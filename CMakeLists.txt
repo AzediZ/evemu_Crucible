@@ -229,3 +229,9 @@ ADD_SUBDIRECTORY( "src/eve-core" )
 ADD_SUBDIRECTORY( "src/eve-xmlpktgen" )
 ADD_SUBDIRECTORY( "src/eve-common" )
 ADD_SUBDIRECTORY( "src/eve-server" )
+
+# Headless test client, used to test the server without the game client
+OPTION( EVEMU_BUILD_BOT "Build the eve-bot test client" OFF )
+IF( EVEMU_BUILD_BOT )
+  ADD_SUBDIRECTORY( "src/eve-bot" )
+ENDIF( EVEMU_BUILD_BOT )
