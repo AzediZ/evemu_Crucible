@@ -885,6 +885,25 @@ int main(int argc, char* argv[]) {
             bot.Call("beyonce", "", "GetFormations", new PyTuple(0));
             bot.Pump(3);
             Out("in space: system %lld ship %lld", (long long)bot.Session("solarsystemid"), (long long)bot.Session("shipid"));
+        } else if (cmd == "beyonce") {
+            // beyonce <method> [args...]: a movement call on the ballpark; whole numbers are sent as ints
+            if (oidBeyonce.empty())
+                oidBeyonce = bot.Bind("beyonce", new PyInt((int32)bot.Session("solarsystemid")));
+            PyTuple* args = new PyTuple(w.size() - 2);
+            for (size_t i = 2; i < w.size(); ++i) {
+                const std::string& a = w[i];
+                if (a.find_first_not_of("-0123456789") == std::string::npos)
+                    args->SetItem(i - 2, new PyInt(std::atoi(a.c_str())));
+                else if (a.find_first_not_of("-0123456789.") == std::string::npos)
+                    args->SetItem(i - 2, new PyFloat(std::atof(a.c_str())));
+                else
+                    args->SetItem(i - 2, new PyString(a));
+            }
+            bot.Call("", oidBeyonce, w[1], args);
+        } else if (cmd == "rebind") {
+            // after a jump the ballpark is a new one
+            oidBeyonce = bot.Bind("beyonce", new PyInt((int32)bot.Session("solarsystemid")));
+            bot.Call("beyonce", "", "GetFormations", new PyTuple(0));
         } else if (cmd == "stop") {
             bot.Call("", oidBeyonce, "CmdStop", new PyTuple(0));
         } else if (cmd == "launch") {
