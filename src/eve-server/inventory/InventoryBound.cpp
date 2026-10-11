@@ -551,6 +551,9 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
         // check for items that need specific handling
         if (IsRigSlot(fromFlag)) //  cant remove rigs like this.  send error.
             throw UserError ("CannotRemoveUpgradeManually");
+        // a fitted subsystem can only be replaced, by dropping another one on its slot
+        else if (IsSubSystem(fromFlag))
+            throw UserError ("CantUnfitSubSystems");
         else if (IsModuleSlot(fromFlag)) {
             // can we remove modules from an inactive ship?  not yet...
             if (pShip == nullptr)
@@ -613,7 +616,8 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             // are we adding module to ship using autoFit?
             if (toFlag == flagNone) {
                // assert(iRef->categoryID() != EVEDB::invCategories::Charge); // crash here...this should NOT happen.
-                if (iRef->categoryID() == EVEDB::invCategories::Module) {
+                if ((iRef->categoryID() == EVEDB::invCategories::Module)
+                or  (iRef->categoryID() == EVEDB::invCategories::Subsystem)) {
                     toFlag = pShip->FindAvailableModuleSlot(iRef);
                     if (toFlag == flagIllegal) {
                         pClient->SendNotifyMsg("Your ship has no available slots to fit this module.  Putting the %s in your CargoHold.", iRef->name());
@@ -629,14 +633,30 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             if (pClient->IsInSpace() and ((toFlag == flagDroneBay) != (iRef->flag() == flagDroneBay)))
                 throw UserError ("DronesNotLoadableInSpace");
 
+            // subsystems are only changed docked.  one dropped on a fitted subsystem replaces it
+            InventoryItemRef oldSubRef(nullptr);
+            if (IsSubSystem(toFlag)) {
+                if (pClient->IsInSpace())
+                    throw UserError ("CantFitSubSystemInSpace");
+                oldSubRef = m_self->GetShipItem()->GetModuleRef(toFlag);
+            }
+
             // verify item is allowed in container first
             m_self->GetShipItem()->VerifyHoldType(toFlag, iRef, pClient); // this will throw if it fails
 
             // then check for module limits
             if (IsModuleSlot(toFlag)) {
-                m_self->GetShipItem()->TryModuleLimitChecks(toFlag, iRef); // this will throw if it fails
+                m_self->GetShipItem()->TryModuleLimitChecks(toFlag, iRef, (oldSubRef.get() != nullptr)); // this will throw if it fails
             } else if (IsCargoHoldFlag(toFlag) or IsHangarFlag(toFlag) or (toFlag == flagDroneBay)) {
                 pInventory->ValidateAddItem(toFlag, iRef);  // this will throw if it fails
+            }
+
+            if (oldSubRef.get() != nullptr) {
+                // the replaced subsystem goes where the new one came from
+                uint32 oldLocationID(iRef->locationID());
+                EVEItemFlags oldFlag(iRef->flag());
+                m_self->GetShipItem()->RemoveItem(oldSubRef);
+                oldSubRef->Move(oldLocationID, oldFlag, true);
             }
 
             // check adding item to ship...if it fails, return to previous container
@@ -650,6 +670,9 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
                 }
                 continue;
             }
+            // a T3 with fewer slots or hardpoints now
+            if (IsSubSystem(toFlag))
+                m_self->GetShipItem()->EvictExcessModules();
         } else if (customs) {
             pInventory->ValidateAddItem(toFlag, iRef);  // this will throw if it fails
             StructureItemRef sRef = StructureItemRef::StaticCast(m_self);

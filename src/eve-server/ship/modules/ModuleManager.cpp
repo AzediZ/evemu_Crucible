@@ -63,12 +63,6 @@ bool ModuleManager::Initialize() {
 
     _log(MODULE__TRACE, "MM::Initialize() - ship %s", pShipItem->name() );
 
-    m_LowSlots = pShipItem->GetAttribute(AttrLowSlots).get_uint32();
-    m_MidSlots = pShipItem->GetAttribute(AttrMedSlots).get_uint32();
-    m_HighSlots = pShipItem->GetAttribute(AttrHiSlots).get_uint32();
-    m_RigSlots = pShipItem->GetAttribute(AttrRigSlots).get_uint32();
-    m_SubSystemSlots = pShipItem->GetAttribute(AttrSubSystemSlot).get_uint32();
-
     // modules - 3 banks of 8 slots each
     for (uint8 flag = flagLowSlot0; flag < flagFixedSlot; ++flag) {
         m_modules.insert(std::pair<uint8, GenericModule*>(flag, nullptr));
@@ -158,7 +152,97 @@ bool ModuleManager::Initialize() {
         }
     }
 
-    return (m_initalized = true);
+    m_initalized = true;
+    UpdateSlotAttributes(false);
+    return true;
+}
+
+void ModuleManager::GetSlotLayout(int16& hi, int16& med, int16& low, int16& turrets, int16& launchers)
+{
+    /* the hull's slots and hardpoints plus its subsystems' modifiers (T3).  the client does this in python
+     *  (slotModifier.py, hardPointModifierEffect.py).  the dogma effects 3773/3774 are Int(1) stubs
+     */
+    hi = pShipItem->GetDefaultAttribute(AttrHiSlots).get_int();
+    med = pShipItem->GetDefaultAttribute(AttrMedSlots).get_int();
+    low = pShipItem->GetDefaultAttribute(AttrLowSlots).get_int();
+    turrets = pShipItem->GetDefaultAttribute(AttrTurretSlotsLeft).get_int();
+    launchers = pShipItem->GetDefaultAttribute(AttrLauncherSlotsLeft).get_int();
+    for (uint8 flag = flagSubSystem0; flag < flagSubSystem5; ++flag) {
+        GenericModule* pMod(m_modules[flag]);
+        if (pMod == nullptr)
+            continue;
+        hi += pMod->GetAttribute(AttrHiSlotModifier).get_int();
+        med += pMod->GetAttribute(AttrMedSlotModifier).get_int();
+        low += pMod->GetAttribute(AttrLowSlotModifier).get_int();
+        turrets += pMod->GetAttribute(AttrTurretHardPointModifier).get_int();
+        launchers += pMod->GetAttribute(AttrLauncherHardPointModifier).get_int();
+    }
+}
+
+void ModuleManager::UpdateSlotAttributes(bool update/*false*/)
+{
+    /* slot counts, free hardpoints, free rig slots and calibration used, worked out from what is fitted.
+     *  done from scratch every time, as an attribute reset (ProcessEffects) puts the hull's values back
+     */
+    if (!m_initalized)
+        return;
+    int16 hi(0), med(0), low(0), turrets(0), launchers(0);
+    GetSlotLayout(hi, med, low, turrets, launchers);
+
+    int16 nHi(0), nMed(0), nLow(0), nTurret(0), nLauncher(0), nRig(0), nSub(0);
+    double upgradeLoad(0.0);
+    for (auto cur : m_modules) {
+        if (cur.second == nullptr)
+            continue;
+        if (IsHiSlot(cur.first)) {
+            ++nHi;
+            if (cur.second->isTurretFitted()) {
+                ++nTurret;
+            } else if (cur.second->isLauncherFitted()) {
+                ++nLauncher;
+            }
+        } else if (IsMidSlot(cur.first)) {
+            ++nMed;
+        } else if (IsLowSlot(cur.first)) {
+            ++nLow;
+        } else if (IsRigSlot(cur.first)) {
+            ++nRig;
+            upgradeLoad += cur.second->GetAttribute(AttrUpgradeCost).get_double();
+        } else if (IsSubSystem(cur.first)) {
+            ++nSub;
+        }
+    }
+
+    // only send what changed
+    auto set = [this, update] (uint16 attrID, EvilNumber value) {
+        if (pShipItem->GetAttribute(attrID) != value)
+            pShipItem->SetAttribute(attrID, value, update);
+    };
+    set(AttrHiSlots, hi);
+    set(AttrMedSlots, med);
+    set(AttrLowSlots, low);
+    // these can go below 0 after a subsystem swap, until ShipItem::EvictExcessModules() has run
+    set(AttrTurretSlotsLeft, turrets - nTurret);
+    set(AttrLauncherSlotsLeft, launchers - nLauncher);
+    set(AttrUpgradeSlotsLeft, pShipItem->GetDefaultAttribute(AttrUpgradeSlotsLeft).get_int() - nRig);
+    set(AttrUpgradeLoad, upgradeLoad);
+
+    int16 rigs(pShipItem->GetDefaultAttribute(AttrRigSlots).get_int());
+    int16 subs(pShipItem->GetDefaultAttribute(AttrMaxSubSystems).get_int());
+    m_HighSlots = (hi > nHi ? hi - nHi : 0);
+    m_MidSlots = (med > nMed ? med - nMed : 0);
+    m_LowSlots = (low > nLow ? low - nLow : 0);
+    m_RigSlots = (rigs > nRig ? rigs - nRig : 0);
+    m_SubSystemSlots = (subs > nSub ? subs - nSub : 0);
+}
+
+uint8 ModuleManager::GetSubSystemCount()
+{
+    uint8 count(0);
+    for (uint8 flag = flagSubSystem0; flag < flagSubSystem5; ++flag)
+        if (m_modules[flag] != nullptr)
+            ++count;
+    return count;
 }
 
 void ModuleManager::LoadOnline() {
@@ -242,7 +326,7 @@ uint16 ModuleManager::GetAvailableSlotInBank(EVEEffectID slotBank)
                     return slot;
         } break;
         case EVEEffectID::subSystem: {
-            uint8 max = flagSubSystem0 + pShipItem->GetAttribute(AttrSubSystemSlot).get_uint32();
+            uint8 max = flagSubSystem0 + pShipItem->GetAttribute(AttrMaxSubSystems).get_uint32();
             for (uint8 slot=flagSubSystem0; slot < max; ++slot)
                 if ( m_modules[slot] == nullptr )
                     return slot;
@@ -401,26 +485,31 @@ bool ModuleManager::InstallSubSystem(ModuleItemRef mRef, EVEItemFlags flag)
     return true;
 }
 
-// not used
 void ModuleManager::CheckSlotFitLimited(EVEItemFlags flag)
 {
-    if (IsRigSlot(flag))
-        if (m_RigSlots)
-            return;
-    if (IsHiSlot(flag))
-        if (m_HighSlots)
-            return;
-    if (IsMidSlot(flag))
-        if (m_MidSlots)
-            return;
-    if (IsLowSlot(flag))
-        if (m_LowSlots)
-            return;
-    if (IsSubSystem(flag))
-        if (m_SubSystemSlots)
-            return;
+    // the slot has to exist on this ship (a T3's slots come from its subsystems)
+    int16 count(0), index(0);
+    if (IsHiSlot(flag)) {
+        count = pShipItem->GetAttribute(AttrHiSlots).get_int();
+        index = flag - flagHiSlot0;
+    } else if (IsMidSlot(flag)) {
+        count = pShipItem->GetAttribute(AttrMedSlots).get_int();
+        index = flag - flagMidSlot0;
+    } else if (IsLowSlot(flag)) {
+        count = pShipItem->GetAttribute(AttrLowSlots).get_int();
+        index = flag - flagLowSlot0;
+    } else if (IsRigSlot(flag)) {
+        count = pShipItem->GetAttribute(AttrRigSlots).get_int();
+        index = flag - flagRigSlot0;
+    } else if (IsSubSystem(flag)) {
+        count = pShipItem->GetAttribute(AttrMaxSubSystems).get_int();
+        index = flag - flagSubSystem0;
+    } else {
+        return;
+    }
 
-    throw UserError ("NoFreeShipSlots");
+    if (index >= count)
+        throw UserError ("NoFreeShipSlots");
 }
 
 // not used
@@ -1278,7 +1367,7 @@ void ModuleManager::UpdateModules(std::vector<uint32> modVec)
     // this one is called from BoardShip() and Ship::Undock()
     pShipItem->SetAttribute(AttrCpuLoad,     EvilZero);
     pShipItem->SetAttribute(AttrPowerLoad,   EvilZero);
-    pShipItem->SetAttribute(AttrUpgradeLoad, EvilZero);
+    // upgradeLoad is worked out from the fitted rigs (UpdateSlotAttributes)
     //OfflineAll();   // set all modules to offline.  this verifies the following Online() call will only online previously-set modules.  (elusive error)
     if (!modVec.empty()) {
         _log(MODULE__TRACE, "MM::UpdateModules(modVec)");
@@ -1297,18 +1386,18 @@ void ModuleManager::UpdateModules(std::vector<uint32> modVec)
 
 void ModuleManager::UpdateModules(EVEItemFlags flag)
 {
-    /** @todo  figure out what needs to be done here and implement it. */
-    //  this should update all ship attribs for this bank.
-    if (is_log_enabled(MODULE__WARNING))
-        sLog.Magenta("MM::UpdateModules(flag)","Needs to be implemented");
+    // a module in this bank changed (Client::MoveItem).  slot counts are worked out again, and modules set to be online
+    //  that aren't (in space) are put back online
+    UpdateSlotAttributes(pShipItem->HasPilot() and !pShipItem->GetPilot()->IsLogin());
 
-    // reset ship and module effect data, and reapply?
-    // call ProcessEffects(false), ApplyEffects(), then UpdateModules() ?
+    if (!pShipItem->HasPilot() or !pShipItem->GetPilot()->IsInSpace())
+        return;
     std::vector< GenericModule* > modVec;
     // this returns only populated modules for this bank
     GetModulesInBank(flag, modVec);
     for (auto cur : modVec)
-        cur->Online();
+        if (cur->GetAttribute(AttrOnline).get_bool() and (cur->GetModuleState() == Module::State::Offline))
+            cur->Online();
 }
 
 void ModuleManager::CharacterBoardingShip()
@@ -1653,33 +1742,18 @@ void ModuleManager::addModuleRef(EVEItemFlags flag, GenericModule* pMod)
         m_modByGroup.emplace(pMod->groupID(), 1);
     }
 
-    // update available slots
+    // apply config rate of fire modifier, if applicable
     if (pMod->isHighPower()) {
-        bool update = !pShipItem->GetPilot()->IsLogin();
         if (pMod->isTurretFitted()) {
-            // apply config modifier, if applicable
             pMod->GetSelf()->MultiplyAttribute(AttrSpeed, sConfig.rates.turretRoF);
-            uint8 count = pShipItem->GetAttribute(AttrTurretSlotsLeft).get_uint32() -1;
-            pShipItem->SetAttribute(AttrTurretSlotsLeft, count, update);
         } else if (pMod->isLauncherFitted()) {
-            // apply config modifier, if applicable
             pMod->GetSelf()->MultiplyAttribute(AttrSpeed, sConfig.rates.missileRoF);
-            uint8 count = pShipItem->GetAttribute(AttrLauncherSlotsLeft).get_uint32() -1;
-            pShipItem->SetAttribute(AttrLauncherSlotsLeft, count, update);
         }
-        --m_HighSlots;
-    } else if (pMod->isMediumPower()) {
-        --m_MidSlots;
-    } else if (pMod->isLowPower()) {
-        --m_LowSlots;
-    } else if (pMod->isSubSystem()) {
-        --m_SubSystemSlots;
-    } else if (pMod->isRig()) {
-        --m_RigSlots;
-        bool update = !pShipItem->GetPilot()->IsLogin();
-        pShipItem->SetAttribute(AttrUpgradeLoad, (pShipItem->GetAttribute(AttrUpgradeLoad) + pMod->GetAttribute(AttrUpgradeCost)), update);
-        pShipItem->SetAttribute(AttrUpgradeSlotsLeft, (pShipItem->GetAttribute(AttrUpgradeSlotsLeft) -1), update);
     }
+
+    // update available slots (Initialize() does this once at its end)
+    if (m_initalized)
+        UpdateSlotAttributes(pShipItem->HasPilot() and !pShipItem->GetPilot()->IsLogin());
 }
 
 void ModuleManager::deleteModuleRef(EVEItemFlags flag, GenericModule* pMod)
@@ -1712,26 +1786,8 @@ void ModuleManager::deleteModuleRef(EVEItemFlags flag, GenericModule* pMod)
     }
 
     // update available slots
-    if (pMod->isHighPower()) {
-        if (pMod->isTurretFitted()) {
-            uint8 count = pShipItem->GetAttribute(AttrTurretSlotsLeft).get_uint32() + 1;
-            pShipItem->SetAttribute(AttrTurretSlotsLeft, count);
-        } else if (pMod->isLauncherFitted()) {
-            uint8 count = pShipItem->GetAttribute(AttrLauncherSlotsLeft).get_uint32() + 1;
-            pShipItem->SetAttribute(AttrLauncherSlotsLeft, count);
-        }
-        ++m_HighSlots;
-    } else if (pMod->isMediumPower()) {
-        ++m_MidSlots;
-    } else if (pMod->isLowPower()) {
-        ++m_LowSlots;
-    } else if (pMod->isSubSystem()) {
-        ++m_SubSystemSlots;
-    } else if (pMod->isRig()) {
-        ++m_RigSlots;
-        pShipItem->SetAttribute(AttrUpgradeLoad, (pShipItem->GetAttribute(AttrUpgradeLoad) - pMod->GetAttribute(AttrUpgradeCost)));
-        pShipItem->SetAttribute(AttrUpgradeSlotsLeft, pShipItem->GetAttribute(AttrUpgradeSlotsLeft) + 1);
-    }
+    if (m_initalized)
+        UpdateSlotAttributes(pShipItem->HasPilot() and !pShipItem->GetPilot()->IsLogin());
 }
 
 bool ModuleManager::VerifySlotExchange(EVEItemFlags slot1, EVEItemFlags slot2)

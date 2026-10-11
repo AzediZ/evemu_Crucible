@@ -37,6 +37,11 @@ public:
      // verify slot available
     // will throw if no slots available
     void CheckSlotFitLimited(EVEItemFlags flag);
+    // hull slots and hardpoints plus the fitted subsystems' modifiers (T3)
+    void GetSlotLayout(int16& hi, int16& med, int16& low, int16& turrets, int16& launchers);
+    // sets the ship's slot counts, free hardpoints, free rig slots and upgradeLoad from what is fitted
+    void UpdateSlotAttributes(bool update=false);
+    uint8 GetSubSystemCount();
     // verify module isnt group limited
     // will throw if group is over fitLimited.
     void CheckGroupFitLimited(EVEItemFlags flag, InventoryItemRef iRef);

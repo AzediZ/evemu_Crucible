@@ -139,6 +139,8 @@ public:
     void StripFitting();
     // this will remove all items from all ship cargo holds
     void EmptyCargo();
+    // after a subsystem change: modules past the ship's slots or hardpoints go to the hangar (cargo in space)
+    void EvictExcessModules();
 
     // loop thru modules that 'get' things and deactivate them
     void CargoFull();
@@ -197,7 +199,10 @@ public:
     InventoryItemRef GetModuleRef(uint32 modID);
 
     // this also checks for fit-by-type and rig restrictions
-    void TryModuleLimitChecks(EVEItemFlags flag, InventoryItemRef iRef);     // this must throw on error
+    // swap: a subsystem replacing the fitted one in its slot
+    void TryModuleLimitChecks(EVEItemFlags flag, InventoryItemRef iRef, bool swap=false);     // this must throw on error
+    // T3 subsystem fitting rules (hull, slot).  throws the client's errors
+    void CheckSubSystemFit(EVEItemFlags flag, InventoryItemRef iRef);
     EVEItemFlags FindAvailableModuleSlot( InventoryItemRef iRef );
     // make sure this does NOT throw.
     // must return integer

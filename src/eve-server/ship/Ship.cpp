@@ -772,12 +772,40 @@ void ShipItem::RemoveCharge(EVEItemFlags fromFlag)
     }
 }
 
-// only called from inv bound call.  can throw
-void ShipItem::TryModuleLimitChecks(EVEItemFlags flag, InventoryItemRef iRef)
+/* T3 subsystems: each fits one hull (fitsToShipType) in one slot (its subSystemSlot attribute)
+ *  {'messageKey': 'CannotFitSubSystemNotShip'}  You can't fit {subSystemName}. It only fits to {validShipName} but you're trying to fit it to {shipName}.
+ *  {'messageKey': 'NoSuitableSlotsForThisSubSystem'}  There are no suitable slots available for {subSystemName}.
+ */
+void ShipItem::CheckSubSystemFit(EVEItemFlags flag, InventoryItemRef iRef)
 {
-    if (m_ModuleManager->IsSlotOccupied(flag))
+    if (IsSubSystem(flag) != (iRef->categoryID() == EVEDB::invCategories::Subsystem)) {
+        if (iRef->categoryID() == EVEDB::invCategories::Subsystem)
+            throw UserError ("NoSuitableSlotsForThisSubSystem")
+                    .AddTypeName ("subSystemName", iRef->typeID ());
+        throw UserError ("NoFreeShipSlots");
+    }
+    if (!IsSubSystem(flag))
+        return;
+
+    uint32 fitsTo(iRef->GetAttribute(AttrFitsToShipType).get_uint32());
+    if (fitsTo != typeID())
+        throw UserError ("CannotFitSubSystemNotShip")
+                .AddTypeName ("subSystemName", iRef->typeID ())
+                .AddTypeName ("validShipName", fitsTo)
+                .AddTypeName ("shipName", typeID ());
+    if (iRef->GetAttribute(AttrSubSystemSlot).get_uint32() != (uint32)flag)
+        throw UserError ("NoSuitableSlotsForThisSubSystem")
+                .AddTypeName ("subSystemName", iRef->typeID ());
+}
+
+// only called from inv bound call.  can throw
+void ShipItem::TryModuleLimitChecks(EVEItemFlags flag, InventoryItemRef iRef, bool swap/*false*/)
+{
+    // a subsystem dropped on a fitted one replaces it
+    if (!(swap and IsSubSystem(flag)) and m_ModuleManager->IsSlotOccupied(flag))
         throw UserError ("SlotAlreadyOccupied");
 
+    CheckSubSystemFit(flag, iRef);
     m_ModuleManager->CheckSlotFitLimited(flag);
     m_ModuleManager->CheckGroupFitLimited(flag, iRef);
 
@@ -843,7 +871,10 @@ EVEItemFlags ShipItem::FindAvailableModuleSlot(InventoryItemRef iRef) {
     } else if (iRef->type().HasEffect(EVEEffectID::hiPower)) {
         slotFound = m_ModuleManager->GetAvailableSlotInBank(EVEEffectID::hiPower);
     } else if (iRef->type().HasEffect(EVEEffectID::subSystem)) {
-        slotFound = m_ModuleManager->GetAvailableSlotInBank(EVEEffectID::subSystem);
+        // a subsystem has one slot.  a fitted one there is swapped out
+        slotFound = iRef->GetAttribute(AttrSubSystemSlot).get_uint32();
+        if (!IsSubSystem(slotFound))
+            slotFound = flagIllegal;
     } else if (iRef->type().HasEffect(EVEEffectID::rigSlot)) {
         slotFound = m_ModuleManager->GetAvailableSlotInBank(EVEEffectID::rigSlot);
     } else {
@@ -1417,6 +1448,55 @@ void ShipItem::StripFitting()
     for (auto cur : moduleList) {
         m_ModuleManager->UnfitModule(cur->itemID());
         cur->Move(locationID(), flag, true);
+    }
+}
+
+void ShipItem::EvictExcessModules()
+{
+    /* a subsystem change can leave a T3 with fewer slots or hardpoints than it has modules fitted.  modules in slots the ship
+     *  no longer has, and the turrets/launchers past its hardpoints (highest slots first), go to the hangar (cargo in space)
+     */
+    int16 hi(0), med(0), low(0), turrets(0), launchers(0);
+    m_ModuleManager->GetSlotLayout(hi, med, low, turrets, launchers);
+
+    std::vector<GenericModule*> evict;
+    const EVEItemFlags first[3] = { flagHiSlot0, flagMidSlot0, flagLowSlot0 };
+    const int16 count[3] = { hi, med, low };
+    for (uint8 rack = 0; rack < 3; ++rack)
+        for (int16 i = (count[rack] < 0 ? 0 : count[rack]); i < 8; ++i) {
+            GenericModule* pMod(m_ModuleManager->GetModule((EVEItemFlags)(first[rack] + i)));
+            if (pMod != nullptr)
+                evict.push_back(pMod);
+        }
+    int16 nTurret(0), nLauncher(0);
+    for (int16 i = 0; (i < hi) and (i < 8); ++i) {
+        GenericModule* pMod(m_ModuleManager->GetModule((EVEItemFlags)(flagHiSlot0 + i)));
+        if (pMod == nullptr)
+            continue;
+        if (pMod->isTurretFitted() and (++nTurret > turrets)) {
+            evict.push_back(pMod);
+        } else if (pMod->isLauncherFitted() and (++nLauncher > launchers)) {
+            evict.push_back(pMod);
+        }
+    }
+    if (evict.empty())
+        return;
+
+    uint32 toID(m_itemID);
+    EVEItemFlags toFlag(flagCargoHold);
+    if (sDataMgr.IsStation(locationID())) {
+        toID = locationID();
+        toFlag = flagHangar;
+    }
+    for (auto pMod : evict) {
+        InventoryItemRef iRef(pMod->GetSelf());
+        EVEItemFlags flag(iRef->flag());
+        // unfitting unloads it and takes it out of its weapon bank
+        m_ModuleManager->UnfitModule(iRef->itemID());
+        iRef->Move(toID, toFlag, true);
+        if (m_pilot != nullptr)
+            m_pilot->SendNotifyMsg("Your %s was removed from %s and placed in your %s.", iRef->name(), \
+                    sDataMgr.GetFlagName(flag), (toFlag == flagHangar ? "hangar" : "cargo hold"));
     }
 }
 
@@ -2002,6 +2082,8 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
     */
     if (add) {
         m_pilot->GetChar()->ProcessEffects(this);
+        // the reset put the hull's slot and hardpoint values back
+        m_ModuleManager->UpdateSlotAttributes(update);
         ProcessShipEffects(update);
     } else {
         ClearModifiers();
@@ -2314,6 +2396,8 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client* 
             }
 
             if (IsModuleSlot(flag)) {
+                // the subsystem errors are more telling than the generic group check below
+                CheckSubSystemFit(flag, iRef);
                 if (!Skill::FitModuleSkillCheck(iRef, pClient->GetChar())) {
                     throw CustomError ("You do not have the required skills to fit this %s.  Ref: ServerError 25163.", iRef->name());
                 }
@@ -2903,14 +2987,15 @@ PyDict* ShipSE::MakeSlimItem() {
         slim->SetItemString("groupID",              new PyInt(m_self->groupID()));
     }
 
-    //encode the hiSlot and Subsystem modules list ONLY
+    //encode the hiSlot and Subsystem modules list ONLY.  the client builds a T3's model from the subsystems in here
     std::vector<InventoryItemRef> items;
     m_self->GetMyInventory()->GetItemsByFlagRange(flagHiSlot0, flagHiSlot7, items);
-    //m_self->GetMyInventory()->GetItemsByFlagRange(flagSubSystem0, flagSubSystem7, items);
+    m_self->GetMyInventory()->GetItemsByFlagRange(flagSubSystem0, flagSubSystem7, items);
     if (!items.empty()) {
         PyList *list = new PyList();
         for (auto cur : items)
-            list->AddItem(new_tuple(cur->itemID(), cur->typeID()));
+            if (cur->categoryID() != EVEDB::invCategories::Charge)
+                list->AddItem(new_tuple(cur->itemID(), cur->typeID()));
 
         slim->SetItemString("modules", list );
     }

@@ -303,6 +303,11 @@ PyResult ShipBound::Undock(PyCallArgs &call, PyInt* shipID, PyBool* ignoreContra
 
     // nowhere near implementing ignoreContraband yet....
 
+    // a strategic cruiser needs all of its subsystems.  (the client offers the assembly window for incomplete hulls)
+    if ((pShip->groupID() == EVEDB::invGroups::StrategicCruiser)
+    and (pShip->GetModuleManager()->GetSubSystemCount() < pShip->GetAttribute(AttrMaxSubSystems).get_uint32()))
+        throw UserError ("TooFewSubSystemsToUndock");
+
     //  get vector of online modules as (k,v) pair,
     //    where key is slotID, value is moduleID
     if (call.byname.find("onlineModules") != call.byname.end()) {
@@ -1127,14 +1132,53 @@ PyResult ShipBound::AssembleShip(PyCallArgs &call, PyList* itemIDs) {
                 sLog.Error("AssembleShip", "subSystemList == nullptr for %s", call.client->GetName());
                 return nullptr;
             }
-            // Move the five specified subsystems to the newly assembled Tech 3 ship
-            InventoryItemRef subSystemItem(nullptr);
+            /* the client sends the subsystems for the empty slots (assembleModularShip.Submit).  each must be ours, in this
+             *  station, a subsystem for this hull, for a free slot and not the same slot as another.  all are checked
+             *  before any is moved.  (the client refuses this in space with CantAssembleModularShipInSpace)
+             */
+            if (!call.client->IsDocked() or (ship->locationID() != call.client->GetStationID()))
+                throw UserError ("CantAssembleModularShipInSpace");
+            std::vector<InventoryItemRef> fitted;
+            ship->GetMyInventory()->GetItemsByFlagRange(flagSubSystem0, flagSubSystem4, fitted);
+            std::set<uint32> slots;
+            for (auto cur : fitted)
+                slots.insert(cur->flag());
+            std::vector<InventoryItemRef> subSystems;
             PyList::const_iterator itr = subSystemList->begin(), end = subSystemList->end();
-            while (itr != end) {
-                subSystemItem = sItemFactory.GetItemRef(PyRep::IntegerValueU32(*itr));
-                if (subSystemItem.get() != nullptr)
-                    subSystemItem->Move(ship->itemID(), (EVEItemFlags)(subSystemItem->GetAttribute(AttrSubSystemSlot).get_uint32()), true);
-                ++itr;
+            for (; itr != end; ++itr) {
+                InventoryItemRef subRef(sItemFactory.GetItemRef(PyRep::IntegerValueU32(*itr)));
+                if (subRef.get() == nullptr)
+                    throw CustomError ("A subsystem for your %s was not found.", ship->name());
+                uint32 slot(subRef->GetAttribute(AttrSubSystemSlot).get_uint32());
+                if ((subRef->ownerID() != call.client->GetCharacterID())
+                or  (subRef->locationID() != ship->locationID())
+                or  (subRef->categoryID() != EVEDB::invCategories::Subsystem)
+                or  (subRef->GetAttribute(AttrFitsToShipType).get_uint32() != ship->typeID())
+                or  !IsSubSystem(slot)
+                or  (slots.find(slot) != slots.end()))
+                    throw UserError ("SubSystemFitFailed")
+                            .AddTypeName ("subSystemName", subRef->typeID ());
+                slots.insert(slot);
+                subSystems.push_back(subRef);
+            }
+            if ((fitted.size() + subSystems.size()) != ship->GetAttribute(AttrMaxSubSystems).get_uint32())
+                throw UserError ("NotEnoughSubSystems")
+                        .AddFormatValue ("ship", new PyInt (ship->typeID ()));
+
+            // Move the specified subsystems to the newly assembled Tech 3 ship
+            for (auto subRef : subSystems) {
+                if (subRef->quantity() > 1)
+                    subRef = subRef->Split(1);
+                if (subRef.get() == nullptr)
+                    continue;
+                EVEItemFlags flag((EVEItemFlags)subRef->GetAttribute(AttrSubSystemSlot).get_uint32());
+                if (ship->HasPilot()) {
+                    // our active ship: its module manager fits it
+                    ship->AddItemByFlag(flag, subRef, call.client);
+                } else {
+                    subRef->ChangeSingleton(true, false);
+                    subRef->Move(ship->itemID(), flag, true);
+                }
             }
         }
 
