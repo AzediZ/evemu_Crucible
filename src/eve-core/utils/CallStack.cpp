@@ -47,11 +47,29 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #if defined(_WIN32)
 #include <windows.h>
 #include <imagehlp.h>
-#if defined(__MINGW32__)
+// MinGW can read gcc's debug info with binutils' BFD (define EVEMU_USE_BFD and link bfd, iberty, sframe and a zlib >= 1.2.9).
+//  without it, MinGW uses the same dbghelp symbol lookup as MSVC
+#if defined(__MINGW32__) && defined(EVEMU_USE_BFD)
+#define CS_USE_BFD 1
+#endif
+#if defined(_M_AMD64) || defined(__x86_64__)
+#define CS_X64 1
+#endif
+#if defined(CS_USE_BFD)
 #define PACKAGE         1 // Supress cmake error.
 #define PACKAGE_VERSION 1 // Supress cmake error.
 #include <bfd.h>
 #include <cxxabi.h>
+// binutils 2.34 replaced the bfd_get_section_* macros with bfd_section_* functions that take only the section
+#ifdef bfd_get_section_flags
+#define CS_SECTION_FLAGS(abfd, sec) bfd_get_section_flags(abfd, sec)
+#define CS_SECTION_VMA(abfd, sec)   bfd_get_section_vma(abfd, sec)
+#define CS_SECTION_SIZE(sec)        bfd_get_section_size(sec)
+#else
+#define CS_SECTION_FLAGS(abfd, sec) bfd_section_flags(sec)
+#define CS_SECTION_VMA(abfd, sec)   bfd_section_vma(sec)
+#define CS_SECTION_SIZE(sec)        bfd_section_size(sec)
+#endif
 #endif
 #else
 #include <execinfo.h>
@@ -115,7 +133,7 @@ public:
 private:
     CRITICAL_SECTION cs;
 } cs;
-#if defined(__MINGW32__)
+#if defined(CS_USE_BFD)
 class bfd_usage : noncopyable
 {
 public:
@@ -187,9 +205,9 @@ private:
     {
         fnis_para& para = *static_cast<fnis_para*>(tpara);
         if(!para.function.empty()) return; // We have got the name. 
-        if(!(bfd_get_section_flags(tabfd, tsec) & SEC_ALLOC)) return; // Allocate space for this section.
-        bfd_vma vma = bfd_get_section_vma(tabfd, tsec);
-        if(para.counter < vma || vma+bfd_get_section_size(tsec) <= para.counter) return;        
+        if(!(CS_SECTION_FLAGS(tabfd, tsec) & SEC_ALLOC)) return; // Allocate space for this section.
+        bfd_vma vma = CS_SECTION_VMA(tabfd, tsec);
+        if(para.counter < vma || vma+CS_SECTION_SIZE(tsec) <= para.counter) return;        
         const char* function = NULL;
         const char* file = NULL;
         unsigned int line = 0;
@@ -200,7 +218,7 @@ private:
         }
     }
 };
-#endif // __MINGW32__
+#endif // CS_USE_BFD
 #endif // _WIN32
 
 void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
@@ -214,12 +232,12 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
         fprintf(stderr, "Error: Failed to initialize symbol context.\n");
         return;
     }
-#ifdef __MINGW32__
+#ifdef CS_USE_BFD
     bfd_usage bfdu;
 #endif
 
     // Prepare variables.
-#if defined(_M_AMD64)
+#if defined(CS_X64)
     const DWORD machine = IMAGE_FILE_MACHINE_AMD64;
 #else
     const DWORD machine = IMAGE_FILE_MACHINE_I386;
@@ -230,7 +248,7 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
     CONTEXT context = { 0 };
     context.ContextFlags = CONTEXT_FULL;
     RtlCaptureContext(&context);
-#if defined(_M_AMD64)
+#if defined(CS_X64)
     frame.AddrPC.Offset = context.Rip;
     frame.AddrPC.Mode = AddrModeFlat;
     frame.AddrStack.Offset = context.Rsp;
@@ -268,7 +286,7 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
         string module_name = Unknown_Module;
         if(module_base && GetModuleFileNameA(reinterpret_cast<HINSTANCE>(module_base), module_name_raw, MAX_PATH)) module_name = module_name_raw;
 
-#if defined(__MINGW32__)
+#if defined(CS_USE_BFD)
         string function = bfdu.get_function_name(frame.AddrPC.Offset);
         if(function.empty())
         {

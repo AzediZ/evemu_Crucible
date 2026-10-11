@@ -83,6 +83,8 @@ protected:
      *  which modules are heating their rack.  linked weapons do this for the whole group */
     void                UpdateCycleHeat(bool cycling);
     void                CheckHeatDamage();
+    /* crime: each cycle on a target is an aggressive (or assisting) act.  CrimeWatch decides if it's a crime */
+    void                CrimeCheck();
     void                ProcessActiveCycle();           // checks and sets cap use
     void                UpdateCharge(uint16 attrID, uint16 testAttrID, uint16 srcAttrID, InventoryItemRef iRef);
     void                UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRef iRef);

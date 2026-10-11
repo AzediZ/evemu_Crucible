@@ -16,6 +16,10 @@
 #include "system/DestinyManager.h"
 #include "system/Damage.h"
 #include "system/SystemBubble.h"
+#include "system/CrimeWatch.h"
+#include "npc/Drone.h"
+#include "npc/NPC.h"
+#include "EVEServerConfig.h"
 
 SentryAI::SentryAI(Sentry* who)
 : m_state(State::Idle),
@@ -91,6 +95,16 @@ void SentryAI::Process() {
     */
     switch(m_state) {
         case State::Idle: {
+            if (m_npc->IsLawSentry()) {
+                if (m_beginFindTarget.Check()) {
+                    SystemEntity* pTarget(FindLawTarget());
+                    if (pTarget != nullptr)
+                        Target(pTarget);
+                } else if (!m_beginFindTarget.Enabled()) {
+                    m_beginFindTarget.Start(m_attackSpeed);
+                }
+                break;
+            }
             // The parameter proximityRange (154) tells us how far we "see" (npc's dont have this, but drones do)
             if (m_beginFindTarget.Check()) {
                 std::vector<Client*> clientVec;
@@ -126,6 +140,10 @@ void SentryAI::Process() {
                 return;
             }
             SystemEntity* pTarget = m_npc->TargetMgr()->GetFirstTarget(false);
+            if ((pTarget != nullptr) and m_npc->IsLawSentry() and !IsLawTarget(pTarget)) {
+                ClearTarget(pTarget);
+                return;
+            }
             if (!pTarget) {
                 _log(NPC__AI_TRACE, "%s(%u): Stopped %s, GetFirstTarget() returned NULL.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
                 SetIdle();
@@ -311,13 +329,14 @@ void SentryAI::AttackTarget(SystemEntity* pTarget) {
                                              pTarget->GetID(),
                                              0,guid,1,1,1,m_attackSpeed,0);
 
+    // gate and station guns ignore transversal and signature radius
     Damage d(m_npc,
              m_npc->GetSelf(),
              m_npc->GetKinetic(),
              m_npc->GetThermal(),
              m_npc->GetEM(),
              m_npc->GetExplosive(),
-             m_formula.GetSentryToHit(m_npc, pTarget),
+             (m_npc->IsLawSentry() ? 1.0f : m_formula.GetSentryToHit(m_npc, pTarget)),
              EVEEffectID::targetAttack
     );
 
@@ -355,4 +374,44 @@ std::string SentryAI::GetStateName(SentryAI::State name)
         case State::Signaling: return "Signaling";
     }
     return "Undefined";
+}
+
+bool SentryAI::IsLawTarget(SystemEntity* pTarget)
+{
+    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->DestinyMgr() == nullptr))
+        return false;
+    if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
+        return false;
+    // an NPC made a criminal (GM testing)
+    if (pTarget->IsNPCSE())
+        return ((m_npc->GetPosition().distance(pTarget->GetPosition()) <= sConfig.crime.SentryRange)
+            and sCrimeWatch.IsCriminal(pTarget->GetID()));
+    uint32 charID(0);
+    if (pTarget->IsShipSE()) {
+        if (pTarget->GetPilot() != nullptr) {
+            if (pTarget->GetPilot()->InPod())
+                return false;
+            charID = pTarget->GetPilot()->GetCharacterID();
+        } else {
+            charID = pTarget->GetSelf()->ownerID();     // a ship left in space by a pilot who logged off
+        }
+    } else if (pTarget->IsDroneSE()) {
+        charID = pTarget->GetSelf()->ownerID();
+    }
+    if (!IsCharacterID(charID))
+        return false;
+    if (m_npc->GetPosition().distance(pTarget->GetPosition()) > sConfig.crime.SentryRange)
+        return false;
+    return (sCrimeWatch.IsCriminal(charID) or sCrimeWatch.IsFlaggedTo(charID, m_npc->GetSelf()->ownerID()));
+}
+
+SystemEntity* SentryAI::FindLawTarget()
+{
+    std::map<uint32, SystemEntity*> entities;
+    m_npc->SysBubble()->GetEntities(entities);
+    for (auto cur : entities)
+        if ((cur.second != nullptr) and (cur.second->IsShipSE() or cur.second->IsDroneSE() or cur.second->IsNPCSE())
+        and !((cur.second->IsNPCSE() and cur.second->GetNPCSE()->IsLawEnforcer())) and IsLawTarget(cur.second))
+            return cur.second;
+    return nullptr;
 }

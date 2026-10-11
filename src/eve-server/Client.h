@@ -373,6 +373,7 @@ protected:
     bool m_packaged;        // used to correctly package updates into a PackagedAction list
     bool m_portrait;        // used to verify new char pic received
     bool m_autoPilot;       // set true for using autopilot.
+    bool m_shipLeftInSpace; // logoff timer: our ship stays in space after we're gone (LawEnforcement logs it out)
     bool m_scanProbe;       // scanning with probes
     bool m_bubbleWait;
     bool m_setStateSent;

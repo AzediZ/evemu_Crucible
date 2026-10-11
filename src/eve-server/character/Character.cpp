@@ -1387,7 +1387,13 @@ float Character::GetNPCCorpStanding(uint32 fromID, uint32 toID) {
 
 void Character::SetStanding(uint32 fromID, uint32 toID, float standing) {
     StandingDB::SetStanding(fromID, toID, standing);
-    PyTuple* payload = new PyTuple(0);
+    if (m_pClient == nullptr)
+        return;
+    // standingsvc.OnStandingSet(fromID, toID, standing)
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(fromID));
+        payload->SetItem(1, new PyInt(toID));
+        payload->SetItem(2, new PyFloat(standing));
     m_pClient->SendNotification("OnStandingSet", "charid", payload, false);
 }
 

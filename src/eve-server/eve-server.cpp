@@ -155,6 +155,7 @@
 // standing services
 #include "standing/Standing.h"
 #include "standing/StandingMgr.h"
+#include "system/CrimeWatch.h"
 // station services
 #include "station/HoloscreenMgrService.h"
 #include "station/InsuranceService.h"
@@ -753,6 +754,7 @@ int main( int argc, char* argv[] )
     /* create the StandingMgr singleton */
     sLog.Green("       ServerInit", "Starting Standings Manager");
     sStandingMgr.Initialize();
+    sCrimeWatch.Initialize();
     /* create the FleetService singleton */
     sLog.Green("       ServerInit", "Starting Fleet Services");
     sFltSvc.Initialize(newSvcMgr);

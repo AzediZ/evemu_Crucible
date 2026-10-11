@@ -381,6 +381,7 @@ SET( missions_SOURCE
 
 SET( npc_INCLUDE
      #"${TARGET_INCLUDE_DIR}/npc/Concord.h"
+     "${TARGET_INCLUDE_DIR}/npc/LawEnforcement.h"
      "${TARGET_INCLUDE_DIR}/npc/Drone.h"
      "${TARGET_INCLUDE_DIR}/npc/DroneAI.h"
      "${TARGET_INCLUDE_DIR}/npc/EntityService.h"
@@ -390,6 +391,7 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h")
 SET( npc_SOURCE
      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
+     "${TARGET_SOURCE_DIR}/npc/LawEnforcement.cpp"
      "${TARGET_SOURCE_DIR}/npc/Drone.cpp"
      "${TARGET_SOURCE_DIR}/npc/DroneAI.cpp"
      "${TARGET_SOURCE_DIR}/npc/EntityService.cpp"

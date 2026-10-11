@@ -25,6 +25,7 @@
 */
 
 #include "standing/Standing.h"
+#include "system/CrimeWatch.h"
 
 /*  re-write of standing system  -allan 10Apr15
  * see notes in StandingDB.cpp
@@ -81,11 +82,7 @@ PyResult Standing::GetMyKillRights(PyCallArgs &call) {
     // self.killRightsCache, self.killedRightsCache = sm.RemoteSvc('standing2').GetMyKillRights()
     // each cache holds k,v where key is toID or fromID
     _log(STANDING__MESSAGE,  "Standing::Handle_GetMyKillRights()");
-    PyTuple* KillRights = new PyTuple(2);
-    PyDict* killRightsCache = new PyDict();
-    PyDict* killedRightsCache = new PyDict();
-        KillRights->items[0] = killRightsCache;
-        KillRights->items[1] = killedRightsCache;
+    PyTuple* KillRights = sCrimeWatch.GetKillRights(call.client->GetCharacterID());
 
     if (is_log_enabled(STANDING__RSPDUMP)) {
         _log(STANDING__RSPDUMP, "Standing::Handle_GetMyKillRights() RSP:" );

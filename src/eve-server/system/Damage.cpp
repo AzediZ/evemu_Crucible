@@ -42,6 +42,10 @@
 #include "system/Container.h"
 #include "system/SystemBubble.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
+#include "system/CrimeWatch.h"
+#include "npc/LawEnforcement.h"
+#include "character/CharacterDB.h"
+#include "StaticDataMgr.h"
 
 /*
 DAMAGE
@@ -130,6 +134,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
 
     // aggressive drones and drones guarding us respond to this
     DroneSE::OnAggression(this, d.srcSE);
+
+    // a pilot shot at by NPCs keeps their ship in space a little longer if they log off
+    if (HasPilot() and (d.srcSE != nullptr) and (d.srcSE->IsNPCSE() or d.srcSE->IsSentrySE()))
+        sCrimeWatch.NPCAggression(GetPilot()->GetCharacterID());
 
     if (is_log_enabled(DAMAGE__MESSAGE)) {
         if (d.srcSE->IsNPCSE()) {
@@ -446,6 +454,12 @@ void ShipSE::Killed(Damage &fatal_blow) {
     std::string wreck_name = m_self->itemName() + " Wreck";
 
     if (!m_self->HasPilot()) {
+        // a ship left in space by a pilot who logged off is still theirs
+        uint32 ownerID(m_system->GetLaw()->GetLoggedOffOwner(m_self->itemID()));
+        if (ownerID != 0) {
+            KilledLoggedOff(fatal_blow, killer, killerID, pClient, ownerID, wreckTypeID, wreck_name, wreckPosition);
+            return;
+        }
         // Spawn a wreck for the Ship that was destroyed:
         ItemData wreckItemData(wreckTypeID, killerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
         WreckContainerRef wreckItemRef = sItemFactory.SpawnWreckContainer( wreckItemData );
@@ -488,20 +502,9 @@ void ShipSE::Killed(Damage &fatal_blow) {
     if (pPilot == nullptr)
         return;    //  make error here
 
-    if (pClient != nullptr)
-        if (m_system->GetSystemSecurityRating() > 0) {
-            /* http://www.eveinfo.net/wiki/ind~4067.htm
-             *  relative_sec_status_penalty = base_penalty * system_truesec * (1 + (victim_sec_status - agressor_sec_status) / 90)
-             *  The actual drop in security status seen by the attacker is a function of their current security status and the relative penalty:
-             *  security status loss = relative_penalty * (agressor_sec_status + 10)
-             */
-            /** @todo (allan) check for faction/corp status modifiers here. */
-            double modifier = (1 + ((pPilot->GetSecurityRating() - pClient->GetSecurityRating()) / 90));
-            double penalty = 6.0f * m_system->GetSystemSecurityRating() * modifier;
-            double loss = penalty * ( pClient->GetSecurityRating() + 10);
-            loss *= sConfig.rates.secRate;
-            pClient->GetChar()->secStatusChange( loss );
-        }
+    // security status penalties for everyone who attacked this pilot illegally, kill rights (CrimeWatch)
+    sCrimeWatch.OnShipDestroyed(pPilot->GetCharacterID(), pPilot->InPod(), pPilot->GetSecurityRating(),
+            ((pClient != nullptr) ? pClient->GetCharacterID() : 0), m_system);
 
     /* populate kill data for killMail and save to db  -allan 01May16  --updated 13July17 */
     KillData data = KillData();
@@ -626,7 +629,9 @@ void ShipSE::Killed(Damage &fatal_blow) {
         // this method will reset char variables to last clone state after being podded.  NOTE  *** NOT TESTED YET ***
         pPilot->ResetAfterPodded();
     } else {
-        PayInsurance();
+        // since Crucible, ships destroyed by CONCORD aren't insured
+        if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
+            PayInsurance();
 
         m_destiny->SendJettisonPacket();
 
@@ -670,4 +675,143 @@ void ShipSE::Killed(Damage &fatal_blow) {
         for (auto cur: survivedItems)
             cur->Move(wreckItemRef->itemID(), flagNone); // populate wreck with items that survived
     }
+}
+
+/* a ship (or pod) left in space by a pilot who logged off (logoff timer) was destroyed.  the pilot isn't here, so this
+ *  does what the normal path does through the character: killmail, wreck, insurance, and a new pod in space (or a clone
+ *  in their home station, for a pod).  the character item is moved out before the ship and its contents are deleted
+ */
+void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
+                             uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition)
+{
+    m_system->GetLaw()->LoggedOffShipKilled(m_self->itemID());
+    CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
+    bool pod(m_self->groupID() == EVEDB::invGroups::Capsule);
+    uint32 locationID(GetLocationID());
+    sCrimeWatch.OnShipDestroyed(ownerID, pod, ((cRef.get() != nullptr) ? cRef->GetSecurityRating() : 0.0f),
+            ((pKillerClient != nullptr) ? pKillerClient->GetCharacterID() : 0), m_system);
+
+    KillData data = KillData();
+        data.solarSystemID = m_system->GetID();
+        data.victimCharacterID = ownerID;
+        data.victimCorporationID = m_corpID;
+        data.victimAllianceID = m_allyID;
+        data.victimFactionID = m_warID;
+        data.victimShipTypeID = m_self->typeID();
+        data.finalCharacterID = killerID;
+        data.finalCorporationID = killer->GetCorporationID();
+        data.finalAllianceID = killer->GetAllianceID();
+        data.finalFactionID = (killer->GetWarFactionID() > 500021 ? 500021 : killer->GetWarFactionID());
+        data.finalShipTypeID = killer->GetTypeID();
+        data.finalWeaponTypeID = ((fatal_blow.weaponRef.get() != nullptr) ? fatal_blow.weaponRef->typeID() : killer->GetTypeID());
+        data.finalSecurityStatus = 0;
+        data.finalDamageDone = fatal_blow.GetTotal();
+        data.victimDamageTaken = m_self->GetAttribute(AttrHP).get_int() + m_self->GetAttribute(AttrArmorHP).get_int()
+                               + m_self->GetAttribute(AttrShieldCapacity).get_int();
+    std::stringstream blob;
+    blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/></items>";
+    data.killBlob = blob.str().c_str();
+    data.killTime = GetFileTimeNow();
+    data.moonID = 0;
+    ServiceDB::SaveKillOrLoss(data);
+
+    if (pod) {
+        MapDB::AddPodKill(locationID);
+        std::string corpse_name(((cRef.get() != nullptr) ? cRef->itemName() : std::string("Unknown")) + "'s Frozen Corpse");
+        ItemData corpseItemData(10041, ownerID, locationID, flagNone, corpse_name.c_str(), wreckPosition);
+        InventoryItemRef corpseRef(sItemFactory.SpawnItem(corpseItemData));
+        if (corpseRef.get() != nullptr) {
+            DBSystemDynamicEntity corpseEntity = DBSystemDynamicEntity();
+                corpseEntity.allianceID = m_allyID;
+                corpseEntity.categoryID = EVEDB::invCategories::Celestial;
+                corpseEntity.corporationID = m_corpID;
+                corpseEntity.factionID = m_warID;
+                corpseEntity.groupID = EVEDB::invGroups::Biomass;
+                corpseEntity.itemID = corpseRef->itemID();
+                corpseEntity.itemName = corpse_name;
+                corpseEntity.ownerID = ownerID;
+                corpseEntity.typeID = 10041;
+                corpseEntity.position = wreckPosition;
+            m_system->BuildDynamicEntity(corpseEntity);
+        }
+        // they wake up in their clone
+        uint32 cloneStationID(0);
+        if ((cRef.get() != nullptr) and CharacterDB::GetCharHomeStation(ownerID, cloneStationID) and (cloneStationID != 0)) {
+            std::string podName(cRef->itemName() + "'s Capsule");
+            ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
+            ShipItemRef newPod(sItemFactory.SpawnShip(podItem));
+            if (newPod.get() != nullptr) {
+                newPod->ChangeSingleton(true);
+                newPod->Move(cloneStationID, flagHangar);
+                newPod->SaveShip();
+                cRef->Move(cloneStationID, flagNone);
+                cRef->SetActiveShip(newPod->itemID());
+                cRef->SetActivePod(newPod->itemID());
+                SystemData sysData;
+                sDataMgr.GetSystemData(sDataMgr.GetStationSystem(cloneStationID), sysData);
+                cRef->SetLocation(cloneStationID, sysData);
+                cRef->ResetClone();
+            }
+        }
+        return;
+    }
+
+    // since Crucible, ships destroyed by CONCORD aren't insured
+    if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
+        PayInsurance();
+    m_destiny->SendJettisonPacket();
+
+    // half of what was aboard survives, rigs never do
+    std::vector<InventoryItemRef> survivedItems;
+    std::map<uint32, InventoryItemRef> contents;
+    GetShipItemRef()->GetMyInventory()->GetInventoryMap(contents);
+    for (auto cur : contents) {
+        if ((cRef.get() != nullptr) and (cur.first == cRef->itemID()))
+            continue;   // the pilot
+        if (IsRigSlot(cur.second->flag()))
+            continue;
+        if (IsEven(MakeRandomInt(0, 100)))
+            survivedItems.push_back(cur.second);
+    }
+
+    // they wake up in their pod, where the ship was.  the pod appears when they log in
+    if (cRef.get() != nullptr) {
+        std::string podName(cRef->itemName() + "'s Capsule");
+        ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
+        ShipItemRef newPod(sItemFactory.SpawnShip(podItem));
+        if (newPod.get() != nullptr) {
+            GPoint podPosition(wreckPosition);
+            podPosition.MakeRandomPointOnSphere(GetShipItemRef()->radius() + newPod->radius() + MakeRandomFloat(100, 200));
+            newPod->ChangeSingleton(true);
+            newPod->Move(m_system->GetID(), flagCapsule);
+            newPod->SetPosition(podPosition);
+            newPod->SaveShip();
+            cRef->Move(newPod->itemID(), flagPilot);
+            cRef->SetActiveShip(newPod->itemID());
+            cRef->SetActivePod(newPod->itemID());
+            cRef->SaveCharacter();
+        }
+    }
+
+    ItemData wreckItemData(wreckTypeID, ownerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
+    WreckContainerRef wreckItemRef(sItemFactory.SpawnWreckContainer(wreckItemData));
+    if (wreckItemRef.get() == nullptr)
+        return;
+    DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();
+        wreckEntity.allianceID = killer->GetAllianceID();
+        wreckEntity.categoryID = EVEDB::invCategories::Celestial;
+        wreckEntity.corporationID = killer->GetCorporationID();
+        wreckEntity.factionID = sDataMgr.GetWreckFaction(wreckTypeID);
+        wreckEntity.groupID = EVEDB::invGroups::Wreck;
+        wreckEntity.itemID = wreckItemRef->itemID();
+        wreckEntity.itemName = wreck_name;
+        wreckEntity.ownerID = ownerID;
+        wreckEntity.typeID = wreckTypeID;
+        wreckEntity.position = wreckPosition;
+    if (!m_system->BuildDynamicEntity(wreckEntity, m_self->itemID())) {
+        wreckItemRef->Delete();
+        return;
+    }
+    for (auto cur : survivedItems)
+        cur->Move(wreckItemRef->itemID(), flagNone);
 }

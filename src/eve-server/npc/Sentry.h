@@ -50,6 +50,10 @@ public:
 
     SentryAI* GetAIMgr()                                { return m_AI; }
 
+    // gate and station guns (npc/LawEnforcement.h): they shoot criminals and anyone aggressing their owner
+    void SetLawSentry(bool set=true)                    { m_lawSentry = set; }
+    bool IsLawSentry()                                  { return m_lawSentry; }
+
 protected:
     SentryAI* m_AI;
 
@@ -62,6 +66,7 @@ private:
     float m_armorDamage = 0;
     float m_shieldCharge = 0;
     float m_shieldCapacity = 0;
+    bool m_lawSentry = false;
 };
 
 #endif  // __NPC_SENTRY_H

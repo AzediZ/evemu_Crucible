@@ -343,6 +343,9 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void Killed(Damage &fatal_blow);            /* This method is defined in Damage.cpp */
+    // a ship left in space by a pilot who logged off was destroyed (Damage.cpp)
+    void KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
+                         uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition);
 
     /* virtual functions to be overridden in derived classes */
     virtual void MissileLaunched(Missile* pMissile)     { /* Do nothing here */ }

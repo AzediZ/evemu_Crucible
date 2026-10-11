@@ -22,6 +22,7 @@
     Rewrite:    Allan
 */
 
+#include "system/CrimeWatch.h"
 #include "eve-server.h"
 
 
@@ -160,6 +161,8 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
                 pShipSE->GetName(), sConfig.world.shipBoardDistance);
 
     pClient->Board(pShipSE);
+    // a criminal in a new ship is still a criminal
+    sCrimeWatch.OnEnterSpace(pClient);
 
     /* return error msg from this call, if applicable (not sure how yet), else nodeid and timestamp */
     // returns nodeID and timestamp

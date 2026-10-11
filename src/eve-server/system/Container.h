@@ -266,6 +266,7 @@ public:
     void Salvaged()                                     { m_contRef->Salvaged(); }
     void SetLaunchedByID(uint32 launcherID=0)           { m_launchedByID = launcherID; }
     bool IsEmpty()                                      { return m_contRef->IsEmpty(); }
+    bool IsAbandoned()                                  { return m_abandoned; }
 
     /** @todo (allan) finish this */
     double GetOwnerBounty()                             { return 0; }

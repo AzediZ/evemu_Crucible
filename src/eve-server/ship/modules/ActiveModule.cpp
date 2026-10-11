@@ -18,6 +18,8 @@
 #include "ship/modules/Prospector.h"
 #include "system/Container.h"
 #include "system/cosmicMgrs/BeltMgr.h"
+#include "system/CrimeWatch.h"
+#include "effects/EffectsDataMgr.h"
 
 
 ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
@@ -402,6 +404,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     m_destinyMgr = pShip->DestinyMgr();
 
     // Do initial cycle immediately while we start timer
+    CrimeCheck();
     UpdateCycleHeat(true);
     SetTimer(DoCycle());
 
@@ -495,6 +498,21 @@ void ActiveModule::SetSlaveData(ShipSE* pShip) {
     m_sysMgr = pShip->SystemMgr();
     m_targMgr = pShip->TargetMgr();
     m_destinyMgr = pShip->DestinyMgr();
+}
+
+void ActiveModule::CrimeCheck()
+{
+    if (m_targetSE == nullptr)
+        return;
+    Client* pPilot(m_shipRef->GetPilot());
+    if (pPilot == nullptr)
+        return;
+    // weapons always count (a launcher's effect becomes its charge's after the first cycle)
+    if (m_turret or m_launcher or sFxDataMgr.isOffensive(m_effectID)) {
+        sCrimeWatch.OffensiveAct(pPilot, m_targetSE);
+    } else if (sFxDataMgr.isAssistance(m_effectID)) {
+        sCrimeWatch.AssistanceAct(pPilot, m_targetSE);
+    }
 }
 
 void ActiveModule::UpdateCycleHeat(bool cycling)
@@ -862,6 +880,7 @@ void ActiveModule::ProcessActiveCycle() {
         return;
     }
 
+    CrimeCheck();
     UpdateCycleHeat(true);
     SetTimer(DoCycle());
 }
