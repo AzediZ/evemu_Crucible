@@ -360,7 +360,7 @@ void Character::Delete() {
     InventoryItem::Delete();
 }
 
-float Character::balance(uint8 type)
+double Character::balance(uint8 type)
 {
     if (type == Account::CreditType::ISK) {
         return m_charData.balance;
@@ -369,18 +369,15 @@ float Character::balance(uint8 type)
     } else {
         _log(ACCOUNT__ERROR, "Character::balance() - invalid type %u", type);
     }
-    return 0.0f;
+    return 0.0;
 }
 
-bool Character::AlterBalance(float amount, uint8 type) {
+bool Character::AlterBalance(double amount, uint8 type) {
     if (amount == 0)
         return true;
 
     // amount can be negative.  check for funds to remove, if applicable
     if ((balance(type) + amount) < 0) {
-        std::map<std::string, PyRep *> args;
-        args["amount"] = new PyFloat(-amount);
-        args["balance"] = new PyFloat(balance(type));
         throw UserError ("NotEnoughMoney")
                 .AddISK ("amount", -amount)
                 .AddISK ("balance", balance (type));

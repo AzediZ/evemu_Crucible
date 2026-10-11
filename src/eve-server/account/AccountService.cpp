@@ -319,6 +319,10 @@ void AccountService::TransferFunds(
         );
     }
 
+    // a negative amount would move money the other way (GiveCash(-x) takes from the recipient)
+    if (!(amount >= 0.0))
+        throw CustomError("Invalid amount.");
+
     uint8 fromCurrency = Account::CreditType::ISK;
 
     if (IsAUR(fromKey)) {
@@ -382,71 +386,76 @@ void AccountService::TransferFunds(
 
     Client* pClientTo(nullptr);
 
-    if (IsCharacterID(toID)) {
-        pClientTo = sEntityList.FindClientByCharID(toID);
-        if (pClientTo == nullptr) {
-            // receipient is offline. xfer funds thru db
-            newBalanceTo = AccountDB::OfflineFundXfer(toID, amount, toCurrency);
+    // the sender is already debited.  if the credit fails, the debit is reversed so the transfer leaves both wallets unchanged
+    try {
+        if (IsCharacterID(toID)) {
+            pClientTo = sEntityList.FindClientByCharID(toID);
+            if (pClientTo == nullptr) {
+                // receipient is offline. xfer funds thru db
+                newBalanceTo = AccountDB::OfflineFundXfer(toID, amount, toCurrency);
+            } else {
+                // this will throw if it fails
+                pClientTo->AddBalance(amount, toCurrency);
+                newBalanceTo = pClientTo->GetBalance(toCurrency);
+            }
+
+            AccountDB::AddJournalEntry(
+                toID,
+                entryTypeID,
+                fromID,
+                toID,
+                toCurrency,
+                toKey,
+                amount,
+                newBalanceTo,
+                reason,
+                referenceID
+            );
+        } else if (IsPlayerCorp(toID)) {
+            uint32 userID(0);
+
+            if (pClient != nullptr) {
+                userID = pClient->GetCharacterID();
+            }
+
+            HandleCorpTransaction(
+                toID,
+                entryTypeID,
+                fromID,
+                userID?userID:toID,
+                toCurrency,
+                toKey,
+                amount,
+                reason,
+                referenceID
+            );
+            return;
         } else {
-            // this will throw if it fails
-            pClientTo->AddBalance(amount, toCurrency);
-            /** @todo if this DOES fail, return funds to origin.  this needs a try/catch block */
-            //TransferFunds(corpSCC, fromID, amount, reason, Journal::EntryType::Undefined, referenceID, fromKey, fromKey);
-            newBalanceTo = pClientTo->GetBalance(toCurrency);
+            AccountDB::AddJournalEntry(
+                toID,
+                entryTypeID,
+                fromID,
+                toID,
+                toCurrency,
+                toKey,
+                amount,
+                newBalanceTo,
+                reason,
+                referenceID
+            );
+
+            _log(ACCOUNT__TRACE,
+                "TransferFunds() - toID: %s(%u) is neither player nor player corp.  Not sending update.",
+                sDataMgr.GetCorpName(toID).c_str(),
+                toID
+            );
+
+            return;
         }
-
-        AccountDB::AddJournalEntry(
-            toID,
-            entryTypeID,
-            fromID,
-            toID,
-            toCurrency,
-            toKey,
-            amount,
-            newBalanceTo,
-            reason,
-            referenceID
-        );
-    } else if (IsPlayerCorp(toID)) {
-        uint32 userID(0);
-
-        if (pClient != nullptr) {
-            userID = pClient->GetCharacterID();
-        }
-
-        HandleCorpTransaction(
-            toID,
-            entryTypeID,
-            fromID,
-            userID?userID:toID,
-            toCurrency,
-            toKey,
-            amount,
-            reason,
-            referenceID
-        );
-        return;
-    } else {
-        AccountDB::AddJournalEntry(
-            toID,
-            entryTypeID,
-            fromID,
-            toID,
-            toCurrency,
-            toKey,
-            amount,
-            newBalanceTo,
-            reason,
-            referenceID
-        );
-
-        _log(ACCOUNT__TRACE,
-            "TransferFunds() - toID: %s(%u) is neither player nor player corp.  Not sending update.",
-            sDataMgr.GetCorpName(toID).c_str(),
-            toID
-        );
-
-        return;
+    } catch (...) {
+        _log(ACCOUNT__ERROR, "TransferFunds() - crediting %u failed.  Refunding %.2f to %u.", toID, amount, fromID);
+        RefundSender(fromID, toID, amount, fromCurrency, fromKey, entryTypeID, reason, referenceID, pClientFrom);
+        throw;
     }
 
     if ((pClientTo != nullptr) and pClientTo->IsCharCreation()) {
@@ -528,6 +537,31 @@ void AccountService::TransferFunds(
     }
 }
 
+void AccountService::RefundSender(uint32 fromID, uint32 toID, double amount, uint8 fromCurrency, uint16 fromKey, uint8 entryTypeID,
+                                  const std::string& reason, uint32 referenceID, Client* pClientFrom)
+{
+    std::string refund = "Refund: ";
+    refund += reason;
+    try {
+        if (IsCharacterID(fromID)) {
+            double newBalance(0);
+            // the sender may have logged off since the debit
+            pClientFrom = sEntityList.FindClientByCharID(fromID);
+            if (pClientFrom == nullptr) {
+                newBalance = AccountDB::OfflineFundXfer(fromID, amount, fromCurrency);
+            } else {
+                pClientFrom->AddBalance(amount, fromCurrency);
+                newBalance = pClientFrom->GetBalance(fromCurrency);
+            }
+            AccountDB::AddJournalEntry(fromID, entryTypeID, toID, fromID, fromCurrency, fromKey, amount, newBalance, refund, referenceID);
+        } else if (IsPlayerCorp(fromID)) {
+            HandleCorpTransaction(fromID, entryTypeID, toID, fromID, fromCurrency, fromKey, amount, refund, referenceID);
+        }
+    } catch (...) {
+        _log(ACCOUNT__ERROR, "RefundSender() - refund of %.2f to %u failed.", amount, fromID);
+    }
+}
+
 void AccountService::HandleCorpTransaction(uint32 corpID, int8 entryTypeID, uint32 fromID, uint32 toID, int8 currency, \
                                             uint16 accountKey, double amount, std::string description, \
                                             uint32 referenceID/*0*/)
@@ -539,11 +573,6 @@ void AccountService::HandleCorpTransaction(uint32 corpID, int8 entryTypeID, uint
     // verify funds available for withdraw first
     if (amount < 0) {
         if (-amount > balance) {
-            std::map<std::string, PyRep *> args;
-            args["owner"] = new PyString(CorporationDB::GetCorpName(corpID));
-            args["amount"] = new PyFloat(-amount);
-            args["balance"] = new PyFloat(balance);
-            args["division"] = new PyString(CorporationDB::GetDivisionName(corpID, accountKey));
             throw UserError ("NotEnoughMoneyCorp")
                     .AddOwnerName ("owner", corpID)
                     .AddISK ("amount", -amount)

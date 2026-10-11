@@ -63,6 +63,19 @@ public:
     );
 
 protected:
+    // reverses the debit TransferFunds() made when crediting the recipient fails
+    static void RefundSender(
+        uint32 fromID,
+        uint32 toID,
+        double amount,
+        uint8 fromCurrency,
+        uint16 fromKey,
+        uint8 entryTypeID,
+        const std::string& reason,
+        uint32 referenceID,
+        Client* pClientFrom
+    );
+
     AccountDB m_db;
 
     PyResult GetKeyMap(PyCallArgs& call);
