@@ -701,7 +701,7 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
         }
         if (pShipSE != nullptr)
             if ((IsJump()) and !m_autoPilot)
-                pShipSE->DestinyMgr()->Halt();
+                pShipSE->DestinyMgr()->Halt(false);
 
         // remove from current system before resetting system vars
         m_system->RemoveEntity(pShipSE);
@@ -819,8 +819,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
 
         SetDestiny(pt);
 
+        // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
+        //  client's autopilot off in every new system
         if (IsJump() and !m_autoPilot)
-            pShipSE->DestinyMgr()->Stop();
+            pShipSE->DestinyMgr()->Halt(false);
     }
 
     if (!m_login)

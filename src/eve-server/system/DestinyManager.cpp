@@ -853,7 +853,7 @@ void DestinyManager::Stop() {
     SendSingleDestinyUpdate(&up);   // consumed
 }
 
-void DestinyManager::Halt() {
+void DestinyManager::Halt(bool notify/*true*/) {
     //  reset ALL movement variables and states.  calling this will set object to a COMPLETE and IMMEDIATE stop.
     bool wasMoving(IsMoving());
 
@@ -875,7 +875,7 @@ void DestinyManager::Halt() {
     m_targetLost = false;
 
     // let the client know, so it stops where we do
-    if (wasMoving and (mySE->SysBubble() != nullptr)) {
+    if (notify and wasMoving and (mySE->SysBubble() != nullptr)) {
         std::vector<PyTuple*> updates;
         CmdStop du;
             du.entityID = mySE->GetID();
@@ -1651,7 +1651,9 @@ void DestinyManager::UpdateOldShip(ShipSE* pShipSE)
 
 void DestinyManager::Jump(bool showCloak)
 {
-    Halt();
+    // the ship is leaving this system, so there is no one to tell.  a Stop here would switch off the jumping
+    //  pilot's autopilot (the client is still in the old system when it arrives)
+    Halt(false);
     if (showCloak) {
         m_cloaked = true;
     }
