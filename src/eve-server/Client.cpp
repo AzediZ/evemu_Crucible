@@ -2329,7 +2329,7 @@ void Client::SendRemoteMessage(const char* msgKey, PyDict* args/*nullptr*/)
     SendNotification("OnRemoteMessage", "charid", &tuple);
 }
 
-void Client::SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey/*nullptr*/, PyDict* fallbackArgs/*nullptr*/)
+int64 Client::SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey/*nullptr*/, PyDict* fallbackArgs/*nullptr*/)
 {
     /* macho.CallReq to the client's service.  the client runs it through ObjectCallGPCS (flag 0 = not an object call)
      * and ServiceCallGPCS ((1, method, args, kw) = service call), which only requires the method to be exported
@@ -2368,7 +2368,9 @@ void Client::SendServiceCall(const char* service, const char* method, PyTuple* a
         packet->Dump(CLIENT__CALL_DUMP, dumper);
     }
 
+    int64 callID = packet->source.callID;
     QueuePacket(packet);
+    return callID;
 }
 
 bool Client::Handle_CallRsp(PyPacket* packet)
@@ -2383,6 +2385,22 @@ bool Client::Handle_CallRsp(PyPacket* packet)
         PyLogDumpVisitor dumper(CLIENT__CALL_DUMP, CLIENT__CALL_DUMP, "", true, true);
         packet->Dump(CLIENT__CALL_DUMP, dumper);
     }
+
+    std::map<int64, std::function<void(PyRep*)>>::iterator cItr = m_serverCallCallbacks.find(packet->dest.callID);
+    if (cItr != m_serverCallCallbacks.end()) {
+        std::function<void(PyRep*)> callback = cItr->second;
+        m_serverCallCallbacks.erase(cItr);
+        // the answer is (substream(result),)
+        PyRep* result(nullptr);
+        if ((packet->payload != nullptr) and (packet->payload->size() > 0)) {
+            result = packet->payload->GetItem(0);
+            if ((result != nullptr) and result->IsSubStream()) {
+                result->AsSubStream()->DecodeData();
+                result = result->AsSubStream()->decoded();
+            }
+        }
+        callback(result);
+    }
     return true;
 }
 
@@ -2393,6 +2411,7 @@ bool Client::Handle_ErrorResponse(PyPacket* packet, ErrorResponse& error)
         PyLogDumpVisitor dumper(CLIENT__CALL_DUMP, CLIENT__CALL_DUMP, "", true, true);
         packet->Dump(CLIENT__CALL_DUMP, dumper);
     }
+    m_serverCallCallbacks.erase(packet->dest.callID);
     // the client could not run the call; tell the user what the call was about
     std::map<int64, std::pair<std::string, PyDict*>>::iterator itr = m_serverCallFallback.find(packet->dest.callID);
     if (itr != m_serverCallFallback.end()) {

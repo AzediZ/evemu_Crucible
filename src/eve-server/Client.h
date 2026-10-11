@@ -461,7 +461,10 @@ public:
     /* calls an exported method of a client service (server -> client CALL_REQ).  args are consumed.  the response is only logged.
      * if the client answers with an error and fallbackKey is set, SendRemoteMessage(fallbackKey, fallbackArgs) is sent instead
      */
-    void SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey = nullptr, PyDict* fallbackArgs = nullptr);
+    // returns the callID (for OnServerCallResult)
+    int64 SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey = nullptr, PyDict* fallbackArgs = nullptr);
+    // runs callback with the client's return value when the call answers (not on an error)
+    void OnServerCallResult(int64 callID, std::function<void(PyRep* result)> callback) { m_serverCallCallbacks[callID] = callback; }
 
     // this is to check Throw status, to avoid throws/segfault when not applicable  (should use try/catch block)
     bool CanThrow()                                     { return m_canThrow; }
@@ -507,6 +510,7 @@ private:
     uint32 m_nextNotifySequence;
     int64 m_nextServerCallID;   // callIDs of server -> client calls
     std::map<int64, std::pair<std::string, PyDict*>> m_serverCallFallback;  // callID -> message sent if the call fails
+    std::map<int64, std::function<void(PyRep*)>> m_serverCallCallbacks;    // callID -> what to do with the answer
 
     std::map<uint32, uint32>    m_lpMap;    // corpID/points
 

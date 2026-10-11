@@ -618,12 +618,52 @@ PyResult LSCService::Invite(PyCallArgs& call, PyInt* characterID, PyInt* channel
     if (!channel->GetTemporary() and !IsPrivileged(call.client, channel) and (channel->GetEntryMode(0) < LSC::Mode::chConversationalist))
         throw CustomError("You are not allowed to invite people to this channel.");
 
+    Client* pTarget = sEntityList.FindClientByCharID(targetID);
+    if (pTarget == nullptr)
+        throw CustomError("%s is not online.", sDataMgr.GetOwnerName(targetID).c_str());
+
     // the client asks to put the invitee on the allowed list when the channel isn't public
     if (addAllowed.has_value() and (addAllowed.value() != nullptr) and (PyRep::IntegerValue(addAllowed.value()) != 0)
     and (channel->GetEntryMode(targetID) < LSC::Mode::chConversationalist))
         channel->SetAccess(targetID, LSC::Mode::chConversationalist, 0, "", call.client);
 
     channel->AddInvite(targetID);
+
+    /* LSC.ChatInvite(invitorID, invitorName, invitorGender, channelID) on the invitee's client: it shows the invitation
+     *  (or accepts at once for contacts) and joins.  it returns None when accepted, else a reason (ChtRejected, ChtBlockedBefore,
+     *  ChtBlockedNow, ChtAlreadyInvited, ChtAlreadyInChannel, ChtCannotInviteSelf, ChtInviteException).
+     *  if the client refuses the call, the invitee gets a notice and can join the channel by name
+     */
+    std::string inviterName = call.client->GetName();
+    std::string channelNameStr = ((channelName.has_value() and (channelName.value() != nullptr) and !channelName.value()->IsNone())
+            ? PyRep::StringContent(channelName.value()) : channel->GetDisplayName());
+    PyDict* fallback = new PyDict();
+        fallback->SetItemString("notify", new PyString(inviterName + " invites you to the chat channel " + channelNameStr + "."));
+    int32 gender = ((call.client->GetChar().get() != nullptr) and call.client->GetChar()->gender()) ? 1 : 0;
+    PyTuple* args = new PyTuple(4);
+        args->SetItem(0, new PyInt(charID));
+        args->SetItem(1, new PyWString(inviterName));
+        args->SetItem(2, new PyInt(gender));
+        args->SetItem(3, channel->EncodeID());
+    int64 callID = pTarget->SendServiceCall("LSC", "ChatInvite", args, "CustomNotify", fallback);
+
+    // tell the inviter when the invitation was turned down
+    std::string targetName = pTarget->GetName();
+    pTarget->OnServerCallResult(callID, [charID, targetName](PyRep* result) {
+        if ((result == nullptr) or !(result->IsString() or result->IsWString()))
+            return;
+        std::string reason = PyRep::StringContent(result);
+        Client* pInviter = sEntityList.FindClientByCharID(charID);
+        if (pInviter == nullptr)
+            return;
+        if ((reason == "ChtRejected") or (reason == "ChtBlockedBefore") or (reason == "ChtBlockedNow")) {
+            pInviter->SendNotifyMsg("%s rejected your chat invitation.", targetName.c_str());
+        } else if (reason == "ChtAlreadyInvited") {
+            pInviter->SendNotifyMsg("%s has already been invited.", targetName.c_str());
+        } else if (reason == "ChtAlreadyInChannel") {
+            pInviter->SendNotifyMsg("%s is already in the channel.", targetName.c_str());
+        }
+    });
     return PyStatic.NewOne();
 }
 
