@@ -378,6 +378,19 @@ boolean can use either 0/1 OR true/false.
         <DevIndexDecayPerHour>100000</DevIndexDecayPerHour><!-- points per hour; the client draws its level bars with 100000, so change with care -->
     </sov>
 
+    <pos><!-- starbases (Crucible 1.1: fuel blocks, strontium reinforcement, charters in 0.5+ empire space) -->
+        <FuelRate>1.0</FuelRate><!-- multiplier on the hourly fuel block, charter and strontium use.  0 = towers run without fuel -->
+        <RequireCharters>true</RequireCharters><!-- bool - starbase charters needed in the cargo hold to anchor, and burned hourly, where invControlTowerResources asks for them -->
+        <HighSecStandingCheck>true</HighSecStandingCheck><!-- bool - anchoring a tower in empire space needs corp standing to the system's faction of 10 x security -->
+        <ConcordAnchorRestriction>true</ConcordAnchorRestriction><!-- bool - no anchoring at 0.8+, and the per-type security limit (no moon mining or reactions in 0.5+) -->
+        <KeepTowerSystemsLoaded>true</KeepTowerSystemsLoaded><!-- bool - boot systems with online towers at startup and keep them loaded, so fuel, reinforcement and moon mining run in real time -->
+        <MaxCatchUpCycles>720</MaxCatchUpCycles><!-- most hourly tower cycles replayed when a tower's system loads after downtime (720 = 30 days) -->
+        <MoonGooSeed>1</MoonGooSeed><!-- seed of the generated moon materials (generated once per moon and saved in moonResources) -->
+        <MoonGooEmptyChance>0.5</MoonGooEmptyChance><!-- chance a moon has no materials -->
+        <GunsEnabled>true</GunsEnabled><!-- bool - starbase weapons and electronic warfare batteries shoot hostiles on their own -->
+        <TowerSnapToMoon>false</TowerSnapToMoon><!-- bool - legacy: anchoring moves the tower to a fixed point at its moon and warps the pilot there -->
+    </pos>
+
     <threads><!-- ignored.  the server main loop is single-threaded by design; these are parsed for compatibility only -->
         <NetworkThreads>2</NetworkThreads>
         <DatabaseThreads>2</DatabaseThreads>

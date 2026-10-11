@@ -131,6 +131,7 @@ void StaticDataMgr::Clear()
     m_ramInstContents.clear();
     m_ramLineActivity.clear();
     m_t3Blueprints.clear();
+    m_towerResources.clear();
 
     PySafeDecRef(m_keyMap);
     PySafeDecRef(m_agents);
@@ -675,6 +676,21 @@ void StaticDataMgr::Populate()
             m_storylineAgents.emplace(row.GetUInt(3), std::make_pair(row.GetUInt(0), locationID));
     }
     sLog.Cyan("    StaticDataMgr", "%lu Agent Data Sets loaded in %.3fms.", m_agentSystem.size(), (GetTimeMSeconds() - startTime));
+
+    startTime = GetTimeMSeconds();
+    ManagerDB::GetControlTowerResources(*res);
+    while (res->GetRow(row)) {
+        //SELECT controlTowerTypeID, resourceTypeID, purpose, quantity, minSecurityLevel, factionID, wormholeClassID
+        EVEPOS::TowerResource resource = EVEPOS::TowerResource();
+        resource.typeID = row.GetUInt(1);
+        resource.purpose = row.GetUInt(2);
+        resource.quantity = row.GetUInt(3);
+        resource.minSecurity = (row.IsNull(4) ? -1.0f : row.GetFloat(4));
+        resource.factionID = (row.IsNull(5) ? 0 : row.GetUInt(5));
+        resource.wormholeClassID = (row.IsNull(6) ? -1 : row.GetInt(6));
+        m_towerResources.emplace(row.GetUInt(0), resource);
+    }
+    sLog.Cyan("    StaticDataMgr", "%lu Control Tower resource rows loaded in %.3fms.", m_towerResources.size(), (GetTimeMSeconds() - startTime));
 
     //cleanup
     SafeDelete(res);
@@ -1256,17 +1272,20 @@ uint32 StaticDataMgr::GetStationSystem(uint32 stationID)
 
 uint8 StaticDataMgr::GetWHSystemClass(uint32 systemID)
 {
+    // the client's cfg.GetLocationWormholeClass():  system, then constellation, then region
     std::map<uint32, uint8>::iterator itr = m_whRegions.find(systemID);
     if (itr != m_whRegions.end())
         return itr->second;
 
-    SystemManager* pSysMgr(sEntityList.FindOrBootSystem(systemID));
-    if (pSysMgr == nullptr)
-        return 0;
-
-    itr = m_whRegions.find(pSysMgr->GetRegionID());
-    if (itr != m_whRegions.end())
-        return itr->second;
+    std::map<uint32, SystemData>::iterator sItr = m_systemData.find(systemID);
+    if (sItr != m_systemData.end()) {
+        itr = m_whRegions.find(sItr->second.constellationID);
+        if (itr != m_whRegions.end())
+            return itr->second;
+        itr = m_whRegions.find(sItr->second.regionID);
+        if (itr != m_whRegions.end())
+            return itr->second;
+    }
 
     // dont have data for systemID nor regionID...throw error and ?something else?
     _log(DATA__MESSAGE, "Failed to query WH Class for systemID %u: System not found.", systemID);
@@ -1276,6 +1295,13 @@ uint8 StaticDataMgr::GetWHSystemClass(uint32 systemID)
         return 0;
 
     return 0;
+}
+
+void StaticDataMgr::GetTowerResources(uint16 towerTypeID, std::vector<EVEPOS::TowerResource>& into)
+{
+    auto range = m_towerResources.equal_range(towerTypeID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
 }
 
 bool StaticDataMgr::GetSystemData(uint32 locationID, SystemData& data)

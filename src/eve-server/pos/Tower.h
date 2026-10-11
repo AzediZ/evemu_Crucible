@@ -36,6 +36,7 @@ public:
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
     virtual void                InitData();
+    virtual void                Killed(Damage &damage);
 
     /* virtual functions to be overridden in derived classes */
     virtual void     MissileLaunched(Missile* pMissile) { /* Do nothing here */ }
@@ -102,6 +103,34 @@ public:
     void GetTowerData(EVEPOS::TowerData& tData)         { tData = m_tdata; }
 
     uint16 GetSOI()                                     { return m_soi; }
+
+    /* starbase rules */
+    // EVEPOS::Access level of an EVEPOS::Deploy action
+    int8 GetDeployFlag(int8 action);
+    // the tower or the first of its structures that is anchoring, onlining or unanchoring
+    StructureSE* GetBusyStructure();
+    // one operation per tower at a time:  throws CantTowerIsAlreadyActive when another structure is busy
+    void CheckNotBusy(StructureSE* pRequester);
+    // a structure anchored (or anchoring, unanchoring) at this tower, nullptr if none
+    StructureSE* GetAnchoredModule();
+    // the tower is gone:  its structures go offline and belong to no tower
+    void OrphanModules();
+    const std::map<uint32, StructureSE*>& GetModules()  { return m_structs; }
+    uint32 GetForceFieldID()                            { return (m_pShieldSE == nullptr ? 0 : m_pShieldSE->GetID()); }
+
+    /* fuel */
+    /* invControlTowerResources for a tower in a system, as the client's fuel tab shows them:  rows of other factions,
+     *  higher security or other wormhole classes skipped, x0.75 where the owner's alliance holds sovereignty, x pos.FuelRate,
+     *  rounded up.  online:  fuel blocks and charters per hour (purpose 1).  strontium:  per hour of reinforcement (purpose 4)
+     */
+    static void GetFuelRequirements(uint16 towerTypeID, uint32 systemID, uint32 ownerAllianceID,
+                                    std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium);
+    // starbase charter types the tower needs in this system (empty where none are needed)
+    static void GetCharterTypes(uint16 towerTypeID, uint32 systemID, std::vector<uint16>& into);
+    // units of typeID in a bay (flagNone fuel bay, flagSecondaryStorage strontium bay)
+    uint32 CountResource(uint16 typeID, EVEItemFlags flag);
+    // CantOnlineTowerLacksResources without a cycle of every online resource in the fuel bay
+    void CheckOnlineFuel();
 
     inline void AddModule(StructureSE* pSE)             { m_structs.emplace(pSE->GetID(), pSE); }
     inline void RemoveModule(StructureSE* pSE)          { m_structs.erase(pSE->GetID()); }

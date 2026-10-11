@@ -166,11 +166,46 @@ public:
     void                        Drop(SystemBubble* pBubble);
     void                        Anchor();
     void                        Offline();
-    void                        PullAnchor();
+    /* anchoring, unanchoring, onlining and offlining.  these check the pilot's permissions and the Crucible starbase
+     *  rules and throw the client's errors.  pClient nullptr is the server or a GM (rules skipped)
+     */
     void                        SetAnchor(Client* pClient, GPoint& pos);
-    void                        Activate(int32 effectID);
-    void                        Deactivate(int32 effectID);
+    void                        PullAnchor(Client* pClient);
+    void                        PullAnchor()            { PullAnchor(nullptr); }
+    void                        Activate(Client* pClient, int32 effectID);
+    void                        Activate(int32 effectID)    { Activate(nullptr, effectID); }
+    void                        Deactivate(Client* pClient, int32 effectID);
+    void                        Deactivate(int32 effectID)  { Deactivate(nullptr, effectID); }
+    // offline at once (tower out of fuel or offlined, link lost...).  no checks
+    void                        ForceOffline();
     void                        GetEffectState(PyList& into);
+
+    /* starbase permissions */
+    // the pilot is in the owner corp and holds the role there (directors hold every role)
+    bool                        HasRole(Client* pClient, int64 role);
+    // EVEPOS::Access level (the tower's deploy and usage flags):  config role, corp, alliance or fuel tech role
+    bool                        CheckAccessLevel(Client* pClient, int8 level);
+    // throws the client's error when the pilot may not do the EVEPOS::Deploy action on this structure
+    void                        CheckDeployPermission(Client* pClient, int8 action);
+    // EVEPOS::Usage (view/put, take, use) from this structure's usage flags
+    bool                        CanUseAccess(Client* pClient, int8 usage);
+
+    /* state helpers */
+    // anchoring, onlining or unanchoring timer running
+    bool                        IsStateChangePending();
+    // 'anchoring', 'onlining' or 'unanchoring' (CantTowerIsAlreadyActive)
+    const char*                 GetPendingActionName();
+    // anchored and done anchoring (offline)
+    bool                        IsFullyAnchored();
+    // anchored (offline or any online state) and not anchoring or unanchoring
+    bool                        IsAnchored();
+    // online, operating or reinforced:  the structure works (a reinforced tower keeps its modules and guns running)
+    bool                        IsPowered()             { return (IsOnline() or IsReinforced()); }
+    // starbase structures (towers and the modules they control)
+    bool                        IsStarbaseStructure()   { return (m_tower or m_module); }
+    // sets the control tower of a module (anchoring near another tower, orphaning)
+    void                        SetControlTower(TowerSE* pTower);
+    int32                       GetProvisionTypeID()    { return m_data.provisionTypeID; }
     int8                        GetState() const        { return m_data.state; }
     int8                        GetProcState()          { return m_procState; }
     int8                        GetStatus()             { return m_data.status; }
@@ -197,11 +232,14 @@ public:
     // structure update methods....may not use like this
     void                        UpdateTimeStamp()       { m_db.UpdateTimeStamp(m_data.itemID, m_data); }
     void                        UpdateUsageFlags()      { m_db.UpdateUsageFlags(m_data.itemID, m_data); }
+    void                        SaveData()              { m_db.UpdateBaseData(m_data); }
 
     // for targetMgr
     bool                        IsReinforced()          { return (m_data.state == EVEPOS::StructureState::Reinforced); }
 
     void                        SendSlimUpdate();
+    // ball flags while anchored/free (also sent to the bubble when they change)
+    void                        SendBallFree(bool free);
 
     // online and usable (online, operating, vulnerable or invulnerable; not reinforced)
     bool                        IsOnline();
@@ -212,6 +250,14 @@ public:
 
 protected:
     void                        SendEffectUpdate(int16 effectID, bool active);
+    // the Crucible anchoring rules.  modules return the control tower they anchor at
+    TowerSE*                    CheckAnchorRules(Client* pClient, const GPoint& pos);
+    void                        CheckOnlineRules(Client* pClient);
+    void                        CheckUnanchorRules(Client* pClient);
+    // the anchored tower that controls a module anchored at pos (within the tower's maxStructureDistance), or nullptr
+    TowerSE*                    FindControlTower(const GPoint& pos);
+    // anchored (or online) structures of this group in the system owned by this structure's alliance (corp without one)
+    uint32                      CountGroupInSystem(bool onlineOnly);
 
     PosMgrDB                    m_db;
 

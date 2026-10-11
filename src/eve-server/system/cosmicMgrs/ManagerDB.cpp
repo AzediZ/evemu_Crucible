@@ -633,6 +633,14 @@ void ManagerDB::GetWHSystemClass(DBQueryResult& res)
         _log(DATABASE__ERROR, "Error in GetWHSystemClass query: %s", res.error.c_str());
 }
 
+void ManagerDB::GetControlTowerResources(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+            "SELECT controlTowerTypeID, resourceTypeID, purpose, quantity, minSecurityLevel, factionID, wormholeClassID"
+            " FROM invControlTowerResources"))
+        _log(DATABASE__ERROR, "Error in GetControlTowerResources query: %s", res.error.c_str());
+}
+
 void ManagerDB::GetDunEntryData(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res, "SELECT dunEntryID, dunEntryName, xpos, ypos, zpos FROM dunEntryData"))

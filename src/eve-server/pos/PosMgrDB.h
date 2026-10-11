@@ -50,6 +50,8 @@ public:
 
     bool GetTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sData);
     void SaveTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sData);
+    // fuel cycle, reinforcement, calendar and notification state, and the field harmonic
+    void UpdateTowerRuntime(uint32 itemID, EVEPOS::TowerData& data);
 
     bool GetBridgeData(EVEPOS::JumpBridgeData& data);
     void SaveBridgeData(EVEPOS::JumpBridgeData& data);

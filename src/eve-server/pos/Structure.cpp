@@ -41,7 +41,26 @@
 #include "system/Damage.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/CrimeWatch.h"
+#include "standing/StandingDB.h"
+
+namespace {
+    // FILETIME ticks per millisecond
+    const int64 FileTimeMs = EvE::Time::Second / 1000;
+
+    // the client's error for a pilot the tower's deploy/usage level (EVEPOS::Access) refuses
+    [[noreturn]] void ThrowAccessDenied(Client* pClient, uint32 corpID, int8 level)
+    {
+        if ((uint32)pClient->GetCorporationID() != corpID)
+            throw UserError("CantConfigureNotInRightCorp");
+        if (level == EVEPOS::Access::FuelTechRole)
+            throw UserError("CantConfigureCorpStarbaseOrCaretakerRoleLacking");
+        throw UserError("PermissionDeniedNeedStarbaseRole")
+                .AddOwnerName("corp", corpID);
+    }
+}
 
 /*
  * Base Structure Item for all POS types
@@ -250,18 +269,24 @@ void StructureSE::InitData()
 
     if (m_sbu)
     { //SBUs are placed near stargates
-        m_gateSE = m_system->GetClosestGateSE(GetPosition())->GetGateSE();
-        m_data.anchorpointID = m_gateSE->GetID();
+        SystemEntity* pGate(m_system->GetClosestGateSE(GetPosition()));
+        m_gateSE = (pGate == nullptr ? nullptr : pGate->GetGateSE());
+        if (m_gateSE != nullptr)
+            m_data.anchorpointID = m_gateSE->GetID();
     }
     if (m_platform)
     { //Construction Platforms are anchored near planets
-        m_planetSE = m_system->GetClosestPlanetSE(GetPosition())->GetPlanetSE();
-        m_data.anchorpointID = m_planetSE->GetID();
+        SystemEntity* pPlanet(m_system->GetClosestPlanetSE(GetPosition()));
+        m_planetSE = (pPlanet == nullptr ? nullptr : pPlanet->GetPlanetSE());
+        if (m_planetSE != nullptr)
+            m_data.anchorpointID = m_planetSE->GetID();
     }
     else
     { //Everything else is places near a moon
-        m_moonSE = m_system->GetClosestMoonSE(GetPosition())->GetMoonSE();
-        m_data.anchorpointID = m_moonSE->GetID();
+        SystemEntity* pMoon(m_system->GetClosestMoonSE(GetPosition()));
+        m_moonSE = (pMoon == nullptr ? nullptr : pMoon->GetMoonSE());
+        if (m_moonSE != nullptr)
+            m_data.anchorpointID = m_moonSE->GetID();
     }
 }
 
@@ -439,23 +464,47 @@ void StructureSE::Init()
     }
     else if (m_module)
     {
-        SystemEntity *pSE = m_system->GetSE(m_data.towerID);
-        if (pSE == nullptr)
-        {
-            _log(POS__ERROR, "StructureSE::Init %s(%u) is invalid.  why are we here?", m_self->name(), m_data.itemID);
-            return;
-        }
-        m_towerSE = pSE->GetTowerSE();
-        m_towerSE->AddModule(this);
         m_duration = 3600000;   // modules default to 1h
+        SystemEntity *pSE = (m_data.towerID == 0 ? nullptr : m_system->GetSE(m_data.towerID));
+        if ((pSE == nullptr) or (pSE->GetTowerSE() == nullptr))
+        {
+            // orphaned:  the tower is gone.  anyone may unanchor it, and it can't online until anchored at a tower
+            _log(POS__MESSAGE, "StructureSE::Init %s(%u) has no control tower (%u).", m_self->name(), m_data.itemID, m_data.towerID);
+            m_data.towerID = 0;
+        }
+        else
+        {
+            m_towerSE = pSE->GetTowerSE();
+            m_towerSE->AddModule(this);
+        }
     }
 
-    /** @todo check for timestamp here and see if any processes are running.
-     * if so, set varaibles accordingly and continue.
-     */
+    // an anchoring, onlining or unanchoring that was running when the server stopped carries on (or completes now)
     if (m_data.timestamp > 0)
     {
-        // do something constructive here.
+        int64 delay(0);
+        int8 procState(EVEPOS::ProcState::Invalid);
+        switch (m_data.state) {
+            case EVEPOS::StructureState::Anchored: {
+                delay = m_self->GetAttribute(AttrAnchoringDelay).get_int();
+                procState = EVEPOS::ProcState::Anchoring;
+            } break;
+            case EVEPOS::StructureState::Onlining: {
+                delay = m_self->GetAttribute(AttrOnliningDelay).get_int();
+                procState = EVEPOS::ProcState::Onlining;
+            } break;
+            case EVEPOS::StructureState::Unanchored: {
+                delay = m_self->GetAttribute(AttrUnanchoringDelay).get_int();
+                procState = EVEPOS::ProcState::Unanchoring;
+            } break;
+        }
+        int64 left((m_data.timestamp - GetFileTimeNow()) / FileTimeMs + delay);
+        if ((procState == EVEPOS::ProcState::Onlining) or ((procState != EVEPOS::ProcState::Invalid) and (left > 0)))
+        {
+            m_procState = procState;
+            m_delayTime = delay;
+            m_procTimer.SetTimer(left > 0 ? left : 1);
+        }
     }
 
     if (m_data.state > EVEPOS::StructureState::Anchored)
@@ -490,6 +539,19 @@ void StructureSE::Process()
         {
         case ProcState::Unanchoring:
         {
+            // free floating again.  the client shows 'unanchoring' until posTimestamp + unanchoringDelay
+            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrUnanchoringDelay).get_int() * FileTimeMs;
+            m_procState = ProcState::Invalid;
+            SendBallFree(true);
+            if (m_tower) {
+                if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
+                    m_moonSE->SetTower(nullptr);
+            } else if (m_module) {
+                // a module belongs to the tower it is anchored at
+                SetControlTower(nullptr);
+            }
+            if (IsStarbaseStructure())
+                OnRemovedFromSpace(false);
             SendSlimUpdate();
             m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorLift", 0, 0, 0, -1, 0);
             m_db.UpdateBaseData(m_data);
@@ -497,11 +559,15 @@ void StructureSE::Process()
         break;
         case ProcState::Anchoring:
         {
+            // the client shows 'anchoring' until posTimestamp + anchoringDelay
+            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
+            m_procState = ProcState::Invalid;
+            SendBallFree(false);
             SendSlimUpdate();
             m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 0, 0, -1, 0);
-            if (m_tower)
+            if (m_tower and (m_moonSE != nullptr))
                 m_moonSE->SetTower(this);
-            if (m_sbu)
+            if (m_sbu and (m_gateSE != nullptr))
                 m_gateSE->SetSBU(this);
 
             m_db.UpdateBaseData(m_data);
@@ -510,6 +576,7 @@ void StructureSE::Process()
         case ProcState::Offlining:
         {
             m_data.state = StructureState::Anchored;
+            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
             SetOffline();
             SendSlimUpdate();
             m_db.UpdateBaseData(m_data);
@@ -567,9 +634,6 @@ void StructureSE::Process()
         break;
         }
 
-        // this will need more work
-        m_data.timestamp = GetTimeMSeconds();
-
         if (m_procState < ProcState::Online)
             m_procState = ProcState::Invalid;
     }
@@ -616,25 +680,17 @@ void StructureSE::Drop(SystemBubble *pBubble)
  */
 void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
 {
+    if (IsStateChangePending() and (m_procState == EVEPOS::ProcState::Unanchoring))
+        throw UserError("AlreadyUnanchoring").AddFormatValue("groupName", new PyString(sDataMgr.GetGroupName(m_self->groupID())));
+    if (IsStateChangePending() and (m_procState == EVEPOS::ProcState::Anchoring))
+        throw UserError("AlreadyAnchoring").AddFormatValue("groupName", new PyString(sDataMgr.GetGroupName(m_self->groupID())));
     if (m_data.state > EVEPOS::StructureState::Unanchored)
-    {
-        pClient->SendErrorMsg("The %s is already anchored", m_self->name());
-        return; // make error here?
-    }
+        throw CustomError ("The %s is already anchored.", m_self->name());
 
-    /* returns SetBallPosition for towers.
-     *    ct will anchor in the middle of the grid that you warp-in to....supposed to, but i dont know how yet.
-     */
-
-    /** @todo  check for other modules changing state...only allow one at a time */
-
-    /* @todo set min/max anchor distances....this will need more work...
-    uint32 anchorMin(m_self->GetAttribute(AttrAnchorDistanceMin).get_uint32());
-    uint32 anchorMax(m_self->GetAttribute(AttrAnchorDistanceMax).get_uint32());
-    */
-
-    // this is incomplete.  there may be client error msgs (havent looked or found)
-    // these errors should throw instead of return.
+    // starbase rules (pilots only).  modules anchor at the tower that controls the chosen position
+    TowerSE* pControlTower(nullptr);
+    if ((pClient != nullptr) and IsStarbaseStructure())
+        pControlTower = CheckAnchorRules(pClient, pos);
 
     // Check for required sovereignty and upgrades for certain structures
     CheckSovRequirements(false);
@@ -650,42 +706,52 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
 
     if (m_tower)
     {
-        // hack for warping to moons
-        // this puts ship at Az: 0.785332, Ele: 0.615505, angle: 1.5708
-        //warpToPoint -= (radius * 1.25);
+        // the tower anchors where it floats (the client sends 0,0,0 for towers) at the moon CheckAnchorRules found
+        std::vector<SystemEntity*> moons;
+        m_system->GetMoonsInRange(GetPosition(), m_self->GetAttribute(AttrMoonAnchorDistance).get_double(), moons);
+        if (!moons.empty() and (moons.front()->GetMoonSE() != nullptr))
+            m_moonSE = moons.front()->GetMoonSE();
+        if (m_moonSE == nullptr)
+            throw CustomError ("The %s can only be anchored near a moon.", m_self->name());
+        m_data.anchorpointID = m_moonSE->GetID();
+        // one tower per moon, anchoring ones included
+        m_moonSE->SetTower(this);
 
-        uint32 dist = /*BUBBLE_RADIUS_METERS + 10000*/ m_self->GetAttribute(AttrMoonAnchorDistance).get_uint32();
-        uint32 radius(m_moonSE->GetRadius());
-        float rad(EvE::Trig::Deg2Rad(90));
+        pos = GetPosition();
+        if (sConfig.pos.TowerSnapToMoon)
+        {
+            // legacy:  a fixed point at the moon
+            uint32 dist = m_self->GetAttribute(AttrMoonAnchorDistance).get_uint32();
+            uint32 radius(m_moonSE->GetRadius());
+            float rad(EvE::Trig::Deg2Rad(90));
 
-        pos = m_moonSE->GetPosition();
-        pos.x += ((radius + dist) * std::sin(rad));
-        pos.z += ((radius + dist) * std::cos(rad));
-        m_destiny->SetPosition(pos);
-        sBubbleMgr.Add(this);
+            pos = m_moonSE->GetPosition();
+            pos.x += ((radius + dist) * std::sin(rad));
+            pos.z += ((radius + dist) * std::cos(rad));
+            m_destiny->SetPosition(pos);
+            sBubbleMgr.Add(this);
+        }
+        if (m_bubble != nullptr)
+            m_bubble->SetTowerSE(GetTowerSE());
 
         if (is_log_enabled(POS__TRACE))
-            _log(POS__TRACE, "StructureSE::Anchor() - TowerSE %s(%u) new position %.2f, %.2f, %.2f at %s",
+            _log(POS__TRACE, "StructureSE::Anchor() - TowerSE %s(%u) anchoring at %.2f, %.2f, %.2f at %s",
                  GetName(), m_data.itemID, pos.x, pos.y, pos.z, m_moonSE->GetName());
     }
     else if (m_sbu)
     {
+        if (m_gateSE == nullptr)
+            throw CustomError ("The %s can only be anchored near a stargate.", m_self->name());
         //verify anchor distance from stargate
         uint32 distance(m_gateSE->GetPosition().distance(m_self->position()));
         //uint32 anchorMin(m_self->GetAttribute(AttrAnchorDistanceMin).get_uint32());
         uint32 anchorMax(m_self->GetAttribute(AttrAnchorDistanceMax).get_uint32());
 
-        if (distance > anchorMax) {
-            pClient->SendErrorMsg("You cannot anchor the %s farther than %u meters from a stargate.", \
-                    m_self->name(), anchorMax);
-            return;
-        }
+        if (distance > anchorMax)
+            throw CustomError ("You cannot anchor the %s farther than %u meters from a stargate.", m_self->name(), anchorMax);
 
-        if (distance < 1000) {
-            pClient->SendErrorMsg("You cannot anchor the %s closer than %u meters from a stargate.", \
-                    m_self->name(), 1000);
-            return;
-        }
+        if (distance < 1000)
+            throw CustomError ("You cannot anchor the %s closer than %u meters from a stargate.", m_self->name(), 1000);
 
         // position is within range.  allow anchoring
         m_destiny->SetPosition(pos);
@@ -701,29 +767,28 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
     }
     else if (m_platform)
     {
+        if (m_planetSE == nullptr)
+            throw CustomError ("The %s can only be anchored near a planet.", m_self->name());
         //verify anchor distance from planet
         uint32 distance(m_planetSE->GetPosition().distance(m_self->position()));
         uint32 anchorMax = (m_planetSE->GetRadius() + 150000000);
 
-        if (distance > anchorMax) {
-            pClient->SendErrorMsg("You cannot anchor the %s farther than %u meters from the planet.", \
-                    m_self->name(), anchorMax);
-            return;
-        }
+        if (distance > anchorMax)
+            throw CustomError ("You cannot anchor the %s farther than %u meters from the planet.", m_self->name(), anchorMax);
         m_destiny->SetPosition(pos);
     }
     else
     {
-        if (!m_moonSE->HasTower())
-        {
-            // this should never hit...
-            pClient->SendErrorMsg("There is no tower anchored at this moon.  You cannot anchor any structure without a tower");
-            return;
+        // starbase modules belong to the tower they anchor at.  GMs anchor at the tower they were launched near
+        if (pControlTower == nullptr)
+            pControlTower = (m_towerSE != nullptr ? m_towerSE : FindControlTower(pos));
+        if (pControlTower == nullptr)
+            throw UserError("CantAnchorRequireTower").AddFormatValue("itemTypeID", new PyInt(m_self->typeID()));
+        SetControlTower(pControlTower);
+        if (pControlTower->GetMoonSE() != nullptr) {
+            m_moonSE = pControlTower->GetMoonSE();
+            m_data.anchorpointID = m_moonSE->GetID();
         }
-        /*  few attribs to look into...
-         * maxStructureDistance
-         * posStructureControlDistanceMax   (maybe multiply this by tower size, or some fraction thereof?)
-         */
         m_destiny->SetPosition(pos);
     }
 
@@ -748,21 +813,19 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
     updates.push_back(sbr.Encode());
     m_destiny->SendDestinyUpdate(updates); //consumed
     m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 1, 1, -1, 0);
+    m_db.UpdateBaseData(m_data);
 }
 
-void StructureSE::PullAnchor()
+void StructureSE::PullAnchor(Client* pClient)
 {
-    if (m_data.state > EVEPOS::StructureState::Anchored)
-        return; // make error here?
+    if ((pClient != nullptr) and IsStarbaseStructure())
+        CheckUnanchorRules(pClient);
+    else if (IsStateChangePending() or (m_data.state != EVEPOS::StructureState::Anchored))
+        return;
 
     // R.A.M. jobs of assembly arrays and labs end; their items go back into the structure
     if (IsArraySE() and GetArraySE()->IsRamInstallation())
         sRamMthd.TerminateStructureJobs(m_data.itemID, EvERam::Status::Unanchor);
-
-    /** @todo  check for other modules changing state...only allow one at a time */
-
-    /** @todo make sure there are NO modules within the SOI of tower if Unanchoring tower.  */
-    //m_towerSE->GetSOI();
 
     m_procState = EVEPOS::ProcState::Unanchoring;
     m_data.state = EVEPOS::StructureState::Unanchored;
@@ -771,8 +834,9 @@ void StructureSE::PullAnchor()
     m_data.timestamp = GetFileTimeNow();
 
     SendSlimUpdate();
+    m_db.UpdateBaseData(m_data);
 
-    if (m_tower)
+    if (m_tower and (m_bubble != nullptr) and (m_bubble->GetTowerSE() == GetTowerSE()))
         m_bubble->SetTowerSE(nullptr);
 
     /*
@@ -795,56 +859,30 @@ void StructureSE::PullAnchor()
  * 1214    posStructureControlDistanceMax  NULL    15000
  */
 
-void StructureSE::Activate(int32 effectID)
+void StructureSE::Activate(Client* pClient, int32 effectID)
 {
-    if (m_data.state > EVEPOS::StructureState::Anchored)
-        return; // make error here?
+    // already online or onlining
+    if (IsPowered() or (m_data.state == EVEPOS::StructureState::Onlining))
+        return;
 
-    /** @todo  check for other modules changing state...only allow one at a time */
-
-    // check effectID, check current state, check current timer, set new state, update timer
+    if ((pClient != nullptr) and IsStarbaseStructure())
+    {
+        CheckDeployPermission(pClient, EVEPOS::Deploy::Online);
+        CheckOnlineRules(pClient);
+    }
+    else if (IsStateChangePending() or (m_data.state != EVEPOS::StructureState::Anchored))
+    {
+        if (pClient != nullptr)
+            return;
+        // GMs:  finish the anchoring first
+        throw CustomError ("The %s must be anchored before it can be put online.", m_self->name());
+    }
 
     // sovereignty and infrastructure upgrade requirements
     CheckSovRequirements(true);
     // jump bridges need a link
     if (m_bridge and (GetJumpBridgeSE() != nullptr))
         GetJumpBridgeSE()->CheckOnline();
-
-    if (m_tower)
-    {
-        // if tower, check fuel quantity for onlining
-        //  if qty sufficient, begin online proc and send OnSlimItemChange and OnSpecialFX
-    }
-    else if (m_module)
-    {
-        if (m_towerSE == nullptr)
-        {
-            _log(POS__ERROR, "POS Module %s(%u) has no TowerSE for tower %u", m_self->name(), m_data.itemID, m_data.towerID);
-            return;
-        }
-        if (!m_towerSE->HasCPU(m_self->GetAttribute(AttrCpu).get_float()))
-        {
-            // throwing an error negates further processing
-            float total = m_towerSE->GetSelf()->GetAttribute(AttrCpuOutput).get_float();
-            float remaining = total - m_towerSE->GetCPULoad();
-            throw UserError ("NotEnoughCpu")
-                    .AddAmount ("total", total)
-                    .AddAmount ("require", m_self->GetAttribute (AttrCpu).get_float ())
-                    .AddAmount ("remaining", remaining)
-                    .AddFormatValue ("moduleType", new PyInt (m_self->typeID ()));
-        }
-        if (!m_towerSE->HasPG(m_self->GetAttribute(AttrPower).get_float()))
-        {
-            // throwing an error negates further processing
-            float total = m_towerSE->GetSelf()->GetAttribute(AttrPowerOutput).get_float();
-            float remaining = total - m_towerSE->GetPGLoad();
-            throw UserError ("NotEnoughPower")
-                    .AddAmount ("total", total)
-                    .AddAmount ("require", m_self->GetAttribute (AttrPower).get_float ())
-                    .AddAmount ("remaining", remaining)
-                    .AddFormatValue ("moduleType", new PyInt (m_self->typeID ()));
-        }
-    }
 
     m_data.state = EVEPOS::StructureState::Onlining;
     m_procState = EVEPOS::ProcState::Onlining;
@@ -855,15 +893,25 @@ void StructureSE::Activate(int32 effectID)
     SendSlimUpdate();
     m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.StructureOnline", 0, 1, 1, -1, 0);
 
-    // should this be done here?
-    if (m_module)
+    // the module uses the tower's power and cpu from now on
+    if (m_module and (m_towerSE != nullptr))
         m_towerSE->OnlineModule(this);
 
     m_db.UpdateBaseData(m_data);
 }
 
-void StructureSE::Deactivate(int32 effectID)
+void StructureSE::Deactivate(Client* pClient, int32 effectID)
 {
+    if ((pClient != nullptr) and IsStarbaseStructure())
+    {
+        CheckDeployPermission(pClient, EVEPOS::Deploy::Offline);
+        // a reinforced tower is locked down
+        if (m_tower and IsReinforced())
+            throw UserError("CantPerformTowerReinforced").AddFormatValue("typeID", new PyInt(m_self->typeID()));
+    }
+    if (!IsPowered() and (m_data.state != EVEPOS::StructureState::Onlining))
+        return;
+
     m_procState = EVEPOS::ProcState::Offlining;
     m_delayTime = 500 /*m_self->GetAttribute(AttrOnliningDelay).get_uint32()*/;
     m_procTimer.SetTimer(m_delayTime);
@@ -873,6 +921,22 @@ void StructureSE::Deactivate(int32 effectID)
 
     SendSlimUpdate();
     //m_destiny->SendSpecialEffect(m_data.itemID,m_data.itemID,m_self->typeID(),0,0,"effects.StructureOnline",0,0,0,-1,0);
+}
+
+void StructureSE::ForceOffline()
+{
+    if (!IsPowered() and (m_data.state != EVEPOS::StructureState::Onlining)
+    and !(m_procTimer.Enabled() and (m_procState == EVEPOS::ProcState::Offlining)))
+        return;
+
+    m_procTimer.Disable();
+    m_procState = EVEPOS::ProcState::Invalid;
+    m_delayTime = 0;
+    m_data.state = EVEPOS::StructureState::Anchored;
+    m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
+    SetOffline();
+    SendSlimUpdate();
+    m_db.UpdateBaseData(m_data);
 }
 
 void StructureSE::SetOnline()
@@ -897,7 +961,7 @@ void StructureSE::SetOnline()
 void StructureSE::SetOffline()
 {
     m_self->SetFlag(flagStructureInactive);
-    if (m_module)
+    if (m_module and (m_towerSE != nullptr))
         m_towerSE->OfflineModule(this);
     if (m_generator)
         svDataMgr.ClearSystemBeaconID(m_self->locationID(), m_data.itemID);
@@ -915,6 +979,409 @@ bool StructureSE::IsOnline()
             return true;
     }
     return false;
+}
+
+bool StructureSE::HasRole(Client* pClient, int64 role)
+{
+    if (pClient == nullptr)
+        return true;
+    if ((uint32)pClient->GetCorporationID() != m_corpID)
+        return false;
+    return ((pClient->GetCorpRole() & (role | Corp::Role::Director)) != 0);
+}
+
+bool StructureSE::CheckAccessLevel(Client* pClient, int8 level)
+{
+    if (pClient == nullptr)
+        return true;
+    bool sameCorp((uint32)pClient->GetCorporationID() == m_corpID);
+    switch (level) {
+        case EVEPOS::Access::ConfigRole:
+            return HasRole(pClient, Corp::Role::StarbaseConfig);
+        case EVEPOS::Access::FuelTechRole:
+            // starbase managers may do what fuel technicians may
+            return HasRole(pClient, Corp::Role::StarbaseCaretaker | Corp::Role::StarbaseConfig);
+        case EVEPOS::Access::Corp:
+            return sameCorp;
+        case EVEPOS::Access::Alliance:
+            return (sameCorp or (IsAlliance(m_allyID) and (pClient->GetAllianceID() == m_allyID)));
+    }
+    return false;
+}
+
+void StructureSE::CheckDeployPermission(Client* pClient, int8 action)
+{
+    if (pClient == nullptr)
+        return;
+
+    TowerSE* pTower(m_tower ? GetTowerSE() : m_towerSE);
+    int8 level(EVEPOS::Access::ConfigRole);
+    if (pTower != nullptr) {
+        level = pTower->GetDeployFlag(action);
+    } else if (m_module and (action == EVEPOS::Deploy::Unanchor)) {
+        // orphaned structures (their tower is gone) can be unanchored by anyone
+        return;
+    }
+    if (!CheckAccessLevel(pClient, level))
+        ThrowAccessDenied(pClient, m_corpID, level);
+}
+
+bool StructureSE::CanUseAccess(Client* pClient, int8 usage)
+{
+    switch (usage) {
+        case EVEPOS::Usage::View:   return CheckAccessLevel(pClient, m_data.view);
+        case EVEPOS::Usage::Take:   return CheckAccessLevel(pClient, m_data.take);
+        case EVEPOS::Usage::Use:    return CheckAccessLevel(pClient, m_data.use);
+    }
+    return false;
+}
+
+bool StructureSE::IsStateChangePending()
+{
+    if (!m_procTimer.Enabled())
+        return false;
+    return ((m_procState == EVEPOS::ProcState::Anchoring)
+         or (m_procState == EVEPOS::ProcState::Onlining)
+         or (m_procState == EVEPOS::ProcState::Unanchoring));
+}
+
+const char* StructureSE::GetPendingActionName()
+{
+    if (m_procTimer.Enabled())
+        switch (m_procState) {
+            case EVEPOS::ProcState::Anchoring:      return "anchoring";
+            case EVEPOS::ProcState::Onlining:       return "onlining";
+            case EVEPOS::ProcState::Unanchoring:    return "unanchoring";
+        }
+    return "";
+}
+
+bool StructureSE::IsFullyAnchored()
+{
+    return ((m_data.state == EVEPOS::StructureState::Anchored) and !IsStateChangePending());
+}
+
+bool StructureSE::IsAnchored()
+{
+    if (m_data.state <= EVEPOS::StructureState::Unanchored)
+        return false;
+    return !(m_procTimer.Enabled() and (m_procState == EVEPOS::ProcState::Anchoring));
+}
+
+void StructureSE::SetControlTower(TowerSE* pTower)
+{
+    if (m_towerSE == pTower)
+        return;
+    if (m_towerSE != nullptr)
+        m_towerSE->RemoveModule(this);
+    m_towerSE = pTower;
+    m_data.towerID = (pTower == nullptr ? 0 : pTower->GetID());
+    if (pTower != nullptr)
+        pTower->AddModule(this);
+}
+
+TowerSE* StructureSE::FindControlTower(const GPoint& pos)
+{
+    // the closest anchored tower whose control distance (maxStructureDistance) reaches pos.  any owner:  the
+    //  ownership rule has its own message
+    TowerSE* pBest(nullptr);
+    double best(-1);
+    for (auto cur : m_system->GetEntities()) {
+        if ((cur.second == this) or !cur.second->IsTowerSE())
+            continue;
+        TowerSE* pTower(cur.second->GetTowerSE());
+        if (pTower->GetState() <= EVEPOS::StructureState::Unanchored)
+            continue;
+        double dist(pos.distance(pTower->GetPosition()));
+        if (dist > pTower->GetSelf()->GetAttribute(AttrMaxStructureDistance).get_double())
+            continue;
+        if ((best < 0) or (dist < best)) {
+            best = dist;
+            pBest = pTower;
+        }
+    }
+    return pBest;
+}
+
+uint32 StructureSE::CountGroupInSystem(bool onlineOnly)
+{
+    // structures of this group owned by this structure's alliance (its corp without one)
+    uint32 count(0);
+    for (auto cur : m_system->GetEntities()) {
+        if ((cur.second == this) or !cur.second->IsPOSSE())
+            continue;
+        StructureSE* pSE(cur.second->GetPOSSE());
+        if (pSE->GetSelf()->groupID() != m_self->groupID())
+            continue;
+        if (IsAlliance(m_allyID) ? (pSE->GetAllianceID() != m_allyID) : (pSE->GetCorporationID() != m_corpID))
+            continue;
+        if (onlineOnly ? (pSE->IsPowered() or (pSE->GetState() == EVEPOS::StructureState::Onlining))
+                       : (pSE->GetState() > EVEPOS::StructureState::Unanchored))
+            ++count;
+    }
+    return count;
+}
+
+TowerSE* StructureSE::CheckAnchorRules(Client* pClient, const GPoint& pos)
+{
+    uint16 typeID(m_self->typeID());
+    float trueSec(m_system->GetSystemSecurityRating());
+    float secLevel(CrimeWatch::SecurityLevel(trueSec));
+
+    // in reach of the pilot (the client asks for 30km to the tower and the configure distance to modules)
+    if (pClient->GetShipSE() != nullptr) {
+        double needed(m_tower ? 30000.0 : maxConfigureDistance);
+        double actual(pClient->GetShipSE()->GetPosition().distance(GetPosition()) - GetRadius() - pClient->GetShipSE()->GetRadius());
+        if (actual > needed + 1000.0)
+            throw UserError("CantConfigureDistant2")
+                    .AddFormatValue("actual", new PyFloat(actual))
+                    .AddFormatValue("needed", new PyFloat(needed));
+    }
+
+    // deadspace
+    if (m_system->GetDungMgr()->IsDeadspace(m_tower ? GetPosition() : pos))
+        throw UserError("DunCantAnchor").AddFormatValue("type", new PyInt(typeID));
+
+    // Anchoring (and the like) skills
+    if (pClient->GetChar().get() != nullptr) {
+        uint8 count(0);
+        std::string missing;
+        for (auto cur : m_self->type().GetRequiredSkills()) {
+            if ((cur.first == 0) or pClient->GetChar()->HasSkillTrainedToLevel(cur.first, cur.second))
+                continue;
+            if (!missing.empty())
+                missing += ", ";
+            std::string name;
+            sDataMgr.GetSkillName(cur.first, name);
+            missing += name;
+            missing += " ";
+            missing += std::to_string(cur.second);
+            ++count;
+        }
+        if (count > 0)
+            throw UserError("SkillPrerequisitesForAnchoring")
+                    .AddFormatValue("skillCount", new PyInt(count))
+                    .AddFormatValue("requiredSkills", new PyString(missing));
+    }
+
+    if (m_tower) {
+        GPoint towerPos(GetPosition());
+        if (sConfig.pos.ConcordAnchorRestriction and (secLevel >= 0.8f))
+            throw UserError("CantAnchorConcordRestriction").AddFormatValue("security", new PyFloat(secLevel));
+
+        // exactly one moon in reach
+        std::vector<SystemEntity*> moons;
+        m_system->GetMoonsInRange(towerPos, m_self->GetAttribute(AttrMoonAnchorDistance).get_double(), moons);
+        if (moons.empty())
+            throw UserError("CantAnchorNoMoonNearby");
+        if (moons.size() > 1) {
+            std::string names;
+            for (auto cur : moons) {
+                if (!names.empty())
+                    names += ", ";
+                names += cur->GetName();
+            }
+            throw UserError("CantAnchorTooManyMoonsNearby").AddFormatValue("moons", new PyString(names));
+        }
+        MoonSE* pMoon(moons.front()->GetMoonSE());
+        if ((pMoon != nullptr) and (pMoon->GetMyTower() != nullptr) and (pMoon->GetMyTower() != this))
+            throw UserError("CantAnchorMoonAlreadyHasControlTower")
+                    .AddFormatValue("towerTypeID", new PyInt(typeID))
+                    .AddFormatValue("moon", new PyInt(moons.front()->GetID()));
+
+        // nothing else anchored within the tower's control distance
+        double maxDist(m_self->GetAttribute(AttrMaxStructureDistance).get_double());
+        for (auto cur : m_system->GetEntities()) {
+            if ((cur.second == this) or !cur.second->IsPOSSE())
+                continue;
+            if (cur.second->GetPOSSE()->GetState() <= EVEPOS::StructureState::Unanchored)
+                continue;
+            if (towerPos.distance(cur.second->GetPosition()) < maxDist)
+                throw UserError("CantAnchorTowerObstruction")
+                        .AddFormatValue("distance", new PyFloat(maxDist))
+                        .AddFormatValue("typeID", new PyInt(cur.second->GetTypeID()));
+        }
+
+        // empire space:  corp standing to the system's faction and a starbase charter in the cargo hold
+        SystemData sData = SystemData();
+        sDataMgr.GetSystemData(m_system->GetID(), sData);
+        if (IsFaction(sData.factionID) and (trueSec >= 0.45f)) {
+            if (sConfig.pos.HighSecStandingCheck) {
+                float want(secLevel * 10.0f);
+                float have(StandingDB::GetStanding(sData.factionID, m_corpID));
+                if (have < want)
+                    throw UserError("CantAnchorStandingLow")
+                            .AddOwnerName("owner", sData.factionID)
+                            .AddFormatValue("want", new PyFloat(want))
+                            .AddFormatValue("have", new PyFloat(have));
+            }
+            std::vector<uint16> charters;
+            TowerSE::GetCharterTypes(typeID, m_system->GetID(), charters);
+            if (!charters.empty() and (pClient->GetShip().get() != nullptr)) {
+                bool found(false);
+                std::string names;
+                for (auto cur : charters) {
+                    if (pClient->GetShip()->GetMyInventory()->ContainsTypeQtyByFlag(cur, flagCargoHold, 1))
+                        found = true;
+                    if (!names.empty())
+                        names += ", ";
+                    const ItemType* pType(sItemFactory.GetType(cur));
+                    names += (pType == nullptr ? std::to_string(cur) : pType->name());
+                }
+                if (!found)
+                    throw UserError("CantAnchorTowerRequiresResources")
+                            .AddFormatValue("typeID", new PyInt(typeID))
+                            .AddFormatValue("resources", new PyString(names));
+            }
+        }
+
+        CheckDeployPermission(pClient, EVEPOS::Deploy::Anchor);
+        return nullptr;
+    }
+
+    // modules:  at an online tower of the owner corp, inside its control distance
+    TowerSE* pTower(FindControlTower(pos));
+    if (pTower == nullptr)
+        throw UserError("CantAnchorRequireTower").AddFormatValue("itemTypeID", new PyInt(typeID));
+    if (!pTower->IsAnchored())
+        throw UserError("CantTowerNotAnchored");
+    if (!pTower->IsPowered())
+        throw UserError("CantTowerNotOnline");
+    if (pTower->GetCorporationID() != m_corpID)
+        throw UserError("CantAnchorStructureOwnerBad")
+                .AddTypeName("what", typeID)
+                .AddOwnerName("whom", pTower->GetCorporationID());
+
+    double dist(pos.distance(pTower->GetPosition()));
+    double minDist(m_self->GetAttribute(AttrControlTowerMinimumDistance).get_double());
+    if ((minDist > 0) and (dist < minDist))
+        throw UserError("CantAnchorTowerProximity")
+                .AddTypeName("structure", typeID)
+                .AddFormatValue("limit", new PyFloat(minDist))
+                .AddFormatValue("actual", new PyFloat(dist));
+
+    // not overlapping another anchored structure
+    for (auto cur : m_system->GetEntities()) {
+        if ((cur.second == this) or !cur.second->IsPOSSE())
+            continue;
+        if (cur.second->GetPOSSE()->GetState() <= EVEPOS::StructureState::Unanchored)
+            continue;
+        if (pos.distance(cur.second->GetPosition()) < (GetRadius() + cur.second->GetRadius()))
+            throw UserError("CantAnchorPositionObstructed")
+                    .AddFormatValue("itemTypeID", new PyInt(typeID))
+                    .AddFormatValue("obstructionTypeID", new PyInt(cur.second->GetTypeID()));
+    }
+
+    // CONCORD 'public resource consent' (moon mining and reactions only below 0.5, ...)
+    EvilNumber value(EvilZero);
+    if (sConfig.pos.ConcordAnchorRestriction and m_self->HasAttribute(AttrAnchoringSecurityLevelMax, value))
+        if (secLevel >= value.get_float())
+            throw UserError("CantAnchorStructureRestrictionSpecific")
+                    .AddFormatValue("type", new PyInt(typeID))
+                    .AddFormatValue("high", new PyFloat(value.get_float()))
+                    .AddFormatValue("actual", new PyFloat(secLevel));
+
+    // per-system limits (cyno generators and jammers, jump bridges, ...)
+    if (m_self->HasAttribute(AttrPosAnchoredPerSolarSystemAmount, value) and (value.get_uint32() > 0))
+        if (CountGroupInSystem(false) >= value.get_uint32())
+            throw UserError("CantAnchorStructureGroupLimit")
+                    .AddTypeName("type", typeID)
+                    .AddFormatValue("limit", new PyInt(value.get_uint32()));
+
+    // the tower's anchor permission, and one operation at a time
+    int8 level(pTower->GetDeployFlag(EVEPOS::Deploy::Anchor));
+    if (!CheckAccessLevel(pClient, level))
+        ThrowAccessDenied(pClient, m_corpID, level);
+    pTower->CheckNotBusy(this);
+
+    return pTower;
+}
+
+void StructureSE::CheckOnlineRules(Client* pClient)
+{
+    uint16 typeID(m_self->typeID());
+    if (!IsFullyAnchored())
+        throw UserError("OnlineRequiredAnchor").AddTypeName("item", typeID);
+
+    // only undamaged structures online
+    double damage(m_self->GetAttribute(AttrArmorDamage).get_double() + m_self->GetAttribute(AttrDamage).get_double());
+    double hp(m_self->GetAttribute(AttrArmorHP).get_double() + m_self->GetAttribute(AttrHP).get_double());
+    if ((damage >= 1.0) and (hp > 0))
+        throw UserError("CantOnlineDamagedGoods")
+                .AddTypeName("what", typeID)
+                .AddFormatValue("damage", new PyInt((int32)std::ceil(damage / hp * 100.0)));
+
+    if (m_tower) {
+        GetTowerSE()->CheckNotBusy(this);
+        GetTowerSE()->CheckOnlineFuel();
+        return;
+    }
+
+    if (m_towerSE == nullptr)
+        throw UserError("CantOnlineRequireTower").AddFormatValue("itemTypeID", new PyInt(typeID));
+    if (!m_towerSE->IsPowered())
+        throw UserError("CantTowerNotOnline");
+    if (m_towerSE->GetCorporationID() != m_corpID)
+        throw UserError("CantOnlineStructureOwnerBad")
+                .AddTypeName("what", typeID)
+                .AddOwnerName("whom", m_towerSE->GetCorporationID());
+    m_towerSE->CheckNotBusy(this);
+
+    EvilNumber value(EvilZero);
+    if (m_self->HasAttribute(AttrPosAnchoredPerSolarSystemAmount, value) and (value.get_uint32() > 0))
+        if (CountGroupInSystem(true) >= value.get_uint32())
+            throw UserError("CantOnlineStructureGroupLimit")
+                    .AddFormatValue("type", new PyInt(typeID))
+                    .AddFormatValue("limit", new PyInt(value.get_uint32()));
+
+    // a harvester needs to know what to harvest
+    if (m_miner and (m_data.provisionTypeID == 0))
+        throw UserError("HarvestOnline");
+
+    float cpu(m_self->GetAttribute(AttrCpu).get_float());
+    if (!m_towerSE->HasCPU(cpu)) {
+        float total(m_towerSE->GetSelf()->GetAttribute(AttrCpuOutput).get_float());
+        throw UserError ("NotEnoughCpu")
+                .AddFormatValue ("total", new PyFloat(total))
+                .AddFormatValue ("require", new PyFloat(cpu))
+                .AddFormatValue ("remaining", new PyFloat(total - m_towerSE->GetCPULoad()))
+                .AddFormatValue ("moduleType", new PyInt (typeID));
+    }
+    float power(m_self->GetAttribute(AttrPower).get_float());
+    if (!m_towerSE->HasPG(power)) {
+        float total(m_towerSE->GetSelf()->GetAttribute(AttrPowerOutput).get_float());
+        throw UserError ("NotEnoughPower")
+                .AddFormatValue ("total", new PyFloat(total))
+                .AddFormatValue ("require", new PyFloat(power))
+                .AddFormatValue ("remaining", new PyFloat(total - m_towerSE->GetPGLoad()))
+                .AddFormatValue ("moduleType", new PyInt (typeID));
+    }
+}
+
+void StructureSE::CheckUnanchorRules(Client* pClient)
+{
+    uint16 typeID(m_self->typeID());
+    if (IsStateChangePending()) {
+        if (m_procState == EVEPOS::ProcState::Unanchoring)
+            throw UserError("AlreadyUnanchoring").AddFormatValue("groupName", new PyString(sDataMgr.GetGroupName(m_self->groupID())));
+        if (m_procState == EVEPOS::ProcState::Anchoring)
+            throw UserError("AlreadyAnchoring").AddFormatValue("groupName", new PyString(sDataMgr.GetGroupName(m_self->groupID())));
+        throw CustomError ("The %s must be offline before it can be unanchored.", m_self->name());
+    }
+    if (m_data.state <= EVEPOS::StructureState::Unanchored)
+        throw UserError("CantDoWhileNotAnchored").AddFormatValue("typeID", new PyInt(typeID));
+    if (m_data.state != EVEPOS::StructureState::Anchored)
+        throw CustomError ("The %s must be offline before it can be unanchored.", m_self->name());
+
+    CheckDeployPermission(pClient, EVEPOS::Deploy::Unanchor);
+
+    if (m_tower) {
+        if (GetTowerSE()->GetAnchoredModule() != nullptr)
+            throw UserError("CantUnanchorTowerStructuresPresent").AddFormatValue("tower", new PyInt(typeID));
+        GetTowerSE()->CheckNotBusy(this);
+    } else if (m_towerSE != nullptr) {
+        m_towerSE->CheckNotBusy(this);
+    }
 }
 
 void StructureSE::CheckSovRequirements(bool online)
@@ -1028,18 +1495,10 @@ void StructureSE::SetUsageFlags(int8 view /*0*/, int8 take /*0*/, int8 use /*0*/
 
 void StructureSE::SendSlimUpdate()
 {
-    PyDict *slim = new PyDict();
-    slim->SetItemString("name", new PyString(m_self->itemName()));
-    slim->SetItemString("itemID", new PyLong(m_data.itemID));
-    slim->SetItemString("typeID", new PyInt(m_self->typeID()));
-    slim->SetItemString("ownerID", new PyInt(m_ownerID));
-    slim->SetItemString("corpID", IsCorp(m_corpID) ? new PyInt(m_corpID) : PyStatic.NewNone());
-    slim->SetItemString("allianceID", IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone());
-    slim->SetItemString("warFactionID", IsFaction(m_warID) ? new PyInt(m_warID) : PyStatic.NewNone());
-    slim->SetItemString("posTimestamp", new PyLong(m_data.timestamp));
-    slim->SetItemString("posState", new PyInt(m_data.state));
-    slim->SetItemString("incapacitated", new PyInt(0));
-    slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
+    if (m_destiny == nullptr)
+        return;
+    // the full slim item (tower, bridge and battery fields included)
+    PyDict *slim = MakeSlimItem();
     PyTuple *shipData = new PyTuple(2);
     shipData->SetItem(0, new PyLong(m_data.itemID));
     shipData->SetItem(1, new PyObject("foo.SlimItem", slim));
@@ -1047,6 +1506,25 @@ void StructureSE::SendSlimUpdate()
     sItem->SetItem(0, new PyString("OnSlimItemChange"));
     sItem->SetItem(1, shipData);
     m_destiny->SendSingleDestinyUpdate(&sItem); // consumed
+}
+
+void StructureSE::SendBallFree(bool free)
+{
+    if (m_destiny == nullptr)
+        return;
+    std::vector<PyTuple*> updates;
+    SetBallFree sbf;
+    sbf.entityID = m_data.itemID;
+    sbf.is_free = free;
+    updates.push_back(sbf.Encode());
+    // anchored starbase structures are solid
+    if (IsStarbaseStructure()) {
+        SetBallMassive sbm;
+        sbm.entityID = m_data.itemID;
+        sbm.is_massive = !free;
+        updates.push_back(sbm.Encode());
+    }
+    m_destiny->SendDestinyUpdate(updates); //consumed
 }
 
 void StructureSE::SendEffectUpdate(int16 effectID, bool active)
@@ -1087,6 +1565,11 @@ void StructureSE::EncodeDestiny(Buffer &into)
     head.posX = x();
     head.posY = y();
     head.posZ = z();
+    // free floating until anchored (an unanchoring structure stays put until it is done), solid once anchored
+    bool unanchoring(m_procTimer.Enabled() and (m_procState == EVEPOS::ProcState::Unanchoring));
+    bool anchoring(m_procTimer.Enabled() and (m_procState == EVEPOS::ProcState::Anchoring));
+    bool isFree((m_data.state < EVEPOS::StructureState::Anchored) and !unanchoring);
+    uint8 massive((IsStarbaseStructure() and !isFree and !anchoring) ? Ball::Flag::IsMassive : 0);
     if (m_tcu or m_ihub or m_sbu)
     {
         // may need to update this after things are working
@@ -1096,13 +1579,12 @@ void StructureSE::EncodeDestiny(Buffer &into)
     else if (m_tower)
     {
         head.mode = Ball::Mode::STOP;
-        head.flags = (m_data.state < EVEPOS::StructureState::Anchored ? Ball::Flag::IsFree : 0) /*Ball::Flag::HasMiniBalls*/;
+        head.flags = (isFree ? Ball::Flag::IsFree : 0) | massive;
     }
     else
     {
         head.mode = Ball::Mode::RIGID;
-        //TODO check for miniballs and add here if found.
-        head.flags = (m_data.state < EVEPOS::StructureState::Anchored ? Ball::Flag::IsFree : 0 /*Ball::Flag::IsMassive*/) /*Ball::Flag::HasMiniBalls*/;
+        head.flags = (isFree ? Ball::Flag::IsFree : 0) | massive;
     }
     into.Append(head);
 
@@ -1118,7 +1600,7 @@ void StructureSE::EncodeDestiny(Buffer &into)
         into.Append(mass);
     }
 
-    if (m_data.state < EVEPOS::StructureState::Anchored) {
+    if (isFree) {
         DataSector data = DataSector();
         data.inertia = 1;
         data.velX = 0;
@@ -1199,23 +1681,27 @@ PyDict *StructureSE::MakeSlimItem()
         slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
         slim->SetItemString("posTimestamp", PyStatic.NewNone());
     }
-    else if (m_miner)
-    {
-        PyTuple *tuple = new PyTuple(3);
-        tuple->SetItem(0, new PyFloat(m_rotation.x));
-        tuple->SetItem(1, new PyFloat(m_rotation.y));
-        tuple->SetItem(2, new PyFloat(m_rotation.z));
-        slim->SetItemString("dunRotation", tuple); // direction to moon
-        slim->SetItemString("controlTowerID", new PyLong(m_data.towerID));
-    }
     else if (m_cargo)
     {
         slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
         slim->SetItemString("posTimestamp", PyStatic.NewNone());
     }
 
+    if (m_miner)
+    {
+        PyTuple *tuple = new PyTuple(3);
+        tuple->SetItem(0, new PyFloat(m_rotation.x));
+        tuple->SetItem(1, new PyFloat(m_rotation.y));
+        tuple->SetItem(2, new PyFloat(m_rotation.z));
+        slim->SetItemString("dunRotation", tuple); // direction to moon
+    }
+
+    // the client finds a module's tower (and orphans) with this
     if (m_module)
-        slim->SetItemString("controlTowerID", new PyLong(m_data.towerID));
+        slim->SetItemString("controlTowerID", (m_data.towerID == 0 ? PyStatic.NewNone() : new PyLong(m_data.towerID)));
+    // pilot manning a starbase weapon
+    if (IsWeaponSE() or IsBatterySE())
+        slim->SetItemString("controllerID", PyStatic.NewNone());
 
     if (is_log_enabled(POS__SLIMITEM))
     {
@@ -1298,14 +1784,20 @@ void StructureSE::Killed(Damage &damage)
 
     OnRemovedFromSpace(true);
 
-    if (m_tower)
-        m_bubble->SetTowerSE(nullptr);
+    // a module leaves its tower.  (the tower orphans its modules in TowerSE::Killed)
+    if (m_module)
+        SetControlTower(nullptr);
+    m_db.DeleteData(m_data.itemID);
 
     uint32 killerID = 0;
     Client *pClient(nullptr);
     SystemEntity *killer = damage.srcSE;
 
-    if (killer->HasPilot())
+    if (killer == nullptr)
+    {
+        // killed by nothing in space (gm, script)
+    }
+    else if (killer->HasPilot())
     {
         pClient = killer->GetPilot();
         killerID = pClient->GetCharacterID();
@@ -1377,12 +1869,12 @@ void StructureSE::Killed(Damage &damage)
     data.victimShipTypeID = GetTypeID();
 
     data.finalCharacterID = killerID;
-    data.finalCorporationID = killer->GetCorporationID();
-    data.finalAllianceID = killer->GetAllianceID();
-    data.finalFactionID = killer->GetWarFactionID();
-    data.finalShipTypeID = killer->GetTypeID();
-    data.finalWeaponTypeID = damage.weaponRef->typeID();
-    data.finalSecurityStatus = 0; /* fix this */
+    data.finalCorporationID = (killer == nullptr ? 0 : killer->GetCorporationID());
+    data.finalAllianceID = (killer == nullptr ? 0 : killer->GetAllianceID());
+    data.finalFactionID = (killer == nullptr ? 0 : killer->GetWarFactionID());
+    data.finalShipTypeID = (killer == nullptr ? 0 : killer->GetTypeID());
+    data.finalWeaponTypeID = (damage.weaponRef.get() == nullptr ? 0 : damage.weaponRef->typeID());
+    data.finalSecurityStatus = (pClient == nullptr ? 0 : pClient->GetSecurityRating());
     data.finalDamageDone = damage.GetTotal();
 
     uint32 totalHP = m_self->GetAttribute(AttrHP).get_uint32();
@@ -1392,22 +1884,13 @@ void StructureSE::Killed(Damage &damage)
 
     data.killBlob = blob.str().c_str();
     data.killTime = GetFileTimeNow();
-    data.moonID = m_moonSE->GetID(); /* denotes moonID for POS/Structure kills */
+    data.moonID = (m_moonSE == nullptr ? 0 : m_moonSE->GetID()); /* denotes moonID for POS/Structure kills */
 
     ServiceDB::SaveKillOrLoss(data);
 
     uint32 locationID = GetLocationID();
-    //  log faction kill in dynamic data   -allan
+    //  player structures count as kills, not npc (faction) kills, and give no npc security status
     MapDB::AddKill(locationID);
-    MapDB::AddFactionKill(locationID);
-
-    if (pClient != nullptr)
-    {
-        //award kill bounty.
-        //AwardBounty( pClient );
-        if (m_system->GetSystemSecurityRating() > 0)
-            AwardSecurityStatus(m_self, pClient->GetChar().get()); // this awards secStatusChange for npcs in empire space
-    }
 
     GPoint wreckPosition = m_destiny->GetPosition();
     if (wreckPosition.isNaN())
@@ -1443,9 +1926,9 @@ void StructureSE::Killed(Damage &damage)
         cur->Move(wreckItemRef->itemID(), flagNone); // populate wreck with items that survived
 
     DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();
-    wreckEntity.allianceID = killer->GetAllianceID();
+    wreckEntity.allianceID = (killer == nullptr ? 0 : killer->GetAllianceID());
     wreckEntity.categoryID = EVEDB::invCategories::Celestial;
-    wreckEntity.corporationID = killer->GetCorporationID();
+    wreckEntity.corporationID = (killer == nullptr ? 0 : killer->GetCorporationID());
     wreckEntity.factionID = m_warID;
     wreckEntity.groupID = EVEDB::invGroups::Wreck;
     wreckEntity.itemID = wreckItemRef->itemID();

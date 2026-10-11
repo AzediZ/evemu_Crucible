@@ -1922,35 +1922,55 @@ uint32 SystemManager::GetClosestPlanetID(const GPoint& myPos)
 
 SystemEntity* SystemManager::GetClosestPlanetSE(const GPoint& myPos)
 {
-    std::map<double, SystemEntity*> sorted;
-    for (auto cur : m_planetMap)
-        sorted.insert(std::pair<double, SystemEntity*>(myPos.distance(cur.second->GetPosition()), cur.second));
-
-    std::map<double, SystemEntity*>::iterator itr = sorted.begin();
-
-    return itr->second;
+    // nullptr when the system has none
+    SystemEntity* pClosest(nullptr);
+    double best(-1);
+    for (auto cur : m_planetMap) {
+        double dist(myPos.distance(cur.second->GetPosition()));
+        if ((best < 0) or (dist < best)) {
+            best = dist;
+            pClosest = cur.second;
+        }
+    }
+    return pClosest;
 }
 
 SystemEntity* SystemManager::GetClosestGateSE(const GPoint& myPos)
 {
-    std::map<double, SystemEntity*> sorted;
-    for (auto cur : m_gateMap)
-        sorted.insert(std::pair<double, SystemEntity*>(myPos.distance(cur.second->GetPosition()), cur.second));
-
-    std::map<double, SystemEntity*>::iterator itr = sorted.begin();
-
-    return itr->second;
+    // nullptr when the system has none
+    SystemEntity* pClosest(nullptr);
+    double best(-1);
+    for (auto cur : m_gateMap) {
+        double dist(myPos.distance(cur.second->GetPosition()));
+        if ((best < 0) or (dist < best)) {
+            best = dist;
+            pClosest = cur.second;
+        }
+    }
+    return pClosest;
 }
 
 SystemEntity* SystemManager::GetClosestMoonSE(const GPoint& myPos)
 {
-    std::map<double, SystemEntity*> sorted;
+    // nullptr when the system has none
+    SystemEntity* pClosest(nullptr);
+    double best(-1);
+    for (auto cur : m_moonMap) {
+        double dist(myPos.distance(cur.second->GetPosition()));
+        if ((best < 0) or (dist < best)) {
+            best = dist;
+            pClosest = cur.second;
+        }
+    }
+    return pClosest;
+}
+
+void SystemManager::GetMoonsInRange(const GPoint& pos, double range, std::vector<SystemEntity*>& into)
+{
+    // moons whose surface is within range of pos
     for (auto cur : m_moonMap)
-        sorted.insert(std::pair<double, SystemEntity*>(myPos.distance(cur.second->GetPosition()), cur.second));
-
-    std::map<double, SystemEntity*>::iterator itr = sorted.begin();
-
-    return itr->second;
+        if ((pos.distance(cur.second->GetPosition()) - cur.second->GetRadius()) <= range)
+            into.push_back(cur.second);
 }
 
 void SystemManager::GetClientList(std::vector< Client* >& cVec)

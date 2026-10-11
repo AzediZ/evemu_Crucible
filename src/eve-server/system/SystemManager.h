@@ -182,6 +182,8 @@ public:
     SystemEntity* GetClosestMoonSE(const GPoint& myPos);
     SystemEntity* GetClosestPlanetSE(const GPoint& myPos);
     SystemEntity* GetClosestGateSE(const GPoint& myPos);
+    // moons whose surface is within range (m) of pos
+    void GetMoonsInRange(const GPoint& pos, double range, std::vector<SystemEntity*>& into);
 
     // this returns entities in range for display on dscan.
     void DScan(int64 range, const GPoint& pos, std::vector< SystemEntity* >& vector);

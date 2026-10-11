@@ -201,6 +201,41 @@ PosMgrBound::PosMgrBound(EVEServiceManager& mgr, PosMgr& parent, uint32 systemID
 }
 
 namespace {
+    // the starbase roles that open the tower management window's tabs
+    const int64 StarbaseViewRoles = (Corp::Role::StarbaseConfig | Corp::Role::StarbaseCaretaker | Corp::Role::InfrastructureTacticalOfficer);
+
+    // a coordinate of the client's (x, y, z):  float or int
+    double PosValue(PyRep* rep)
+    {
+        if (rep == nullptr)
+            return 0.0;
+        if (rep->IsFloat())
+            return rep->AsFloat()->value();
+        return (double)PyRep::IntegerValue(rep);
+    }
+}
+
+TowerSE* PosMgrBound::GetTower(Client* pClient, PyInt* itemID, int64 roles, bool setter)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetTowerSE() == nullptr))
+        throw CustomError ("That control tower can't be found.");
+    TowerSE* pTower(pSE->GetTowerSE());
+    if (pTower->GetCorporationID() != (uint32)pClient->GetCorporationID())
+        throw UserError("CantConfigureNotInRightCorp");
+    if (!pTower->HasRole(pClient, roles)) {
+        if (roles == (Corp::Role::StarbaseConfig | Corp::Role::StarbaseCaretaker))
+            throw UserError("CantConfigureCorpStarbaseOrCaretakerRoleLacking");
+        throw UserError("CantConfigureCorpStarbaseRoleLacking");
+    }
+    // a reinforced tower is locked down
+    if (setter and pTower->IsReinforced())
+        throw UserError("CantPerformTowerReinforced").AddFormatValue("typeID", new PyInt(pTower->GetTypeID()));
+    return pTower;
+}
+
+namespace {
     // '{structure} in {system}' parameters of the bridge messages
     [[noreturn]] void ThrowBridgeError(const char* msgKey, const char* structure, uint32 systemID)
     {
@@ -353,21 +388,13 @@ PyResult PosMgrBound::GetTowerNotificationSettings(PyCallArgs &call, PyInt* item
     _log(POS__TRACE,  "PosMgrBound::Handle_GetTowerNotificationSettings()");
     call.Dump(POS__DUMP);
 
+    TowerSE* pTSE(GetTower(call.client, itemID, StarbaseViewRoles, false));
+
     PyList* header = new PyList(2);
         header->SetItemString(0, "sendFuelNotifications");
         header->SetItemString(1, "showInCalendar");
     PyDict* dict = new PyDict();
         dict->SetItemString("header", header);
-
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return new PyObject("util.Row", dict);
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return new PyObject("util.Row", dict);
 
     PyList* line = new PyList(2);
         line->SetItem(0, new PyBool(pTSE->SendFuelNotifications()));
@@ -380,15 +407,7 @@ PyResult PosMgrBound::GetTowerNotificationSettings(PyCallArgs &call, PyInt* item
 PyResult PosMgrBound::SetTowerNotifications(PyCallArgs &call, PyInt* itemID, PyBool* showInCalendar, PyBool* sendFuelNotifications) {
     //self.posMgr.SetTowerNotifications(self.slimItem.itemID, showInCalendar, sendFuelNotifications)
 
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
 
     pTSE->SetSendFuelNotifications(sendFuelNotifications->value());
     pTSE->SetShowInCalendar(showInCalendar->value());
@@ -407,15 +426,7 @@ PyResult PosMgrBound::GetTowerSentrySettings(PyCallArgs &call, PyInt* itemID) {
         header->SetItemString(4, "standingOwnerID");
     data->SetItemString("header", header);
 
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return new PyObject("util.Row", data);
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return new PyObject("util.Row", data);
+    TowerSE* pTSE(GetTower(call.client, itemID, StarbaseViewRoles, false));
 
     // limits that are switched off go back as None (unchecked boxes)
     PyList* line = new PyList(5);
@@ -451,15 +462,7 @@ namespace {
 
 PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, PyRep* standing, PyRep* status, PyRep* statusDrop, PyRep* corpWar, PyRep* useAllianceStandings) {
     //  self.posMgr.SetTowerSentrySettings(self.slimItem.itemID, standing, status, statusDrop, war, useAllianceStandings)
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
 
     pTSE->SetStanding(SentryValue(standing));
     pTSE->SetStatus(SentryValue(status));
@@ -479,15 +482,7 @@ PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, Py
 
 PyResult PosMgrBound::GetStarbasePermissions(PyCallArgs &call, PyInt* itemID) {
     //  deployFlags, usageFlagsList = self.posMgr.GetStarbasePermissions(self.slimItem.itemID)
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, StarbaseViewRoles, false));
 
     PyTuple* tuple = new PyTuple(2);
         tuple->SetItem(0, pTSE->GetDeployFlags());  // deployFlags
@@ -507,50 +502,50 @@ PyResult PosMgrBound::SetStarbasePermissions(PyCallArgs &call, PyInt* itemID, Py
     _log(POS__TRACE,  "PosMgrBound::Handle_SetStarbasePermissions()");
     call.Dump(POS__DUMP);
 
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
+
+    // an access level (EVEPOS::Access 0-3) from a row
+    auto level = [](PyList* row, size_t idx) -> int8 {
+        PyRep* rep(row->size() > idx ? row->GetItem(idx) : nullptr);
+        if ((rep == nullptr) or !rep->IsInt() or (rep->AsInt()->value() < EVEPOS::Access::ConfigRole)
+        or (rep->AsInt()->value() > EVEPOS::Access::FuelTechRole))
+            throw CustomError ("Invalid starbase permission.");
+        return rep->AsInt()->value();
+    };
+
+    // decode deployFlags object (util.Row)
+    PyRep* args((deployFlags == nullptr) ? nullptr : deployFlags->arguments());
+    PyRep* rep((args == nullptr) or !args->IsDict() ? nullptr : args->AsDict()->GetItemString("line"));
+    if ((rep == nullptr) or !rep->IsList()) {
+        codelog(POS__ERROR, "deployFlags 'line' item is not PyList");
+        throw CustomError ("Invalid starbase permissions.");
     }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
-
-    // decode deployFlags object
-    PyRep* rep = deployFlags->arguments()->AsDict()->GetItemString("line");
-    if (!rep->IsList()) {
-        codelog(POS__ERROR, "deployFlags 'line' item is not PyList: %s", rep->TypeString());
-        return nullptr;
-    }
-
     PyList* list = rep->AsList();
-    //list->Dump(POS__RSP_DUMP, "    ");
-    pTSE->SetDeployFlags(list->GetItem(0)->AsInt()->value(),
-                         list->GetItem(1)->AsInt()->value(),
-                         list->GetItem(2)->AsInt()->value(),
-                         list->GetItem(3)->AsInt()->value() );
+    int8 anchor(level(list, 0)), unanchor(level(list, 1)), online(level(list, 2)), offline(level(list, 3));
 
-
-    // decode usageFlagsList object
-    PyRep* rep2 = usageFlagsList->arguments()->AsDict()->GetItemString("lines");
-    if (!rep2->IsList()) {
-        codelog(POS__ERROR, "usageFlagsList 'lines' item is not PyList: %s", rep2->TypeString());
-        return nullptr;
+    // decode usageFlagsList object (util.Rowset)
+    PyRep* args2((usageFlagsList == nullptr) ? nullptr : usageFlagsList->arguments());
+    PyRep* rep2((args2 == nullptr) or !args2->IsDict() ? nullptr : args2->AsDict()->GetItemString("lines"));
+    if ((rep2 == nullptr) or !rep2->IsList()) {
+        codelog(POS__ERROR, "usageFlagsList 'lines' item is not PyList");
+        throw CustomError ("Invalid starbase permissions.");
     }
-
+    // validate everything before changing anything
+    std::vector<std::tuple<uint32, int8, int8, int8>> usage;
     PyList* list2 = rep2->AsList();
-    //list2->Dump(POS__RSP_DUMP, "    ");
     for (PyList::const_iterator itr = list2->begin(); itr != list2->end(); ++itr) {
-        if (!(*itr)->IsList()) {
-            codelog(POS__ERROR, "usageFlagsList - itr item is not PyList: %s", (*itr)->TypeString());
+        if (!(*itr)->IsList() or ((*itr)->AsList()->size() < 4) or !(*itr)->AsList()->GetItem(0)->IsInt()) {
+            codelog(POS__ERROR, "usageFlagsList - row is not a list of 4");
             continue;
         }
-        pTSE->SetUseFlags((*itr)->AsList()->GetItem(0)->AsInt()->value(),
-                          (*itr)->AsList()->GetItem(1)->AsInt()->value(),
-                          (*itr)->AsList()->GetItem(2)->AsInt()->value(),
-                          (*itr)->AsList()->GetItem(3)->AsInt()->value());
+        PyList* row((*itr)->AsList());
+        usage.emplace_back(row->GetItem(0)->AsInt()->value(), level(row, 1), level(row, 2), level(row, 3));
     }
+
+    pTSE->SetDeployFlags(anchor, unanchor, online, offline);
+    // only this tower's structures (SetUseFlags ignores others)
+    for (auto cur : usage)
+        pTSE->SetUseFlags(std::get<0>(cur), std::get<1>(cur), std::get<2>(cur), std::get<3>(cur));
 
     return PyStatic.NewNone();
 }
@@ -577,15 +572,7 @@ if self.moon[1] is not None:
   call.Dump(POS__DUMP);
   */
 
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, StarbaseViewRoles, false));
     MoonSE* pMSE = pTSE->GetMoonSE();
     if (pMSE == nullptr)
         return PyStatic.NewNone();
@@ -624,15 +611,8 @@ PyResult PosMgrBound::SetShipPassword(PyCallArgs &call, PyWString* password) {
 }
 
 PyResult PosMgrBound::SetTowerPassword(PyCallArgs& call, PyInt* itemID, PyRep* password) {
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    // 'Set new password for force field' (pwn.EnterTowerPassword)
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
 
     if (password->IsString() or password->IsWString())
         pTSE->SetPassword(PyRep::StringContent(password));
@@ -642,15 +622,8 @@ PyResult PosMgrBound::SetTowerPassword(PyCallArgs& call, PyInt* itemID, PyRep* p
 }
 
 PyResult PosMgrBound::SetTowerPassword(PyCallArgs &call, PyInt* itemID, PyRep* password, PyBool* allowCorp, PyBool* allowAlliance) {
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
+    // the tower window's force field tab.  password False keeps the current one
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
 
     if (password->IsString() or password->IsWString()) {
         pTSE->SetPassword(PyRep::StringContent(password));
@@ -661,22 +634,19 @@ PyResult PosMgrBound::SetTowerPassword(PyCallArgs &call, PyInt* itemID, PyRep* p
     pTSE->SetAllyAccess(allowAlliance->value());
     pTSE->UpdateAccess();
 
-    // set harmonic for ship to 'offline' (0)   -according to packet data
-    call.client->GetShipSE()->SetHarmonic(EVEPOS::Harmonic::Offline);
-
-    // at this point, if ship password isnt updated, it should be kicked out of tower's ff.
-    //  not sure how we're gonna do this yet.  will have to wait till system matures
-
     return PyStatic.NewNone();
 }
 
 PyResult PosMgrBound::UnanchorStructure(PyCallArgs &call, PyInt* itemID) {
+    // the client unanchors through dogmaLM.Activate(itemID, effectAnchorLiftForStructures); this is the same thing
     _log(POS__TRACE,  "PosMgrBound::Handle_UnanchorStructure()");
     call.Dump(POS__DUMP);
 
-    StructureSE* pTSE(nullptr);
-
-    //pTSE->PullAnchor();
+    SystemManager* pSystem(call.client->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+        throw CustomError ("That structure can't be found.");
+    pSE->GetPOSSE()->PullAnchor(call.client);
 
     return PyStatic.NewNone();
 }
@@ -684,44 +654,31 @@ PyResult PosMgrBound::UnanchorStructure(PyCallArgs &call, PyInt* itemID) {
 PyResult PosMgrBound::AnchorStructure(PyCallArgs &call, PyInt* structureID, PyTuple* position) {
     _log(POS__TRACE, "POS Mgr::Anchor()");
     call.Dump(POS__DUMP);
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
+    if (!call.client->IsInSpace() or (call.client->GetShipSE() == nullptr))
+        throw CustomError ("You must be in space to anchor a structure.");
+    SystemManager* pSystem(call.client->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(structureID->value()));
+    if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+        throw CustomError ("That structure can't be found.");
+    StructureSE* pTSE(pSE->GetPOSSE());
 
-    double posX = PyRep::IntegerValue(position->GetItem(0));
-    double posY = PyRep::IntegerValue(position->GetItem(1));
-    double posZ = PyRep::IntegerValue(position->GetItem(2));
-
-    StructureSE* pTSE = pSystem->GetSE(structureID->value())->GetPOSSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
-
-    GPoint pos(posX, posY, posZ);
+    // modules go where the pilot placed them.  towers (0,0,0) anchor where they float
+    GPoint pos(pTSE->GetPosition());
+    if ((position != nullptr) and (position->size() > 2) and !pTSE->IsTowerSE())
+        pos = GPoint(PosValue(position->GetItem(0)), PosValue(position->GetItem(1)), PosValue(position->GetItem(2)));
     pTSE->SetAnchor(call.client, pos);
 
-    // auto warp to new POS position?  config option?
-    if (pTSE->IsTowerSE()) {
+    // legacy:  the tower jumped to its moon point, take the pilot there
+    if (pTSE->IsTowerSE() and sConfig.pos.TowerSnapToMoon) {
         uint32 dist = pTSE->GetSelf()->radius() + call.client->GetShip()->radius();
         call.client->GetShipSE()->DestinyMgr()->WarpTo(pos, dist);
-        /** @todo add tower anchor position to bookmark */
     }
     // returns nodeID and timestamp
     return this->GetOID();
 }
 
 PyResult PosMgrBound::GetMoonProcessInfoForTower(PyCallArgs &call, PyInt* itemID) {
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    TowerSE* pTSE = pSystem->GetSE(itemID->value())->GetTowerSE();
-    if (pTSE == nullptr)
-        return PyStatic.NewNone();
-
+    TowerSE* pTSE(GetTower(call.client, itemID, StarbaseViewRoles, false));
     return pTSE->GetProcessInfo();
 }
 

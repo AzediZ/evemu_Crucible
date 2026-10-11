@@ -20,6 +20,7 @@ void PosMgrDB::DeleteData(uint32 itemID) {
     sDatabase.RunQuery(err, "DELETE FROM posCustomsOfficeData WHERE itemID = %u", itemID);
     sDatabase.RunQuery(err, "DELETE FROM posJumpBridgeData WHERE itemID = %u", itemID);
     sDatabase.RunQuery(err, "DELETE FROM posTowerData WHERE itemID = %u", itemID);
+    sDatabase.RunQuery(err, "DELETE FROM posProcessLinks WHERE sourceID = %u OR destID = %u OR towerID = %u", itemID, itemID, itemID);
 }
 
 PyRep* PosMgrDB::GetSiloCapacityForType(uint16 typeID) {
@@ -174,8 +175,8 @@ bool PosMgrDB::GetBaseData(EVEPOS::StructureData& data)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-            "SELECT towerID, anchorpointID, state, status, timestamp, canUse, canView, canTake FROM posStructureData"
-            " WHERE itemID = %u", data.itemID))
+            "SELECT towerID, anchorpointID, state, status, timestamp, canUse, canView, canTake, provisionTypeID, active"
+            " FROM posStructureData WHERE itemID = %u", data.itemID))
     {
         codelog(DATABASE__ERROR, "Error in GetBaseData query: %s", res.error.c_str());
         return false;
@@ -192,6 +193,8 @@ bool PosMgrDB::GetBaseData(EVEPOS::StructureData& data)
     data.use = row.GetInt(5);
     data.view = row.GetInt(6);
     data.take = row.GetInt(7);
+    data.provisionTypeID = row.GetInt(8);
+    data.active = (row.GetInt(9) != 0);
     return true;
 }
 
@@ -200,17 +203,20 @@ void PosMgrDB::SaveBaseData(EVEPOS::StructureData& data)
     DBerror err;
     sDatabase.RunQuery(err,
         "INSERT INTO posStructureData "
-        "(itemID, towerID, anchorpointID, state, status, timestamp, canUse, canView, canTake)"
-        " VALUES ( %i, %i, %i, %i, %i, %lli, %i, %i, %i)",
-        data.itemID, data.towerID, data.anchorpointID, data.state, data.status, data.timestamp, data.use, data.view, data.take);
+        "(itemID, towerID, anchorpointID, state, status, timestamp, canUse, canView, canTake, provisionTypeID, active)"
+        " VALUES ( %i, %i, %i, %i, %i, %lli, %i, %i, %i, %i, %u)",
+        data.itemID, data.towerID, data.anchorpointID, data.state, data.status, data.timestamp, data.use, data.view, data.take,
+        data.provisionTypeID, (data.active ? 1 : 0));
 }
 
 void PosMgrDB::UpdateBaseData(EVEPOS::StructureData& data)
 {
     DBerror err;
     sDatabase.RunQuery(err,
-        "UPDATE posStructureData SET state=%i, status=%i, timestamp=%lli WHERE itemID = %i",
-        data.state, data.status, data.timestamp, data.itemID);
+        "UPDATE posStructureData SET towerID=%i, anchorpointID=%i, state=%i, status=%i, timestamp=%lli, provisionTypeID=%i,"
+        " active=%u WHERE itemID = %i",
+        data.towerID, data.anchorpointID, data.state, data.status, data.timestamp, data.provisionTypeID, (data.active ? 1 : 0),
+        data.itemID);
 }
 
 bool PosMgrDB::GetTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sData)
@@ -219,7 +225,8 @@ bool PosMgrDB::GetTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sDa
     if (!sDatabase.RunQuery(res,
             "SELECT"
             " harmonic, standing, standingOwnerID, statusDrop, corpWar, allyStandings, showInCalendar,"
-            " sendFuelNotifications, allowCorp, allowAlliance, password, anchor, unanchor, online, offline, status"
+            " sendFuelNotifications, allowCorp, allowAlliance, password, anchor, unanchor, online, offline, status,"
+            " lastCycle, reinforceUntil, reinforceArmed, fuelEventID, fuelExpiry, lowFuelNotified"
             " FROM posTowerData"
             " WHERE itemID = %i", sData.itemID))
     {
@@ -234,7 +241,7 @@ bool PosMgrDB::GetTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sDa
     }
     tData.harmonic = row.GetInt(0);
     tData.standing = row.GetFloat(1);
-    tData.standingOwnerID = row.GetInt(2);
+    tData.standingOwnerID = row.GetUInt(2);
     tData.statusDrop = row.GetInt(3);
     tData.corpWar = row.GetInt(4);
     tData.allyStandings = row.GetInt(5);
@@ -248,20 +255,40 @@ bool PosMgrDB::GetTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sDa
     tData.online = row.GetInt(13);
     tData.offline = row.GetInt(14);
     tData.status = row.GetFloat(15);
+    tData.lastCycle = row.GetInt64(16);
+    tData.reinforceUntil = row.GetInt64(17);
+    tData.reinforceArmed = (row.GetInt(18) != 0);
+    tData.fuelEventID = row.GetUInt(19);
+    tData.fuelExpiry = row.GetInt64(20);
+    tData.lowFuelNotified = row.GetInt64(21);
     return true;
 }
 
 void PosMgrDB::SaveTowerData(EVEPOS::TowerData& tData, EVEPOS::StructureData& sData)
 {
+    std::string passEsc;
+    sDatabase.DoEscapeString(passEsc, tData.password);
     DBerror err;
     sDatabase.RunQuery(err,
-        "INSERT INTO posTowerData"
-        " (itemID, harmonic, standing, standingOwnerID, status, statusDrop, corpWar, allyStandings, showInCalendar,"
-        " sendFuelNotifications, allowCorp, allowAlliance, anchor, unanchor, online, offline)"
-        " VALUES ( %i, %i, %f, %i, %f, %u, %u, %u, %u, %u, %u, %u, %i, %i, %i,%i)",
-        sData.itemID, tData.harmonic, tData.standing, tData.standingOwnerID, tData.status, tData.statusDrop, tData.corpWar, tData.allyStandings,
-        tData.showInCalendar, tData.sendFuelNotifications, tData.allowCorp, tData.allowAlliance,
-        tData.anchor, tData.unanchor, tData.online, tData.offline);
+        "REPLACE INTO posTowerData"
+        " (itemID, harmonic, password, standing, standingOwnerID, status, statusDrop, corpWar, allyStandings, showInCalendar,"
+        " sendFuelNotifications, allowCorp, allowAlliance, anchor, unanchor, online, offline,"
+        " lastCycle, reinforceUntil, reinforceArmed, fuelEventID, fuelExpiry, lowFuelNotified)"
+        " VALUES ( %i, %i, '%s', %f, %u, %f, %u, %u, %u, %u, %u, %u, %u, %i, %i, %i, %i, %lli, %lli, %u, %u, %lli, %lli)",
+        sData.itemID, tData.harmonic, passEsc.c_str(), tData.standing, tData.standingOwnerID, tData.status, tData.statusDrop,
+        tData.corpWar, tData.allyStandings, tData.showInCalendar, tData.sendFuelNotifications, tData.allowCorp, tData.allowAlliance,
+        tData.anchor, tData.unanchor, tData.online, tData.offline,
+        tData.lastCycle, tData.reinforceUntil, tData.reinforceArmed, tData.fuelEventID, tData.fuelExpiry, tData.lowFuelNotified);
+}
+
+void PosMgrDB::UpdateTowerRuntime(uint32 itemID, EVEPOS::TowerData& data)
+{
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "UPDATE posTowerData SET lastCycle=%lli, reinforceUntil=%lli, reinforceArmed=%u, fuelEventID=%u, fuelExpiry=%lli,"
+        " lowFuelNotified=%lli, harmonic=%i WHERE itemID = %u",
+        data.lastCycle, data.reinforceUntil, data.reinforceArmed, data.fuelEventID, data.fuelExpiry, data.lowFuelNotified,
+        data.harmonic, itemID);
 }
 
 bool PosMgrDB::GetBridgeData(EVEPOS::JumpBridgeData& data)
@@ -508,7 +535,7 @@ void PosMgrDB::UpdateSentry(int32 itemID, EVEPOS::TowerData& data)
     DBerror err;
     sDatabase.RunQuery(err,
         "UPDATE posTowerData"
-        " SET standing=%f, status=%f, statusDrop=%i, corpWar=%i, allyStandings=%i, standingOwnerID=%i WHERE itemID = %u",
+        " SET standing=%f, status=%f, statusDrop=%i, corpWar=%i, allyStandings=%i, standingOwnerID=%u WHERE itemID = %u",
         data.standing, data.status, data.statusDrop, data.corpWar, data.allyStandings, data.standingOwnerID, itemID);
 }
 
@@ -543,6 +570,6 @@ void PosMgrDB::UpdateDeployFlags(int32 itemID, EVEPOS::TowerData& data)
     DBerror err;
     sDatabase.RunQuery(err,
         "UPDATE posTowerData"
-        " SET anchor=%f, unanchor=%i, online=%i, offline=%i WHERE itemID = %u",
+        " SET anchor=%i, unanchor=%i, online=%i, offline=%i WHERE itemID = %u",
         data.anchor, data.unanchor, data.online, data.offline, itemID);
 }

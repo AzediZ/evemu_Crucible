@@ -817,22 +817,24 @@ PyResult DogmaIMBound::Activate(PyCallArgs& call, PyInt* itemID, PyInt* effectID
     // determine if this pSE is pos or cont.
     //call (de)activate on pSE, pass effectID, send effect to clients (bubblecast) then set timers.
     if (pSE->IsPOSSE()) {
-        /*  these two may be called in posMgr...
-        if ((args.arg2 == anchorDropForStructures)
-        or (args.arg2 == anchorDropOrbital)) {
-            pSE->GetPOSSE()->SetAnchor(args.arg2);
-        } else */ if (effectID->value() == anchorLiftForStructures) {
-            pSE->GetPOSSE()->PullAnchor();
+        // the client anchors starbase structures through posMgr.AnchorStructure; this anchors where it floats
+        //  permissions and starbase rules are checked by the structure (UserErrors go to the client)
+        if (effectID->value() == anchorDropForStructures) {
+            GPoint pos = pSE->GetPosition();
+            pSE->GetPOSSE()->SetAnchor(call.client, pos);
+        }
+        else if (effectID->value() == anchorLiftForStructures) {
+            pSE->GetPOSSE()->PullAnchor(call.client);
         }
         else if (pSE->IsPlatformSE() and effectID->value() == anchorDrop) {
             GPoint pos = pSE->GetPosition();
             pSE->GetPOSSE()->SetAnchor(call.client, pos);
         }
         else if (pSE->IsPlatformSE() and effectID->value() == anchorLift) {
-            pSE->GetPOSSE()->PullAnchor();
+            pSE->GetPOSSE()->PullAnchor(call.client);
         }
         else if (effectID->value() == onlineForStructures) {
-            pSE->GetPOSSE()->Activate(effectID->value());
+            pSE->GetPOSSE()->Activate(call.client, effectID->value());
         }
         if (pSE->IsContainerSE() and effectID->value() == anchorDrop) {
             GPoint pos = pSE->GetPosition();
@@ -895,7 +897,7 @@ PyResult DogmaIMBound::Deactivate(PyCallArgs& call, PyInt* itemID, PyInt* effect
      // determine if this pSE is pos or cont.
      //call activate on pSE, pass effectID, send effect to clients (bubblecast) then set timers.
     if (pSE->IsPOSSE()) {
-        pSE->GetPOSSE()->Deactivate(effect->value());
+        pSE->GetPOSSE()->Deactivate(pClient, effect->value());
     }
     else if (pSE->IsContainerSE()) {
         pSE->GetContSE()->Deactivate(effect->value());

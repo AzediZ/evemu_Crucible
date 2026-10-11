@@ -438,6 +438,20 @@ public:
         uint32 DevIndexDecayPerHour;        // points (client devIndexUtil.devIndexDecayRate; other values desync the client's level bars)
     } sov;
 
+    // From <pos>  (F18: starbases)
+    struct {
+        float FuelRate;                     // multiplier on hourly fuel, charter and strontium use.  0 = towers run without fuel
+        bool RequireCharters;               // starbase charters needed to anchor (cargo) and burned hourly where the data asks for them
+        bool HighSecStandingCheck;          // corp standing to the system's empire faction >= 10 x security to anchor a tower there
+        bool ConcordAnchorRestriction;      // no anchoring at 0.8+, and the per-type anchoringSecurityLevelMax
+        bool KeepTowerSystemsLoaded;        // boot systems with online towers at startup and never unload them
+        uint32 MaxCatchUpCycles;            // most hourly tower cycles replayed when a tower's system loads after downtime
+        uint32 MoonGooSeed;                 // seed of the generated moon materials
+        float MoonGooEmptyChance;           // chance a moon has no materials
+        bool GunsEnabled;                   // starbase defenses shoot on their own
+        bool TowerSnapToMoon;               // legacy: anchoring moves the tower to a fixed point at its moon and warps the pilot there
+    } pos;
+
     // From <testing>
     struct {
         bool EnableDrones;
@@ -479,6 +493,7 @@ protected:
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );
     bool ProcessSov( const TiXmlElement* ele );
+    bool ProcessPOS( const TiXmlElement* ele );
     bool ProcessBPTimes( const TiXmlElement* ele );
     bool ProcessTesting( const TiXmlElement* ele );
     bool ProcessDebug( const TiXmlElement* ele );

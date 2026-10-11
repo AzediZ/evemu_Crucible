@@ -331,6 +331,18 @@ EVEServerConfig::EVEServerConfig()
     sov.IndustrialPointsPerM3 = 1.0f;
     sov.DevIndexDecayPerHour = 100000;
 
+    // pos
+    pos.FuelRate = 1.0f;
+    pos.RequireCharters = true;
+    pos.HighSecStandingCheck = true;
+    pos.ConcordAnchorRestriction = true;
+    pos.KeepTowerSystemsLoaded = true;
+    pos.MaxCatchUpCycles = 720;
+    pos.MoonGooSeed = 1;
+    pos.MoonGooEmptyChance = 0.5f;
+    pos.GunsEnabled = true;
+    pos.TowerSnapToMoon = false;
+
     // testing
     testing.EnableDrones = false;
 
@@ -397,6 +409,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "missions",    &EVEServerConfig::ProcessMissions );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
+    AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
     AddMemberParser( "chat",        &EVEServerConfig::ProcessChat );
     AddMemberParser( "debug",       &EVEServerConfig::ProcessDebug );
@@ -424,6 +437,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "missions" );
     RemoveParser( "crime" );
     RemoveParser( "sov" );
+    RemoveParser( "pos" );
     RemoveParser( "standings" );
     RemoveParser( "chat" );
     RemoveParser( "debug" );
@@ -1134,6 +1148,28 @@ bool EVEServerConfig::ProcessSov( const TiXmlElement* ele )
     RemoveParser( "MilitaryPointsPerBountyISK" );
     RemoveParser( "IndustrialPointsPerM3" );
     RemoveParser( "DevIndexDecayPerHour" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessPOS( const TiXmlElement* ele )
+{
+    AddValueParser( "FuelRate",                 pos.FuelRate );
+    AddValueParser( "RequireCharters",          pos.RequireCharters );
+    AddValueParser( "HighSecStandingCheck",     pos.HighSecStandingCheck );
+    AddValueParser( "ConcordAnchorRestriction", pos.ConcordAnchorRestriction );
+    AddValueParser( "KeepTowerSystemsLoaded",   pos.KeepTowerSystemsLoaded );
+    AddValueParser( "MaxCatchUpCycles",         pos.MaxCatchUpCycles );
+    AddValueParser( "MoonGooSeed",              pos.MoonGooSeed );
+    AddValueParser( "MoonGooEmptyChance",       pos.MoonGooEmptyChance );
+    AddValueParser( "GunsEnabled",              pos.GunsEnabled );
+    AddValueParser( "TowerSnapToMoon",          pos.TowerSnapToMoon );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"FuelRate", "RequireCharters", "HighSecStandingCheck", "ConcordAnchorRestriction",
+            "KeepTowerSystemsLoaded", "MaxCatchUpCycles", "MoonGooSeed", "MoonGooEmptyChance", "GunsEnabled", "TowerSnapToMoon"})
+        RemoveParser( name );
 
     return result;
 }

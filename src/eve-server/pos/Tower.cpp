@@ -28,6 +28,7 @@
 #include "system/Damage.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 /** @todo (Allan) this class needs more research to finish
  * see pics in ::GamePC/G/games/EvE/misc/POS
@@ -153,13 +154,12 @@ void TowerSE::Init()
         CreateForceField();
 
     // if tower anchored, tell moon this is its tower
-    if (m_data.state > EVEPOS::StructureState::Unanchored)
+    if ((m_data.state > EVEPOS::StructureState::Unanchored) and (m_moonSE != nullptr))
         m_moonSE->SetTower(this);
 
     // set tower in bubble
-    if (m_bubble == nullptr)
-        assert(0);
-    m_bubble->SetTowerSE(this);
+    if (m_bubble != nullptr)
+        m_bubble->SetTowerSE(this);
 
     /** @todo
      * will have to check if Online or Operating
@@ -210,9 +210,163 @@ bool TowerSE::ConsidersHostile(Client* pClient)
     return false;
 }
 
+void TowerSE::Killed(Damage& damage)
+{
+    // the force field goes, the moon is free again and the tower's structures are orphaned
+    if (m_hasShield) {
+        m_pShieldSE->Delete();
+        SafeDelete(m_pShieldSE);
+        m_hasShield = false;
+    }
+    if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
+        m_moonSE->SetTower(nullptr);
+    if ((m_bubble != nullptr) and (m_bubble->GetTowerSE() == this))
+        m_bubble->SetTowerSE(nullptr);
+    OrphanModules();
+
+    StructureSE::Killed(damage);
+}
+
+int8 TowerSE::GetDeployFlag(int8 action)
+{
+    switch (action) {
+        case EVEPOS::Deploy::Anchor:    return m_tdata.anchor;
+        case EVEPOS::Deploy::Unanchor:  return m_tdata.unanchor;
+        case EVEPOS::Deploy::Online:    return m_tdata.online;
+        case EVEPOS::Deploy::Offline:   return m_tdata.offline;
+    }
+    return EVEPOS::Access::ConfigRole;
+}
+
+StructureSE* TowerSE::GetBusyStructure()
+{
+    if (IsStateChangePending())
+        return this;
+    for (auto cur : m_structs)
+        if (cur.second->IsStateChangePending())
+            return cur.second;
+    return nullptr;
+}
+
+void TowerSE::CheckNotBusy(StructureSE* pRequester)
+{
+    StructureSE* pBusy(GetBusyStructure());
+    if ((pBusy == nullptr) or (pBusy == pRequester))
+        return;
+    throw UserError("CantTowerIsAlreadyActive")
+            .AddFormatValue("tower", new PyInt(GetTypeID()))
+            .AddFormatValue("structure", new PyInt(pBusy->GetTypeID()))
+            .AddFormatValue("action", new PyString(pBusy->GetPendingActionName()));
+}
+
+StructureSE* TowerSE::GetAnchoredModule()
+{
+    for (auto cur : m_structs)
+        if ((cur.second->GetState() > EVEPOS::StructureState::Unanchored) or cur.second->IsStateChangePending())
+            return cur.second;
+    return nullptr;
+}
+
+void TowerSE::OrphanModules()
+{
+    // copy:  SetControlTower() takes the module out of m_structs
+    std::map<uint32, StructureSE*> modules(m_structs);
+    for (auto cur : modules) {
+        cur.second->ForceOffline();
+        cur.second->SetControlTower(nullptr);
+        cur.second->SaveData();
+        cur.second->SendSlimUpdate();
+    }
+}
+
+void TowerSE::GetFuelRequirements(uint16 towerTypeID, uint32 systemID, uint32 ownerAllianceID,
+                                  std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium)
+{
+    SystemData sData = SystemData();
+    sDataMgr.GetSystemData(systemID, sData);
+    int8 whClass(sDataMgr.GetWHSystemClass(systemID));
+    // the client's consumefactor:  sovereignty held by the owner's alliance saves a quarter
+    float factor(sConfig.pos.FuelRate);
+    if (IsAlliance(ownerAllianceID) and (svDataMgr.GetSystemAllianceID(systemID) == ownerAllianceID))
+        factor *= 0.75f;
+
+    std::vector<EVEPOS::TowerResource> rows;
+    sDataMgr.GetTowerResources(towerTypeID, rows);
+    for (auto cur : rows) {
+        // power and cpu rows (heavy water, liquid ozone) are gone since Crucible 1.1's fuel blocks
+        if ((cur.purpose != EVEPOS::Purpose::Online) and (cur.purpose != EVEPOS::Purpose::Reinforce))
+            continue;
+        if ((cur.factionID != 0) and (cur.factionID != sData.factionID))
+            continue;
+        if ((cur.minSecurity >= 0) and (cur.minSecurity > sData.securityRating))
+            continue;
+        if ((cur.wormholeClassID >= 0) and (cur.wormholeClassID != whClass))
+            continue;
+        // starbase charters (the faction rows)
+        if ((cur.factionID != 0) and !sConfig.pos.RequireCharters)
+            continue;
+        uint32 qty((uint32)std::ceil(cur.quantity * factor));
+        if (qty == 0)
+            continue;
+        if (cur.purpose == EVEPOS::Purpose::Online) {
+            online[cur.typeID] += qty;
+        } else {
+            strontium[cur.typeID] += qty;
+        }
+    }
+}
+
+void TowerSE::GetCharterTypes(uint16 towerTypeID, uint32 systemID, std::vector<uint16>& into)
+{
+    if (!sConfig.pos.RequireCharters)
+        return;
+    SystemData sData = SystemData();
+    sDataMgr.GetSystemData(systemID, sData);
+    std::vector<EVEPOS::TowerResource> rows;
+    sDataMgr.GetTowerResources(towerTypeID, rows);
+    for (auto cur : rows) {
+        if ((cur.purpose != EVEPOS::Purpose::Online) or (cur.factionID == 0) or (cur.factionID != sData.factionID))
+            continue;
+        if ((cur.minSecurity >= 0) and (cur.minSecurity > sData.securityRating))
+            continue;
+        into.push_back(cur.typeID);
+    }
+}
+
+uint32 TowerSE::CountResource(uint16 typeID, EVEItemFlags flag)
+{
+    std::vector<InventoryItemRef> items;
+    m_self->GetMyInventory()->GetItemsByFlag(flag, items);
+    uint32 qty(0);
+    for (auto cur : items)
+        if ((cur->typeID() == typeID) and !cur->isSingleton())
+            qty += cur->quantity();
+    return qty;
+}
+
+void TowerSE::CheckOnlineFuel()
+{
+    std::map<uint16, uint32> online, strontium;
+    GetFuelRequirements(GetTypeID(), m_system->GetID(), (IsAlliance(m_allyID) ? m_allyID : 0), online, strontium);
+    std::string missing;
+    for (auto cur : online) {
+        if (CountResource(cur.first, flagNone) >= cur.second)
+            continue;
+        if (!missing.empty())
+            missing += ", ";
+        const ItemType* pType(sItemFactory.GetType(cur.first));
+        missing += (pType == nullptr ? std::to_string(cur.first) : pType->name());
+    }
+    if (!missing.empty())
+        throw UserError("CantOnlineTowerLacksResources")
+                .AddFormatValue("tower", new PyInt(GetTypeID()))
+                .AddFormatValue("resource", new PyString(missing));
+}
+
 void TowerSE::Scoop() {
     StructureSE::Scoop();
-    m_moonSE->SetTower(nullptr);
+    if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
+        m_moonSE->SetTower(nullptr);
     m_tdata = EVEPOS::TowerData();
     m_self->ChangeSingleton(false);
     m_self->SaveItem();
@@ -283,8 +437,16 @@ void TowerSE::SetOffline()
         SafeDelete(m_pShieldSE);
         m_hasShield = false;
     }
+    m_harmonic = EVEPOS::Harmonic::Offline;
+    m_tdata.harmonic = m_harmonic;
+
+    // an offline tower powers nothing
+    std::map<uint32, StructureSE*> modules(m_structs);
+    for (auto cur : modules)
+        cur.second->ForceOffline();
 
     StructureSE::SetOffline();
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
 }
 
 
@@ -542,18 +704,9 @@ PyDict* TowerSE::MakeSlimItem()
     _log(SE__SLIMITEM, "MakeSlimItem for TowerSE %u", m_self->itemID());
     _log(POS__SLIMITEM, "MakeSlimItem for TowerSE %u", m_self->itemID());
 
-    PyDict *slim = new PyDict();
-    slim->SetItemString("name",                     new PyString(m_self->itemName()));
-    slim->SetItemString("itemID",                   new PyLong(m_self->itemID()));
-    slim->SetItemString("typeID",                   new PyInt(m_self->typeID()));
-    slim->SetItemString("ownerID",                  new PyInt(m_ownerID));
-    slim->SetItemString("corpID",                   IsCorp(m_corpID) ? new PyInt(m_corpID) : PyStatic.NewNone());
-    slim->SetItemString("allianceID",               IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone());
-    slim->SetItemString("warFactionID",             IsFaction(m_warID) ? new PyInt(m_warID) : PyStatic.NewNone());
-    slim->SetItemString("posTimestamp",             new PyLong(m_data.timestamp));
-    slim->SetItemString("posState",                 new PyInt(m_data.state));
-    slim->SetItemString("incapacitated",            new PyInt((m_data.state == EVEPOS::StructureState::Incapacitated) ? 1 : 0));
-    slim->SetItemString("posDelayTime",             new PyInt(m_delayTime));
+    PyDict *slim = StructureSE::MakeSlimItem();
+    // the client compares ship and field harmonics through this (pwn.CompareShipStructureHarmonic)
+    slim->SetItemString("forceFieldID",             (m_pShieldSE == nullptr ? PyStatic.NewNone() : new PyLong(m_pShieldSE->GetID())));
 
     if (is_log_enabled(POS__SLIMITEM)) {
         _log( POS__SLIMITEM, "TowerSE::MakeSlimItem() - %s(%u)", GetName(), GetID());

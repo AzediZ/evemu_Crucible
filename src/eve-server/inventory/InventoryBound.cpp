@@ -1358,7 +1358,8 @@ PyResult InventoryBound::Build(PyCallArgs &call) {
     stData.corporationID = call.client->GetCorporationID();
 
     // Build station name
-    stData.name = call.client->SystemMgr()->GetClosestPlanetSE(anchorPosition)->GetName()
+    SystemEntity* pPlanet(call.client->SystemMgr()->GetClosestPlanetSE(anchorPosition));
+    stData.name = (pPlanet == nullptr ? std::string(call.client->SystemMgr()->GetName()) : std::string(pPlanet->GetName()))
         + std::string(" - ") + stationBaseName;
 
     // Set default configurable values

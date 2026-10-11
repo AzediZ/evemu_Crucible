@@ -1330,13 +1330,14 @@ PyResult Command_pos(Client* pClient, CommandDB* db, EVEServiceManager &services
     std::string cmd(args.arg(1));
     StructureSE* pSE(GetStructure(pClient, args, 2));
 
+    // no client:  the starbase rules and permissions are skipped
     if (strcasecmp(cmd.c_str(), "online") == 0) {
         pSE->Activate(EVEEffectID::onlineForStructures);
     } else if (strcasecmp(cmd.c_str(), "offline") == 0) {
         pSE->Deactivate(EVEEffectID::onlineForStructures);
     } else if (strcasecmp(cmd.c_str(), "anchor") == 0) {
         GPoint pos(pSE->GetPosition());
-        pSE->SetAnchor(pClient, pos);
+        pSE->SetAnchor(nullptr, pos);
     } else if (strcasecmp(cmd.c_str(), "unanchor") == 0) {
         pSE->PullAnchor();
     } else {

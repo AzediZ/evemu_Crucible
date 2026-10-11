@@ -150,7 +150,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
             return false;
         }
     } else if (tSE->IsTowerSE()) {
-        if ((tSE->GetTowerSE()->GetState() == EVEPOS::StructureState::Reinforced) || (tSE->GetTowerSE()->GetState() == EVEPOS::StructureState::ArmorReinforced) || (tSE->GetTowerSE()->GetState() == EVEPOS::StructureState::SheildReinforced)) {
+        if (tSE->GetTowerSE()->IsReinforced()) {
             mySE->GetPilot()->SendNotifyMsg("You cannot target an invulnerable structure.");
             return false;
         }

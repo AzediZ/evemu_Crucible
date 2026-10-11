@@ -15,6 +15,7 @@
 #include "Client.h"
 
 class PosMgrBound;
+class TowerSE;
 
 class PosMgr : public BindableService <PosMgr, PosMgrBound>
 {
@@ -75,6 +76,11 @@ protected:
     PyResult UninstallJumpBridgeLink(PyCallArgs& call, PyInt* itemID);
 
 private:
+    /* the caller's control tower in this system:  owned by the caller's corp, one of 'roles' held (directors hold all).
+     *  setters are refused while the tower is reinforced.  throws the client's errors
+     */
+    TowerSE* GetTower(Client* pClient, PyInt* itemID, int64 roles, bool setter);
+
     PosMgrDB m_db;
     uint32 m_systemID;
 };

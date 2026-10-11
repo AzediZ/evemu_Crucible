@@ -37,6 +37,8 @@ namespace EVEPOS {
         int32 itemID;
         int32 towerID;
         int32 anchorpointID;       /* used to hold PlanetID for structures which are anchored near moons/planets/stargates */
+        int32 provisionTypeID;     /* moon harvester material / silo content type */
+        bool active;               /* moon process ran last cycle */
         int64 timestamp;
     };
     struct TowerData {
@@ -47,15 +49,21 @@ namespace EVEPOS {
         bool corpWar :1;
         bool showInCalendar :1;
         bool sendFuelNotifications :1;
+        bool reinforceArmed :1;     /* reinforcement re-arms once the shield is back to 50% */
         int8 anchor;
         int8 unanchor;
         int8 online;
         int8 offline;
         int8 selectedHour;  /* determines timeframe structure will come out of reinforced mode */
         int32 harmonic;       /* this is POS ForceField status */
-        int32 standingOwnerID;
+        uint32 standingOwnerID;
+        uint32 fuelEventID;   /* calendar event of the fuel expiry */
         float status;         /* this is different from structure.status:  it is used for defense standings and needs to be renamed */
         float standing;
+        int64 lastCycle;      /* FILETIME of the last hourly fuel cycle */
+        int64 reinforceUntil; /* FILETIME the tower leaves reinforced mode, 0 = not reinforced */
+        int64 fuelExpiry;     /* FILETIME of the fuel expiry in the calendar event */
+        int64 lowFuelNotified;/* FILETIME of the last low fuel notification */
         std::string password;
     };
 
@@ -82,6 +90,24 @@ namespace EVEPOS {
         GVector rotation;      /* yaw,pitch,roll - direction to planet (for correct orientation) */
     };
 
+    // a row of invControlTowerResources
+    struct TowerResource {
+        uint16 typeID;
+        uint8 purpose;          // 1 online (fuel blocks, charters), 2 power, 3 cpu, 4 reinforce (strontium)
+        uint32 quantity;        // per posControlTowerPeriod
+        float minSecurity;      // raw system security the row starts at, -1 = any
+        uint32 factionID;       // system faction the row applies in (charters), 0 = any
+        int8 wormholeClassID;   // wormhole class the row applies in, -1 = any
+    };
+    namespace Purpose {
+        enum {
+            Online      = 1,
+            Power       = 2,
+            CPU         = 3,
+            Reinforce   = 4
+        };
+    }
+
     struct POS_Connections {
         uint32 toID;
         uint32 sourceID;
@@ -91,6 +117,39 @@ namespace EVEPOS {
         uint32 typeID;
         uint32 quantity;
     };
+
+    // who may anchor/unanchor/online/offline (tower deploy flags) and view/take/use a structure (usage flags)
+    namespace Access {
+        enum {
+            ConfigRole      = 0,    // Config Starbase Equipment role in the owner corp
+            Corp            = 1,    // owner corp members
+            Alliance        = 2,    // owner alliance members
+            FuelTechRole    = 3     // Starbase Fuel Technician role in the owner corp
+        };
+    }
+    namespace Deploy {
+        enum {
+            Anchor,
+            Unanchor,
+            Online,
+            Offline
+        };
+    }
+    namespace Usage {
+        enum {
+            View,       // view and put
+            Take,       // view, put and take
+            Use
+        };
+    }
+
+    // tower shield fraction that starts reinforced mode, and the fraction that re-arms it
+    static const float ReinforceShieldLevel = 0.25f;
+    static const float ShieldFluctuationLevel = 0.50f;
+    // hours of fuel left that make a low fuel notification
+    static const uint32 LowFuelHours = 24;
+    // starbase command distance (the client's COMMAND_DISTANCE): manual defense control
+    static const uint32 ControlDistance = 250000;
 
     namespace Harmonic {
         enum  {
