@@ -129,6 +129,7 @@ boolean can use either 0/1 OR true/false.
         <UseOrderRange>true</UseOrderRange><!-- bool  - default: true  -->
         <DeleteOldTransactions>false</DeleteOldTransactions><!-- bool  - delete transactions from db older than 3 days  default: false  -->
         <SalesTax>1.0</SalesTax><!-- float - the sales tax percentage -->
+        <OrderModificationDelay>300</OrderModificationDelay><!-- integer - seconds between modifications of one market order (Crucible: 300).  0 disables -->
     </market>
 
     <!-- don't modify any of the following bpTimes settings - they are not fully debugged -->

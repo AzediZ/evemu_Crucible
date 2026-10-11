@@ -268,6 +268,17 @@ void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID) {
     this->m_cache->InvalidateCache(method_id);
 }
 
+bool MarketMgr::CanModifyOrder(uint32 orderID, int64 issued)
+{
+    if (sConfig.market.OrderModificationDelay == 0)
+        return true;
+    int64 last(issued);
+    std::map<uint32, int64>::const_iterator itr = m_orderModified.find(orderID);
+    if ((itr != m_orderModified.end()) and (itr->second > last))
+        last = itr->second;
+    return ((GetFileTimeNow() - last) >= (int64)sConfig.market.OrderModificationDelay * EvE::Time::Second);
+}
+
 /** @todo take off market overhead fees */
 /*
  *    def BrokersFee(self, stationID, amount, commissionPercentage):
@@ -409,7 +420,9 @@ bool MarketMgr::ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef
         }
     }
 
-    float money = price * qtySold;
+    // trades settle at the resting (buy) order's price, which is what its escrow was reserved at.
+    //  'price' is only the seller's limit
+    double money = oInfo.price * qtySold;
     std::string reason = "DESC:  Buying items in ";
     reason += stDataMgr.GetStationName(stationID).c_str();
     uint32 sellerWalletOwnerID = 0;
@@ -498,7 +511,7 @@ bool MarketMgr::ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef
     data.isCorp         = useCorp;
     data.memberID       = seller->GetCharacterID(); // TODO: change this to the corp member ID if useCorp is 1?
     data.clientID       = oInfo.ownerID;
-    data.price          = price;
+    data.price          = oInfo.price;
     data.quantity       = qtySold;
     data.stationID      = stationID;
     data.regionID       = sDataMgr.GetStationRegion(stationID);
@@ -531,9 +544,9 @@ bool MarketMgr::ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef
 
         InvalidateOrdersCache(oInfo.regionID, typeID);
 
-        if (isPlayer or isCorp) {
-            SendOnOwnOrderChanged(seller, orderID, Market::Action::Modify, useCorp);
-        }
+        // tell the buy order's owner, not the seller
+        if (isPlayer)
+            SendOnOwnOrderChanged(sEntityList.FindClientByCharID(oInfo.ownerID), orderID, Market::Action::Modify, false);
 
         return true;
     }
@@ -545,11 +558,15 @@ bool MarketMgr::ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef
         _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to delete order #%u.", orderID);
         return false;
     }
+    ClearOrderModified(orderID);
 
     InvalidateOrdersCache(oInfo.regionID, typeID);
 
-    if (isPlayer or isCorp) {
-        SendOnOwnOrderChanged(seller, orderID, Market::Action::Expiry, useCorp, order);
+    // tell the buy order's owner, not the seller
+    if (isPlayer) {
+        SendOnOwnOrderChanged(sEntityList.FindClientByCharID(oInfo.ownerID), orderID, Market::Action::Expiry, false, order);
+    } else {
+        PySafeDecRef(order);
     }
 
     return true;
@@ -583,7 +600,8 @@ void MarketMgr::ExecuteSellOrder(Client* buyer, uint32 orderID, uint32 sellQuant
     }
 
     /** @todo  get/implement accountKey here.... */
-    float money = price * sellQuantity;
+    // trades settle at the resting (sell) order's price.  'price' is only the buyer's limit
+    double money = oInfo.price * sellQuantity;
 
     // send wallet blink event and record the transaction in their journal.
     std::string reason = "DESC:  Buying market items in ";
@@ -664,6 +682,7 @@ void MarketMgr::ExecuteSellOrder(Client* buyer, uint32 orderID, uint32 sellQuant
             _log(MARKET__ERROR, "ExecuteSellOrder - Failed to delete order #%u.", orderID);
             return;
         }
+        ClearOrderModified(orderID);
 
         InvalidateOrdersCache(oInfo.regionID, typeID);
 
@@ -690,7 +709,7 @@ void MarketMgr::ExecuteSellOrder(Client* buyer, uint32 orderID, uint32 sellQuant
     data.isCorp         = useCorp;
     data.memberID       = buyer->GetCharacterID(); // TODO: change this to the corp member ID if useCorp is 1?
     data.clientID       = oInfo.ownerID;
-    data.price          = price;
+    data.price          = oInfo.price;
     data.quantity       = sellQuantity;
     data.stationID      = stationID;
     data.regionID       = sDataMgr.GetStationRegion(stationID);

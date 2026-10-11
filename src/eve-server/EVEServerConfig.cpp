@@ -123,6 +123,7 @@ EVEServerConfig::EVEServerConfig()
     market.UseOrderRange = true;//N
     market.DeleteOldTransactions = false;
     market.salesTax = 1.0f;
+    market.OrderModificationDelay = 300;
 
     // ram
     ram.AutoEvent = false;
@@ -504,6 +505,7 @@ bool EVEServerConfig::ProcessMarket(const TiXmlElement* ele)
     AddValueParser( "DeleteOldTransactions",        market.DeleteOldTransactions);
     AddValueParser( "HistoryUpdateTime",            market.HistoryUpdateTime);
     AddValueParser( "SalesTax",                     market.salesTax);
+    AddValueParser( "OrderModificationDelay",       market.OrderModificationDelay);
 
     const bool result = ParseElementChildren( ele );
 

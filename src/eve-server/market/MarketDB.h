@@ -49,7 +49,8 @@ public:
 
     static bool DeleteOrder(uint32 orderID);
     static bool GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo);
-    static bool AlterOrderPrice(uint32 orderID, double new_price);
+    // new_escrow < 0 leaves the escrow column alone
+    static bool AlterOrderPrice(uint32 orderID, double new_price, double new_escrow = -1.0);
     static bool RecordTransaction(Market::TxData &data);
     static bool AlterOrderQuantity(uint32 orderID, uint32 new_qty);
 

@@ -199,13 +199,13 @@ uint32 MarketDB::FindBuyOrder(uint32 typeID, uint32 stationID, uint32 quantity, 
         "  AND typeID=%u"
         "  AND stationID=%u"
         "  AND volRemaining >= %u"
-        "  AND price > %.2f"
+        "  AND price > %.3f"
         " ORDER BY price DESC"
         " LIMIT 1;",
         typeID,
         stationID,
         quantity,
-        price - 0.1/*, sConfig.market.FindBuyOrder*/))
+        price - 0.005/* tolerance for float price columns.  trades settle at the order's price */))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return 0;
@@ -228,13 +228,13 @@ uint32 MarketDB::FindSellOrder(uint32 typeID, uint32 stationID, uint32 quantity,
         "  AND typeID=%u"
         "  AND stationID=%u"
         "  AND volRemaining >= %u"
-        "  AND price < %.2f"
+        "  AND price < %.3f"
         " ORDER BY price ASC"
         " LIMIT 1;",
         typeID,
         stationID,
         quantity,
-        price + 0.1/*, sConfig.market.FindSellOrder*/))
+        price + 0.005/* tolerance for float price columns.  trades settle at the order's price */))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return 0;
@@ -262,7 +262,9 @@ bool MarketDB::GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo) {
         " bid,"
         " isCorp,"
         " memberID,"
-        " accountKey"
+        " accountKey,"
+        " issued,"
+        " escrow"
         " FROM mktOrders"
         " WHERE orderID=%u",
         orderID))
@@ -277,8 +279,9 @@ bool MarketDB::GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo) {
         return false;
     }
 
+    oInfo.orderID    = orderID;
     oInfo.quantity   = row.GetUInt(0);
-    oInfo.price      = row.GetFloat(1);
+    oInfo.price      = row.GetDouble(1);
     oInfo.typeID     = row.GetUInt(2);
     oInfo.stationID  = row.GetUInt(3);
     oInfo.regionID   = row.GetUInt(4);
@@ -287,6 +290,8 @@ bool MarketDB::GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo) {
     oInfo.isCorp     = row.GetBool(7);
     oInfo.memberID   = row.GetUInt(8);
     oInfo.accountKey = row.GetUInt(9);
+    oInfo.issued     = row.GetInt64(10);
+    oInfo.escrow     = row.GetDouble(11);
 
     return true;
 }
@@ -301,8 +306,15 @@ bool MarketDB::AlterOrderQuantity(uint32 orderID, uint32 new_qty) {
     return true;
 }
 
-bool MarketDB::AlterOrderPrice(uint32 orderID, double new_price) {
+bool MarketDB::AlterOrderPrice(uint32 orderID, double new_price, double new_escrow/*-1.0*/) {
     DBerror err;
+    if (new_escrow >= 0) {
+        if (!sDatabase.RunQuery(err, "UPDATE mktOrders SET price = %.2f, escrow = %.2f WHERE orderID = %u", new_price, new_escrow, orderID)) {
+            _log(MARKET__DB_ERROR, "Error in query: %s.", err.c_str());
+            return false;
+        }
+        return true;
+    }
     if (!sDatabase.RunQuery(err, "UPDATE mktOrders SET price = %.2f WHERE orderID = %u", new_price, orderID)) {
         _log(MARKET__DB_ERROR, "Error in query: %s.", err.c_str());
         return false;

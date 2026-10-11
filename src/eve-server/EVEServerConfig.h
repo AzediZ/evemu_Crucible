@@ -147,6 +147,7 @@ public:
         uint8 NewPriceLimit;
         uint8 HistoryUpdateTime;
         float salesTax;
+        uint32 OrderModificationDelay;  // seconds between modifications of one order (0 disables)
     } market;
 
     // From <ram>

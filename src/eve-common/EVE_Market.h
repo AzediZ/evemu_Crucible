@@ -128,7 +128,9 @@ namespace Market {
         uint32 quantity;
         uint32 accountKey;   // corp account key (default 1000 (cash))
         uint32 memberID;     // corp member that placed order (0 for char order)
-        float price;
+        int64 issued;
+        double price;
+        double escrow;
     };
 
     // POD structure for mineral data used in pricing method

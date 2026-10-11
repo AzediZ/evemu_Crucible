@@ -60,6 +60,19 @@ protected:
 private:
     EVEServiceManager& m_manager;
     ObjCacheService* m_cache;
+
+    // throws if pClient may not modify/cancel this order
+    void CheckOrderOwner(Client* pClient, const Market::OrderInfo& oInfo);
+    // is stationID within the trade range given by a market skill level (Marketing, Procurement, Daytrading)
+    //  client's jumpsPerSkillLevel = {0: station, 1: system, 2: 5j, 3: 10j, 4: 20j, 5: region}
+    //  @todo  levels 2-4 are approximated as 'same region' until a jump count helper exists (F04 MapData::GetJumpCount)
+    bool InTradeRange(Client* pClient, uint32 stationID, uint8 skillLevel);
+    // order range values the client can send
+    static bool ValidOrderRange(int32 range);
+    static bool ValidOrderDuration(int32 duration);
+    static bool ValidOrderPrice(double price);
+    // broker fee for an order of 'value' at stationID, using the station owner's standings
+    static double GetBrokerFee(Client* pClient, uint32 stationID, double value);
 };
 
 #endif

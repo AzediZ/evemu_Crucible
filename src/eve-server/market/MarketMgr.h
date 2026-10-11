@@ -53,6 +53,12 @@ public:
 
     void InvalidateOrdersCache(uint32 regionID, uint32 typeID);
 
+    // player order modification delay (market.OrderModificationDelay, Crucible const.mktModificationDelay)
+    // issued = order's issue date.  the last-modified stamps are kept in memory only
+    bool CanModifyOrder(uint32 orderID, int64 issued);
+    void SetOrderModified(uint32 orderID)               { m_orderModified[orderID] = GetFileTimeNow(); }
+    void ClearOrderModified(uint32 orderID)             { m_orderModified.erase(orderID); }
+
     bool NeedsUpdate()                                  { return m_timeStamp > GetFileTimeNow()?false:true; }
 
     PyRep* GetMarketGroups()                            { PyIncRef(m_marketGroups); return m_marketGroups; }
@@ -78,6 +84,8 @@ private:
     PyRep* m_marketGroups;  // static market group data
 
     int64 m_timeStamp;
+
+    std::map<uint32, int64> m_orderModified;    // orderID/time of last modification
 
     // markets are regional.  there are 66 regions.
     // market orders are stored as {regionID/typeID}
