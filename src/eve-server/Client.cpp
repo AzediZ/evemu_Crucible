@@ -34,6 +34,7 @@
 #include "system/CrimeWatch.h"
 #include "npc/LawEnforcement.h"
 #include "Client.h"
+#include "missions/MissionObjectives.h"
 #include "ConsoleCommands.h"
 #include "EVEServerConfig.h"
 #include "LiveUpdateDB.h"
@@ -1807,89 +1808,19 @@ uint32 Client::GetLoyaltyPoints(uint32 corpID) {
 
 void Client::RemoveMissionItem(uint16 typeID, uint32 qty)
 {
-    uint16 count = qty;
-    InventoryItemRef iRef(nullptr);
-    if (sDataMgr.IsStation(m_locationID)) {
-        iRef = sItemFactory.GetStationRef(m_locationID)->GetMyInventory()->GetByTypeFlag(typeID, flagHangar);
-        if (iRef.get() != nullptr) {
-            if (count < iRef->quantity()) {
-                iRef->AlterQuantity(count, true);
-                count = 0;
-            } else {
-                count -= iRef->quantity();
-                iRef->Delete();
-            }
-        }
-    }
-
-    if (count) {
-        iRef = GetShip()->GetMyInventory()->GetByTypeFlag(typeID, flagCargoHold);
-        if (iRef.get() != nullptr){
-            if (count < iRef->quantity()) {
-                iRef->AlterQuantity(count, true);
-                count = 0;
-            } else {
-                count -= iRef->quantity();
-                iRef->Delete();
-            }
-        }
-    }
-    if (count)
-        ;  // make error here for not enough?
+    // best effort: this char's own items in the current station's hangar and the active ship's cargo (cargo only in space)
+    MissionObjectives::TakeDelivered(this, (uint32)GetStationID(), typeID, qty, true);
 }
 
 bool Client::ContainsTypeQty(uint16 typeID, uint32 qty) const
 {
-    uint16 count = 0;
-    InventoryItemRef iRef(nullptr);
-    // this is for missions....we will have to determine if we have the TOTAL qty desired, in both cargo and hangar
-    if (sDataMgr.IsStation(m_locationID)) {
-        iRef = sItemFactory.GetStationRef(m_locationID)->GetMyInventory()->GetByTypeFlag(typeID, flagHangar);
-        if (iRef.get() != nullptr)
-            count = iRef->quantity();
-    }
-
-    iRef = GetShip()->GetMyInventory()->GetByTypeFlag(typeID, flagCargoHold);
-    if (iRef.get() != nullptr)
-        count += iRef->quantity();
-
-    if (count >= qty)
-        return true;
-    return false;
+    // this is for missions....we have to determine if we have the TOTAL qty desired, in both cargo and hangar
+    return (MissionObjectives::CountDelivered(const_cast<Client*>(this), (uint32)GetStationID(), typeID) >= qty);
 }
 
 bool Client::IsMissionComplete(MissionOffer& data)
 {
-    // dont know all the stipulations of "completion" yet, but skeleton code for starters...
-    switch (data.typeID) {
-        case Mission::Type::Tutorial: {
-        } break;
-        case Mission::Type::Encounter: {
-        } break;
-        case Mission::Type::Courier: {
-            if (m_locationID == data.destinationID)
-                if (ContainsTypeQty(data.courierTypeID, data.courierAmount))
-                    return true;
-        } break;
-        case Mission::Type::Trade: {
-        } break;
-        case Mission::Type::Mining: {
-        } break;
-        case Mission::Type::Research: {
-        } break;
-        case Mission::Type::Data: {
-        } break;
-        case Mission::Type::Storyline: {
-        } break;
-        case Mission::Type::Cosmos: {
-        } break;
-        case Mission::Type::EpicArc: {
-        } break;
-        case Mission::Type::Anomic: {
-        } break;
-    }
-
-    return false;
+    return (MissionObjectives::Check(this, data) == Mission::Objective::Complete);
 }
 
 

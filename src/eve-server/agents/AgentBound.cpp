@@ -32,6 +32,7 @@
 #include "corporation/LPService.h"
 #include "agents/AgentBound.h"
 #include "agents/AgentMgrService.h"
+#include "missions/MissionObjectives.h"
 #include "station/Station.h"
 #include "services/ServiceManager.h"
 
@@ -69,6 +70,16 @@ PyResult AgentBound::GetInfoServiceDetails(PyCallArgs& call) {
  * @note   these below are partially coded
  */
 
+namespace {
+    // adds a (buttonID, buttonID) dialog button
+    void AddButton(PyList* dialog, int32 buttonID) {
+        PyTuple* button = new PyTuple(2);
+            button->SetItem(0, new PyInt(buttonID));
+            button->SetItem(1, new PyInt(buttonID));
+        dialog->AddItem(button);
+    }
+}
+
 PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID) {
     // this is first call when initiating agent convo
     _log(AGENT__DUMP,  "AgentBound::Handle_DoAction() - size=%lli", call.tuple->size());
@@ -97,6 +108,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
 
     std::string response = "";
     bool missionQuit = false, missionCompleted = false, missionDeclined = false;
+    // set by mission actions that refuse the request
+    const char* errorKey(nullptr);
+    std::string errorText;
 
     PyTuple* agentSays = new PyTuple(2);
     // dialog is button info
@@ -165,6 +179,21 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             } break;
             case RequestMission: {  //2
                 MissionOffer offer = MissionOffer();
+                if (m_agent->HasMission(pchar->itemID(), offer)) {
+                    // one offer per agent.  answer like ViewMission instead of making (and spawning cargo for) another one
+                    agentSays->SetItem(0, new PyInt(offer.briefingID));
+                    agentSays->SetItem(1, new PyInt(offer.characterID));
+                    if (offer.stateID < Mission::State::Accepted) {
+                        AddButton(dialog, Accept);
+                        AddButton(dialog, Decline);
+                        AddButton(dialog, Defer);
+                    } else if (offer.stateID == Mission::State::Accepted) {
+                        AddButton(dialog, Quit);
+                        if (call.client->IsMissionComplete(offer))
+                            AddButton(dialog, Complete);
+                    }
+                    break;
+                }
                 m_agent->MakeOffer(pchar->itemID(), offer);
                 m_agent->SendMissionUpdate(call.client, "offered");
 
@@ -228,11 +257,23 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             case Accept:            //3
             case AcceptRemotely: {  //5
                 MissionOffer offer = MissionOffer();
-                m_agent->GetOffer(pchar->itemID(), offer);
+                // accepting twice (or after Defer) used to spawn the courier cargo again
+                if (!m_agent->HasMission(pchar->itemID(), offer) or (offer.stateID >= Mission::State::Accepted)) {
+                    errorKey = "MisNoSuchMission";
+                    break;
+                }
+                if (offer.expiryTime < GetFileTimeNow()) {
+                    errorKey = "MisMissionExpired";
+                    break;
+                }
+                if ((actionID.value()->value() == AcceptRemotely) and !offer.remoteOfferable) {
+                    errorKey = "MissionNotIssued";
+                    break;
+                }
                 offer.stateID = Mission::State::Accepted;
                 offer.dateAccepted = GetFileTimeNow();
                 offer.expiryTime = GetFileTimeNow() + (30 * m_agent->GetLevel() * EvE::Time::Minute);  // 30m per agent level  ?  test this.
-                if (offer.courierTypeID) {
+                if (MissionObjectives::SpawnsCargoOnAccept(offer) and offer.courierTypeID) {
                     // add item to players hangar
                     sItemFactory.SetUsingClient(call.client);
                     ItemData data(offer.courierTypeID, pchar->itemID(), locTemp, flagNone, offer.courierAmount);
@@ -249,17 +290,47 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             case CompleteRemotely: {    //7
                 //  need to verify all requirements have been met.
                 MissionOffer offer = MissionOffer();
-                m_agent->GetOffer(pchar->itemID(), offer);
+                if (!m_agent->HasMission(pchar->itemID(), offer) or (offer.stateID != Mission::State::Accepted)) {
+                    errorKey = "MisNoSuchMission";
+                    break;
+                }
+                // MissionDataMgr::Process() fails these, but only every few minutes
+                if (offer.expiryTime < GetFileTimeNow()) {
+                    errorKey = "MisMissionExpired";
+                    break;
+                }
+                if ((actionID.value()->value() == CompleteRemotely) and !offer.remoteCompletable) {
+                    errorText = "This mission cannot be completed remotely.";
+                    break;
+                }
+                switch (MissionObjectives::Check(call.client, offer)) {
+                    case Mission::Objective::Complete:
+                        break;
+                    case Mission::Objective::WrongLocation:
+                    case Mission::Objective::MissingItems:
+                        if (offer.typeID == Mission::Type::Courier) {
+                            errorKey = "MisPackageNotHere";
+                        } else {
+                            errorText = "You have not completed the mission objectives yet.";
+                        }
+                        break;
+                    default:
+                        errorText = "You have not completed the mission objectives yet.";
+                        break;
+                }
+                if ((errorKey != nullptr) or !errorText.empty())
+                    break;
+                // take the delivered items (all or nothing) before any reward is given
+                if (!MissionObjectives::Consume(call.client, offer)) {
+                    errorText = "You have not completed the mission objectives yet.";
+                    break;
+                }
                 offer.stateID = Mission::State::Completed;
                 offer.dateCompleted = GetFileTimeNow();
                 m_agent->UpdateOffer(pchar->itemID(), offer);
                 m_agent->SendMissionUpdate(call.client, "completed");
                 agentSays->SetItem(0, new PyInt(m_agent->GetCompleteRsp(pchar->itemID())));
                 agentSays->SetItem(1, new PyInt(pchar->itemID()));
-                if (offer.courierTypeID) {
-                    // remove item from player possession
-                    call.client->RemoveMissionItem(offer.courierTypeID, offer.courierAmount);
-                }
                 if (offer.rewardItemID) {
                     // add reward item to players hangar
                     sItemFactory.SetUsingClient(call.client);
@@ -271,7 +342,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 /** @todo  add fleet sharing  */
                 if (offer.rewardISK)
                     AccountService::TransferFunds(m_agent->GetID(), pchar->itemID(), offer.rewardISK, "Mission Reward", Journal::EntryType::AgentMissionReward, m_agent->GetID());
-                if ((offer.bonusTime > 0) and (offer.bonusTime < (offer.dateAccepted - GetFileTimeNow())))
+                // bonusTime is in minutes from acceptance
+                if ((offer.bonusISK > 0) and (offer.bonusTime > 0)
+                and ((GetFileTimeNow() - offer.dateAccepted) <= ((double)offer.bonusTime * EvE::Time::Minute)))
                     AccountService::TransferFunds(m_agent->GetID(), pchar->itemID(), offer.bonusISK, "Mission Bonus Reward", Journal::EntryType::AgentMissionTimeBonusReward, m_agent->GetID());
                 /** @todo  add lp, etc, etc  */
                 if (offer.rewardLP)
@@ -282,7 +355,8 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             case Defer: {   //10
                 // extend expiry time and close
                 MissionOffer offer = MissionOffer();
-                if (m_agent->HasMission(pchar->itemID(), offer)) {
+                // only an offer can be deferred.  deferring an accepted mission made it acceptable (and its cargo spawnable) again
+                if (m_agent->HasMission(pchar->itemID(), offer) and (offer.stateID < Mission::State::Accepted)) {
                     offer.stateID = Mission::State::Allocated; //Defered
                     offer.expiryTime += EvE::Time::Day;
                     m_agent->UpdateOffer(pchar->itemID(), offer);
@@ -292,6 +366,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 }
             } break;
             case Decline: { //9
+                MissionOffer offer = MissionOffer();
+                if (!m_agent->HasMission(pchar->itemID(), offer) or (offer.stateID >= Mission::State::Accepted))
+                    break;
                 missionDeclined = true;
                 m_agent->DeleteOffer(pchar->itemID());
                 m_agent->SendMissionUpdate(call.client, "offer_declined");
@@ -301,10 +378,11 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 m_agent->UpdateStandings(call.client, Standings::MissionDeclined);
             } break;
             case Quit: {    //11
-                missionQuit = true;
                 MissionOffer offer = MissionOffer();
-                m_agent->GetOffer(pchar->itemID(), offer);
-                if (offer.courierTypeID) {
+                if (!m_agent->HasMission(pchar->itemID(), offer) or (offer.stateID != Mission::State::Accepted))
+                    break;
+                missionQuit = true;
+                if (MissionObjectives::SpawnsCargoOnAccept(offer) and offer.courierTypeID) {
                     // remove item from player possession
                     call.client->RemoveMissionItem(offer.courierTypeID, offer.courierAmount);
                 }
@@ -359,6 +437,14 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
     } else {
         agentSays->SetItem(0, new PyInt(m_agent->GetStandingsRsp(pchar->itemID())));
         agentSays->SetItem(1, PyStatic.NewNone() /*new PyInt(pchar->itemID())*/);
+    }
+
+    if ((errorKey != nullptr) or !errorText.empty()) {
+        PySafeDecRef(dialog);
+        PySafeDecRef(agentSays);
+        if (errorKey != nullptr)
+            throw UserError(errorKey);
+        throw CustomError("%s", errorText.c_str());
     }
 
     // extraInfo data....

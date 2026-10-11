@@ -15,6 +15,7 @@
 #include "agents/AgentMgrService.h"
 #include "database/EVEDBUtils.h"
 #include "missions/MissionDataMgr.h"
+#include "missions/MissionObjectives.h"
 #include "inventory/ItemFactory.h"
 
 MissionDataMgr::MissionDataMgr()
@@ -71,11 +72,16 @@ void MissionDataMgr::Process()
             if (itr->second.expiryTime < GetFileTimeNow()) {
                 pAgent = sEntityList.GetAgent(itr->second.agentID);
                 pClient = sEntityList.FindClientByCharID(itr->first);
+                if (pAgent == nullptr) {
+                    _log(AGENT__ERROR, "MissionDataMgr::Process() - agent %u of offer %u not found.", itr->second.agentID, itr->second.offerID);
+                    ++itr;
+                    continue;
+                }
                 // notify client if they are online.  eventaully we'll send mail also
                 if (itr->second.stateID == Mission::State::Accepted) {
                     pAgent->SendMissionUpdate(pClient, "failed");
                     itr->second.stateID = Mission::State::Failed;
-                    if (itr->second.courierTypeID) {
+                    if (MissionObjectives::SpawnsCargoOnAccept(itr->second) and itr->second.courierTypeID) {
                         // remove item from player's possession
                         if (pClient != nullptr) {
                             pClient->RemoveMissionItem(itr->second.courierTypeID, itr->second.courierAmount);

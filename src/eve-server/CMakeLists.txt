@@ -373,11 +373,13 @@ SET( market_SOURCE
 SET( missions_INCLUDE
      "${TARGET_INCLUDE_DIR}/missions/MissionDB.h"
      "${TARGET_INCLUDE_DIR}/missions/MissionDataMgr.h"
-     "${TARGET_INCLUDE_DIR}/missions/MissionMgrService.h" )
+     "${TARGET_INCLUDE_DIR}/missions/MissionMgrService.h"
+     "${TARGET_INCLUDE_DIR}/missions/MissionObjectives.h" )
 SET( missions_SOURCE
      "${TARGET_SOURCE_DIR}/missions/MissionDB.cpp"
      "${TARGET_SOURCE_DIR}/missions/MissionDataMgr.cpp"
-     "${TARGET_SOURCE_DIR}/missions/MissionMgrService.cpp" )
+     "${TARGET_SOURCE_DIR}/missions/MissionMgrService.cpp"
+     "${TARGET_SOURCE_DIR}/missions/MissionObjectives.cpp" )
 
 SET( npc_INCLUDE
      #"${TARGET_INCLUDE_DIR}/npc/Concord.h"

@@ -121,10 +121,10 @@ void MissionDB::RemoveMissionItem(uint32 charID, uint16 typeID, uint32 qty)
     sDatabase.RunQuery(res, "SELECT itemID, quantity FROM entity WHERE typeID = %u AND ownerID = %u", typeID, charID);
 
     DBResultRow row;
-    std::map<uint32, uint16> map;
+    std::map<uint32, uint32> map;
     while (res.GetRow(row)) {
         // make map of all items of 'typeID'
-        map.emplace(row.GetInt(0), row.GetInt(1));
+        map.emplace(row.GetUInt(0), row.GetUInt(1));
     }
 
     DBerror err;
@@ -135,7 +135,7 @@ void MissionDB::RemoveMissionItem(uint32 charID, uint16 typeID, uint32 qty)
             qty -= cur.second;
             sDatabase.RunQuery(err, "DELETE FROM entity WHERE itemID = %u", cur.first);
         } else if (cur.second > qty) {
-            sDatabase.RunQuery(err, "UPDATE entity SET quantity = %u WHERE itemID = %u", qty, cur.first);
+            sDatabase.RunQuery(err, "UPDATE entity SET quantity = %u WHERE itemID = %u", cur.second - qty, cur.first);
             qty = 0;
         }
     }
