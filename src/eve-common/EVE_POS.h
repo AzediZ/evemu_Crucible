@@ -12,6 +12,7 @@
 #include "../eve-core/eve-core.h"
 
 #include "math/gpoint.h"
+#include "utils/crc32.h"
 
 
 namespace EVEPOS {
@@ -157,6 +158,14 @@ namespace EVEPOS {
             Offline = 0,    // shows 'offline' in mgr window
             Online = 1
         };
+    }
+
+    // force field and ship harmonic of a password:  -1 (none) without one, else a positive 31 bit hash.
+    //  a ship whose harmonic matches a field's goes through it (the client's pwn.CompareShipStructureHarmonic too)
+    inline int32 HarmonicFromPassword(const std::string& password) {
+        if (password.empty())
+            return Harmonic::Inactive;
+        return (int32)((CRC32::Generate((const uint8*)password.data(), password.size()) & 0x7FFFFFFF) | 1);
     }
 
     namespace ProcState {

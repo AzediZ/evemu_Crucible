@@ -602,10 +602,16 @@ PyResult PosMgrBound::SetShipPassword(PyCallArgs &call, PyWString* password) {
      */
 
     // havent been able to call this while docked, but there is an error msg for it.
-    if (call.client->IsDocked())
+    if (call.client->IsDocked() or (call.client->GetShipSE() == nullptr))
         throw UserError("CannotSetShieldHarmonicPassword");
 
-    call.client->GetShipSE()->SetPassword(PyRep::StringContent(password));
+    // not from inside a force field
+    ShipSE* pShipSE(call.client->GetShipSE());
+    if ((pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()
+    and pShipSE->SysBubble()->GetTowerSE()->InForceField(pShipSE->GetPosition()))
+        throw UserError("CantChangeShipHarmonicWithinForceField");
+
+    pShipSE->SetPassword(PyRep::StringContent(password));
 
     return PyStatic.NewNone();
 }

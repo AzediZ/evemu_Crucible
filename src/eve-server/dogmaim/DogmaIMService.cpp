@@ -374,7 +374,7 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     }
     if (mySE->SysBubble()->HasTower()) {
         TowerSE* ptSE = mySE->SysBubble()->GetTowerSE();
-        if (ptSE->HasForceField() && mySE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
+        if (ptSE->InForceField(mySE->GetPosition()))
                 throw UserError ("DeniedTargetingInsideField")
                         .AddFormatValue ("target", new PyInt (targetID->value()));
     }
@@ -458,10 +458,10 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
                     .AddFormatValue ("target", new PyInt (targetID->value()));
     if (tSE->SysBubble()->HasTower()) {
         TowerSE* ptSE = tSE->SysBubble()->GetTowerSE();
-        if (ptSE->HasForceField() && tSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
+        if (ptSE->InForceField(tSE->GetPosition()))
                 throw UserError ("DeniedTargetForceField")
                         .AddFormatValue ("target", new PyInt (targetID->value()))
-                        .AddFormatValue ("range", new PyInt (ptSE->GetSOI ()))
+                        .AddFormatValue ("range", new PyFloat (ptSE->GetForceFieldRadius ()))
                         .AddFormatValue ("item", new PyInt (ptSE->GetID ()));
     }
 

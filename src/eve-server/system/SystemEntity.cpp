@@ -532,7 +532,9 @@ void ItemSystemEntity::MakeDamageState(DoDestinyDamageState &into) {
 }
 
 FieldSE::FieldSE(InventoryItemRef self, EVEServiceManager &services, SystemManager *system, const FactionData& data)
-: ItemSystemEntity(self, services, system)
+: ItemSystemEntity(self, services, system),
+m_allowCorp(false),
+m_allowAlliance(false)
 {
     m_warID = data.factionID;
     m_allyID = data.allianceID;
@@ -542,7 +544,9 @@ FieldSE::FieldSE(InventoryItemRef self, EVEServiceManager &services, SystemManag
 
 // copy c'tor
 FieldSE::FieldSE(const FieldSE* oth)
-: ItemSystemEntity(oth->m_self, oth->m_services, oth->m_system)
+: ItemSystemEntity(oth->m_self, oth->m_services, oth->m_system),
+m_allowCorp(oth->m_allowCorp),
+m_allowAlliance(oth->m_allowAlliance)
 {
     sLog.Error("ISE::FieldSE()", "copy c'tor.");
     // wip
@@ -558,14 +562,15 @@ void FieldSE::EncodeDestiny( Buffer& into )
         head.posX = x();
         head.posY = y();
         head.posZ = z();
-        head.flags = 0 /*(m_harmonic > EVEPOS::Harmonic::Offline ? Ball::Flag::IsMassive : 0)*/; // leave this as 0 to disable client-side bump checks for now
+        // a tuned field is solid to everyone but matching harmonics, the tower's corp and alliance (if allowed)
+        head.flags = (m_harmonic > EVEPOS::Harmonic::Offline ? Ball::Flag::IsMassive : 0);
     into.Append( head );
     MassSector mass = MassSector();
         mass.mass = 10000000000;    // as seen in packets
         mass.cloak = 0;
         mass.harmonic = m_harmonic;
-        mass.corporationID = m_corpID;
-        mass.allianceID = (IsAlliance(m_allyID) ? m_allyID : -1);
+        mass.corporationID = GetCorpAccessID();
+        mass.allianceID = GetAllianceAccessID();
     into.Append( mass );
     if (head.mode == Ball::Mode::FIELD) {
         FIELD_Struct main;

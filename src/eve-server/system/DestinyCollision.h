@@ -39,6 +39,9 @@
 #define __DESTINYCOLLISION_H_INCL__
 
 #include "eve-compat.h"
+#include "destiny/DestinyStructs.h"
+#include "utils/Buffer.h"
+#include <deque>
 
 class SystemBubble;
 class SystemEntity;
@@ -63,6 +66,11 @@ namespace Destiny {
     // missiles get more agile (lighter) as they speed up.  this is the agility the client uses for a ball in MISSILE mode
     double MissileAgility(double agility, const GVector& vel);
 
+    /* a ball's collision miniballs, written after its mode-specific part (ReadBallFromStream, destiny.dll 0x1003a510:
+     *  uint16 count, then count x {double x, y, z offset; float radius}).  the header must have Ball::Flag::HasMiniBalls
+     *  exactly when there are any
+     */
+    void AppendMiniBalls(Buffer& into, const std::vector<MiniBall>& balls);
     /* a ball, as the client's collision code sees it */
     struct CollisionBall {
         int64 id = 0;
@@ -80,6 +88,9 @@ namespace Destiny {
         GVector thrust;                 // this tick's acceleration from EvolveThrust() (Ball+0x168)
         int64 followID = 0;             // target, for missiles
         int64 ownerID = 0;              // launcher, for missiles
+        int64 harmonic = -1;            // MassSector harmonic, corp and alliance (force fields let matching ones through)
+        int32 corpID = -1;
+        int32 allianceID = -1;
         SystemEntity* pSE = nullptr;
 
         // mass * agility used in the equations of motion, or FIXED_MASS for balls that can't move
@@ -97,6 +108,9 @@ namespace Destiny {
     //  acceleration that bounces 'a' off 'b' if it is the earliest collision so far.  only 'a' is affected
     void Collide(CollisionBall a, CollisionBall b, int depth, CollisionResult& result);
 
+    // a starbase force field the ball goes through (harmonic, corp or alliance match)
+    bool PassesForceField(const CollisionBall& ship, const CollisionBall& field);
+
     /* the client's view of the balls in a system for one tick.  built once per tick by SystemManager::ProcessDestiny(),
      *  after all thrusts are known and before anything moves */
     class BallparkSnapshot {
@@ -112,6 +126,7 @@ namespace Destiny {
     private:
         SystemManager* m_system;
         std::map<uint32, CollisionBall> m_balls;
+        std::deque<CollisionBall> m_miniBalls;  // the miniballs of massive balls (stable addresses)
         std::map<SystemBubble*, std::vector<const CollisionBall*>> m_massive;
     };
 }

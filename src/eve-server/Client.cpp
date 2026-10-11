@@ -1157,12 +1157,9 @@ void Client::Board(ShipSE* newShipSE)
     } else {    // you can xfer direct from one ship from another.
         //  check for POS/FF in bubble.  check for ship in FF.  if so, then not abandoned.
         bool abandoned = true;
-        if (pShipSE->SysBubble()->HasTower()) {
-            TowerSE* ptSE = pShipSE->SysBubble()->GetTowerSE();
-            if (ptSE->HasForceField())
-                if (pShipSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
-                    abandoned = false;
-        }
+        if (pShipSE->SysBubble()->HasTower())
+            if (pShipSE->SysBubble()->GetTowerSE()->InForceField(pShipSE->GetPosition()))
+                abandoned = false;
 
         char ci[45];
         if (abandoned) {
@@ -1213,12 +1210,9 @@ void Client::Eject()
 
     //  check for POS/FF in bubble.  check for ship in FF.  if so, then not abandoned.
     bool abandoned = true;
-    if (pShipSE->SysBubble()->HasTower()) {
-        TowerSE* ptSE = pShipSE->SysBubble()->GetTowerSE();
-        if (ptSE->HasForceField())
-            if (pShipSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
-                abandoned = false;
-    }
+    if (pShipSE->SysBubble()->HasTower())
+        if (pShipSE->SysBubble()->GetTowerSE()->InForceField(pShipSE->GetPosition()))
+            abandoned = false;
 
     char ci[45];
     if (abandoned) {

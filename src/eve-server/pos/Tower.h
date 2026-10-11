@@ -119,6 +119,9 @@ public:
     void OrphanModules();
     const std::map<uint32, StructureSE*>& GetModules()  { return m_structs; }
     uint32 GetForceFieldID()                            { return (m_pShieldSE == nullptr ? 0 : m_pShieldSE->GetID()); }
+    // inside the force field (only while the tower has one:  online with a password)
+    bool InForceField(const GPoint& pos);
+    double GetForceFieldRadius();
 
     /* fuel */
     /* invControlTowerResources for a tower in a system, as the client's fuel tab shows them:  rows of other factions,
@@ -138,7 +141,8 @@ public:
     inline void RemoveModule(StructureSE* pSE)          { m_structs.erase(pSE->GetID()); }
 
     // structure update methods
-    void UpdateAccess()                                 { m_db.UpdateAccess(m_data.itemID, m_tdata); }
+    // saves corp/alliance access and the password, and retunes the force field
+    void UpdateAccess();
     void UpdateSentry()                                 { m_db.UpdateSentry(m_data.itemID, m_tdata); }
     void UpdateNotify()                                 { m_db.UpdateNotify(m_data.itemID, m_tdata); }
     void UpdatePermission()                             { m_db.UpdatePermission(m_data.itemID, m_tdata); }
@@ -200,7 +204,11 @@ protected:
     //POS_AI* m_ai;
 
 private:
-    void CreateForceField();
+    // the force field of an online tower with a password.  notify:  tell the bubble the tower's forceFieldID
+    void CreateForceField(bool notify);
+    void RemoveForceField();
+    // harmonic and corp/alliance access of the field, to everyone in the bubble
+    void UpdateForceField();
     // replays the hours missed while the system was unloaded
     void CatchUp();
 

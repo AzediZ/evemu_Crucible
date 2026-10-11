@@ -2744,6 +2744,24 @@ m_allowFleetSMBUsage(false)
     _log(SHIP__TRACE, "Created ShipSE %p for item %u", this, self->itemID());
 }
 
+void ShipSE::SetPassword(std::string pass)
+{
+    m_towerPass = pass;
+    m_harmonic = EVEPOS::HarmonicFromPassword(pass);
+    if (m_destiny == nullptr)
+        return;
+    // the client's SetBallHarmonic(ballID, harmonic, corpID, allianceID, field)
+    std::vector<PyTuple*> updates;
+    SetBallHarmonic sbh;
+        sbh.itemID = GetID();
+        sbh.harmonic = m_harmonic;
+        sbh.corpID = m_corpID;
+        sbh.allianceID = (IsAlliance(m_allyID) ? m_allyID : -1);
+        sbh.field = 0;
+    updates.push_back(sbh.Encode());
+    m_destiny->SendDestinyUpdate(updates); //consumed
+}
+
 float ShipSE::CalculateRechargeRate(float Capacity, float Current, float RechargeTimeMS)
 {
     return CalcRechargeRate(Capacity, Current, RechargeTimeMS);

@@ -641,6 +641,12 @@ void ManagerDB::GetControlTowerResources(DBQueryResult& res)
         _log(DATABASE__ERROR, "Error in GetControlTowerResources query: %s", res.error.c_str());
 }
 
+void ManagerDB::GetMiniBalls(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT typeID, x, y, z, radius FROM invTypeMiniBalls ORDER BY typeID, idx"))
+        _log(DATABASE__ERROR, "Error in GetMiniBalls query: %s", res.error.c_str());
+}
+
 void ManagerDB::GetDunEntryData(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res, "SELECT dunEntryID, dunEntryName, xpos, ypos, zpos FROM dunEntryData"))

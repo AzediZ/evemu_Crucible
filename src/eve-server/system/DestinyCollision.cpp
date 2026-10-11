@@ -33,6 +33,7 @@
 #include "system/DestinyManager.h"
 #include "system/SystemEntity.h"
 #include "system/SystemManager.h"
+#include "StaticDataMgr.h"
 #include "utils/Buffer.h"
 #include <cmath>
 #include <cstring>
@@ -313,6 +314,9 @@ namespace {
             offset += sizeof(MassSector);
             ball.mass = (mass.mass < 0.0 ? 0.0 : mass.mass);
             ball.isCloaked = (mass.cloak != 0);
+            ball.harmonic = mass.harmonic;
+            ball.corpID = mass.corporationID;
+            ball.allianceID = mass.allianceID;
         }
         if (ball.isFree) {
             if (size < offset + sizeof(DataSector))
@@ -362,8 +366,44 @@ const std::vector<const CollisionBall*>& BallparkSnapshot::GetMassiveBalls(Syste
         if (!pBall->isMassive or pBall->isCloaked or (pBall->mode == Ball::Mode::MISSILE))
             continue;
         list.push_back(pBall);
+        // its miniballs collide too (the parent sphere is kept)
+        const std::vector<MiniBall>* pMiniBalls(sDataMgr.GetMiniBalls(cur.second->GetTypeID()));
+        if (pMiniBalls == nullptr)
+            continue;
+        for (auto mini : *pMiniBalls) {
+            CollisionBall ball(*pBall);
+            ball.pos = GPoint(pBall->pos.x + mini.posX, pBall->pos.y + mini.posY, pBall->pos.z + mini.posZ);
+            ball.radius = mini.radius;
+            ball.vel = GVector(0, 0, 0);
+            m_miniBalls.push_back(ball);
+            list.push_back(&m_miniBalls.back());
+        }
     }
     return list;
+}
+
+bool PassesForceField(const CollisionBall& ship, const CollisionBall& field)
+{
+    // Partition: a FIELD ball is no obstacle for the master harmonic, a matching harmonic, the field's corp or alliance
+    if (field.mode != Ball::Mode::FIELD)
+        return false;
+    if (ship.harmonic == -2)
+        return true;
+    if ((field.harmonic != -1) and (field.harmonic == ship.harmonic))
+        return true;
+    if ((field.corpID != -1) and (field.corpID == ship.corpID))
+        return true;
+    if ((field.allianceID != -1) and (field.allianceID == ship.allianceID))
+        return true;
+    return false;
+}
+
+void AppendMiniBalls(Buffer& into, const std::vector<MiniBall>& balls)
+{
+    uint16 count(balls.size());
+    into.Append(count);
+    for (auto cur : balls)
+        into.Append(cur);
 }
 
 }   // namespace Destiny

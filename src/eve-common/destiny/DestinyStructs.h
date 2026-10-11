@@ -103,12 +103,14 @@ struct BallHeader {
 };
 
 //included if not a RIGID body
+//  field order as Crucible's destiny.dll ReadBallFromStream reads it (0x1003a510):  harmonic (Ball+0x20, int64),
+//  corporationID (+0x48), allianceID (+0x44).  -1 = none.  force fields let through matching harmonics, corps and alliances
 struct MassSector {
     double mass;
     uint8  cloak;        // indicates cloak
-    int64 allianceID;
+    int64 harmonic;
     int32 corporationID;
-    int32 harmonic;
+    int32 allianceID;
 };
 
 //only included if the thing can move...

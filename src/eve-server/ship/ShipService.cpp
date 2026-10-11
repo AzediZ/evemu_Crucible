@@ -365,7 +365,7 @@ static const char* DropCheck(Client* pClient, InventoryItemRef iRef, bool npcCor
     // a control tower can't be launched from inside another tower's force field
     if ((iRef->groupID() == EVEDB::invGroups::Control_Tower) and (pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()) {
         TowerSE* pTower(pShipSE->SysBubble()->GetTowerSE());
-        if (pTower->HasForceField() and (pShipSE->GetPosition().distance(pTower->GetPosition()) < pTower->GetSOI()))
+        if (pTower->InForceField(pShipSE->GetPosition()))
             return "CantLaunchInsideForcefield";
     }
     return "";

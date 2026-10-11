@@ -34,6 +34,8 @@
 #include "station/StationDataMgr.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
+#include "system/DestinyCollision.h"
+#include "StaticDataMgr.h"
 #include "system/SystemEntity.h"
 #include "system/SystemManager.h"
 
@@ -320,11 +322,17 @@ void StationSE::EncodeDestiny( Buffer& into )
         head.posX = x();
         head.posY = y();
         head.posZ = z();
-        head.flags = /*Ball::Flag::HasMiniBalls |*/ Ball::Flag::IsGlobal | Ball::Flag::IsMassive;
+        head.flags = Ball::Flag::IsGlobal | Ball::Flag::IsMassive;
+    // collision shape (invTypeMiniBalls), after the mode-specific part
+    const std::vector<MiniBall>* pMiniBalls(sDataMgr.GetMiniBalls(m_self->typeID()));
+    if (pMiniBalls != nullptr)
+        head.flags |= Ball::Flag::HasMiniBalls;
     into.Append( head );
     RIGID_Struct main;
         main.formationID = 0xFF;
     into.Append( main );
+    if (pMiniBalls != nullptr)
+        AppendMiniBalls(into, *pMiniBalls);
 
 /** @todo miniballs is broken and needs work...
  *  dont know what's wrong at this point, but client freaks out and ignores ANY ball data (in SetState) after this.

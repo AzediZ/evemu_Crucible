@@ -264,8 +264,8 @@ public:
     uint32                      GetFleetID()            { return m_fleetID; }
     void                        SetFleetID(uint32 set)  { m_fleetID = set; }
 
-    int8                        GetHarmonic()           { return m_harmonic; }
-    void                        SetHarmonic(int8 set)   { m_harmonic = set; }
+    int32                       GetHarmonic()           { return m_harmonic; }
+    void                        SetHarmonic(int32 set)  { m_harmonic = set; }
 
 
     /* public generic functions handled in base class. */
@@ -549,6 +549,15 @@ public:
     virtual void                EncodeDestiny( Buffer& into );
 
     virtual PyDict*             MakeSlimItem();
+
+    // a starbase force field also lets the tower's corp and/or alliance through
+    void                        SetAccess(bool corp, bool alliance) { m_allowCorp = corp; m_allowAlliance = alliance; }
+    int32                       GetCorpAccessID()       { return (m_allowCorp ? (int32)m_corpID : -1); }
+    int32                       GetAllianceAccessID()   { return ((m_allowAlliance and IsAlliance(m_allyID)) ? m_allyID : -1); }
+
+private:
+    bool                        m_allowCorp;
+    bool                        m_allowAlliance;
 };
 
 /* Non-Static / Non-Mobile / Destructible / Celestial Objects

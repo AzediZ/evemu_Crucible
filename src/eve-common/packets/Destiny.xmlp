@@ -683,12 +683,13 @@ DST_WARPEXIT = 11
         <!-- 0 -->
         <stringInline value="SetBallHarmonic" />
         <!-- 1 -->
+        <!-- destiny.dll Ballpark.SetBallHarmonic "LLiii":  ballID, harmonic, corporationID, allianceID, field (1 = FIELD mode) -->
         <tupleInline>
             <int name="itemID" />
-            <int name="allianceID" />
-            <int name="corpID" />
-            <int name="mass" /><!-- always -1 -->
             <int name="harmonic" />
+            <int name="corpID" />
+            <int name="allianceID" />
+            <int name="field" />
         </tupleInline>
       </tupleInline>
   </elementDef>

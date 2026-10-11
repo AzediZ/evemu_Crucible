@@ -246,7 +246,7 @@ ADD_CUSTOM_COMMAND( OUTPUT ${packets_INCLUDE} ${packets_SOURCE}
                     ARGS -I "${TARGET_PACKETS_DIR}/packets"
                          -S "${TARGET_PACKETS_DIR}/packets"
                          ${packets_XMLP}
-                    DEPENDS "eve-xmlpktgen"
+                    DEPENDS "eve-xmlpktgen" ${packets_XMLP}
                     COMMENT "Generating packet files..." )
 
 ADD_LIBRARY( "${TARGET_NAME}"

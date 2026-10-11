@@ -269,7 +269,7 @@ void DestinyManager::EvolveCollide(Destiny::BallparkSnapshot& ballpark) {
     }
 
     for (auto pOther : ballpark.GetMassiveBalls(pBubble))
-        if (pOther->id != pSelf->id)
+        if ((pOther->id != pSelf->id) and !PassesForceField(*pSelf, *pOther))
             Collide(*pSelf, *pOther, 0, m_collision);
 
     if (is_log_enabled(DESTINY__MOVE_TRACE) and (m_collision.time >= 0.0))

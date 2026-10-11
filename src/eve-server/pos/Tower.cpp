@@ -159,12 +159,10 @@ void TowerSE::Init()
     // an online tower catches up on its first tic (its structures aren't all initialized yet)
     m_catchUp = IsPowered();
 
-    // if password is already set and tower online, then we can online (create) the forcefield
-    m_harmonic = m_tdata.harmonic;
-    if ((m_harmonic > EVEPOS::Harmonic::Offline)
-    and (!m_tdata.password.empty())
-    and (m_data.state > EVEPOS::StructureState::Anchored))
-        CreateForceField();
+    // an online tower with a password has its force field
+    m_harmonic = (IsPowered() ? EVEPOS::Harmonic::Online : EVEPOS::Harmonic::Offline);
+    if (IsPowered() and !m_tdata.password.empty())
+        CreateForceField(false);
 
     // if tower anchored, tell moon this is its tower
     if ((m_data.state > EVEPOS::StructureState::Unanchored) and (m_moonSE != nullptr))
@@ -446,9 +444,8 @@ void TowerSE::SetOnline()
     m_tdata.harmonic = m_harmonic;
     m_tdata.lastCycle = m_data.timestamp;
 
-    if ((m_harmonic > EVEPOS::Harmonic::Offline)
-    and (!m_tdata.password.empty()))
-        CreateForceField();
+    if (!m_tdata.password.empty())
+        CreateForceField(true);
 
     UpdateFuelCalendar();
     m_db.UpdateBaseData(m_data);
@@ -457,13 +454,8 @@ void TowerSE::SetOnline()
 
 void TowerSE::SetOffline()
 {
-    if (m_hasShield) {
-        m_pShieldSE->Delete();
-        SafeDelete(m_pShieldSE);
-        m_hasShield = false;
-    }
+    RemoveForceField();
     m_harmonic = EVEPOS::Harmonic::Offline;
-    m_tdata.harmonic = m_harmonic;
 
     // an offline tower powers nothing
     std::map<uint32, StructureSE*> modules(m_structs);
@@ -996,39 +988,74 @@ void TowerSE::Reinforced()
 
 void TowerSE::UpdatePassword()
 {
-    if (m_tdata.password.empty()) {
-        m_harmonic =EVEPOS::Harmonic::Offline;
-        m_tdata.harmonic = m_harmonic;
-        if (m_pShieldSE == nullptr)
-            return;
-
-        m_pShieldSE->SetHarmonic(m_harmonic);
-
-        //  this is for UPDATING forcefield ONLY...do not send on creation.
-        std::vector<PyTuple*> updates;
-        //  'massive' enables client-side bounce
-        SetBallMassive sbm;
-            sbm.entityID = m_pShieldSE->GetSelf()->itemID();
-            sbm.is_massive = false;         // disable client-side bump checks
-        updates.push_back(sbm.Encode());
-        // harmonic for ForceField
-        SetBallHarmonic sbh;
-            sbh.itemID = m_pShieldSE->GetSelf()->itemID();
-            sbh.corpID = m_corpID;
-            sbh.allianceID = m_allyID;
-            sbh.mass = -1;      // always -1
-            sbh.harmonic = m_harmonic;
-        updates.push_back(sbh.Encode());
-        m_destiny->SendDestinyUpdate(updates); //consumed
-    } else {
-        m_harmonic = EVEPOS::Harmonic::Online;
-        m_tdata.harmonic = m_harmonic;
-
-        if (m_data.state > EVEPOS::StructureState::Anchored)
-            CreateForceField();
+    // the field's harmonic is the password's.  no password, no field (the client asks for one when there is no field)
+    m_tdata.harmonic = (m_tdata.password.empty() ? EVEPOS::Harmonic::Offline : EVEPOS::HarmonicFromPassword(m_tdata.password));
+    if (IsPowered()) {
+        if (m_tdata.password.empty()) {
+            RemoveForceField();
+        } else if (!m_hasShield) {
+            CreateForceField(true);
+        } else {
+            UpdateForceField();
+        }
     }
 
     m_db.UpdateHarmonicAndPassword(m_data.itemID, m_tdata);
+}
+
+void TowerSE::UpdateAccess()
+{
+    m_db.UpdateAccess(m_data.itemID, m_tdata);
+    UpdateForceField();
+}
+
+bool TowerSE::InForceField(const GPoint& pos)
+{
+    if (m_pShieldSE == nullptr)
+        return false;
+    return (pos.distance(GetPosition()) < GetForceFieldRadius());
+}
+
+double TowerSE::GetForceFieldRadius()
+{
+    return m_self->GetAttribute(AttrShieldRadius).get_double();
+}
+
+void TowerSE::UpdateForceField()
+{
+    if ((m_pShieldSE == nullptr) or (m_pShieldSE->GetFieldSE() == nullptr))
+        return;
+    FieldSE* pField(m_pShieldSE->GetFieldSE());
+    pField->SetHarmonic(EVEPOS::HarmonicFromPassword(m_tdata.password));
+    pField->SetAccess(m_tdata.allowCorp, m_tdata.allowAlliance);
+
+    // the client's SetBallHarmonic(ballID, harmonic, corpID, allianceID, field)
+    std::vector<PyTuple*> updates;
+    SetBallHarmonic sbh;
+        sbh.itemID = pField->GetID();
+        sbh.harmonic = pField->GetHarmonic();
+        sbh.corpID = pField->GetCorpAccessID();
+        sbh.allianceID = pField->GetAllianceAccessID();
+        sbh.field = 1;
+    updates.push_back(sbh.Encode());
+    //  'massive' enables client-side bounce
+    SetBallMassive sbm;
+        sbm.entityID = pField->GetID();
+        sbm.is_massive = 1;
+    updates.push_back(sbm.Encode());
+    if (m_destiny != nullptr)
+        m_destiny->SendDestinyUpdate(updates); //consumed
+}
+
+void TowerSE::RemoveForceField()
+{
+    if (!m_hasShield)
+        return;
+    m_pShieldSE->Delete();
+    SafeDelete(m_pShieldSE);
+    m_hasShield = false;
+    // forceFieldID
+    SendSlimUpdate();
 }
 
 void TowerSE::SetDeployFlags(int8 anchor/*0*/, int8 unanchor/*0*/, int8 online/*0*/, int8 offline/*0*/)
@@ -1177,7 +1204,7 @@ PyRep* TowerSE::GetProcessInfo()
     return list;
 }
 
-void TowerSE::CreateForceField()
+void TowerSE::CreateForceField(bool notify)
 {
     if (m_hasShield)
         return;
@@ -1194,11 +1221,16 @@ void TowerSE::CreateForceField()
         data.factionID = m_warID;
         data.ownerID = m_ownerID;
     FieldSE* iSE = new FieldSE(ifRef, m_services, m_system, data);
-    // set shield harmonic to tower harmonic
-    iSE->SetHarmonic(m_harmonic);
+    // the password's harmonic, and the tower's corp/alliance if they are let in
+    m_tdata.harmonic = EVEPOS::HarmonicFromPassword(m_tdata.password);
+    iSE->SetHarmonic(m_tdata.harmonic);
+    iSE->SetAccess(m_tdata.allowCorp, m_tdata.allowAlliance);
     m_system->AddEntity(iSE);
     m_pShieldSE = iSE;
     m_hasShield = true;
+    // forceFieldID
+    if (notify)
+        SendSlimUpdate();
 }
 
 PyDict* TowerSE::MakeSlimItem()

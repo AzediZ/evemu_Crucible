@@ -39,6 +39,7 @@
 #include "manufacturing/RamMethods.h"
 #include "system/Container.h"
 #include "system/Damage.h"
+#include "system/DestinyCollision.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
@@ -1654,6 +1655,8 @@ void StructureSE::EncodeDestiny(Buffer &into)
     bool anchoring(m_procTimer.Enabled() and (m_procState == EVEPOS::ProcState::Anchoring));
     bool isFree((m_data.state < EVEPOS::StructureState::Anchored) and !unanchoring);
     uint8 massive((IsStarbaseStructure() and !isFree and !anchoring) ? Ball::Flag::IsMassive : 0);
+    // collision shape (invTypeMiniBalls)
+    const std::vector<MiniBall>* pMiniBalls(sDataMgr.GetMiniBalls(m_self->typeID()));
     if (m_tcu or m_ihub or m_sbu)
     {
         // may need to update this after things are working
@@ -1670,6 +1673,8 @@ void StructureSE::EncodeDestiny(Buffer &into)
         head.mode = Ball::Mode::RIGID;
         head.flags = (isFree ? Ball::Flag::IsFree : 0) | massive;
     }
+    if (pMiniBalls != nullptr)
+        head.flags |= Ball::Flag::HasMiniBalls;
     into.Append(head);
 
     /** @todo these may need more work....  */
@@ -1733,6 +1738,9 @@ void StructureSE::EncodeDestiny(Buffer &into)
         main.formationID = 0xFF;
         into.Append(main);
     }
+    // after the mode-specific part
+    if (pMiniBalls != nullptr)
+        AppendMiniBalls(into, *pMiniBalls);
 
     _log(SE__DESTINY, "StructureSE::EncodeDestiny(): %s - id:%lli, mode:%u, flags:0x%X", GetName(), head.entityID, head.mode, head.flags);
     _log(POS__DESTINY, "StructureSE::EncodeDestiny(): %s - id:%lli, mode:%u, flags:0x%X", GetName(), head.entityID, head.mode, head.flags);

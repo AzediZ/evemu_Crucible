@@ -131,9 +131,8 @@ bool CynoModule::CanActivate()
 
         if ((pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()) {
             TowerSE* ptSE = pShipSE->SysBubble()->GetTowerSE();
-            if (ptSE->HasForceField())
-                if (pShipSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
-                    throw UserError("NoCynoInPOSShields");
+            if (ptSE->InForceField(pShipSE->GetPosition()))
+                throw UserError("NoCynoInPOSShields");
         }
 
         // maxVelocityActivationLimit (500 m/s)

@@ -576,6 +576,13 @@ bool SystemManager::LoadPlayerDynamics() {
 
     SystemEntity* pSE(nullptr);
     for (auto cur : entities) {
+        // starbase force fields are made by their (online) towers.  one left over from before a restart goes
+        if (cur.groupID == EVEDB::invGroups::Force_Field) {
+            InventoryItemRef fRef(sItemFactory.GetItemRef(cur.itemID));
+            if (fRef.get() != nullptr)
+                fRef->Delete();
+            continue;
+        }
         pSE = DynamicEntityFactory::BuildEntity(*this, cur);
         if (pSE == nullptr) {
             sLog.Error( "SystemManager::LoadPlayerDynamics()", "Failed to create entity for item %u (grp: %u, type %u)", cur.itemID, cur.groupID, cur.typeID);

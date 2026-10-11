@@ -132,6 +132,7 @@ void StaticDataMgr::Clear()
     m_ramLineActivity.clear();
     m_t3Blueprints.clear();
     m_towerResources.clear();
+    m_miniBalls.clear();
 
     PySafeDecRef(m_keyMap);
     PySafeDecRef(m_agents);
@@ -691,6 +692,19 @@ void StaticDataMgr::Populate()
         m_towerResources.emplace(row.GetUInt(0), resource);
     }
     sLog.Cyan("    StaticDataMgr", "%lu Control Tower resource rows loaded in %.3fms.", m_towerResources.size(), (GetTimeMSeconds() - startTime));
+
+    startTime = GetTimeMSeconds();
+    ManagerDB::GetMiniBalls(*res);
+    while (res->GetRow(row)) {
+        //SELECT typeID, x, y, z, radius FROM invTypeMiniBalls ORDER BY typeID, idx
+        Destiny::MiniBall ball = Destiny::MiniBall();
+        ball.posX = row.GetDouble(1);
+        ball.posY = row.GetDouble(2);
+        ball.posZ = row.GetDouble(3);
+        ball.radius = row.GetFloat(4);
+        m_miniBalls[row.GetUInt(0)].push_back(ball);
+    }
+    sLog.Cyan("    StaticDataMgr", "%lu types with collision miniballs loaded in %.3fms.", m_miniBalls.size(), (GetTimeMSeconds() - startTime));
 
     //cleanup
     SafeDelete(res);
@@ -1295,6 +1309,14 @@ uint8 StaticDataMgr::GetWHSystemClass(uint32 systemID)
         return 0;
 
     return 0;
+}
+
+const std::vector<Destiny::MiniBall>* StaticDataMgr::GetMiniBalls(uint16 typeID)
+{
+    std::map<uint16, std::vector<Destiny::MiniBall>>::const_iterator itr(m_miniBalls.find(typeID));
+    if ((itr == m_miniBalls.end()) or itr->second.empty())
+        return nullptr;
+    return &itr->second;
 }
 
 void StaticDataMgr::GetTowerResources(uint16 towerTypeID, std::vector<EVEPOS::TowerResource>& into)
