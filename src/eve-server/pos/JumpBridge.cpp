@@ -64,7 +64,8 @@ void JumpBridgeSE::SetOnline()
 
     // Make sure player is not in high-sec (configurable)
     if (!sConfig.world.highSecCyno) {
-        if (m_system->GetSecValue() >= 0.5f) {
+        // use the security rating, not GetSecValue() (1.1 minus the rating).  0.45 and up shows as 0.5 in the client, which is high-sec
+        if (m_system->GetSystemSecurityRating() >= 0.45f) {
             throw CustomError("This module may not be used in high security space.");
         }
     }

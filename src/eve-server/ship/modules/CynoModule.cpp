@@ -94,7 +94,9 @@ bool CynoModule::CanActivate()
 
     //Make sure player is not in high-sec (configurable)
     if (!sConfig.world.highSecCyno) {
-        if (pClient->SystemMgr()->GetSecValue() >= 0.5f) {
+        // GetSecValue() is 1.1 minus the security rating (0.1 in a 1.0 system, 0.7 in a 0.4), so it refused low-sec and allowed
+        //  high-sec.  use the security rating itself.  0.45 and up shows as 0.5 in the client, which is high-sec
+        if (pClient->SystemMgr()->GetSystemSecurityRating() >= 0.45f) {
             pClient->SendNotifyMsg("This module may not be used in high security space.");
             return false;
         }
