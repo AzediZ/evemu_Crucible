@@ -35,6 +35,8 @@
 #include "planet/Moon.h"
 #include "pos/Structure.h"
 #include "ship/BeyonceService.h"
+#include "ship/modules/CloakModule.h"
+#include "ship/modules/ModuleManager.h"
 #include "station/StationDataMgr.h"
 #include "system/BookmarkService.h"
 #include "system/Container.h"
@@ -339,6 +341,18 @@ PyResult BeyonceBound::CmdOrbit(PyCallArgs &call, PyInt* entityID, PyRep* rangeV
     return PyStatic.NewNone();
 }
 
+// only the covert ops cloak can warp
+void BeyonceBound::CheckCloakedWarp(Client* pClient)
+{
+    ShipSE* pShip(pClient->GetShipSE());
+    if ((pShip == nullptr) or (pShip->DestinyMgr() == nullptr) or !pShip->DestinyMgr()->IsModuleCloaked())
+        return;
+    GenericModule* pMod(pClient->GetShip()->GetModuleManager()->GetActiveModuleByGroup(EVEDB::invGroups::Cloaking_Device));
+    if ((pMod != nullptr) and pMod->IsCloakModule() and pMod->GetCloakModule()->IsWarpSafeCloak())
+        return;
+    throw UserError ("CantWarpWhileCloaked");
+}
+
 PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* id) {
     _log(AUTOPILOT__MESSAGE, "%s called WarpToStuff. AP: %s", call.client->GetName(), (call.client->IsAutoPilot() ? "true" : "false"));
     //call.client->SetAutoPilot(false);
@@ -350,6 +364,7 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
    // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
    if (call.client->GetShipSE()->IsWarpScrambled())
         throw UserError ("WarpScrambled");
+    CheckCloakedWarp(call.client);
 
     DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
     if (pDestiny == nullptr) {
@@ -607,6 +622,7 @@ PyResult BeyonceBound::CmdWarpToStuffAutopilot(PyCallArgs &call, PyInt* destID) 
     // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
     if (call.client->GetShipSE()->IsWarpScrambled())
         throw UserError ("WarpScrambled");
+    CheckCloakedWarp(call.client);
 
     call.client->SetInvul(false);
     call.client->SetUndock(false);
@@ -674,6 +690,8 @@ PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* ship
     } else if (pDestiny->IsFrozen()) {
         call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
         return PyStatic.NewNone();
+    } else if (pDestiny->IsModuleCloaked()) {
+        throw UserError ("CantDockWhileCloaked");
     }
     SystemManager* pSystem = call.client->SystemMgr();
     if (pSystem == nullptr) {
@@ -733,6 +751,8 @@ PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, 
     SystemEntity* pGate = pSystem->GetSE(fromStargateID->value());
     if ((pGate == nullptr) or !pGate->IsGateSE())
         throw CustomError("That stargate is not in this system.");
+    if ((pShipSE->DestinyMgr() != nullptr) and pShipSE->DestinyMgr()->IsModuleCloaked())
+        throw UserError("CantJumpWhileCloaked");
     if (!pGate->GetGateSE()->HasDestination(toStargateID->value()))
         throw CustomError("That stargate does not lead there.");
     double dist = pShipSE->GetPosition().distance(pGate->GetPosition()) - pShipSE->GetRadius() - pGate->GetRadius();

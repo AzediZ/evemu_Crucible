@@ -12,6 +12,8 @@
 #include "ship/Ship.h"
 #include "packets/DogmaIM.h"
 #include "ship/modules/GenericModule.h"
+#include "ship/modules/EwarModule.h"
+#include "ship/modules/ModuleManager.h"
 #include "station/Station.h"
 #include "system/DestinyManager.h"
 #include "system/BubbleManager.h"
@@ -2449,6 +2451,7 @@ ShipSE::ShipSE(InventoryItemRef self, EVEServiceManager &services, SystemManager
 m_shipRef(ShipItemRef::StaticCast(self)),
 m_processTimerTick(SHIP_PROCESS_TICK_MS),   //5s
 m_processTimer(SHIP_PROCESS_TICK_MS),
+m_cloakCheckTimer(1000),
 m_oldArmor(0),
 m_oldShield(0),
 m_oldScanRes(0),
@@ -2467,6 +2470,7 @@ m_allowFleetSMBUsage(false)
 
     m_towerPass = "";
     m_processTimer.Start(m_processTimerTick);
+    m_cloakCheckTimer.Start(1000);
     _log(SHIP__TRACE, "Created ShipSE %p for item %u", this, self->itemID());
 }
 
@@ -2505,6 +2509,12 @@ void ShipSE::Process() {
     /** @todo m_self is NOT being populated for non-piloted ships...check later */
     if ((m_self.get() == nullptr) or (!m_self->HasPilot()))
         return;
+
+    // anything within 2000m drops a cloaking device
+    if (m_cloakCheckTimer.Check())
+        if ((m_destiny != nullptr) and m_destiny->IsModuleCloaked() and !m_destiny->IsWarping())
+            if (Ewar::FindDecloaker(this) != nullptr)
+                Decloak();
 
     if (m_processTimer.Check()) {
         double profileStartTime(GetTimeUSeconds());
@@ -2628,6 +2638,21 @@ void ShipSE::Warp() {
         m_targMgr->ClearModules();
 
     m_shipRef->Warp();
+}
+
+void ShipSE::Decloak(const char* msgKey/*nullptr*/)
+{
+    if ((m_destiny == nullptr) or !m_destiny->IsModuleCloaked())
+        return;
+    GenericModule* pMod(m_shipRef->GetModuleManager()->GetActiveModuleByGroup(EVEDB::invGroups::Cloaking_Device));
+    if (pMod == nullptr) {
+        // shouldn't happen.  drop the cloak anyway
+        m_destiny->UnCloak(Destiny::Cloak::Module);
+        return;
+    }
+    pMod->Deactivate();
+    if ((msgKey != nullptr) and HasPilot())
+        GetPilot()->SendRemoteMessage(msgKey);
 }
 
 void ShipSE::RemoveTarget(SystemEntity* pSE) {

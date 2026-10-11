@@ -344,9 +344,9 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     if ((pClient->SystemMgr() != nullptr) and pClient->SystemMgr()->GetLaw()->IsJammed(pClient->GetShipID()))
         throw CustomError ("Your targeting systems are being jammed by CONCORD.");
 
-    /** @todo pClient->IsUncloak() incomplete */
+    // sensors recalibrating after a cloaking device (CloakModule sets the delay)
     if (pClient->IsUncloak())
-        throw UserError ("DeinedTargetAfterCloak");
+        throw UserError ("DeniedTargetAfterCloak");
 
     if (pClient->IsDocked()) {
         pClient->SendNotifyMsg("You can't do this while docked");

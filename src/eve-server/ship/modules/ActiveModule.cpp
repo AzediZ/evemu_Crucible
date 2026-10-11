@@ -1350,6 +1350,9 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
     if ((m_effectID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
         m_effectID = m_chargeRef->type().GetDefaultEffect();
     std::string guidStr = sFxDataMgr.GetEffectGuid(m_effectID);
+    // the covert ops cloak's guid isn't in the client's effect repository.  it looks like any other cloak
+    if (guidStr.compare("effects.CloakingCovertOps") == 0)
+        guidStr = "effects.Cloaking";
     if (guidStr.empty())
         _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), m_effectID);
 

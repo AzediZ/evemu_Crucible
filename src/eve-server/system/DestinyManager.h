@@ -45,6 +45,18 @@ class SystemBubble;
 class SystemEntity;
 class SystemManager;
 
+namespace Destiny {
+    // cloak modes.  the values are destiny.dll's CloakBall modes (DSTNORMALCLOAK, DSTRESTORECLOAK, DSTGMCLOAK)
+    namespace Cloak {
+        enum {
+            None        = 0,
+            Module      = 1,    // cloaking device
+            Session     = 2,    // gate jump / login / undock cloak.  movement breaks it
+            GM          = 3
+        };
+    }
+}
+
 /* this object manages an entity's position and movement in a system.
  *
  * the client runs its own destiny simulation and applies every destiny update at the tick it was stamped with.
@@ -100,7 +112,6 @@ public:
     void Stop();
     void Halt();     // puts entity at 0 velocity
     void Eject();   // avoid numerous other redirect calls
-    void SetCloak(bool set=false)                       { m_cloaked = set; }
 
     /* TractorBeam */
     void TractorBeamStop();
@@ -129,13 +140,18 @@ public:
     bool IsFollowing()                                  { return (m_ballMode == Destiny::Ball::Mode::FOLLOW); }
     bool IsAligningForWarp() const                      { return ((m_ballMode == Destiny::Ball::Mode::WARP) and (m_effectStamp == -1)); }
     bool IsWarping() const                              { return ((m_ballMode == Destiny::Ball::Mode::WARP) and (m_effectStamp != -1)); }
-    bool IsCloaked()                                    { return m_cloaked; }
+    bool IsCloaked()                                    { return (m_cloakMode != Destiny::Cloak::None); }
+    // cloaked by a cloaking device (not the gate/login cloak or a GM)
+    bool IsModuleCloaked()                              { return (m_cloakMode == Destiny::Cloak::Module); }
+    uint8 GetCloakMode()                                { return m_cloakMode; }
     bool IsTractored()                                  { return m_tractored; }
 
     //Destiny Update stuff:
     void Jump(bool showCloak=true);
-    void Cloak();
-    void UnCloak();
+    // mode is Destiny::Cloak::Module, Session (gate, login, jump) or GM
+    void Cloak(uint8 mode = Destiny::Cloak::Session);
+    // Destiny::Cloak::None uncloaks any mode.  otherwise only that mode is dropped (movement only breaks a session cloak)
+    void UnCloak(uint8 mode = Destiny::Cloak::None);
 
     PyResult AttemptDockOperation();
     void Undock(GPoint dir);
@@ -156,6 +172,8 @@ public:
     void SendAnchorDrop() const;
     void SendAnchorLift() const;
     void SendCloakFx(bool apply=false, bool module=false) const;
+    void SendCloakBall() const;         // to our pilot only
+    void SendUncloakBall() const;       // to our pilot only
     void SendSpecialEffect10(uint32 entityID, uint32 targetID, std::string guid, bool isOffensive, bool start, bool isActive) const;
     void SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 moduleTypeID, uint32 targetID, uint32 chargeTypeID, std::string guid, bool isOffensive, bool start, bool isActive, int32 duration, uint32 repeat, int32 graphicInfo = 0) const;
 
@@ -241,7 +259,7 @@ protected:
     bool m_missileHit;
 
     //User controlled information
-    bool m_cloaked;
+    uint8 m_cloakMode;                  // Destiny::Cloak
     bool m_tractored;
 
 private:

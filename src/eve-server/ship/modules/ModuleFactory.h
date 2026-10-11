@@ -38,6 +38,7 @@
 #include "ship/modules/TurretModule.h"
 #include "ship/modules/CynoModule.h"
 #include "ship/modules/EwarModule.h"
+#include "ship/modules/CloakModule.h"
 
 static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
 {
@@ -103,7 +104,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::System_Scanner:                          return (new ActiveModule(mRef, sRef));    // Active - external
 
             // Electronics Modules:
-            case EVEDB::invGroups::Cloaking_Device:                         return (new ActiveModule(mRef, sRef));    // Active  -  SELF
+            case EVEDB::invGroups::Cloaking_Device:                         return (new CloakModule(mRef, sRef));     // Active  -  SELF
             case EVEDB::invGroups::Target_Painter:                          return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Drone_Control_Unit:                      return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Scan_Probe_Launcher:                     return (new ActiveModule(mRef, sRef));    // Active - external

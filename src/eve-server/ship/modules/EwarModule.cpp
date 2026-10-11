@@ -11,6 +11,7 @@
 #include "ship/Ship.h"
 #include "system/CrimeWatch.h"
 #include "ship/modules/EwarModule.h"
+#include "system/SystemBubble.h"
 #include "system/SystemEntity.h"
 #include "system/SystemManager.h"
 
@@ -39,6 +40,33 @@ const char* Ewar::GetKindEwarType(uint8 kind)
         case Ewar::Damp:            return "ewRemoteSensorDamp";
         case Ewar::TrackDisrupt:    return "ewTrackingDisrupt";
         case Ewar::Paint:           return "ewTargetPaint";
+    }
+    return nullptr;
+}
+
+SystemEntity* Ewar::FindDecloaker(SystemEntity* pSE)
+{
+    if ((pSE == nullptr) or (pSE->SysBubble() == nullptr))
+        return nullptr;
+
+    std::vector<SystemEntity*> entities;
+    pSE->SysBubble()->GetStaticEntities(entities);
+    std::map<uint32, SystemEntity*> dynamics;
+    pSE->SysBubble()->GetAllEntities(dynamics);
+    for (auto cur : dynamics)
+        entities.push_back(cur.second);
+
+    const GPoint& pos(pSE->GetPosition());
+    for (auto cur : entities) {
+        if ((cur == nullptr) or (cur == pSE) or cur->IsDead())
+            continue;
+        if (cur->IsMissileSE() or cur->IsProbeSE() or cur->IsFieldSE() or cur->IsBeltSE() or cur->IsAnomalySE())
+            continue;
+        // something warping through doesn't
+        if ((cur->DestinyMgr() != nullptr) and cur->DestinyMgr()->IsWarping())
+            continue;
+        if ((pos.distance(cur->GetPosition()) - pSE->GetRadius() - cur->GetRadius()) < DecloakRange)
+            return cur;
     }
     return nullptr;
 }

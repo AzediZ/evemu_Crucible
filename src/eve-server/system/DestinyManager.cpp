@@ -147,7 +147,7 @@ m_frozen(false)
     m_targetLost = false;
     m_missileHit = false;
 
-    m_cloaked = false;
+    m_cloakMode = Destiny::Cloak::None;
     m_tractored = false;
 }
 
@@ -717,6 +717,9 @@ bool DestinyManager::IsMassive() const {
     // the client clears the flag when warp proper starts, and sets it again when the ball drops out (see OnWarpExited())
     if (IsWarping())
         return false;
+    // CloakBall clears it too
+    if (m_cloakMode != Destiny::Cloak::None)
+        return false;
     if (mySE->IsNPCSE() or mySE->IsMissileSE())
         return true;
     if (mySE->IsShipSE())
@@ -968,9 +971,9 @@ void DestinyManager::BeginMovement() {
         _log(DESTINY__ERROR, "%s position is inf.", mySE->GetName());
     }
 
-    // this will have to be adjusted for cloak mod.
+    // moving breaks a gate/login cloak.  a cloaking device keeps working
     if (IsCloaked())
-        UnCloak();
+        UnCloak(Destiny::Cloak::Session);
 
     m_stateStamp = sEntityList.GetStamp();
 
@@ -1653,28 +1656,77 @@ void DestinyManager::Jump(bool showCloak)
 {
     Halt();
     if (showCloak) {
-        m_cloaked = true;
+        m_cloakMode = Destiny::Cloak::Session;
     }
     if (mySE->SysBubble() != nullptr)
         mySE->SysBubble()->RemoveExclusive(mySE);
 }
 
-void DestinyManager::Cloak() {
-    if (m_cloaked)
+void DestinyManager::Cloak(uint8 mode/*Destiny::Cloak::Session*/) {
+    if (mode == Destiny::Cloak::None)
         return;
-    m_cloaked = true;
+    if (IsCloaked()) {
+        // already hidden from everyone else (a cloaking device started during a gate cloak).  just take the new mode
+        if (mode == m_cloakMode)
+            return;
+        m_cloakMode = mode;
+        SendCloakBall();
+        if (mode == Destiny::Cloak::Module)
+            if (mySE->TargetMgr() != nullptr) {
+                mySE->TargetMgr()->ClearFromTargets();
+                mySE->TargetMgr()->ClearModules();
+            }
+        return;
+    }
+
+    m_cloakMode = mode;
     SendCloakFx(true);
+    SendCloakBall();
     if (mySE->SysBubble() != nullptr)
         mySE->SysBubble()->RemoveExclusive(mySE);
+    if (mode == Destiny::Cloak::Module)
+        if (mySE->TargetMgr() != nullptr) {
+            // nobody keeps a lock on us, and their modules on us stop
+            mySE->TargetMgr()->ClearFromTargets();
+            mySE->TargetMgr()->ClearModules();
+        }
 }
 
-void DestinyManager::UnCloak() {
-    if (!m_cloaked)
+void DestinyManager::UnCloak(uint8 mode/*Destiny::Cloak::None*/) {
+    if (!IsCloaked())
         return;
-    m_cloaked = false;
+    if ((mode != Destiny::Cloak::None) and (mode != m_cloakMode))
+        return;
+    bool wasSession(m_cloakMode == Destiny::Cloak::Session);
+    m_cloakMode = Destiny::Cloak::None;
     SendCloakFx();
+    // the session cloak is never sent to the pilot (CloakBall would hide the jump-in from its own client)
+    if (!wasSession)
+        SendUncloakBall();
     if (mySE->SysBubble() != nullptr)
         mySE->SysBubble()->AddBallExclusive(mySE);
+}
+
+void DestinyManager::SendCloakBall() const {
+    // the pilot's own ballpark gets the cloak on its ball (autopilot and the ship's own shader read isCloaked).
+    //  everyone else just loses the ball (RemoveExclusive).  gate and login cloaks are server side only
+    if (!mySE->HasPilot() or (m_cloakMode == Destiny::Cloak::Session))
+        return;
+    CloakBall cb;
+        cb.entityID = mySE->GetID();
+        cb.mode = m_cloakMode;
+        cb.range = 2000.0;      // const.minCloakingDistance
+    PyTuple* up = cb.Encode();
+    SendSingleDestinyUpdate(&up, true);   // consumed
+}
+
+void DestinyManager::SendUncloakBall() const {
+    if (!mySE->HasPilot())
+        return;
+    UncloakBall ub;
+        ub.entityID = mySE->GetID();
+    PyTuple* up = ub.Encode();
+    SendSingleDestinyUpdate(&up, true);   // consumed
 }
 
 void DestinyManager::TractorBeamStart(SystemEntity* pShipSE, EvilNumber speed)

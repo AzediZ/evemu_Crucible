@@ -363,6 +363,8 @@ public:
     void Jump(bool showCloak=true);        // this sets ship cloak
     void Warp();
     void RemoveTarget(SystemEntity* pSE);
+    // stops an active cloaking device at once (proximity, smart bombs, police).  msgKey is sent to the pilot.  gm and session cloaks are left alone
+    void Decloak(const char* msgKey = nullptr);
     void SetPassword(std::string pass)                  { m_towerPass = pass; }
     // fleet
     void ClearBoostData();
@@ -404,6 +406,7 @@ private:
     ShipDB m_db;
 
     Timer m_processTimer;
+    Timer m_cloakCheckTimer;            // proximity decloak, once a second
 
     uint32 m_podShipID;
 

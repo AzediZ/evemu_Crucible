@@ -456,7 +456,7 @@ void Client::ProcessClient() {
         if (m_cloakTimer.Check(false)) {
             _log(CLIENT__TIMER, "ProcessClient():  SetCloak to false for %s(%u)", m_char->name(), m_char->itemID());
             m_cloakTimer.Disable();
-            pShipSE->DestinyMgr()->UnCloak();
+            pShipSE->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
             //m_clientState = Player::State::Idle;
             //_log(AUTOPILOT__TRACE, "ProcessClient() - Cloaked - m_clientState set to Idle");
         }
@@ -511,7 +511,7 @@ void Client::ProcessClient() {
                     } break;
                 case Player::State::LoginWarp: {
                     _log(CLIENT__TIMER, "ProcessClient()::CheckState():  case: LoginWarp");
-                    pShipSE->DestinyMgr()->UnCloak();
+                    pShipSE->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
                     pShipSE->DestinyMgr()->WarpTo(m_loginWarpPoint);
                     } break;
                 case Player::State::Jump: {
@@ -1631,7 +1631,7 @@ void Client::SetCloakTimer(uint32 time/*Player::Timer::Default*/)
         m_cloakTimer.Disable();
         if (pShipSE != nullptr)
             if (pShipSE->DestinyMgr() != nullptr)
-                pShipSE->DestinyMgr()->UnCloak();
+                pShipSE->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
         _log(CLIENT__TIMER, "%s: Cloak Timer Disabled", m_char->name());
         return;
     }
@@ -1660,11 +1660,9 @@ void Client::SetUncloakTimer(uint32 time/*Player::Timer::Default*/)
         return;
     }
 
-    if (m_uncloakTimer.Enabled()) {
-        _log(CLIENT__ERROR, "%s: Uncloak Timer called but timer already enabled with %ums remaining.", m_char->name(), m_cloakTimer.GetRemainingTime());
-        EvE::traceStack();
-        return;
-    }
+    // a newer cloak's delay replaces the running one
+    if (m_uncloakTimer.Enabled())
+        _log(CLIENT__TIMER, "%s: Uncloak Timer restarted with %ums remaining.", m_char->name(), m_uncloakTimer.GetRemainingTime());
 
     _log(CLIENT__TIMER, "%s: Uncloak Timer set at %ums.   current state time is %ums", m_char->name(), time, m_uncloakTimer.GetCurrentTime());
     m_uncloakTimer.Start(time);

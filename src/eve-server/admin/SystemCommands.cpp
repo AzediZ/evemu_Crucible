@@ -1108,10 +1108,13 @@ PyResult Command_cloak(Client* pClient, CommandDB* db, EVEServiceManager &servic
 {
     if (args.argCount() == 1) {
         if (pClient->IsInSpace()) {
-            if (pClient->GetShipSE()->DestinyMgr()->IsCloaked())
-                pClient->GetShipSE()->DestinyMgr()->UnCloak();
+            DestinyManager* pDestiny(pClient->GetShipSE()->DestinyMgr());
+            if (pDestiny->IsModuleCloaked())
+                pClient->GetShipSE()->Decloak();
+            else if (pDestiny->IsCloaked())
+                pDestiny->UnCloak();
             else
-                pClient->GetShipSE()->DestinyMgr()->Cloak();
+                pDestiny->Cloak(Destiny::Cloak::GM);
         } else
             throw CustomError ("ERROR!  You MUST be in space to cloak!");
     } else

@@ -625,6 +625,32 @@ DST_WARPEXIT = 11
       </tupleInline>
   </elementDef>
 
+  <!-- destiny.dll CloakBall(ballID, mode=1, uncloakRange=2000.0): sets the ball's isCloaked to mode and clears isMassive.
+       modes DSTNORMALCLOAK=1, DSTRESTORECLOAK=2, DSTGMCLOAK=3 -->
+  <elementDef name="CloakBall">
+      <tupleInline>
+        <!-- 0 -->
+        <stringInline value="CloakBall" />
+        <!-- 1 -->
+        <tupleInline>
+            <int name="entityID" />
+            <int name="mode" />
+            <real name="range" />
+        </tupleInline>
+      </tupleInline>
+  </elementDef>
+
+  <elementDef name="UncloakBall">
+      <tupleInline>
+        <!-- 0 -->
+        <stringInline value="UncloakBall" />
+        <!-- 1 -->
+        <tupleInline>
+            <int name="entityID" />
+        </tupleInline>
+      </tupleInline>
+  </elementDef>
+
   <elementDef name="SetBallFree">
       <tupleInline>
         <!-- 0 -->

@@ -289,6 +289,10 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
         return;
     Response& r = *pResponse;
 
+    // police pursuit jams cloaks
+    if (pTarget->IsShipSE() and pTarget->DestinyMgr()->IsModuleCloaked())
+        pTarget->GetShipSE()->Decloak("CloakingDisengagedPolicePursuit");
+
     // warp scrambled
     if (r.scram <= 0) {
         InventoryItemRef shipRef(pTarget->GetSelf());

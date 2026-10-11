@@ -55,6 +55,9 @@ public:
     BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Client* client);
 
 protected:
+    // throws CantWarpWhileCloaked unless the active cloak is a covert ops cloak
+    void CheckCloakedWarp(Client* pClient);
+
     PyResult CmdFollowBall(PyCallArgs& call, PyInt* ballID, PyRep* distance);
     PyResult CmdSetSpeedFraction(PyCallArgs& call, PyFloat* speedFraction);
     PyResult CmdAlignTo(PyCallArgs& call, PyInt* entityID);

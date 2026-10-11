@@ -26,6 +26,7 @@ class TurretModule;
 class SuperWeapon;
 class RigModule;
 class CynoModule;
+class CloakModule;
 class SubSystemModule;
 
 /* generic module base class */
@@ -66,6 +67,7 @@ public:
     virtual RigModule*          GetRigModule()          { return nullptr; }
     virtual SubSystemModule*    GetSubSystemModule()    { return nullptr; }
     virtual CynoModule*         GetCynoModule()         { return nullptr; }
+    virtual CloakModule*        GetCloakModule()        { return nullptr; }
     /* class type helpers.  public for anyone to access. */
     virtual bool        IsGenericModule() const         { return true; }
     virtual bool        IsPassiveModule() const         { return false; }
@@ -73,6 +75,7 @@ public:
     virtual bool        IsMiningLaser() const           { return false; }
     virtual bool        IsProspectModule() const        { return false; }
     virtual bool        IsCynoModule() const            { return false; }
+    virtual bool        IsCloakModule() const           { return false; }
     virtual bool        IsRigModule() const             { return false; }   // check this in m_rigSlot?
     virtual bool        IsSubSystemModule() const       { return false; }   // check this in m_subSystem?
 

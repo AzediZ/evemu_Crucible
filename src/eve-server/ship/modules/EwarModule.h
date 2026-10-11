@@ -14,6 +14,15 @@ class Client;
 class SystemEntity;
 
 namespace Ewar {
+    // const.minCloakingDistance.  nothing may be this close (surface to surface) to a cloaked ship
+    const double DecloakRange = 2000.0;
+    // smart bombs can't run this close to a station, stargate or acceleration gate
+    const double SmartbombStructureRange = 5000.0;
+
+    /* the first object within DecloakRange of pSE that would decloak it (or stops it cloaking): ships (cloaked ones too),
+     *  drones, npcs, structures, containers, wrecks, asteroids, stations, gates.  not missiles, probes or bubbles.  nullptr if none */
+    SystemEntity* FindDecloaker(SystemEntity* pSE);
+
     // client 'ewarType' strings (state.py ewarStates) for module groups.  nullptr when the group isn't ewar
     const char* GetEwarType(uint16 groupID);
     // groups that are offensive modifiers (blocked by AttrDisallowOffensiveModifiers on the target)
