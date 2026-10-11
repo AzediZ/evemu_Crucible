@@ -353,6 +353,9 @@ void ShipItem::ProcessModules() {
 
 void ShipItem::Eject()
 {
+    // the ship keeps nothing from the pilot's fleet links
+    if (HasPilot() and (GetPilot()->GetShipSE() != nullptr) and (GetPilot()->GetShipSE()->GetID() == itemID()))
+        GetPilot()->GetShipSE()->RemoveLinkBonuses();
     if (m_ModuleManager != nullptr) {
         // overload effects need the pilot, so they come off before the pilot leaves
         m_ModuleManager->ClearOverloads();
@@ -2613,6 +2616,8 @@ bool ShipSE::IsLogin()
 }
 
 void ShipSE::Dock() {
+    // links don't reach into stations
+    RemoveLinkBonuses();
     if (m_targMgr != nullptr) {
         m_targMgr->ClearModules();
         m_targMgr->ClearAllTargets(false);
@@ -2772,6 +2777,45 @@ void ShipSE::ClearBoostData()
 
     m_boost = BoostData();
     m_boosted = false;
+}
+
+void ShipSE::ApplyLinkBonuses(const LinkMap& wanted)
+{
+    if (wanted.empty() and m_linkMults.empty())
+        return;
+    std::set<std::pair<uint32, uint16>> keys;
+    for (auto& cur : wanted)
+        keys.insert(cur.first);
+    for (auto& cur : m_linkMults)
+        keys.insert(cur.first);
+
+    for (auto& key : keys) {
+        LinkMap::const_iterator wItr = wanted.find(key);
+        LinkMap::iterator oItr = m_linkMults.find(key);
+        float newMult(wItr == wanted.end() ? 1.0f : wItr->second);
+        float oldMult(oItr == m_linkMults.end() ? 1.0f : oItr->second);
+        if (std::fabs(newMult - oldMult) < 0.00001f)
+            continue;
+        InventoryItemRef iRef(nullptr);
+        if (key.first == m_shipRef->itemID()) {
+            iRef = m_shipRef;
+        } else {
+            GenericModule* pMod(m_shipRef->GetModuleManager()->GetModule(key.first));
+            if (pMod != nullptr)
+                iRef = pMod->GetSelf();
+        }
+        if ((iRef.get() != nullptr) and (oldMult != 0.0f)) {
+            float value(iRef->GetAttribute(key.second).get_float());
+            iRef->SetAttribute(key.second, value / oldMult * newMult);
+            _log(FLEET__TRACE, "ShipSE::ApplyLinkBonuses() - %s(%u) attr %u: %.4f -> %.4f (x%.4f)", iRef->name(), iRef->itemID(), key.second, value, value / oldMult * newMult, newMult);
+        }
+        if ((iRef.get() == nullptr) or (newMult == 1.0f)) {
+            if (oItr != m_linkMults.end())
+                m_linkMults.erase(oItr);
+        } else {
+            m_linkMults[key] = newMult;
+        }
+    }
 }
 
 void ShipSE::RemoveBoost()

@@ -323,6 +323,9 @@ class Missile;
 class SystemManager;
 class ServiceDB;
 
+// warfare link multipliers on a ship: (itemID of the ship or a fitted module, attributeID) -> multiplier
+typedef std::map<std::pair<uint32, uint16>, float> LinkMap;
+
 class ShipSE
 : public DynamicSystemEntity
 {
@@ -373,6 +376,9 @@ public:
     void RemoveBoost();
     void ApplyBoost(BoostData& bData);
     uint8 GetMiningBoostAmount()                        { return m_boost.mining; }
+    /* warfare links.  wanted is everything the ship should have now.  old multipliers are divided out, new ones multiplied in */
+    void ApplyLinkBonuses(const LinkMap& wanted);
+    void RemoveLinkBonuses()                            { ApplyLinkBonuses(LinkMap()); }
 
     // misc
     void PayInsurance();
@@ -423,6 +429,9 @@ private:
 
     /*  for POS field */
     std::string m_towerPass;
+
+    /* warfare link multipliers applied to this ship and its modules */
+    LinkMap m_linkMults;
 
 };
 

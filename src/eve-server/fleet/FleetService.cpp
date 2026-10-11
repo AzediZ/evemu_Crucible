@@ -15,6 +15,8 @@
 #include "eve-server.h"
 #include "chat/LSCService.h"
 #include "fleet/FleetService.h"
+#include "ship/modules/GangLinkModule.h"
+#include "ship/modules/ModuleManager.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
@@ -703,6 +705,156 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
 
     _log( FLEET__TRACE, "FleetService::UpdateBoost() - Updated %lu members of fleetID: %u in %.2fus.  fleet: %s, wing: %s, squad: %s", \
             memberUpdateMap.size(), fleetID, GetTimeUSeconds() - start, (fleet ? "true" : "false"), (wing.empty() ? "false" : "true"), (squad.empty() ? "false" : "true"));
+
+    // whatever changed the skill boosts changes who gets which links
+    UpdateLinks(fleetID);
+}
+
+bool FleetService::FleetBoostPasses(uint32 fleetID)
+{
+    std::map<uint32, FleetData>::iterator itr = m_fleetDataMap.find(fleetID);
+    if ((itr == m_fleetDataMap.end()) or (itr->second.leader == nullptr) or !itr->second.leader->IsInSpace())
+        return false;
+    return (m_fleetWings.count(fleetID) <= itr->second.leader->GetChar()->GetSkillLevel(EvESkill::FleetCommand));
+}
+
+bool FleetService::WingBoostPasses(uint32 wingID)
+{
+    std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(wingID);
+    if ((itr == m_wingDataMap.end()) or (itr->second.leader == nullptr) or !itr->second.leader->IsInSpace())
+        return false;
+    return (m_wingSquads.count(wingID) <= itr->second.leader->GetChar()->GetSkillLevel(EvESkill::WingCommand));
+}
+
+bool FleetService::SquadBoostPasses(uint32 squadID)
+{
+    std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(squadID);
+    if ((itr == m_squadDataMap.end()) or (itr->second.leader == nullptr) or !itr->second.leader->IsInSpace())
+        return false;
+    return (itr->second.members.size() <= (itr->second.leader->GetChar()->GetSkillLevel(EvESkill::Leadership) * 2));
+}
+
+void FleetService::ApplyLinksTo(Client* pMember, const std::vector<Client*>& boosters)
+{
+    if ((pMember == nullptr) or (pMember->GetShipSE() == nullptr))
+        return;
+
+    LinkMap wanted;
+    if (pMember->IsInSpace()) {
+        // strongest module of each link effect among the boosters (no stacking of the same link)
+        std::map<uint16, GenericModule*> best;
+        std::map<uint16, float> bestScore;
+        std::set<Client*> seen;
+        for (auto pBooster : boosters) {
+            if ((pBooster == nullptr) or (seen.find(pBooster) != seen.end()))
+                continue;
+            seen.insert(pBooster);
+            if (!pBooster->IsInSpace() or (pBooster->GetShipSE() == nullptr) or (pBooster->GetSystemID() != pMember->GetSystemID()))
+                continue;
+            std::vector<GenericModule*> modules;
+            pBooster->GetShip()->GetModuleManager()->GetActiveModules(modules);
+            for (auto pMod : modules) {
+                if ((pMod->groupID() != EVEDB::invGroups::Gang_Coordinator) or !pMod->IsActiveModule())
+                    continue;
+                uint16 effectID(pMod->GetActiveModule()->GetEffectID());
+                if (effectID == 0)
+                    continue;
+                float score(0.0f);
+                for (auto& lMod : GangLinkModule::GetModifiers(effectID))
+                    score += std::fabs(pMod->GetAttribute(lMod.srcAttr).get_float());
+                std::map<uint16, float>::iterator sItr = bestScore.find(effectID);
+                if ((sItr == bestScore.end()) or (score > sItr->second)) {
+                    best[effectID] = pMod;
+                    bestScore[effectID] = score;
+                }
+            }
+        }
+
+        ShipItemRef shipRef(pMember->GetShip());
+        for (auto& cur : best) {
+            for (auto& lMod : GangLinkModule::GetModifiers(cur.first)) {
+                float mult(1.0f + (cur.second->GetAttribute(lMod.srcAttr).get_float() / 100.0f));
+                if (lMod.skillID == 0) {
+                    std::pair<uint32, uint16> key(shipRef->itemID(), lMod.targetAttr);
+                    LinkMap::iterator itr = wanted.find(key);
+                    wanted[key] = (itr == wanted.end() ? mult : itr->second * mult);
+                    continue;
+                }
+                std::vector<InventoryItemRef> modules;
+                shipRef->GetModuleManager()->GetModuleListByReqSkill(lMod.skillID, modules);
+                for (auto mRef : modules) {
+                    if (!mRef->HasAttribute(lMod.targetAttr))
+                        continue;
+                    std::pair<uint32, uint16> key(mRef->itemID(), lMod.targetAttr);
+                    LinkMap::iterator itr = wanted.find(key);
+                    wanted[key] = (itr == wanted.end() ? mult : itr->second * mult);
+                }
+            }
+        }
+    }
+
+    pMember->GetShipSE()->ApplyLinkBonuses(wanted);
+}
+
+void FleetService::UpdateLinks(uint32 fleetID)
+{
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if (fItr == m_fleetDataMap.end())
+        return;
+
+    bool fleetPasses(FleetBoostPasses(fleetID));
+    std::set<Client*> done;
+    std::vector<uint32> wingIDs, squadIDs;
+    GetWingIDs(fleetID, wingIDs);
+    for (auto wingID : wingIDs) {
+        std::map<uint32, WingData>::iterator wItr = m_wingDataMap.find(wingID);
+        if (wItr == m_wingDataMap.end())
+            continue;
+        bool wingPasses(WingBoostPasses(wingID));
+        squadIDs.clear();
+        GetSquadIDs(wingID, squadIDs);
+        for (auto squadID : squadIDs) {
+            std::map<uint32, SquadData>::iterator sItr = m_squadDataMap.find(squadID);
+            if (sItr == m_squadDataMap.end())
+                continue;
+            std::vector<Client*> boosters;
+            if (SquadBoostPasses(squadID)) {
+                boosters.push_back(sItr->second.booster);
+                if (wingPasses) {
+                    boosters.push_back(wItr->second.booster);
+                    if (fleetPasses)
+                        boosters.push_back(fItr->second.booster);
+                }
+            }
+            for (auto cur : sItr->second.members) {
+                ApplyLinksTo(cur.second, boosters);
+                done.insert(cur.second);
+            }
+        }
+        // the wing commander sits above the squads
+        if ((wItr->second.leader != nullptr) and (done.find(wItr->second.leader) == done.end())) {
+            std::vector<Client*> boosters;
+            if (wingPasses) {
+                boosters.push_back(wItr->second.booster);
+                if (fleetPasses)
+                    boosters.push_back(fItr->second.booster);
+            }
+            ApplyLinksTo(wItr->second.leader, boosters);
+            done.insert(wItr->second.leader);
+        }
+    }
+    if ((fItr->second.leader != nullptr) and (done.find(fItr->second.leader) == done.end())) {
+        std::vector<Client*> boosters;
+        if (fleetPasses)
+            boosters.push_back(fItr->second.booster);
+        ApplyLinksTo(fItr->second.leader, boosters);
+        done.insert(fItr->second.leader);
+    }
+    // anyone else (no position yet) gets nothing
+    auto range = m_fleetMembers.equal_range(fleetID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        if (done.find(itr->second) == done.end())
+            ApplyLinksTo(itr->second, std::vector<Client*>());
 }
 
 void FleetService::SetWingBoostData(uint32 wingID, BoostData& bData)
@@ -1295,6 +1447,11 @@ void FleetService::LeaveFleet(Client* pClient)
     SendFleetUpdate(fleetID, "OnFleetLeave", tuple);
 
     RemoveMember(pClient);
+
+    // links stop for the leaver, and for anyone the leaver was boosting
+    if (pClient->GetShipSE() != nullptr)
+        pClient->GetShipSE()->RemoveLinkBonuses();
+    UpdateLinks(fleetID);
 
     CharFleetData fleet = CharFleetData();
     //call updates on fleet session data

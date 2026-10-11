@@ -569,6 +569,8 @@ void Client::ProcessClient() {
                     }
             }
             pShipSE->ApplyBoost(bData);
+            // links only reach members in the booster's system
+            sFltSvc.UpdateLinks(m_fleet);
         }
 
     if (sConfig.debug.UseProfiling)

@@ -62,6 +62,13 @@ public:
     void RenameSquad(uint32 squadID, std::string name);
 
     void UpdateBoost(uint32 fleetID, bool fleet, std::list< int32 >& wing, std::list< int32 >& squad);
+    /* warfare links: every member gets the strongest active link of each kind from its squad, wing and fleet boosters
+     *  (in the same system), as far as the chain of command passes bonuses down */
+    void UpdateLinks(uint32 fleetID);
+    // the commander of each level is in space and can pass bonuses down (same skill rules as UpdateBoost)
+    bool FleetBoostPasses(uint32 fleetID);
+    bool WingBoostPasses(uint32 wingID);
+    bool SquadBoostPasses(uint32 squadID);
     void UpdateOptions(uint32 fleetID, bool isFreeMove, bool isRegistered, bool isVoiceEnabled);
 
     bool AddMember(Client* pClient, uint32 fleetID, int32 wingID, int32 squadID, int8 job, int8 role, int8 booster);
@@ -145,6 +152,8 @@ protected:
     void DecFleetSquads(uint32 fleetID, uint32 wingID);
 
     void SetWingBoostData(uint32 wingID, BoostData& bData);
+    // applies the links of these boosters to the member's ship (no boosters removes them)
+    void ApplyLinksTo(Client* pMember, const std::vector<Client*>& boosters);
     void SetSquadBoostData(uint32 squadID, BoostData bData, bool& sboost);
 
     uint32 m_fleetID;

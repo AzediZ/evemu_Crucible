@@ -23,6 +23,7 @@
 #include "ship/modules/ModuleManager.h"
 #include "ship/modules/ModuleFactory.h"
 #include "ship/modules/ActiveModule.h"
+#include "fleet/FleetService.h"
 #include "station/Station.h"
 #include "system/DestinyManager.h"
 
@@ -458,6 +459,7 @@ void ModuleManager::UnfitModule(uint32 itemID)
         _log(MODULE__ERROR, "MM::UnfitModule() -  Module %u not found", itemID);
         return;
     }
+    LinksChanging(true);
 
     _log(MODULE__TRACE, "%s(%u) calling MM::UnfitModule(itemID)", pMod->GetSelf()->name(), pMod->itemID());
 
@@ -473,6 +475,7 @@ void ModuleManager::UnfitModule(uint32 itemID)
     deleteModuleRef(pMod->flag(), pMod);
     // delete the GenericModule object (but not the ModuleItem object)
     SafeDelete(pMod);
+    LinksChanging(false);
 }
 
 void ModuleManager::UnfitModule(EVEItemFlags flag) {
@@ -481,6 +484,7 @@ void ModuleManager::UnfitModule(EVEItemFlags flag) {
         _log(MODULE__ERROR, "MM::UnfitModule() -  Module not found at %s", sDataMgr.GetFlagName(flag));
         return;
     }
+    LinksChanging(true);
 
     _log(MODULE__TRACE, "%s(%u) calling MM::UnfitModule(flag)", pMod->GetSelf()->name(), pMod->itemID());
 
@@ -496,6 +500,23 @@ void ModuleManager::UnfitModule(EVEItemFlags flag) {
     deleteModuleRef(flag, pMod);
     // delete the GenericModule object (but not the ModuleItem object)
     SafeDelete(pMod);
+    LinksChanging(false);
+}
+
+void ModuleManager::LinksChanging(bool before)
+{
+    // fleet links multiply module attributes.  take them off before a module changes, and work them out again after
+    if (!pShipItem->HasPilot())
+        return;
+    Client* pClient(pShipItem->GetPilot());
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pShipSE == nullptr) or (pShipSE->GetID() != pShipItem->itemID()) or !pClient->IsInSpace())
+        return;
+    if (before) {
+        pShipSE->RemoveLinkBonuses();
+    } else if (pClient->InFleet()) {
+        sFltSvc.UpdateLinks(pClient->GetFleetID());
+    }
 }
 
 // cannot throw without test
@@ -575,7 +596,9 @@ void ModuleManager::Online(uint32 itemID)
     }
 
     _log(MODULE__MESSAGE, "MM::Online(itemID) -  %s going Online", pMod->GetSelf()->name());
+    LinksChanging(true);
     pMod->Online();
+    LinksChanging(false);
 }
 
 void ModuleManager::Online(EVEItemFlags flag)
@@ -608,7 +631,9 @@ void ModuleManager::Offline(uint32 itemID)
     }
 
     _log(MODULE__MESSAGE, "MM::Offline(itemID) -  %s going Offline", pMod->GetSelf()->name());
+    LinksChanging(true);
     pMod->Offline();
+    LinksChanging(false);
 }
 
 void ModuleManager::Offline(EVEItemFlags flag)
@@ -733,7 +758,9 @@ void ModuleManager::Deactivate(uint32 itemID, std::string effectName)
     // test for effectName "online", which is sent thru rclick menu in HUD to offline module
     if (effectName.compare("online") == 0) {
         _log(MODULE__TRACE, "MM::Deactivate() - %s Offlining - '%s'", pMod->GetSelf()->name(), effectName.c_str());
+        LinksChanging(true);
         pMod->Offline();
+        LinksChanging(false);
         return;
     }
     if (pMod->GetModuleState() != Module::State::Activated)  // we dont need an error msgs here....this is acceptable, as the module may not be active

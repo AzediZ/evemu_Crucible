@@ -505,7 +505,8 @@ SET( ship_modules_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/modules/EwarModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/CloakModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/SmartBombModule.h"
-     "${TARGET_INCLUDE_DIR}/ship/modules/SiegeModule.h" )
+     "${TARGET_INCLUDE_DIR}/ship/modules/SiegeModule.h"
+     "${TARGET_INCLUDE_DIR}/ship/modules/GangLinkModule.h" )
 SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/ActiveModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/GenericModule.cpp"
@@ -522,7 +523,8 @@ SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/EwarModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/CloakModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/SmartBombModule.cpp"
-     "${TARGET_SOURCE_DIR}/ship/modules/SiegeModule.cpp" )
+     "${TARGET_SOURCE_DIR}/ship/modules/SiegeModule.cpp"
+     "${TARGET_SOURCE_DIR}/ship/modules/GangLinkModule.cpp" )
 
 SET( standing_INCLUDE
      "${TARGET_INCLUDE_DIR}/standing/Standing.h"

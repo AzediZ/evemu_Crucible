@@ -160,6 +160,8 @@ private:
     void addModuleRef(EVEItemFlags flag, GenericModule* pMod);
     // removes module ref from maps and adjusts slot count
     void deleteModuleRef(EVEItemFlags flag, GenericModule* pMod);
+    // fleet link multipliers come off before a module change (before=true) and are worked out again after
+    void LinksChanging(bool before);
 
     bool m_initalized;
 

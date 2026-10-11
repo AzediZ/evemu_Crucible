@@ -41,6 +41,7 @@
 #include "ship/modules/CloakModule.h"
 #include "ship/modules/SmartBombModule.h"
 #include "ship/modules/SiegeModule.h"
+#include "ship/modules/GangLinkModule.h"
 
 static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
 {
@@ -154,7 +155,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::Remote_ECM_Burst:                        return (new EcmModule(mRef, sRef));       // Active - external
 
             // Gang Assist Modules:
-            case EVEDB::invGroups::Gang_Coordinator:                        return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Gang_Coordinator:                        return (new GangLinkModule(mRef, sRef));  // Active - fleet
             case EVEDB::invGroups::Siege_Module:                            return (new SiegeModule(mRef, sRef));     // Active  -  SELF (siege and triage)
             case EVEDB::invGroups::Jump_Portal_Generator:                   return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Cynosural_Field_Generator:               return (new CynoModule(mRef, sRef));
