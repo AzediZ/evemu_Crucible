@@ -91,6 +91,8 @@ public:
     const void CopyAttributes(InventoryItem& itemRef) const;
 
     bool HasReqSkill(const uint16 skillID) const;
+    // skill typeID -> level
+    const std::map<uint16, uint8>& GetRequiredSkills() const { return m_reqSkillMap; }
 
     /* new effects processing system */
     void GetEffectMap(const int8 state, std::map<uint16, Effect>& effectMap) const;

@@ -157,6 +157,10 @@ void CharacterDB::DeleteCharacter(uint32 characterID) {
     sDatabase.RunQuery(err, "DELETE FROM crpApplications WHERE characterID=%u", characterID);
     sDatabase.RunQuery(err, "DELETE FROM chrCharacterAttributes WHERE charID = %u", characterID);
     sDatabase.RunQuery(err, "DELETE FROM chrPausedSkillQueue WHERE characterID = %u", characterID);
+    sDatabase.RunQuery(err, "DELETE FROM chrJumpCloneImplants"
+                            " WHERE jumpCloneID IN (SELECT jumpCloneID FROM chrJumpClones WHERE characterID = %u)", characterID);
+    sDatabase.RunQuery(err, "DELETE FROM chrJumpClones WHERE characterID = %u", characterID);
+    sDatabase.RunQuery(err, "DELETE FROM chrBoosters WHERE characterID = %u", characterID);
     sDatabase.RunQuery(err, "DELETE FROM entity_attributes"
                             " WHERE itemID IN (SELECT itemID FROM entity WHERE ownerID = %u)", characterID);
     sDatabase.RunQuery(err, "DELETE FROM entity WHERE ownerID = %u", characterID);
@@ -2328,4 +2332,198 @@ bool CharacterDB::GetBloodlineByCharacterType(uint16 characterTypeID, uint8 &blo
     bloodlineID = row.GetUInt(0);
 
     return true;
+}
+
+/* jump clones (F15) */
+int64 CharacterDB::GetLastCloneJumpTime(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT lastCloneJumpTime FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in GetLastCloneJumpTime query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetInt64(0);
+}
+
+void CharacterDB::SetLastCloneJumpTime(uint32 charID, int64 time)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrCharacters SET lastCloneJumpTime = %" PRIi64 " WHERE characterID = %u", time, charID);
+}
+
+PyRep* CharacterDB::GetJumpClones(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT jumpCloneID, locationID FROM chrJumpClones WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpClones query: %s", res.error.c_str());
+        return nullptr;
+    }
+    return DBResultToCRowset(res);
+}
+
+PyRep* CharacterDB::GetJumpCloneImplants(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT i.jumpCloneID, i.typeID"
+        " FROM chrJumpCloneImplants AS i"
+        "  JOIN chrJumpClones AS c ON c.jumpCloneID = i.jumpCloneID"
+        " WHERE c.characterID = %u", charID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetJumpCloneImplants query: %s", res.error.c_str());
+        return nullptr;
+    }
+    return DBResultToCRowset(res);
+}
+
+PyRep* CharacterDB::GetJumpClonesAtLocation(uint32 locationID, uint32 charID/*0*/)
+{
+    std::string owner;
+    if (charID > 0)
+        owner = " AND characterID = " + std::to_string(charID);
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT jumpCloneID, characterID AS ownerID, locationID"
+        " FROM chrJumpClones"
+        " WHERE locationID = %u%s", locationID, owner.c_str()))
+    {
+        codelog(DATABASE__ERROR, "Error in GetJumpClonesAtLocation query: %s", res.error.c_str());
+        return nullptr;
+    }
+    return DBResultToCRowset(res);
+}
+
+bool CharacterDB::GetJumpCloneAt(uint32 charID, uint32 locationID, uint32& jumpCloneID)
+{
+    jumpCloneID = 0;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT jumpCloneID FROM chrJumpClones WHERE characterID = %u AND locationID = %u", charID, locationID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpCloneAt query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    jumpCloneID = row.GetUInt(0);
+    return true;
+}
+
+bool CharacterDB::GetJumpClone(uint32 jumpCloneID, uint32& charID, uint32& locationID, uint32& locationOwnerID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT characterID, locationID, locationOwnerID FROM chrJumpClones WHERE jumpCloneID = %u", jumpCloneID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpClone query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    charID = row.GetUInt(0);
+    locationID = row.GetUInt(1);
+    locationOwnerID = row.GetUInt(2);
+    return true;
+}
+
+uint32 CharacterDB::CountJumpClones(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM chrJumpClones WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in CountJumpClones query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+uint32 CharacterDB::CountJumpClonesAtLocation(uint32 locationID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM chrJumpClones WHERE locationID = %u", locationID)) {
+        codelog(DATABASE__ERROR, "Error in CountJumpClonesAtLocation query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void CharacterDB::GetJumpCloneIDsAtLocation(uint32 locationID, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT jumpCloneID FROM chrJumpClones WHERE locationID = %u", locationID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpCloneIDsAtLocation query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void CharacterDB::GetJumpCloneImplantTypes(uint32 jumpCloneID, std::vector<uint16>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT typeID FROM chrJumpCloneImplants WHERE jumpCloneID = %u", jumpCloneID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpCloneImplantTypes query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+uint32 CharacterDB::AddJumpClone(uint32 charID, uint32 locationID, uint32 locationOwnerID, const std::vector<uint16>& implants)
+{
+    DBerror err;
+    uint32 jumpCloneID(0);
+    if (!sDatabase.RunQueryLID(err, jumpCloneID,
+        "INSERT INTO chrJumpClones (characterID, locationID, locationOwnerID, installDateTime)"
+        " VALUES (%u, %u, %u, %" PRIi64 ")", charID, locationID, locationOwnerID, (int64)GetFileTimeNow()))
+    {
+        codelog(DATABASE__ERROR, "Error in AddJumpClone query: %s", err.c_str());
+        return 0;
+    }
+    for (auto cur : implants)
+        sDatabase.RunQuery(err, "INSERT IGNORE INTO chrJumpCloneImplants (jumpCloneID, typeID) VALUES (%u, %u)", jumpCloneID, cur);
+    return jumpCloneID;
+}
+
+void CharacterDB::DeleteJumpClone(uint32 jumpCloneID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM chrJumpCloneImplants WHERE jumpCloneID = %u", jumpCloneID);
+    sDatabase.RunQuery(err, "DELETE FROM chrJumpClones WHERE jumpCloneID = %u", jumpCloneID);
+}
+
+/* active boosters (F15) */
+void CharacterDB::AddBooster(uint32 itemID, uint32 charID, int64 expiryTime, uint8 sideEffectMask)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "REPLACE INTO chrBoosters (itemID, characterID, expiryTime, sideEffectMask)"
+        " VALUES (%u, %u, %" PRIi64 ", %u)", itemID, charID, expiryTime, sideEffectMask))
+        codelog(DATABASE__ERROR, "Error in AddBooster query: %s", err.c_str());
+}
+
+void CharacterDB::DeleteBooster(uint32 itemID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM chrBoosters WHERE itemID = %u", itemID);
+}
+
+void CharacterDB::LoadBoosters(uint32 charID, std::map<uint32, std::pair<int64, uint8>>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID, expiryTime, sideEffectMask FROM chrBoosters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in LoadBoosters query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = std::make_pair(row.GetInt64(1), (uint8)row.GetUInt(2));
 }

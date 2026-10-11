@@ -319,6 +319,35 @@ public:
      * @return True on success, false on failure.
      */
     static bool GetBloodlineByCharacterType(uint16 characterTypeID, uint8& bloodlineID);
+
+    /* jump clones (F15).  station clones have locationID = stationID and locationOwnerID 0,
+     *  ship clones locationID = shipID and locationOwnerID = the pilot that installed it.
+     *  clone implants are kept as typeIDs
+     */
+    static int64 GetLastCloneJumpTime(uint32 charID);
+    static void SetLastCloneJumpTime(uint32 charID, int64 time);
+    // rowset jumpCloneID, locationID
+    static PyRep* GetJumpClones(uint32 charID);
+    // rowset jumpCloneID, typeID
+    static PyRep* GetJumpCloneImplants(uint32 charID);
+    // rowset jumpCloneID, ownerID, locationID.  charID 0 = every owner
+    static PyRep* GetJumpClonesAtLocation(uint32 locationID, uint32 charID = 0);
+    static bool GetJumpCloneAt(uint32 charID, uint32 locationID, uint32& jumpCloneID);
+    static bool GetJumpClone(uint32 jumpCloneID, uint32& charID, uint32& locationID, uint32& locationOwnerID);
+    static uint32 CountJumpClones(uint32 charID);
+    static uint32 CountJumpClonesAtLocation(uint32 locationID);
+    // jumpCloneIDs at locationID
+    static void GetJumpCloneIDsAtLocation(uint32 locationID, std::vector<uint32>& into);
+    static void GetJumpCloneImplantTypes(uint32 jumpCloneID, std::vector<uint16>& into);
+    // returns the new jumpCloneID (0 on error)
+    static uint32 AddJumpClone(uint32 charID, uint32 locationID, uint32 locationOwnerID, const std::vector<uint16>& implants);
+    static void DeleteJumpClone(uint32 jumpCloneID);
+
+    /* active boosters (F15).  sideEffectMask bit n = the side effect using boosterEffectChance(n+1) fired */
+    static void AddBooster(uint32 itemID, uint32 charID, int64 expiryTime, uint8 sideEffectMask);
+    static void DeleteBooster(uint32 itemID);
+    // itemID -> (expiryTime, sideEffectMask)
+    static void LoadBoosters(uint32 charID, std::map<uint32, std::pair<int64, uint8>>& into);
 };
 
 #endif

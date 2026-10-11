@@ -164,6 +164,15 @@ boolean can use either 0/1 OR true/false.
         <terminationDelay>1800</terminationDelay> <!-- seconds  30m default -->
         <statMultiplier>1</statMultiplier><!-- stats are multiplied by this (after remap) -->
         <allow3edChar>false</allow3edChar><!-- (dis)allow creating a third character -->
+        <!-- clones, implants and boosters -->
+        <requirePausedTraining>true</requirePausedTraining><!-- bool  Crucible: plugging in implants, consuming boosters and clone jumping need a paused skill queue.  false recalculates the queue instead -->
+        <jumpCloneCost>100000.0</jumpCloneCost><!-- ISK jump clone installation fee.  100k Crucible default (the client shows this constant) -->
+        <jumpCloneMinStanding>8.0</jumpCloneMinStanding><!-- standing (personal or corp) needed with an npc station's owner to install a jump clone there.  -10 disables -->
+        <jumpCloneCooldownHours>24</jumpCloneCooldownHours><!-- hours between clone jumps.  the client always shows a 24h countdown -->
+        <cloneSkillLoss>true</cloneSkillLoss><!-- bool  pilots podded with more SP than their clone saves lose skill points -->
+        <cloneSkillLossPercent>5.0</cloneSkillLossPercent><!-- % of total SP lost, taken from the skill with the most SP -->
+        <cloneSkillLossCap>50.0</cloneSkillLossCap><!-- max % of that skill's SP lost -->
+        <boosterFallbackDurationHours>24</boosterFallbackDurationHours><!-- duration of boosters without a boosterDuration attribute (Cerebral Accelerator) -->
     </character>
 
     <npc>

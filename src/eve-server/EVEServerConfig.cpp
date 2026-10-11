@@ -161,6 +161,14 @@ EVEServerConfig::EVEServerConfig()
     character.terminationDelay = 180 /*s*/;
     character.statMultiplier = 1;
     character.allow3edChar = false;
+    character.requirePausedTraining = true;
+    character.jumpCloneCost = 100000.0;
+    character.jumpCloneMinStanding = 8.0f;
+    character.jumpCloneCooldownHours = 24;
+    character.cloneSkillLoss = true;
+    character.cloneSkillLossPercent = 5.0f;
+    character.cloneSkillLossCap = 50.0f;
+    character.boosterFallbackDurationHours = 24;
 
     // npc
     npc.IdleWander = false;
@@ -670,6 +678,14 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
     AddValueParser( "terminationDelay", character.terminationDelay );
     AddValueParser( "statMultiplier",   character.statMultiplier );
     AddValueParser( "allow3edChar",     character.allow3edChar );
+    AddValueParser( "requirePausedTraining",        character.requirePausedTraining );
+    AddValueParser( "jumpCloneCost",                character.jumpCloneCost );
+    AddValueParser( "jumpCloneMinStanding",         character.jumpCloneMinStanding );
+    AddValueParser( "jumpCloneCooldownHours",       character.jumpCloneCooldownHours );
+    AddValueParser( "cloneSkillLoss",               character.cloneSkillLoss );
+    AddValueParser( "cloneSkillLossPercent",        character.cloneSkillLossPercent );
+    AddValueParser( "cloneSkillLossCap",            character.cloneSkillLossCap );
+    AddValueParser( "boosterFallbackDurationHours", character.boosterFallbackDurationHours );
 
     const bool result = ParseElementChildren( ele );
 
@@ -681,6 +697,14 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
     RemoveParser( "terminationDelay" );
     RemoveParser( "statMultiplier" );
     RemoveParser( "allow3edChar" );
+    RemoveParser( "requirePausedTraining" );
+    RemoveParser( "jumpCloneCost" );
+    RemoveParser( "jumpCloneMinStanding" );
+    RemoveParser( "jumpCloneCooldownHours" );
+    RemoveParser( "cloneSkillLoss" );
+    RemoveParser( "cloneSkillLossPercent" );
+    RemoveParser( "cloneSkillLossCap" );
+    RemoveParser( "boosterFallbackDurationHours" );
 
     return result;
 }

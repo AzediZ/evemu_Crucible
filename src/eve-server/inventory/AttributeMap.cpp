@@ -145,7 +145,8 @@ bool AttributeMap::Save() {
                     data.itemID = mItem.itemID();
                     data.attrID = itr->first;
                     data.type = false;
-                    data.valueInt = itr->second.get_int();
+                    // ability attribs hold implant/booster bonuses while live; the character saves its base value  (F15)
+                    data.valueInt = mItem.GetPersistentAttribute(itr->first, itr->second).get_int();
                     attribs.push_back(data);
                 }
             }

@@ -199,6 +199,22 @@ public:
         double startAurBalance;
         /// Starting security rating for new characters.
         double startSecRating;
+        /// Crucible: plugging in implants, consuming boosters and clone jumping need a paused skill queue  (F15)
+        bool requirePausedTraining;
+        /// jump clone installation fee  (Crucible: 100k, const.costJumpClone)
+        double jumpCloneCost;
+        /// standing needed with an npc station's owner to install a jump clone there.  -10 disables
+        float jumpCloneMinStanding;
+        /// hours between clone jumps
+        uint32 jumpCloneCooldownHours;
+        /// podded pilots with too small a clone lose skill points
+        bool cloneSkillLoss;
+        /// % of total SP lost
+        float cloneSkillLossPercent;
+        /// max % of the affected skill's SP lost
+        float cloneSkillLossCap;
+        /// duration of boosters without a boosterDuration attribute
+        uint32 boosterFallbackDurationHours;
     } character;
 
     // From <NPC>

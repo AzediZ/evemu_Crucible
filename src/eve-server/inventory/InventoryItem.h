@@ -328,6 +328,8 @@ public:
 
     EvilNumber GetAttribute(const uint16 attrID) const                 { return pAttributeMap->GetAttribute(attrID); }
     EvilNumber GetDefaultAttribute(const uint16 attrID) const          { return m_type.GetAttribute(attrID); }
+    // value AttributeMap::Save() writes for attrID.  characters keep implant/booster bonuses out of their saved ability attribs  (F15)
+    virtual EvilNumber GetPersistentAttribute(uint16 attrID, const EvilNumber& live) const { return live; }
 
 protected:
     AttributeMap* pAttributeMap;
