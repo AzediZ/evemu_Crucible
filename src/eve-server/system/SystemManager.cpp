@@ -644,6 +644,8 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
             /** @todo make error msg here */
             deployable->SetAttribute(AttrRadius, deployable->type().radius());     // Can you set this somehow from the type class ?
             DeployableSE* dSE = new DeployableSE(deployable, sysMgr.GetServiceMgr(), &sysMgr, data);
+            // anchored mobile warp disruptors come back with their field
+            dSE->Init();
             _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making DeployableSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
             return dSE;
         } break;

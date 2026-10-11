@@ -42,6 +42,7 @@
 #include "pos/Structure.h"
 #include "standing/StandingMgr.h"
 #include "system/DestinyManager.h"
+#include "system/Interdiction.h"
 #include "station/Station.h"
 #include "system/SystemBubble.h"
 #include "system/SystemEntity.h"
@@ -675,12 +676,157 @@ void ObjectSystemEntity::Killed(Damage& damage)
 }
 
 DeployableSE::DeployableSE(InventoryItemRef self, EVEServiceManager &services, SystemManager *system, const FactionData& data)
-: ObjectSystemEntity(self, services, system)
+: ObjectSystemEntity(self, services, system),
+m_state(DeployState::Unanchored),
+m_stateTimer(0)
 {
     m_warID = data.factionID;
     m_allyID = data.allianceID;
     m_corpID = data.corporationID;
     m_ownerID = data.ownerID;
+}
+
+void DeployableSE::Init()
+{
+    // anchoring/unanchoring in progress isn't saved: it comes back in the state it started from
+    EvilNumber online(EvilZero);
+    m_state = ((m_self->HasAttribute(AttrOnline, online) and (online > EvilZero)) ? DeployState::Anchored : DeployState::Unanchored);
+    if (m_state == DeployState::Anchored)
+        SetField(true);
+}
+
+void DeployableSE::EncodeDestiny( Buffer& into )
+{
+    // DeployableSpaceObject.SetColorBasedOnStatus(): isFree -> green, no sphere.  otherwise red with the warpScrambleRange sphere
+    using namespace Destiny;
+    BallHeader head = BallHeader();
+        head.entityID = m_self->itemID();
+        head.mode = Ball::Mode::RIGID;
+        head.radius = m_radius;
+        head.posX = x();
+        head.posY = y();
+        head.posZ = z();
+        head.flags = (m_state == DeployState::Unanchored ? Ball::Flag::IsFree : 0);
+    into.Append( head );
+    if (m_state == DeployState::Unanchored) {
+        DataSector data = DataSector();
+            data.inertia = 1;
+            data.velX = 0;
+            data.velY = 0;
+            data.velZ = 0;
+            data.maxSpeed = 1;
+            data.speedfraction = 0;
+        into.Append( data );
+    }
+    RIGID_Struct main;
+        main.formationID = 0xFF;
+    into.Append( main );
+
+    _log(SE__DESTINY, "DeployableSE::EncodeDestiny(): %s - id:%lli, mode:%u, flags:0x%X", GetName(), head.entityID, head.mode, head.flags);
+}
+
+void DeployableSE::Process()
+{
+    SystemEntity::Process();
+
+    if (!m_stateTimer.Check(false))
+        return;
+    m_stateTimer.Disable();
+
+    switch (m_state) {
+        case DeployState::Anchoring: {
+            m_state = DeployState::Anchored;
+            m_self->SetAttribute(AttrOnline, EvilOne, false);
+            m_self->SaveAttributes();
+            SetField(true);
+            // client: red, sphere shown
+            SendAnchorFx("effects.AnchorDrop", false, 0);
+            _log(SE__TRACE, "DeployableSE::Process() - %s(%u) anchored.", GetName(), GetID());
+        } break;
+        case DeployState::Unanchoring: {
+            m_state = DeployState::Unanchored;
+            m_self->SetAttribute(AttrOnline, EvilZero, false);
+            m_self->SaveAttributes();
+            SetField(false);
+            SetBallFree sbf;
+                sbf.entityID = m_self->itemID();
+                sbf.is_free = true;
+            PyTuple* up = sbf.Encode();
+            m_destiny->SendSingleDestinyUpdate(&up);   // consumed
+            // client: green, sphere hidden
+            SendAnchorFx("effects.AnchorLift", false, 0);
+            _log(SE__TRACE, "DeployableSE::Process() - %s(%u) unanchored.", GetName(), GetID());
+        } break;
+    }
+}
+
+void DeployableSE::CheckControl(Client* pClient)
+{
+    if ((m_ownerID != pClient->GetCharacterID()) and (m_ownerID != (uint32)pClient->GetCorporationID()))
+        throw CustomError ("You do not own the %s.", GetName());
+    // the client offers these within maxConfigureDistance (5km, surface to surface)
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pShipSE == nullptr) or (pShipSE->SystemMgr() != m_system)
+    or ((pShipSE->GetPosition().distance(GetPosition()) - pShipSE->GetRadius() - GetRadius()) > 5000.0))
+        throw CustomError ("You are too far away from the %s to do that.", GetName());
+}
+
+void DeployableSE::Anchor(Client* pClient)
+{
+    CheckControl(pClient);
+    if (m_state != DeployState::Unanchored)
+        throw CustomError ("The %s is already anchored.", GetName());
+    // mobile warp disruptors only work in 0.0 and w-space
+    if (m_self->type().HasAttribute(AttrDisallowInEmpireSpace)
+    and (m_self->type().GetAttribute(AttrDisallowInEmpireSpace) > EvilZero)
+    and InterdictionMgr::IsRestricted(m_system))
+        throw UserError ("CantInEmpireSpace");
+
+    uint32 delay(m_self->GetAttribute(AttrAnchoringDelay).get_uint32());
+    m_state = DeployState::Anchoring;
+    m_stateTimer.Start(delay > 0 ? delay : 1);
+
+    SetBallFree sbf;
+        sbf.entityID = m_self->itemID();
+        sbf.is_free = false;
+    PyTuple* up = sbf.Encode();
+    m_destiny->SendSingleDestinyUpdate(&up);   // consumed
+    // client: yellow until the stop at the end of the delay
+    SendAnchorFx("effects.AnchorDrop", true, delay);
+    _log(SE__TRACE, "DeployableSE::Anchor() - %s(%u) anchoring for %ums.", GetName(), GetID(), delay);
+}
+
+void DeployableSE::Unanchor(Client* pClient)
+{
+    CheckControl(pClient);
+    if (m_state != DeployState::Anchored)
+        throw CustomError ("The %s is not anchored.", GetName());
+
+    // anchorLift uses anchoringDelay too (durationAttributeID 556).  the field stays up until it's done
+    uint32 delay(m_self->GetAttribute(AttrAnchoringDelay).get_uint32());
+    m_state = DeployState::Unanchoring;
+    m_stateTimer.Start(delay > 0 ? delay : 1);
+    SendAnchorFx("effects.AnchorLift", true, delay);
+    _log(SE__TRACE, "DeployableSE::Unanchor() - %s(%u) unanchoring for %ums.", GetName(), GetID(), delay);
+}
+
+void DeployableSE::SetField(bool on)
+{
+    if (m_self->groupID() != EVEDB::invGroups::Mobile_Warp_Disruptor)
+        return;
+    if (on) {
+        m_system->GetInterdictionMgr()->AddField(this, m_self->GetAttribute(AttrWarpScrambleRange).get_double(),
+                Interdiction::Source::Deployable, m_self->typeID());
+    } else {
+        m_system->GetInterdictionMgr()->RemoveField(GetID());
+    }
+}
+
+void DeployableSE::SendAnchorFx(const char* guid, bool start, uint32 duration)
+{
+    if (m_destiny == nullptr)
+        return;
+    m_destiny->SendSpecialEffect(GetID(), GetID(), m_self->typeID(), 0, 0, guid, false, start, start, (start ? (int32)duration : 0), 0);
 }
 
 // copy c'tor

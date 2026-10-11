@@ -581,6 +581,16 @@ private:
     bool m_invul;
 };
 
+/* anchoring state of a deployable.  only Unanchored and Anchored survive a restart (AttrOnline = 1 when anchored) */
+namespace DeployState {
+    enum : uint8 {
+        Unanchored  = 0,
+        Anchoring   = 1,
+        Anchored    = 2,
+        Unanchoring = 3
+    };
+}
+
 /* Mobile Warp Disruptors */
 class DeployableSE
 : public ObjectSystemEntity
@@ -605,6 +615,25 @@ public:
     /* class type tests. */
     virtual bool                IsSystemEntity()        { return false; }
     virtual bool                IsDeployableSE()        { return true; }
+
+    /* SystemEntity interface */
+    virtual void                Process();              // anchoring timer
+    virtual void                EncodeDestiny( Buffer& into );  // a free (green) ball while unanchored
+
+    /* specific functions handled in this class. */
+    void                        Init();                 // restore the anchored state (and the field) after building the entity
+    void                        Anchor(Client* pClient);        // effect anchorDrop.  throws
+    void                        Unanchor(Client* pClient);      // effect anchorLift.  throws
+    bool                        IsAnchored() const      { return (m_state != DeployState::Unanchored); }
+    uint8                       GetAnchorState() const  { return m_state; }
+
+private:
+    void                        CheckControl(Client* pClient);  // owner (or owner corp) and within configure range.  throws
+    void                        SetField(bool on);
+    void                        SendAnchorFx(const char* guid, bool start, uint32 duration);
+
+    uint8                       m_state;
+    Timer                       m_stateTimer;
 };
 
 

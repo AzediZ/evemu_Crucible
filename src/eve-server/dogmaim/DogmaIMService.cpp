@@ -808,6 +808,16 @@ PyResult DogmaIMBound::Activate(PyCallArgs& call, PyInt* itemID, PyInt* effectID
     */
 
 
+    // mobile warp disruptors (and other deployables)
+    if (pSE->IsDeployableSE()) {
+        if (effectID->value() == anchorDrop) {
+            pSE->GetDeployableSE()->Anchor(call.client);
+        } else if (effectID->value() == anchorLift) {
+            pSE->GetDeployableSE()->Unanchor(call.client);
+        }
+        return PyStatic.NewOne();
+    }
+
     // determine if this pSE is pos or cont.
     //call (de)activate on pSE, pass effectID, send effect to clients (bubblecast) then set timers.
     if (pSE->IsPOSSE()) {

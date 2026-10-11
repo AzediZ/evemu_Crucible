@@ -36,6 +36,7 @@
 #include "ship/ShipService.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
+#include "system/Interdiction.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
@@ -480,7 +481,17 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                 list->AddItem(new PyInt(entity.itemID));
             } break;
             case EVEDB::invCategories::Deployable: {
-                pClient->SendNotifyMsg("Launching Deployables isnt available yet.");
+                // "Launch for Self/Corp".  each one is launched unanchored, the owner anchors it from its menu
+                int32 count(iRef->isSingleton() ? 1 : qty);
+                if (count < 1)
+                    count = 1;
+                for (int32 i = 0; i < count; ++i) {
+                    uint32 launchedID(LaunchDeployable(pClient, iRef, ownerID));
+                    list->AddItem(new PyInt(launchedID));
+                    dropped = true;
+                    if (launchedID == iRef->itemID())
+                        break;      // that was the whole stack
+                }
             } break;
             case EVEDB::invCategories::SovereigntyStructure: {
                 //Code for spawning sovereignty structures
@@ -766,6 +777,13 @@ PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID) {
     if (pSE->IsContainerSE())
         if (pSE->GetContSE()->IsAnchored())
             throw CustomError ("%s is anchored.  Cannot scoop.", pSE->GetName());
+    if (pSE->IsDeployableSE()) {
+        if (pSE->GetDeployableSE()->IsAnchored())
+            throw CustomError ("%s is anchored.  Cannot scoop.", pSE->GetName());
+        uint32 ownerID(pSE->GetOwnerID());
+        if ((ownerID != pClient->GetCharacterID()) and (ownerID != (uint32)pClient->GetCorporationID()))
+            throw CustomError ("You do not own the %s.  Cannot scoop.", pSE->GetName());
+    }
 
     // drones: ours, or abandoned
     if (pSE->IsDroneSE()) {
@@ -890,6 +908,17 @@ PyResult ShipBound::Jettison(PyCallArgs &call, PyList* itemIDs) {
         /** @todo  determine if this is char or corp here */
         data.ownerID = pClient->GetCharacterID();
 
+    // deployables are launched with the same rules as "Launch for Self", never put into a can
+    for (std::vector<int32>::iterator dItr = ints.begin(); dItr != ints.end(); ) {
+        InventoryItemRef dRef(sItemFactory.GetItemRef(*dItr));
+        if ((dRef.get() != nullptr) and (dRef->categoryID() == EVEDB::invCategories::Deployable)) {
+            LaunchDeployable(pClient, dRef, pClient->GetCharacterID());
+            dItr = ints.erase(dItr);
+        } else {
+            ++dItr;
+        }
+    }
+
     //args contains id's of items to jettison
     std::vector<int32>::iterator itr = ints.begin();
     // loop thru items to see if there is a container in this list.
@@ -926,22 +955,6 @@ PyResult ShipBound::Jettison(PyCallArgs &call, PyList* itemIDs) {
                 sSE->SetPosition(location);
                 sRef->SaveItem();
                 pSysMgr->AddEntity(sSE);
-                pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
-                itr = ints.erase(itr);
-            } break;
-            case EVEDB::invCategories::Deployable: {
-                cRef = sItemFactory.GetItemRef(*itr);
-                if (cRef.get() == nullptr)
-                    throw CustomError ("Unable to spawn Deployable item of type %u.", cRef->typeID());
-
-                cRef->Move(pClient->GetLocationID(), flagNone, true);
-                //flagUnanchored: for some DUMB reason, this flag, 1023 yields a PyNone when notifications
-                // are created inside InventoryItem::Move() from passing it into a PyInt() constructor...WTF?
-                DeployableSE* dSE = new DeployableSE(cRef, this->GetServiceManager(), pSysMgr, data);
-                location.MakeRandomPointOnSphere(1500.0 + cRef->type().radius());
-                dSE->SetPosition(location);
-                cRef->SaveItem();
-                pSysMgr->AddEntity(dSE);
                 pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
                 itr = ints.erase(itr);
             } break;
@@ -1074,6 +1087,83 @@ PyResult ShipBound::Jettison(PyCallArgs &call, PyList* itemIDs) {
     // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
     //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
     return this->GetOID();
+}
+
+uint32 ShipBound::LaunchDeployable(Client* pClient, InventoryItemRef iRef, uint32 ownerID)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pSystem == nullptr) or (pShipSE == nullptr) or !pClient->IsInSpace())
+        throw CustomError ("You must be in space to launch the %s.", iRef->name());
+    if (iRef->locationID() != pShipSE->GetID())
+        throw CustomError ("The %s is not in your ship.", iRef->name());
+
+    // mobile warp disruptors only work in 0.0 and w-space
+    if (iRef->type().HasAttribute(AttrDisallowInEmpireSpace)
+    and (iRef->type().GetAttribute(AttrDisallowInEmpireSpace) > EvilZero)
+    and InterdictionMgr::IsRestricted(pSystem))
+        throw UserError ("CantInEmpireSpace");
+
+    // required skills (anchoring, propulsion jamming...)
+    CharacterRef cRef(pClient->GetChar());
+    static const uint16 skills[2][2] = { { AttrRequiredSkill1, AttrRequiredSkill1Level }, { AttrRequiredSkill2, AttrRequiredSkill2Level } };
+    for (uint8 i = 0; i < 2; ++i) {
+        if (!iRef->type().HasAttribute(skills[i][0]))
+            continue;
+        uint16 skillID(iRef->type().GetAttribute(skills[i][0]).get_uint32());
+        uint8 level(iRef->type().HasAttribute(skills[i][1]) ? iRef->type().GetAttribute(skills[i][1]).get_uint32() : 1);
+        if ((skillID > 0) and !cRef->HasSkillTrainedToLevel(skillID, level))
+            throw CustomError ("You don't have the skills required to launch the %s.", iRef->name());
+    }
+
+    // one per launch.  the last one is the stack itself
+    InventoryItemRef dRef(iRef);
+    if (!iRef->isSingleton() and (iRef->quantity() > 1)) {
+        dRef = iRef->Split(1);
+        if (dRef.get() == nullptr)
+            throw CustomError ("Unable to launch the %s.", iRef->name());
+    }
+
+    // launched for the corp only when the client asks for our corp
+    if (ownerID != (uint32)pClient->GetCorporationID())
+        ownerID = pClient->GetCharacterID();
+
+    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+        entity.ownerID = ownerID;
+        entity.factionID = pClient->GetWarFactionID();
+        entity.allianceID = pClient->GetAllianceID();
+        entity.corporationID = pClient->GetCorporationID();
+        entity.itemID = dRef->itemID();
+        entity.itemName = dRef->itemName();
+        entity.typeID = dRef->typeID();
+        entity.groupID = dRef->groupID();
+        entity.categoryID = dRef->categoryID();
+
+    GPoint location(pShipSE->GetPosition());
+    location.MakeRandomPointOnSphereLayer(500 + pShipSE->GetRadius(), 1500 + pShipSE->GetRadius());
+
+    // Move item from cargo bay to space: (and send OnItemChange packet)
+    dRef->Move(pClient->GetLocationID(), flagNone, true);
+    dRef->SetPosition(location);
+    dRef->ChangeOwner(ownerID);
+    dRef->ChangeSingleton(true);
+    // launched unanchored, at full shields
+    dRef->SetAttribute(AttrOnline, EvilZero, false);
+    dRef->SetAttribute(AttrShieldCharge, dRef->GetAttribute(AttrShieldCapacity), false);
+    dRef->SaveItem();
+    entity.position = location;
+
+    SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
+    if (pSE == nullptr) {
+        //couldnt create entity.  move item back to the cargo bay
+        dRef->Donate(pClient->GetCharacterID(), pShipSE->GetID(), flagCargoHold);
+        throw CustomError ("Unable to launch the %s.", iRef->name());
+    }
+
+    pSystem->AddEntity(pSE);
+    pShipSE->DestinyMgr()->SendJettisonPacket();
+    _log(ITEM__TRACE, "ShipBound::LaunchDeployable() - %s launched %s(%u) for %u", pClient->GetName(), dRef->name(), dRef->itemID(), ownerID);
+    return dRef->itemID();
 }
 
 PyResult ShipBound::AssembleShip(PyCallArgs& args, PyInt* shipID) {

@@ -74,6 +74,9 @@ protected:
     PyResult StoreVessel(PyCallArgs& call, PyInt* destID);
     PyResult SelfDestruct(PyCallArgs& call, PyInt* shipID);
 
+    /* launches one deployable (mobile warp disruptor) from the pilot's ship into space, unanchored.  returns the launched itemID.  throws */
+    static uint32 LaunchDeployable(Client* pClient, InventoryItemRef iRef, uint32 ownerID);
+
 private:
     ShipItem* pShip;
 };
