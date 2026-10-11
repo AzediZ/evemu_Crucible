@@ -94,8 +94,7 @@ m_stateTimer(0),
 m_returnTimer(0),
 m_scanStrength(0),
 m_scanDeviation(0),
-m_ring(false),
-m_sphere(false),
+m_rangeFactor(2),
 m_scanShips(false)
 {
     m_state = Probe::State::Inactive;
@@ -122,12 +121,9 @@ m_rangeStep(0),
 m_scanRange(0),
 m_stateTimer(0),
 m_returnTimer(0),
-m_rangeFactor(0),
+m_rangeFactor(2),
 m_scanStrength(0),
 m_scanDeviation(0),
-m_baseScanRange(0),
-m_ring(false),
-m_sphere(false),
 m_scanShips(false)
 {
     m_warID = m_client->GetWarFactionID();
@@ -159,62 +155,81 @@ m_scanShips(false)
 
 void ProbeSE::CalcStats()
 {
-    // set base str, deviation and range
-    m_rangeFactor = m_self->GetAttribute(AttrRangeFactor).get_uint32();
-    m_scanStrength = m_self->GetAttribute(AttrBaseSensorStrength).get_float();
-    m_scanDeviation = m_self->GetAttribute(AttrBaseMaxScanDeviation).get_float();
-    m_baseScanRange = m_self->GetAttribute(AttrBaseScanRange).get_float() * (ONE_AU_IN_METERS /100);
+    /* Crucible probe strength and deviation.  every bonus is a PostPercent on the probe's baseSensorStrength (effect 4162
+     *  and the hull/subsystem effects) or baseMaxScanDeviation (effect 4161), all from the data:
+     *    skills:  Astrometric Rangefinding +10%/lvl strength, Astrometric Pinpointing -10%/lvl deviation
+     *    launcher:  scanStrengthBonus (Core/Expanded II +5, Sisters +10)
+     *    rigs:  Gravity Capacitor Upgrade +10/+15
+     *    hull:  Magnate/Heron/Imicus/Probe +5%/frigate lvl, covert ops +10%/lvl, T3 electronic subsystems +x%/lvl
+     *  the probe item is fresh (no dogma), so this is done here from type values.  only one hull bonus applies per hull
+     */
+    Character* pChar(m_client->GetChar().get());
+    m_rangeFactor = m_self->type().GetAttribute(AttrRangeFactor).get_float();
+    if (m_rangeFactor < 1)
+        m_rangeFactor = 2;
+    double strength(m_self->type().GetAttribute(AttrBaseSensorStrength).get_double());
+    double deviation(m_self->type().GetAttribute(AttrBaseMaxScanDeviation).get_double());
 
-    // i think we may have to do probe modifiers here....they are not being done thru fx system
-    Character* pChar = m_client->GetChar().get();
     // skills
-    m_scanStrength *= (1 + (0.1 * pChar->GetSkillLevel(EvESkill::AstrometricRangefinding)));   // +10% strength per level
-    // skill bonuses unique to EVEmu
-    //m_scanStrength *= (1 + (0.01 * pChar->GetSkillLevel(EvESkill::Astrometrics)));             // +1% strength per level
-    //m_scanStrength *= (1 + (0.01 * pChar->GetSkillLevel(EvESkill::SignatureAnalysis)));        // +1% strength per level
-    //m_scanDeviation *= (1 - (0.01 * pChar->GetSkillLevel(EvESkill::Astrometrics)));            // -1% deviation per level
-    //m_scanDeviation *= (1 - (0.01 * pChar->GetSkillLevel(EvESkill::SensorLinking)));           // -1% deviation per level
-
-    // ship
-    switch (m_shipRef->typeID()) {
-        //t1
-        case 29248: { /* Magnate */
-            m_scanStrength *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::AmarrFrigate)))); // +5% strength per level
-        } break;
-        case 605: { /* Heron */
-            m_scanStrength *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::CaldariFrigate)))); // +5% strength per level
-        } break;
-        case 607: { /* Imicus */
-            m_scanStrength *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::GallenteFrigate)))); // +5% strength per level
-        } break;
-        case 586: { /* Probe */
-            m_scanStrength *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::MinmatarFrigate)))); // +5% strength per level
-        } break;
-        //t2 - Anathema, Buzzard, Cheetah, Helios
-        case 11188:  /* Anathema */
-        case 11192:  /* Buzzard */
-        case 11172:  /* Helios */
-        case 11182: { /* Cheetah */
-            m_scanStrength *= (1 + (0.1f * (pChar->GetSkillLevel(EvESkill::CovertOps)))); // +10% strength per level
-        } break;
-        //t3
-        // just test for subsystem here... typeIDs 30042, 30052, 30062, 30072
-        // use same general code as GetRigScanBonus() in MM below...
+    std::vector<InventoryItemRef> skills;
+    pChar->GetSkillsList(skills);
+    for (auto cur : skills) {
+        uint8 level(cur->GetAttribute(AttrSkillLevel).get_uint32());
+        if (level < 1)
+            continue;
+        if (cur->type().HasEffect(4162))    // baseSensorStrengthModifierRequiringAstrometrics
+            strength *= (1.0 + 0.01 * cur->type().GetAttribute(AttrScanStrengthBonus).get_double() * level);
+        if (cur->type().HasEffect(4161))    // baseMaxScanDeviationModifierRequiringAstrometrics
+            deviation *= (1.0 + 0.01 * cur->type().GetAttribute(AttrMaxScanDeviationModifier).get_double() * level);
     }
 
-    // modules (launchers - 5 or 10)
-    if (m_moduleRef->HasAttribute(AttrScanStrengthBonus))
-        m_scanStrength *= (1 + (0.01f * m_moduleRef->GetAttribute(AttrScanStrengthBonus).get_float()));
+    // launcher
+    if ((m_moduleRef.get() != nullptr) and m_moduleRef->type().HasEffect(4162))
+        strength *= (1.0 + 0.01 * m_moduleRef->type().GetAttribute(AttrScanStrengthBonus).get_double());
 
-    // rigs (10 or 15)
-    m_scanStrength *= (1 + m_shipRef->GetModuleManager()->GetRigScanBonus());
+    // rigs and subsystems
+    std::vector<InventoryItemRef> modules;
+    m_shipRef->GetModuleManager()->GetModuleListOfRefsAsc(modules);
+    for (auto cur : modules) {
+        if ((cur->flag() >= flagRigSlot0) and (cur->flag() <= flagRigSlot7)) {
+            if (cur->type().HasEffect(4162))
+                strength *= (1.0 + 0.01 * cur->type().GetAttribute(AttrScanStrengthBonus).get_double());
+            if (cur->type().HasEffect(4161))
+                deviation *= (1.0 + 0.01 * cur->type().GetAttribute(AttrMaxScanDeviationModifier).get_double());
+        } else if ((cur->flag() >= flagSubSystem0) and (cur->flag() <= flagSubSystem7)) {
+            struct SubBonus { uint16 effectID; uint16 attr; uint16 skill; };
+            static const SubBonus subs[] = {
+                { 4389, AttrSubsystemBonusAmarrElectronic,     EvESkill::AmarrElectronicSystems },
+                { 4390, AttrSubsystemBonusCaldariElectronic,   EvESkill::CaldariElectronicSystems },
+                { 4391, AttrSubsystemBonusGallenteElectronic,  EvESkill::GallenteElectronicSystems },
+                { 4392, AttrSubsystemBonusMinmatarElectronic,  EvESkill::MinmatarElectronicSystems }
+            };
+            for (auto& sub : subs)
+                if (cur->type().HasEffect(sub.effectID))
+                    strength *= (1.0 + 0.01 * cur->type().GetAttribute(sub.attr).get_double() * pChar->GetSkillLevel(sub.skill));
+        }
+    }
 
-    // implants (virtue - 1-5, hardwire 2,6,10)
-    // skill (AstrometricRangefinding @ 10%/lvl)  <-- this doesnt get set on character object - checked above...
-    // this is just a placeholder.  not sure if this will be how it works yet
-    //  also, the bonus will be determined by the implant fx, which would be set in attrib.
-    if (pChar->HasAttribute(AttrScanStrengthBonus))
-        m_scanStrength *= (1 + (0.01f * pChar->GetAttribute(AttrScanStrengthBonus).get_float()));
+    // hull
+    struct HullBonus { uint16 effectID; uint16 attr; uint16 skill; };
+    static const HullBonus hulls[] = {
+        { 4164, AttrShipBonusAF,          EvESkill::AmarrFrigate },        // Magnate
+        { 4165, AttrShipBonus2CF,         EvESkill::CaldariFrigate },      // Heron
+        { 4166, AttrShipBonus2MF,         EvESkill::MinmatarFrigate },     // Probe
+        { 4167, AttrShipBonus2GF,         EvESkill::GallenteFrigate },     // Imicus
+        { 4163, AttrEliteBonusCoverOps2,  EvESkill::CovertOps },           // covert ops
+        { 4168, AttrEliteBonusCoverOps2,  EvESkill::CovertOps }
+    };
+    const ItemType& sType(m_shipRef->type());
+    for (auto& hull : hulls)
+        if (sType.HasEffect(hull.effectID))
+            strength *= (1.0 + 0.01 * sType.GetAttribute(hull.attr).get_double() * pChar->GetSkillLevel(hull.skill));
+
+    /** @todo F15 (implants):  implants with effect 4162/4161 (Virtue set, PPH/PPF hardwirings) multiply here like the
+     *   rigs, once Character exposes its fitted implants.  the Virtue set bonus is F15's */
+
+    m_scanStrength = strength * sConfig.exploring.ProbeStrengthScale;
+    m_scanDeviation = deviation;
 }
 
     /*
@@ -318,8 +333,7 @@ void ProbeSE::SetRangeStep(uint8 step)
     if (step > 8)       // const.scanProbeNumberOfRangeSteps
         step = 8;
     m_rangeStep = step;
-    m_scanRange = m_self->type().GetAttribute(AttrBaseScanRange).get_float()
-                * std::pow(m_self->type().GetAttribute(AttrRangeFactor).get_float(), m_rangeStep - 1) * ONE_AU_IN_METERS;
+    m_scanRange = m_self->type().GetAttribute(AttrBaseScanRange).get_float() * std::pow(m_rangeFactor, m_rangeStep - 1) * ONE_AU_IN_METERS;
 }
 
 void ProbeSE::UpdateProbe(ProbeData& data)
@@ -549,30 +563,10 @@ const char* ProbeSE::GetStateName(uint8 state)
     return "Undefined";
 }
 
-float ProbeSE::GetDeviation()
+float ProbeSE::GetEffectiveStrength()
 {
-    // % of current range based on bonuses
-    return m_scanRange *m_scanDeviation;
-}
-
-float ProbeSE::GetScanStrength()
-{
-    // factor of range
-    return m_scanStrength /pow(2, (m_rangeStep -1));
-}
-
-float ProbeSE::GetRangeModifier(float dist) {
-    // e^-((targ rang / max range)^2)
-    float tmp = pow(dist/(m_baseScanRange *m_rangeStep), m_rangeFactor);
-    return log(tmp);
-}
-
-//SignatureFocusing?
-bool ProbeSE::HasMaxSkill() {
-    if (m_client->GetChar()->HasSkillTrainedToLevel(EvESkill::SensorLinking, 5))
-        if (m_client->GetChar()->HasSkillTrainedToLevel(EvESkill::AstrometricAcquisition, 5))
-            return true;
-        return false;
+    // strength halves each time the range doubles
+    return m_scanStrength / std::pow(m_rangeFactor, (m_rangeStep > 0 ? m_rangeStep - 1 : 0));
 }
 
 PyDict* ProbeSE::MakeSlimItem()

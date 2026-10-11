@@ -127,29 +127,17 @@ public:
     uint16 GetMoveTime()                                { return m_stateTimer.GetRemainingTime(); }
     int64 GetExpiryTime()                               { return m_expiry; }
 
-    // return deviation in meters based on current probe settings
-    float GetDeviation();
-    // return probe scan range setting in km
+    // max deviation in meters at the current range
+    float GetMaxDeviation()                             { return m_scanRange * m_scanDeviation; }
+    // probe scan range in meters
     float GetScanRange()                                { return m_scanRange; }
-    float GetRangeModifier(float dist);
-
-    // total probe scan strength, based on data modified by char skills, ship, launcher, and range
-    float GetScanStrength();
+    // probe strength (skills, launcher, rigs, hull) at the current range:  halves each time the range doubles
+    float GetEffectiveStrength();
 
     GPoint GetDestination()                             { return m_destination; }
     const char* GetStateName(uint8 state);
 
     bool CanScanShips()                                 { return m_scanShips; }
-
-    bool IsRing()                                       { return m_ring; }
-    bool IsSphere()                                     { return m_sphere; }
-    void SetRing(bool set=false)                        { m_ring = set; }
-    void SetSphere(bool set=false)                      { m_sphere = set; }
-
-
-    // this will allow players with Sensor Linking L5 and Signal Acquisition L5
-    //  to add another set of probe results to the signal being scanned (max of 4)
-    bool HasMaxSkill();
 
 private:
     // strength and deviation from the probe, skills, launcher, ship and fittings
@@ -170,21 +158,17 @@ private:
     InventoryItemRef m_moduleRef;
 
     bool m_scanShips;
-    bool m_ring;                // used to send additional data to client for partial hit
-    bool m_sphere;              // used to send additional data to client for partial hit
 
     uint8 m_state;
     uint8 m_rangeStep;          // range 'click'.  values are 1 to 8.  sent from client
-    uint8 m_rangeFactor;        // exponent for range checks
-
-    uint32 m_baseScanRange;     // lowest scan radius, in km
 
     int64 m_expiry;             // probe lifetime as filetime
 
     float m_secStatus;
-    float m_scanRange;          // in km.  sent from client
-    float m_scanStrength;       // scan str in decimal.  unsure of uom
-    float m_scanDeviation;      // max scan deviation for this probe, in % where 1.0 = 100
+    float m_rangeFactor;        // range multiplier per step (2)
+    float m_scanRange;          // in m, from the range step
+    float m_scanStrength;       // strength at the smallest range (baseSensorStrength with all bonuses)
+    float m_scanDeviation;      // max scan deviation as a fraction of the scan range (baseMaxScanDeviation with bonuses)
 
 };
 

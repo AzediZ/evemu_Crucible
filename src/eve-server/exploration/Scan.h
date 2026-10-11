@@ -11,16 +11,25 @@
 #ifndef EVEMU_SCANING_SCAN_H_
 #define EVEMU_SCANING_SCAN_H_
 
+#include <set>
 #include "packets/Scan.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 
+class ProbeSE;
+
+// one probe's share of a signal
+struct ProbeHit {
+    ProbeSE* probe;
+    float distance;         // m, probe to the signal's true position
+    float signal;           // % (after the asymptote)
+};
+
+// a signal as the active probes see it
 struct SignalData {
-    float distance;
-    float certainty;
-    float deviation;
-    CosmicSignature sig;
-    PyRep* probes;
-    PyRep* probePos;
+    float certainty;        // 0..1+ (1 = warpable)
+    float deviation;        // m
+    GPoint truePos;         // live position (ships move)
+    std::vector<ProbeHit> hits;     // strongest first, at most 8
 };
 
 
@@ -45,6 +54,11 @@ public:
     void ShipScanResult();
     void ProbeScanResult();
 
+    // foo.Vector3 for the client
+    static PyRep* MakeVector3(const GPoint& pos);
+    // f(x):  x below 25%, then diminishing returns towards 75% (one probe never sees more than that)
+    static float Asymptote(float x);
+
     void SystemScanStarted(uint32 duration);
 
     // probe methods
@@ -56,19 +70,21 @@ public:
     // a scan (on-board or probes) is running
     bool IsScanning()                                   { return (m_busy or m_probeScan or !m_activeProbeMap.empty()); }
 
-    bool GetProbeDataForSig(SignalData& data);
-    // this will determine signal strength, deviation, and other aspects based on signal type and probe data
-    void GetSignalData(SignalData& data, std::vector<ProbeSE*>& probeVec);
-
-protected:
-    void ScanStart();
-    void SurveyScan();
+    // what the active probes get from this signal.  false if no probe sees it
+    bool CalcSignal(const CosmicSignature& sig, SignalData& data);
+    // sphere (1 probe), circle (2), two points (3) or a point (4+) results for this signal
+    void AddResultGeometry(const CosmicSignature& sig, SignalData& data, PyList* results);
+    // cached (perfect) sig/anom results the client should drop because the site is gone
+    PyList* GetAbsentTargets();
 
 private:
     ManagerDB* m_db;
     Client* m_client;           // the system is always m_client->SystemMgr() (never cached; we live across jumps)
 
-    void CalcProbeAngles(GPoint& sigPos, std::vector<ProbeSE*>& probeVec, std::map<float, std::pair<ProbeSE*, ProbeSE*>>& angleMap);
+    // a sig/anom result the client keeps (certainty >= 1 with a point)
+    void CacheResult(const CosmicSignature& sig, float certainty);
+
+    std::set<std::string> m_cachedIDs;          // sig/anom ids the client has cached
 
     bool m_busy;                // RequestScans until its results are sent
     bool m_probeScan;

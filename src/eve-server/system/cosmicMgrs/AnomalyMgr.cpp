@@ -244,7 +244,7 @@ void AnomalyMgr::LoadAnomalies() {
         sig.sigTypeID = row.GetInt(5);
         sig.sigGroupID = row.GetInt(6);
         sig.scanGroupID = row.GetInt(7);
-        sig.sigStrength = 10.0f;
+        sig.sigStrength = 0.1f;     // wormholes (1/10, as WormholeMgr makes them) are the only rows kept
         sig.scanAttributeID = row.GetInt(8);
         sig.position.x = row.GetDouble(9);
         sig.position.y = row.GetDouble(10);
@@ -684,11 +684,9 @@ void AnomalyMgr::AddSignal(SystemEntity* pSE, uint32 id/*0*/)
         case EVEDB::invCategories::Entity:
         case EVEDB::invCategories::Celestial:       //wrecks
         default:  {
-            sig.sigTypeID = EVEDB::invTypes::CosmicAnomaly;
-            sig.sigGroupID = EVEDB::invGroups::Cosmic_Anomaly;
-            sig.scanGroupID = Scanning::Group::Anomaly;
-            sig.scanAttributeID = AttrScanAllStrength;  // Unknown
-            //sig.sigStrength = 1.0;      // this will need to be adjusted for entity/celestial types
+            // wrecks, cans and other objects aren't scanner results (they used to show as cosmic anomalies).
+            //  real anomalies come from CreateAnomaly()/LoadAnomalies()
+            return;
         } break;
     }
 

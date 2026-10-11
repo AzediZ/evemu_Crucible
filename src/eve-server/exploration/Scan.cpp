@@ -244,31 +244,21 @@ void Scan::SystemScanStarted(uint32 duration)
 {
     _log(SCAN__TRACE, "Scan::SystemScanStarted()  for %s in system %u", m_client->GetName(), m_client->GetSystemID());
 
-    GPoint pos(NULL_ORIGIN);
     PyDict* probeDict = new PyDict();
     for (auto cur : m_activeProbeMap) {
         // probe data here...
         ScanProbesDict spd;
             spd.expiry = cur.second->GetExpiryTime();
-            spd.maxDeviation = cur.second->GetDeviation();
+            spd.maxDeviation = cur.second->GetMaxDeviation();
             spd.probeID = cur.first;
             spd.state = cur.second->GetState();
             spd.rangeStep = cur.second->GetRangeStep();
             spd.scanRange = cur.second->GetScanRange();
-            spd.scanStrength = cur.second->GetScanStrength();
+            spd.scanStrength = cur.second->GetEffectiveStrength();
             spd.typeID = cur.second->GetSelf()->typeID();
-        pos = cur.second->GetPosition();
-        ScanResultPos srp;
-            srp.x = pos.x;
-            srp.y = pos.y;
-            srp.z = pos.z;
-        PyToken* token = new PyToken("foo.Vector3");
-        PyTuple* oed_tuple = new PyTuple(2);
-            oed_tuple->SetItem(0, token);
-            oed_tuple->SetItem(1, srp.Encode());
-        spd.pos = new PyObjectEx(false, oed_tuple);  // oed goes here
-        PyIncRef(spd.pos);
-        spd.destination = spd.pos;
+            spd.pos = MakeVector3(cur.second->GetPosition());
+            PyIncRef(spd.pos);
+            spd.destination = spd.pos;
         probeDict->SetItem(new PyInt(cur.first), spd.Encode());
     }
 
@@ -281,10 +271,52 @@ void Scan::SystemScanStarted(uint32 duration)
     m_client->SendNotification("OnSystemScanStarted", "charid", &ev, false);
 }
 
+PyRep* Scan::MakeVector3(const GPoint& pos)
+{
+    ScanResultPos srp;
+        srp.x = pos.x;
+        srp.y = pos.y;
+        srp.z = pos.z;
+    PyTuple* oed_tuple = new PyTuple(2);
+        oed_tuple->SetItem(0, new PyToken("foo.Vector3"));
+        oed_tuple->SetItem(1, srp.Encode());
+    return new PyObjectEx(false, oed_tuple);  // oed goes here
+}
+
+void Scan::CacheResult(const CosmicSignature& sig, float certainty)
+{
+    // the client keeps sig/anom results with a point at >= 100% until they are listed in absentTargets
+    if ((certainty < 1.0f) or !((sig.scanGroupID == Scanning::Group::Signature) or (sig.scanGroupID == Scanning::Group::Anomaly)))
+        return;
+    m_cachedIDs.insert(sig.sigID);
+}
+
+PyList* Scan::GetAbsentTargets()
+{
+    PyList* absent = new PyList();
+    if (m_cachedIDs.empty())
+        return absent;
+    std::vector<CosmicSignature> sigs;
+    m_client->SystemMgr()->GetAnomMgr()->GetAnomalyList(sigs);
+    m_client->SystemMgr()->GetAnomMgr()->GetSignatureList(sigs);
+    std::set<std::string> current;
+    for (auto& cur : sigs)
+        current.insert(cur.sigID);
+    std::set<std::string>::iterator itr = m_cachedIDs.begin();
+    while (itr != m_cachedIDs.end()) {
+        if (current.find(*itr) == current.end()) {
+            absent->AddItem(new PyString(*itr));
+            itr = m_cachedIDs.erase(itr);
+        } else {
+            ++itr;
+        }
+    }
+    return absent;
+}
+
 void Scan::ShipScanResult() {
     //  WORKING CODE...DONT FUCK WITH THIS!!  -allan 11Dec15
-    /** @todo  see client code to verify what it expects, and what it can calculate */
-    // client scan data found in EVE_Scanning.h
+    // the on-board scanner finds cosmic anomalies only (ScnShipScannerDeadspaceOnly)
     std::vector<CosmicSignature> anom;
     if (m_client->IsShowall()) {
         m_client->SystemMgr()->GetAllEntities(anom);
@@ -295,7 +327,6 @@ void Scan::ShipScanResult() {
     }
 
     PyList* resultList = new PyList();
-    // NOTE. cannot scan pos, wrecks, ships, mission sites, or escalations.  they DO have sigIDs, and can get to type (25%), but no farther
     for (auto anoms : anom) {
         SystemScanResult ssr;
             ssr.typeID = anoms.sigTypeID;
@@ -309,22 +340,16 @@ void Scan::ShipScanResult() {
             ssr.probeID = new PyInt(m_client->GetShipID());
             ssr.certainty = anoms.sigStrength;
             ssr.pos = PyStatic.NewNone();
-        ScanResultPos ssr_oed;
-            ssr_oed.x = anoms.position.x;
-            ssr_oed.y = anoms.position.y;
-            ssr_oed.z = anoms.position.z;
-        PyTuple* oed_tuple = new PyTuple(2);
-            oed_tuple->SetItem(0, new PyToken("foo.Vector3"));
-            oed_tuple->SetItem(1, ssr_oed.Encode());
-        ssr.data = new PyObjectEx(false, oed_tuple);  // oed goes here
+            ssr.data = MakeVector3(anoms.position);
         resultList->AddItem(ssr.Encode());
+        CacheResult(anoms, anoms.sigStrength);
     }
 
     OnSystemScanStopped osss;
         osss.systemScanResult = resultList;
-        // probeDict and absentTargets are both empty when using ship sensors to scan.
+        // probeDict is empty when using ship sensors to scan.
         osss.scanProbesDict = new PyDict();
-        osss.absentTargets = new PyList();
+        osss.absentTargets = GetAbsentTargets();
     PyTuple* ev = osss.Encode();
     ev->Dump(SCAN__RSPDUMP, "ssr-    ");
     m_client->SendNotification("OnSystemScanStopped", "charid", &ev);
@@ -332,13 +357,12 @@ void Scan::ShipScanResult() {
 
 void Scan::ProbeScanResult()
 {
-    // this will use outline of above code, but be MUCH more complicated...
     _log(SCAN__TRACE, "Scan::ProbeScanResult()  for %s in system %u", m_client->GetName(), m_client->GetSystemID());
 
     PyList* resultList = new PyList();
     std::vector<CosmicSignature> sig, anom;
 
-    // are anomalies shown in probe scan results?  config option?
+    // anomalies need no probes.  they are always found, at 100%
     m_client->SystemMgr()->GetAnomMgr()->GetAnomalyList(anom);
     for (auto anoms : anom) {
         SystemScanResult ssr;
@@ -352,503 +376,280 @@ void Scan::ProbeScanResult()
             ssr.degraded = false;
             ssr.probeID = new PyInt(m_client->GetShipID());
             ssr.certainty = anoms.sigStrength;
-            ssr.pos = new PyToken("foo.Vector3"); //PyStatic.NewNone();
-            /*  this is ship position first, then anomaly position
-             *    [PyString "data"]
-             *    [PyObjectEx Type2]
-             *      [PyTuple 2 items]
-             *        [PyTuple 1 items]
-             *          [PyObjectEx Type2]
-             *            [PyTuple 2 items]
-             *              [PyTuple 1 items]
-             *                [PyToken foo.Vector3]
-             *              [PyTuple 3 items]
-             *                [PyFloat 924428329391.783]
-             *                [PyFloat 8194006649.63061]
-             *                [PyFloat 165918840569.438]
-             *        [PyTuple 3 items]
-             *          [PyFloat 1231197245226]
-             *          [PyFloat -146772910080]
-             *          [PyFloat 111531171840]
-             */
-        ScanResultPos ssr_oed;
-            ssr_oed.x = anoms.position.x;
-            ssr_oed.y = anoms.position.y;
-            ssr_oed.z = anoms.position.z;
-        PyToken* token = new PyToken("foo.Vector3");
-        PyTuple* oed_tuple = new PyTuple(2);
-            oed_tuple->SetItem(0, token);
-            oed_tuple->SetItem(1, ssr_oed.Encode());
-        ssr.data = new PyObjectEx(false, oed_tuple);  // oed goes here
+            ssr.pos = PyStatic.NewNone();
+            ssr.data = MakeVector3(anoms.position);
         resultList->AddItem(ssr.Encode());
+        CacheResult(anoms, anoms.sigStrength);
     }
 
+    // signatures, ships, drones/probes and structures
     m_client->SystemMgr()->GetAnomMgr()->GetSignatureList(sig);
-    for (auto sigs : sig) {
+    for (auto& sigs : sig) {
         SignalData data = SignalData();
-            data.sig = sigs;
-            data.probes = nullptr;
-            data.probePos = nullptr;
-        if (GetProbeDataForSig(data)) {
-            SystemScanResult ssr;
-                ssr.id = sigs.sigID;
-                ssr.dungeonName = sigs.sigName;
-                ssr.typeID = sigs.sigTypeID;
-                ssr.groupID = sigs.sigGroupID;
-                ssr.scanGroupID = sigs.scanGroupID;
-                ssr.strengthAttributeID = sigs.scanAttributeID;
-                ssr.degraded = false;
-                ssr.deviation = data.deviation; //deviation is the distance between the scan result shown on the map and the actual location of your target.
-                ssr.certainty = data.certainty; // this is listed as "signal strength" in scan window
-                ssr.probeID = data.probes;
-                ssr.pos = data.probePos;
-            ScanResultPos ssr_oed;
-                ssr_oed.x = data.sig.position.x;
-                ssr_oed.y = data.sig.position.y;
-                ssr_oed.z = data.sig.position.z;
-            PyToken* token = new PyToken("foo.Vector3");
-            PyTuple* oed_tuple = new PyTuple(2);
-                oed_tuple->SetItem(0, token);
-                oed_tuple->SetItem(1, ssr_oed.Encode());
-            ssr.data = new PyObjectEx(false, oed_tuple);  // oed goes here
-            resultList->AddItem(ssr.Encode());
-        }
+        if (!CalcSignal(sigs, data))
+            continue;
+        AddResultGeometry(sigs, data, resultList);
     }
 
-    GPoint pos(NULL_ORIGIN);
     PyDict* probeDict = new PyDict();
     for (auto cur : m_activeProbeMap) {
-        // probe data here...
         ScanProbesDict spd;
-        spd.expiry = cur.second->GetExpiryTime();
-        spd.maxDeviation = cur.second->GetDeviation();
-        pos = cur.second->GetPosition();
-        ScanResultPos ssr_oed;
-            ssr_oed.x = pos.x;
-            ssr_oed.y = pos.y;
-            ssr_oed.z = pos.z;
-        PyToken* token = new PyToken("foo.Vector3");
-        PyTuple* oed_tuple = new PyTuple(2);
-            oed_tuple->SetItem(0, token);
-            oed_tuple->SetItem(1, ssr_oed.Encode());
-        spd.pos = new PyObjectEx(false, oed_tuple);  // oed goes here
-        spd.destination = spd.pos;
-        spd.probeID = cur.first;
-        spd.state = cur.second->GetState();
-        spd.rangeStep = cur.second->GetRangeStep();
-        spd.scanRange = cur.second->GetScanRange();
-        spd.scanStrength = cur.second->GetScanStrength();
-        spd.typeID = cur.second->GetSelf()->typeID();
+            spd.expiry = cur.second->GetExpiryTime();
+            spd.maxDeviation = cur.second->GetMaxDeviation();
+            spd.pos = MakeVector3(cur.second->GetPosition());
+            PyIncRef(spd.pos);
+            spd.destination = spd.pos;
+            spd.probeID = cur.first;
+            spd.state = cur.second->GetState();
+            spd.rangeStep = cur.second->GetRangeStep();
+            spd.scanRange = cur.second->GetScanRange();
+            spd.scanStrength = cur.second->GetEffectiveStrength();
+            spd.typeID = cur.second->GetSelf()->typeID();
         probeDict->SetItem(new PyInt(cur.first), spd.Encode());
     }
-
-    // this will be sigs that are no longer present in current scan range
-    //  will have to keep previous list and compare with current list to populate this
-    // may not be used.....testing
-    PyList* absentList = new PyList();
 
     OnSystemScanStopped osssp;
         osssp.scanProbesDict = probeDict;
         osssp.systemScanResult = resultList;
-        osssp.absentTargets = absentList;
+        osssp.absentTargets = GetAbsentTargets();
     PyTuple* ev = osssp.Encode();
     ev->Dump(SCAN__RSPDUMP, "psr-    ");
     m_client->SendNotification("OnSystemScanStopped", "charid", &ev);
 }
 
-
-/*  probeID is for those probes that pick up this signal.
- * pos is probe position
- *    will have to call a method to determine sig type, probe data, and signal specifics for each signal
+/* Crucible (Apocrypha - Retribution) probe scanning.  CCP never published the formula; this is the community's
+ *  reverse-engineered model (forums-archive topic 223301, 2013) in a bounded form:
+ *    size        = site signal band in % (1/80 = 1.25 ... 1/5 = 20), or signature radius / exploring.ProbeShipSigDivisor
+ *                  for ships, drones and structures
+ *    probe       = Asymptote(size * strength at range * e^-((distance/range)^2) / 4)   in %
+ *    total       = strongest probe + each next probe * its spread to the stronger ones (at most 8 probes)
+ *    certainty   = total / 100.  1 = warpable (needs 4+ probes:  1 probe = sphere, 2 = circle, 3 = two points)
+ *  Asymptote(x) = x up to 25, then 75 - 50 e^-((x-25)/50)  (continuous, never above 75 for one probe)
+ *  spread:  1 - cos(angle at the target) between two probes, normalised to the tetrahedral angle (well spread
+ *  probes count fully, probes bunched on one side count little)
  */
-bool Scan::GetProbeDataForSig(SignalData& data)
+float Scan::Asymptote(float x)
 {
-    /*  this will determine sig position vs probe position, range, strength
-     * to decide if this sig is picked up by a probe, and return probe data
-     * based on that.
-     *
-struct CosmicSignature {
-    uint8 dungeonType;
-    uint16 sigTypeID;
-    uint16 sigGroupID;
-    uint16 scanGroupID;
-    uint16 scanAttributeID;
-    uint32 ownerID;
-    uint32 systemID;
-    uint32 sigItemID;   // itemID of this entry
-    GPoint position;
-    std::string sigID;  // this is unique xxx-nnn id displayed in scanner
-    std::string sigName;
-};
-     */
+    if (x <= 25.0f)
+        return x;
+    return 75.0f - 50.0f * std::exp(-(x - 25.0f) / 50.0f);
+}
 
-    bool hit(false);
-    float dist(0);
-    std::vector<ProbeSE*> probeVec;
-    // check probe scan ranges for signals; verify probe can scan signal
-    for (auto cur : m_activeProbeMap) {
-        // reset ring/sphere checks
-        cur.second->SetRing(false);
-        cur.second->SetSphere(false);
-        switch (data.sig.scanGroupID) {
-            case Scanning::Group::Ship:
-            case Scanning::Group::DroneOrProbe:
-            case Scanning::Group::Structure: {
-                if (cur.second->CanScanShips()) {
-                    dist = cur.second->GetPosition().distance(data.sig.position);
-                    if (cur.second->GetScanRange() > dist) {
-                        hit = true;
-                        probeVec.push_back(cur.second);
-                    }
-                    _log(SCAN__DEBUG, "Scan::GetProbeDataForSig()  scan range for probe %u: %.2fAU, distance to signal '%s' -> %.2fAU - %s",\
-                            cur.first, cur.second->GetScanRange() /ONE_AU_IN_METERS, data.sig.sigName.c_str(), \
-                            dist /ONE_AU_IN_METERS, hit?"hit":"miss");
-                } else {
-                    _log(SCAN__TRACE, "Scan::GetProbeDataForSig()  probe %u cannot scan signal %s", cur.first, data.sig.sigName.c_str());
-                }
-            } break;
-            case Scanning::Group::Signature: {
-                switch (data.sig.dungeonType) {
-                    case Dungeon::Type::Mission: // npc mission
-                    case Dungeon::Type::Escalation://  new dungeon from previous site. very limited access
-                    case Dungeon::Type::Rated: { // DED rated dungeon
-                        _log(SCAN__TRACE, "Scan::GetProbeDataForSig()  probe %u cannot scan signal %s", cur.first, data.sig.sigName.c_str());
-                        continue;
-                    }
-                /*  nothing to check for on these...
-                    case Dungeon::Type::Gravimetric:// roids
-                    case Dungeon::Type::Magnetometric:// salvage and archeology
-                    case Dungeon::Type::Radar:// hacking
-                    case Dungeon::Type::Ladar: // gas mining
-                    case Dungeon::Type::Wormhole:
-                    case Dungeon::Type::Anomaly:// non-rated dungeon that isnt required to scan with probes - will not hit here.
-                    case Dungeon::Type::Unrated:// non-rated dungeon  no waves, possible escalation to complex
-                        break;
-                */
-                }
-            } // this probe can scan this signal; fall thru to add probe to signal's map
-            default: {
-                dist = cur.second->GetPosition().distance(data.sig.position);
-                if (cur.second->GetScanRange() > dist) {
-                    hit = true;
-                    probeVec.push_back(cur.second);
-                }
-                _log(SCAN__DEBUG, "Scan::GetProbeDataForSig()  scan range for probe %u: %.2fAU, distance to signal '%s' -> %.2fAU - %s",\
-                        cur.first, cur.second->GetScanRange() /ONE_AU_IN_METERS, data.sig.sigName.c_str(), \
-                        dist /ONE_AU_IN_METERS, hit?"hit":"miss");
-            } break;
-        }
-        hit = false;
-    }
+bool Scan::CalcSignal(const CosmicSignature& sig, SignalData& data)
+{
+    SystemManager* pSys(m_client->SystemMgr());
+    data.truePos = sig.position;
+    data.certainty = 0;
+    data.deviation = 0;
+    data.hits.clear();
 
-    _log(SCAN__TRACE, "Scan::GetProbeDataForSig()  probeVec size: %u for signal %s (%s)", \
-            probeVec.size(), data.sig.sigName.c_str(), m_client->SystemMgr()->GetAnomMgr()->GetScanGroupName(data.sig.scanGroupID));
-
-    if (probeVec.empty())
-        return false;
-
-    // at this point, we have at least one probe scanning at least one signal
-    GetSignalData(data, probeVec);
-    if (probeVec.size() > 1) {
-        bool isRing(false);
-        uint8 count(0);
-        GPoint pos(NULL_ORIGIN);
-        PyList* list = new PyList();
-        PyList* ring = new PyList();
-        PyTuple* tuple = new PyTuple(probeVec.size());
-        for (auto cur : probeVec) {
-            tuple->SetItem(count++, new PyInt(cur->GetID()));
-            pos = cur->GetPosition();
-            ScanResultPos ssr_oed;
-                ssr_oed.x = pos.x;
-                ssr_oed.y = pos.y;
-                ssr_oed.z = pos.z;
-            PyToken* token = new PyToken("foo.Vector3");
-            PyTuple* oed_tuple = new PyTuple(2);
-                oed_tuple->SetItem(0, token);
-                oed_tuple->SetItem(1, ssr_oed.Encode());
-            list->AddItem(new PyObjectEx(false, oed_tuple));
-            if (cur->IsRing()) {
-                isRing = true;
-                ring->AddItem(new PyObjectEx(false, oed_tuple));
+    bool isSite((sig.scanGroupID == Scanning::Group::Signature) or (sig.scanGroupID == Scanning::Group::Anomaly));
+    float size(0.0f);
+    if (isSite) {
+        switch (sig.dungeonType) {
+            case Dungeon::Type::Mission:        // npc mission
+            case Dungeon::Type::Escalation:     // new dungeon from previous site. very limited access
+            case Dungeon::Type::Rated: {        // DED rated dungeon
+                return false;
             }
         }
-        if (isRing)
-            list->AddItem(ring);
-        data.probes = tuple;
-        data.probePos = list;
-        // there is *something* here where one of the positions is given as a nested list of objects
-        /*
-                      [PyString "pos"]
-                      [PyList 6 items]
-                        [PyObjectEx Type2]
-                          [PyTuple 2 items]
-                            [PyTuple 1 items]
-                              [PyToken foo.Vector3]
-                            [PyTuple 3 items]
-                              [PyFloat 506169425920]
-                              [PyFloat 948782891008]
-                              [PyFloat 154119258112]
-                        [PyList 3 items]
-                          [PyObjectEx Type2]
-                            [PyTuple 2 items]
-                              [PyTuple 1 items]
-                                [PyToken foo.Vector3]
-                              [PyTuple 3 items]
-                                [PyFloat 506169425920]
-                                [PyFloat -555071897600]
-                                [PyFloat 1636387389440]
-                */
+        // band as a fraction (1/80 = 0.0125)
+        size = sig.sigStrength * 100.0f;
     } else {
-        ScanResultPos ssr_oed;
-            ssr_oed.x = probeVec.at(0)->GetPosition().x;
-            ssr_oed.y = probeVec.at(0)->GetPosition().y;
-            ssr_oed.z = probeVec.at(0)->GetPosition().z;
-        PyToken* token = new PyToken("foo.Vector3");
-        PyTuple* oed_tuple = new PyTuple(2);
-            oed_tuple->SetItem(0, token);
-            oed_tuple->SetItem(1, ssr_oed.Encode());
-        data.probes = new PyInt(probeVec.at(0)->GetID());
-        if (probeVec.at(0)->IsSphere())
-            ; // placeholder.  no clue how to do this yet
-        data.probePos = new PyObjectEx(false, oed_tuple);
+        // ships, drones and structures are found where they are now
+        SystemEntity* pSE(pSys->GetSE(sig.sigItemID));
+        if (pSE == nullptr)
+            return false;
+        if ((pSE->DestinyMgr() != nullptr) and pSE->DestinyMgr()->IsCloaked())
+            return false;
+        // our own ship, probes and drones aren't results
+        if (pSE->GetID() == m_client->GetShipID())
+            return false;
+        if ((pSE->IsProbeSE() or pSE->IsDroneSE()) and (pSE->GetOwnerID() == m_client->GetCharacterID()))
+            return false;
+        data.truePos = pSE->GetPosition();
+        size = pSE->GetSelf()->GetAttribute(AttrSignatureRadius).get_float() / sConfig.exploring.ProbeShipSigDivisor;
     }
+    if (size <= 0)
+        return false;
+
+    for (auto cur : m_activeProbeMap) {
+        ProbeSE* pProbe(cur.second);
+        // core probes can't find ships, drones or structures
+        if (!isSite and !pProbe->CanScanShips())
+            continue;
+        float range(pProbe->GetScanRange());
+        float distance(pProbe->GetPosition().distance(data.truePos));
+        if ((range <= 0) or (distance > range))
+            continue;
+        float ratio(distance / range);
+        ProbeHit hit = ProbeHit();
+            hit.probe = pProbe;
+            hit.distance = distance;
+            hit.signal = Asymptote(size * pProbe->GetEffectiveStrength() * std::exp(-(ratio * ratio)) / 4.0f);
+        data.hits.push_back(hit);
+    }
+    if (data.hits.empty())
+        return false;
+
+    std::sort(data.hits.begin(), data.hits.end(), [](const ProbeHit& a, const ProbeHit& b) { return a.signal > b.signal; });
+    if (data.hits.size() > 8)
+        data.hits.resize(8);
+
+    // each next probe adds what its position adds:  its spread to every stronger probe (tetrahedral spread = full)
+    static const float fullSpread(1.0f - std::cos(EvE::Trig::Deg2Rad(109.47)));
+    float total(0.0f), devSum(0.0f);
+    for (uint8 k = 0; k < data.hits.size(); ++k) {
+        devSum += data.hits[k].probe->GetMaxDeviation();
+        float spread(1.0f);
+        if (k > 0) {
+            GVector vk(data.truePos, data.hits[k].probe->GetPosition());
+            vk.normalize();
+            for (uint8 j = 0; j < k; ++j) {
+                GVector vj(data.truePos, data.hits[j].probe->GetPosition());
+                vj.normalize();
+                float am((1.0f - (float)vk.dotProduct(vj)) / fullSpread);
+                spread = std::min(spread, std::min(1.0f, am));
+            }
+        }
+        total += data.hits[k].signal * spread;
+    }
+    data.certainty = total / 100.0f;
+    data.deviation = (devSum / data.hits.size()) * std::max(0.0f, 1.0f - data.certainty);
+
+    _log(SCAN__TRACE, "Scan::CalcSignal() - %s(%s) size %.2f:  %u probes, certainty %.4f, deviation %.0fm", \
+            sig.sigName.c_str(), sig.sigID.c_str(), size, data.hits.size(), data.certainty, data.deviation);
     return true;
 }
 
-void Scan::GetSignalData(SignalData& data, std::vector<ProbeSE*>& probeVec)
+void Scan::AddResultGeometry(const CosmicSignature& sig, SignalData& data, PyList* results)
 {
-    // probeVec has only probes than are in range of a signal it can scan
-    uint8 probeCount = probeVec.size();
-    float probeMultiplier(0.0f);
-    switch(probeCount) {
-        //  new style...already calculated (in python) for 1 to 8 probes
-        case 1: probeMultiplier = 0.25774312594204907; break;
-        case 2: probeMultiplier = 0.5130245854773758; break;
-        case 3: probeMultiplier = 0.7234132613571191; break;
-        case 4: probeMultiplier = 0.8824741410676007; break;
-        case 5: probeMultiplier = 0.9963325352118082; break;
-        case 6: probeMultiplier = 1.0754155621393995; break;
-        case 7: probeMultiplier = 1.1296251734489133; break;
-        case 8: probeMultiplier = 1.1666968137637062; break;
-    }
-
-    GPoint point(data.sig.position);
-    data.deviation = 0;
-    float scanStr1(0), rangeMod1(0), dist1(0), scanStr2(0), rangeMod2(0), dist2(0), angleMod(0);
-    if (probeCount == 1) {
-        dist1 = probeVec.at(0)->GetPosition().distance(point);
-        rangeMod1 = probeVec.at(0)->GetRangeModifier(dist1);
-        scanStr1 = probeVec.at(0)->GetScanStrength();
-        data.deviation = probeVec.at(0)->GetDeviation() *1.3;  // fudge a bit for single probe
-        data.certainty = data.sig.sigStrength * (scanStr1 / rangeMod1) / 2;
-        _log(SCAN__TRACE, "Scan::GetSignalData(1)  dist: %.3fAU, rangeMod: %.5f, scanStr: %.5f", \
-                dist1 / ONE_AU_IN_METERS, rangeMod1, scanStr1);
-    } else {
-        /*  loop thru probes and get range mods and sigStrength for each.
-         *  combine all probe's data to get good sum based on probe range and strength
-         */
-        int8 count(0), max(2);
-        if (probeVec.at(0)->HasMaxSkill())
-            max = 3;
-        std::map<float, std::pair<ProbeSE*, ProbeSE*>> angleMap;     // angle, <probeSE1,probeSE2>
-        CalcProbeAngles(point, probeVec, angleMap);    //determine probe angles to target
-        float probeSig1(0), probeSig2(0);
-        // reverse-iterate to use highest values first
-        std::map<float, std::pair<ProbeSE*, ProbeSE*>>::reverse_iterator itr = angleMap.rbegin(), end = angleMap.rend();
-        for (; itr != end; ++itr) {
-            // we are using top 3 angle pairs of 2 probes/angle, which gives 6 total scans for str calc.
-            // if player has signal acquisition and sensor linking both at l5, this will allow another pair of scan results
-            if (count > max)
-                break;
-            angleMod = sin(itr->first / 2);      // get value between 0 and 1 (fuzzy logic as angle modifier)
-            // get sigStr from first probe
-            dist1 = itr->second.first->GetPosition().distance(point);
-            rangeMod1 = itr->second.first->GetRangeModifier(dist1);
-            scanStr1 = itr->second.first->GetScanStrength();
-            probeSig1 = data.sig.sigStrength * angleMod * probeMultiplier * (scanStr1 / rangeMod1);
-            data.certainty += probeSig1;
-            // get sigStr from second probe
-            dist2 = itr->second.second->GetPosition().distance(point);
-            rangeMod2 = itr->second.second->GetRangeModifier(dist2);
-            scanStr2 = itr->second.second->GetScanStrength();
-            probeSig2 = data.sig.sigStrength * angleMod * probeMultiplier * (scanStr2 / rangeMod2);
-            data.certainty += probeSig2;
-            // get deviation from both probes
-            data.deviation += itr->second.first->GetDeviation();
-            data.deviation += itr->second.second->GetDeviation();
-            _log(SCAN__TRACE, "Scan::GetSignalData(%u)  #%u - angle %.3f (P1 %u, P2 %u) - dist: %.3fAU, %.3fAU, rangeMod: %.5f, %.5f, scanStr: %.5f, %.5f, angleMod: %.4f, multiplier: %.5f, probeSig: %.5f, %.5f", \
-                    probeCount, count, EvE::Trig::Rad2Deg(itr->first), itr->second.first->GetID(), itr->second.second->GetID(), dist1 /ONE_AU_IN_METERS, dist2 /ONE_AU_IN_METERS,\
-                    rangeMod1, rangeMod2, scanStr1, scanStr2, angleMod, probeMultiplier, probeSig1, probeSig2);
-            ++count;
-        }
-        // get average deviation from all probes
-        if (count)
-            data.deviation /= (count * 2);
-    }
-/*Results, and What They Mean
-
-    Sphere: The result is somewhere in the sphere. One probe only has a hit and approximate range. You can get multiple probes with independent hits, it can be messy. This is the least accurate hit.
-    Circle: Two probes have approximate distances. More accurate, and likely to yield better hits with more probes. Target anomaly is located near the circle.
-    Two Dots: Three probes have distances, which narrows it down to between two possible locations. Likely to be more or less accurate, but beware of deviation. Target anomaly has been narrowed down to being near one of the dots.
-    One Dot: Four or more probes can see the result. Once scan strength reaches 100%, the result will be warpable.
-*/
-    if ((data.certainty < 0.05) and (probeCount == 1)) { // set sphere
-        probeVec.at(0)->SetSphere(true);
-    } else if ((data.certainty < 0.08) and (probeCount == 2) ) {
-        // set ring
-        probeVec.at(0)->SetRing(true);
-        probeVec.at(1)->SetRing(true);
-    } else if (data.certainty > 0.99) {
-        sStatMgr.Increment(Stat::sitesScanned);
-    }
-
-    // adjust deviation based on signal strength
-    /*
-    if (data.certainty < 0.8f)
-        data.deviation *= (1 + (1 - data.certainty));
-    else
-        data.deviation *= (1 - data.certainty);
-    */
-
-    /** @todo make sure this 'reported' position is within probe boundary */
-    //point.MakeRandomPointOnSphereLayer(data.deviation /2, data.deviation);
-    data.sig.position = point;
-
-    _log(SCAN__TRACE, "Scan::GetSignalData() - certainty for signal %s(%s) is %.5f (sigStrength:%.5f) \n Deviation: %.0fm (%.3f AU)", \
-            data.sig.sigName.c_str(), data.sig.sigID.c_str(), data.certainty, data.sig.sigStrength, data.deviation, (data.deviation / ONE_AU_IN_METERS));
-}
-
-void Scan::CalcProbeAngles(GPoint& sigPos, std::vector<ProbeSE*>& probeVec, std::map<float, std::pair<ProbeSE*, ProbeSE*>>& angleMap ) {
-    bool run(true);
-    uint8 count(probeVec.size()), x(0), y(1);
-    float dot(0.0f), angle(0.0f);
-    ProbeSE* p1(nullptr);
-    while (x < count) {
-        p1 = probeVec.at(x++);
-        if (p1 == nullptr)
-            continue;
-        GVector v1(p1->GetPosition(), sigPos);
-        v1.normalize();
-        for (auto cur : probeVec) {
-            if ((cur == nullptr) or (p1 == cur))
-                continue;
-            GVector v2(cur->GetPosition(), sigPos);
-            v2.normalize();
-            dot = v1.dotProduct(v2);        // cosine of angle between v1,v2
-            angle = acos(dot);              // angle in rad
-            // if this probe set is already inserted, skip and move along.
-            if (angleMap.find(angle) != angleMap.end())
-                continue;
-            // add to map
-            angleMap[angle] = std::make_pair(p1, cur);
-            _log(SCAN__DEBUG, "Scan::CalcProbeAngles() - adding angle %.3f, p1 %u, p2 %u to map",\
-                    /*EvE::Trig::Rad2Deg*/(angle), p1->GetID(), cur->GetID());
-        }
-    }
-}
-
-//  *********  apoc or before.....
-/*  probe formulas....
- *
- * single...
- * sp = sb*(1+0.05(a+ar))*(1+l)*(1+h)*pi(1+p*Fi))
- * sb is probe base str
- * a/ar is astrometrics and rangefinding
- * l is launcher bonus
- * h is hull bonus
- * fi is fit bonuses
- * p is stack penalty
- *
- * s3 is effective sig str.  ease with which a given target can be scanned
- * ship/struct sig str is ratio of sig radius to effective sig str of probe
- *
- * nr is probe scan radius.  distance from probe to target with radius of probe.
- * usually given in AU, but could be steps (nr) above min radius (rb = 0.25 for core, 0.5 for combat) where
- *      r = rb*2^nr-1
- *
- *
- * multiple....
- * str = (probe average)*2*(a1+a2+a3+a4)/360;
- * avg is from best 4 probes (within range)
- * a1,a2,a3,a4 = angles of best 4 probes (others disregarded)
- */
-
-// post from 2013
-/* probe formula...incomplete and some functions i cant do, so we're using apoc
- *
- * formula steps
- * 1) eval sig str of each probe
- * 2) eval angles of probe pairs to target
- * 3) eval total sig str
- *
- * 1 - eval sig str for probe
- * base sig str = size * probe str * distancMod /4
- * sig str = f(base sig str) + g(f(base sig str), position)
- *
- * size = targ sig radius
- * probe str = probe base str * bonus mods / range mods
- * dist mod = e^-((targ range/max range)^2)
- * pos = 3d coords of probe relative to target
- * f() = asymptotic function where f(x)=x below 25%, then diminishing returns to f(x)=75% for x=infinity
- * g(x,y) = returns percentage of x, between 1.5 and 3.5 (or 1 and 4)
- *
- * 2 - eval angles of probe pairs
- * compute angle between targ and each pair of probes
- * angleMod(a,b) = beta(angle(a,b),x,y)
- * a = probe 1 (arbitrary)
- * b = probe 2 (arbitrary)
- * beta = regularized beta function (found in boost as `ibeta(a,b,x)`)
- * angle = actual angle between a and b that intersects the signal
- * x, y = ratio between str of probe a, probe b and strongest probe
- *
- * 3 - eval total sig str
- * final = sigstrP1 + sigstrP2*(angleMod(p2,p1) + sigstrP3*(anglemod(P3,P1)*anglemod(p3,p2)) ... [to max of 8 probes?]
- */
-
-
-// unscannable ship is (sigRad/sensorStr < 1.08)
-
-/* center of tetrahedron formula
- * (((x1+x2+x3+x4) /4), ((y1+y2+y3+y4) /4), ((z1+z2+z3+z4) /4))
- */
-/*
-    One probe will only tell you if something is in range of the probe.
-This will generate a red sphere inside your probe’s bubble that is centered on your probe.
-The sphere gives you a general idea of how far the target is from your probe.
-    Two probes will tell you that something exists on an imaginary ring which shows on what plane and the general area where your target is.
-    Three probes will produce two possible locations for your target.
-These are still not warpable and will usually show up as just one small circle on your map screen but there will be two entries under your scan results screen with the same ID#.
-    Four or more probes will give you a single location shown by a red (less than 50% strength), yellow (50-99%), or green (100% hit).
-By maneuvering your probes and decreasing their range they will eventually give a warpable result when the signal strength reaches 100% and turns green.
-*/
-
-
-// these are for moon scanning
-void Scan::ScanStart()
-{
-    // not used yet
-}
-
-void Scan::SurveyScan() {
-    /*
-     *
-     *                      [PyString "OnSpecialFX"]
-     *                      [PyTuple 14 items]
-     *                        [PyIntegerVar 1002331681462]
-     *                        [PyIntegerVar 1002332233248]
-     *                        [PyInt 444]
-     *                        [PyNone]
-     *                        [PyNone]
-     *                        [PyList 0 items]
-     *                        [PyString "effects.SurveyScan"]
-     *                        [PyBool False]
-     *                        [PyInt 1]
-     *                        [PyInt 1]
-     *                        [PyFloat 4250]
-     *                        [PyInt 0]
-     *                        [PyIntegerVar 129509430135552798]
-     *                        [PyNone]
-     *
+    /* client (scanner.py):  data is a float -> sphere of that radius around pos;  a Vector3 -> a point;  else an object
+     *  with point/normal/radius -> a circle.  spheres and circles never show as 100%.  three probes give two points with
+     *  the same id (two possible locations), neither warpable
      */
+    uint8 count(data.hits.size());
+    ProbeSE* p1(data.hits[0].probe);
+    GPoint pos1(p1->GetPosition());
+    float certainty(data.certainty);
+
+    PyRep* probeIDs(nullptr);
+    if (count == 1) {
+        probeIDs = new PyInt(p1->GetID());
+    } else {
+        PyTuple* tuple = new PyTuple(count);
+        for (uint8 i = 0; i < count; ++i)
+            tuple->SetItem(i, new PyInt(data.hits[i].probe->GetID()));
+        probeIDs = tuple;
+    }
+
+    std::vector<PyRep*> shapes;     // one result per entry
+    if (count == 3) {
+        // the true position and its mirror across the probes' plane, each off by up to the deviation
+        GPoint pos2(data.hits[1].probe->GetPosition()), pos3(data.hits[2].probe->GetPosition());
+        GVector normal(GVector(pos2 - pos1).crossProduct(GVector(pos3 - pos1)));
+        if (normal.length() > 1.0) {
+            normal.normalize();
+            GPoint mirror(data.truePos - normal * (2.0 * GVector(data.truePos - pos1).dotProduct(normal)));
+            certainty = std::min(certainty, 0.99f);
+            GPoint a(data.truePos), b(mirror);
+            if (data.deviation > 0) {
+                GPoint offset(NULL_ORIGIN);
+                offset.MakeRandomPointOnSphere(MakeRandomFloat(0, data.deviation));
+                a += offset;
+                offset = NULL_ORIGIN;
+                offset.MakeRandomPointOnSphere(MakeRandomFloat(0, data.deviation));
+                b += offset;
+            }
+            shapes.push_back(MakeVector3(a));
+            shapes.push_back(MakeVector3(b));
+        } else {
+            // probes in a line:  as good as two
+            count = 2;
+        }
+    }
+    if (count == 2) {
+        // the circle where the two probes' spheres meet:  around the line between them, through the target
+        GPoint pos2(data.hits[1].probe->GetPosition());
+        GVector axis(pos2 - pos1);
+        double len(axis.length());
+        if (len > 1.0) {
+            axis.normalize();
+            GPoint center(pos1 + axis * GVector(data.truePos - pos1).dotProduct(axis));
+            double radius(center.distance(data.truePos));
+            if (data.deviation > 0)
+                radius = std::max(0.0, radius + MakeRandomFloat(-1, 1) * data.deviation);
+            if (radius > 1.0) {
+                PyDict* dict = new PyDict();
+                    dict->SetItemString("point", MakeVector3(center));
+                    dict->SetItemString("normal", MakeVector3(GPoint(axis.x, axis.y, axis.z)));
+                    dict->SetItemString("radius", new PyFloat(radius));
+                shapes.push_back(new PyObject("util.KeyVal", dict));
+            }
+        }
+        if (shapes.empty())
+            count = 1;      // target on the line between them:  a sphere
+    }
+    if (count == 1) {
+        // a sphere around the probe:  the target is about this far away
+        float distance(data.hits[0].distance);
+        if (data.deviation > 0)
+            distance = std::max(1.0, distance + MakeRandomFloat(-1, 1) * data.deviation);
+        shapes.push_back(new PyFloat(distance));
+    }
+    if (count >= 4) {
+        // a point.  perfect at 100%
+        GPoint point(data.truePos);
+        if (certainty < 1.0f) {
+            if (data.deviation > 0) {
+                GPoint offset(NULL_ORIGIN);
+                offset.MakeRandomPointOnSphere(MakeRandomFloat(0, data.deviation));
+                point += offset;
+            }
+        } else {
+            data.deviation = 0;
+            if (sig.scanGroupID == Scanning::Group::Signature)
+                sStatMgr.Increment(Stat::sitesScanned);
+        }
+        shapes.push_back(MakeVector3(point));
+        CacheResult(sig, certainty);
+    }
+
+    for (uint8 i = 0; i < shapes.size(); ++i) {
+        SystemScanResult ssr;
+            ssr.id = sig.sigID;
+            ssr.dungeonName = sig.sigName;
+            ssr.typeID = sig.sigTypeID;
+            ssr.groupID = sig.sigGroupID;
+            ssr.scanGroupID = sig.scanGroupID;
+            ssr.strengthAttributeID = sig.scanAttributeID;
+            ssr.degraded = false;
+            ssr.deviation = data.deviation;     // how far the shown position may be off the target
+            ssr.certainty = certainty;          // "signal strength" in the scanner window
+            if (i > 0)
+                PyIncRef(probeIDs);
+            ssr.probeID = probeIDs;
+            ssr.pos = MakeVector3(pos1);
+            ssr.data = shapes[i];
+        results->AddItem(ssr.Encode());
+    }
 }
+
+/* moon scanning (survey probes) is in ExplorationMgr.  the survey probe fx packet, for reference:
+ *                      [PyString "OnSpecialFX"]
+ *                      [PyTuple 14 items]
+ *                        [PyIntegerVar 1002331681462]
+ *                        [PyIntegerVar 1002332233248]
+ *                        [PyInt 444]
+ *                        [PyNone]
+ *                        [PyNone]
+ *                        [PyList 0 items]
+ *                        [PyString "effects.SurveyScan"]
+ *                        [PyBool False]
+ *                        [PyInt 1]
+ *                        [PyInt 1]
+ *                        [PyFloat 4250]
+ *                        [PyInt 0]
+ *                        [PyIntegerVar 129509430135552798]
+ *                        [PyNone]
+ */
