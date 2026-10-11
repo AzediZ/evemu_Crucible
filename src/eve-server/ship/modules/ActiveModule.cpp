@@ -14,6 +14,7 @@
 #include "inventory/AttributeEnum.h"
 #include "ship/Missile.h"
 #include "ship/modules/ActiveModule.h"
+#include "ship/modules/EwarModule.h"
 #include "ship/modules/ModuleItem.h"
 #include "ship/modules/Prospector.h"
 #include "system/Container.h"
@@ -35,6 +36,7 @@ m_usesCharge(false),
 m_needsCharge(false),
 m_needsTarget(false),
 m_targetID(0),
+m_reactivateAt(0),
 m_effectID(0),
 m_Stop(true),
 m_heating(false)
@@ -267,7 +269,49 @@ void ActiveModule::Clear()
 
     m_shipRef->ClearTargetRef();
 
+    // an activation that ran (not one refused before starting) starts the reactivation delay
+    if (m_ModuleState >= Module::State::Deactivating) {
+        int64 delay(GetAttribute(AttrModuleReactivationDelay).get_int());
+        if (delay > 0)
+            m_reactivateAt = GetFileTimeNow() + (delay * (EvE::Time::Second / 1000));
+    }
+
     SetModuleState(Module::State::Online);
+}
+
+void ActiveModule::CheckActivationRules()
+{
+    // moduleReactivationDelay (cloaks, ecm bursts, remote ecm bursts...)
+    int64 now(GetFileTimeNow());
+    if (m_reactivateAt > now)
+        throw UserError("ModuleReactivationDelayed2")
+                .AddTypeName("item", typeID())
+                .AddFormatValue("delay", new PyLong(m_reactivateAt - now));
+
+    // maxGroupActive (warfare links, cloaks...)
+    if (HasAttribute(AttrMaxGroupActive)) {
+        uint8 count(m_shipRef->GetModuleManager()->GetActiveCountByGroup(groupID(), this));
+        if (count >= GetAttribute(AttrMaxGroupActive).get_uint32())
+            throw UserError("EffectCrowdedOut")
+                    .AddFormatValue("module", new PyInt(typeID()))
+                    .AddFormatValue("count", new PyInt(count));
+    }
+}
+
+void ActiveModule::CheckTargetRules(uint16 effectID)
+{
+    InventoryItemRef targRef(m_targetSE->GetSelf());
+    if (sFxDataMgr.isAssistance(effectID))
+        if (targRef->GetAttribute(AttrDisallowAssistance).get_bool()) {
+            Clear();
+            throw UserError ("DeniedActivateTargetAssistDisallowed");
+        }
+    // ewar immune targets (supercapitals, sieged/triaged ships)
+    if (Ewar::IsOffensiveModifier(groupID()))
+        if (targRef->GetAttribute(AttrDisallowOffensiveModifiers).get_bool()) {
+            Clear();
+            throw UserError ("DeniedActivateTargetOffModDisallowed");
+        }
 }
 
 void ActiveModule::Process()
@@ -333,6 +377,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         Online();
         return;
     }
+    CheckActivationRules();
     if (m_needsCharge and (!m_chargeLoaded or (m_chargeRef.get() == nullptr))) {
         _log(MODULE__TRACE, "ActiveModule::Activate - %s: needsCharge: %s, chargeLoaded: %s, chargeRef: %s", \
                 m_modRef->name(), m_needsCharge?"True":"False", m_chargeLoaded?"True":"False", \
@@ -367,11 +412,8 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
                 throw CustomError ("You cannot attack the %s.", m_targetSE->GetName());
             }
 
+        CheckTargetRules(effectID);
         if (sFxDataMgr.isAssistance(effectID)) {
-            if (m_targetSE->GetSelf()->HasAttribute(AttrDisallowAssistance)) {
-                Clear();
-                throw UserError ("DeniedActivateTargetAssistDisallowed");
-            }
             /** @todo criminal shit isnt written yet....fix this once it is.
             if (m_targetSE->HasPilot())
                 if (m_targetSE->GetPilot()->IsCriminal())
@@ -388,6 +430,9 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
 
     m_repeat = repeat;
     m_effectID = effectID;
+    // single cycle modules (remote ecm burst, doomsday...)
+    if (GetAttribute(AttrDisallowRepeatingActivation).get_bool())
+        m_repeat = 1;
 
     if (!CanActivate()) {
         Clear();
@@ -414,8 +459,9 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         return;
     }
 
-    ApplyEffect(FX::State::Active, true);
-    if (IsValidTarget(targetID))
+    if (ApplyActiveEffects())
+        ApplyEffect(FX::State::Active, true);
+    if (IsValidTarget(targetID) and ApplyTargetEffects())
         ApplyEffect(FX::State::Target, true);
 
     std::vector<GenericModule*> modules;
@@ -430,6 +476,10 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     }
 
     SetModuleState(Module::State::Activated);
+
+    // overview/tactical ewar icons on the target's client.  ecm sends its own (EcmModule)
+    if ((m_targetSE != nullptr) and (groupID() != EVEDB::invGroups::ECM))
+        Ewar::SendEwarNotify(true, m_shipRef->itemID(), itemID(), m_targetSE, Ewar::GetEwarType(groupID()));
 
     switch (groupID()) {
         case EVEDB::invGroups::Afterburner:
@@ -757,10 +807,14 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
     }
 
     // Remove modifier added by module
-    ApplyEffect(FX::State::Active, false);
+    if (ApplyActiveEffects())
+        ApplyEffect(FX::State::Active, false);
     if (IsValidTarget(m_targetID)
-    and (m_targetSE != nullptr))
+    and (m_targetSE != nullptr)
+    and ApplyTargetEffects())
         ApplyEffect(FX::State::Target, false);
+    if ((m_targetSE != nullptr) and (groupID() != EVEDB::invGroups::ECM))
+        Ewar::SendEwarNotify(false, m_shipRef->itemID(), itemID(), m_targetSE, Ewar::GetEwarType(groupID()));
         /*
     else if (m_needsTarget) {
         _log(MODULE__INFO, "%s - DeactivateCycle() - need target = true and targetID: %u, targSE: %x", \

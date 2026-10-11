@@ -97,6 +97,16 @@ public:
     void                ClearTargets(bool notify=true);
     void                ClearAllTargets(bool notify=true);
 
+    /* ewar */
+    // drop every lock we hold (ecm), with full notifications to both sides.  others keep their locks on us
+    void                LoseAllTargets();
+    // jammed (EwarState): can't lock anything
+    bool                IsJammed();
+    // anyone holding a completed lock on us (cloak check)
+    bool                HasLockedTargeters() const;
+    // modules active on us
+    void                GetTargetModules(std::vector<ActiveModule*>& into) const;
+
     /* method to remove target without triggering anything else (target destroyed) */
     void                RemoveTarget(SystemEntity* tSE);
 

@@ -58,7 +58,7 @@ namespace {
         if (name == "decreaseTargetSpeed")
             return Web;
         if (offensive or assistance)
-            return Ewar;
+            return DroneAI::Action::Ewar;
         return None;
     }
 }

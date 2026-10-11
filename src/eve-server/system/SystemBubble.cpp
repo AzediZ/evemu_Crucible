@@ -538,6 +538,11 @@ void SystemBubble::GetAllEntities(std::map< uint32, SystemEntity* >& into) const
         into.emplace(cur.first, cur.second);
 }
 
+void SystemBubble::GetStaticEntities(std::vector<SystemEntity*>& into) const
+{
+    for (auto cur : m_entities)
+        into.push_back(cur.second);
+}
 
 void SystemBubble::GetEntityVec(std::vector< SystemEntity* >& into) const
 {

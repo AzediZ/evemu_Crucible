@@ -32,6 +32,7 @@
 #include "pos/PosMgrDB.h"
 #include "system/DestinyManager.h"
 #include "system/TargetManager.h"
+#include "system/EwarState.h"
 
 class BeltMgr;
 class Character;
@@ -108,7 +109,7 @@ public:
     //SystemEntity& operator=(SystemEntity&& oth) =delete;
 
     // d'tor
-    virtual ~SystemEntity()                             { /* do nothing here */ }
+    virtual ~SystemEntity()                             { SafeDelete(m_ewar); }
 
     /* Process Calls - Overridden as needed in derived classes */
     virtual void                Process();
@@ -223,6 +224,12 @@ public:
     SystemManager*              SystemMgr()             { return m_system; }
     TargetManager*              TargetMgr()             { return m_targMgr; }
     DestinyManager*             DestinyMgr()            { return m_destiny; }
+    /* ewar received by this entity.  created on first use */
+    EwarState*                  GetEwar(bool create=false);
+    /* warp scramble attribute (CONCORD, warp core stabilizers) plus ewar scrams */
+    bool                        IsWarpScrambled();
+    /* signature radius with target painters */
+    float                       GetSignatureRadius();
 
     /* common functions for all entities handled here */
     /* public data queries  */
@@ -297,6 +304,7 @@ protected:
     SystemManager*              m_system;               /* we do not own this  never NULL in space */
     TargetManager*              m_targMgr;              /* we do not own this. only Destructible items will have it */
     DestinyManager*             m_destiny;              /* we do not own this. only mobile items will have it */
+    EwarState*                  m_ewar;                 /* we own this.  nullptr until something applies ewar to us */
 
     EVEServiceManager&          m_services;
 

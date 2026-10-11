@@ -501,7 +501,8 @@ SET( ship_modules_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/modules/SubSystemModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/TurretFormulas.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/TurretModule.h"
-     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h" )
+     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h"
+     "${TARGET_INCLUDE_DIR}/ship/modules/EwarModule.h" )
 SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/ActiveModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/GenericModule.cpp"
@@ -514,7 +515,8 @@ SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/SubSystemModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/TurretFormulas.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/TurretModule.cpp"
-     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp" )
+     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp"
+     "${TARGET_SOURCE_DIR}/ship/modules/EwarModule.cpp" )
 
 SET( standing_INCLUDE
      "${TARGET_INCLUDE_DIR}/standing/Standing.h"
@@ -579,6 +581,7 @@ SET( system_INCLUDE
      "${TARGET_INCLUDE_DIR}/system/SystemEntity.h"
      "${TARGET_INCLUDE_DIR}/system/SystemManager.h"
      "${TARGET_INCLUDE_DIR}/system/TargetManager.h"
+     "${TARGET_INCLUDE_DIR}/system/EwarState.h"
      "${TARGET_INCLUDE_DIR}/system/WorldSpaceServer.h"
      "${TARGET_INCLUDE_DIR}/system/WormholeSvc.h" )
 SET( system_SOURCE
@@ -604,6 +607,7 @@ SET( system_SOURCE
      "${TARGET_SOURCE_DIR}/system/SystemEntity.cpp"
      "${TARGET_SOURCE_DIR}/system/SystemManager.cpp"
      "${TARGET_SOURCE_DIR}/system/TargetManager.cpp"
+     "${TARGET_SOURCE_DIR}/system/EwarState.cpp"
      "${TARGET_SOURCE_DIR}/system/WorldSpaceServer.cpp"
      "${TARGET_SOURCE_DIR}/system/WormholeSvc.cpp")
 

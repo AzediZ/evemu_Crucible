@@ -56,6 +56,7 @@ m_system(system),
 m_bubble(nullptr),
 m_destiny(nullptr),
 m_targMgr(nullptr),
+m_ewar(nullptr),
 m_killed(false)
 {
     assert(m_system != nullptr);
@@ -78,7 +79,7 @@ m_killed(false)
 SystemEntity::SystemEntity(const SystemEntity* oth) : m_self(oth->m_self),m_services(oth->m_services),m_system(oth->m_system),
 m_bubble(oth->m_bubble),m_destiny(oth->m_destiny),m_targMgr(oth->m_targMgr),m_killed(oth->m_killed),m_warID(oth->m_warID),
 m_allyID(oth->m_allyID),m_corpID(oth->m_corpID),m_fleetID(oth->m_fleetID),m_ownerID(oth->m_ownerID),m_radius(oth->m_radius),
-m_harmonic(oth->m_harmonic)
+m_harmonic(oth->m_harmonic),m_ewar(nullptr)
 {
     sLog.Error("SE::SE()", "copy c'tor.");
     // wip
@@ -93,6 +94,33 @@ void SystemEntity::Process() {
 
     if (m_destiny != nullptr)
         m_destiny->Process();
+
+    if ((m_ewar != nullptr) and !m_ewar->Empty())
+        m_ewar->Process();
+}
+
+EwarState* SystemEntity::GetEwar(bool create/*false*/)
+{
+    if ((m_ewar == nullptr) and create)
+        m_ewar = new EwarState(this);
+    return m_ewar;
+}
+
+bool SystemEntity::IsWarpScrambled()
+{
+    // warp core stabilizers give a negative status, CONCORD and siege a positive one
+    float status(m_self->GetAttribute(AttrWarpScrambleStatus).get_float());
+    if (m_ewar != nullptr)
+        status += m_ewar->GetScrambleStrength();
+    return (status > 0);
+}
+
+float SystemEntity::GetSignatureRadius()
+{
+    float sig(m_self->GetAttribute(AttrSignatureRadius).get_float());
+    if (m_ewar != nullptr)
+        sig *= m_ewar->GetSigRadiusMult();
+    return sig;
 }
 
 PyTuple* SystemEntity::MakeDamageState() {

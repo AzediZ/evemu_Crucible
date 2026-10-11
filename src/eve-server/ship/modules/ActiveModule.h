@@ -56,6 +56,9 @@ public:
     virtual bool        CanActivate();
     /* apply charge effects when undocking, as they are reset and not called anywhere else */
     virtual void        ReprocessCharge();
+    /* dogma hooks.  modules whose target or active effects are handled in code (ecm jams, gang links) return false */
+    virtual bool        ApplyTargetEffects()            { return true; }
+    virtual bool        ApplyActiveEffects()            { return true; }
 
     /* ActiveModule methods */
     virtual uint32      GetTargetID()           { return m_targetID; }
@@ -79,6 +82,10 @@ protected:
     TargetManager*      m_targMgr;
 
     void                Clear();
+    /* generic activation rules: reactivation delay and group limits.  throws, before any state is changed */
+    void                CheckActivationRules();
+    /* target rules: assistance and offensive modifier immunity.  calls Clear() and throws */
+    void                CheckTargetRules(uint16 effectID);
     /* heat.  a cycle starting (or the module stopping) applies pending overload requests, and tells the ship
      *  which modules are heating their rack.  linked weapons do this for the whole group */
     void                UpdateCycleHeat(bool cycling);
@@ -103,6 +110,7 @@ protected:
     uint16              m_reloadTime;
     uint16              m_effectID;                     //passed to us by activate
     uint32              m_targetID;                     //passed to us by activate
+    int64               m_reactivateAt;                 // filetime the module can be activated again (moduleReactivationDelay)
 
     // protected to allow derived usage
     bool                m_Stop :1;

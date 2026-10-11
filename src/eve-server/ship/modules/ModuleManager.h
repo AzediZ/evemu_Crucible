@@ -131,6 +131,17 @@ public:
     // returns # of active non-ol'd modules for this rack
     uint8 GetActiveModulesCount(uint8 rack);
     uint8 GetFittedModuleCountByGroup(uint16 groupID);
+    // every active (activated or deactivating) module
+    void GetActiveModules(std::vector< GenericModule* >& modVec);
+    // # of active modules of this group, not counting exclude
+    uint8 GetActiveCountByGroup(uint16 groupID, GenericModule* exclude = nullptr);
+    // first fitted / first active module of this group, nullptr if none
+    GenericModule* GetModuleByGroup(uint16 groupID);
+    GenericModule* GetActiveModuleByGroup(uint16 groupID);
+    // first active module that can't be stopped early (siege, triage, cyno, jump portal, doomsday...).  blocks docking and jumping
+    GenericModule* GetActiveBlockingModule();
+    // first active module that prevents cloaking (AttrCanCloak = 0)
+    GenericModule* GetActiveNoCloakModule();
 
     // scan method to check for scanning rigs.
     // this is set as % with 1.0 being 100%

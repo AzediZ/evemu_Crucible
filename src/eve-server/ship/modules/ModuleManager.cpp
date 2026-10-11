@@ -711,7 +711,8 @@ void ModuleManager::Activate(int32 itemID, uint16 effectID, int32 targetID, int3
     } else if (pDestiny->IsWarping()) {
         if (pMod->HasAttribute(AttrDisallowActivateOnWarp) or !sFxDataMgr.isWarpSafe(effectID))
             throw UserError ("DeniedActivateInWarp");
-    } else if (pDestiny->IsCloaked()) {
+    } else if (pDestiny->IsCloaked() and (pMod->groupID() != EVEDB::invGroups::Cloaking_Device)) {
+        // a cloaking device can be started during a session (gate) cloak.  CloakModule checks module cloaks
         throw UserError ("DeniedActivateCloaked");
     } else if (pShipItem->GetPilot()->IsJump()) {
         throw UserError ("DeniedActivateInJump");
@@ -1517,6 +1518,57 @@ uint8 ModuleManager::GetActiveModulesCount(uint8 rack)
                 ++count;
 
     return count;
+}
+
+void ModuleManager::GetActiveModules(std::vector< GenericModule* >& modVec)
+{
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and cur.second->IsActive())
+            modVec.push_back(cur.second);
+}
+
+uint8 ModuleManager::GetActiveCountByGroup(uint16 groupID, GenericModule* exclude/*nullptr*/)
+{
+    uint8 count(0);
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and (cur.second != exclude))
+            if ((cur.second->groupID() == groupID) and cur.second->IsActive())
+                ++count;
+    return count;
+}
+
+GenericModule* ModuleManager::GetModuleByGroup(uint16 groupID)
+{
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and (cur.second->groupID() == groupID))
+            return cur.second;
+    return nullptr;
+}
+
+GenericModule* ModuleManager::GetActiveModuleByGroup(uint16 groupID)
+{
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and (cur.second->groupID() == groupID) and cur.second->IsActive())
+            return cur.second;
+    return nullptr;
+}
+
+GenericModule* ModuleManager::GetActiveBlockingModule()
+{
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and cur.second->IsActive())
+            if (cur.second->GetAttribute(AttrDisallowEarlyDeactivation).get_bool())
+                return cur.second;
+    return nullptr;
+}
+
+GenericModule* ModuleManager::GetActiveNoCloakModule()
+{
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and cur.second->IsActive())
+            if (cur.second->HasAttribute(AttrCanCloak) and !cur.second->GetAttribute(AttrCanCloak).get_bool())
+                return cur.second;
+    return nullptr;
 }
 
 uint8 ModuleManager::GetFittedModuleCountByGroup(uint16 groupID)

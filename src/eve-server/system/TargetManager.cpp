@@ -202,6 +202,9 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
 
 bool TargetManager::StartTargeting(SystemEntity *tSE, float lockTime, uint8 maxLockedTargets, double maxTargetLockRange, bool &chase)
 {       // NOTE  this is for npcs
+    // jammed entities can't lock anything (this isn't a range problem, so no chase)
+    if (IsJammed())
+        return false;
     //first make sure they are not already in the list
     if (m_targets.find(tSE) != m_targets.end()) {
         _log(TARGET__DEBUG, " %s(%u): Told to target %s(%u), but we are already targeting them. Ignoring request.", \
@@ -367,6 +370,9 @@ void TargetManager::TargetLost(SystemEntity *tSE) {
 void TargetManager::TargetedByLocked(SystemEntity* pSE) {
     _log(TARGET__TRACE, "%s(%u) has been locked by %s(%u)", \
             mySE->GetName(), mySE->GetID(), pSE->GetName(), pSE->GetID());
+    std::map<SystemEntity*, TargetedByEntry*>::iterator itr = m_targetedBy.find(pSE);
+    if (itr != m_targetedBy.end())
+        itr->second->state = TargMgr::State::Locked;
     // i think this is redundant....check
     //mySE->TargetMgr()->TargetedAdd(pSE);
 }
@@ -475,6 +481,48 @@ void TargetManager::TargetsCleared() {
         multi.events->AddItem(te.Encode());
     PyTuple* tmp = multi.Encode();
     mySE->GetPilot()->SendNotification("OnMultiEvent", "clientID", &tmp);
+}
+
+void TargetManager::LoseAllTargets()
+{
+    if (m_targets.empty())
+        return;
+    std::vector<SystemEntity*> targets;
+    for (auto cur : m_targets)
+        targets.push_back(cur.first);
+    for (auto tSE : targets) {
+        if (m_targets.find(tSE) == m_targets.end())
+            continue;
+        // ships stop their modules on it first.  ClearTarget sends TargetedByLost to them and OnTarget 'lost' to us
+        if (mySE->IsShipSE()) {
+            mySE->GetShipSE()->RemoveTarget(tSE);
+        } else {
+            ClearTarget(tSE);
+        }
+    }
+    _log(TARGET__TRACE, "LoseAllTargets:  %s(%u) has lost all its locks.", mySE->GetName(), mySE->GetID());
+}
+
+bool TargetManager::IsJammed()
+{
+    EwarState* pEwar(mySE->GetEwar());
+    if (pEwar == nullptr)
+        return false;
+    return pEwar->IsJammed();
+}
+
+bool TargetManager::HasLockedTargeters() const
+{
+    for (auto cur : m_targetedBy)
+        if (cur.second->state == TargMgr::State::Locked)
+            return true;
+    return false;
+}
+
+void TargetManager::GetTargetModules(std::vector<ActiveModule*>& into) const
+{
+    for (auto cur : m_modules)
+        into.push_back(cur.second);
 }
 
 bool TargetManager::IsTargetedBy(SystemEntity* pSE)
