@@ -19,7 +19,9 @@ class Client;
 class MissionObjectives
 {
 public:
-    // station where the objective is turned in (courier: destinationID; mining: originID (agent's station)).  0 if not location-bound
+    // the offer's Mission::ObjType (offers made before there were objective types:  by mission type)
+    static uint8 GetObjective(const MissionOffer& offer);
+    // station where the objective is turned in (courier: destinationID; mine/fetch/trade: originID (agent's station)).  0 if not location-bound
     static uint32 GetDeliveryLocation(const MissionOffer& offer);
     // returns Mission::Objective::*.  no side effects
     static uint8 Check(Client* pClient, const MissionOffer& offer);
@@ -32,6 +34,8 @@ public:
     // takes qty from the hangar first, then the cargo, and deletes the taken stacks.
     //  false (nothing taken) if there is not enough, unless allowPartial, which takes what there is
     static bool TakeDelivered(Client* pClient, uint32 stationID, uint16 typeID, uint32 qty, bool allowPartial = false);
+    // GM (/missioncomplete):  completes the kill objective of charID's mission with agentID.  false if there is none
+    static bool ForceComplete(uint32 charID, uint32 agentID);
     // does accepting this mission give the pilot cargo (courier package)
     static bool SpawnsCargoOnAccept(const MissionOffer& offer)  { return offer.typeID == Mission::Type::Courier; }
 };

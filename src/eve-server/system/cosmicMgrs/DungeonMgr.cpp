@@ -2019,8 +2019,10 @@ void DungeonMgr::Process()
             continue;
 
         // completed sites go a while after completion.  expired ones when nobody is there (or half an hour later anyway)
+        //  mission pockets stay until their mission is over (MissionInstanceMgr::Release despawns them)
         Instance& inst = itr->second;
-        if (inst.completed and (now >= inst.completedAt + (sConfig.dungeon.CompletedDespawn * EvE::Time::Second))) {
+        if (inst.completed and (inst.kind != Dungeon::Kind::Mission)
+        and (now >= inst.completedAt + (sConfig.dungeon.CompletedDespawn * EvE::Time::Second))) {
             despawn.push_back(id);
             continue;
         }
@@ -2203,6 +2205,8 @@ void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
         throw CustomError("This acceleration gate is not active.");
     Instance& inst = iItr->second;
     const Dungeon::GateDef* pDef(gate.def);
+    // mission pockets' gates carry the mission level's ship restrictions (missions.GateRestrictions switches them off)
+    const bool shipLists((inst.kind != Dungeon::Kind::Mission) or sConfig.missions.GateRestrictions);
 
     // the client approaches to 2500m (surface distance) before asking
     double distance(pShip->GetPosition().distance(pGate->GetPosition()) - pShip->GetRadius() - pGate->GetRadius());
@@ -2223,7 +2227,7 @@ void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
         }
         return names;
     };
-    if (DungeonDataMgr::IsCapitalGroup(shipGroupID) or ((pDef != nullptr) and
+    if (DungeonDataMgr::IsCapitalGroup(shipGroupID) or ((pDef != nullptr) and shipLists and
         (std::find(pDef->deniedGroups.begin(), pDef->deniedGroups.end(), shipGroupID) != pDef->deniedGroups.end())))
     {
         std::vector<uint32> denied, allowed;
@@ -2232,7 +2236,7 @@ void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
                 .AddFormatValue("ship", new PyInt(shipTypeID))
                 .AddFormatValue("list", new PyString(groupNames(denied)));
     }
-    if ((pDef != nullptr) and !pDef->allowedGroups.empty()
+    if ((pDef != nullptr) and shipLists and !pDef->allowedGroups.empty()
     and (std::find(pDef->allowedGroups.begin(), pDef->allowedGroups.end(), shipGroupID) == pDef->allowedGroups.end()))
         throw UserError("DunShipCannotWarp")
                 .AddFormatValue("ship", new PyInt(shipTypeID))

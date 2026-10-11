@@ -7,19 +7,39 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "EntityList.h"
+#include "agents/Agent.h"
 #include "inventory/Inventory.h"
+#include "missions/MissionInstance.h"
 #include "missions/MissionObjectives.h"
 
 
+uint8 MissionObjectives::GetObjective(const MissionOffer& offer)
+{
+    if (offer.objectiveType != Mission::ObjType::None)
+        return offer.objectiveType;
+    // offers made before mission content had objective types
+    switch (offer.typeID) {
+        case Mission::Type::Courier:    return Mission::ObjType::Deliver;
+        case Mission::Type::Mining:     return Mission::ObjType::Mine;
+        case Mission::Type::Trade:      return Mission::ObjType::Trade;
+        case Mission::Type::Encounter:  return Mission::ObjType::KillAll;
+    }
+    return Mission::ObjType::None;
+}
+
 uint32 MissionObjectives::GetDeliveryLocation(const MissionOffer& offer)
 {
-    switch (offer.typeID) {
-        case Mission::Type::Courier:
+    switch (GetObjective(offer)) {
+        case Mission::ObjType::Deliver:
             return offer.destinationID;
-        case Mission::Type::Mining:
-            // ore is brought back to the agent
+        case Mission::ObjType::Mine:
+        case Mission::ObjType::Fetch:
+        case Mission::ObjType::Trade:
+            // the goods are brought back to the agent
             return offer.originID;
     }
+    // kill objectives aren't turned in anywhere
     return 0;
 }
 
@@ -28,9 +48,11 @@ uint8 MissionObjectives::Check(Client* pClient, const MissionOffer& offer)
     if (offer.stateID != Mission::State::Accepted)
         return Mission::Objective::NotAccepted;
 
-    switch (offer.typeID) {
-        case Mission::Type::Courier:
-        case Mission::Type::Mining: {
+    switch (GetObjective(offer)) {
+        case Mission::ObjType::Deliver:
+        case Mission::ObjType::Mine:
+        case Mission::ObjType::Fetch:
+        case Mission::ObjType::Trade: {
             uint32 locationID = GetDeliveryLocation(offer);
             if ((locationID == 0) or ((uint32)pClient->GetStationID() != locationID))
                 return Mission::Objective::WrongLocation;
@@ -38,6 +60,12 @@ uint8 MissionObjectives::Check(Client* pClient, const MissionOffer& offer)
                 return Mission::Objective::MissingItems;
             return Mission::Objective::Complete;
         }
+        case Mission::ObjType::KillAll:
+        case Mission::ObjType::KillTrigger:
+        case Mission::ObjType::DestroyStructure:
+        case Mission::ObjType::TalkToAgent:
+            // set by the mission pocket's events (MissionInstanceMgr) or a GM
+            return (offer.objectiveCompleted ? Mission::Objective::Complete : Mission::Objective::Incomplete);
     }
 
     return Mission::Objective::Unsupported;
@@ -45,16 +73,36 @@ uint8 MissionObjectives::Check(Client* pClient, const MissionOffer& offer)
 
 bool MissionObjectives::Consume(Client* pClient, const MissionOffer& offer)
 {
-    switch (offer.typeID) {
-        case Mission::Type::Courier:
-        case Mission::Type::Mining: {
+    switch (GetObjective(offer)) {
+        case Mission::ObjType::Deliver:
+        case Mission::ObjType::Mine:
+        case Mission::ObjType::Fetch:
+        case Mission::ObjType::Trade: {
             if ((offer.courierTypeID == 0) or (offer.courierAmount == 0))
                 return true;
             return TakeDelivered(pClient, GetDeliveryLocation(offer), offer.courierTypeID, offer.courierAmount);
         }
     }
 
+    // kill objectives take nothing
     return true;
+}
+
+bool MissionObjectives::ForceComplete(uint32 charID, uint32 agentID)
+{
+    Agent* pAgent(sEntityList.GetAgent(agentID));
+    MissionOffer offer = MissionOffer();
+    if ((pAgent == nullptr) or !pAgent->HasMission(charID, offer) or (offer.stateID != Mission::State::Accepted))
+        return false;
+    switch (GetObjective(offer)) {
+        case Mission::ObjType::KillAll:
+        case Mission::ObjType::KillTrigger:
+        case Mission::ObjType::DestroyStructure:
+        case Mission::ObjType::TalkToAgent:
+            return sMissionInstanceMgr.SetObjectiveComplete(offer.offerID);
+    }
+    // item objectives are done by bringing the items
+    return false;
 }
 
 uint32 MissionObjectives::CountDelivered(Client* pClient, uint32 stationID, uint16 typeID)

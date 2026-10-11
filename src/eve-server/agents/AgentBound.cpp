@@ -35,6 +35,7 @@
 #include "agents/AgentBound.h"
 #include "agents/AgentMgrService.h"
 #include "fleet/FleetService.h"
+#include "missions/MissionInstance.h"
 #include "missions/MissionObjectives.h"
 #include "ship/BeyonceService.h"
 #include "station/Station.h"
@@ -325,6 +326,7 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                     LPService::AddLP(charID, m_agent->GetCorpID(), offer.rewardLP);
                 m_agent->UpdateStandings(call.client, Standings::MissionCompleted, offer.important);
                 m_agent->RemoveOffer(charID);
+                sMissionInstanceMgr.Release(offer.offerID);
             } break;
             case Defer: {   //10
                 // the offer stays in the journal until it expires
@@ -373,6 +375,7 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 }
                 // remove mission offer and set standings accordingly
                 m_agent->DeleteOffer(charID, Mission::State::Failed);
+                sMissionInstanceMgr.Release(offer.offerID);
                 m_agent->SendMissionUpdate(call.client, "quit");
                 agentSays->SetItem(0, new PyInt(m_agent->GetQuitRsp(charID)));
                 agentSays->SetItem(1, new PyInt(charID));
@@ -809,9 +812,14 @@ PyResult AgentBound::GetDungeonShipRestrictions(PyCallArgs &call, PyInt* dungeon
     call.Dump(AGENT__DUMP);
 
     std::vector<uint32> allowed, denied;
-    // the pocket's gates say, else the mission level's rules
-    sDunDataMgr.GetShipRestrictions(dungeonID->value(), allowed, denied);
-    if (allowed.empty()) {
+    if (!sConfig.missions.GateRestrictions) {
+        // the gates only turn capitals away
+        MissionDataMgr::GetShipRestrictions(5, allowed, denied);
+    } else {
+        // the pocket's gates say, else the mission level's rules
+        sDunDataMgr.GetShipRestrictions(dungeonID->value(), allowed, denied);
+    }
+    if (sConfig.missions.GateRestrictions and allowed.empty()) {
         std::vector<uint32> levelDenied;
         MissionDataMgr::GetShipRestrictions(m_agent->GetLevel(), allowed, levelDenied);
         for (auto cur : levelDenied)
@@ -906,6 +914,8 @@ void AgentBound::ResolveLocation(Client* pClient, MissionOffer& offer, const std
     if (locationType == "dungeon") {
         if (pClient->GetSystemID() != offer.dungeonSolarSystemID)
             throw CustomError("That location is in another solar system.");
+        // the pocket is made when the pilot first goes there (again after its system was unloaded)
+        sMissionInstanceMgr.EnsureInstance(offer);
         point = offer.dungeonPos;
         return;
     }

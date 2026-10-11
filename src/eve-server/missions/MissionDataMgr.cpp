@@ -17,6 +17,7 @@
 #include "database/EVEDBUtils.h"
 #include "mail/NotificationMgr.h"
 #include "missions/MissionDataMgr.h"
+#include "missions/MissionInstance.h"
 #include "missions/MissionObjectives.h"
 #include "inventory/ItemFactory.h"
 #include "station/StationDataMgr.h"
@@ -77,6 +78,9 @@ void MissionDataMgr::GetInfo()
 // called every minute from EntityList::Process()
 void MissionDataMgr::Process()
 {
+    // released mission pockets that are due go first
+    sMissionInstanceMgr.Process();
+
     // collect first:  failing/expiring an offer removes it from m_offers
     double now(GetFileTimeNow());
     std::vector<MissionOffer> expired;
@@ -136,6 +140,7 @@ void MissionDataMgr::FailOffer(MissionOffer& data, bool notify)
     MissionDB::UpdateMissionOffer(data);
     RemoveMissionOffer(data.characterID, data);
     m_xoffers.emplace(data.characterID, data);
+    sMissionInstanceMgr.Release(data.offerID);
 
     if (pAgent == nullptr)
         return;

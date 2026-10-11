@@ -34,6 +34,7 @@
 #include "StaticDataMgr.h"
 #include "StatisticMgr.h"
 #include "missions/MissionDataMgr.h"
+#include "missions/MissionInstance.h"
 //console commands
 #include "ConsoleCommands.h"
 // account services
@@ -1005,6 +1006,8 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
     /* log out all clients (no-op when the halt path already did it) */
     if (!sConsole.IsDbError())
         sEntityList.Shutdown();
+    /* mission pockets get no more dungeon events */
+    sMissionInstanceMgr.Close();
     /* Close the MarketMgr */
     sMktMgr.Close();
     /* Close the sovereignty data manager (saves anything changed before shutdown) */

@@ -17,5 +17,7 @@ COMMAND( entity, Acct::Role::SPAWN,
 COMMAND( crime, Acct::Role::GML,
          "(me|charID|entityID) [victimID] - commits a crime for testing CONCORD.  a pilot attacks the victim (default: you,"
          " or a civilian when it's you) through the normal crime rules.  an NPC or other entity is made a criminal" )
+COMMAND( missioncomplete, Acct::Role::GML,
+         "(agentID) [charID] - completes the kill objective of your (or charID's) accepted mission with the agent" )
 COMMAND( heat, Acct::Role::VIP,
          "[hi|med|low|all] [percent] [me|charID] - shows or sets a ship's rack heat.  no arguments shows yours, (me|charID) shows theirs" )

@@ -31,6 +31,7 @@
  *  /entity deploy      WM: /Entity deploy this type
  *  /heat               testing: shows or sets rack heat
  *  /crime              testing: commits a crime, to bring CONCORD
+ *  /missioncomplete    testing: completes a mission's kill objective (MissionObjectives::ForceComplete)
  */
 
 #include "eve-server.h"
@@ -38,6 +39,7 @@
 #include "Client.h"
 #include "EntityList.h"
 #include "admin/AllCommands.h"
+#include "missions/MissionObjectives.h"
 #include "admin/CommandDB.h"
 #include "admin/CommandDispatcher.h"
 #include "admin/SlashService.h"
@@ -339,4 +341,17 @@ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &servic
         snprintf(buf, sizeof(buf), "%s is now a criminal in %s.  No CONCORD in low-sec, but the sentries will shoot.", who.c_str(), where.c_str());
     }
     return new PyString(buf);
+}
+
+PyResult Command_missioncomplete(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (!args.isNumber(1))
+        throw CustomError ("Correct Usage: /missioncomplete (agentID) [charID]");
+    uint32 agentID(atoi(args.arg(1).c_str()));
+    uint32 charID(pClient->GetCharacterID());
+    if (args.isNumber(2))
+        charID = atoi(args.arg(2).c_str());
+    if (!MissionObjectives::ForceComplete(charID, agentID))
+        throw CustomError ("No accepted kill mission of %u with agent %u.", charID, agentID);
+    return new PyString("Mission objective completed.");
 }
