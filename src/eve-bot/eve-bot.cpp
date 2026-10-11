@@ -21,7 +21,7 @@
  *                                     ints, none is None.  e.g. dogma LinkWeapons $ship $launcher1 $launcher2
  *   launch <itemID> <qty>             launch drones from the drone bay (one Drop call, like dragging a stack)
  *   drones <command> [targetID]       entity command on every drone we have in space:
- *                                     engage, returnhome, returnbay, abandon, reconnect
+ *                                     engage, mine, returnhome, returnbay, abandon, reconnect
  *   wait <seconds>                    keep reading from the server
  *   expect <what> ...                 checks, printed as PASS/FAIL (see Expect())
  *   quit
@@ -824,10 +824,15 @@ int main(int argc, char* argv[]) {
             vars[w[1]] = val;
             Out("%s = %s", w[1].c_str(), val.c_str());
         } else if (cmd == "spaceobject") {
-            // set <var> to the newest ball in space of this typeID
-            int64 type = std::atoll(w[2].c_str()), best = 0;
+            // set <var> to the newest ball in space of this typeID (or of any in a comma-separated list)
+            std::set<int64> types;
+            std::stringstream ss(w[2]);
+            std::string t;
+            while (std::getline(ss, t, ','))
+                if (!t.empty()) types.insert(std::atoll(t.c_str()));
+            int64 best = 0;
             for (auto cur : bot.m_balls)
-                if ((cur.second == type) and (cur.first > best)) best = cur.first;
+                if (types.count(cur.second) and (cur.first > best)) best = cur.first;
             vars[w[1]] = std::to_string(best);
             Out("%s = %lld", w[1].c_str(), (long long)best);
         } else if (cmd == "assemble" or cmd == "board") {
@@ -982,8 +987,8 @@ int main(int argc, char* argv[]) {
             std::string what = w[1];
             PyTuple* args;
             std::string method;
-            if (what == "engage") {
-                method = "CmdEngage";
+            if ((what == "engage") or (what == "mine")) {
+                method = (what == "engage") ? "CmdEngage" : "CmdMine";
                 args = new PyTuple(2);
                 args->SetItem(0, list);
                 args->SetItem(1, new PyInt(std::atoi(w[2].c_str())));
