@@ -293,6 +293,7 @@ namespace Dungeon {
         bool hasCompletionEvent;                // some trigger completes the dungeon (else: all groups destroyed)
         std::vector<uint32> roomOrder;          // roomIDs ascending.  index 0 is the entry room
         std::map<uint32, Room> rooms;
+        std::map<uint32, GateDef> gates;        // acceleration gate rules by objectID (live gates point in here)
     };
 }
 

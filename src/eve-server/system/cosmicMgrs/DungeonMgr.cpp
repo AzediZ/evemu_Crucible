@@ -289,9 +289,14 @@ void DungeonDataMgr::Load(uint32 dungeonID)
             continue;
         m_byArchetype.emplace(cur.second->archetypeID, cur.first);
         for (auto& room : cur.second->rooms) {
-            for (auto& object : room.second.objects)
-                if (m_gates.find(object.objectID) != m_gates.end())
-                    m_gateDungeon[object.objectID] = cur.first;
+            for (auto& object : room.second.objects) {
+                auto gItr = m_gates.find(object.objectID);
+                if (gItr == m_gates.end())
+                    continue;
+                m_gateDungeon[object.objectID] = cur.first;
+                // a copy the dungeon's live instances keep when this dungeon is reloaded
+                cur.second->gates[object.objectID] = gItr->second;
+            }
             for (auto& trigger : room.second.triggers)
                 for (auto& event : trigger.events)
                     if (event.eventType == Dungeon::Event::Trigger::DungeonCompletion)
@@ -825,31 +830,36 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
         entity.allianceID = inst.factionID;
         entity.factionID = ((inst.factionID == factionRogueDrones) ? 0 : inst.factionID);
         entity.position = pos;
+
+    uint32 itemID(iRef->itemID());
+    // a gate's state must exist before its entity does (its slim item is sent when it enters its bubble).
+    //  its rules come from the instance's own copy of the dungeon, which a reload of the dungeon doesn't touch
+    if (pType->groupID() == EVEDB::invGroups::Warp_Gate) {
+        auto gItr = inst.dungeon->gates.find(objectID);
+        LiveGate gate = LiveGate();
+            gate.instanceID = inst.instanceID;
+            gate.roomIdx = roomIdx;
+            gate.objectID = objectID;
+            gate.def = ((gItr != inst.dungeon->gates.end()) ? &gItr->second : nullptr);
+            gate.open = ((gate.def == nullptr) or !gate.def->locked);
+            gate.openUntil = (gate.open ? Win32TimeNow() : 0);
+            gate.shownOpen = (gate.open and ((gate.def == nullptr) or !gate.def->requireClear));
+        m_gates[itemID] = gate;
+    }
+
     // dungeon objects don't show on the scanner
     if (!m_system->BuildDynamicEntity(entity, 0, false)) {
+        m_gates.erase(itemID);
         iRef->Delete();
         return 0;
     }
 
-    uint32 itemID(iRef->itemID());
     if (objectID != 0) {
         room.objects[objectID] = itemID;
     } else {
         room.extraObjects.insert(itemID);
     }
     Index(itemID, inst.instanceID, roomIdx);
-
-    if (pType->groupID() == EVEDB::invGroups::Warp_Gate) {
-        LiveGate gate = LiveGate();
-            gate.instanceID = inst.instanceID;
-            gate.roomIdx = roomIdx;
-            gate.objectID = objectID;
-            gate.def = sDunDataMgr.GetGate(objectID);
-            gate.open = ((gate.def == nullptr) or !gate.def->locked);
-            gate.openUntil = (gate.open ? Win32TimeNow() : 0);
-            gate.shownOpen = (gate.open and ((gate.def == nullptr) or !gate.def->requireClear));
-        m_gates[itemID] = gate;
-    }
     return itemID;
 }
 
@@ -945,7 +955,12 @@ DungeonMgr::LiveGroup* DungeonMgr::FindGroup(Instance& inst, uint32 spawnGroupID
 void DungeonMgr::RemoveEntity(uint32 itemID, bool explode)
 {
     SystemEntity* pSE(m_system->GetSE(itemID));
-    if ((pSE == nullptr) or pSE->IsDead())
+    if (pSE == nullptr) {
+        // already gone (mined out, scooped, removed elsewhere)
+        m_entityIndex.erase(itemID);
+        return;
+    }
+    if (pSE->IsDead())
         return;
 
     if (explode) {
@@ -1179,7 +1194,12 @@ void DungeonMgr::DropLoot(uint32 lootGroupID, uint32 wreckID, const GPoint& pos,
             containerRef = cargoRef;
         }
         ItemData iLoot(cur.typeID, ownerID, containerRef->itemID(), flagNone, quantity);
-        containerRef->AddItem(sItemFactory.SpawnItem(iLoot));
+        InventoryItemRef iRef(sItemFactory.SpawnItem(iLoot));
+        if (iRef.get() == nullptr) {
+            _log(DUNG__WARNING, "DungeonMgr::DropLoot() - unable to spawn type %u of loot group %u", cur.typeID, lootGroupID);
+            continue;
+        }
+        containerRef->AddItem(iRef);
     }
 }
 
@@ -1729,9 +1749,12 @@ void DungeonMgr::ProcessPresence(Instance& inst, const std::vector<std::pair<uin
             if (room.origin.distance(cur.second) < BUBBLE_RADIUS_METERS)
                 inside.insert(cur.first);
 
+        bool hadPlayers(!room.playersInside.empty());
         for (auto charID : inside) {
             if (room.playersInside.find(charID) != room.playersInside.end())
                 continue;
+            // the new arrival is in the room for its own triggers (their messages go to the room)
+            room.playersInside.insert(charID);
             Ctx ctx;
                 ctx.charID = charID;
             if (!room.entered) {
@@ -1750,7 +1773,6 @@ void DungeonMgr::ProcessPresence(Instance& inst, const std::vector<std::pair<uin
             if (m_instances.find(instanceID) == m_instances.end())
                 return;
         }
-        bool hadPlayers(!room.playersInside.empty());
         room.playersInside = inside;
         if (hadPlayers and inside.empty()) {
             Ctx ctx;
