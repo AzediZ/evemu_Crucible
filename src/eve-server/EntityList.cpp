@@ -354,6 +354,15 @@ void EntityList::GetStationGuestList(uint32 stationID, std::vector<Client*> &res
         itr->second->GetGuestList(result);
 }
 
+uint32 EntityList::GetLoggedInCount() const
+{
+    uint32 count(0);
+    for (auto cur : m_clients)
+        if (cur->GetUserID() > 0)
+            ++count;
+    return count;
+}
+
 bool EntityList::IsOnline(uint32 charID)
 {
     if (m_players.find(charID) == m_players.end())

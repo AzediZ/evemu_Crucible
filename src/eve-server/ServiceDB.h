@@ -45,6 +45,8 @@ public:
     static bool UpdateAccountHash( const char* username, std::string &hash );
     static bool IncrementLoginCount(uint32 accountID );
     static void UpdatePassword(uint32 accountID, const char* pass);
+    // true when the account has no characters, or its oldest character was created within 'days' days
+    static bool GetAccountNewbie(uint32 accountID, uint8 days);
 
     uint32 GetStationOwner(uint32 stationID);
 

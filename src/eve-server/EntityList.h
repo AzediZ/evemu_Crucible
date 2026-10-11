@@ -106,6 +106,8 @@ public:
 
     uint32 GetNPCCount()                                { return m_npcs; }
     uint32 GetClientCount() const                       { return m_clients.size(); }
+    // authenticated sessions (incl. character select).  connections still logging in have userid 0
+    uint32 GetLoggedInCount() const;
     uint32 GetPlayerCount() const                       { return m_players.size(); }
     uint32 GetSystemCount() const                       { return m_systems.size(); }
     uint32 GetStationCount() const                      { return m_stations.size(); }

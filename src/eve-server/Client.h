@@ -425,12 +425,18 @@ protected:
     /********************************************************************/
     void _GetVersion( VersionExchangeServer& version );
     uint32 GetUserCount();
-    uint32 _GetQueuePosition()                          { /* hack */ return 1; }
+    // logon queue position for an account with this role (1 = may log in, >=2 = queued).  QC probes use the general position
+    uint32 _GetQueuePosition()                          { return _GetQueuePositionFor(0); }
+    uint32 _GetQueuePositionFor(int64 role);
 
     /********************************************************************/
     /* EVEClientLogin statemachine                                      */
     /********************************************************************/
     bool _LoginFail(std::string fail_msg);
+    // account role for this login: db role with NEWBIE recomputed (and PETITIONEE added for GMs)
+    int64 ComputeLoginRole(const AccountData& aData);
+    // passwordVersion already sent for the current authentication attempt
+    bool m_passwordVersionSent;
     bool _VerifyVersion( VersionExchangeClient& version );
     bool _VerifyCrypto( CryptoRequestPacket& cr );
     bool _VerifyLogin( CryptoChallengePacket& ccp );
@@ -456,6 +462,9 @@ public:
     bool CanThrow()                                     { return m_canThrow; }
 
     bool IsCharCreation()                               { return m_charCreation; }
+
+    // account.type, or Mammon when the db holds a value the client doesn't know
+    static uint8 ValidAccountType(uint8 type);
     void CreateChar(bool set)                           { m_charCreation = set; }
 
     void AddBindID(uint32 bindID)                       { m_bindSet.emplace(bindID); }

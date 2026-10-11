@@ -110,7 +110,8 @@ bool ServiceDB::GetAccountInformation( CryptoChallengePacket& ccp, AccountData& 
     aData.id         = row.GetInt(0);
     aData.clientID   = row.GetInt(1);
     aData.password   = (row.IsNull(2) ? "" : row.GetText(2));
-    aData.hash       = (row.IsNull(3) ? "" : row.GetText(3));
+    // hash is a binary sha-1 blob and may contain NUL bytes
+    aData.hash       = (row.IsNull(3) ? "" : std::string(row.GetText(3), row.ColumnLength(3)));
     aData.role       = row.GetInt64(4);
     aData.type       = row.GetUInt(5);
     aData.online     = row.GetInt(6) ? true : false;
@@ -170,6 +171,21 @@ void ServiceDB::UpdatePassword(uint32 accountID, const char* pass)
 {
     DBerror err;
     sDatabase.RunQuery(err, "UPDATE account SET password = '%s' WHERE accountID=%u", pass, accountID);
+}
+
+bool ServiceDB::GetAccountNewbie(uint32 accountID, uint8 days)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT MIN(createDateTime) FROM chrCharacters WHERE accountID = %u", accountID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return true;    // no characters yet
+
+    return ((GetFileTimeNow() - row.GetInt64(0)) < (days * EvE::Time::Day));
 }
 
 void ServiceDB::SetServerOnlineStatus(bool online) {

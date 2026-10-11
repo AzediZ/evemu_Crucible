@@ -38,6 +38,7 @@
 #include "ConsoleCommands.h"
 #include "EVEServerConfig.h"
 #include "LiveUpdateDB.h"
+#include "auth/PasswordModule.h"
 
 #include "StaticDataMgr.h"
 #include "chat/LSCService.h"
@@ -122,6 +123,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
     m_setStateSent = false;
     m_validSession = false;
     m_sessionChangeActive = false;
+    m_passwordVersionSent = false;
 
     //m_toGate = 0;
     m_locationID = 0;
@@ -2463,21 +2465,30 @@ bool Client::_VerifyCrypto(CryptoRequestPacket& cr)
 
 bool Client::_VerifyLogin(CryptoChallengePacket& ccp)
 {
-    /* send passwordVersion required: 1=plain, 2=hashed */
-    // this doesnt work as i want it to.
-    //  sending '2' will have client use hashed pass.
-    //  sending '1' will have client send hashed pass first, then a second authentication packet using plain pass
-    PyRep* res = new PyInt(2);
-    mNet->QueueRep(res);
-
     std::string failMsg = "Login Authorization Invalid.";
 
     // test account name for invalid chars (which may allow sql injection)
-    if (!ServiceDB::ValidateAccountName(ccp, failMsg))
-        return _LoginFail(failMsg);
+    bool valid = ServiceDB::ValidateAccountName(ccp, failMsg);
 
     AccountData aData = AccountData();
-    if (!ServiceDB::GetAccountInformation(ccp, aData, failMsg))
+    if (valid)
+        valid = ServiceDB::GetAccountInformation(ccp, aData, failMsg);
+
+    /* the client reads passwordVersion right after its first secure handshake:  1=plain, 2=hashed
+     *  on 1, it re-sends the same handshake with user_password set and user_password_hash = None
+     *  accounts which only have a plain password (no hash yet) get 1, so we can verify and convert them
+     */
+    if (!m_passwordVersionSent) {
+        m_passwordVersionSent = true;
+        int32 version(2);
+        if (valid and aData.hash.empty() and !aData.password.empty())
+            version = 1;
+        mNet->QueueRep(new PyInt(version));
+        if (version == 1)
+            return false;   // stay in _HandleAuthentication for the second handshake
+    }
+
+    if (!valid)
         return _LoginFail(failMsg);
 
     if (aData.banned) {
@@ -2492,22 +2503,27 @@ bool Client::_VerifyLogin(CryptoChallengePacket& ccp)
 
     if (!ccp.user_password.empty()) {
         sLog.Warning("  Client::Login()", "%s(%u) - Using Plain Password", aData.name.c_str(), aData.clientID);
-        if (strcmp(aData.password.c_str(), ccp.user_password.c_str()) != 0) {
+        if (aData.password.empty() or (aData.password != ccp.user_password)) {
             failMsg = "The plain Password you entered is incorrect for this account.";
             return _LoginFail(failMsg);
         }
+
+        // convert this account to a hashed password and drop the plain one
+        std::string hash;
+        if (PasswordModule::GeneratePassHash(ccp.user_name, ccp.user_password, hash)
+        and ServiceDB::UpdateAccountHash(ccp.user_name.c_str(), hash)) {
+            ServiceDB::UpdatePassword(aData.id, "");
+            sLog.Green("  Client::Login()", "%s(%u) - Plain password converted to hash", aData.name.c_str(), aData.clientID);
+        }
     } else {
-        //sLog.Warning("  Client::Login()", "%s(%u) - Using Hashed Password", aData.name.c_str(), aData.clientID);
-        if (strcmp(aData.hash.c_str(), ccp.user_password_hash.c_str()) != 0) {
+        // hash is binary, so compare the whole string (strcmp stops at the first NUL)
+        if (aData.hash.empty() or (aData.hash != ccp.user_password_hash)) {
             failMsg = "The Password you entered is incorrect for this account.";
             return _LoginFail(failMsg);
         }
-
-        if (!ccp.user_password.empty())
-            ServiceDB::UpdatePassword(aData.id, ccp.user_password.c_str());
     }
 
-    /** @todo  check this character/account for newbie status and revoke as needed before account update.  */
+    int64 role = ComputeLoginRole(aData);
 
     /* send our handshake */
     CryptoServerHandshake server_shake;
@@ -2517,7 +2533,7 @@ bool Client::_VerifyLogin(CryptoChallengePacket& ccp)
     server_shake.verification = new PyBool(false);
     server_shake.cluster_usercount = sEntityList.GetClientCount(); //GetUserCount();
     server_shake.proxy_nodeid = 0xFFAA; //888444
-    server_shake.user_logonqueueposition = _GetQueuePosition();
+    server_shake.user_logonqueueposition = _GetQueuePositionFor(role);
     // binascii.crc_hqx of marshaled single-element tuple containing 64 zero-bytes string
     server_shake.challenge_responsehash = "55087";
 
@@ -2529,22 +2545,79 @@ bool Client::_VerifyLogin(CryptoChallengePacket& ccp)
     server_shake.boot_build = EVEBuildVersion;
     server_shake.boot_codename = EVEProjectCodename;
     server_shake.boot_region = EVEProjectRegion;
-    res = server_shake.Encode();
-    mNet->QueueRep(res);
+    uint32 position = server_shake.user_logonqueueposition;
+    mNet->QueueRep(server_shake.Encode());
+
+    if (position > 1) {
+        /* the client raises AutLogonFailureTotalUsers, keeps this transport and retries Authenticate on it,
+         *  which starts with a fresh version exchange
+         */
+        sLog.Warning("  Client::Login()", "Account %u (%s) queued at position %u (%u/%u logged in)",
+                aData.id, aData.name.c_str(), position, sEntityList.GetLoggedInCount(), sConfig.server.maxPlayers);
+        m_passwordVersionSent = false;
+        Reset();
+        return false;
+    }
 
     // Setup session, but don't send the change yet.
     pSession->SetString("address", EVEClientSession::GetAddress().c_str());
     pSession->SetString("languageID", ccp.user_languageid.c_str());
 
-    pSession->SetInt("userType", Acct::Type::Mammon);     //aData.type  - incomplete (db fields done)
+    pSession->SetInt("userType", ValidAccountType(aData.type));
     pSession->SetInt("userid", aData.id);
-    pSession->SetLong("role", aData.role);
+    pSession->SetLong("role", role);
     pSession->SetLong("clientID", 1000000L * aData.clientID + 888444);  // kinda arbitrary
     pSession->SetLong("sessionID", 0 /*pSession->GetSessionID()*/);
 
     sLog.Green("  Client::Login()","Account %u (%s) logging in from %s", aData.id, aData.name.c_str(), EVEClientSession::GetAddress().c_str());
 
     return true;
+}
+
+uint8 Client::ValidAccountType(uint8 type)
+{
+    switch (type) {
+        case Acct::Type::CCP:
+        case Acct::Type::UK:
+        case Acct::Type::PBC:
+        case Acct::Type::ETC:
+        case Acct::Type::Trial:
+        case Acct::Type::Mammon:
+        case Acct::Type::Media:
+        case Acct::Type::CDKey:
+        case Acct::Type::IA:
+            return type;
+    }
+    return Acct::Type::Mammon;
+}
+
+int64 Client::ComputeLoginRole(const AccountData& aData)
+{
+    /* ROLE_NEWBIE puts the pilot in Rookie Help (lscengine) and keeps the tutorial offered (charsel).
+     *  Crucible:  new pilots are newbies for their first 30 days.  this is an account role, so it is
+     *  computed here from the account's oldest character (or no characters at all).
+     *  it is not changed per character, as the client logs a session error when role changes for an active character.
+     */
+    int64 role = aData.role & ~Acct::Role::NEWBIE;
+    if (ServiceDB::GetAccountNewbie(aData.id, 30))
+        role |= Acct::Role::NEWBIE;
+    // GMs work the petition queues
+    if (role & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::ADMIN))
+        role |= Acct::Role::PETITIONEE;
+    return role;
+}
+
+uint32 Client::_GetQueuePositionFor(int64 role)
+{
+    if (sConfig.server.maxPlayers == 0)
+        return 1;
+    // VIP keys and GM/dev accounts bypass the logon queue
+    if (role & (Acct::Role::VIPLOGIN | Acct::Role::GML | Acct::Role::GMH | Acct::Role::ADMIN
+              | Acct::Role::PROGRAMMER | Acct::Role::QA | Acct::Role::CONTENT))
+        return 1;
+    // same as live (machoNet):  first queued = 2
+    int64 position = (int64)sEntityList.GetLoggedInCount() - sConfig.server.maxPlayers + 2;
+    return (position < 1 ? 1 : (uint32)position);
 }
 
 bool Client::_LoginFail(std::string fail_msg)
@@ -2563,8 +2636,8 @@ bool Client::_VerifyFuncResult(CryptoHandshakeResult& result)
         ack.jit = GetLanguageID();
         ack.userid = GetUserID();   //5654387 accountID?
         ack.maxSessionTime = PyStatic.NewNone();        // set this for an auto-logout time?
-        ack.userType = Acct::Type::Mammon;      //GetAccountType()  - not written yet
-        ack.role = Acct::Role::PLAYER | Acct::Role::NEWBIE | Acct::Role::LOGIN; /*  live returns these */
+        ack.userType = GetAccountType();
+        ack.role = GetAccountRole();
         ack.address = GetAddress();
         ack.inDetention = PyStatic.NewNone();   // dont know what this is or what it's for
         ack.client_hash = PyStatic.NewNone();
