@@ -184,6 +184,8 @@ public:
     // after one of pMod's overloaded cycles, pMod and its rack may take heat damage
     void HeatDamageCheck(GenericModule* pMod);
     void DamageModule(uint32 modID, float amt=1)        { m_ModuleManager->DamageModule(modID, amt); }
+    // pMod's damage reached its hp.  offlines it (it can't be onlined until repaired)
+    void BurnOut(GenericModule* pMod);
     void DamageRandModule()                             { m_ModuleManager->DamageRandModule(); }
 
     // get list of fitted modules
@@ -260,34 +262,52 @@ public:
     void CharacterBoardingShip()                        { m_ModuleManager->CharacterBoardingShip(); }
 
     /* linking weapons methods */
+    // number of weapons in pMod's bank (1 if not banked)
     uint8 GetLinkedCount(GenericModule* pMod);
+    // number of online, loaded weapons in pMod's bank (1 if not banked)
     uint8 GetLoadedLinkedCount(GenericModule* pMod);
     bool HasLinkedWeapons()                             { return (!m_linkedWeapons.empty()); }
+    // master of the bank pMod is in (pMod itself if it is the master), nullptr if not banked
+    GenericModule* GetBankMaster(GenericModule* pMod);
+    // a bank with an offline member can't be activated
+    bool BankHasOfflineMember(GenericModule* pMod);
+    /* dogma calls.  these throw the client's CantLink* / CantUngroup* errors */
     void LinkAllWeapons();
-    void LinkWeapon(uint32 masterID, uint32 slaveID);           // this should not throw
-    void PeelAndLink(uint32 masterID, uint32 slaveID);          // this should not throw
-    void MergeModuleGroups(uint32 masterID, uint32 slaveID);    // this should not throw
-    uint32 UnlinkWeapon(uint32 moduleID);
-    void UnlinkGroup(uint32 memberID, bool update=false);
-    void UnlinkAllWeapons();
+    void LinkWeapon(uint32 masterID, uint32 slaveID);
+    void PeelAndLink(uint32 masterID, uint32 slaveID);
+    void MergeModuleGroups(uint32 masterID, uint32 slaveID);
+    uint32 UnlinkWeapon(uint32 moduleID);           // returns the slave taken out of moduleID's bank
+    // dissolves the bank memberID is in.  force skips the active/loading checks (unfitting)
+    void UnlinkGroup(uint32 memberID, bool update=false, bool force=false);
+    void UnlinkAllWeapons(bool force=false);
     PyRep* GetLinkedWeapons();
-    void OfflineGroup(GenericModule* pMod);
-    void DamageGroup(GenericModule* pMod);
     // to load with ammo
     void LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs);
     void GetLinkedWeaponMods(EVEItemFlags flag, std::vector<GenericModule*> &modules);
 
 protected:
     /* linking weapons methods */
+    // adds pSlave to pMaster's bank.  no checks
     void LinkWeapon(GenericModule* pMaster, GenericModule* pSlave);
     void UnlinkWeapon(uint32 masterID, uint32 slaveID);
+    // hi slot turret or launcher of a groupable group
+    bool IsGroupable(GenericModule* pMod);
+    // pMod's bank members, master first.  just pMod when not banked
+    void GetBankMembers(GenericModule* pMod, std::vector<GenericModule*>& modules);
+    // these throw
+    void CheckLinkable(GenericModule* pMod);
+    void CheckLinkable(GenericModule* pMod1, GenericModule* pMod2);
+    void CheckUnlinkable(GenericModule* pMod);
+    // checks the modules joining a bank and the bank, then unloads them (server.UnloadOnLinkAll)
+    void PrepareLink(std::vector<GenericModule*>& joining, std::vector<GenericModule*>& bank);
+    // takes one module out of its bank.  a bank left with one module is dissolved
+    void RemoveFromBank(GenericModule* pMod);
+    // OnWeaponBanksChanged to the pilot
+    void SendWeaponBanks();
     // to load saved linked weapons
     void LoadWeaponGroups();
     // to save linked weapons
     void SaveWeaponGroups();
-    // this single iteration loop will link same type weapons, then remove the weapon from the list.
-    //  non-linked weapons are kept in list to be checked upon return to caller.
-    void LinkWeaponLoop(std::list< GenericModule* >& moduleVec);
 
 private:
     Client* m_pilot;
@@ -315,7 +335,6 @@ private:
     double RackHeatAt(int8 rack, int64 time);
     void SyncRackHeat(int8 rack);
     void SendHeatChange(uint16 attrID, double value, int64 time);
-    void BurnOut(GenericModule* pMod);
 
     void ProcessShipEffects(bool update=false);
 

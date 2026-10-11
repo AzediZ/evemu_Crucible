@@ -65,21 +65,33 @@ void TurretModule::ApplyDamage()
     // add data to StatisticMgr
     sStatMgr.Increment(Stat::pcShots);
 
+    /* grouped weapons each roll to hit (dev blog "Weapon Grouping").  only online, loaded weapons fire.
+     *  bank members are the same type with the same attributes, so each roll uses this module's numbers.
+     *  the damage is the sum of the rolls, sent as one hit whose quality (damage message) is the average roll
+     */
+    uint8 shots(1);
+    if (m_linkMaster)
+        shots = m_shipRef->GetLoadedLinkedCount(this);
+    if (shots < 1)
+        shots = 1;
+    float toHit(0.0f);
+    for (uint8 i = 0; i < shots; ++i)
+        toHit += m_formula.GetToHit(m_shipRef, this, m_targetSE);
+    toHit /= shots;
+
     Damage d(m_shipRef->GetPilot()->GetShipSE(),
             m_modRef,
             m_chargeRef->GetAttribute(AttrKineticDamage).get_float(),
             m_chargeRef->GetAttribute(AttrThermalDamage).get_float(),
             m_chargeRef->GetAttribute(AttrEmDamage).get_float(),
             m_chargeRef->GetAttribute(AttrExplosiveDamage).get_float(),
-            m_formula.GetToHit(m_shipRef, this, m_targetSE),
+            toHit,
             m_effectID
     );
 
     d *= GetAttribute(AttrDamageMultiplier).get_float();
     d *= sConfig.rates.turretDamage;
-
-    if (m_linkMaster)
-        d *= m_shipRef->GetLoadedLinkedCount(this);   // only loaded weapons add to damage.
+    d *= shots;
 
     m_targetSE->ApplyDamage(d);
 

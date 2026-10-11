@@ -738,7 +738,7 @@ void ShipItem::LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& charge
     m_ModuleManager->LoadCharge(cRef, pMod->flag());
     // loop thru slaves and load charge(s)
     std::list<GenericModule*>::iterator itr2 = itr->second.begin();
-    while ((itr2 != itr->second.end()) and (pos <= size)) {
+    while ((itr2 != itr->second.end()) and (pos < size)) {
         cRef = sItemFactory.GetItemRef(chargeIDs[pos]);
         if (cRef.get() == nullptr){
             ++pos;
@@ -1172,11 +1172,6 @@ void ShipItem::ReplaceCharges(EVEItemFlags flag, InventoryItemRef newCharge)
 
 */
 
-void ShipItem::DamageGroup(GenericModule* pMod)
-{
-    // not used yet
-}
-
 namespace {
     // per rack: high, medium, low
     const uint16 heatAttr[3]        = { AttrHeatHi, AttrHeatMed, AttrHeatLow };
@@ -1402,11 +1397,16 @@ void ShipItem::BurnOut(GenericModule* pMod)
         pClient->SendNotifyMsg("Your %s has burned out.", pMod->GetSelf()->name());
     // stops it now, takes it out of overload, and tells the client it's offline.  it can't be onlined until repaired
     pMod->Offline();
+    // its bank stays, but stops and can't be activated until it is back online
+    m_ModuleManager->OnModuleWentOffline(pMod);
 }
 
 void ShipItem::StripFitting()
 {
-    UnlinkAllWeapons();
+    bool banked(HasLinkedWeapons());
+    UnlinkAllWeapons(true);
+    if (banked)
+        SendWeaponBanks();
 
     EVEItemFlags flag = flagCargoHold;
     if (sDataMgr.IsStation(locationID()))
@@ -1435,26 +1435,187 @@ void ShipItem::CargoFull() {
     // drones->return();
 }
 
-void ShipItem::GetLinkedWeaponMods( EVEItemFlags flag, std::vector<GenericModule*> &modules ) {
-    GenericModule* pMod = m_ModuleManager->GetModule(flag);
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-    if (itr != m_linkedWeapons.end()) {
-        modules.push_back(pMod);
-        for (auto cur : itr->second)
-            modules.push_back(cur);
+/* weapon banks
+ *  client contract (clientDogmaLocation.py):
+ *    LinkWeapons(shipID, masterID, fromID)         fromID isnt banked.  returns {masterID: [slaveIDs]} or None
+ *    MergeModuleGroups(shipID, masterID, slaveID)  slaveID is the master of the dragged module's bank.  the whole bank joins masterID's
+ *    PeelAndLink(shipID, masterID, slaveID)        slaveID is the master of the dragged module's bank.  one module leaves it for masterID's
+ *    UnlinkModule(shipID, moduleID)                moduleID is a bank master.  returns a slaveID in that bank, which the client removes
+ *    UnlinkAllModules / LinkAllWeapons             return the bank dict
+ *    DestroyWeaponBank(shipID, masterID)           the client deletes the bank itself
+ *  Crucible rules (dev blog "Weapon Grouping", Oct 2008): same type, hi slot turrets and launchers only,
+ *    online, undamaged, not active or loading and not loaded (server.UnloadOnLinkAll unloads them instead)
+ */
+bool ShipItem::IsGroupable(GenericModule* pMod)
+{
+    if (pMod == nullptr)
+        return false;
+    if (!IsHiSlot(pMod->flag()))
+        return false;
+    // const.dgmGroupableGroupIDs
+    switch (pMod->groupID()) {
+        case EVEDB::invGroups::Energy_Weapon:
+        case EVEDB::invGroups::Projectile_Weapon:
+        case EVEDB::invGroups::Hybrid_Weapon:
+        case EVEDB::invGroups::Missile_Launcher:
+        case EVEDB::invGroups::Missile_Launcher_Assault:
+        case EVEDB::invGroups::Missile_Launcher_Citadel:
+        case EVEDB::invGroups::Missile_Launcher_Cruise:
+        case EVEDB::invGroups::Missile_Launcher_Defender:
+        case EVEDB::invGroups::Missile_Launcher_Heavy:
+        case EVEDB::invGroups::Missile_Launcher_Heavy_Assault:
+        case EVEDB::invGroups::Missile_Launcher_Rocket:
+        case EVEDB::invGroups::Missile_Launcher_Siege:
+        case EVEDB::invGroups::Missile_Launcher_Standard:
+            return true;
+    }
+    return false;
+}
+
+GenericModule* ShipItem::GetBankMaster(GenericModule* pMod)
+{
+    if (pMod == nullptr)
+        return nullptr;
+    if (m_linkedWeapons.find(pMod) != m_linkedWeapons.end())
+        return pMod;
+    for (auto& cur : m_linkedWeapons)
+        if (std::find(cur.second.begin(), cur.second.end(), pMod) != cur.second.end())
+            return cur.first;
+    return nullptr;
+}
+
+void ShipItem::GetBankMembers(GenericModule* pMod, std::vector<GenericModule*>& modules)
+{
+    GenericModule* pMaster(GetBankMaster(pMod));
+    if (pMaster == nullptr) {
+        if (pMod != nullptr)
+            modules.push_back(pMod);
+        return;
+    }
+    modules.push_back(pMaster);
+    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMaster);
+    for (auto cur : itr->second)
+        modules.push_back(cur);
+}
+
+bool ShipItem::BankHasOfflineMember(GenericModule* pMod)
+{
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    for (auto cur : modules)
+        if (!cur->isOnline())
+            return true;
+    return false;
+}
+
+void ShipItem::CheckLinkable(GenericModule* pMod)
+{
+    if (!pMod->isOnline())
+        throw UserError ("CantLinkModuleNotOnline");
+    if (pMod->IsActive())
+        throw UserError ("CantLinkModuleActive");
+    if (pMod->IsLoading())
+        throw UserError ("CantLinkModuleLoading");
+    if (pMod->IsDamaged())
+        throw UserError ("CantLinkModuleDamaged");
+    // loaded weapons are unloaded by PrepareLink() when the server allows it
+    if (pMod->IsLoaded() and !sConfig.server.UnloadOnLinkAll)
+        throw UserError ("CantLinkAmmoInWeapon");
+}
+
+void ShipItem::CheckLinkable(GenericModule* pMod1, GenericModule* pMod2)
+{
+    if ((pMod1 == nullptr) or (pMod2 == nullptr))
+        throw CustomError ("That module is not fitted to your ship.");
+    // the client checks both of these and doesnt call us, so these are catchalls
+    if (pMod1->typeID() != pMod2->typeID())
+        throw CustomError ("You can only group modules of the same type and meta level together.");
+    if (!IsGroupable(pMod1) or !IsGroupable(pMod2))
+        throw CustomError ("Only turrets and launchers fitted in high slots can be grouped.");
+}
+
+void ShipItem::PrepareLink(std::vector<GenericModule*>& joining, std::vector<GenericModule*>& bank)
+{
+    // check everything before changing anything.  modules joining a bank must be linkable,
+    //  the bank they join must be idle and unloaded
+    for (auto cur : joining)
+        CheckLinkable(cur);
+    for (auto cur : bank) {
+        if (cur->IsActive())
+            throw UserError ("CantLinkModuleActive");
+        if (cur->IsLoading())
+            throw UserError ("CantLinkModuleLoading");
+        if (cur->IsLoaded() and !sConfig.server.UnloadOnLinkAll)
+            throw UserError ("CantLinkAmmoInWeapon");
+    }
+    for (auto cur : joining)
+        if (cur->IsLoaded())
+            m_ModuleManager->UnloadCharge(cur);
+    for (auto cur : bank)
+        if (cur->IsLoaded())
+            m_ModuleManager->UnloadCharge(cur);
+}
+
+void ShipItem::CheckUnlinkable(GenericModule* pMod)
+{
+    // if the master is loading or active, so is the whole group
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    for (auto cur : modules) {
+        if (cur->IsActive())
+            throw UserError ("CantUngroupModuleActive");
+        if (cur->IsLoading())
+            throw UserError ("CantUngroupModuleLoading");
+    }
+}
+
+void ShipItem::RemoveFromBank(GenericModule* pMod)
+{
+    GenericModule* pMaster(GetBankMaster(pMod));
+    if (pMaster == nullptr)
+        return;
+
+    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMaster);
+    if (pMod == pMaster) {
+        // the first slave takes over the rest of the bank
+        std::list<GenericModule*> slaves(itr->second);
+        m_linkedWeapons.erase(itr);
+        if (slaves.size() > 1) {
+            GenericModule* pNew(slaves.front());
+            slaves.pop_front();
+            pNew->SetLinkMaster(true);
+            m_linkedWeapons[pNew] = slaves;
+        } else if (!slaves.empty()) {
+            slaves.front()->SetLinked(false);
+            slaves.front()->SetLinkMaster(false);
+        }
     } else {
-        // this module isnt master... loop thru all links and see if we can find it
-        for (auto cur : m_linkedWeapons) {
-            std::list<GenericModule*>::iterator itr2 = cur.second.begin(), end = cur.second.end();
-            while (itr2 != end) {
-                if ((*itr2) == pMod) {
-                    GetLinkedWeaponMods(cur.first->flag(), modules);
-                    return;
-                }
-                ++itr2;
-            }
+        itr->second.remove(pMod);
+        if (itr->second.empty()) {
+            pMaster->SetLinked(false);
+            pMaster->SetLinkMaster(false);
+            m_linkedWeapons.erase(itr);
         }
     }
+    pMod->SetLinked(false);
+    pMod->SetLinkMaster(false);
+}
+
+void ShipItem::SendWeaponBanks()
+{
+    if (m_pilot == nullptr)
+        return;
+    PyTuple* tuple = new PyTuple(3);
+        tuple->SetItem(0, new PyString("OnWeaponBanksChanged"));
+        tuple->SetItem(1, new PyInt(m_itemID));
+        tuple->SetItem(2, GetLinkedWeapons());
+    m_pilot->QueueDestinyEvent(&tuple);
+}
+
+void ShipItem::GetLinkedWeaponMods( EVEItemFlags flag, std::vector<GenericModule*> &modules ) {
+    GenericModule* pMaster(GetBankMaster(m_ModuleManager->GetModule(flag)));
+    if (pMaster != nullptr)
+        GetBankMembers(pMaster, modules);
 }
 
 // only called from dogma call.  can throw
@@ -1462,29 +1623,36 @@ void ShipItem::LinkWeapon(uint32 masterID, uint32 slaveID)
 {
     if (masterID == slaveID)
         return;
-    GenericModule* pMod1 = m_ModuleManager->GetModule(masterID);
-    GenericModule* pMod2 = m_ModuleManager->GetModule(slaveID);
-    LinkWeapon(pMod1, pMod2);
+    GenericModule* pMod1(m_ModuleManager->GetModule(masterID));
+    GenericModule* pMod2(m_ModuleManager->GetModule(slaveID));
+    CheckLinkable(pMod1, pMod2);
 
+    // a banked module joins with its whole bank
+    if (GetBankMaster(pMod2) != nullptr) {
+        MergeModuleGroups(masterID, slaveID);
+        return;
+    }
+
+    GenericModule* pMaster(GetBankMaster(pMod1));
+    if (pMaster == nullptr)
+        pMaster = pMod1;
+
+    std::vector<GenericModule*> joining, bank;
+    joining.push_back(pMod2);
+    GetBankMembers(pMaster, bank);
+    PrepareLink(joining, bank);
+
+    LinkWeapon(pMaster, pMod2);
     SaveWeaponGroups();
 }
 
+// adds pSlave to pMaster's bank (making one if needed).  no checks here
 void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
 {
     if ((pMaster == nullptr) or (pSlave == nullptr))
-        return; // make error here?
+        return;
     if (pMaster == pSlave)
-        return; // make error here?
-    if ((pMaster->IsLoaded()) or (pSlave->IsLoaded()))
-        throw UserError ("CantLinkAmmoInWeapon");
-    if ((pMaster->IsActive()) or (pSlave->IsActive()))
-        throw UserError ("CantLinkModuleActive");
-    if ((pMaster->IsDamaged()) or (pSlave->IsDamaged()))
-        throw UserError ("CantLinkModuleDamaged");
-    if ((pMaster->IsLoading()) or (pSlave->IsLoading()))
-        throw UserError ("CantLinkModuleLoading");
-    if ((!pMaster->isOnline()) or (!pSlave->isOnline()))
-        throw UserError ("CantLinkModuleNotOnline");
+        return;
 
     std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMaster);
     if (itr == m_linkedWeapons.end()) {
@@ -1497,114 +1665,134 @@ void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
         itr->second.push_back(pSlave);
     }
     pSlave->SetLinked(true);
+    pSlave->SetLinkMaster(false);
 }
 
+// only called from dogma call.  can throw
 void ShipItem::MergeModuleGroups(uint32 masterID, uint32 slaveID)
 {
-    _log(MODULE__ERROR, "MergeModuleGroups() called by %s(%u).  It still needs to be written.", name(), itemID());
-}
+    GenericModule* pMod1(m_ModuleManager->GetModule(masterID));
+    GenericModule* pMod2(m_ModuleManager->GetModule(slaveID));
+    CheckLinkable(pMod1, pMod2);
 
-void ShipItem::PeelAndLink(uint32 masterID, uint32 slaveID)
-{
-    _log(MODULE__ERROR, "PeelAndLink() called by %s(%u).  It still needs to be written.", name(), itemID());
-}
+    GenericModule* pMaster(GetBankMaster(pMod1));
+    if (pMaster == nullptr)
+        pMaster = pMod1;
+    GenericModule* pOther(GetBankMaster(pMod2));
+    if (pOther == nullptr)
+        pOther = pMod2;
+    if (pMaster == pOther)
+        return;
 
-void ShipItem::LinkAllWeapons()
-{
-    std::list< GenericModule* > weaponList;
-    m_ModuleManager->GetWeapons(weaponList);
+    std::vector<GenericModule*> joining, bank;
+    GetBankMembers(pOther, joining);
+    GetBankMembers(pMaster, bank);
+    PrepareLink(joining, bank);
 
-    // remove current links
-    for (auto cur : weaponList) {
-        if (sConfig.server.UnloadOnLinkAll)
-            m_ModuleManager->UnloadCharge(cur);
-        cur->SetLinked(false);
-        cur->SetLinkMaster(false);
+    // pOther and all of its slaves join pMaster's bank
+    std::list<GenericModule*> moved;
+    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pOther);
+    if (itr != m_linkedWeapons.end()) {
+        moved = itr->second;
+        m_linkedWeapons.erase(itr);
     }
-    m_linkedWeapons.clear();
-
-    LinkWeaponLoop(weaponList);
-
-    // remove empty masters from map
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.begin();
-    while (itr != m_linkedWeapons.end()) {
-        if (itr->second.empty()) {
-            if (is_log_enabled(MODULE__INFO))
-                _log(MODULE__INFO, "ShipItem::LinkAllWeapons() - %s(%s) has empty link list.  Removing.", \
-                    itr->first->GetSelf()->name(), sDataMgr.GetFlagName(itr->first->flag()));
-            itr = m_linkedWeapons.erase(itr);
-        } else {
-            ++itr;
-        }
-    }
+    LinkWeapon(pMaster, pOther);
+    for (auto cur : moved)
+        LinkWeapon(pMaster, cur);
 
     SaveWeaponGroups();
 }
 
-void ShipItem::LinkWeaponLoop(std::list<GenericModule*>& weaponList)
+// only called from dogma call.  can throw
+void ShipItem::PeelAndLink(uint32 masterID, uint32 slaveID)
 {
-    double start = GetTimeUSeconds();
-    GenericModule* master(nullptr);
-    std::list< GenericModule*>::iterator itr = weaponList.begin();
-    while (itr != weaponList.end()) {
-        if ((*itr)->IsLoaded() or (*itr)->IsLoading()) {
+    GenericModule* pMod1(m_ModuleManager->GetModule(masterID));
+    GenericModule* pMod2(m_ModuleManager->GetModule(slaveID));
+    CheckLinkable(pMod1, pMod2);
+
+    GenericModule* pOther(GetBankMaster(pMod2));
+    if (pOther == nullptr) {
+        LinkWeapon(masterID, slaveID);
+        return;
+    }
+    GenericModule* pMaster(GetBankMaster(pMod1));
+    if (pMaster == nullptr)
+        pMaster = pMod1;
+    if (pMaster == pOther)
+        return;
+
+    // the client sends the master of the source bank, not the dragged module.
+    //  peel its last slave so the source bank keeps its master (and its button)
+    CheckUnlinkable(pOther);
+    GenericModule* pPeeled(m_linkedWeapons[pOther].back());
+
+    std::vector<GenericModule*> joining, bank;
+    joining.push_back(pPeeled);
+    GetBankMembers(pMaster, bank);
+    PrepareLink(joining, bank);
+
+    RemoveFromBank(pPeeled);
+    LinkWeapon(pMaster, pPeeled);
+    SaveWeaponGroups();
+}
+
+// only called from dogma call.  can throw
+void ShipItem::LinkAllWeapons()
+{
+    // one bank per type of the online, undamaged, idle weapons.  existing banks are kept and merged
+    std::list< GenericModule* > weaponList;
+    m_ModuleManager->GetWeapons(weaponList);
+
+    // GetWeapons() is in flag order, so the first of a type has the lowest slot
+    std::map<uint32, std::vector<GenericModule*>> buckets;
+    for (auto cur : weaponList) {
+        if (!IsGroupable(cur) or !cur->isOnline() or cur->IsDamaged())
+            continue;
+        bool busy(false);
+        std::vector<GenericModule*> bank;
+        GetBankMembers(cur, bank);
+        for (auto mod : bank)
+            if (mod->IsActive() or mod->IsLoading())
+                busy = true;
+        if (busy)
+            continue;
+        if (cur->IsLoaded() and !sConfig.server.UnloadOnLinkAll) {
             if (is_log_enabled(MODULE__INFO))
-                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) IsLoaded.  Skipping.", \
-                    (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID());
-            m_pilot->SendErrorMsg("You cannot group the %s while loaded with %s", (*itr)->GetSelf()->name(), (*itr)->GetLoadedChargeRef()->name());
-            itr = weaponList.erase(itr);
-        } else if (master == nullptr) {
-            // lets check if this module will match a master already in list before making new master...
-            bool match(false);
-            for (auto item : m_linkedWeapons)
-                if (item.first->typeID() == (*itr)->typeID()) {
-                    //master = item.first;
-                    if (is_log_enabled(MODULE__INFO))
-                        _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() -(null master) %s(%s-%u) matches list master %s(%s-%u).  Adding.", \
-                            (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID(), \
-                            item.first->GetSelf()->name(), sDataMgr.GetFlagName(item.first->flag()), item.first->itemID());
-                    LinkWeapon(item.first, (*itr));
-                    itr = weaponList.erase(itr);
-                    match = true;
-                    break;
-                }
-            if (match)
-                continue;
-            // didnt match, or list empty.  make new master.
-            master = (*itr);
-            if (is_log_enabled(MODULE__INFO))
-                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - Setting %s(%s-%u) to master.",\
-                    (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID());
-            // set blank list for this master.
-            std::list<GenericModule*> slaves;
-            m_linkedWeapons[master] = slaves;
-            itr = weaponList.erase(itr);
-        } else {
-            if (master->typeID() == (*itr)->typeID()) {    // this item can be slave
-                if (is_log_enabled(MODULE__INFO))
-                    _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) matches master %s(%s-%u).  Adding.", \
-                        (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID(), \
-                        master->GetSelf()->name(), sDataMgr.GetFlagName(master->flag()), master->itemID());
-                LinkWeapon(master, (*itr));
-                itr = weaponList.erase(itr);
-            } else {
-                for (auto item : m_linkedWeapons)
-                    if (item.first->typeID() == (*itr)->typeID()) {
-                        //master = item.first;
-                        if (is_log_enabled(MODULE__INFO))
-                            _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) matches list master %s(%s-%u).  Adding.", \
-                                (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID(), \
-                                item.first->GetSelf()->name(), sDataMgr.GetFlagName(item.first->flag()), item.first->itemID());
-                        LinkWeapon(item.first, (*itr));
-                        itr = weaponList.erase(itr);
-                        break;
-                    }
-                master = nullptr;
+                _log(MODULE__INFO, "ShipItem::LinkAllWeapons() - %s(%s-%u) IsLoaded.  Skipping.", \
+                    cur->GetSelf()->name(), sDataMgr.GetFlagName(cur->flag()), cur->itemID());
+            if (m_pilot != nullptr)
+                m_pilot->SendErrorMsg("You cannot group the %s while loaded with %s", cur->GetSelf()->name(), cur->GetLoadedChargeRef()->name());
+            continue;
+        }
+        buckets[cur->typeID()].push_back(cur);
+    }
+
+    for (auto& cur : buckets) {
+        if (cur.second.size() < 2)
+            continue;
+        // use the first existing bank of this type, else the lowest slot
+        GenericModule* pMaster(nullptr);
+        for (auto mod : cur.second)
+            if (mod->IsMaster()) {
+                pMaster = mod;
+                break;
             }
+        if (pMaster == nullptr)
+            pMaster = cur.second.front();
+
+        for (auto mod : cur.second)
+            if (mod->IsLoaded())
+                m_ModuleManager->UnloadCharge(mod);
+
+        for (auto mod : cur.second) {
+            if ((mod == pMaster) or (GetBankMaster(mod) == pMaster))
+                continue;
+            RemoveFromBank(mod);
+            LinkWeapon(pMaster, mod);
         }
     }
-    if (is_log_enabled(MODULE__INFO))
-        _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - Completed loop in %.3fus.", GetTimeUSeconds() - start);
+
+    SaveWeaponGroups();
 }
 
 /*
@@ -1615,50 +1803,21 @@ void ShipItem::LinkWeaponLoop(std::list<GenericModule*>& weaponList)
  * {'messageKey': 'CantUnlinkModuleActive', 'dataID': 17878129, 'suppressable': False, 'bodyID': 257511, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 2679}
  *    (257511, `You cannot ungroup active modules, please deactivate them first.`)
  */
+// only called from dogma call.  can throw
 uint32 ShipItem::UnlinkWeapon(uint32 moduleID)
 {
-    GenericModule* pMod1(m_ModuleManager->GetModule(moduleID));
-    if (pMod1 == nullptr)
-        return 0; // make error here?
+    // the client removes the returned module from moduleID's bank, so it must be one of its slaves
+    GenericModule* pMaster(GetBankMaster(m_ModuleManager->GetModule(moduleID)));
+    if (pMaster == nullptr)
+        throw CustomError ("That module is not grouped.");
+    CheckUnlinkable(pMaster);
 
-    if (pMod1->IsActive()) {
-        m_pilot->SendNotifyMsg("You cannot ungroup active modules, please deactivate them first.");
-        return 0;
-    }
-    if (pMod1->IsLoading()) {
-        m_pilot->SendNotifyMsg("You cannot ungroup weapons while they are being loaded with charges.");
-        return 0;
-    }
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod1);
-    if (itr == m_linkedWeapons.end())
-        return 0;
-
-    // weird shit here, but this works...
-
-    // get first linked moduleID
-    uint32 slaveID(itr->second.front()->itemID());
-    // delete group
-    UnlinkGroup(moduleID);
-    LinkWeapon(moduleID, slaveID);
-    // make packet for master and first slave (slaveID)
-    PyList* slaves = new PyList();
-        slaves->AddItem(new PyInt(slaveID));
-    PyDict* result = new PyDict();
-        result->SetItem(new PyInt(moduleID), slaves);
-    PyTuple* tuple = new PyTuple(3);
-        tuple->SetItem(0, new PyString("OnWeaponBanksChanged"));
-        tuple->SetItem(1, new PyInt(m_itemID));
-        tuple->SetItem(2, result);      //GetLinkedWeapons()
-    // send 'new' group data to client
-    m_pilot->QueueDestinyEvent(&tuple);
-    // send immediately (otherwise it will wait until after this call returns, which negates this hack
-    //m_pilot->FlushQueue();
-
-    // return slaveID, which client will use to delete it's map and continue processing
-    return slaveID;
+    GenericModule* pSlave(m_linkedWeapons[pMaster].back());
+    RemoveFromBank(pSlave);
+    SaveWeaponGroups();
+    return pSlave->itemID();
 }
 
-// only called from dogma call.  can throw
 void ShipItem::UnlinkWeapon(uint32 masterID, uint32 slaveID)
 {
     if (masterID == slaveID)
@@ -1666,96 +1825,58 @@ void ShipItem::UnlinkWeapon(uint32 masterID, uint32 slaveID)
     GenericModule* pMod1(m_ModuleManager->GetModule(masterID));
     GenericModule* pMod2(m_ModuleManager->GetModule(slaveID));
     if ((pMod1 == nullptr) or (pMod2 == nullptr))
-        return; // make error here?
+        return;
+    if (GetBankMaster(pMod2) != pMod1)
+        return;
 
-    // if master is loading or active, then whole group is
-    if (pMod1->IsActive())
-        throw UserError ("CantUngroupModuleActive");
-    if (pMod1->IsLoading())
-        throw UserError ("CantUngroupModuleLoading");
-
-    pMod2->SetLinked(false);
-
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod1);
-    if (itr != m_linkedWeapons.end()) {
-        std::list<GenericModule*>::iterator itr2 = itr->second.begin();
-        while (itr2 != itr->second.end()) {
-            if ((*itr2) == pMod2) {
-                itr2 = itr->second.erase(itr2);
-                if (itr->second.empty()) {
-                    pMod1->SetLinked(false);
-                    pMod1->SetLinkMaster(false);
-                    m_linkedWeapons.erase(itr);
-                }
-                return;
-            }
-            ++itr2;
-        }
-    }
+    CheckUnlinkable(pMod1);
+    RemoveFromBank(pMod2);
+    SaveWeaponGroups();
 }
 
-// only called from dogma call.  can throw
-void ShipItem::UnlinkGroup(uint32 memberID, bool update/*false*/)
+// called from dogma call (can throw) and unfit (force, doesnt throw)
+void ShipItem::UnlinkGroup(uint32 memberID, bool update/*false*/, bool force/*false*/)
 {
-    GenericModule* pMod1(m_ModuleManager->GetModule(memberID));
-    if (pMod1 == nullptr)
-        return; // make error here?
+    GenericModule* pMaster(GetBankMaster(m_ModuleManager->GetModule(memberID)));
+    if (pMaster == nullptr)
+        return;
+    if (!force)
+        CheckUnlinkable(pMaster);
 
-    // if master is loading or active, then whole group is
-    if (pMod1->IsActive())
-        throw UserError ("CantUngroupModuleActive");
-    if (pMod1->IsLoading())
-        throw UserError ("CantUngroupModuleLoading");
-
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod1);
-    if (itr != m_linkedWeapons.end()) {
-        pMod1->SetLinked(false);
-        pMod1->SetLinkMaster(false);
-        std::list<GenericModule*>::iterator itr2 = itr->second.begin();
-        while (itr2 != itr->second.end()) {
-            (*itr2)->SetLinked(false);
-            itr2 = itr->second.erase(itr2);
-            if (itr->second.empty()) {
-                m_linkedWeapons.erase(itr);
-                SaveWeaponGroups();
-                if (update) {
-                    PyTuple* tuple = new PyTuple(3);
-                        tuple->SetItem(0, new PyString("OnWeaponGroupDestroyed"));
-                        tuple->SetItem(1, new PyInt(m_itemID));
-                        tuple->SetItem(2, new PyInt(memberID));
-                    m_pilot->QueueDestinyEvent(&tuple);
-                }
-                return;
-            }
-        }
-    } else {
-        // this module isnt master... loop thru all links to see if we can find it
-        for (auto cur : m_linkedWeapons) {
-            std::list<GenericModule*>::iterator itr2 = cur.second.begin();
-            while (itr2 != cur.second.end()) {
-                if ((*itr2) == pMod1) {
-                    UnlinkGroup(cur.first->itemID(), update);
-                    return;
-                }
-                ++itr2;
-            }
-        }
-    }
-}
-
-// called from here and dogma call.  can throw
-void ShipItem::UnlinkAllWeapons()
-{
-    std::list< GenericModule* > weaponList;
-    m_ModuleManager->GetWeapons(weaponList);
-    for (auto cur : weaponList) {
-        if (cur->IsActive())
-            throw UserError ("CantUngroupModuleActive");
-        if (cur->IsLoading())
-            throw UserError ("CantUngroupModuleLoading");
-
+    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMaster);
+    for (auto cur : itr->second) {
         cur->SetLinked(false);
         cur->SetLinkMaster(false);
+    }
+    m_linkedWeapons.erase(itr);
+    pMaster->SetLinked(false);
+    pMaster->SetLinkMaster(false);
+    SaveWeaponGroups();
+
+    if (update and (m_pilot != nullptr)) {
+        PyTuple* tuple = new PyTuple(3);
+            tuple->SetItem(0, new PyString("OnWeaponGroupDestroyed"));
+            tuple->SetItem(1, new PyInt(m_itemID));
+            tuple->SetItem(2, new PyInt(pMaster->itemID()));
+        m_pilot->QueueDestinyEvent(&tuple);
+    }
+}
+
+// called from here and dogma call.  can throw unless forced
+void ShipItem::UnlinkAllWeapons(bool force/*false*/)
+{
+    // check everything before changing anything
+    if (!force)
+        for (auto cur : m_linkedWeapons)
+            CheckUnlinkable(cur.first);
+
+    for (auto cur : m_linkedWeapons) {
+        cur.first->SetLinked(false);
+        cur.first->SetLinkMaster(false);
+        for (auto slave : cur.second) {
+            slave->SetLinked(false);
+            slave->SetLinkMaster(false);
+        }
     }
     m_linkedWeapons.clear();
     ShipDB::ClearWeaponGroups(m_itemID);
@@ -1763,24 +1884,22 @@ void ShipItem::UnlinkAllWeapons()
 
 uint8 ShipItem::GetLinkedCount(GenericModule* pMod)
 {
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-    if (itr == m_linkedWeapons.end())
-        return 1;
-    return itr->second.size() + 1;
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    return (modules.empty() ? 1 : modules.size());
 }
 
 uint8 ShipItem::GetLoadedLinkedCount(GenericModule* pMod)
 {
-    uint8 count(1);
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-    if (itr != m_linkedWeapons.end()) {
-        std::list<GenericModule*>::iterator itr2 = itr->second.begin(), end = itr->second.end();
-        while (itr2 != end) {
-            if ((*itr2)->IsLoaded())
-                ++count;
-            ++itr2;
-        }
-    }
+    // only online, loaded weapons fire
+    if (GetBankMaster(pMod) == nullptr)
+        return 1;
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    uint8 count(0);
+    for (auto cur : modules)
+        if (cur->isOnline() and cur->IsLoaded())
+            ++count;
     return count;
 }
 
@@ -1802,28 +1921,6 @@ PyRep* ShipItem::GetLinkedWeapons()
         result->Dump(MODULE__MESSAGE, "    ");
     }
     return result;
-}
-
-void ShipItem::OfflineGroup(GenericModule* pMod)
-{
-    if (pMod->IsMaster()) {
-        std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-        if (itr != m_linkedWeapons.end())
-            for (auto cur : itr->second)
-                cur->Offline();
-    } else {
-        // this module isnt master... loop thru all links to see if we can find it
-        for (auto cur : m_linkedWeapons) {
-            std::list<GenericModule*>::iterator itr = cur.second.begin();
-            while (itr != cur.second.end()) {
-                if ((*itr) == pMod) {
-                    OfflineGroup(cur.first);
-                    return;
-                }
-                ++itr;
-            }
-        }
-    }
 }
 
 void ShipItem::SaveWeaponGroups()
@@ -1858,26 +1955,26 @@ void ShipItem::LoadWeaponGroups()
         //SELECT masterID, slaveID FROM shipWeaponGroups
         pMaster = m_ModuleManager->GetModule(row.GetInt(0));
         pSlave = m_ModuleManager->GetModule(row.GetInt(1));
-        if ((pMaster == nullptr) or (pSlave == nullptr)) {
+        if ((pMaster == nullptr) or (pSlave == nullptr) or (pMaster == pSlave)) {
             error = true;
             continue;
         }
-        //LinkWeapon(pMaster, pSlave);  <<<--- this will throw.  DO NOT use here.
-        std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMaster);
-        if (itr == m_linkedWeapons.end()) {
-            std::list<GenericModule*> slaves;
-            slaves.push_back(pSlave);
-            m_linkedWeapons[pMaster] = slaves;
-        } else {
-            itr->second.push_back(pSlave);
+        // the module moved or was swapped since the group was saved
+        if ((pMaster->typeID() != pSlave->typeID()) or !IsGroupable(pMaster) or !IsGroupable(pSlave)) {
+            error = true;
+            continue;
         }
-        pMaster->SetLinked(true);
-        pMaster->SetLinkMaster(true);
-        pSlave->SetLinked(true);
+        // a module in two banks
+        if ((GetBankMaster(pSlave) != nullptr) or (pMaster->IsLinked() and !pMaster->IsMaster())) {
+            error = true;
+            continue;
+        }
+        //LinkWeapon(masterID, slaveID);  <<<--- this will throw.  DO NOT use here.
+        LinkWeapon(pMaster, pSlave);
     }
 
     if (error) {
-        UnlinkAllWeapons();
+        UnlinkAllWeapons(true);
         if (m_pilot != nullptr)
             m_pilot->SendErrorMsg("There was an error loading a weapon group master.  Ref: ServerError 06123");
     }

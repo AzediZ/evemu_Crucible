@@ -468,7 +468,7 @@ void ModuleManager::UnfitModule(uint32 itemID)
          UnloadCharge(pMod);
 
     if (pMod->IsLinked())
-        pShipItem->UnlinkGroup(itemID, true);
+        pShipItem->UnlinkGroup(itemID, true, true);
 
     pMod->Offline();
 
@@ -493,7 +493,7 @@ void ModuleManager::UnfitModule(EVEItemFlags flag) {
         UnloadCharge(pMod);
 
     if (pMod->IsLinked())
-        pShipItem->UnlinkGroup(pMod->itemID(), true);
+        pShipItem->UnlinkGroup(pMod->itemID(), true, true);
 
     pMod->Offline();
 
@@ -634,6 +634,7 @@ void ModuleManager::Offline(uint32 itemID)
     LinksChanging(true);
     pMod->Offline();
     LinksChanging(false);
+    OnModuleWentOffline(pMod);
 }
 
 void ModuleManager::Offline(EVEItemFlags flag)
@@ -650,6 +651,22 @@ void ModuleManager::Offline(EVEItemFlags flag)
     }
     _log(MODULE__MESSAGE, "MM::Offline(flag) -  %s going Offline", pMod->GetSelf()->name());
     pMod->Offline();
+    OnModuleWentOffline(pMod);
+}
+
+void ModuleManager::OnModuleWentOffline(GenericModule* pMod)
+{
+    /* Crucible keeps the bank when one of its modules goes offline (manually, burnt out or shot).
+     *  the bank can't be activated until that module is back online (CantActivateLinkedModuleOffline),
+     *  and an active bank stops at the end of its cycle
+     */
+    if ((pMod == nullptr) or !pMod->IsLinked())
+        return;
+    GenericModule* pMaster(pShipItem->GetBankMaster(pMod));
+    if ((pMaster == nullptr) or (pMaster == pMod))
+        return;
+    if (pMaster->IsActive())
+        pMaster->Deactivate();
 }
 
 void ModuleManager::AbortCycle()
@@ -743,8 +760,13 @@ void ModuleManager::Activate(int32 itemID, uint16 effectID, int32 targetID, int3
         throw UserError ("DeniedActivateInJump");
     }
 
-    if (!pMod->IsLinked() or pMod->IsMaster())
-        pMod->Activate(effectID, targetID, repeat);
+    if (pMod->IsLinked() and !pMod->IsMaster())
+        return;
+    // the client only stops this when the master is offline
+    if (pMod->IsMaster() and pShipItem->BankHasOfflineMember(pMod))
+        throw UserError ("CantActivateLinkedModuleOffline");
+
+    pMod->Activate(effectID, targetID, repeat);
 }
 
 void ModuleManager::Deactivate(uint32 itemID, std::string effectName)
@@ -761,6 +783,7 @@ void ModuleManager::Deactivate(uint32 itemID, std::string effectName)
         LinksChanging(true);
         pMod->Offline();
         LinksChanging(false);
+        OnModuleWentOffline(pMod);
         return;
     }
     if (pMod->GetModuleState() != Module::State::Activated)  // we dont need an error msgs here....this is acceptable, as the module may not be active
@@ -871,20 +894,17 @@ void ModuleManager::DamageModule(GenericModule* pMod, float amount)
         return;
     }
 
-    pMod->SetAttribute(AttrDamage, (pMod->GetAttribute(AttrDamage) + amount));  //verify this works as intended
+    if (pMod->IsBurntOut())
+        return;
+    EvilNumber damage(pMod->GetAttribute(AttrDamage) + amount);
+    if (damage > pMod->GetAttribute(AttrHP))
+        damage = pMod->GetAttribute(AttrHP);
+    pMod->SetAttribute(AttrDamage, damage);
     _log(MODULE__DAMAGE, "MM::DamageModule() - %s taking %.2f damage.  current damage %.2f",  \
-                pMod->GetSelf()->name(), amount, pMod->GetAttribute(AttrDamage).get_float());
-    if (pMod->GetAttribute(AttrDamage) >= pMod->GetAttribute(AttrHP)) {
-        //  this is for offlining entire group...this isnt right.
-        /*
-        if (pMod->IsLinked()) {
-            // loop thru linked modules and offline all
-            pShipItem->GetPilot()->SendNotifyMsg("Your group of %s has gone offline due to damage.", pMod->GetSelf()->name());
-            pShipItem->OfflineGroup(pMod);
-        } else */
-        pShipItem->GetPilot()->SendNotifyMsg("Your %s in %s has gone offline due to damage.", pMod->GetSelf()->name(), sDataMgr.GetFlagName(pMod->flag()));
-        pMod->Offline();
-    }
+                pMod->GetSelf()->name(), amount, damage.get_float());
+    // a burnt out module goes offline.  a bank it is in stays, but can't be activated until it is repaired and onlined
+    if (pMod->IsBurntOut())
+        pShipItem->BurnOut(pMod);
 }
 
 void ModuleManager::RepairModule(uint32 itemID, EvilNumber amount)
@@ -894,7 +914,7 @@ void ModuleManager::RepairModule(uint32 itemID, EvilNumber amount)
 
 void ModuleManager::RepairModule(GenericModule* pMod, EvilNumber amount)
 {
-    if (pMod != nullptr){
+    if (pMod == nullptr){
         _log(MODULE__ERROR, "MM::RepairModule() - Called on module that is not loaded.");
         return;
     }

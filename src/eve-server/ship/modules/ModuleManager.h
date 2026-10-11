@@ -56,6 +56,8 @@ public:
     void Offline(uint32 itemID);
     void Online(EVEItemFlags flag);
     void Offline(EVEItemFlags flag);
+    // a fitted module went offline (manually, burnt out, forced).  stops its active bank.  call after offlining a module
+    void OnModuleWentOffline(GenericModule* pMod);
     void OnlineAll();
     void OfflineAll();
     void Activate(int32 itemID, uint16 effectID, int32 targetID, int32 repeat);

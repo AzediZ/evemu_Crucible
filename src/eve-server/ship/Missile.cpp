@@ -129,14 +129,16 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
 
     flightTime *= sConfig.rates.missileTime;
 
-    // if linked, update appropriate attributes
-    if (pMod != nullptr)
-        if (pMod->IsLinked()) {
-            uint8 mod = m_fromSE->GetShipSE()->GetShipItemRef()->GetLinkedCount(pMod);
-            m_damageMod *= mod;
-            flightTime *= mod;
-            m_hullHP *= mod;
+    /* a bank fires one stacked missile (dev blog "Weapon Grouping"): damage and hp times the loaded launchers,
+     *  flight time unchanged.  only online, loaded launchers fire
+     */
+    if ((pMod != nullptr) and pMod->IsLinked() and m_fromSE->IsShipSE()) {
+        uint8 count = m_fromSE->GetShipSE()->GetShipItemRef()->GetLoadedLinkedCount(pMod);
+        if (count > 1) {
+            m_damageMod *= count;
+            m_hullHP *= count;
         }
+    }
 
     m_lifeTimer.Start(flightTime);
 
@@ -259,6 +261,10 @@ void Missile::HitTarget() {
 
     // apply damage modifier from char skills, if applicable
     d *= m_damageMod;
+    // a damaged missile does less damage (its share of the bank's launchers is gone)
+    float missileDamage(m_self->GetAttribute(AttrDamage).get_float());
+    if ((missileDamage > 0) and (m_hullHP > 0))
+        d *= EvE::max(1.0 - (missileDamage / m_hullHP));
     // apply missile damage formula to computed total damage
     d *= EvE::min1(v1, v2);
 
