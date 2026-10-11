@@ -78,6 +78,9 @@ protected:
 
     /* launches one deployable (mobile warp disruptor) from the pilot's ship into space, unanchored.  returns the launched itemID.  throws */
     static uint32 LaunchDeployable(Client* pClient, InventoryItemRef iRef, uint32 ownerID);
+    /* launches one item (structure, sov structure, orbital, construction platform, container) from the pilot's cargo into space
+     *  at location for ownerID, adding its new itemID to result.  false if its entity couldn't be built (the item goes back) */
+    static bool LaunchToSpace(Client* pClient, InventoryItemRef iRef, uint32 ownerID, const GPoint& location, PyList* result, uint32 planetID = 0);
 
     /* ship maintenance array (POS) and ship maintenance bay (carriers, Orca, Rorqual...) */
     // a ship-storing container in this system the pilot may use: an online SMA (or assembly array, for launching), or a ship

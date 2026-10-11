@@ -33,6 +33,7 @@
 #include "planet/CustomsOffice.h"
 #include "planet/Moon.h"
 #include "pos/Structure.h"
+#include "pos/Tower.h"
 #include "ship/ShipService.h"
 #include "ship/modules/GenericModule.h"
 #include "system/Container.h"
@@ -321,46 +322,229 @@ PyResult ShipBound::Undock(PyCallArgs &call, PyInt* shipID, PyBool* ignoreContra
     return this->GetOID();
 }
 
+/* the generic launch rules, before an item goes into space.  "" if it may be launched, else the error is added to list
+ *  Crucible: POS, sov and orbital structures need a player corp, anchoringSecurityLevelMax keeps some structures out of
+ *  high-sec, disallowInEmpireSpace (mobile warp disruptors...) keeps items out of empire space
+ */
+static const char* DropCheck(Client* pClient, InventoryItemRef iRef, bool npcCorpLaunch, PyDict*& args)
+{
+    ShipSE* pShipSE(pClient->GetShipSE());
+    SystemManager* pSystem(pClient->SystemMgr());
+    args = new PyDict();
+    if ((iRef->locationID() != pShipSE->GetID()) or (iRef->flag() != flagCargoHold)) {
+        args->SetItemString("itemTypeID", new PyInt(iRef->typeID()));
+        args->SetItemString("containerTypeID", new PyInt(pShipSE->GetTypeID()));
+        return "CantLaunchItemNotPresent";
+    }
+    uint8 categoryID(iRef->categoryID());
+    bool structure((categoryID == EVEDB::invCategories::Structure)
+                or (categoryID == EVEDB::invCategories::SovereigntyStructure)
+                or (categoryID == EVEDB::invCategories::StructureUpgrade)
+                or (categoryID == EVEDB::invCategories::Orbitals)
+                or (iRef->groupID() == EVEDB::invGroups::Construction_Platform));
+    // launching for an NPC corp gives the corp nothing; structures always need a player corp
+    if (npcCorpLaunch or (structure and IsNPCCorp(pClient->GetCorporationID()))) {
+        args->SetItemString("item", new PyInt(iRef->typeID()));
+        return "DropNeedsPlayerCorp";
+    }
+    if (iRef->type().HasAttribute(AttrAnchoringSecurityLevelMax)
+    and (CrimeWatch::SecurityLevel(pSystem->GetSystemSecurityRating()) > iRef->type().GetAttribute(AttrAnchoringSecurityLevelMax).get_float()))
+        return "CantInHighSecSpace";
+    if (iRef->type().HasAttribute(AttrDisallowInEmpireSpace)
+    and (iRef->type().GetAttribute(AttrDisallowInEmpireSpace) > EvilZero)
+    and InterdictionMgr::IsRestricted(pSystem))
+        return "CantInEmpireSpace";
+    // a control tower can't be launched from inside another tower's force field
+    if ((iRef->groupID() == EVEDB::invGroups::Control_Tower) and (pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()) {
+        TowerSE* pTower(pShipSE->SysBubble()->GetTowerSE());
+        if (pTower->HasForceField() and (pShipSE->GetPosition().distance(pTower->GetPosition()) < pTower->GetSOI()))
+            return "CantLaunchInsideForcefield";
+    }
+    return "";
+}
+
+/* sovereignty structure placement rules.  "" if it may be launched here */
+static std::string SovLaunchError(Client* pClient, SystemManager* pSystem, InventoryItemRef iRef)
+{
+    SystemData sysData;
+    sDataMgr.GetSystemData(pClient->GetSystemID(), sysData);
+    if (sysData.factionID)
+        return "Launching sovereignty structures is forbidden in empire space.";
+    if (pClient->GetAllianceID() == 0)
+        return "You must be part of an alliance to launch a sovereignty structure.";
+    ShipSE* pShipSE(pClient->GetShipSE());
+    uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(pClient->GetSystemID()));
+    switch (iRef->groupID()) {
+        case EVEDB::invGroups::Sovereignty_Blockade_Units: {
+            // near a stargate, in a system claimed by someone else, one per gate
+            bool atGate(false);
+            for (auto cur : pSystem->GetOperationalStatics())
+                if (cur.second->IsGateSE() and (cur.second->SysBubble() == pShipSE->SysBubble()))
+                    atGate = true;
+            if (!atGate)
+                return "Sovereignty blockade units must be deployed near a stargate.";
+            if (sovAllianceID == 0)
+                return "You cannot launch a Sovereignty Blockade Unit in an unclaimed system.";
+            if (sovAllianceID == (uint32)pClient->GetAllianceID())
+                return "You cannot launch a Sovereignty Blockade Unit in a system claimed by your alliance";
+            SystemEntity* pGate(pSystem->GetClosestGateSE(pShipSE->GetPosition()));
+            if ((pGate != nullptr) and pGate->GetGateSE()->HasSBU())
+                return "There is already a Sovereignty Blockade Unit on this stargate.";
+            for (auto cur : pSystem->GetOperationalStatics())
+                if (cur.second->IsSBUSE() and (cur.second->SysBubble() == pShipSE->SysBubble()))
+                    return "There is already a Sovereignty Blockade Unit on this stargate.";
+        } break;
+        case EVEDB::invGroups::Territorial_Claim_Units: {
+            // todo:  check Structure.h  - these can be dropped and anchored, but not onlined if >1 in system
+            for (auto cur : pSystem->GetOperationalStatics())
+                if (cur.second->IsTCUSE())
+                    return "There is already a Territorial Claim Unit in this system.";
+            if (sovAllianceID != 0)
+                return "This system has already been claimed.";
+        } break;
+        case EVEDB::invGroups::Infrastructure_Hubs: {
+            for (auto cur : pSystem->GetOperationalStatics())
+                if (cur.second->IsIHubSE())
+                    return "There is already an Infrastructure Hub this system.";
+            if (sovAllianceID != (uint32)pClient->GetAllianceID())
+                return "You cannot launch an Infrastructure Hub in a system not claimed by your alliance.";
+        } break;
+    }
+    return "";
+}
+
+/* moves one item from the pilot's cargo into space as a new entity of ownerID.  adds its new itemID to result.
+ *  the entity is built by DynamicEntityFactory (structures, sov structures, orbitals, construction platforms, containers)
+ */
+bool ShipBound::LaunchToSpace(Client* pClient, InventoryItemRef iRef, uint32 ownerID, const GPoint& location, PyList* result, uint32 planetID/*0*/)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    ShipSE* pShipSE(pClient->GetShipSE());
+
+    // one per launch
+    InventoryItemRef lRef(iRef);
+    if (!iRef->isSingleton() and (iRef->quantity() > 1)) {
+        lRef = iRef->Split(1);
+        if (lRef.get() == nullptr)
+            return false;
+    }
+
+    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+        entity.ownerID = ownerID;
+        entity.factionID = pClient->GetWarFactionID();
+        entity.allianceID = pClient->GetAllianceID();
+        entity.corporationID = pClient->GetCorporationID();
+        entity.itemID = lRef->itemID();
+        entity.itemName = lRef->itemName();
+        entity.typeID = lRef->typeID();
+        entity.groupID = lRef->groupID();
+        entity.categoryID = lRef->categoryID();
+        entity.planetID = planetID;
+        entity.position = location;
+
+    // Move item from cargo bay to space: (and send OnItemChange packet)
+    lRef->Move(pClient->GetLocationID(), flagNone, true);
+    lRef->SetPosition(location);
+    lRef->ChangeOwner(ownerID);
+
+    SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
+    if (pSE == nullptr) {
+        //couldnt create entity.  move item back to orig location
+        lRef->Donate(pClient->GetCharacterID(), pShipSE->GetID(), flagCargoHold);
+        return false;
+    }
+
+    // item was successfully created.  set singleton
+    lRef->ChangeSingleton(true);
+    if (pSE->IsPOSSE())
+        pSE->GetPOSSE()->Drop(pShipSE->SysBubble());
+    pSystem->AddEntity(pSE);
+    result->AddItem(new PyInt(entity.itemID));
+    return true;
+}
+
 PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <PyInt*> oOwnerID, PyBool* ignoreWarning)
 {
+    /* util.LaunchFromShip():  Drop([(itemID, qty)], ownerID, ignoreWarning).  returns {itemID: [newItemID..., (msgKey, {args})...]}
+     *  each tuple is raised on the client as UserError(msgKey, args).  LaunchCPWarning is thrown, and the launch is retried
+     *  with ignoreWarning once the pilot agrees.  "Launch for Self" sends our charID, "Launch for Corp" our corpID, drones nothing
+     */
     _log(SHIP__INFO, "ShipBound::Handle_Drop()");
     call.Dump(SHIP__INFO);
 
-    if (sDataMgr.IsStation(call.client->GetLocationID())) {
-        _log(SERVICE__ERROR, "%s: Trying to drop items when not in space!", call.client->GetName());
-        return nullptr;
-    }
-
-   uint32 ownerID = oOwnerID.has_value () ? oOwnerID.value()->value() : 1;  // not sent for LaunchDrone() command  (not needed)
-    //used for LaunchUpgradePlatformWarning
-    // args.ignoreWarning
-
-    bool dropped = false, shipDrop = false;
-
     Client* pClient = call.client;
-    SystemManager* pSystem = pClient->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return nullptr;
-    }
-
-    uint8 qty = 0;
-    uint32 itemID = 0;
-    double radius = pShip->radius();
-
-    InventoryItemRef iRef(nullptr);
     PyDict* dict = new PyDict();
-    for (uint32 i = 0; i < PyToDropList->size(); ++i) {
-        dropped = false;
+    SystemManager* pSystem = pClient->SystemMgr();
+    ShipSE* pShipSE(pClient->GetShipSE());
+    ShipItemRef shipRef(pClient->GetShip());
+    if (!pClient->IsInSpace() or (pSystem == nullptr) or (pShipSE == nullptr) or (shipRef.get() == nullptr)) {
+        _log(SERVICE__ERROR, "%s: Trying to drop items when not in space!", pClient->GetName());
+        return dict;
+    }
+    ShipItem* pShip(shipRef.get());     // the drone rules below use the active ship
+
+    uint32 charID(pClient->GetCharacterID()), corpID(pClient->GetCorporationID());
+    uint32 ownerID(oOwnerID.has_value() ? oOwnerID.value()->value() : charID);
+    if ((ownerID != charID) and (ownerID != corpID)) {
+        if (IsCorp(ownerID))
+            throw UserError ("CantLaunchNotInCorp").AddOwnerName("corp", ownerID);
+        throw UserError ("CantLaunchNotOwner");
+    }
+    bool npcCorpLaunch((ownerID == corpID) and IsNPCCorp(corpID));
+    bool warn((ignoreWarning == nullptr) or !ignoreWarning->value());
+
+    // the warnings are thrown before anything is launched, and the whole group comes back when the pilot agrees
+    if (warn)
+        for (PyList::const_iterator itr = PyToDropList->begin(); itr != PyToDropList->end(); ++itr) {
+            if (!(*itr)->IsTuple() or ((*itr)->AsTuple()->size() < 2))
+                continue;
+            InventoryItemRef wRef(sItemFactory.GetItemRef((*itr)->AsTuple()->GetItem(0)->AsInt()->value()));
+            if ((wRef.get() != nullptr) and (wRef->groupID() == EVEDB::invGroups::Construction_Platform))
+                throw UserError ("LaunchCPWarning");
+        }
+
+    bool shipDrop(false);
+    double radius(pShipSE->GetRadius());
+    for (PyList::const_iterator itr = PyToDropList->begin(); itr != PyToDropList->end(); ++itr) {
+        if (!(*itr)->IsTuple() or ((*itr)->AsTuple()->size() < 2))
+            continue;
+        uint32 itemID((*itr)->AsTuple()->GetItem(0)->AsInt()->value());
+        int32 qty((*itr)->AsTuple()->GetItem(1)->AsInt()->value());
+
         PyList* list = new PyList();
-        GPoint location(pShip->position());
-        location.MakeRandomPointOnSphereLayer(500,1500);
-        qty = PyToDropList->items.at(i)->AsTuple()->items.at(1)->AsInt()->value();
-        itemID = PyToDropList->items.at(i)->AsTuple()->items.at(0)->AsInt()->value();
-        iRef = sItemFactory.GetItemRef(itemID);
+        // errors go in the item's result list as (msgName, args), which the client shows as UserErrors
+        auto addError = [&](const char* msgName, PyDict* args) {
+            PyTuple* err = new PyTuple(2);
+                err->SetItem(0, new PyString(msgName));
+                err->SetItem(1, args);
+            list->AddItem(err);
+        };
+        auto addCustomError = [&](const std::string& text) {
+            PyDict* args = new PyDict();
+                args->SetItemString("error", new PyString(text));
+            addError("CustomError", args);
+        };
+
+        InventoryItemRef iRef(sItemFactory.GetItemRef(itemID));
         if (iRef.get() == nullptr) {
             sLog.Error("ShipBound::Handle_Drop()", "%s: Unable to find item %u to drop.", pClient->GetName(), itemID);
+            addCustomError("That item is no longer in your cargo hold.");
+            dict->SetItem(new PyInt(itemID), list);
             continue;
+        }
+
+        GPoint location(pShipSE->GetPosition());
+        location.MakeRandomPointOnSphereLayer(500 + radius + iRef->radius(), 1500 + radius + iRef->radius());
+
+        if (iRef->categoryID() != EVEDB::invCategories::Drone) {
+            PyDict* args(nullptr);
+            const char* error(DropCheck(pClient, iRef, npcCorpLaunch, args));
+            if (error[0] != '\0') {
+                addError(error, args);
+                dict->SetItem(new PyInt(itemID), list);
+                continue;
+            }
+            PyDecRef(args);
         }
 
         switch (iRef->categoryID()) {
@@ -379,14 +563,6 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                 }
                 if ((pShipSE == nullptr) or pClient->InPod())
                     throw CustomError ("You need a ship to launch drones.");
-
-                // errors go in the item's result list as (msgName, args), which the client shows as UserErrors
-                auto addError = [&](const char* msgName, PyDict* args) {
-                    PyTuple* err = new PyTuple(2);
-                        err->SetItem(0, new PyString(msgName));
-                        err->SetItem(1, args);
-                    list->AddItem(err);
-                };
 
                 if ((iRef->flag() != flagDroneBay) or (iRef->locationID() != pShip->itemID())) {
                     // {'FullPath': u'UI/Messages', 'messageID': 259680, 'label': u'DropItemNotInDroneBayBody'}(u'{[item]item.name} cannot be dropped because it is not in your drone bay.', None, {u'{[item]item.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'item'}})
@@ -433,65 +609,29 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                     }
                     pShipSE->LaunchDrone(dRef);
                     list->AddItem(new PyInt(dRef->itemID()));
-                    dropped = true;
                     shipDrop = true;
                     if (dRef == iRef)
                         break;
                 }
             } break;
             case EVEDB::invCategories::Structure: {
-                // test for existing tower
+                // POS anchoring rules (charters, standings, moon distance, per-system limits) are F18's
+                SystemEntity* pMoon(pSystem->GetClosestMoonSE(location));
+                if ((pMoon == nullptr) or (pMoon->GetMoonSE() == nullptr)) {
+                    addCustomError("Structures can only be launched near a moon.");
+                    break;
+                }
                 if (iRef->groupID() == EVEDB::invGroups::Control_Tower) {
-                    if (pClient->SystemMgr()->GetClosestMoonSE(location)->GetMoonSE()->HasTower()) {
-                        pClient->SendErrorMsg("This Moon already has a Control Tower in orbit.  Aborting Drop.");
-                        return nullptr;
+                    if (pMoon->GetMoonSE()->HasTower()) {
+                        addCustomError("This Moon already has a Control Tower in orbit.");
+                        break;
                     }
-                } else {
-                    if (!pClient->SystemMgr()->GetClosestMoonSE(location)->GetMoonSE()->HasTower()) {
-                        pClient->SendErrorMsg("You need an anchored Control Tower before launching modules.  Aborting Drop.");
-                        return nullptr;
-                    }
+                } else if (!pMoon->GetMoonSE()->HasTower()) {
+                    addCustomError("You need an anchored Control Tower before launching modules.");
+                    break;
                 }
-                /** @todo implement these checks  (may be more i havent found yet) */
-                //{'FullPath': u'UI/Messages', 'messageID': 259679, 'label': u'DropNeedsPlayerCorpBody'}(u'In order to launch {[item]item.name} you need to be a member of a independent corporation.', None, {u'{[item]item.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'item'}})
-                //{'FullPath': u'UI/Messages', 'messageID': 256411, 'label': u'CantInHighSecSpaceBody'}(u'You cannot do that as CONCORD currently restricts the launching, anchoring and control of that type of structure within CONCORD-protected space to authorized agents of the empires.', None, None)
-
-                DBSystemDynamicEntity entity = DBSystemDynamicEntity();
-                entity.ownerID = ownerID;
-                entity.factionID = pClient->GetWarFactionID();
-                entity.allianceID = pClient->GetAllianceID();
-                entity.corporationID = pClient->GetCorporationID();
-                entity.itemID = iRef->itemID();
-                entity.itemName = iRef->itemName();
-                entity.typeID = iRef->typeID();
-                entity.groupID = iRef->groupID();
-                entity.categoryID = iRef->categoryID();
-
-                // Move item from cargo bay to space: (and send OnItemChange packet)
-                iRef->Move(pClient->GetLocationID(), flagNone, true);
-                iRef->SetPosition(location + iRef->radius() + radius);
-                iRef->ChangeOwner(entity.ownerID);
-
-                entity.position = iRef->position();
-
-                if (entity.groupID == EVEDB::invGroups::Orbital_Infrastructure)
-                    entity.planetID = pSystem->GetClosestPlanetID(location);
-
-                SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
-                if (pSE == nullptr) {
-                    //couldnt create entity.  move item back to orig location and continue
-                    iRef->Donate(pClient->GetCharacterID(), pShip->itemID(), flagCargoHold);
-                    continue;
-                }
-
-                // item was successfully created.  set singleton
-                iRef->ChangeSingleton(true);
-
-                dropped = true;
-                shipDrop = true;
-                pSE->GetPOSSE()->Drop(pClient->GetShipSE()->SysBubble());
-                pSystem->AddEntity(pSE);
-                list->AddItem(new PyInt(entity.itemID));
+                if (LaunchToSpace(pClient, iRef, ownerID, location, list))
+                    shipDrop = true;
             } break;
             case EVEDB::invCategories::Deployable: {
                 // "Launch for Self/Corp".  each one is launched unanchored, the owner anchors it from its menu
@@ -501,265 +641,70 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                 for (int32 i = 0; i < count; ++i) {
                     uint32 launchedID(LaunchDeployable(pClient, iRef, ownerID));
                     list->AddItem(new PyInt(launchedID));
-                    dropped = true;
                     if (launchedID == iRef->itemID())
                         break;      // that was the whole stack
                 }
             } break;
             case EVEDB::invCategories::SovereigntyStructure: {
-                //Code for spawning sovereignty structures
-
-                //Check if system is in empire space
-                SystemData sysData;
-                sDataMgr.GetSystemData(pClient->GetSystemID(), sysData);
-                if (sysData.factionID) {
-                    pClient->SendErrorMsg("Launching sovereignty structures is forbidden in empire space.");
-                    return nullptr;
+                std::string error(SovLaunchError(pClient, pSystem, iRef));
+                if (!error.empty()) {
+                    addCustomError(error);
+                    break;
                 }
-
-                //Check if client is part of an alliance
-                if (pClient->GetAllianceID() == 0) {
-                    pClient->SendErrorMsg("You must be part of an alliance to launch a sovereignty structure.");
-                    return nullptr;
-                }
-
-                switch (iRef->groupID()) {
-                    case EVEDB::invGroups::Sovereignty_Blockade_Units: {
-                        // Make sure SBU is deployed in the same bubble as a gate
-                        std::vector<uint16> gateBubbles;
-                        for (auto cur: pSystem->GetOperationalStatics()) {
-                            if (cur.second->IsGateSE())
-                            {
-                                gateBubbles.push_back(cur.second->SysBubble()->GetID());
-                            }
-                        }
-                        if (!(std::find(gateBubbles.begin(), gateBubbles.end(),pClient->GetShipSE()->SysBubble()->GetID())!=gateBubbles.end()))
-                        {
-                            pClient->SendErrorMsg("Sovereignty blockade units must be deployed near a stargate.");
-                            return nullptr;
-                        }
-
-                        // Check if this system is currently claimed
-                        if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) == 0 ) {
-                            pClient->SendErrorMsg("You cannot launch a Sovereignty Blockade Unit in an unclaimed system.");
-                            return nullptr;
-                        }
-
-                        // Check if this system is claimed by your alliance
-                        if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) == pClient->GetAllianceID()) {
-                            pClient->SendErrorMsg("You cannot launch a Sovereignty Blockade Unit in a system claimed by your alliance");
-                            return nullptr;
-                        }
-
-                        // Check if there is already an SBU on this stargate
-                        SystemEntity* pSE = pSystem->GetClosestGateSE(pClient->GetShipSE()->GetPosition());
-                        if (pSE->GetGateSE()->HasSBU()) {
-                            pClient->SendErrorMsg("There is already a Sovereignty Blockade Unit on this stargate.  Aborting Drop.");
-                            return nullptr;
-                        }
-
-                        // Check if there is already an unanchored SBU in the current bubble
-                        for (auto cur: pSystem->GetOperationalStatics()) {
-                            if (cur.second->IsSBUSE())
-                            {
-                                if (cur.second->SysBubble()->GetID() == pClient->GetShipSE()->SysBubble()->GetID())
-                                {
-                                    pClient->SendErrorMsg("There is already a Sovereignty Blockade Unit on this stargate.  Aborting Drop.");
-                                    return nullptr;
-                                }
-                            }
-                        }
-                    } break;
-                    //verify only one TCU or IHub is deployed in the system.
-                    // todo:  check Structure.h  - these can be dropped and anchored, but not onlined if >1 in system
-                    case EVEDB::invGroups::Territorial_Claim_Units: {
-                        // Only one can be launched in a system
-                        for (auto cur: pSystem->GetOperationalStatics()) {
-                            if (cur.second->IsTCUSE())
-                            {
-                                pClient->SendErrorMsg("There is already a Territorial Claim Unit in this system.  Aborting Drop.");
-                                return nullptr;
-                            }
-                        }
-
-                        //This should never hit as there should always be a TCU in a claimed system
-                        if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) != 0 ) {
-                            pClient->SendErrorMsg("This system has already been claimed. ");
-                            return nullptr;
-                        }
-                    } break;
-                    case EVEDB::invGroups::Infrastructure_Hubs: {
-                        // Only one can be launched in a system
-                        for (auto cur: pSystem->GetOperationalStatics()) {
-                            if (cur.second->IsIHubSE())
-                            {
-                                pClient->SendErrorMsg("There is already an Infrastructure Hub this system.  Aborting Drop.");
-                                return nullptr;
-                            }
-                        }
-
-                        // Check if this system is not claimed by your alliance
-                        if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) != uint32(pClient->GetAllianceID())) {
-                            pClient->SendErrorMsg("You cannot launch an Infrastructure Hub in a system not claimed by your alliance.");
-                            return nullptr;
-                        }
-                    } break;
-                }
-
-                DBSystemDynamicEntity entity = DBSystemDynamicEntity();
-                entity.ownerID = ownerID;
-                entity.factionID = pClient->GetWarFactionID();
-                entity.allianceID = pClient->GetAllianceID();
-                entity.corporationID = pClient->GetCorporationID();
-                entity.itemID = iRef->itemID();
-                entity.itemName = iRef->itemName();
-                entity.typeID = iRef->typeID();
-                entity.groupID = iRef->groupID();
-                entity.categoryID = iRef->categoryID();
-
-                // Move item from cargo bay to space: (and send OnItemChange packet)
-                iRef->Move(pClient->GetLocationID(), flagNone, true);
-                iRef->SetPosition(location + iRef->radius() + radius);
-                iRef->ChangeOwner(entity.ownerID);
-
-                entity.position = iRef->position();
-
-                SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
-                if (pSE == nullptr) {
-                    //couldnt create entity.  move item back to orig location and continue
-                    iRef->Donate(pClient->GetCharacterID(), pShip->itemID(), flagCargoHold);
-                    continue;
-                }
-
-                // item was successfully created.  set singleton
-                iRef->ChangeSingleton(true);
-
-                dropped = true;
-                shipDrop = true;
-                pSE->GetPOSSE()->Drop(pClient->GetShipSE()->SysBubble());
-                pSystem->AddEntity(pSE);
-                list->AddItem(new PyInt(entity.itemID));
+                if (LaunchToSpace(pClient, iRef, ownerID, location, list))
+                    shipDrop = true;
             } break;
-            case EVEDB::invCategories::Celestial: { //Outpost construction platforms
-                if (iRef->groupID() == EVEDB::invGroups::Construction_Platform) {
-                    // Get current planet to anchor platform on
-                    uint32 planetID = pSystem->GetClosestPlanetID(pClient->GetShipSE()->GetPosition());
-
-                    // Checks to see if we can deploy the platform
-                    // Our alliance must have sovereignty in the system to deploy an outpost
-                    if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) != pClient->GetAllianceID() ) {
-                        pClient->SendErrorMsg("You cannot launch Construction Platforms in a system which your alliance does not control. ");
-                        return nullptr;
-                    }
-
-                    // Platforms must be deployed on a planet
-                    for (auto cur: pSystem->GetOperationalStatics())
-                        if (cur.second->IsPlatformSE())
-                            if (cur.second->GetPOSSE()->GetPlanetID() ==  planetID) {
-                                pClient->SendErrorMsg("There is already a platform deployed at this planet.");
-                                return nullptr;
-                            }
-
-                    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
-                    entity.ownerID = ownerID;
-                    entity.factionID = pClient->GetWarFactionID();
-                    entity.allianceID = pClient->GetAllianceID();
-                    entity.corporationID = pClient->GetCorporationID();
-                    entity.itemID = iRef->itemID();
-                    entity.itemName = iRef->itemName();
-                    entity.typeID = iRef->typeID();
-                    entity.groupID = iRef->groupID();
-                    entity.categoryID = iRef->categoryID();
-
-                    // Move item from cargo bay to space: (and send OnItemChange packet)
-                    iRef->Move(pClient->GetLocationID(), flagNone, true);
-                    iRef->SetPosition(location + iRef->radius() + radius);
-                    iRef->ChangeOwner(entity.ownerID);
-
-                    entity.position = iRef->position();
-
-                    SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
-                    if (pSE == nullptr) {
-                        //couldnt create entity.  move item back to orig location and continue
-                        iRef->Donate(pClient->GetCharacterID(), pShip->itemID(), flagCargoHold);
-                        continue;
-                    }
-
-                    // item was successfully created.  set singleton
-                    iRef->ChangeSingleton(true);
-
-                    dropped = true;
+            case EVEDB::invCategories::Orbitals: {
+                // customs office gantry placement rules (planet distance, one per planet...) are F19's
+                if (LaunchToSpace(pClient, iRef, ownerID, location, list, pSystem->GetClosestPlanetID(location)))
                     shipDrop = true;
-                    pSE->GetPOSSE()->Drop(pClient->GetShipSE()->SysBubble());
-                    pSystem->AddEntity(pSE);
-                    list->AddItem(new PyInt(entity.itemID));
-                }
-                if (iRef->groupID() == EVEDB::invGroups::Secure_Cargo_Container or
-                    EVEDB::invGroups::Secure_Cargo_Container or
-                    EVEDB::invGroups::Cargo_Container or
-                    EVEDB::invGroups::Freight_Container or
-                    EVEDB::invGroups::Audit_Log_Secure_Container or
-                    EVEDB::invGroups::Mission_Container) 
-                {
-                    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
-                    entity.ownerID = ownerID;
-                    entity.factionID = pClient->GetWarFactionID();
-                    entity.allianceID = pClient->GetAllianceID();
-                    entity.corporationID = pClient->GetCorporationID();
-                    entity.itemID = iRef->itemID();
-                    entity.itemName = iRef->itemName();
-                    entity.typeID = iRef->typeID();
-                    entity.groupID = iRef->groupID();
-                    entity.categoryID = iRef->categoryID();
-
-                    // Move item from cargo bay to space: (and send OnItemChange packet)
-                    iRef->Move(pClient->GetLocationID(), flagNone, true);
-                    iRef->SetPosition(location + iRef->radius() + radius);
-                    iRef->ChangeOwner(entity.ownerID);
-
-                    entity.position = iRef->position();
-
-                    SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*pSystem, entity);
-                    if (pSE == nullptr) {
-                        //couldnt create entity.  move item back to orig location and continue
-                        iRef->Donate(pClient->GetCharacterID(), pShip->itemID(), flagCargoHold);
-                        continue;
-                    }
-
-                    // item was successfully created.  set singleton
-                    iRef->ChangeSingleton(true);
-
-                    dropped = true;
-                    shipDrop = true;
-                    pSE->GetPOSSE()->Drop(pClient->GetShipSE()->SysBubble());
-                    pSystem->AddEntity(pSE);
-                    list->AddItem(new PyInt(entity.itemID));
+            } break;
+            case EVEDB::invCategories::Celestial: {
+                switch (iRef->groupID()) {
+                    case EVEDB::invGroups::Construction_Platform: {   // outpost construction platforms
+                        // our alliance must hold sovereignty here, and one platform per planet
+                        uint32 planetID(pSystem->GetClosestPlanetID(pShipSE->GetPosition()));
+                        if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) != (uint32)pClient->GetAllianceID()) {
+                            addCustomError("You cannot launch Construction Platforms in a system which your alliance does not control.");
+                            break;
+                        }
+                        bool taken(false);
+                        for (auto cur : pSystem->GetOperationalStatics())
+                            if (cur.second->IsPlatformSE() and (cur.second->GetPOSSE()->GetPlanetID() == planetID))
+                                taken = true;
+                        if (taken) {
+                            addCustomError("There is already a platform deployed at this planet.");
+                            break;
+                        }
+                        if (LaunchToSpace(pClient, iRef, ownerID, location, list))
+                            shipDrop = true;
+                    } break;
+                    case EVEDB::invGroups::Cargo_Container:
+                    case EVEDB::invGroups::Secure_Cargo_Container:
+                    case EVEDB::invGroups::Audit_Log_Secure_Container:
+                    case EVEDB::invGroups::Freight_Container: {
+                        if (LaunchToSpace(pClient, iRef, ownerID, location, list))
+                            shipDrop = true;
+                    } break;
                 }
             } break;
             default: {
-                _log(INV__ERROR, "ShipBound::Handle_Drop() - Item %s (cat %u) is neither drone, structure or deployable.", iRef->name(), iRef->categoryID());
+                _log(INV__ERROR, "ShipBound::Handle_Drop() - Item %s (cat %u) is not launchable.", iRef->name(), iRef->categoryID());
             }
         }
 
-    // returns dict of dropped items as {itemID, data} where data is list of itemIDs dropped (split stack if applicable)
-    // however, on non-throw error, data is tuple of errID, errDetailsType, errDetails (unknown where these are defined)
-
-        if (dropped or !list->empty()) {
-            dict->SetItem(new PyInt(iRef->itemID()), list);
-        } else {
-            PyTuple* err = new PyTuple(3);
-            err->SetItem(0, new PyInt(1));
-            err->SetItem(1, new PyString("unsure"));
-            err->SetItem(2, new PyString("misc error"));
-            dict->SetItem(new PyInt(iRef->itemID()), err);
+        // nothing launched and no reason given: the item can't be launched from a ship
+        if (list->empty()) {
+            PyDict* args = new PyDict();
+                args->SetItemString("item", Client::TypeNameArg(iRef->typeID()));
+                args->SetItemString("containerTypeID", new PyInt(shipRef->typeID()));
+            addError("CantLaunchItemUnlaunchable", args);
         }
+        dict->SetItem(new PyInt(itemID), list);
     }
 
-    //  missing launch error throw msgs.... LaunchCPWarning, LaunchUpgradePlatformWarning
-    //   - these are thrown before item is launched and will negate entire launch group until warning is approved, then entire group is reprocessed
-
     if (shipDrop)
-        pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
+        pShipSE->DestinyMgr()->SendJettisonPacket();
 
     return dict;
 }
@@ -886,220 +831,99 @@ PyResult ShipBound::ScoopDrone(PyCallArgs &call, PyList* itemIDs) {
 }
 
 PyResult ShipBound::Jettison(PyCallArgs &call, PyList* itemIDs) {
-    std::vector <int32> ints;
-
-    PyList::const_iterator list_2_cur = itemIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != itemIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_SingleIntList failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        ints.push_back(t->value());
-    }
+    /* menusvc.Jettison():  any cargo hold item.  everything goes into one new jetcan (structures and deployables too, as
+     *  packaged cargo; launching is Drop's job).  freighters had no jettison tube before Retribution
+     */
     Client* pClient(call.client);
-    if (!pClient->IsInSpace()) {
+    ShipSE* pShipSE(pClient->GetShipSE());
+    SystemManager* pSysMgr(pClient->SystemMgr());
+    if (!pClient->IsInSpace() or (pShipSE == nullptr) or (pSysMgr == nullptr)) {
         _log(SERVICE__ERROR, "%s: Trying to jettison items when not in space!", pClient->GetName());
         return nullptr;
     }
+    ShipItemRef shipRef(pClient->GetShip());
+    if ((shipRef->groupID() == EVEDB::invGroups::Freighter) or (shipRef->groupID() == EVEDB::invGroups::JumpFreighter))
+        throw UserError ("ShpCantUseCargoInSpaceJettison");
 
-    SystemManager* pSysMgr(pClient->SystemMgr());
-    //Get location of our ship
-    GPoint location(pClient->GetShipSE()->GetPosition());
+    // only items in our own cargo hold (not fitted modules, drones or anyone else's things)
+    std::vector<InventoryItemRef> items;
+    std::set<uint32> seen;
+    for (PyList::const_iterator itr = itemIDs->begin(); itr != itemIDs->end(); ++itr) {
+        if (!(*itr)->IsInt())
+            continue;
+        uint32 itemID((*itr)->AsInt()->value());
+        if (!seen.insert(itemID).second)
+            continue;
+        InventoryItemRef iRef(sItemFactory.GetItemRef(itemID));
+        if (iRef.get() == nullptr)
+            continue;
+        if ((iRef->locationID() != shipRef->itemID()) or (iRef->flag() != flagCargoHold))
+            throw UserError ("CannotJettisonItem").AddFormatValue("typeID", new PyInt(iRef->typeID()));
+        items.push_back(iRef);
+    }
+    if (items.empty())
+        throw UserError ("NothingToJettison");
 
-    InventoryItemRef cRef(nullptr), iRef(nullptr);
-    CargoContainerRef jcRef(nullptr), ccRef(nullptr);
-    StructureItemRef sRef(nullptr);
+    if (!pClient->IsJetcanAvalible())
+        throw UserError ("ShpJettisonPending")
+                .AddTimeShort ("eta", pClient->JetcanTime() * EvE::Time::Second);
 
-    /** @todo  deal with launching items for corp... they will use flagProperty */
+    // Spawn jetcan
+    GPoint location(pShipSE->GetPosition());
+    location.MakeRandomPointOnSphere(500.0f);
+    ItemData p_idata(
+                    23,                         // 23 = cargo container
+                    pClient->GetCharacterID(),
+                    pClient->GetLocationID(),
+                    flagNone,
+                    "Jettisoned Cargo Container",
+                    location);
+    CargoContainerRef jcRef(sItemFactory.SpawnCargoContainer(p_idata));
+    if (jcRef.get() == nullptr)
+        throw CustomError ("Unable to spawn jetcan.");
 
     FactionData data = FactionData();
         data.allianceID = pClient->GetAllianceID();
         data.corporationID = pClient->GetCorporationID();
         data.factionID = pClient->GetWarFactionID();
-        /** @todo  determine if this is char or corp here */
         data.ownerID = pClient->GetCharacterID();
+    ContainerSE* cSE = new ContainerSE(jcRef, this->GetServiceManager(), pSysMgr, data);
+    cSE->Init();
+    jcRef->SetMySE(cSE);
+    // set anchored to avoid deletion while it is empty
+    jcRef->SetAnchor(true);
+    pSysMgr->AddEntity(cSE);
+    pShipSE->DestinyMgr()->SendJettisonPacket();
+    pClient->StartJetcanTimer();
 
-    // deployables are launched with the same rules as "Launch for Self", never put into a can
-    for (std::vector<int32>::iterator dItr = ints.begin(); dItr != ints.end(); ) {
-        InventoryItemRef dRef(sItemFactory.GetItemRef(*dItr));
-        if ((dRef.get() != nullptr) and (dRef->categoryID() == EVEDB::invCategories::Deployable)) {
-            LaunchDeployable(pClient, dRef, pClient->GetCharacterID());
-            dItr = ints.erase(dItr);
-        } else {
-            ++dItr;
+    bool notAll(false);
+    for (auto iRef : items) {
+        if (jcRef->GetMyInventory()->HasAvailableSpace(flagNone, iRef)) {
+            pClient->MoveItem(iRef->itemID(), jcRef->itemID(), flagNone);
+            continue;
         }
+        // as many of the stack as will fit, then stop
+        float unitVolume(iRef->GetAttribute(AttrVolume).get_float());
+        if (!iRef->isSingleton() and (unitVolume > 0)) {
+            int32 count((int32)floor(jcRef->GetMyInventory()->GetRemainingCapacity(flagNone) / unitVolume));
+            if ((count > 0) and (count < iRef->quantity())) {
+                InventoryItemRef part(iRef->Split(count));
+                if (part.get() != nullptr)
+                    part->Move(jcRef->itemID(), flagNone, true);
+            }
+        }
+        _log(ITEM__WARNING, "%s: Jetcan %u is full.", pClient->GetName(), jcRef->itemID());
+        notAll = true;
+        break;
     }
 
-    //args contains id's of items to jettison
-    std::vector<int32>::iterator itr = ints.begin();
-    // loop thru items to see if there is a container in this list.
-    for (; itr != ints.end(); ++itr) {
-        // running this list twice is fuckedup, but not sure of another way to determine if container is in jettison list.
-        iRef = sItemFactory.GetItemRef(*itr);
-        if (iRef.get() == nullptr)
-            continue;
-        switch (iRef->categoryID()) {
-            case EVEDB::invCategories::Structure:
-            case EVEDB::invCategories::SovereigntyStructure:
-            case EVEDB::invCategories::StructureUpgrade: {
-                sRef = sItemFactory.GetStructureRef(*itr);
-                if (sRef.get() == nullptr)
-                    throw CustomError ("Unable to spawn Structure item of type %u.", sRef->typeID());
+    //jetcan should spawn unanchored
+    jcRef->SetAnchor(false);
+    // the can is out there already, so this is only a message
+    if (notAll)
+        pClient->SendRemoteMessage("NotAllItemsWereMoved");
 
-                sRef->Move(pClient->GetLocationID(), flagNone, true);
-                StructureSE* sSE = new StructureSE(sRef, this->GetServiceManager(), pSysMgr, data);
-                location.MakeRandomPointOnSphere(1500.0 + sRef->type().radius());
-                sSE->SetPosition(location);
-                sRef->SaveItem();
-                pSysMgr->AddEntity(sSE);
-                pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
-                itr = ints.erase(itr);
-            } break;
-            case EVEDB::invCategories::Orbitals: {
-                sRef = sItemFactory.GetStructureRef(*itr);
-                if (sRef.get() == nullptr)
-                    throw CustomError ("Unable to spawn Structure item of type %u.", sRef->typeID());
-
-                sRef->Move(pClient->GetLocationID(), flagNone, true);
-                CustomsSE* sSE = new CustomsSE(sRef, this->GetServiceManager(), pSysMgr, data);
-                location.MakeRandomPointOnSphere(1500.0 + sRef->type().radius());
-                sSE->SetPosition(location);
-                sRef->SaveItem();
-                pSysMgr->AddEntity(sSE);
-                pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
-                itr = ints.erase(itr);
-            } break;
-            /** @todo  Handle other cargo */
-
-            // test for cargo container being launched
-            case EVEDB::invCategories::Celestial: {
-                switch (iRef->groupID()) {
-                    case EVEDB::invGroups::Cargo_Container:
-                    case EVEDB::invGroups::Audit_Log_Secure_Container:
-                    case EVEDB::invGroups::Secure_Cargo_Container:
-                    case EVEDB::invGroups::Freight_Container: {
-                        /** @todo (allan)  check these for accuracy  */
-                        /** @todo (allan)  *****  there are stipulations on placement of these items.  *****  */
-                        ccRef = sItemFactory.GetCargoRef(*itr);
-                        if (ccRef.get() == nullptr)
-                            throw CustomError ("Unable to spawn item of type %u.", ccRef->typeID());
-
-                        ccRef->Move(pClient->GetLocationID(), flagNone, true);
-                        ContainerSE* cSE = new ContainerSE(ccRef, this->GetServiceManager(), pSysMgr, data);
-                        cSE->Init();
-                        location.MakeRandomPointOnSphere(500.0);
-                        cSE->SetPosition(location);
-                        ccRef->SaveItem();
-                        pSysMgr->AddEntity(cSE);
-                        pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
-
-                        // container found.  remove this item from list, then break out of here and use to contain all other non-pos items
-                        ints.erase(itr);
-                        itr = ints.end();
-                    } break;
-                    case EVEDB::invGroups::Construction_Platform:
-                    case EVEDB::invGroups::Mobile_Sentry_Gun:
-                    case EVEDB::invGroups::Global_Warp_Disruptor:
-                    case EVEDB::invGroups::Station_Upgrade_Platform:
-                    case EVEDB::invGroups::Station_Improvement_Platform:
-                    case EVEDB::invGroups::Covert_Beacon:
-                    case EVEDB::invGroups::Covert_Cynosural_Field_Generator: {
-                        //these should need corp shit for use, i think.
-                        sLog.Warning("Ship::Jettison", "%s: %s called to jettison.",pClient->GetName(), iRef->name());
-                    } break;
-                    case EVEDB::invGroups::Shipping_Crates: {
-                        // not sure what this is, can it be jettisoned?
-                        sLog.Error("Ship::Jettison", "%s: %s called to jettison.",pClient->GetName(), iRef->name());
-                    } break;
-                }
-            }
-        }
-    }
-
-    // container check complete, loop thru list for other items
-    for (auto cur : ints) {
-        iRef = sItemFactory.GetItemRef(cur);
-        if (iRef.get() == nullptr)
-            continue;
-
-        // item can be jettisoned.  check if container was already created
-        if ((ccRef.get() == nullptr) and (jcRef.get() == nullptr)) {
-            if (!pClient->IsJetcanAvalible()) {
-                throw UserError ("ShpJettisonPending")
-                    .AddTimeShort ("eta", pClient->JetcanTime() * EvE::Time::Second);
-            }
-            // Spawn jetcan then continue loop
-            location.MakeRandomPointOnSphere(500.0f);
-            ItemData p_idata(
-                            23,                         // 23 = cargo container
-                            pClient->GetCharacterID(),  //owner is Character?  figure out how to test for corp owner
-                            pClient->GetLocationID(),
-                            flagNone,
-                            "Jettisoned Cargo Container",
-                            location);
-
-            jcRef = sItemFactory.SpawnCargoContainer(p_idata);
-            if (jcRef.get() == nullptr)
-                throw CustomError ("Unable to spawn jetcan.");
-            // create new container
-            ContainerSE* cSE = new ContainerSE(jcRef, this->GetServiceManager(), pSysMgr, data);
-            cSE->Init();
-
-            jcRef->SetMySE(cSE);
-            // set anchored to avoid deletion when empty
-            jcRef->SetAnchor(true);
-            pSysMgr->AddEntity(cSE);
-            pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
-            pClient->StartJetcanTimer();
-        }
-        // check current can for capacity limits.
-        //if over limit create new can?  reject remaining cargo?  delete?  crash?  run thru station naked?
-        if (ccRef.get() != nullptr) {
-            if (ccRef->GetMyInventory()->HasAvailableSpace(flagNone, iRef)) {
-                pClient->MoveItem(cur, ccRef->itemID(), flagNone);
-            } else {
-                // extra step, try to move as much items as possible, this needs a new item creation tho
-                float remainingCapacity = ccRef->GetMyInventory ()->GetRemainingCapacity (flagNone);
-                int32 maximumAmountOfItems = (int32) floor(remainingCapacity / iRef->GetAttribute (AttrVolume).get_float ());
-
-                ItemData newItem(iRef->typeID(), iRef->ownerID(), ccRef->itemID(), flagNone, maximumAmountOfItems);
-                ccRef->AddItem(sItemFactory.SpawnItem(newItem));
-
-                iRef->AlterQuantity(-maximumAmountOfItems, true);
-                _log(ITEM__WARNING, "%s: CargoContainer %u is full.", pClient->GetName(), ccRef->itemID());
-                throw UserError ("NotAllItemsWereMoved");
-            }
-        } else if (jcRef.get() != nullptr) {
-            if (jcRef->GetMyInventory()->HasAvailableSpace(flagNone, iRef)) {
-                pClient->MoveItem(cur, jcRef->itemID(), flagNone);
-            } else {
-                // extra step, try to move as much items as possible, this needs a new item creation tho
-                float remainingCapacity = jcRef->GetMyInventory ()->GetRemainingCapacity (flagNone);
-                int32 maximumAmountOfItems = (int32) floor(remainingCapacity / iRef->GetAttribute (AttrVolume).get_float ());
-
-                ItemData newItem(iRef->typeID(), iRef->ownerID(), jcRef->itemID(), flagNone, maximumAmountOfItems);
-                jcRef->AddItem(sItemFactory.SpawnItem(newItem));
-
-                iRef->AlterQuantity(-maximumAmountOfItems, true);
-
-                _log(ITEM__WARNING, "%s: Jetcan %u is full.", pClient->GetName(), jcRef->itemID());
-                throw UserError ("NotAllItemsWereMoved");
-            }
-            //jetcan should spawn unanchored
-            jcRef->SetAnchor(false);
-            continue;
-        } else {
-            _log(ITEM__ERROR, "Jettison call for %s - no CC or Jcan.", pClient->GetName());
-            throw CustomError ("Item container not found.", cRef->typeID());
-        }
-        continue;
-    }
-
-    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
-    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
-    return this->GetOID();
+    return nullptr;
 }
 
 uint32 ShipBound::LaunchDeployable(Client* pClient, InventoryItemRef iRef, uint32 ownerID)
