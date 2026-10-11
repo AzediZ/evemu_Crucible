@@ -1449,11 +1449,22 @@ PyRep *Client::GetAggressors() const {
     return dict;
 }
 
-void Client::StargateJump(uint32 fromGate, uint32 toGate) {
+void Client::CheckMovePending() {
     if ((m_clientState != Player::State::Idle) or m_stateTimer.Enabled()) {
-        sLog.Error("Client","%s: StargateJump called when a move is already pending. Ignoring.", m_char->name());
-        /** @todo  send error to client here */
-        return;
+        _log(CLIENT__WARNING, "%s: jump requested when a move is already pending.", m_char->name());
+        throw CustomError("You are already jumping.  Please wait for the current jump to complete.");
+    }
+}
+
+void Client::StargateJump(uint32 fromGate, uint32 toGate) {
+    CheckMovePending();
+
+    // validate the destination before any effect is sent, so a bad gate doesn't leave the client mid-animation
+    //m_toGate = toGate;
+    StaticData toData = StaticData();
+    if (!sDataMgr.GetStaticInfo(toGate, toData)) {
+        _log(DATA__ERROR, "Failed to retrieve data for stargate %u", toGate);
+        throw CustomError("Jump failed: destination stargate %u not found.", toGate);
     }
 
     // add jump to mapDynamicData for showing in StarMap (F10)    -allan 06Mar14
@@ -1464,14 +1475,6 @@ void Client::StargateJump(uint32 fromGate, uint32 toGate) {
     pShipSE->DestinyMgr()->SendJumpOut(fromGate);
     //  show gate animation in from gate.   -working -allan 15Nov15
     pShipSE->DestinyMgr()->SendGateActivity(fromGate);
-
-    //m_toGate = toGate;
-    StaticData toData = StaticData();
-    if (!sDataMgr.GetStaticInfo(toGate, toData)) {
-        _log(DATA__ERROR, "Failed to retrieve data for stargate %u", toGate);
-        /** @todo  send error to client here */
-        return;
-    }
 
     // this is where we can put the msgs about system closed or w/e
 
@@ -1494,11 +1497,7 @@ void Client::StargateJump(uint32 fromGate, uint32 toGate) {
 }
 
 void Client::CynoJump(InventoryItemRef beacon) {
-    if ((m_clientState != Player::State::Idle) or m_stateTimer.Enabled()) {
-        sLog.Error("Client","%s: CynoJump called when a move is already pending. Ignoring.", m_char->name());
-        /** @todo  send error to client here */
-        return;
-    }
+    CheckMovePending();
 
     MapDB::AddJump(m_locationID);
 
@@ -1515,10 +1514,14 @@ void Client::CynoJump(InventoryItemRef beacon) {
 }
 
 void Client::WormholeJump(InventoryItemRef wormhole) {
-    if ((m_clientState != Player::State::Idle) or m_stateTimer.Enabled()) {
-        sLog.Error("Client","%s: WormholeJump called when a move is already pending. Ignoring.", m_char->name());
-        /** @todo  send error to client here */
-        return;
+    CheckMovePending();
+
+    // Get destination wormhole before any effect is sent
+    uint32 destID = wormhole->GetAttribute(AttrWormholeTargetSystem2).get_uint32();
+    InventoryItemRef destWh = sItemFactory.GetItemRefFromID(destID);
+    if (destWh.get() == nullptr) {
+        _log(DATA__ERROR, "Failed to retrieve destination wormhole %u for wormhole %u", destID, wormhole->itemID());
+        throw CustomError("Jump failed: this wormhole has no destination.");
     }
 
     MapDB::AddJump(m_locationID);
@@ -1529,11 +1532,7 @@ void Client::WormholeJump(InventoryItemRef wormhole) {
     MapDB::AddJump(m_moveSystemID);
     m_char->VisitSystem(m_moveSystemID);
 
-
-    // Get destination wormhole position and start jump timer
-    InventoryItemRef destWh;
-    destWh = sItemFactory.GetItemRefFromID(wormhole->GetAttribute(AttrWormholeTargetSystem2).get_int());
-
+    // start jump timer
     m_movePoint = destWh->position();
     m_movePoint.MakeRandomPointOnSphere(2000);
     SetStateTimer(Player::State::WormholeJump, Player::Timer::Jumping);
@@ -1542,9 +1541,8 @@ void Client::WormholeJump(InventoryItemRef wormhole) {
 
 void Client::ExecuteJump() {
     if (m_movePoint == NULL_ORIGIN) {
-        m_clientState = Player::State::Idle;
         _log(AUTOPILOT__TRACE, "ExecuteJump() - movePoint = null; state set to Idle");
-        /** @todo  send error to client here */
+        AbortMove();
         return;
     }
 
@@ -1562,9 +1560,8 @@ void Client::ExecuteJump() {
 
 void Client::ExecuteDriveJump() {
     if (m_movePoint == NULL_ORIGIN) {
-        m_clientState = Player::State::Idle;
         _log(AUTOPILOT__TRACE, "ExecuteDriveJump() - movePoint = null; state set to Idle");
-        /** @todo  send error to client here */
+        AbortMove();
         return;
     }
 
@@ -1581,9 +1578,8 @@ void Client::ExecuteDriveJump() {
 
 void Client::ExecuteWormholeJump() {
     if (m_movePoint == NULL_ORIGIN) {
-        m_clientState = Player::State::Idle;
         _log(AUTOPILOT__TRACE, "ExecuteWormholeJump() - movePoint = null; state set to Idle");
-        /** @todo  send error to client here */
+        AbortMove();
         return;
     }
 
@@ -1596,6 +1592,16 @@ void Client::ExecuteWormholeJump() {
 
     m_movePoint = NULL_ORIGIN;
     m_moveSystemID = 0;
+}
+
+void Client::AbortMove() {
+    // runs from the state timer, so it can't throw
+    m_clientState = Player::State::Idle;
+    m_moveSystemID = 0;
+    m_movePoint = NULL_ORIGIN;
+    if ((pShipSE != nullptr) and (pShipSE->DestinyMgr() != nullptr) and !IsDocked())
+        pShipSE->DestinyMgr()->Stop();
+    SendErrorMsg("Jump failed: no destination.  Please try again.");
 }
 
 void Client::SetBallParkTimer(uint32 time/*Player::Timer::Default*/)

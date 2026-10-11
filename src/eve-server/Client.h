@@ -260,6 +260,8 @@ public:
     void SetSessionTimer()                              { m_sessionChangeActive = true; m_sessionTimer.Start(Player::Timer::Session); }
     void SetSessionChange(bool set=false)               { m_sessionChangeActive = set; }
     void SetBallPark();
+    // these throw when a move is already pending (or the destination is invalid), before any effect is sent
+    void CheckMovePending();
     void StargateJump(uint32 fromGate, uint32 toGate);
     void CynoJump(InventoryItemRef beacon);
     void WormholeJump(InventoryItemRef wormhole);
@@ -357,6 +359,8 @@ protected:
     SystemManager* m_system;    //we do not own this
 
     void ExecuteJump();
+    // a timed move without a destination:  reset state, stop the ship and tell the client
+    void AbortMove();
     void ExecuteDriveJump();
     void ExecuteWormholeJump();
     void DestroyShipSE();

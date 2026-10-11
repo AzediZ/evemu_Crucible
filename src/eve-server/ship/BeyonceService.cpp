@@ -1006,6 +1006,8 @@ PyResult BeyonceBound::CmdJumpThroughCorporationStructure(PyCallArgs &call, PyIn
         return nullptr;
     }
 
+    // refuse before any fuel is taken
+    call.client->CheckMovePending();
     uint32 quantityLeft = fuelQuantity;
     for (auto cur : requiredItems) {
         if (cur->quantity() >= quantityLeft) {
@@ -1097,6 +1099,8 @@ PyResult BeyonceBound::CmdBeaconJumpFleet(PyCallArgs &call, PyInt* characterID, 
         return PyStatic.NewNone();
     }
 
+    // refuse before any fuel is taken
+    call.client->CheckMovePending();
     for (auto cur : requiredItems) {
         if (cur->quantity() > fuelQuantity) {
             //If we have all the quantity we need in the current stack, decrement the amount we need and break
@@ -1181,6 +1185,8 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID, 
         return nullptr;
     }
 
+    // refuse before any fuel is taken
+    call.client->CheckMovePending();
     uint32 quantityLeft = fuelQuantity;
     for (auto cur : requiredItems) {
         if (cur->quantity() >= quantityLeft) {
