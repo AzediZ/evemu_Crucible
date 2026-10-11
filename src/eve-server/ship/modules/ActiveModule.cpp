@@ -1717,11 +1717,18 @@ bool ActiveModule::IsScriptedDisruptor()
 
 void ActiveModule::StartDisruptField()
 {
-    if (m_fieldActive)
-        return;
     ShipSE* pShipSE(m_shipRef->HasPilot() ? m_shipRef->GetPilot()->GetShipSE() : nullptr);
     if ((pShipSE == nullptr) or (pShipSE->SystemMgr() == nullptr))
         return;
+    if (m_fieldActive) {
+        if (pShipSE->SystemMgr()->GetInterdictionMgr()->HasField(pShipSE->GetID()))
+            return;
+        /* the ship docked while the field was up: docking stops the module without a DeactivateCycle() and resets the ship's
+         *  and modules' attributes, and leaving space removed the field.  only the bookkeeping is left over
+         */
+        m_fieldActive = false;
+        m_fieldPropDeltas.clear();
+    }
 
     FieldPenalties(true);
     // the field is centred on (and moves with) the ship.  messages name the HIC's hull

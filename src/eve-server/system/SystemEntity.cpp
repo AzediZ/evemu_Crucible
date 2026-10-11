@@ -831,7 +831,9 @@ void DeployableSE::SendAnchorFx(const char* guid, bool start, uint32 duration)
 
 // copy c'tor
 DeployableSE::DeployableSE(const DeployableSE* oth)
-: ObjectSystemEntity(oth->m_self, oth->m_services, oth->m_system)
+: ObjectSystemEntity(oth->m_self, oth->m_services, oth->m_system),
+m_state(DeployState::Unanchored),
+m_stateTimer(0)
 {
     sLog.Error("OSE::DeployableSE()", "copy c'tor.");
     // wip

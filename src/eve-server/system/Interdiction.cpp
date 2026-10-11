@@ -73,12 +73,21 @@ bool InterdictionMgr::IsRestricted(SystemManager* pSystem)
     return (CrimeWatch::SecurityClass(pSystem->GetSystemSecurityRating()) != Crime::SecClass::Null);
 }
 
+bool InterdictionMgr::IsLive(const WarpDisruptField& field)
+{
+    if (field.pSE == nullptr)
+        return false;
+    if ((field.source == Interdiction::Source::Generator) and !field.pSE->HasPilot())
+        return false;
+    return true;
+}
+
 const WarpDisruptField* InterdictionMgr::GetFieldAt(const GPoint& pos, double* escape/*nullptr*/) const
 {
     const WarpDisruptField* pField(nullptr);
     double best(0), distance(0);
     for (auto& cur : m_fields) {
-        if (cur.second.pSE == nullptr)
+        if (!IsLive(cur.second))
             continue;
         distance = pos.distance(cur.second.pSE->GetPosition());
         if (distance >= cur.second.radius)
@@ -187,7 +196,7 @@ bool InterdictionMgr::GetWarpPathDrop(const GPoint& from, const GPoint& target, 
 
     double nearest(0), tcNearest(0);
     for (auto& cur : m_fields) {
-        if (cur.second.pSE == nullptr)
+        if (!IsLive(cur.second))
             continue;
         const GPoint& centre(cur.second.pSE->GetPosition());
         // only fields on the destination grid matter (bubbles at the start or mid-route don't)

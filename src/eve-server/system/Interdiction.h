@@ -46,6 +46,7 @@ public:
     void RemoveField(uint32 entityID);                  // no-op if absent
     void Clear()                                        { m_fields.clear(); }
     bool HasFields() const                              { return !m_fields.empty(); }
+    bool HasField(uint32 entityID) const                { return (m_fields.find(entityID) != m_fields.end()); }
     void GetFields(std::vector<const WarpDisruptField*>& into) const;
 
     // nullified (T3 interdiction nullifier) ships are never caught
@@ -73,6 +74,9 @@ public:
                          GPoint& dropPoint, const WarpDisruptField*& pField) const;
 
 private:
+    // a field generator only works with its pilot aboard (a hull left behind after eject/logoff keeps its entry until it leaves space)
+    static bool IsLive(const WarpDisruptField& field);
+
     SystemManager* m_system;    // we do not own this
 
     std::map<uint32, WarpDisruptField> m_fields;
