@@ -333,6 +333,15 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         Online();
         return;
     }
+    if (m_ModuleState == Module::State::Activated) {
+        // already running.  restarting here let spam-clicking fire faster than the module's rate of fire.  tell the
+        //  client again that it is running, in case it lost track
+        ShowEffect(true, false);
+        return;
+    }
+    if (m_ModuleState == Module::State::Deactivating)
+        return;     // stopping at the end of its cycle; it can be started again once that cycle ends
+
     if (m_needsCharge and (!m_chargeLoaded or (m_chargeRef.get() == nullptr))) {
         _log(MODULE__TRACE, "ActiveModule::Activate - %s: needsCharge: %s, chargeLoaded: %s, chargeRef: %s", \
                 m_modRef->name(), m_needsCharge?"True":"False", m_chargeLoaded?"True":"False", \
@@ -422,7 +431,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     if (m_linkMaster) {
         m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
         for (auto cur : modules) {
-            cur->GetActiveModule()->SetSlaveData(pShip);
+            cur->GetActiveModule()->SetSlaveData(pShip, this);
             cur->GetActiveModule()->ShowEffect(true, false);
         }
     } else {
@@ -493,7 +502,13 @@ void ActiveModule::Deactivate(std::string effect/*""*/)
     m_Stop = true;
 }
 
-void ActiveModule::SetSlaveData(ShipSE* pShip) {
+void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
+    if ((pMaster != nullptr) and (pMaster != this)) {
+        m_effectID = pMaster->m_effectID;
+        m_targetID = pMaster->m_targetID;
+        m_targetSE = pMaster->m_targetSE;
+        m_repeat = pMaster->m_repeat;
+    }
     m_bubble = pShip->SysBubble();
     m_sysMgr = pShip->SystemMgr();
     m_targMgr = pShip->TargetMgr();
@@ -1280,12 +1295,16 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
         }
     }
 
-    // there may be others here like this...this is ONLY for OnSpecialFX data
-    if ((m_effectID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
-        m_effectID = m_chargeRef->type().GetDefaultEffect();
-    std::string guidStr = sFxDataMgr.GetEffectGuid(m_effectID);
+    // there may be others here like this...this is ONLY for OnSpecialFX data.  a launcher's graphic comes from its charge's
+    //  default effect, but OnGodmaShipEffect below must name the launcher's own effect (useMissiles): that is what the
+    //  client's module button tracks.  overwriting m_effectID here left the client thinking launchers never started, so
+    //  they showed no cycle ring, couldn't be switched off, and every click started them again
+    uint16 fxID(m_effectID);
+    if ((fxID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
+        fxID = m_chargeRef->type().GetDefaultEffect();
+    std::string guidStr = sFxDataMgr.GetEffectGuid(fxID);
     if (guidStr.empty())
-        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), m_effectID);
+        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), fxID);
 
     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
     uint32 timeLeft(GetRemainingCycleTimeMS());
@@ -1298,7 +1317,7 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
                 IsValidTarget(m_targetID) ? m_targetID : m_shipRef->itemID(),
                 chgTypeID,
                 guidStr,
-                sFxDataMgr.isOffensive(m_effectID),
+                sFxDataMgr.isOffensive(fxID),
                 active,         // start    - if (start = 0) THEN remove effect
                 active,         // active   - if (start and active) THEN starting ONE-SHOT event of (duration)  (dunno what 'ONE-SHOT event' is)
                 timeLeft,       // duration in ms
