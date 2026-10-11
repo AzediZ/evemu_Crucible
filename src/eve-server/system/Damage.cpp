@@ -48,6 +48,7 @@
 #include "character/CharacterDB.h"
 #include "station/JumpCloneService.h"
 #include "StaticDataMgr.h"
+#include "pos/Structure.h"
 
 /*
 DAMAGE
@@ -445,6 +446,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // npcs start repairing, build threat and answer the attack
         if (IsNPCSE())
             GetNPCSE()->GetAIMgr()->OnDamaged(d.srcSE, total_damage);
+        // starbases:  reinforcement, attack alerts, the guns' aggressor list
+        if (IsPOSSE())
+            GetPOSSE()->OnDamaged(d.srcSE);
     }
 
     if (sConfig.debug.UseProfiling)

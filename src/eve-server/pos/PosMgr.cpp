@@ -613,6 +613,9 @@ PyResult PosMgrBound::SetShipPassword(PyCallArgs &call, PyWString* password) {
 PyResult PosMgrBound::SetTowerPassword(PyCallArgs& call, PyInt* itemID, PyRep* password) {
     // 'Set new password for force field' (pwn.EnterTowerPassword)
     TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
+    // the force field can't be retuned while the shield is weak
+    if (pTSE->GetShieldFraction() < EVEPOS::ShieldFluctuationLevel)
+        throw UserError("CantPerformTowerShieldFluctuations").AddFormatValue("tower", new PyInt(pTSE->GetTypeID()));
 
     if (password->IsString() or password->IsWString())
         pTSE->SetPassword(PyRep::StringContent(password));
@@ -624,6 +627,9 @@ PyResult PosMgrBound::SetTowerPassword(PyCallArgs& call, PyInt* itemID, PyRep* p
 PyResult PosMgrBound::SetTowerPassword(PyCallArgs &call, PyInt* itemID, PyRep* password, PyBool* allowCorp, PyBool* allowAlliance) {
     // the tower window's force field tab.  password False keeps the current one
     TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig, true));
+    // the force field can't be retuned while the shield is weak
+    if (pTSE->GetShieldFraction() < EVEPOS::ShieldFluctuationLevel)
+        throw UserError("CantPerformTowerShieldFluctuations").AddFormatValue("tower", new PyInt(pTSE->GetTypeID()));
 
     if (password->IsString() or password->IsWString()) {
         pTSE->SetPassword(PyRep::StringContent(password));

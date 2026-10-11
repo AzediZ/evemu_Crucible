@@ -28,6 +28,8 @@ public:
 
     /* class type tests. */
     virtual bool                IsTowerSE()             { return true; }
+    // a reinforced tower takes no damage
+    virtual bool                IsInvul()               { return (IsReinforced() or StructureSE::IsInvul()); }
 
     /* SystemEntity interface */
     virtual void                Process();
@@ -124,7 +126,7 @@ public:
      *  rounded up.  online:  fuel blocks and charters per hour (purpose 1).  strontium:  per hour of reinforcement (purpose 4)
      */
     static void GetFuelRequirements(uint16 towerTypeID, uint32 systemID, uint32 ownerAllianceID,
-                                    std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium);
+                                    std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium, bool applyFuelRate = true);
     // starbase charter types the tower needs in this system (empty where none are needed)
     static void GetCharterTypes(uint16 towerTypeID, uint32 systemID, std::vector<uint16>& into);
     // units of typeID in a bay (flagNone fuel bay, flagSecondaryStorage strontium bay)
@@ -166,6 +168,16 @@ public:
     uint32 FuelHoursLeft();
     // the tower and its structures go offline now
     void GoOffline(bool outOfFuel);
+
+    /* reinforcement */
+    // any structure of this tower took damage
+    void OnStructureDamaged(StructureSE* pVictim, SystemEntity* pAttacker);
+    // under 25% shield while online and armed:  reinforced for the whole hours of strontium in the bay
+    void CheckReinforce();
+    void EnterReinforced();
+    void ExitReinforced();
+    // who attacked this tower's structures (charID for pilots and their drones, itemID for npcs) and when (FILETIME)
+    bool IsRecentAggressor(uint32 id, int64 window);
     // the fuel expiry event in the corp calendar (showInCalendar)
     void UpdateFuelCalendar();
 
@@ -184,6 +196,8 @@ private:
     // replays the hours missed while the system was unloaded
     void CatchUp();
 
+    std::map<uint32, int64> m_aggressors;   // aggressor id / last attack
+    bool m_fuelOut;         // ran out of fuel while reinforced:  offline when reinforcement ends
     bool m_catchUp;         // catch up on the first tic after loading
     bool m_replaying;       // replaying missed hours (saves once at the end)
     float m_pgUsed;

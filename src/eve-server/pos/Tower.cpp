@@ -108,6 +108,7 @@
 TowerSE::TowerSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& fData)
 : StructureSE(structure, services, system, fData),
 m_pShieldSE(nullptr),
+m_fuelOut(false),
 m_catchUp(false),
 m_replaying(false),
 m_pgUsed(0.0f),
@@ -289,13 +290,13 @@ void TowerSE::OrphanModules()
 }
 
 void TowerSE::GetFuelRequirements(uint16 towerTypeID, uint32 systemID, uint32 ownerAllianceID,
-                                  std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium)
+                                  std::map<uint16, uint32>& online, std::map<uint16, uint32>& strontium, bool applyFuelRate/*true*/)
 {
     SystemData sData = SystemData();
     sDataMgr.GetSystemData(systemID, sData);
     int8 whClass(sDataMgr.GetWHSystemClass(systemID));
     // the client's consumefactor:  sovereignty held by the owner's alliance saves a quarter
-    float factor(sConfig.pos.FuelRate);
+    float factor(applyFuelRate ? sConfig.pos.FuelRate : 1.0f);
     if (IsAlliance(ownerAllianceID) and (svDataMgr.GetSystemAllianceID(systemID) == ownerAllianceID))
         factor *= 0.75f;
 
@@ -392,6 +393,15 @@ void TowerSE::Process()
             CatchUp();
     }
 
+    // reinforcement ends on time (the hourly cycle also checks, for missed hours)
+    if (IsReinforced() and (GetFileTimeNow() >= m_tdata.reinforceUntil))
+        ExitReinforced();
+    // repaired back to 50% shield:  it can be reinforced again
+    if (!m_tdata.reinforceArmed and !IsReinforced() and (GetShieldFraction() >= EVEPOS::ShieldFluctuationLevel)) {
+        m_tdata.reinforceArmed = true;
+        m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    }
+
     // starbase charter checks for empire space
 
     // tower-specific tests here
@@ -471,10 +481,20 @@ void TowerSE::Online()
 
 void TowerSE::ProcessCycle(int64 cycleTime)
 {
-    // fuel blocks (and charters):  all of them or the tower goes offline
-    if (!ConsumeFuelCycle()) {
-        GoOffline(true);
+    // reinforcement ended during this hour (missed hours)
+    if (IsReinforced() and (cycleTime >= m_tdata.reinforceUntil))
+        ExitReinforced();
+    if (!IsPowered())
         return;
+
+    // fuel blocks (and charters):  all of them or the tower goes offline.  a reinforced tower holds out until the end
+    if (!ConsumeFuelCycle()) {
+        if (IsReinforced()) {
+            m_fuelOut = true;
+        } else {
+            GoOffline(true);
+            return;
+        }
     }
 
     m_tdata.lastCycle = cycleTime;
@@ -618,6 +638,102 @@ void TowerSE::UpdateFuelCalendar()
     m_tdata.fuelEventID = CalendarDB::SaveSystemEvent(m_corpID, m_corpID, expiry, Calendar::AutoEvent::PosFuel, title, description, true);
     m_tdata.fuelExpiry = expiry;
     m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+}
+
+void TowerSE::OnStructureDamaged(StructureSE* pVictim, SystemEntity* pAttacker)
+{
+    // who did it.  pilots (and their drones) by character, npcs by item
+    if (pAttacker != nullptr) {
+        uint32 id(pAttacker->GetID());
+        if (pAttacker->HasPilot()) {
+            id = pAttacker->GetPilot()->GetCharacterID();
+        } else if (pAttacker->IsDroneSE() and IsCharacterID(pAttacker->GetSelf()->ownerID())) {
+            id = pAttacker->GetSelf()->ownerID();
+        }
+        m_aggressors[id] = GetFileTimeNow();
+    }
+
+    if (pVictim == this)
+        CheckReinforce();
+}
+
+bool TowerSE::IsRecentAggressor(uint32 id, int64 window)
+{
+    std::map<uint32, int64>::iterator itr(m_aggressors.find(id));
+    if (itr == m_aggressors.end())
+        return false;
+    if ((GetFileTimeNow() - itr->second) > window) {
+        m_aggressors.erase(itr);
+        return false;
+    }
+    return true;
+}
+
+void TowerSE::CheckReinforce()
+{
+    if (IsReinforced() or !m_tdata.reinforceArmed or !IsOnline())
+        return;
+    if (GetShieldFraction() >= EVEPOS::ReinforceShieldLevel)
+        return;
+    EnterReinforced();
+}
+
+void TowerSE::EnterReinforced()
+{
+    // whole hours of strontium in the strontium bay at the tower's hourly rate (pos.FuelRate only scales what is burned)
+    std::map<uint16, uint32> online, strontium;
+    float rate(sConfig.pos.FuelRate);
+    GetFuelRequirements(GetTypeID(), m_system->GetID(), (IsAlliance(m_allyID) ? m_allyID : 0), online, strontium, false);
+
+    uint32 hours(strontium.empty() ? 0 : UINT32_MAX);
+    for (auto cur : strontium) {
+        uint32 have(CountResource(cur.first, flagSecondaryStorage) / cur.second);
+        if (have < hours)
+            hours = have;
+    }
+
+    // no strontium, no reinforcement:  the tower stays vulnerable (re-armed at 50% shield)
+    m_tdata.reinforceArmed = false;
+    if (hours == 0) {
+        _log(POS__MESSAGE, "TowerSE::EnterReinforced() - %s(%u) has no strontium and stays vulnerable.", GetName(), m_data.itemID);
+        m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+        return;
+    }
+
+    for (auto cur : strontium)
+        TakeResource(cur.first, flagSecondaryStorage, (uint32)std::ceil(hours * cur.second * rate));
+
+    int64 now(GetFileTimeNow());
+    m_tdata.reinforceUntil = now + hours * EvE::Time::Hour;
+    m_data.state = EVEPOS::StructureState::Reinforced;
+    // the client counts down to posTimestamp
+    m_data.timestamp = m_tdata.reinforceUntil;
+    m_delayTime = hours * 3600000;
+    SendSlimUpdate();
+    m_db.UpdateBaseData(m_data);
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    _log(POS__MESSAGE, "TowerSE::EnterReinforced() - %s(%u) in %s is reinforced for %u hours.", GetName(), m_data.itemID, m_system->GetName(), hours);
+}
+
+void TowerSE::ExitReinforced()
+{
+    if (!IsReinforced())
+        return;
+    // back online as it is (shield unchanged, not armed until repaired to 50%)
+    m_data.state = EVEPOS::StructureState::Online;
+    m_data.timestamp = GetFileTimeNow();
+    m_delayTime = 0;
+    m_tdata.reinforceUntil = 0;
+    SendSlimUpdate();
+    m_db.UpdateBaseData(m_data);
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    _log(POS__MESSAGE, "TowerSE::ExitReinforced() - %s(%u) left reinforced mode.", GetName(), m_data.itemID);
+
+    // the fuel ran out while it was reinforced
+    if (m_fuelOut) {
+        m_fuelOut = false;
+        GoOffline(true);
+    }
 }
 
 void TowerSE::RecalcLoad()

@@ -89,6 +89,11 @@ class DungeonEditSE;
  */
 #include <set>
 
+/* passive shield and capacitor recharge rate (units per second) at 'current' of 'capacity' with the given recharge time
+ *  C = Cmax * [ 1 + ( SQRT(C0/Cmax) - 1) * EXP((t0-t1)/tau) ] ^ 2   (ships, starbase structures)
+ */
+float CalcRechargeRate(float capacity, float current, float rechargeTimeMS);
+
 class SystemEntity {
     friend class SystemBubble;    /* only to update m_bubble */
 public:

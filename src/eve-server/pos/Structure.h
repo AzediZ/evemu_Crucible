@@ -148,6 +148,8 @@ public:
 
     /* virtual functions to be overridden in derived classes */
     virtual void     MissileLaunched(Missile* pMissile) { /* Do nothing here */ }
+    // damage taken (not killed):  the control tower hears about it (reinforcement, alerts, aggressors)
+    virtual void                OnDamaged(SystemEntity* pAttacker);
 
     /* basic structure processing methods */
     virtual void                SetOnline();
@@ -290,9 +292,14 @@ protected:
     uint32                      m_anchorPointID;
 
 private:
+    // passive shield regeneration of anchored starbase structures (not reinforced towers)
+    void                        ProcessShieldRegen();
+
     uint32 m_duration;              // module duration in ms
 
     Timer m_procTimer;              // module state timer
+    Timer m_regenTimer;             // shield regeneration, 1s
+    uint8 m_regenTicks;             // damage state sent every 5 regeneration tics
 
     bool m_tcu :1;              // Territorial Claim Unit
     bool m_sbu :1;              // System Blockade Unit

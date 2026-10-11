@@ -87,6 +87,20 @@ m_harmonic(oth->m_harmonic),m_ewar(nullptr)
 }
 
 
+float CalcRechargeRate(float capacity, float current, float rechargeTimeMS)
+{
+    // dC/dt = (SQRT(C/Cmax) - C/Cmax) * 2 * Cmax / tau
+    // tau = "Cap Recharge Time" / 5.0
+    // prevent divide by zero.
+    rechargeTimeMS = (rechargeTimeMS < 1 ? 1 : rechargeTimeMS);
+    current = (current < 1 ? 1 : current);
+    float Cmax = (capacity < 1 ? 1 : capacity);
+    float tau = (rechargeTimeMS / 5000.0f);
+    float C_Cmax = (current / Cmax);
+    // charge rate in units / sec
+    return (((Cmax * 2) / tau) * (std::sqrt(C_Cmax) - C_Cmax));
+}
+
 void SystemEntity::Process() {
     if (m_killed) {
         _log(SE__DEBUG, "SE::Process() - %s(%u) is dead but still in system.", m_self->name(), m_self->itemID());

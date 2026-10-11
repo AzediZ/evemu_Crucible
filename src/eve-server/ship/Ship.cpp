@@ -2746,26 +2746,7 @@ m_allowFleetSMBUsage(false)
 
 float ShipSE::CalculateRechargeRate(float Capacity, float Current, float RechargeTimeMS)
 {
-    // C = Cmax * [ 1 + ( SQRT(C0/Cmax) - 1) * EXP((t0-t1)/tau) ] ^ 2
-    // dC/dt = (SQRT(C/Cmax) - C/Cmax) * 2 * Cmax / tau
-    // tau = "Cap Recharge Time" / 5.0
-
-    // prevent divide by zero.
-    RechargeTimeMS = (RechargeTimeMS < 1 ? 1 : RechargeTimeMS);
-    Current = (Current < 1 ? 1 : Current);
-    float Cmax = (Capacity < 1 ? 1 : Capacity);
-
-    // tau = "cap recharge time" / 5.0
-    float tau = (RechargeTimeMS / 5000.0);
-    // (2*Cmax) / tau
-    float Cmax2_tau = ((Cmax * 2) / tau);
-    float C = Current;
-    // C / Cmax
-    float C_Cmax = (C / Cmax);
-    // sqrt( C / Cmax)
-    float sC_Cmax = sqrt(C_Cmax);
-    // charge rate in Gj / sec
-    return (Cmax2_tau * (sC_Cmax - C_Cmax));
+    return CalcRechargeRate(Capacity, Current, RechargeTimeMS);
 }
 
 void ShipSE::Process() {

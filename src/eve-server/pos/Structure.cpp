@@ -224,6 +224,8 @@ StructureSE::StructureSE(StructureItemRef structure, EVEServiceManager&services,
     m_gateSE(nullptr),
     m_bridgeSE(nullptr),
     m_procTimer(10000), // arbitrary default
+    m_regenTimer(1000),
+    m_regenTicks(0),
     m_tcu(false),
     m_sbu(false),
     m_ihub(false),
@@ -526,6 +528,9 @@ void StructureSE::Process()
     /* called by EntityList::Process on every loop */
     /*  Enable base call to Process Targeting and Movement  */
     SystemEntity::Process();
+
+    if (m_regenTimer.Check())
+        ProcessShieldRegen();
 
     if (m_procTimer.Check(false))
     {
@@ -979,6 +984,35 @@ bool StructureSE::IsOnline()
             return true;
     }
     return false;
+}
+
+void StructureSE::ProcessShieldRegen()
+{
+    // anchored starbase structures recharge their shield like ships do.  a reinforced tower's shield is frozen
+    if (!IsStarbaseStructure() or !IsAnchored() or IsReinforced() or m_killed)
+        return;
+    float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+    float charge(m_self->GetAttribute(AttrShieldCharge).get_float());
+    if ((capacity <= 0.0f) or (charge >= capacity))
+        return;
+
+    float newCharge(charge + CalcRechargeRate(capacity, charge, m_self->GetAttribute(AttrShieldRechargeRate).get_float()));
+    if ((newCharge > capacity) or ((capacity - newCharge) < 0.3f))
+        newCharge = capacity;
+    m_self->SetAttribute(AttrShieldCharge, newCharge, false);
+
+    // those watching see it every 5s, and when it is full
+    if ((++m_regenTicks >= 5) or (newCharge >= capacity)) {
+        m_regenTicks = 0;
+        SendDamageStateChanged();
+    }
+}
+
+void StructureSE::OnDamaged(SystemEntity* pAttacker)
+{
+    TowerSE* pTower(m_tower ? GetTowerSE() : m_towerSE);
+    if (pTower != nullptr)
+        pTower->OnStructureDamaged(this, pAttacker);
 }
 
 float StructureSE::GetShieldFraction()
