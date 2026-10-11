@@ -34,7 +34,8 @@ FLEET__BIND_DUMP
 
 FleetService::FleetService()
 : m_lsc(nullptr),
-m_initalized(false)
+m_initalized(false),
+m_departing(nullptr)
 {
 }
 
@@ -150,8 +151,8 @@ uint32 FleetService::CreateFleet(Client *pClient)
 PyRep* FleetService::CreateWing(uint32 fleetID)
 {
     int8 count = m_fleetWings.count(fleetID);
-    // do we need an error here?
-    if (count > 4)
+    // callers check the limit and throw FleetTooManyWings
+    if (count >= Fleet::Limits::MaxWings)
         return nullptr;
     WingData wData = WingData();
         wData.fleetID = fleetID;
@@ -184,8 +185,8 @@ PyRep* FleetService::CreateWing(uint32 fleetID)
 
 void FleetService::CreateSquad(uint32 fleetID, uint32 wingID)
 {
-    // do we need an error here?
-    if (m_wingSquads.count(wingID) == 5)
+    // callers check the limit and throw FleetTooManySquads
+    if (m_wingSquads.count(wingID) >= Fleet::Limits::MaxSquadsPerWing)
         return;
     IncFleetSquads(fleetID, wingID);
     FleetData data = FleetData();
@@ -385,7 +386,7 @@ bool FleetService::UpdateMember(uint32 charID, uint32 fleetID, int32 newWingID, 
     int8 oldRole(0), oldJob(0), oldBooster(0);
     int32 oldWingID(0), oldSquadID(0);
     // verify member data
-    Client* pClient = sEntityList.FindClientByCharID(charID);
+    Client* pClient = GetMember(fleetID, charID);
     if (pClient == nullptr)
         return false;
     Character* pChar = pClient->GetChar().get();
@@ -397,6 +398,12 @@ bool FleetService::UpdateMember(uint32 charID, uint32 fleetID, int32 newWingID, 
     oldWingID = pChar->wingID();
     oldSquadID = pChar->squadID();
     oldBooster = pChar->fleetBooster();
+
+    // 0 means 'unchanged' (resolve it first, or the squad roster below would drop this member)
+    if (newWingID == 0)
+        newWingID = oldWingID;
+    if (newSquadID == 0)
+        newSquadID = oldSquadID;
 
     // update fleet data
     if (oldBooster != newBooster) {
@@ -593,7 +600,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                     }
                 // this is for FC only.  will always get own skill, and here they get their fleet boost, also
                 fData.leader = fItr->second.leader->GetChar()->GetSkillLevel(EvESkill::Leadership);
-                if (fItr->second.leader->IsInSpace())
+                if (fItr->second.leader->IsInSpace() and (fItr->second.leader->GetShipSE() != nullptr))
                     fItr->second.leader->GetShipSE()->ApplyBoost(fData);
             }
     }
@@ -691,7 +698,8 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
     // update boost effects on these members' ships using updated boost levels
     // this is for fleet boost only, as modules will apply/remove their effects using the FxSystem
     for (auto cur : memberUpdateMap)
-        cur.first->ApplyBoost(cur.second);
+        if (cur.first != nullptr)
+            cur.first->ApplyBoost(cur.second);
 
     _log( FLEET__TRACE, "FleetService::UpdateBoost() - Updated %lu members of fleetID: %u in %.2fus.  fleet: %s, wing: %s, squad: %s", \
             memberUpdateMap.size(), fleetID, GetTimeUSeconds() - start, (fleet ? "true" : "false"), (wing.empty() ? "false" : "true"), (squad.empty() ? "false" : "true"));
@@ -733,7 +741,8 @@ void FleetService::SetWingBoostData(uint32 wingID, BoostData& bData)
                 }
             // this is for WC only.  will always get own skill, and here they get their wing boost, also
             wItr->second.boost.leader   = leader;
-            wItr->second.leader->GetShipSE()->ApplyBoost(wItr->second.boost);
+            if (wItr->second.leader->GetShipSE() != nullptr)
+                wItr->second.leader->GetShipSE()->ApplyBoost(wItr->second.boost);
         }
 
     if (!boost)
@@ -999,17 +1008,39 @@ void FleetService::RemoveFleetAdvert(uint32 fleetID)
 
 void FleetService::DeleteFleet(uint32 fleetID)
 {
+    _log(FLEET__INFO, "FleetService::DeleteFleet() - fleetID: %u", fleetID);
+
+    RemoveFleetAdvert(fleetID);
+
     std::vector<uint32> wings, squads;
     GetWingIDs(fleetID, wings);
     for (auto wing : wings) {
-        m_wingDataMap.erase(wing);
         squads.clear();
         GetSquadIDs(wing, squads);
-        for (auto squad : squads)
+        for (auto squad : squads) {
             m_squadDataMap.erase(squad);
+            if (m_lsc != nullptr)
+                m_lsc->DeleteSystemChannel(squad);
+        }
+        m_wingSquads.erase(wing);
+        m_wingDataMap.erase(wing);
+        if (m_lsc != nullptr)
+            m_lsc->DeleteSystemChannel(wing);
     }
+    m_fleetWings.erase(fleetID);
     m_fleetDataMap.erase(fleetID);
-    RemoveFleetAdvert(fleetID);
+    m_fleetMembers.erase(fleetID);
+    m_joinReq.erase(fleetID);
+
+    for (auto itr = m_inviteData.begin(); itr != m_inviteData.end(); )
+        if (itr->second.fleetID == fleetID) {
+            itr = m_inviteData.erase(itr);
+        } else {
+            ++itr;
+        }
+
+    if (m_lsc != nullptr)
+        m_lsc->DeleteSystemChannel(fleetID);
 }
 
 void FleetService::DeleteWing(uint32 wingID)
@@ -1018,7 +1049,7 @@ void FleetService::DeleteWing(uint32 wingID)
     if (wItr == m_wingDataMap.end())
         return;
 
-    DecFleetSquads(wItr->second.fleetID, wingID);
+    uint32 fleetID = wItr->second.fleetID;
 
     std::vector<uint32> squads;
     GetSquadIDs(wingID, squads);
@@ -1027,14 +1058,28 @@ void FleetService::DeleteWing(uint32 wingID)
         sItr = m_squadDataMap.find(cur);
         if (sItr == m_squadDataMap.end())
             continue;
+        DecFleetSquads(fleetID, wingID);
         m_squadDataMap.erase(sItr);
+        if (m_lsc != nullptr)
+            m_lsc->DeleteSystemChannel(cur);
     }
+    m_wingSquads.erase(wingID);
+
+    // remove this wing from the fleet's wing list
+    auto range = m_fleetWings.equal_range(fleetID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        if (itr->second == wingID) {
+            m_fleetWings.erase(itr);
+            break;
+        }
 
     PyTuple* tuple = new PyTuple(1);
         tuple->SetItem(0, new PyInt(wingID));
-    SendFleetUpdate(wItr->second.fleetID, "OnFleetWingDeleted", tuple);
+    SendFleetUpdate(fleetID, "OnFleetWingDeleted", tuple);
 
     m_wingDataMap.erase(wItr);
+    if (m_lsc != nullptr)
+        m_lsc->DeleteSystemChannel(wingID);
 }
 
 void FleetService::DeleteSquad(uint32 squadID)
@@ -1045,11 +1090,21 @@ void FleetService::DeleteSquad(uint32 squadID)
 
     DecFleetSquads(itr->second.fleetID, itr->second.wingID);
 
+    // remove this squad from the wing's squad list
+    auto range = m_wingSquads.equal_range(itr->second.wingID);
+    for (auto sItr = range.first; sItr != range.second; ++sItr)
+        if (sItr->second == squadID) {
+            m_wingSquads.erase(sItr);
+            break;
+        }
+
     PyTuple* tuple = new PyTuple(1);
         tuple->SetItem(0, new PyInt(squadID));
     SendFleetUpdate(itr->second.fleetID, "OnFleetSquadDeleted", tuple);
 
     m_squadDataMap.erase(itr);
+    if (m_lsc != nullptr)
+        m_lsc->DeleteSystemChannel(squadID);
 }
 
 void FleetService::IncFleetSquads(uint32 fleetID, uint32 wingID)
@@ -1079,7 +1134,7 @@ Client* FleetService::GetFleetLeader(uint32 fleetID)
 uint32 FleetService::GetFleetLeaderID(uint32 fleetID)
 {
     std::map<uint32, FleetData>::iterator itr = m_fleetDataMap.find(fleetID);
-    if (itr == m_fleetDataMap.end())
+    if ((itr == m_fleetDataMap.end()) or (itr->second.leader == nullptr))
         return 0;
     return itr->second.leader->GetCharacterID();
 }
@@ -1095,7 +1150,7 @@ Client* FleetService::GetWingLeader(uint32 wingID)
 uint32 FleetService::GetWingLeaderID(uint32 wingID)
 {
     std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(wingID);
-    if (itr == m_wingDataMap.end())
+    if ((itr == m_wingDataMap.end()) or (itr->second.leader == nullptr))
         return 0;
     return itr->second.leader->GetCharacterID();
 }
@@ -1111,7 +1166,7 @@ Client* FleetService::GetSquadLeader(uint32 squadID)
 uint32 FleetService::GetSquadLeaderID(uint32 squadID)
 {
     std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(squadID);
-    if (itr == m_squadDataMap.end())
+    if ((itr == m_squadDataMap.end()) or (itr->second.leader == nullptr))
         return 0;
     return itr->second.leader->GetCharacterID();
 }
@@ -1148,38 +1203,271 @@ std::string FleetService::GetFleetDescription(uint32 fleetID)
     return itr->second.description;
 }
 
-void FleetService::GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID)
+bool FleetService::GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID, int32 restrictWingID/*0*/, int32 restrictSquadID/*0*/)
 {
-    std::vector<uint32> wings, squads;
-    auto range = m_fleetWings.equal_range(fleetID);
-    for (auto itr = range.first; itr != range.second; ++itr)
-        wings.push_back(itr->second);
+    // wings and squads are kept in creation order.  use the first squad with room for another member
+    auto wRange = m_fleetWings.equal_range(fleetID);
+    for (auto wItr = wRange.first; wItr != wRange.second; ++wItr) {
+        if ((restrictWingID > 0) and (wItr->second != (uint32)restrictWingID))
+            continue;
+        auto sRange = m_wingSquads.equal_range(wItr->second);
+        for (auto sItr = sRange.first; sItr != sRange.second; ++sItr) {
+            if ((restrictSquadID > 0) and (sItr->second != (uint32)restrictSquadID))
+                continue;
+            if (GetSquadMemberCount(sItr->second) < Fleet::Limits::MaxSquadMembers) {
+                wingID = wItr->second;
+                squadID = sItr->second;
+                return true;
+            }
+        }
+    }
 
-    wingID = wings.at(MakeRandomInt(0, wings.size()));
-
-    range = m_wingSquads.equal_range(wingID);
-    for (auto itr = range.first; itr != range.second; ++itr)
-        squads.push_back(itr->second);
-
-    // make sure there is room in this squad for another member
-    squadID = squads.at(MakeRandomInt(0, squads.size()));
+    return false;
 }
 
 void FleetService::LeaveFleet(Client* pClient)
 {
+    if (pClient == nullptr)
+        return;
     Character* pChar = pClient->GetChar().get();
     if (pChar == nullptr)
         return;
+    uint32 fleetID = pChar->fleetID();
+    if (fleetID == 0)
+        return;
+
+    // the boss role passes to the next in command before this member is removed
+    if (IsBoss(pChar) and (m_fleetMembers.count(fleetID) > 1))
+        PassBoss(fleetID, pClient);
 
     PyTuple* tuple = new PyTuple(1);
     tuple->SetItem(0, new PyInt(pChar->itemID()));
-    SendFleetUpdate(pChar->fleetID(), "OnFleetLeave", tuple);
+    SendFleetUpdate(fleetID, "OnFleetLeave", tuple);
 
     RemoveMember(pClient);
 
     CharFleetData fleet = CharFleetData();
     //call updates on fleet session data
     pChar->SetFleetData(fleet);
+
+    // no pointer to this client may stay in the fleet data
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if ((fItr != m_fleetDataMap.end()) and (fItr->second.creator == pClient))
+        fItr->second.creator = nullptr;
+    std::map<uint32, FleetAdvert>::iterator aItr = m_fleetAdvertMap.find(fleetID);
+    if ((aItr != m_fleetAdvertMap.end()) and (aItr->second.leader == pClient)) {
+        if ((fItr != m_fleetDataMap.end()) and (fItr->second.creator != nullptr)) {
+            aItr->second.leader = fItr->second.creator;
+        } else {
+            m_fleetAdvertMap.erase(aItr);
+        }
+    }
+
+    // an empty fleet is deleted
+    if (m_fleetMembers.count(fleetID) == 0)
+        DeleteFleet(fleetID);
+}
+
+void FleetService::ClientLogout(Client* pClient)
+{
+    if (pClient == nullptr)
+        return;
+
+    // drop invites issued by or to this client
+    for (auto itr = m_inviteData.begin(); itr != m_inviteData.end(); )
+        if ((itr->second.invited == pClient) or (itr->second.inviteBy == pClient)) {
+            itr = m_inviteData.erase(itr);
+        } else {
+            ++itr;
+        }
+
+    // drop join requests from this client
+    for (auto itr = m_joinReq.begin(); itr != m_joinReq.end(); )
+        if (itr->second == pClient) {
+            itr = m_joinReq.erase(itr);
+        } else {
+            ++itr;
+        }
+
+    Character* pChar = pClient->GetChar().get();
+    if ((pChar == nullptr) or (pChar->fleetID() == 0))
+        return;
+
+    m_departing = pClient;
+    LeaveFleet(pClient);
+    m_departing = nullptr;
+}
+
+void FleetService::PassBoss(uint32 fleetID, Client* pLeaving)
+{
+    Client* pFC(nullptr);
+    Client* pWC(nullptr);
+    Client* pSC(nullptr);
+    Client* pOldest(nullptr);
+    int64 oldest(0);
+
+    auto range = m_fleetMembers.equal_range(fleetID);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        Client* pClient = itr->second;
+        if ((pClient == nullptr) or (pClient == pLeaving))
+            continue;
+        Character* pChar = pClient->GetChar().get();
+        if (pChar == nullptr)
+            continue;
+        switch (pChar->fleetRole()) {
+            case Fleet::Role::FleetLeader: {
+                if (pFC == nullptr)
+                    pFC = pClient;
+            } break;
+            case Fleet::Role::WingLeader: {
+                if (pWC == nullptr)
+                    pWC = pClient;
+            } break;
+            case Fleet::Role::SquadLeader: {
+                if (pSC == nullptr)
+                    pSC = pClient;
+            } break;
+        }
+        if ((pOldest == nullptr) or (pChar->fleetJoinTime() < oldest)) {
+            pOldest = pClient;
+            oldest = pChar->fleetJoinTime();
+        }
+    }
+
+    Client* pNewBoss = pFC;
+    if (pNewBoss == nullptr)
+        pNewBoss = pWC;
+    if (pNewBoss == nullptr)
+        pNewBoss = pSC;
+    if (pNewBoss == nullptr)
+        pNewBoss = pOldest;
+    if (pNewBoss == nullptr)
+        return;
+
+    _log(FLEET__INFO, "FleetService::PassBoss() - fleetID: %u boss passes from %s to %s", \
+            fleetID, (pLeaving != nullptr ? pLeaving->GetName() : "(none)"), pNewBoss->GetName());
+    SetBoss(fleetID, pNewBoss);
+}
+
+void FleetService::SetBoss(uint32 fleetID, Client* pNewBoss)
+{
+    if (pNewBoss == nullptr)
+        return;
+    Character* pNewChar = pNewBoss->GetChar().get();
+    if (pNewChar == nullptr)
+        return;
+
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if (fItr == m_fleetDataMap.end())
+        return;
+
+    // clear the boss job on every other member (there should only be one)
+    std::vector<Client*> members;
+    GetMemeberVec(fleetID, members);
+    for (auto pClient : members) {
+        if ((pClient == nullptr) or (pClient == pNewBoss))
+            continue;
+        Character* pChar = pClient->GetChar().get();
+        if ((pChar == nullptr) or !IsBoss(pChar))
+            continue;
+        UpdateMember(pChar->itemID(), fleetID, 0, 0, pChar->fleetJob() & ~Fleet::Job::Creator, pChar->fleetRole(), pChar->fleetBooster());
+    }
+
+    if (!IsBoss(pNewChar))
+        UpdateMember(pNewChar->itemID(), fleetID, 0, 0, pNewChar->fleetJob() | Fleet::Job::Creator, pNewChar->fleetRole(), pNewChar->fleetBooster());
+
+    Client* pOldBoss = fItr->second.creator;
+    fItr->second.creator = pNewBoss;
+
+    std::map<uint32, FleetAdvert>::iterator aItr = m_fleetAdvertMap.find(fleetID);
+    if ((aItr != m_fleetAdvertMap.end()) and ((aItr->second.leader == pOldBoss) or (aItr->second.leader == nullptr)))
+        aItr->second.leader = pNewBoss;
+}
+
+bool FleetService::IsBoss(Character* pChar)
+{
+    if (pChar == nullptr)
+        return false;
+    return ((pChar->fleetJob() & Fleet::Job::Creator) == Fleet::Job::Creator);
+}
+
+bool FleetService::IsSuperior(Character* me, Character* target)
+{
+    if ((me == nullptr) or (target == nullptr))
+        return false;
+    if (me->fleetID() != target->fleetID())
+        return false;
+    if (me == target)
+        return true;
+    if (IsBoss(me) or (me->fleetRole() == Fleet::Role::FleetLeader))
+        return true;
+    if ((me->fleetRole() == Fleet::Role::WingLeader) and (me->wingID() > 0) and (target->wingID() == me->wingID()))
+        return true;
+    if ((me->fleetRole() == Fleet::Role::SquadLeader) and (me->squadID() > 0) and (target->squadID() == me->squadID()))
+        return true;
+    return false;
+}
+
+Client* FleetService::GetMember(uint32 fleetID, uint32 charID)
+{
+    auto range = m_fleetMembers.equal_range(fleetID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        if ((itr->second != nullptr) and (itr->second->GetCharacterID() == charID))
+            return itr->second;
+    return nullptr;
+}
+
+bool FleetService::IsWingInFleet(uint32 wingID, uint32 fleetID)
+{
+    std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(wingID);
+    if (itr == m_wingDataMap.end())
+        return false;
+    return (itr->second.fleetID == fleetID);
+}
+
+bool FleetService::IsSquadInFleet(uint32 squadID, uint32 fleetID)
+{
+    std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(squadID);
+    if (itr == m_squadDataMap.end())
+        return false;
+    return (itr->second.fleetID == fleetID);
+}
+
+uint32 FleetService::GetSquadMemberCount(uint32 squadID)
+{
+    std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(squadID);
+    if (itr == m_squadDataMap.end())
+        return 0;
+    return itr->second.members.size();
+}
+
+uint32 FleetService::GetWingMemberCount(uint32 wingID)
+{
+    std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(wingID);
+    if (itr == m_wingDataMap.end())
+        return 0;
+
+    // squad members plus the wing commander
+    uint32 count(0);
+    auto range = m_fleetMembers.equal_range(itr->second.fleetID);
+    for (auto mItr = range.first; mItr != range.second; ++mItr) {
+        if (mItr->second == nullptr)
+            continue;
+        Character* pChar = mItr->second->GetChar().get();
+        if ((pChar != nullptr) and (pChar->wingID() == (int32)wingID))
+            ++count;
+    }
+    return count;
+}
+
+Client* FleetService::GetPositionHolder(uint32 fleetID, int32 wingID, int32 squadID, int8 role)
+{
+    switch (role) {
+        case Fleet::Role::FleetLeader:  return GetFleetLeader(fleetID);
+        case Fleet::Role::WingLeader:   return (wingID > 0 ? GetWingLeader(wingID) : nullptr);
+        case Fleet::Role::SquadLeader:  return (squadID > 0 ? GetSquadLeader(squadID) : nullptr);
+    }
+    return nullptr;
 }
 
 void FleetService::RemoveMember(Client* pClient)
@@ -1196,31 +1484,37 @@ void FleetService::RemoveMember(Client* pClient)
         if (fItr != m_fleetDataMap.end()) {
             if (pChar->fleetBooster() == Fleet::Booster::Fleet)
                 fItr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::FleetLeader)
+            if ((pChar->fleetRole() == Fleet::Role::FleetLeader) or (fItr->second.leader == pClient))
                 fItr->second.leader = nullptr;
+            if (fItr->second.booster == pClient)
+                fItr->second.booster = nullptr;
         }
     }
 
     // update wing data
-    if (pChar->wingID()) {
+    if (pChar->wingID() > 0) {
         std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(pChar->wingID());
         if (itr != m_wingDataMap.end()) {
             if (pChar->fleetBooster() == Fleet::Booster::Wing)
                 itr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::WingLeader)
+            if ((pChar->fleetRole() == Fleet::Role::WingLeader) or (itr->second.leader == pClient))
                 itr->second.leader = nullptr;
+            if (itr->second.booster == pClient)
+                itr->second.booster = nullptr;
         }
     }
 
     // update squad data
-    if (pChar->squadID()) {
+    if (pChar->squadID() > 0) {
         std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(pChar->squadID());
         if (itr != m_squadDataMap.end()) {
             itr->second.members.erase(pChar->itemID());
             if (pChar->fleetBooster() == Fleet::Booster::Squad)
                 itr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::SquadLeader)
+            if ((pChar->fleetRole() == Fleet::Role::SquadLeader) or (itr->second.leader == pClient))
                 itr->second.leader = nullptr;
+            if (itr->second.booster == pClient)
+                itr->second.booster = nullptr;
         }
     }
 
@@ -1494,7 +1788,7 @@ void FleetService::SendFleetUpdate(uint32 fleetID, const char* notifyType, PyTup
         members.push_back(fItr->second);
 
     for (auto cur : members) {
-        if (cur == nullptr)
+        if ((cur == nullptr) or (cur == m_departing))
             continue;
         PySafeIncRef(payload);
         cur->SendNotification(notifyType, "*fleetid", payload, true);    // this sends "*fleetid" update to all fleet members and is sequenced
@@ -1703,11 +1997,14 @@ std::string FleetService::GetBoosterData(uint32 fleetID, uint16& length)
     bool fboost(false);
     FleetData fData = FleetData();
     GetFleetData(fleetID, fData);
-    str << "<color=teal>" << fData.name << "  Created By: " << fData.creator->GetChar()->itemName();
+    std::string bossName = "(none)";
+    if ((fData.creator != nullptr) and (fData.creator->GetChar().get() != nullptr))
+        bossName = fData.creator->GetChar()->itemName();
+    str << "<color=teal>" << fData.name << "  Created By: " << bossName;
     str << "  Members: " << std::to_string(m_fleetMembers.count(fleetID)) << "</color><br>"; //54
     length += 54;
     length += fData.name.size();
-    length += fData.creator->GetChar()->itemName().size();
+    length += bossName.size();
 
     if ((fData.leader != nullptr) and (fData.leader->IsInSpace()) and (pChar = fData.leader->GetChar().get()) != nullptr) {
         if (m_fleetWings.count(fleetID) > pChar->GetSkillLevel(EvESkill::FleetCommand)) {
@@ -1730,7 +2027,7 @@ std::string FleetService::GetBoosterData(uint32 fleetID, uint16& length)
     }
 
     if ((fData.booster != nullptr) and (fData.booster->IsInSpace()) and (pChar = fData.booster->GetChar().get()) != nullptr) {
-        if (fData.leader->GetSystemID() == fData.booster->GetSystemID()) {
+        if ((fData.leader != nullptr) and (fData.leader->GetSystemID() == fData.booster->GetSystemID())) {
             if (pChar->HasSkillTrainedToLevel(EvESkill::ArmoredWarfare, 1) or pChar->HasSkillTrainedToLevel(EvESkill::InformationWarfare, 1)
                 or pChar->HasSkillTrainedToLevel(EvESkill::SiegeWarfare, 1) or pChar->HasSkillTrainedToLevel(EvESkill::SkirmishWarfare, 1)
                 or pChar->HasSkillTrainedToLevel(EvESkill::MiningForeman, 1)) {
@@ -1868,7 +2165,7 @@ std::string FleetService::GetBoosterData(uint32 fleetID, uint16& length)
                 length += 37;
             }
             if ((sData.booster != nullptr) and (sData.booster->IsInSpace()) and (pChar = sData.booster->GetChar().get()) != nullptr) {
-                if (sData.leader->GetSystemID() == sData.booster->GetSystemID()) {
+                if ((sData.leader != nullptr) and (sData.leader->GetSystemID() == sData.booster->GetSystemID())) {
                     if (pChar->HasSkillTrainedToLevel(EvESkill::ArmoredWarfare, 1) or pChar->HasSkillTrainedToLevel(EvESkill::InformationWarfare, 1)
                         or pChar->HasSkillTrainedToLevel(EvESkill::SiegeWarfare, 1) or pChar->HasSkillTrainedToLevel(EvESkill::SkirmishWarfare, 1)
                         or pChar->HasSkillTrainedToLevel(EvESkill::MiningForeman, 1)) {

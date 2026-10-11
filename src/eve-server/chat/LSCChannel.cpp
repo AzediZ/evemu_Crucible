@@ -177,7 +177,8 @@ void LSCChannel::Evacuate(Client * c) {
 
     dc.channelID = EncodeID();
     dc.member_count = 0;
-    dc.sender = _MakeSenderInfo(c);
+    // a null client means the server is destroying the channel
+    dc.sender = (c != nullptr ? _MakeSenderInfo(c) : _FakeSenderInfo());
 
     MulticastTarget mct;
 
@@ -188,6 +189,14 @@ void LSCChannel::Evacuate(Client * c) {
 
     PyTuple *answer = dc.Encode();
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
+
+    // members must not keep a pointer to this channel once it is deleted
+    for (auto charID : mct.characters) {
+        Client* pClient = sEntityList.FindClientByCharID(charID);
+        if (pClient != nullptr)
+            pClient->ChannelLeft(this);
+    }
+    m_chars.clear();
 }
 
 void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*/) {

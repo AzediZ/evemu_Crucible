@@ -244,6 +244,7 @@ PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<
     }
 
     InviteData data = InviteData();
+        data.fleetID = m_fleetID;
         data.inviteBy = call.client;
         data.invited = pClient;
         data.wingID = wingID.has_value() ? wingID.value()->value() : 0;  // default sends 0
@@ -262,7 +263,8 @@ PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<
         // wing and squad should both be populated at this point
         _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
     } else if ((data.wingID == 0) and (data.squadID == 0)) {// char invited as generic squad member, no specific position
-        sFltSvc.GetRandUnitIDs(m_fleetID, data.wingID, data.squadID);
+        if (!sFltSvc.GetRandUnitIDs(m_fleetID, data.wingID, data.squadID))
+            throw UserError("FleetNoPositionFound");
         _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
     } else {
         _log(FLEET__ERROR, "Fleet Invite Role/UnitID error.  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
@@ -305,10 +307,11 @@ PyResult FleetBound::AcceptInvite(PyCallArgs &call, std::optional <PyInt*> shipT
         return new PyLong(GetFileTimeNow());
 
     InviteData data = InviteData();
-    if (!sFltSvc.GetInviteData(pChar->itemID(), data)){
-        call.client->SendNotifyMsg("You do not have an outstanding Fleet Invite on issue.");
-        return new PyLong(GetFileTimeNow());
-    }
+    if (!sFltSvc.GetInviteData(pChar->itemID(), data))
+        throw UserError("FleetNotInvited");
+    // the invite must be for this (bound) fleet
+    if (data.fleetID != m_fleetID)
+        throw UserError("FleetNotInvited");
 
     int8 booster = Fleet::Booster::No;
     switch (data.role) {
@@ -357,10 +360,12 @@ PyResult FleetBound::RejectInvite(PyCallArgs &call) {
         return new PyLong(GetFileTimeNow());
     }
 
-    if (rejected) {
-        data.inviteBy->SendNotifyMsg("%s has rejected your fleet invite.", data.invited->GetChar()->name());
-    } else {
-        data.inviteBy->SendNotifyMsg("%s has auto-rejected your fleet invite.", data.invited->GetChar()->name());
+    if (data.inviteBy != nullptr) {
+        if (rejected) {
+            data.inviteBy->SendNotifyMsg("%s has rejected your fleet invite.", pChar->name());
+        } else {
+            data.inviteBy->SendNotifyMsg("%s has auto-rejected your fleet invite.", pChar->name());
+        }
     }
     sFltSvc.RemoveInviteData(pChar->itemID());
 
@@ -436,10 +441,24 @@ PyResult FleetBound::RejectJoinRequest(PyCallArgs &call, PyInt* characterID) {
     sLog.Warning("FleetBound", "Handle_RejectJoinRequest() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Client* pClient = sEntityList.FindClientByCharID(characterID->value());
-    sFltSvc.RemoveJoinRequest(call.client->GetChar()->fleetID(), pClient);
+    // the applicant is not a member; look it up in this fleet's join requests
+    Client* pClient(nullptr);
+    std::vector<Client*> cVec;
+    sFltSvc.GetJoinRequests(m_fleetID, cVec);
+    for (auto cur : cVec)
+        if ((cur != nullptr) and (cur->GetCharacterID() == characterID->value())) {
+            pClient = cur;
+            break;
+        }
+    if (pClient == nullptr)
+        return nullptr;
 
-    pClient->SendInfoModalMsg("Your fleet join request was denied by %s", call.client->GetName());
+    sFltSvc.RemoveJoinRequest(m_fleetID, pClient);
+
+    // fleetSvc.OnFleetJoinRejected(charID) shows FleetJoinRequestRejected with the rejecter's name
+    PyTuple* tuple = new PyTuple(1);
+        tuple->SetItem(0, new PyInt(call.client->GetCharacterID()));
+    pClient->SendNotification("OnFleetJoinRejected", "clientID", &tuple, false);
 
     // returns nothing
     return nullptr;
@@ -560,13 +579,19 @@ PyResult FleetBound::MakeLeader(PyCallArgs &call, PyInt* characterID) {
         Character* pCharOld = pClient->GetChar().get();
         if (pCharOld == nullptr)
             return PyStatic.NewNone();
-        int32 wingID = 0, squadID = 0;
-        sFltSvc.GetRandUnitIDs(m_fleetID, wingID, squadID);
+        int32 wingID = -1, squadID = -1;
+        if (!sFltSvc.GetRandUnitIDs(m_fleetID, wingID, squadID)) {
+            wingID = -1;
+            squadID = -1;
+        }
         sFltSvc.UpdateMember(pCharOld->itemID(), m_fleetID, wingID, squadID, pCharOld->fleetJob(), Fleet::Role::Member, pCharOld->fleetBooster());
     }
 
     // update new leader
-    Character* pCharNew = sEntityList.FindClientByCharID(characterID->value())->GetChar().get();
+    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
+    if (pTarget == nullptr)
+        throw UserError("FleetMemberNotFound");
+    Character* pCharNew = pTarget->GetChar().get();
     if (pCharNew == nullptr)
         return PyStatic.NewNone();
     sFltSvc.UpdateMember(characterID->value(), m_fleetID, -1, -1, pCharNew->fleetJob(), Fleet::Role::FleetLeader, pCharNew->fleetBooster());
@@ -581,7 +606,10 @@ PyResult FleetBound::SetBooster(PyCallArgs &call, PyInt* characterID, std::optio
     call.Dump(FLEET__DUMP);
 
     Character* pOldChar(nullptr);
-    Character* pChar = sEntityList.FindClientByCharID(characterID->value())->GetChar().get();
+    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
+    if (pTarget == nullptr)
+        throw UserError("FleetMemberNotFound");
+    Character* pChar = pTarget->GetChar().get();
     if (pChar == nullptr)
         return PyStatic.NewFalse();
 
@@ -624,7 +652,10 @@ PyResult FleetBound::MoveMember(PyCallArgs &call, PyInt* characterID, std::optio
     sLog.Warning("FleetBound", "Handle_MoveMember() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Character* pChar = sEntityList.FindClientByCharID(characterID->value())->GetChar().get();
+    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
+    if (pTarget == nullptr)
+        throw UserError("FleetMemberNotFound");
+    Character* pChar = pTarget->GetChar().get();
     if (pChar == nullptr)
         return PyStatic.NewFalse();
 
@@ -647,7 +678,10 @@ PyResult FleetBound::KickMember(PyCallArgs &call, PyInt* characterID) {
     sLog.Warning("FleetBound", "Handle_KickMember() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    sFltSvc.LeaveFleet(sEntityList.FindClientByCharID(characterID->value()));
+    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
+    if (pTarget == nullptr)
+        throw UserError("FleetMemberNotFound");
+    sFltSvc.LeaveFleet(pTarget);
 
     // returns boolean
     return PyStatic.NewTrue();

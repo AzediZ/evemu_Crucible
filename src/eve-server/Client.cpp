@@ -177,6 +177,10 @@ Client::~Client() {
                 sEntityList.GetStationByID(m_locationID)->RemoveItem(m_char);
             }
         }
+        // drop fleet invites/join requests and leave the fleet before the character goes away
+        if (!sConsole.IsShutdown())
+            sFltSvc.ClientLogout(this);
+
         // remove fleet data, remove char from ItemFactory cache, save SP and set logout time
         m_char->LogOut();
     }

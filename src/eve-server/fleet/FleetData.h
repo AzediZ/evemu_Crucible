@@ -46,6 +46,15 @@ namespace Fleet {
             Any = 15
         };
     }
+    // client fleetcommon.py MAX_WINGS/MAX_SQUADS/MAX_MEMBERS_IN_SQUAD/MAX_MEMBERS_IN_FLEET
+    namespace Limits {
+        enum {
+            MaxWings            = 5,
+            MaxSquadsPerWing    = 5,
+            MaxSquadMembers     = 10,
+            MaxMembers          = 256
+        };
+    }
     namespace BCast {
         namespace Scope {
             enum {
@@ -133,6 +142,7 @@ struct SquadData {
 };
 
 struct InviteData {
+    uint32 fleetID;
     int8 role;
     int32 wingID;
     int32 squadID;

@@ -78,9 +78,29 @@ public:
 
     std::string GetFleetDescription(uint32 fleetID);
 
-    void GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID);
+    // first squad with room (in wing/squad order).  restrictWingID/restrictSquadID limit the search.  false when the fleet is full
+    bool GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID, int32 restrictWingID = 0, int32 restrictSquadID = 0);
 
     void LeaveFleet(Client* pClient);
+    // called when a client disconnects: drops its invites and join requests, then leaves its fleet
+    void ClientLogout(Client* pClient);
+    // makes pNewBoss the fleet boss (job Creator), clearing the job on the old boss
+    void SetBoss(uint32 fleetID, Client* pNewBoss);
+
+    /* permission and lookup helpers */
+    bool IsBoss(Character* pChar);
+    // true when 'me' commands 'target' (or is target): boss/FC for anyone, WC for own wing, SC for own squad
+    bool IsSuperior(Character* me, Character* target);
+    // returns the member's client, or nullptr when charID is not a member of fleetID
+    Client* GetMember(uint32 fleetID, uint32 charID);
+    bool IsWingInFleet(uint32 wingID, uint32 fleetID);
+    bool IsSquadInFleet(uint32 squadID, uint32 fleetID);
+    uint32 GetSquadMemberCount(uint32 squadID);
+    uint32 GetWingMemberCount(uint32 wingID);
+    // holder of the FC (role FleetLeader), WC of wingID or SC of squadID slot, or nullptr when free
+    Client* GetPositionHolder(uint32 fleetID, int32 wingID, int32 squadID, int8 role);
+    uint8 GetWingCount(uint32 fleetID)                 { return m_fleetWings.count(fleetID); }
+    uint8 GetSquadCount(uint32 wingID)                 { return m_wingSquads.count(wingID); }
 
     void FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8 group, std::string msg);
 
@@ -98,7 +118,7 @@ public:
     void GetJoinRequests(uint32 fleetID, std::vector<Client*>& data);
     void RemoveJoinRequest(uint32 fleetID, Client* pClient);
 
-    uint8 GetFleetMemberCount(uint32 fleetID)          { return m_fleetMembers.count(fleetID); }
+    uint16 GetFleetMemberCount(uint32 fleetID)         { return m_fleetMembers.count(fleetID); }
 
     std::string GetJobName(int8 job);
     std::string GetRoleName(int8 role);
@@ -114,6 +134,8 @@ public:
 
 protected:
     void RemoveMember(Client* pClient);
+    // picks the next boss when pLeaving (the boss) leaves: FC, then a WC, then a SC, then the longest-standing member
+    void PassBoss(uint32 fleetID, Client* pLeaving);
 
     void IncFleetSquads(uint32 fleetID, uint32 wingID);
     void DecFleetSquads(uint32 fleetID, uint32 wingID);
@@ -128,6 +150,7 @@ protected:
 private:
     LSCService* m_lsc;
     bool m_initalized;
+    Client* m_departing;    // client being removed by ClientLogout(); SendFleetUpdate() skips it
 
     std::map<uint32, InviteData>        m_inviteData;       // charID/data
 

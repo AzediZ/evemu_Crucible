@@ -44,6 +44,9 @@ PyResult FleetManager::ForceLeaveFleet(PyCallArgs &call) {
     sLog.Warning("FleetManager", "Handle_ForceLeaveFleet() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    if ((call.client == nullptr) or (call.client->GetChar().get() == nullptr) or (call.client->GetChar()->fleetID() == 0))
+        return nullptr;
+
     sFltSvc.LeaveFleet(call.client);
 
     // returns nothing

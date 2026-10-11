@@ -991,6 +991,17 @@ void LSCService::CreateSystemChannel(int32 channelID)
     CreateChannel(channelID, ownerID, name.c_str(), motd, nullptr, comStr.c_str(), type, cspa, grpMsgID, messageID);
 }
 
+void LSCService::DeleteSystemChannel(int32 channelID)
+{
+    std::map<int32, LSCChannel*>::iterator itr = m_channels.find(channelID);
+    if (itr == m_channels.end())
+        return;
+
+    itr->second->Evacuate(nullptr);
+    SafeDelete(itr->second);
+    m_channels.erase(itr);
+}
+
 void LSCService::CreateStaticChannels() {
     // hardcode creating server static channels during server startup
     // these are all set to memberless to avoid constant updates
