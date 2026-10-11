@@ -210,6 +210,9 @@ public:
     int32                       GetProvisionTypeID()    { return m_data.provisionTypeID; }
     // shield charge / capacity
     float                       GetShieldFraction();
+    // the pilot manning a starbase weapon (manual control), 0 = none
+    uint32                      GetControllerID()       { return m_controllerID; }
+    void                        SetControllerID(uint32 charID)  { m_controllerID = charID; }
 
     /* starbase inventory rules, from InventoryBound::MoveItems.  they throw the client's errors
      *  add:  anchored, view/put access, offline structures of a weak tower are locked.  remove:  the same with take access
@@ -299,6 +302,7 @@ private:
 
     Timer m_procTimer;              // module state timer
     Timer m_regenTimer;             // shield regeneration, 1s
+    uint32 m_controllerID;          // manual control (runtime)
     uint8 m_regenTicks;             // damage state sent every 5 regeneration tics
 
     bool m_tcu :1;              // Territorial Claim Unit

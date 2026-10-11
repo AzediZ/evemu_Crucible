@@ -227,6 +227,7 @@ StructureSE::StructureSE(StructureItemRef structure, EVEServiceManager&services,
     m_procTimer(10000), // arbitrary default
     m_regenTimer(1000),
     m_regenTicks(0),
+    m_controllerID(0),
     m_tcu(false),
     m_sbu(false),
     m_ihub(false),
@@ -1793,7 +1794,7 @@ PyDict *StructureSE::MakeSlimItem()
         slim->SetItemString("controlTowerID", (m_data.towerID == 0 ? PyStatic.NewNone() : new PyLong(m_data.towerID)));
     // pilot manning a starbase weapon
     if (IsWeaponSE() or IsBatterySE())
-        slim->SetItemString("controllerID", PyStatic.NewNone());
+        slim->SetItemString("controllerID", (m_controllerID == 0 ? PyStatic.NewNone() : new PyInt(m_controllerID)));
 
     if (is_log_enabled(POS__SLIMITEM))
     {

@@ -31,6 +31,7 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/CalendarDB.h"
 #include "mail/NotificationMgr.h"
+#include "system/CrimeWatch.h"
 #include "../eve-common/EVE_Mail.h"
 #include "../eve-common/EVE_Calendar.h"
 
@@ -377,6 +378,59 @@ void TowerSE::CheckOnlineFuel()
         throw UserError("CantOnlineTowerLacksResources")
                 .AddFormatValue("tower", new PyInt(GetTypeID()))
                 .AddFormatValue("resource", new PyString(missing));
+}
+
+bool TowerSE::IsHostile(SystemEntity* pTarget)
+{
+    if ((pTarget == nullptr) or pTarget->IsDead())
+        return false;
+    const int64 aggressionWindow(EvE::Time::Minute * 15);
+
+    // npcs:  only those that attacked us
+    if (pTarget->IsNPCSE())
+        return IsRecentAggressor(pTarget->GetID(), aggressionWindow);
+
+    // whose is it
+    uint32 charID(0), corpID(pTarget->GetCorporationID());
+    int32 allyID(pTarget->GetAllianceID());
+    Client* pClient(nullptr);
+    if (pTarget->IsShipSE()) {
+        if (pTarget->HasPilot()) {
+            pClient = pTarget->GetPilot();
+            charID = pClient->GetCharacterID();
+            corpID = pClient->GetCorporationID();
+            allyID = pClient->GetAllianceID();
+        } else {
+            // a ship left in space by a pilot who logged off
+            charID = pTarget->GetSelf()->ownerID();
+        }
+    } else if (pTarget->IsDroneSE()) {
+        charID = pTarget->GetSelf()->ownerID();
+        pClient = sEntityList.FindClientByCharID(charID);
+    } else {
+        return false;
+    }
+    if (!IsCharacterID(charID))
+        return false;
+    if ((pClient != nullptr) and pClient->IsInvul())
+        return false;
+
+    // 1. never our own
+    if (corpID == m_corpID)
+        return false;
+    if (IsAlliance(m_allyID) and (allyID == m_allyID))
+        return false;
+    // 2. flagged to the corp, or shot at its structures
+    if (sCrimeWatch.IsFlaggedTo(charID, m_corpID) or IsRecentAggressor(charID, aggressionWindow))
+        return true;
+    // 3. at war with the owner:  @todo F22
+    // 4. criminals
+    if (m_tdata.statusDrop and sCrimeWatch.IsCriminal(charID))
+        return true;
+    // 5. standings and security status, below high security space only
+    if ((CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) != Crime::SecClass::High) and (pClient != nullptr))
+        return ConsidersHostile(pClient);
+    return false;
 }
 
 void TowerSE::Scoop() {

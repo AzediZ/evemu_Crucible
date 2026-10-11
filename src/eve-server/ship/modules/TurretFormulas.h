@@ -22,6 +22,9 @@ public:
     float GetNPCToHit(NPC* pNPC, SystemEntity* pTarget);
     float GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget);
     float GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget);
+    // starbase turrets:  the standard formula with the battery's (tower-bonused) optimal and falloff, tracking and signature
+    //  resolution against the target's transversal and signature radius
+    float GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget);
 };
 
 

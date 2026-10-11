@@ -13,6 +13,7 @@
 
 
 #include "pos/Structure.h"
+#include "pos/POS_AI.h"
 
 
 class WeaponSE
@@ -20,7 +21,7 @@ class WeaponSE
 {
 public:
     WeaponSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& data);
-    virtual ~WeaponSE()                                 { /* do nothing here */ }
+    virtual ~WeaponSE();
 
     /* class type pointer querys. */
     virtual WeaponSE*           GetWeaponSE()           { return this; }
@@ -33,6 +34,16 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void Init();
+    virtual void SetOffline();
+    virtual void Killed(Damage &damage);
+    // charges (flagHiSlot0) of the battery's charge groups
+    virtual void ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag);
+
+    // the defenses' brain (automatic and manual fire)
+    POS_AI*                     GetAI()                 { return m_ai; }
+
+private:
+    POS_AI* m_ai;
 
 
 };

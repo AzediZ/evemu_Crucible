@@ -199,6 +199,45 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
     return (rNum + 0.49);
 }
 
+float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget)
+{
+    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
+        return 0;
+    float distance(pSource->GetPosition().distance(pTarget->DestinyMgr()->GetPosition()));
+    if (distance < 1.0f)
+        distance = 1.0f;
+    // tracking disruptors and dampeners on the battery
+    EwarState* pEwar(pSource->GetEwar());
+    if (pEwar != nullptr) {
+        tracking *= pEwar->GetTrackingMult();
+        optimal *= pEwar->GetOptimalMult();
+    }
+    // the battery doesn't move:  the target's velocity across the line of sight
+    GVector los(pSource->GetPosition(), pTarget->DestinyMgr()->GetPosition());
+    los.normalize();
+    GVector vel(pTarget->GetVelocity());
+    double radial(vel.dotProduct(los));
+    double transversal(std::sqrt(EvE::max(vel.lengthSquared() - (radial * radial))));
+    float angularVel(transversal / distance);
+    float targSig(pTarget->GetSignatureRadius());
+    if (targSig < 0.01f)
+        targSig = pTarget->GetSelf()->GetAttribute(AttrRadius).get_float() / 10;
+    if (tracking <= 0.0f)
+        tracking = 0.0001f;
+    if (falloff <= 0.0f)
+        falloff = 1.0f;
+    // ChanceToHit = 0.5 ^ (((angular / tracking) * (sigRes / targetSig))^2 + (max(0, distance - optimal) / falloff)^2)
+    float a((angularVel / tracking) * (sigRes / targSig));
+    float d(EvE::max(distance - optimal));
+    float chanceToHit(std::pow(0.5, (a * a) + ((d / falloff) * (d / falloff))));
+    float rNum(MakeRandomFloat(0.0, 1.0));
+    if (rNum <= sConfig.rates.SentryCritChance)
+        return 3.0f;
+    if (rNum < chanceToHit)
+        return (rNum + 0.49);
+    return 0;
+}
+
 float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
 {
     if (pTarget == nullptr)

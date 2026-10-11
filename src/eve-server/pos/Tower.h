@@ -91,6 +91,12 @@ public:
      *  F18's tower guns use this too
      */
     bool ConsidersHostile(Client* pClient);
+    /* would the tower's defenses shoot this (pilots' ships, ships left in space, drones, npcs)?
+     *  never the owner corp or alliance.  anyone flagged to the corp or who shot one of its structures in the last 15 minutes
+     *  (npcs too).  corpWar:  at war with the owner (@todo F22).  statusDrop:  criminals (global criminal countdown).
+     *  below high security space also the standing and security status limits (ConsidersHostile)
+     */
+    bool IsHostile(SystemEntity* pTarget);
     bool GetStatusDrop()                                { return m_tdata.statusDrop; }
     bool GetCorpWar()                                   { return m_tdata.corpWar; }
     float GetStanding()                                 { return m_tdata.standing; }
