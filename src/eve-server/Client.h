@@ -198,6 +198,8 @@ public:
     void DockToStation();
     void PickAlternateShip();
     void ResetAfterPodded();
+    // clone jump (docked): wakes up in a new capsule docked in stationID.  the ships stay where they are  (F15)
+    void CloneJumpToStation(uint32 stationID);
     void ResetAfterPopped(GPoint& position);  //  delete killed ship, reset player to pod, add pod to system
     void Eject();       // only called in space
     // leaves the current ship in a ship maintenance bay/array (destRef, flag) and puts the pilot in space in a pod.  only called in space

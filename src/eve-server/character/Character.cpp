@@ -1077,6 +1077,40 @@ void Character::DestroyImplants()
         RefreshSkillQueueTimes();
 }
 
+void Character::StoreImplants(std::vector<uint16>& typeIDs)
+{
+    // the body we leave keeps its implants (jump clone rows hold their typeIDs).  docked, so no ship effects to take off
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
+    std::vector<InventoryItemRef> implants;
+    GetImplants(implants);
+    for (auto cur : implants) {
+        typeIDs.push_back(cur->typeID());
+        DestroyAugmentation(cur, false);
+    }
+    ApplyAbilityBonuses(true);
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+}
+
+void Character::InstallImplants(const std::vector<uint16>& typeIDs)
+{
+    // the body we wake up in
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
+    for (auto cur : typeIDs) {
+        ItemData data(cur, m_itemID, locTemp, flagNone);
+        InventoryItemRef iRef(sItemFactory.SpawnItem(data));
+        if (iRef.get() == nullptr) {
+            _log(CHARACTER__ERROR, "%s(%u): unable to spawn implant type %u for the clone.", name(), m_itemID, cur);
+            continue;
+        }
+        iRef->ChangeSingleton(true);
+        iRef->Move(m_itemID, flagImplant, true);
+    }
+    ApplyAbilityBonuses(true);
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+}
+
 void Character::ApplyClonePenalty(uint16& skillTypeID, uint32& spLost)
 {
     /* Crucible: a clone saves up to its skillPointsSaved.  podded with more, the pilot loses cloneSkillLossPercent (5%) of

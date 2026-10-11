@@ -1381,6 +1381,42 @@ void Client::ResetAfterPodded() {
     SendSessionChange();
 }
 
+void Client::CloneJumpToStation(uint32 stationID)
+{
+    /* done like ResetAfterPodded.  the ship we were in stays in the hangar here.  the old capsule doesn't come along:
+     *  the body that was in it is a jump clone now
+     */
+    m_autoPilot = false;
+
+    ShipItemRef oldShip(m_ship), oldPod(m_pod);
+    if (oldShip->typeID() != itemTypeCapsule) {
+        char ci[45];
+        snprintf(ci, sizeof(ci), "Inactive: %s(%u)", GetName(), m_char->itemID());
+        oldShip->SetCustomInfo(ci);
+        oldShip->GetModuleManager()->CharacterLeavingShip();
+    }
+    oldShip->SetPlayer(nullptr);
+    oldShip->SaveShip();
+
+    // same system: MoveToLocation only takes us off the old station's guest list when the system changes
+    if (sDataMgr.GetStationSystem(stationID) == m_systemData.systemID)
+        CharNoLongerInStation();
+
+    CreateNewPod();
+    SetShip(m_pod);
+    if ((oldPod.get() != nullptr) and (oldPod->itemID() != m_pod->itemID()))
+        oldPod->Delete();
+
+    // verify the destination hangar isnt loaded yet.
+    RemoveStationHangar(stationID);
+
+    MoveToLocation(stationID, NULL_ORIGIN);
+
+    m_ship->Move(m_locationID, flagHangar);
+    m_ship->SaveShip();
+    m_char->SaveCharacter();
+}
+
 void Client::ReleaseScan(bool notify/*false*/)
 {
     m_scanTimer.Disable();

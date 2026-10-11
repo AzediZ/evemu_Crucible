@@ -26,12 +26,15 @@
 #ifndef __JUMPCLONE_SERVICE_H_INCL__
 #define __JUMPCLONE_SERVICE_H_INCL__
 
-#include "station/StationDB.h"
 #include "services/BoundService.h"
 #include "Client.h"
 
 class JumpCloneBound;
 
+/* jump clones (F15).  station clones and ship clones (Clone Vat Bay) are rows in chrJumpClones (CharacterDB); their
+ *  implants are kept as typeIDs.  the client (svc.clonejump) binds this with (solarsystemid, groupSolarSystem) in space
+ *  and (stationid2, groupStation) docked; handlers use the caller's live location.
+ */
 class JumpCloneService : public BindableService <JumpCloneService, JumpCloneBound>
 {
 public:
@@ -39,19 +42,18 @@ public:
 
     void BoundReleased (JumpCloneBound* bound) override;
 
+    // OnJumpCloneCacheInvalidated to charID (when online), and OnStationJumpCloneCacheInvalidated(stationID, charID) for stationID
+    static void InvalidateClientCaches(uint32 charID, uint32 stationID = 0);
+
 protected:
-    StationDB m_db;
-
-    //PyCallable_DECL_CALL(GetShipCloneState)
-
     //overloaded in order to support bound objects:
-    BoundDispatcher* BindObject(Client *client, PyRep* bindParameters);
+    BoundDispatcher* BindObject(Client *client, PyRep* bindParameters) override;
 };
 
 class JumpCloneBound : public EVEBoundObject <JumpCloneBound>
 {
 public:
-    JumpCloneBound(EVEServiceManager& mgr, JumpCloneService& parent, StationDB* db, uint32 locationID);
+    JumpCloneBound(EVEServiceManager& mgr, JumpCloneService& parent, uint32 locationID);
 
 protected:
     PyResult GetCloneState(PyCallArgs& call);
@@ -63,13 +65,14 @@ protected:
     PyResult DestroyInstalledClone(PyCallArgs& call, PyInt* cloneID);
     PyResult AcceptShipCloneInstallation(PyCallArgs& call);
     PyResult CancelShipCloneInstallation(PyCallArgs& call);
-    PyResult CloneJump(PyCallArgs& call, PyInt* locationID);
+    // CloneJump(destLocationID, okWithLosingClone).  the client asks again with True after the JumpCheck* confirmations
+    PyResult CloneJump(PyCallArgs& call, PyInt* destLocationID, std::optional<PyBool*> okWithLosingClone);
 
 protected:
-    StationDB *const m_db;        //we do not own this
+    JumpCloneService& m_svc;
 
     uint32 m_locationID;
-    uint8 m_locGroupID;
+    uint16 m_locGroupID;
 };
 
 #endif
