@@ -300,6 +300,19 @@ public:
         int8 Complex;
     } exploring;
 
+    // From <dungeon>  (F13: dungeons, anomalies and escalations)
+    struct {
+        uint32 AnomalyLifetime;         // h an untouched combat anomaly lives.  0 = until completed (Crucible)
+        uint32 SignatureLifetime;       // h an untouched signature site lives (+-25%).  0 = until completed
+        uint32 CompletedDespawn;        // s after completion before the site's objects and npcs are removed
+        uint32 RespawnDelay;            // s before a completed/expired site is replaced elsewhere in the system
+        float EscalationChance;         // multiplier on dunEscalations.chance
+        uint32 EscalationExpiry;        // h an escalation lasts when its rule has no expiry (client dunExpirationDelay)
+        bool EscalationShareFleet;      // fleet members in the system get the escalation too (Crucible: no)
+        bool GateKeysRequired;          // acceleration gate keys are checked and consumed
+        bool TriggerMessages;           // dungeon trigger messages are sent to players
+    } dungeon;
+
     // From <standings>
     struct {
         float MissionBonus;
@@ -403,6 +416,7 @@ protected:
     bool ProcessThreads( const TiXmlElement* ele );
     bool ProcessCosmic( const TiXmlElement* ele );
     bool ProcessExploring( const TiXmlElement* ele );
+    bool ProcessDungeon( const TiXmlElement* ele );
     bool ProcessStandings( const TiXmlElement* ele );
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );

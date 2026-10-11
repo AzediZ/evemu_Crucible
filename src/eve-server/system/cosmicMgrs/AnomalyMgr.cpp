@@ -16,6 +16,7 @@
 
 #include "StaticDataMgr.h"
 #include "map/MapData.h"
+#include "system/BubbleManager.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
@@ -23,6 +24,7 @@
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 #include "../../../eve-common/EVE_Scanning.h"
 
@@ -65,6 +67,9 @@ m_Radar(0),
 m_Unrated(0),
 m_Complex(0),
 m_maxSigs(0),
+m_bonusCombat(0),
+m_bonusExplore(0),
+m_bonusOre(0),
 m_initalized(false)
 {
     m_sigBySigID.clear();
@@ -138,6 +143,22 @@ bool AnomalyMgr::Init(BeltMgr* beltMgr, DungeonMgr* dungMgr, SpawnMgr* spawnMgr)
     }
 
     m_procTimer.Start(1000); // Initial 5s timer to ensure everything gets loaded correctly
+
+    // these use config option to (en/dis)able individual types
+    m_Grav = sConfig.exploring.Gravametric;
+    m_Mag = sConfig.exploring.Magnetometric;
+    m_Ladar = sConfig.exploring.Ladar;
+    m_Radar = sConfig.exploring.Radar;
+    m_Unrated = sConfig.exploring.Unrated;
+    m_Complex = sConfig.exploring.Complex;
+    // the caps above are counts of sites made so far (< 0 = disabled)
+    if (m_Grav > 0) m_Grav = 0;
+    if (m_Mag > 0) m_Mag = 0;
+    if (m_Ladar > 0) m_Ladar = 0;
+    if (m_Radar > 0) m_Radar = 0;
+    if (m_Unrated > 0) m_Unrated = 0;
+    if (m_Complex > 0) m_Complex = 0;
+
     // populate the type vector with all of the anomaly types we will use in this system
     for (int i = 0; i < m_maxSigs; i++) { // anomaly and signature count should be accounted for while fillimg the typeList vector
         m_typeList.push_back(GetDungeonType());
@@ -147,13 +168,10 @@ bool AnomalyMgr::Init(BeltMgr* beltMgr, DungeonMgr* dungMgr, SpawnMgr* spawnMgr)
         m_typeList.push_back(Dungeon::Type::Anomaly);
     }
 
-    // these use config option to (en/dis)able individual types
-    m_Grav = sConfig.exploring.Gravametric;
-    m_Mag = sConfig.exploring.Magnetometric;
-    m_Ladar = sConfig.exploring.Ladar;
-    m_Radar = sConfig.exploring.Radar;
-    m_Unrated = sConfig.exploring.Unrated;
-    m_Complex = sConfig.exploring.Complex;
+    // infrastructure hub upgrades of this system add sites
+    SetUpgradeBonus(svDataMgr.GetActiveUpgradeLevel(m_system->GetID(), Sov::Upgrade::PirateDetection),
+                    svDataMgr.GetActiveUpgradeLevel(m_system->GetID(), Sov::Upgrade::SurveyNetworks),
+                    svDataMgr.GetActiveUpgradeLevel(m_system->GetID(), Sov::Upgrade::OreProspecting));
 
     /* load current data?, start timers, process current data, and create new items, if needed */
     /** @todo all anomalies are currently temp items.  if/when we start saving them, create new table and itemIDs*/
@@ -189,16 +207,24 @@ void AnomalyMgr::Process() {
             m_firstSpawn = false;
         }
     }
-    //TODO: Implement checking for expired anomalies
-    /*if (m_spawnTimer.Check(false)) {
-        // Check for expired anomalies and delete them
 
-    }*/
+    // completed and expired sites are replaced elsewhere in the system (expiry is run by DungeonMgr)
+    if (!m_respawnQueue.empty() and (m_system->PlayerCount() > 0)) {
+        int64 now(Win32TimeNow());
+        while (!m_respawnQueue.empty() and (m_respawnQueue.begin()->first <= now)) {
+            uint8 typeID(m_respawnQueue.begin()->second);
+            m_respawnQueue.erase(m_respawnQueue.begin());
+            CreateAnomaly(typeID);
+        }
+    }
 }
 
 void AnomalyMgr::Close()
 {
     _log(COSMIC_MGR__MESSAGE, "Closing AnomalyMgr for %s(%u).", m_system->GetName(), m_system->GetID());
+    // dungeon sites go with the system (their rows are removed by the system unload).  new ones are made on the next boot
+    m_respawnQueue.clear();
+    m_typeList.clear();
 }
 
 void AnomalyMgr::LoadAnomalies() {
@@ -224,9 +250,11 @@ void AnomalyMgr::LoadAnomalies() {
         sig.position.y = row.GetDouble(10);
         sig.position.z = row.GetDouble(11);
 
-        // Register loaded signatures.  wormholes are made by the wormhole manager, everything else is a dungeon
-        if ((sig.dungeonType != Dungeon::Type::Wormhole) and !m_dungMgr->MakeDungeon(sig))
+        // only wormholes outlive their system.  a dungeon row is stale (its items are gone)
+        if (sig.dungeonType != Dungeon::Type::Wormhole) {
+            m_mdb.DeleteAnomaly(sig.sigID);
             continue;
+        }
         m_sigBySigID.emplace(sig.sigID, sig);
         if (sig.dungeonType == Dungeon::Type::Anomaly) {
             m_anomByItemID.emplace(sig.sigItemID, sig);
@@ -250,10 +278,8 @@ void AnomalyMgr::LoadAnomalies() {
 
 void AnomalyMgr::SaveAnomaly(CosmicSignature& sig)
 {
-    // Save anomalies based upon their type to the database
-    if (sig.dungeonType == Dungeon::Type::Wormhole) {
-        m_mdb.SaveAnomaly(sig);
-    }
+    // every live site is in sysSignatures while it exists (map deadspace complexes, wormhole reload)
+    m_mdb.SaveAnomaly(sig);
 }
 
 void AnomalyMgr::GetSignatureList(std::vector<CosmicSignature>& sig)
@@ -302,7 +328,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
         return;
     }
 
-    sig.position = sMapData.GetAnomalyPoint(m_system);
+    sig.position = GetSitePosition();
 
     // some sites will use sys sov for ships.  use this for them....
     // sig.ownerID = sDataMgr.GetRegionFaction(m_system->GetRegionID());
@@ -380,8 +406,26 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
 
     // create and register here
     // all anomalies will be created/populated by dungMgr, except WH (handed off to WHMgr above)
-    /** @todo  check distances based on system size */
-    if (!m_dungMgr->MakeDungeon(sig)) // pass by ref here, so other vars can be set.
+    //  the dungeon:  this faction's for the system's true sec, else any faction's
+    float trueSec(m_system->GetSystemSecurityRating());
+    uint32 dungeonID(sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec));
+    if (dungeonID == 0)
+        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, 0, trueSec);
+    std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
+    if (pDungeon.get() == nullptr) {
+        _log(COSMIC_MGR__WARNING, "AnomalyMgr::CreateAnomaly() - no %s dungeon for %s(%u) (true sec %.2f)",
+                sDunDataMgr.GetDungeonType(sig.dungeonType), m_system->GetName(), m_system->GetID(), trueSec);
+        return;
+    }
+    Dungeon::SpawnParams params;
+        params.dungeonID = dungeonID;
+        params.archetype = sig.dungeonType;
+        // a faction's own dungeon keeps its faction
+        params.factionID = (pDungeon->factionID != 0 ? 0 : sig.ownerID);
+        params.kind = (sig.scanGroupID == Scanning::Group::Anomaly ? Dungeon::Kind::Anomaly : Dungeon::Kind::Signature);
+        params.usePosition = true;
+        params.position = sig.position;
+    if (m_dungMgr->SpawnInstance(params, &sig) == 0) // pass by ref here, so other vars can be set.
         return;
     // add new sig to sysSigMaps
     m_sigBySigID.emplace(sig.sigID, sig);
@@ -399,6 +443,74 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
     _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::Create() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
             sDunDataMgr.GetDungeonType(sig.dungeonType), sig.dungeonType, \
             sig.sigName.c_str(), m_system->GetName(), sig.systemID, sig.bubbleID, sig.sigStrength *100);
+}
+
+GPoint AnomalyMgr::GetSitePosition()
+{
+    // a random spot around a planet, inside the system and off any other grid
+    SystemData sysData = SystemData();
+    sDataMgr.GetSystemData(m_system->GetID(), sysData);
+    double maxDist(sysData.radius * 0.9);
+    GPoint pos(sMapData.GetAnomalyPoint(m_system));
+    for (uint8 tries = 0; tries < 10; ++tries) {
+        if ((maxDist > 0) and (pos.length() > maxDist)) {
+            GVector dir(pos);
+            dir.normalize();
+            pos = dir * (maxDist * MakeRandomFloat(0.33, 1.0));
+        }
+        bool clear(sBubbleMgr.FindBubble(m_system->GetID(), pos) == nullptr);
+        for (auto& cur : m_sigBySigID)
+            if (cur.second.position.distance(pos) < (2 * BUBBLE_RADIUS_METERS))
+                clear = false;
+        if (clear)
+            break;
+        pos = sMapData.GetAnomalyPoint(m_system);
+    }
+    return pos;
+}
+
+void AnomalyMgr::OnSiteCompleted(const CosmicSignature& sig)
+{
+    // the site leaves the scanner now, and another of its type comes later
+    RemoveSignal(sig.sigItemID);
+    m_mdb.DeleteAnomaly(sig.sigID);
+    if (sig.scanGroupID == Scanning::Group::Anomaly) {
+        if (m_Anoms > 0)
+            --m_Anoms;
+    } else if (m_Sigs > 0) {
+        --m_Sigs;
+    }
+    // sites an upgrade no longer pays for aren't replaced
+    auto itr = m_skip.find(sig.dungeonType);
+    if ((itr != m_skip.end()) and (itr->second > 0)) {
+        --itr->second;
+        return;
+    }
+    m_respawnQueue.emplace(Win32TimeNow() + (sConfig.dungeon.RespawnDelay * EvE::Time::Second), sig.dungeonType);
+}
+
+void AnomalyMgr::SetUpgradeBonus(uint8 combatLevel, uint8 exploreLevel, uint8 oreLevel/*0*/)
+{
+    /* infrastructure hub upgrades:  pirate detection arrays add combat anomalies (2 per level),
+     *  survey networks radar/magnetometric sites and ore prospecting arrays gravimetric sites (1 per level).
+     *  more sites come with the next spawn round;  fewer sites aren't replaced when completed
+     */
+    auto apply = [this](uint8& current, uint8 wanted, uint8 typeA, uint8 typeB) {
+        for (uint8 i = current; i < wanted; ++i) {
+            uint8 typeID((i % 2) ? typeB : typeA);
+            if (m_skip[typeID] > 0) {
+                --m_skip[typeID];
+            } else {
+                m_typeList.push_back(typeID);
+            }
+        }
+        for (uint8 i = wanted; i < current; ++i)
+            ++m_skip[((i % 2) ? typeB : typeA)];
+        current = wanted;
+    };
+    apply(m_bonusCombat, combatLevel *2, Dungeon::Type::Anomaly, Dungeon::Type::Anomaly);
+    apply(m_bonusExplore, exploreLevel, Dungeon::Type::Radar, Dungeon::Type::Magnetometric);
+    apply(m_bonusOre, oreLevel, Dungeon::Type::Gravimetric, Dungeon::Type::Gravimetric);
 }
 
 // Register an exit wormhole created by WhMgr's 'CreateExit()' function

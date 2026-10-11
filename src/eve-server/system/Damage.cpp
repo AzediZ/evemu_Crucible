@@ -42,6 +42,7 @@
 #include "system/Container.h"
 #include "system/SystemBubble.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/CrimeWatch.h"
 #include "npc/LawEnforcement.h"
 #include "character/CharacterDB.h"
@@ -151,6 +152,9 @@ void SystemEntity::Destroy(Damage &d)
         m_destiny->SendTerminalExplosion(m_self->itemID(), m_bubble->GetID(), isGlobal());
 
     Killed(d);  // this must NOT remove dead SE from system.
+    // dungeon npcs and objects (waves, loot, gates, completion).  the wreck exists by now
+    if ((m_system != nullptr) and m_system->GetDungMgr()->IsDungeonEntity(GetID()))
+        m_system->GetDungMgr()->OnEntityDestroyed(this, d);
     SystemEntity::Killed(d);    // this removes dead SE from system then deletes itemRef and all its contents
 }
 
@@ -160,6 +164,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
     // invulnerable things (highsec customs offices, outposts, reinforced structures, gm invul) take nothing.  shots may still be in flight
     if (IsInvul())
         return false;
+
+    // dungeon 'attacked' triggers
+    if ((m_system != nullptr) and m_system->GetDungMgr()->IsDungeonEntity(GetID()))
+        m_system->GetDungMgr()->OnEntityAttacked(this, d.srcSE);
 
     // aggressive drones and drones guarding us respond to this
     DroneSE::OnAggression(this, d.srcSE);
@@ -449,6 +457,10 @@ void ShipSE::Killed(Damage &fatal_blow) {
         return; // make error here?
 
     m_shipRef->SetPopped(true);
+
+    // a pilot dying in a dungeon room (PlayerKilled triggers)
+    if (HasPilot())
+        m_system->GetDungMgr()->OnPlayerKilled(this, GetPilot()->GetCharacterID());
 
     /* {'messageKey': 'ShipExploded', 'dataID': 17881627, 'suppressable': True, 'bodyID': 258841, 'messageType': 'info', 'urlAudio': '', 'urlIcon': '', 'titleID': 258840, 'messageID': 1558}
      * u'ShipExplodedBody'}(u'Your ship has been destroyed by {[character]charID.name}.', None, {u'{[character]charID.name}': {'conditionalValues': [], 'variableType': 0, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'charID'}})

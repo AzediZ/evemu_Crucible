@@ -18,6 +18,8 @@
 #include "Client.h"
 #include "inventory/Inventory.h"
 #include "inventory/ItemFactory.h"
+#include "system/SystemManager.h"
+#include "system/cosmicMgrs/AnomalyMgr.h"
 
 uint8 DevIndex::LevelForPoints(int64 points)
 {
@@ -804,9 +806,11 @@ void SovereigntyDataMgr::RefreshUpgrades(uint32 systemID, uint32 hubID)
         m_activeUpgrades[systemID] = active;
     }
 
-    /** @todo F13: push the anomaly/signature bonuses to a loaded system's AnomalyMgr here
-     *  (SetUpgradeBonus(GetActiveUpgradeLevel(systemID, PirateDetection), GetActiveUpgradeLevel(systemID, SurveyNetworks)))
-     */
+    // a loaded system's anomaly manager adds (or stops replacing) the upgrades' sites
+    SystemManager* pSystem(sEntityList.FindSystem(systemID));
+    if (pSystem != nullptr)
+        pSystem->GetAnomMgr()->SetUpgradeBonus(GetActiveUpgradeLevel(systemID, Sov::Upgrade::PirateDetection),
+                GetActiveUpgradeLevel(systemID, Sov::Upgrade::SurveyNetworks), GetActiveUpgradeLevel(systemID, Sov::Upgrade::OreProspecting));
 }
 
 void SovereigntyDataMgr::RefreshAllUpgrades()

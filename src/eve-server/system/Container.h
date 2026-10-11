@@ -262,6 +262,7 @@ public:
     /* specific functions handled in this class. */
     void Salvaged()                                     { m_contRef->Salvaged(); }
     void SetLaunchedByID(uint32 launcherID=0)           { m_launchedByID = launcherID; }
+    uint32 GetLaunchedByID()                            { return m_launchedByID; }
     bool IsEmpty()                                      { return m_contRef->IsEmpty(); }
     bool IsAbandoned()                                  { return m_abandoned; }
 

@@ -43,9 +43,12 @@ public:
     std::string GetSpawnGroupName(int8 sGroup);
 
     bool DoSpawnForBubble(SystemBubble* pBubble);
-    void DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level, uint16 typeID, uint32 factionID = 0);
-    void DoSpawnForMission(SystemBubble* pBubble, uint32 regionID);
-    void DoSpawnForIncursion(SystemBubble* pBubble, uint32 regionID);
+
+    /* dungeon (anomaly, mission, incursion) npcs, for DungeonMgr and other dungeon users.  they never respawn */
+    // npc types of one npcSpawnClass row (type, sub;  sub 0 = a random row) for this faction.  false if there is nothing
+    bool ResolveClassTypes(uint32 factionID, uint8 classType, uint8 classSub, std::vector<SpawnGroup>& out);
+    // one npc at pos (warpIn: starts 100-150km away and warps to pos).  liveGroupID is its aggro group (NPC::SetSpawnGroupID)
+    NPC* SpawnDungeonNPC(SystemBubble* pBubble, uint16 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID);
 
     // primitive test for chained spawns
     bool IsChaining(uint16 bubbleID);
@@ -69,6 +72,8 @@ protected:
     void RemoveSpawn(uint16 bubbleID, uint32 itemID);
 
     uint8 GetSpawnGroup(uint8 sClass);
+    // appends the npc types of one class row for this faction.  false if nothing was added
+    bool AddClassTypes(uint32 factionID, uint8 sClass, const RatSpawnClass& entry, std::vector<SpawnGroup>& out);
 
     uint16 GetRandTypeID(uint8 sClass);
 

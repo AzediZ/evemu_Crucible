@@ -136,7 +136,8 @@ public:
     float GetSecValue()                                 { return m_secValue; }
 
     // this create a SE with given data and add to system
-    bool BuildDynamicEntity(const DBSystemDynamicEntity& entity, uint32 launcherID=0);
+    // addSignal false:  not listed on the scanner (dungeon objects)
+    bool BuildDynamicEntity(const DBSystemDynamicEntity& entity, uint32 launcherID=0, bool addSignal=true);
 
     void AddNPC(NPC* pNPC);
     void RemoveNPC(NPC* pNPC);

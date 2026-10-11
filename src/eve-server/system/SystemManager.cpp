@@ -594,7 +594,7 @@ bool SystemManager::LoadPlayerDynamics() {
     return true;
 }
 
-bool SystemManager::BuildDynamicEntity(const DBSystemDynamicEntity& entity, uint32 launcherID/*0*/) {
+bool SystemManager::BuildDynamicEntity(const DBSystemDynamicEntity& entity, uint32 launcherID/*0*/, bool addSignal/*true*/) {
     SystemEntity* pSE = DynamicEntityFactory::BuildEntity(*this, entity);
     if (pSE == nullptr) {
         sLog.Error( "SystemManager::BuildDynamicEntity()", "Failed to create entity for item %u (grp: %u, type %u)", entity.itemID, entity.groupID, entity.typeID);
@@ -603,7 +603,7 @@ bool SystemManager::BuildDynamicEntity(const DBSystemDynamicEntity& entity, uint
 
     _log(ITEM__TRACE, "SystemManager::BuildDynamicEntity() - Created dynamic entity %u of type %u for %s(%u)", \
                 entity.itemID, entity.typeID, m_data.name.c_str(),m_data.systemID );
-    AddEntity(pSE);
+    AddEntity(pSE, addSignal);
 
     // this is only used for wrecks...
     if (launcherID) {

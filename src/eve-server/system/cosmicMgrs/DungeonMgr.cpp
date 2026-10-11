@@ -12,7 +12,17 @@
 
 #include "StaticDataMgr.h"
 #include "dungeon/DungeonDB.h"
+#include "Client.h"
+#include "EntityList.h"
+#include "npc/NPC.h"
+#include "npc/NPCAI.h"
+#include "ship/Ship.h"
+#include "system/Asteroid.h"
+#include "system/Container.h"
+#include "system/Damage.h"
+#include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
+#include "system/TargetManager.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
@@ -466,17 +476,18 @@ const char* DungeonDataMgr::GetDungeonType(int8 typeID)
 
 
 DungeonMgr::DungeonMgr(SystemManager* mgr, EVEServiceManager& svc)
-: m_system(mgr),
-m_services(svc),
+: m_initalized(false),
 m_anomMgr(nullptr),
 m_spawnMgr(nullptr),
-m_initalized(false)
+m_system(mgr),
+m_services(svc),
+m_nextLiveGroupID(1)
 {
 }
 
 DungeonMgr::~DungeonMgr()
 {
-    // TODO: clean up and free any resources
+    // the entities are gone with the system (Close() ran during the unload).  listeners are not called from here
 }
 
 bool DungeonMgr::Init(AnomalyMgr* anomMgr, SpawnMgr* spawnMgr)
@@ -506,196 +517,1666 @@ bool DungeonMgr::Init(AnomalyMgr* anomMgr, SpawnMgr* spawnMgr)
         _log(COSMIC_MGR__INIT, "DungeonMgr Initialized for %s(%u)", m_system->GetName(), m_system->GetID());
 
         m_initalized = true;
+        // escalation sites granted for this system come back
+        LoadEscalations();
         return true;
     }
     return false;
 }
 
-bool DungeonMgr::GetInstanceWarpIn(uint32 instanceID, uint32 charID, GPoint& into)
+/* instance creation */
+
+uint32 DungeonMgr::ResolveFaction(const Dungeon::SpawnParams& params, const Dungeon::Dungeon& dungeon)
 {
-    /** @todo F13: per-character dungeon instances (escalations).  no instance exists before then */
-    return false;
+    if (params.factionID != 0)
+        return params.factionID;
+    if (dungeon.factionID != 0)
+        return dungeon.factionID;
+    uint32 factionID(sDataMgr.GetRegionRatFaction(m_system->GetRegionID()));
+    if (factionID != 0)
+        return factionID;
+    return factionRogueDrones;
 }
 
-void DungeonMgr::Process()
+GPoint DungeonMgr::NextRoomOrigin(const GPoint& from)
 {
-    // TODO: process and update any active dungeons in the system
+    // rooms are 1/3 AU apart in a random direction, inside the system and away from other grids
+    SystemData sysData = SystemData();
+    sDataMgr.GetSystemData(m_system->GetID(), sysData);
+    double maxDist((sysData.radius > 0 ? sysData.radius : ONE_AU_IN_METERS *50.0) *0.9);
+    GPoint pos(from);
+    for (uint8 tries = 0; tries < 10; ++tries) {
+        pos = from;
+        pos.MakeRandomPointOnSphere(NEXT_DUNGEON_ROOM_DIST);
+        if (pos.length() > maxDist) {
+            GVector dir(pos);
+            dir.normalize();
+            pos = dir * (maxDist * MakeRandomFloat(0.6, 1.0));
+        }
+        if (sBubbleMgr.FindBubble(m_system->GetID(), pos) == nullptr)
+            break;
+    }
+    return pos;
+}
+
+bool DungeonMgr::IsNPCType(uint32 typeID)
+{
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if ((pType == nullptr) or (pType->categoryID() != EVEDB::invCategories::Entity))
+        return false;
+    // entities that are objects (containers, sentries, structures, deco)
+    switch (pType->groupID()) {
+        case EVEDB::invGroups::Spawn_Container:
+        case EVEDB::invGroups::Sentry_Gun:
+        case EVEDB::invGroups::Protective_Sentry_Gun:
+        case EVEDB::invGroups::Destructible_Sentry_Gun:
+        case EVEDB::invGroups::Mobile_Sentry_Gun:
+        case EVEDB::invGroups::Deadspace_Overseer_s_Structure:
+        case EVEDB::invGroups::Deadspace_Overseer_s_Sentry:
+        case EVEDB::invGroups::Deadspace_Overseer_s_Belongings:
+        case EVEDB::invGroups::Large_Collidable_Ship:
+        case EVEDB::invGroups::Billboard:
+        case EVEDB::invGroups::Temporary_Cloud:
+        case EVEDB::invGroups::Capture_Point:
+        case EVEDB::invGroups::Control_Bunker:
+        case EVEDB::invGroups::Mission_Container:
+            return false;
+    }
+    return true;
+}
+
+uint32 DungeonMgr::SpawnInstance(const Dungeon::SpawnParams& params, CosmicSignature* sigOut/*nullptr*/)
+{
     if (!m_initalized)
-        return;
+        return 0;
+
+    uint32 dungeonID(params.dungeonID);
+    if (dungeonID == 0)
+        dungeonID = sDunDataMgr.PickDungeon(params.archetype, params.factionID, m_system->GetSystemSecurityRating());
+    std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
+    if ((pDungeon.get() == nullptr) or pDungeon->roomOrder.empty()) {
+        _log(DUNG__WARNING, "DungeonMgr::SpawnInstance() - no usable dungeon (id %u, archetype %u) in %s(%u)",
+                dungeonID, params.archetype, m_system->GetName(), m_system->GetID());
+        return 0;
+    }
+    if (pDungeon->roomOrder.size() > 255) {
+        _log(DUNG__ERROR, "DungeonMgr::SpawnInstance() - dungeon %u has too many rooms", dungeonID);
+        return 0;
+    }
+
+    Instance inst = Instance();
+        inst.dungeon = pDungeon;
+        inst.factionID = ResolveFaction(params, *pDungeon);
+        inst.kind = params.kind;
+        inst.ownerID = params.ownerID;
+        inst.escalationID = params.escalationID;
+        inst.name = sDunDataMgr.GetDisplayName(*pDungeon, inst.factionID);
+        inst.listener = params.listener;
+        inst.created = Win32TimeNow();
+
+    GPoint origin(params.usePosition ? params.position : m_anomMgr->GetSitePosition());
+
+    // anomalies and signatures have a scanner item at the site.  everything else is reached by other means
+    bool scannable((params.kind == Dungeon::Kind::Anomaly) or (params.kind == Dungeon::Kind::Signature));
+    if (scannable) {
+        CosmicSignature sig = CosmicSignature();
+        if (sigOut != nullptr)
+            sig = *sigOut;
+        if (sig.sigTypeID == 0) {
+            if (params.kind == Dungeon::Kind::Anomaly) {
+                sig.sigTypeID = EVEDB::invTypes::CosmicAnomaly;
+                sig.sigGroupID = EVEDB::invGroups::Cosmic_Anomaly;
+            } else {
+                sig.sigTypeID = EVEDB::invTypes::DeadspaceSignature;
+                sig.sigGroupID = EVEDB::invGroups::Cosmic_Signature;
+            }
+        }
+        sig.systemID = m_system->GetID();
+        sig.position = origin;
+        sig.ownerID = inst.factionID;
+        sig.sigName = inst.name;
+        if (sig.dungeonType == 0)
+            sig.dungeonType = pDungeon->archetypeID;
+
+        ItemData iData(sig.sigTypeID, inst.factionID, m_system->GetID(), flagNone, inst.name.c_str(), origin, "livedungeon");
+        InventoryItemRef iRef(sItemFactory.SpawnItem(iData));
+        if (iRef.get() == nullptr) {
+            _log(DUNG__ERROR, "DungeonMgr::SpawnInstance() - unable to spawn the signature item for %s", inst.name.c_str());
+            return 0;
+        }
+        DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+            entity.itemID = iRef->itemID();
+            entity.itemName = inst.name;
+            entity.typeID = iRef->typeID();
+            entity.groupID = iRef->groupID();
+            entity.categoryID = iRef->categoryID();
+            entity.ownerID = inst.factionID;
+            entity.factionID = inst.factionID;
+            entity.position = origin;
+        // the signal is added by AnomalyMgr when this returns
+        if (!m_system->BuildDynamicEntity(entity, 0, false)) {
+            iRef->Delete();
+            return 0;
+        }
+        SystemEntity* pSE(m_system->GetSE(iRef->itemID()));
+        sig.sigItemID = iRef->itemID();
+        sig.bubbleID = ((pSE != nullptr) and (pSE->SysBubble() != nullptr)) ? pSE->SysBubble()->GetID() : 0;
+        inst.instanceID = sig.sigItemID;
+        inst.sig = sig;
+        inst.hasSignal = (sigOut != nullptr);
+        if (sigOut != nullptr)
+            *sigOut = sig;
+    } else {
+        inst.instanceID = sItemFactory.GetNextTempID();
+    }
+
+    // lifetime:  the caller's, the dungeon's, or the config default of its kind (0 = forever)
+    int64 lifetime(params.lifetimeSec * EvE::Time::Second);
+    if (lifetime == 0) {
+        if (pDungeon->lifetimeHours > 0) {
+            lifetime = pDungeon->lifetimeHours * EvE::Time::Hour;
+        } else if (params.kind == Dungeon::Kind::Anomaly) {
+            lifetime = sConfig.dungeon.AnomalyLifetime * EvE::Time::Hour;
+        } else if (params.kind == Dungeon::Kind::Signature) {
+            lifetime = sConfig.dungeon.SignatureLifetime * EvE::Time::Hour;
+            lifetime = static_cast<int64>(lifetime * MakeRandomFloat(0.75, 1.25));
+        }
+    }
+    inst.expires = (lifetime > 0 ? inst.created + lifetime : 0);
+
+    // rooms:  room 0 at the site, the others 1/3 AU apart
+    uint8 idx(0);
+    for (auto roomID : pDungeon->roomOrder) {
+        auto rItr = pDungeon->rooms.find(roomID);
+        if (rItr == pDungeon->rooms.end())
+            continue;
+        LiveRoom room = LiveRoom();
+            room.roomID = roomID;
+            room.def = &rItr->second;
+            room.origin = (idx == 0 ? origin : NextRoomOrigin(inst.rooms.back().origin));
+        for (auto& group : rItr->second.groups) {
+            LiveGroup live = LiveGroup();
+                live.liveGroupID = m_nextLiveGroupID++;
+                live.def = &group;
+            room.groups.push_back(live);
+        }
+        for (auto& trigger : rItr->second.triggers)
+            if (trigger.triggerType == Dungeon::Trigger::Attacked)
+                inst.hasAttackTriggers = true;
+        inst.rooms.push_back(room);
+        ++idx;
+    }
+
+    uint32 instanceID(inst.instanceID);
+    m_instances[instanceID] = inst;
+    Instance& live = m_instances[instanceID];
+
+    // objects of every room now (gates must exist before anyone arrives).  room 0's npcs now, the others' when first reached
+    for (uint8 i = 0; i < live.rooms.size(); ++i) {
+        LiveRoom& room = live.rooms[i];
+        // npc behaviour (no warp out, leash) and SpawnMgr bookkeeping key off the room bubble
+        SystemBubble* pBubble(sBubbleMgr.GetBubble(m_system, room.origin));
+        if (pBubble != nullptr) {
+            if (live.kind == Dungeon::Kind::Mission) {
+                pBubble->SetMission();
+            } else if (live.kind == Dungeon::Kind::Incursion) {
+                pBubble->SetIncursion();
+            } else {
+                pBubble->SetAnomaly();
+            }
+        }
+        for (auto& object : room.def->objects) {
+            GPoint pos(room.origin + GPoint(object.x, object.y, object.z));
+            if (IsNPCType(object.typeID)) {
+                // an npc placed in the room is a one-ship group present from the start
+                uint32 itemID(SpawnNPC(live, i, object.typeID, live.factionID, pos, false, 0));
+                if (itemID != 0)
+                    room.extraNPCs.insert(itemID);
+                continue;
+            }
+            SpawnObject(live, i, object.typeID, pos, object.objectID, object.radius);
+        }
+    }
+    PopulateRoom(live, 0);
+
+    _log(DUNG__INFO, "DungeonMgr::SpawnInstance() - %s (dungeon %u, kind %u, faction %u) spawned as instance %u in %s(%u) with %u rooms",
+            live.name.c_str(), dungeonID, live.kind, live.factionID, instanceID, m_system->GetName(), m_system->GetID(), live.rooms.size());
+    return instanceID;
 }
 
 bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
 {
-    Dungeon::Dungeon dData;
-    dData.dungeonID = 0;
+    Dungeon::SpawnParams params;
+        params.dungeonID = dungeonID;
+        params.archetype = sig.dungeonType;
+        params.factionID = sig.ownerID;
+        params.usePosition = true;
+        params.position = sig.position;
+    if (IsCharacterID(sig.ownerID)) {
+        // dungeon editor playtest
+        params.kind = Dungeon::Kind::Test;
+        params.factionID = 0;
+        params.ownerID = sig.ownerID;
+        return (SpawnInstance(params) != 0);
+    }
+    params.kind = ((sig.dungeonType == Dungeon::Type::Anomaly) ? Dungeon::Kind::Anomaly : Dungeon::Kind::Signature);
+    return (SpawnInstance(params, &sig) != 0);
+}
 
-    // If we are given a dungeonID, use it otherwise pick a random dungeon based on archetype
-    if (dungeonID == 0) {
-        sDunDataMgr.GetRandomDungeon(dData, sig.dungeonType);
+uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius)
+{
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if (pType == nullptr) {
+        _log(DUNG__WARNING, "DungeonMgr::SpawnObject() - invalid type %u in dungeon %u", typeID, inst.dungeon->dungeonID);
+        return 0;
+    }
+    LiveRoom& room = inst.rooms[roomIdx];
+
+    // ore and gas are minable rocks of a temp belt per room.  the object's radius field holds the quantity
+    if ((pType->categoryID() == EVEDB::invCategories::Asteroid) or (pType->groupID() == EVEDB::invGroups::Harvestable_Cloud)) {
+        if (room.beltID == 0) {
+            room.beltID = sItemFactory.GetNextTempID();
+            uint32 instanceID(inst.instanceID);
+            m_system->GetBeltMgr()->SetMinedCallback(room.beltID, [this, instanceID, roomIdx](AsteroidSE* pASE, double units, bool depleted) {
+                Ctx ctx;
+                    ctx.entityID = pASE->GetID();
+                    ctx.typeID = pASE->GetTypeID();
+                    ctx.pos = pASE->GetPosition();
+                QueueTrigger(instanceID, roomIdx, Dungeon::Trigger::Mined, ctx);
+                if (depleted)
+                    QueueTrigger(instanceID, roomIdx, Dungeon::Trigger::RoomMinedOut, ctx);
+            });
+        }
+        double quantity(radius > 0 ? radius : 10000);
+        AsteroidSE* pASE(m_system->GetBeltMgr()->SpawnResource(room.beltID, typeID, quantity, pos));
+        if (pASE == nullptr)
+            return 0;
+        room.asteroids.insert(pASE->GetID());
+        if (objectID != 0)
+            room.objects[objectID] = pASE->GetID();
+        Index(pASE->GetID(), inst.instanceID, roomIdx);
+        return pASE->GetID();
+    }
+
+    uint32 ownerID(sDataMgr.GetFactionCorp(inst.factionID));
+    if (ownerID == 0)
+        ownerID = ownerSystem;
+    std::string info("livedungeon_" + std::to_string(inst.instanceID));
+    ItemData iData(typeID, ownerID, m_system->GetID(), flagNone, pType->name().c_str(), pos, info.c_str());
+    InventoryItemRef iRef(sItemFactory.SpawnItem(iData));
+    if (iRef.get() == nullptr) {
+        _log(DUNG__ERROR, "DungeonMgr::SpawnObject() - unable to spawn %s(%u) for %s", pType->name().c_str(), typeID, inst.name.c_str());
+        return 0;
+    }
+    iRef->SaveItem();
+
+    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+        entity.itemID = iRef->itemID();
+        entity.itemName = iRef->itemName();
+        entity.typeID = typeID;
+        entity.groupID = pType->groupID();
+        entity.categoryID = pType->categoryID();
+        entity.ownerID = ownerID;
+        entity.corporationID = ownerID;
+        entity.allianceID = inst.factionID;
+        entity.factionID = ((inst.factionID == factionRogueDrones) ? 0 : inst.factionID);
+        entity.position = pos;
+    // dungeon objects don't show on the scanner
+    if (!m_system->BuildDynamicEntity(entity, 0, false)) {
+        iRef->Delete();
+        return 0;
+    }
+
+    uint32 itemID(iRef->itemID());
+    if (objectID != 0) {
+        room.objects[objectID] = itemID;
     } else {
-        sDunDataMgr.GetDungeon(dData, dungeonID);
+        room.extraObjects.insert(itemID);
+    }
+    Index(itemID, inst.instanceID, roomIdx);
+
+    if (pType->groupID() == EVEDB::invGroups::Warp_Gate) {
+        LiveGate gate = LiveGate();
+            gate.instanceID = inst.instanceID;
+            gate.roomIdx = roomIdx;
+            gate.objectID = objectID;
+            gate.def = sDunDataMgr.GetGate(objectID);
+            gate.open = ((gate.def == nullptr) or !gate.def->locked);
+            gate.openUntil = (gate.open ? Win32TimeNow() : 0);
+            gate.shownOpen = gate.open;
+        m_gates[itemID] = gate;
+    }
+    return itemID;
+}
+
+uint32 DungeonMgr::SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID)
+{
+    NPC* pNPC(m_spawnMgr->SpawnDungeonNPC(sBubbleMgr.GetBubble(m_system, pos), typeID, factionID, pos, warpIn, (liveGroupID != 0 ? liveGroupID : inst.instanceID)));
+    if (pNPC == nullptr)
+        return 0;
+    Index(pNPC->GetID(), inst.instanceID, roomIdx);
+    return pNPC->GetID();
+}
+
+void DungeonMgr::PopulateRoom(Instance& inst, uint8 roomIdx)
+{
+    LiveRoom& room = inst.rooms[roomIdx];
+    if (room.populated)
+        return;
+    room.populated = true;
+    for (auto& group : room.groups)
+        if (!group.spawned and (group.def->spawnMode == Dungeon::SpawnMode::RoomCreated))
+            SpawnGroup(inst, roomIdx, group);
+}
+
+void DungeonMgr::SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group)
+{
+    if (group.spawned)
+        return;
+    group.spawned = true;
+    LiveRoom& room = inst.rooms[roomIdx];
+    const Dungeon::SpawnGroupDef& def = *group.def;
+    uint32 factionID(def.factionID != 0 ? def.factionID : inst.factionID);
+
+    std::vector<::SpawnGroup> types;
+    if (!def.types.empty()) {
+        for (auto& cur : def.types) {
+            ::SpawnGroup entry = ::SpawnGroup();
+                entry.typeID = cur.first;
+                entry.quantity = cur.second;
+            types.push_back(entry);
+        }
+    } else if (def.npcClassType != 0) {
+        m_spawnMgr->ResolveClassTypes(factionID, def.npcClassType, def.npcClassSub, types);
     }
 
-    if (dData.rooms.empty()) {
-        _log(DUNG__WARNING, "DungeonMgr::MakeDungeon() - no dungeon with rooms for %s (type %u, dungeonID %u)", sig.sigName.c_str(), sig.dungeonType, dungeonID);
-        return false;
-    }
-    if (!dData.name.empty())
-        sig.sigName = dData.name;
-    else
-        sig.sigName = sDunDataMgr.GetDungeonType(sig.dungeonType);
-
-    if ((sig.sigGroupID == EVEDB::invGroups::Cosmic_Signature) || (sig.sigGroupID == EVEDB::invGroups::Cosmic_Anomaly)) {
-        // Create a new anomaly inventory item to track entire dungeon under
-        ItemData iData(sig.sigTypeID, sig.ownerID, sig.systemID, flagNone, sig.sigName.c_str(), sig.position/*, info*/);
-
-        InventoryItemRef iRef = sItemFactory.SpawnItem(iData);
-        if (iRef.get() == nullptr)
-            return false;
-        iRef->SetCustomInfo(std::string("livedungeon").c_str());
-        iRef->SaveItem();
-
-        CelestialSE* cSE = new CelestialSE(iRef, m_system->GetServiceMgr(), m_system);
-
-        if (cSE == nullptr)
-            return false;
-
-        // dont add signal thru sysMgr.  signal is added when this returns to anomMgr
-        m_system->AddEntity(cSE, false);
-        sig.sigItemID = iRef->itemID();
-        sig.bubbleID = cSE->SysBubble()->GetID();
-
-        _log(COSMIC_MGR__TRACE, "DungeonMgr::Create() - %s using dungeonID %u", sig.sigName.c_str(), dData.dungeonID);
-
-        // Create the new live dungeon
-        LiveDungeon newDungeon;
-        newDungeon.anomalyID = iRef->itemID();
-        newDungeon.systemID = m_system->GetID();
-
-        // Iterate through rooms and handle item spawning for each room
-        uint16 roomCounter = 0;
-        for (auto const& room : dData.rooms) {
-            LiveRoom newRoom;
-            // Set room position
-            // Handle first room differently as it will be at the origin point of signature
-            if (roomCounter == 0) {
-                newRoom.position = sig.position;
-            } else {
-                // The following rooms shall be 100M kilometers in x direction from previous room.
-                GPoint pos;
-                pos.x = newDungeon.rooms[roomCounter - 1].position.x + NEXT_DUNGEON_ROOM_DIST;
-                pos.y = newDungeon.rooms[roomCounter - 1].position.y;
-                pos.z = newDungeon.rooms[roomCounter - 1].position.z;
-                newRoom.position = pos;
-            }
-
-            for (auto object : room.second.objects ) {
-                GPoint pos;
-                // Set position for each object
-                pos.x = newRoom.position.x + object.x;
-                pos.y = newRoom.position.y + object.y;
-                pos.z = newRoom.position.z + object.z;
-
-                // If invGroup is an NPC, we must spawn it as such
-                Inv::TypeData objType;
-                Inv::GrpData objGroup;
-                sDataMgr.GetType(object.typeID, objType);
-                sDataMgr.GetGroup(objType.groupID, objGroup);
-                if (objGroup.catID == EVEDB::invCategories::Ship || objGroup.catID == EVEDB::invCategories::Drone) {
-                    m_spawnMgr->DoSpawnForAnomaly(sBubbleMgr.GetBubble(m_system, pos), pos, GetRandLevel(), object.typeID, sig.ownerID);
-                } 
-                
-                // Otherwise, spawn as a normal celestial object
-                else {
-                    // Define ItemData object for each RoomObject
-                    ItemData dData(object.typeID, sig.ownerID, sig.systemID, flagNone, sDataMgr.GetTypeName(object.typeID), pos);
-
-                    // Spawn the object (and persist it across system unloads)
-                    iRef = sItemFactory.SpawnItem(dData);
-                    if (iRef.get() == nullptr) {
-                        _log(COSMIC_MGR__ERROR, "DungeonMgr::Create() - Unable to spawn item with type %s for room %u dungeon with anomaly itemID %u", sDataMgr.GetTypeName(object.typeID), roomCounter, newDungeon.anomalyID);
-                        return false;
-                    }
-                    iRef->SetCustomInfo(("livedungeon_" + std::to_string(newDungeon.anomalyID)).c_str());
-                    iRef->SaveItem();
-
-                    cSE = new CelestialSE(iRef, m_system->GetServiceMgr(), m_system);
-                    m_system->AddEntity(cSE, false);
-                    newRoom.items.push_back(iRef->itemID());
-                }
-            }
-
-            newDungeon.rooms.insert({roomCounter, newRoom});
-            roomCounter++;
+    GPoint center(room.origin + GPoint(def.x, def.y, def.z));
+    for (auto& cur : types)
+        for (uint16 i = 0; i < cur.quantity; ++i) {
+            GPoint pos(center);
+            pos.MakeRandomPointOnSphere(MakeRandomFloat(0.0, def.spread));
+            uint32 itemID(SpawnNPC(inst, roomIdx, cur.typeID, factionID, pos, def.warpIn, group.liveGroupID));
+            if (itemID != 0)
+                group.alive.insert(itemID);
         }
 
-        // Finally add the new dungeon to the system-wide list for tracking
-        m_dungeonList.insert({newDungeon.anomalyID, newDungeon});
-        return true;
+    _log(DUNG__MESSAGE, "DungeonMgr::SpawnGroup() - %s room %u: group %u (wave %u) spawned %u npcs", inst.name.c_str(), room.roomID,
+            def.spawnGroupID, def.waveNumber, group.alive.size());
+
+    // nothing to spawn counts as spawned and destroyed, so the waves go on
+    if (group.alive.empty()) {
+        group.destroyed = true;
+        Ctx ctx;
+            ctx.liveGroupID = group.liveGroupID;
+            ctx.groupWiped = true;
+            ctx.pos = center;
+        QueueTrigger(inst.instanceID, roomIdx, Dungeon::Trigger::Exploding, ctx);
     }
-    return false;
+}
+
+DungeonMgr::LiveGroup* DungeonMgr::FindGroup(Instance& inst, uint32 spawnGroupID, uint8& roomIdx)
+{
+    for (uint8 i = 0; i < inst.rooms.size(); ++i)
+        for (auto& group : inst.rooms[i].groups)
+            if (group.def->spawnGroupID == spawnGroupID) {
+                roomIdx = i;
+                return &group;
+            }
+    return nullptr;
+}
+
+/* removal */
+
+void DungeonMgr::RemoveEntity(uint32 itemID, bool explode)
+{
+    SystemEntity* pSE(m_system->GetSE(itemID));
+    if ((pSE == nullptr) or pSE->IsDead())
+        return;
+
+    if (explode) {
+        // a real kill (wreck, Exploding triggers through OnEntityDestroyed)
+        Damage d(pSE, true);
+        d.weaponRef = pSE->GetSelf();
+        SystemEntity::SetUnkillable(itemID, false);
+        pSE->Destroy(d);
+        return;
+    }
+
+    m_entityIndex.erase(itemID);
+    if (pSE->IsNPCSE()) {
+        NPC* pNPC(pSE->GetNPCSE());
+        if (pNPC->TargetMgr() != nullptr)
+            pNPC->TargetMgr()->ClearFromTargets();
+        m_system->RemoveNPC(pNPC);
+        delete pNPC;
+        return;
+    }
+    if (pSE->IsContainerSE()) {
+        // the container item takes its entity out of space and deletes its contents
+        InventoryItemRef iRef(pSE->GetSelf());
+        iRef->Delete();
+    } else {
+        pSE->Delete();
+    }
+    SafeDelete(pSE);
+}
+
+uint32 DungeonMgr::CountLiveNPCs(const LiveRoom& room)
+{
+    uint32 count(room.extraNPCs.size());
+    for (auto& group : room.groups)
+        count += group.alive.size();
+    return count;
+}
+
+void DungeonMgr::DespawnInstance(uint32 instanceID, bool notifyAnomMgr/*true*/)
+{
+    auto itr = m_instances.find(instanceID);
+    if (itr == m_instances.end())
+        return;
+    Instance& inst = itr->second;
+
+    _log(DUNG__INFO, "DungeonMgr::DespawnInstance() - removing %s (instance %u) from %s(%u)", inst.name.c_str(), instanceID, m_system->GetName(), m_system->GetID());
+
+    for (auto& room : inst.rooms) {
+        if (room.beltID != 0)
+            m_system->GetBeltMgr()->ClearMinedCallback(room.beltID);
+        std::set<uint32> items(room.extraNPCs);
+        items.insert(room.extraObjects.begin(), room.extraObjects.end());
+        items.insert(room.asteroids.begin(), room.asteroids.end());
+        for (auto& cur : room.objects)
+            items.insert(cur.second);
+        for (auto& group : room.groups)
+            items.insert(group.alive.begin(), group.alive.end());
+        for (auto cur : items) {
+            m_gates.erase(cur);
+            RemoveEntity(cur, false);
+        }
+    }
+    // anything else still indexed for this instance (warped away npcs)
+    for (auto eItr = m_entityIndex.begin(); eItr != m_entityIndex.end(); ) {
+        if (eItr->second.first == instanceID) {
+            uint32 itemID(eItr->first);
+            ++eItr;
+            RemoveEntity(itemID, false);
+            continue;
+        }
+        ++eItr;
+    }
+
+    if (inst.sig.sigItemID != 0) {
+        if (inst.hasSignal) {
+            if (notifyAnomMgr) {
+                m_anomMgr->OnSiteCompleted(inst.sig);
+            } else {
+                m_anomMgr->RemoveSignal(inst.sig.sigItemID);
+            }
+        }
+        SystemEntity* pSE(m_system->GetSE(inst.sig.sigItemID));
+        if (pSE != nullptr) {
+            pSE->Delete();
+            SafeDelete(pSE);
+        } else {
+            InventoryItemRef iRef(sItemFactory.GetItemRef(inst.sig.sigItemID));
+            if (iRef.get() != nullptr)
+                iRef->Delete();
+        }
+    }
+
+    Ctx ctx;
+    Notify(inst, Dungeon::Engine::Despawned, 0, ctx);
+    m_instances.erase(itr);
 }
 
 void DungeonMgr::Close()
 {
-    // the items of live dungeons don't survive the system.  their entities are torn down by the system unload after this
-    for (auto& dungeon : m_dungeonList) {
-        for (auto& room : dungeon.second.rooms)
-            for (auto itemID : room.second.items) {
-                SystemEntity* pSE(m_system->GetSE(itemID));
-                if (pSE != nullptr) {
-                    m_system->RemoveEntity(pSE);
-                    SafeDelete(pSE);
-                }
-                InventoryItemRef iRef(sItemFactory.GetItemRef(itemID));
-                if (iRef.get() != nullptr)
-                    iRef->Delete();
-            }
-        SystemEntity* pSE(m_system->GetSE(dungeon.second.anomalyID));
-        if (pSE != nullptr) {
-            m_system->RemoveEntity(pSE);
-            SafeDelete(pSE);
+    // the items of live dungeons don't survive the system.  their entities are torn down here, before the system unload
+    std::vector<uint32> ids;
+    for (auto& cur : m_instances)
+        ids.push_back(cur.first);
+    for (auto id : ids)
+        DespawnInstance(id, false);
+    // nobody gets called after this
+    FlushNotices();
+    m_pending.clear();
+    m_delayed.clear();
+    m_returns.clear();
+    m_warpedAway.clear();
+    m_gates.clear();
+    m_entityIndex.clear();
+}
+
+void DungeonMgr::ClearListener(Dungeon::DungeonListener* pListener)
+{
+    for (auto& cur : m_instances)
+        if (cur.second.listener == pListener)
+            cur.second.listener = nullptr;
+    for (auto& cur : m_notices)
+        if (cur.first == pListener)
+            cur.first = nullptr;
+}
+
+/* queries */
+
+uint32 DungeonMgr::GetInstanceOf(uint32 itemID)
+{
+    auto itr = m_entityIndex.find(itemID);
+    if (itr == m_entityIndex.end())
+        return 0;
+    return itr->second.first;
+}
+
+bool DungeonMgr::IsInDungeon(const GPoint& pos)
+{
+    for (auto& cur : m_instances)
+        for (auto& room : cur.second.rooms)
+            if (room.origin.distance(pos) < BUBBLE_RADIUS_METERS)
+                return true;
+    return false;
+}
+
+bool DungeonMgr::IsDeadspace(const GPoint& pos)
+{
+    for (auto& cur : m_instances)
+        for (uint8 i = 0; i < cur.second.rooms.size(); ++i) {
+            if (cur.second.rooms[i].origin.distance(pos) >= BUBBLE_RADIUS_METERS)
+                continue;
+            if ((i > 0) or (cur.second.kind != Dungeon::Kind::Anomaly))
+                return true;
         }
-        InventoryItemRef iRef(sItemFactory.GetItemRef(dungeon.second.anomalyID));
-        if (iRef.get() != nullptr)
-            iRef->Delete();
-    }
-    m_dungeonList.clear();
+    return false;
 }
 
-int8 DungeonMgr::GetFaction(uint32 factionID)
+/* hooks.  these only queue triggers;  Process() runs them */
+
+void DungeonMgr::QueueTrigger(uint32 instanceID, uint8 roomIdx, uint16 triggerType, const Ctx& ctx)
 {
-    switch (factionID) {
-        case factionAngel:          return 2;
-        case factionSanshas:        return 5;
-        case factionGuristas:       return 4;
-        case factionSerpentis:      return 1;
-        case factionBloodRaider:    return 3;
-        case factionRogueDrones:    return 6;
-        case 0:                     return 7;
-        // these are incomplete.  set to default (region rat)
-        case factionAmarr:
-        case factionAmmatar:
-        case factionCaldari:
-        case factionGallente:
-        case factionMinmatar:
-        default:
-            return GetFaction(sDataMgr.GetRegionRatFaction(m_system->GetRegionID()));
+    PendingTrigger pending;
+        pending.instanceID = instanceID;
+        pending.roomIdx = roomIdx;
+        pending.triggerType = triggerType;
+        pending.ctx = ctx;
+    m_pending.push_back(pending);
+}
+
+uint32 DungeonMgr::FindWreck(uint32 deadItemID, const GPoint& pos)
+{
+    SystemBubble* pBubble(sBubbleMgr.FindBubble(m_system->GetID(), pos));
+    if (pBubble == nullptr)
+        return 0;
+    std::map<uint32, SystemEntity*> entities;
+    pBubble->GetEntities(entities);
+    for (auto& cur : entities)
+        if (cur.second->IsWreckSE() and (cur.second->GetWreckSE()->GetLaunchedByID() == deadItemID))
+            return cur.first;
+    return 0;
+}
+
+void DungeonMgr::DropLoot(uint32 lootGroupID, uint32 wreckID, const GPoint& pos, uint32 ownerID)
+{
+    std::vector<Dungeon::LootEntry> loot;
+    sDunDataMgr.GetLoot(lootGroupID, loot);
+    if (loot.empty())
+        return;
+    if (ownerID == 0)
+        ownerID = ownerSystem;
+
+    InventoryItemRef containerRef(nullptr);
+    if (wreckID != 0)
+        containerRef = sItemFactory.GetWreckContainer(wreckID);
+    for (auto& cur : loot) {
+        if (MakeRandomFloat() >= cur.chance)
+            continue;
+        uint32 quantity(cur.minQty);
+        if (cur.maxQty > cur.minQty)
+            quantity = std::min<uint32>(MakeRandomInt(cur.minQty, cur.maxQty + 1), cur.maxQty);
+        if (quantity == 0)
+            continue;
+        if (containerRef.get() == nullptr) {
+            // no wreck:  a cargo container at the spot
+            ItemData cData(EVEDB::invTypes::CargoContainer, ownerID, m_system->GetID(), flagNone, "Cargo Container", pos);
+            CargoContainerRef cargoRef(sItemFactory.SpawnCargoContainer(cData));
+            if (cargoRef.get() == nullptr)
+                return;
+            DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+                entity.itemID = cargoRef->itemID();
+                entity.itemName = cargoRef->itemName();
+                entity.typeID = cargoRef->typeID();
+                entity.groupID = cargoRef->groupID();
+                entity.categoryID = cargoRef->categoryID();
+                entity.ownerID = ownerID;
+                entity.position = pos;
+            if (!m_system->BuildDynamicEntity(entity)) {
+                cargoRef->Delete();
+                return;
+            }
+            containerRef = cargoRef;
+        }
+        ItemData iLoot(cur.typeID, ownerID, containerRef->itemID(), flagNone, quantity);
+        containerRef->AddItem(sItemFactory.SpawnItem(iLoot));
     }
 }
 
-int8 DungeonMgr::GetRandLevel()
+void DungeonMgr::OnEntityDestroyed(SystemEntity* pSE, Damage& d)
 {
-    double level = MakeRandomFloat();
-    _log(DUNG__TRACE, "DungeonMgr::GetRandLevel() - level = %.2f", level);
+    auto iItr = m_entityIndex.find(pSE->GetID());
+    if (iItr == m_entityIndex.end())
+        return;
+    uint32 instanceID(iItr->second.first);
+    uint8 roomIdx(iItr->second.second);
+    m_entityIndex.erase(iItr);
+    auto itr = m_instances.find(instanceID);
+    if (itr == m_instances.end())
+        return;
+    Instance& inst = itr->second;
+    LiveRoom& room = inst.rooms[roomIdx];
 
-    if (level < 0.15) {
-        return 4;
-    } else if (level < 0.25) {
-        return 3;
-    } else if (level < 0.50) {
-        return 2;
+    Ctx ctx;
+        ctx.entityID = pSE->GetID();
+        ctx.typeID = pSE->GetTypeID();
+        ctx.pos = pSE->GetPosition();
+    // the killer:  a pilot, or a drone's owner
+    if (d.srcSE != nullptr) {
+        if (d.srcSE->HasPilot()) {
+            ctx.charID = d.srcSE->GetPilot()->GetCharacterID();
+        } else if (d.srcSE->IsDroneSE() and IsCharacterID(d.srcSE->GetSelf()->ownerID())) {
+            ctx.charID = d.srcSE->GetSelf()->ownerID();
+        }
+    }
+    if (ctx.charID != 0)
+        inst.lastCharID = ctx.charID;
+
+    for (auto oItr = room.objects.begin(); oItr != room.objects.end(); ++oItr)
+        if (oItr->second == ctx.entityID) {
+            ctx.objectID = oItr->first;
+            room.objects.erase(oItr);
+            break;
+        }
+    room.extraNPCs.erase(ctx.entityID);
+    room.extraObjects.erase(ctx.entityID);
+    room.asteroids.erase(ctx.entityID);
+    m_gates.erase(ctx.entityID);
+    for (auto& group : room.groups) {
+        if (group.alive.erase(ctx.entityID) == 0)
+            continue;
+        ctx.liveGroupID = group.liveGroupID;
+        if (group.alive.empty()) {
+            group.destroyed = true;
+            ctx.groupWiped = true;
+        }
+        // the group's loot goes into each member's wreck (the wreck exists by now)
+        if (group.def->lootGroupID != 0)
+            DropLoot(group.def->lootGroupID, FindWreck(ctx.entityID, ctx.pos), ctx.pos, ctx.charID);
+        break;
+    }
+
+    QueueTrigger(instanceID, roomIdx, Dungeon::Trigger::Exploding, ctx);
+}
+
+void DungeonMgr::OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker)
+{
+    auto iItr = m_entityIndex.find(pSE->GetID());
+    if (iItr == m_entityIndex.end())
+        return;
+    auto itr = m_instances.find(iItr->second.first);
+    if ((itr == m_instances.end()) or !itr->second.hasAttackTriggers)
+        return;
+    Ctx ctx;
+        ctx.entityID = pSE->GetID();
+        ctx.typeID = pSE->GetTypeID();
+        ctx.pos = pSE->GetPosition();
+    if ((pAttacker != nullptr) and pAttacker->HasPilot())
+        ctx.charID = pAttacker->GetPilot()->GetCharacterID();
+    for (auto& cur : itr->second.rooms[iItr->second.second].objects)
+        if (cur.second == ctx.entityID)
+            ctx.objectID = cur.first;
+    for (auto& group : itr->second.rooms[iItr->second.second].groups)
+        if (group.alive.find(ctx.entityID) != group.alive.end())
+            ctx.liveGroupID = group.liveGroupID;
+    QueueTrigger(itr->first, iItr->second.second, Dungeon::Trigger::Attacked, ctx);
+}
+
+void DungeonMgr::OnPlayerKilled(ShipSE* pShip, uint32 charID)
+{
+    GPoint pos(pShip->GetPosition());
+    for (auto& cur : m_instances)
+        for (uint8 i = 0; i < cur.second.rooms.size(); ++i)
+            if (cur.second.rooms[i].origin.distance(pos) < BUBBLE_RADIUS_METERS) {
+                Ctx ctx;
+                    ctx.entityID = pShip->GetID();
+                    ctx.typeID = pShip->GetTypeID();
+                    ctx.charID = charID;
+                    ctx.pos = pos;
+                QueueTrigger(cur.first, i, Dungeon::Trigger::PlayerKilled, ctx);
+                return;
+            }
+}
+
+void DungeonMgr::OnObjectEvent(uint32 itemID, uint16 triggerType, uint32 charID, uint32 typeID/*0*/)
+{
+    Ctx ctx;
+        ctx.entityID = itemID;
+        ctx.charID = charID;
+        ctx.typeID = typeID;
+    auto iItr = m_entityIndex.find(itemID);
+    if (iItr != m_entityIndex.end()) {
+        auto itr = m_instances.find(iItr->second.first);
+        if (itr == m_instances.end())
+            return;
+        for (auto& cur : itr->second.rooms[iItr->second.second].objects)
+            if (cur.second == itemID)
+                ctx.objectID = cur.first;
+        SystemEntity* pSE(m_system->GetSE(itemID));
+        if (pSE != nullptr)
+            ctx.pos = pSE->GetPosition();
+        QueueTrigger(itr->first, iItr->second.second, triggerType, ctx);
+        return;
+    }
+
+    // not a dungeon object (ItemInCargo names the pilot's ship):  the room the pilot is in
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or (pClient->SystemMgr() != m_system))
+        return;
+    ctx.pos = pClient->GetShipSE()->GetPosition();
+    for (auto& cur : m_instances)
+        for (uint8 i = 0; i < cur.second.rooms.size(); ++i)
+            if (cur.second.rooms[i].origin.distance(ctx.pos) < BUBBLE_RADIUS_METERS) {
+                QueueTrigger(cur.first, i, triggerType, ctx);
+                return;
+            }
+}
+
+/* triggers and events */
+
+void DungeonMgr::FireTriggers(Instance& inst, uint8 roomIdx, uint16 triggerType, const Ctx& ctx)
+{
+    LiveRoom& room = inst.rooms[roomIdx];
+    const LiveGroup* pGroup(nullptr);
+    if (ctx.liveGroupID != 0)
+        for (auto& group : room.groups)
+            if (group.liveGroupID == ctx.liveGroupID)
+                pGroup = &group;
+
+    uint32 instanceID(inst.instanceID);
+    for (auto& trigger : room.def->triggers) {
+        if (trigger.triggerType != triggerType)
+            continue;
+        if (!trigger.repeatable and (room.firedTriggers.find(trigger.triggerID) != room.firedTriggers.end()))
+            continue;
+
+        // source filters
+        if (trigger.spawnGroupID != 0) {
+            if ((pGroup == nullptr) or (pGroup->def->spawnGroupID != trigger.spawnGroupID))
+                continue;
+            // a group's Exploding fires when the whole group is dead (the wave rule), or for each member with value 1
+            if ((triggerType == Dungeon::Trigger::Exploding) and (trigger.value < 0.5) and !ctx.groupWiped)
+                continue;
+        }
+        if ((trigger.objectID != 0) and (trigger.objectID != ctx.objectID))
+            continue;
+
+        switch (triggerType) {
+            case Dungeon::Trigger::Exploding: {
+                // an empty group "explodes" without an entity.  only group triggers react to that
+                if ((ctx.entityID == 0) and (trigger.spawnGroupID == 0))
+                    continue;
+            } break;
+            case Dungeon::Trigger::Attacked:
+            case Dungeon::Trigger::ShieldConditionLevel:
+            case Dungeon::Trigger::ArmorConditionLevel:
+            case Dungeon::Trigger::StructureConditionLevel: {
+                // once per entity
+                std::pair<uint32, uint32> key(trigger.triggerID, ctx.entityID);
+                if (room.conditionFired.find(key) != room.conditionFired.end())
+                    continue;
+                room.conditionFired.insert(key);
+            } break;
+            case Dungeon::Trigger::ItemPlacedInMissionContainer:
+            case Dungeon::Trigger::ItemRemovedFromSpawnContainer:
+            case Dungeon::Trigger::ItemInCargo: {
+                // value names the item type, if set
+                if ((trigger.value > 0) and (static_cast<uint32>(trigger.value) != ctx.typeID))
+                    continue;
+            } break;
+            case Dungeon::Trigger::CounterEQ:
+            case Dungeon::Trigger::CounterGT:
+            case Dungeon::Trigger::CounterGE:
+            case Dungeon::Trigger::CounterLT:
+            case Dungeon::Trigger::CounterLE: {
+                double counter(inst.counters[trigger.counterID]);
+                bool hit(false);
+                switch (triggerType) {
+                    case Dungeon::Trigger::CounterEQ: hit = (std::fabs(counter - trigger.value) < 0.0001); break;
+                    case Dungeon::Trigger::CounterGT: hit = (counter > trigger.value); break;
+                    case Dungeon::Trigger::CounterGE: hit = (counter >= trigger.value); break;
+                    case Dungeon::Trigger::CounterLT: hit = (counter < trigger.value); break;
+                    case Dungeon::Trigger::CounterLE: hit = (counter <= trigger.value); break;
+                }
+                if (!hit)
+                    continue;
+            } break;
+        }
+
+        room.firedTriggers.insert(trigger.triggerID);
+        _log(DUNG__TRACE, "DungeonMgr::FireTriggers() - %s room %u:  trigger %u (type %u) fired", inst.name.c_str(), room.roomID, trigger.triggerID, triggerType);
+
+        for (auto& event : trigger.events) {
+            if (event.delaySeconds > 0) {
+                PendingEvent pending;
+                    pending.instanceID = instanceID;
+                    pending.roomIdx = roomIdx;
+                    pending.event = &event;
+                    pending.ctx = ctx;
+                m_delayed.emplace(Win32TimeNow() + (event.delaySeconds * EvE::Time::Second), pending);
+                continue;
+            }
+            RunEvent(inst, roomIdx, event, ctx);
+            // the instance may be gone (despawned by an event)
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+        }
+    }
+}
+
+void DungeonMgr::CheckCounters(Instance& inst, uint8 roomIdx, uint32 counterID)
+{
+    // counter triggers anywhere in the dungeon re-check after a change
+    uint32 instanceID(inst.instanceID);
+    Ctx ctx;
+    for (uint8 i = 0; i < inst.rooms.size(); ++i)
+        for (uint16 type = Dungeon::Trigger::CounterEQ; type <= Dungeon::Trigger::CounterLE; ++type) {
+            FireTriggers(inst, i, type, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+        }
+}
+
+void DungeonMgr::RunEvent(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event, const Ctx& ctx)
+{
+    LiveRoom& room = inst.rooms[roomIdx];
+    _log(DUNG__TRACE, "DungeonMgr::RunEvent() - %s room %u:  event %u (type %u)", inst.name.c_str(), room.roomID, event.eventID, event.eventType);
+
+    // the entities an event works on:  an object, a group, or the entity that fired the trigger
+    auto targets = [&]() -> std::vector<uint32> {
+        std::vector<uint32> into;
+        if (event.objectID != 0) {
+            for (auto& cur : inst.rooms)
+                if (cur.objects.find(event.objectID) != cur.objects.end())
+                    into.push_back(cur.objects[event.objectID]);
+        } else if (event.spawnGroupID != 0) {
+            uint8 idx(0);
+            LiveGroup* pGroup(FindGroup(inst, event.spawnGroupID, idx));
+            if (pGroup != nullptr)
+                into.insert(into.end(), pGroup->alive.begin(), pGroup->alive.end());
+        } else if ((ctx.entityID != 0) and (m_entityIndex.find(ctx.entityID) != m_entityIndex.end())) {
+            into.push_back(ctx.entityID);
+        }
+        return into;
+    };
+
+    switch (event.eventType) {
+        case Dungeon::Event::Trigger::ActivateGate: {
+            for (auto& cur : m_gates) {
+                if ((cur.second.instanceID != inst.instanceID) or (cur.second.roomIdx != roomIdx))
+                    continue;
+                if ((event.objectID != 0) and (cur.second.objectID != event.objectID))
+                    continue;
+                OpenGate(cur.first, cur.second, true);
+            }
+        } break;
+        case Dungeon::Event::Trigger::SpawnGuards: {
+            uint8 idx(0);
+            LiveGroup* pGroup(FindGroup(inst, event.spawnGroupID, idx));
+            if (pGroup != nullptr)
+                SpawnGroup(inst, idx, *pGroup);
+        } break;
+        case Dungeon::Event::Trigger::SpawnGuardObject:
+        case Dungeon::Event::Trigger::SpawnShip: {
+            if (event.typeID == 0)
+                break;
+            GPoint center(room.origin);
+            if (event.objectID != 0) {
+                auto oItr = room.objects.find(event.objectID);
+                SystemEntity* pSE((oItr != room.objects.end()) ? m_system->GetSE(oItr->second) : nullptr);
+                if (pSE != nullptr)
+                    center = pSE->GetPosition();
+            }
+            for (int32 i = 0; i < std::max<int32>(event.quantity, 1); ++i) {
+                GPoint pos(center);
+                pos.MakeRandomPointOnSphere(MakeRandomFloat(1000, 5000));
+                if (IsNPCType(event.typeID)) {
+                    uint32 itemID(SpawnNPC(inst, roomIdx, event.typeID, inst.factionID, pos, false, 0));
+                    if (itemID != 0)
+                        room.extraNPCs.insert(itemID);
+                } else {
+                    SpawnObject(inst, roomIdx, event.typeID, pos, 0, 0);
+                }
+            }
+        } break;
+        case Dungeon::Event::Trigger::Msg: {
+            SendMessage(inst, roomIdx, event);
+        } break;
+        case Dungeon::Event::Trigger::DungeonCompletion: {
+            CompleteInstance(inst, (ctx.charID != 0 ? ctx.charID : inst.lastCharID));
+        } break;
+        case Dungeon::Event::Trigger::MissionCompletion:
+        case Dungeon::Event::Trigger::MissionFailure:
+        case Dungeon::Event::Trigger::AgentTalkTo:
+        case Dungeon::Event::Trigger::AgentMsg:
+        case Dungeon::Event::Trigger::GrantGroupReward:
+        case Dungeon::Event::Trigger::GrantDelayedGroupReward:
+        case Dungeon::Event::Trigger::GrantGroupRewardLimitedRestrictions:
+        case Dungeon::Event::Trigger::AdjustSystemInfluence:
+        case Dungeon::Event::Trigger::FacWarVictoryPointsGranted: {
+            // missions and incursions handle these
+            Notify(inst, event.eventType, room.roomID, ctx, &event);
+        } break;
+        case Dungeon::Event::Trigger::ObjectDespawn:
+        case Dungeon::Event::Trigger::EntityDespawn: {
+            for (auto itemID : targets()) {
+                ForgetEntity(inst, itemID);
+                RemoveEntity(itemID, false);
+            }
+            CheckImplicitCompletion(inst);
+        } break;
+        case Dungeon::Event::Trigger::ObjectExplode:
+        case Dungeon::Event::Trigger::EntityExplode: {
+            for (auto itemID : targets())
+                RemoveEntity(itemID, true);
+        } break;
+        case Dungeon::Event::Trigger::DropLoot: {
+            uint32 lootGroupID(event.value > 0 ? static_cast<uint32>(event.value) : event.typeID);
+            DropLoot(lootGroupID, FindWreck(ctx.entityID, ctx.pos), (ctx.entityID != 0 ? ctx.pos : room.origin), ctx.charID);
+        } break;
+        case Dungeon::Event::Trigger::SpawnItemInCargo: {
+            Client* pClient(sEntityList.FindClientByCharID(ctx.charID));
+            if ((pClient == nullptr) or (event.typeID == 0) or !pClient->IsInSpace() or (pClient->GetShip().get() == nullptr))
+                break;
+            ItemData iData(event.typeID, ctx.charID, pClient->GetShipID(), flagCargoHold, std::max<int32>(event.quantity, 1));
+            InventoryItemRef iRef(sItemFactory.SpawnItem(iData));
+            if (iRef.get() != nullptr)
+                pClient->GetShip()->AddItemByFlag(flagCargoHold, iRef, pClient);
+        } break;
+        case Dungeon::Event::Trigger::CounterAdd:       inst.counters[event.counterID] += event.value; CheckCounters(inst, roomIdx, event.counterID); break;
+        case Dungeon::Event::Trigger::CounterSubtract:  inst.counters[event.counterID] -= event.value; CheckCounters(inst, roomIdx, event.counterID); break;
+        case Dungeon::Event::Trigger::CounterMultiply:  inst.counters[event.counterID] *= event.value; CheckCounters(inst, roomIdx, event.counterID); break;
+        case Dungeon::Event::Trigger::CounterDivide: {
+            if (event.value != 0)
+                inst.counters[event.counterID] /= event.value;
+            CheckCounters(inst, roomIdx, event.counterID);
+        } break;
+        case Dungeon::Event::Trigger::CounterSet:       inst.counters[event.counterID] = event.value; CheckCounters(inst, roomIdx, event.counterID); break;
+        case Dungeon::Event::Trigger::WarpShipAwayDespawn:
+        case Dungeon::Event::Trigger::WarpShipAwayAndComeBack: {
+            for (auto itemID : targets())
+                WarpAway(itemID, (event.eventType == Dungeon::Event::Trigger::WarpShipAwayAndComeBack), inst, roomIdx);
+        } break;
+        case Dungeon::Event::Trigger::SupressAllRespawn: {
+            // dungeons never respawn anything
+        } break;
+        case Dungeon::Event::Trigger::Escalate: {
+            TryEscalate(inst, (ctx.charID != 0 ? ctx.charID : inst.lastCharID));
+        } break;
+        default: {
+            // ranged damage/healing, effect beacons (incursions), tutorials
+            if (m_unsupportedLogged.insert(event.eventType).second)
+                _log(DUNG__WARNING, "DungeonMgr::RunEvent() - event type %u is not supported (dungeon %u, event %u)",
+                        event.eventType, inst.dungeon->dungeonID, event.eventID);
+        } break;
+    }
+}
+
+void DungeonMgr::ForgetEntity(Instance& inst, uint32 itemID)
+{
+    // an entity leaves the instance without dying (despawn, warp away)
+    auto iItr = m_entityIndex.find(itemID);
+    if (iItr == m_entityIndex.end())
+        return;
+    LiveRoom& room = inst.rooms[iItr->second.second];
+    m_entityIndex.erase(iItr);
+    room.extraNPCs.erase(itemID);
+    room.extraObjects.erase(itemID);
+    room.asteroids.erase(itemID);
+    m_gates.erase(itemID);
+    for (auto oItr = room.objects.begin(); oItr != room.objects.end(); ++oItr)
+        if (oItr->second == itemID) {
+            room.objects.erase(oItr);
+            break;
+        }
+    for (auto& group : room.groups)
+        if ((group.alive.erase(itemID) > 0) and group.alive.empty())
+            group.destroyed = true;
+}
+
+void DungeonMgr::WarpAway(uint32 itemID, bool comeBack, Instance& inst, uint8 roomIdx)
+{
+    SystemEntity* pSE(m_system->GetSE(itemID));
+    if ((pSE == nullptr) or !pSE->IsNPCSE() or pSE->IsDead())
+        return;
+    NPC* pNPC(pSE->GetNPCSE());
+    GPoint home(pNPC->GetPosition());
+
+    if (comeBack) {
+        // it stays a member of its group while it is away, so the wave isn't over
+        uint32 liveGroupID(0);
+        for (auto& group : inst.rooms[roomIdx].groups)
+            if (group.alive.find(itemID) != group.alive.end())
+                liveGroupID = group.liveGroupID;
+        ReturnEntry entry;
+            entry.instanceID = inst.instanceID;
+            entry.roomIdx = roomIdx;
+            entry.typeID = pSE->GetTypeID();
+            entry.liveGroupID = liveGroupID;
+            entry.oldItemID = itemID;
+            entry.pos = home;
+        m_returns.emplace(Win32TimeNow() + (60 * EvE::Time::Second), entry);
+        m_entityIndex.erase(itemID);
+        inst.rooms[roomIdx].extraNPCs.erase(itemID);
     } else {
-        return 1;
+        ForgetEntity(inst, itemID);
+        CheckImplicitCompletion(inst);
     }
+
+    // off it goes, 1 AU away.  it is removed once out of sight
+    GPoint away(home);
+    away.MakeRandomPointOnSphere(ONE_AU_IN_METERS);
+    if (pNPC->TargetMgr() != nullptr)
+        pNPC->TargetMgr()->ClearTargets();
+    pNPC->DestinyMgr()->WarpTo(away, 0);
+    m_warpedAway[itemID] = Win32TimeNow() + (20 * EvE::Time::Second);
+}
+
+void DungeonMgr::SendMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event)
+{
+    if (!sConfig.dungeon.TriggerMessages)
+        return;
+    // everyone in the room.  a message from an empty room goes to everyone in the dungeon
+    std::set<uint32> chars(inst.rooms[roomIdx].playersInside);
+    if (chars.empty())
+        for (auto& room : inst.rooms)
+            chars.insert(room.playersInside.begin(), room.playersInside.end());
+    for (auto charID : chars) {
+        Client* pClient(sEntityList.FindClientByCharID(charID));
+        if (pClient == nullptr)
+            continue;
+        if (event.messageID != 0) {
+            // the client echoes the localized message to local in the colour of its type
+            PyTuple* payload = new PyTuple(2);
+                payload->SetItem(0, new PyInt(event.messageType));
+                payload->SetItem(1, new PyInt(event.messageID));
+            pClient->SendNotification("OnDungeonTriggerMessage", "charid", payload, false);
+        } else if (!event.messageText.empty()) {
+            pClient->SendNotifyMsg("%s", event.messageText.c_str());
+        }
+    }
+}
+
+void DungeonMgr::Notify(Instance& inst, uint16 type, uint32 roomID, const Ctx& ctx, const Dungeon::EventDef* pEvent/*nullptr*/)
+{
+    if (inst.listener == nullptr)
+        return;
+    Dungeon::DungeonEvent ev = Dungeon::DungeonEvent();
+        ev.instanceID = inst.instanceID;
+        ev.dungeonID = inst.dungeon->dungeonID;
+        ev.roomID = roomID;
+        ev.type = type;
+        ev.entityID = ctx.entityID;
+        ev.charID = ctx.charID;
+        ev.typeID = ctx.typeID;
+    if (pEvent != nullptr) {
+        if (pEvent->typeID != 0)
+            ev.typeID = pEvent->typeID;
+        ev.messageID = pEvent->messageID;
+        ev.quantity = pEvent->quantity;
+        ev.value = pEvent->value;
+    }
+    // listeners are called from Process() (they may spawn or despawn instances)
+    m_notices.emplace_back(inst.listener, ev);
+}
+
+void DungeonMgr::FlushNotices()
+{
+    while (!m_notices.empty()) {
+        std::deque<std::pair<Dungeon::DungeonListener*, Dungeon::DungeonEvent>> notices;
+        notices.swap(m_notices);
+        for (auto& cur : notices)
+            if (cur.first != nullptr)
+                cur.first->OnDungeonEvent(cur.second);
+    }
+}
+
+void DungeonMgr::CheckImplicitCompletion(Instance& inst)
+{
+    // dungeons without a completion event are done when every room-created/room-entered group was spawned and destroyed
+    if (inst.completed or inst.dungeon->hasCompletionEvent)
+        return;
+    bool any(false);
+    for (auto& room : inst.rooms)
+        for (auto& group : room.groups) {
+            if (group.def->spawnMode == Dungeon::SpawnMode::TriggerOnly)
+                continue;
+            if (!group.spawned or !group.destroyed)
+                return;
+            any = true;
+        }
+    if (any)
+        CompleteInstance(inst, inst.lastCharID);
+}
+
+void DungeonMgr::CompleteInstance(Instance& inst, uint32 charID)
+{
+    if (inst.completed)
+        return;
+    inst.completed = true;
+    inst.completedAt = Win32TimeNow();
+    if (charID != 0)
+        inst.lastCharID = charID;
+
+    _log(DUNG__INFO, "DungeonMgr::CompleteInstance() - %s (instance %u) in %s(%u) completed by %u",
+            inst.name.c_str(), inst.instanceID, m_system->GetName(), m_system->GetID(), inst.lastCharID);
+
+    Ctx ctx;
+        ctx.charID = inst.lastCharID;
+    Notify(inst, Dungeon::Engine::Completed, 0, ctx);
+
+    // automatic escalations of this dungeon
+    if ((inst.lastCharID != 0) and (inst.kind != Dungeon::Kind::Mission) and (inst.kind != Dungeon::Kind::Test))
+        TryEscalate(inst, inst.lastCharID);
+
+    // a completed site leaves the scanner now and is replaced elsewhere
+    if (inst.hasSignal) {
+        m_anomMgr->OnSiteCompleted(inst.sig);
+        inst.hasSignal = false;
+    }
+
+    if (inst.escalationID != 0)
+        OnEscalationCompleted(inst);
+}
+
+void DungeonMgr::ProcessPresence(Instance& inst, const std::vector<std::pair<uint32, GPoint>>& ships)
+{
+    uint32 instanceID(inst.instanceID);
+    for (uint8 i = 0; i < inst.rooms.size(); ++i) {
+        LiveRoom& room = inst.rooms[i];
+        std::set<uint32> inside;
+        for (auto& cur : ships)
+            if (room.origin.distance(cur.second) < BUBBLE_RADIUS_METERS)
+                inside.insert(cur.first);
+
+        for (auto charID : inside) {
+            if (room.playersInside.find(charID) != room.playersInside.end())
+                continue;
+            Ctx ctx;
+                ctx.charID = charID;
+            if (!room.entered) {
+                room.entered = true;
+                PopulateRoom(inst, i);
+                for (auto& group : room.groups)
+                    if (!group.spawned and (group.def->spawnMode == Dungeon::SpawnMode::RoomEntered))
+                        SpawnGroup(inst, i, group);
+                Notify(inst, Dungeon::Engine::RoomEntered, room.roomID, ctx);
+                FireTriggers(inst, i, Dungeon::Trigger::RoomEntered, ctx);
+                if (m_instances.find(instanceID) == m_instances.end())
+                    return;
+            }
+            OnVisitor(inst, i, charID);
+            FireTriggers(inst, i, Dungeon::Trigger::ShipsEnteredRoom, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+        }
+        bool hadPlayers(!room.playersInside.empty());
+        room.playersInside = inside;
+        if (hadPlayers and inside.empty()) {
+            Ctx ctx;
+            FireTriggers(inst, i, Dungeon::Trigger::ShipsLeftRoom, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+        }
+
+        // proximity of ships to a room object
+        for (auto& trigger : room.def->triggers) {
+            if ((trigger.triggerType != Dungeon::Trigger::ShipEnteredProximity) and (trigger.triggerType != Dungeon::Trigger::ShipLeftProximity))
+                continue;
+            auto oItr = room.objects.find(trigger.objectID);
+            SystemEntity* pSE((oItr != room.objects.end()) ? m_system->GetSE(oItr->second) : nullptr);
+            GPoint center(pSE != nullptr ? pSE->GetPosition() : room.origin);
+            std::set<uint32>& before = room.proximity[trigger.triggerID];
+            std::set<uint32> now;
+            for (auto& cur : ships)
+                if ((inside.find(cur.first) != inside.end()) and (center.distance(cur.second) <= trigger.value))
+                    now.insert(cur.first);
+            for (auto charID : now)
+                if ((before.find(charID) == before.end()) and (trigger.triggerType == Dungeon::Trigger::ShipEnteredProximity)) {
+                    Ctx ctx;
+                        ctx.charID = charID;
+                        ctx.objectID = trigger.objectID;
+                    FireTriggers(inst, i, Dungeon::Trigger::ShipEnteredProximity, ctx);
+                    if (m_instances.find(instanceID) == m_instances.end())
+                        return;
+                }
+            for (auto charID : before)
+                if ((now.find(charID) == now.end()) and (trigger.triggerType == Dungeon::Trigger::ShipLeftProximity)) {
+                    Ctx ctx;
+                        ctx.charID = charID;
+                        ctx.objectID = trigger.objectID;
+                    FireTriggers(inst, i, Dungeon::Trigger::ShipLeftProximity, ctx);
+                    if (m_instances.find(instanceID) == m_instances.end())
+                        return;
+                }
+            room.proximity[trigger.triggerID] = now;
+        }
+    }
+}
+
+void DungeonMgr::ProcessConditions(Instance& inst, uint8 roomIdx)
+{
+    LiveRoom& room = inst.rooms[roomIdx];
+    uint32 instanceID(inst.instanceID);
+    for (auto& trigger : room.def->triggers) {
+        uint16 attrID(0), maxID(0);
+        bool damage(true);
+        switch (trigger.triggerType) {
+            case Dungeon::Trigger::ShieldConditionLevel:    attrID = AttrShieldCharge; maxID = AttrShieldCapacity; damage = false; break;
+            case Dungeon::Trigger::ArmorConditionLevel:     attrID = AttrArmorDamage; maxID = AttrArmorHP; break;
+            case Dungeon::Trigger::StructureConditionLevel: attrID = AttrDamage; maxID = AttrHP; break;
+            default: continue;
+        }
+        std::vector<uint32> sources;
+        if (trigger.objectID != 0) {
+            auto oItr = room.objects.find(trigger.objectID);
+            if (oItr != room.objects.end())
+                sources.push_back(oItr->second);
+        } else if (trigger.spawnGroupID != 0) {
+            for (auto& group : room.groups)
+                if (group.def->spawnGroupID == trigger.spawnGroupID)
+                    sources.insert(sources.end(), group.alive.begin(), group.alive.end());
+        }
+        for (auto itemID : sources) {
+            SystemEntity* pSE(m_system->GetSE(itemID));
+            if ((pSE == nullptr) or pSE->IsDead())
+                continue;
+            InventoryItemRef iRef(pSE->GetSelf());
+            double max(iRef->GetAttribute(maxID).get_double());
+            if (max <= 0)
+                continue;
+            double cur(iRef->GetAttribute(attrID).get_double());
+            double fraction(damage ? 1.0 - (cur / max) : cur / max);
+            if (fraction > trigger.value)
+                continue;
+            Ctx ctx;
+                ctx.entityID = itemID;
+                ctx.typeID = pSE->GetTypeID();
+                ctx.objectID = trigger.objectID;
+                ctx.pos = pSE->GetPosition();
+            for (auto& group : room.groups)
+                if (group.alive.find(itemID) != group.alive.end())
+                    ctx.liveGroupID = group.liveGroupID;
+            FireTriggers(inst, roomIdx, trigger.triggerType, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+        }
+    }
+}
+
+void DungeonMgr::ProcessPending(PendingTrigger& pending)
+{
+    auto itr = m_instances.find(pending.instanceID);
+    if (itr == m_instances.end())
+        return;
+    Instance& inst = itr->second;
+    if (pending.roomIdx >= inst.rooms.size())
+        return;
+    uint32 instanceID(inst.instanceID);
+    const Ctx& ctx = pending.ctx;
+    LiveRoom& room = inst.rooms[pending.roomIdx];
+
+    switch (pending.triggerType) {
+        case Dungeon::Trigger::Exploding: {
+            if (ctx.entityID != 0)
+                Notify(inst, Dungeon::Engine::EntityKilled, room.roomID, ctx);
+            FireTriggers(inst, pending.roomIdx, Dungeon::Trigger::Exploding, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+            // the room is clear once every npc that spawned in it is dead
+            bool anySpawned(!room.extraNPCs.empty());
+            for (auto& group : room.groups)
+                anySpawned |= group.spawned;
+            if (anySpawned and (CountLiveNPCs(room) == 0)) {
+                FireTriggers(inst, pending.roomIdx, Dungeon::Trigger::RoomWipedOut, ctx);
+                if (m_instances.find(instanceID) == m_instances.end())
+                    return;
+            }
+            if (ctx.groupWiped)
+                CheckImplicitCompletion(inst);
+        } break;
+        case Dungeon::Trigger::Mined: {
+            // the first mining in a room is RoomMined
+            FireTriggers(inst, pending.roomIdx, Dungeon::Trigger::Mined, ctx);
+            if (m_instances.find(instanceID) == m_instances.end())
+                return;
+            FireTriggers(inst, pending.roomIdx, Dungeon::Trigger::RoomMined, ctx);
+        } break;
+        case Dungeon::Trigger::RoomMinedOut: {
+            // fired for a depleted rock:  the room is mined out when no rock of it is left
+            room.asteroids.erase(ctx.entityID);
+            m_entityIndex.erase(ctx.entityID);
+            bool left(false);
+            for (auto rockID : room.asteroids)
+                if (m_system->GetSE(rockID) != nullptr)
+                    left = true;
+            if (!left)
+                FireTriggers(inst, pending.roomIdx, Dungeon::Trigger::RoomMinedOut, ctx);
+        } break;
+        default: {
+            FireTriggers(inst, pending.roomIdx, pending.triggerType, ctx);
+        } break;
+    }
+}
+
+void DungeonMgr::Process()
+{
+    if (!m_initalized)
+        return;
+
+    int64 now(Win32TimeNow());
+
+    // triggers queued by hooks.  events may queue more (bounded, in case of a trigger loop)
+    uint16 count(0);
+    while (!m_pending.empty() and (++count < 1000)) {
+        PendingTrigger pending(m_pending.front());
+        m_pending.pop_front();
+        ProcessPending(pending);
+    }
+
+    // delayed events
+    while (!m_delayed.empty() and (m_delayed.begin()->first <= now)) {
+        PendingEvent pending(m_delayed.begin()->second);
+        m_delayed.erase(m_delayed.begin());
+        auto itr = m_instances.find(pending.instanceID);
+        if ((itr != m_instances.end()) and (pending.roomIdx < itr->second.rooms.size()))
+            RunEvent(itr->second, pending.roomIdx, *pending.event, pending.ctx);
+    }
+
+    // ships that warped away are removed out of sight
+    for (auto itr = m_warpedAway.begin(); itr != m_warpedAway.end(); ) {
+        if (itr->second > now) {
+            ++itr;
+            continue;
+        }
+        uint32 itemID(itr->first);
+        itr = m_warpedAway.erase(itr);
+        m_entityIndex.erase(itemID);
+        RemoveEntity(itemID, false);
+    }
+    // ...and some of them come back
+    while (!m_returns.empty() and (m_returns.begin()->first <= now)) {
+        ReturnEntry entry(m_returns.begin()->second);
+        m_returns.erase(m_returns.begin());
+        auto itr = m_instances.find(entry.instanceID);
+        if (itr == m_instances.end())
+            continue;
+        Instance& inst = itr->second;
+        LiveGroup* pGroup(nullptr);
+        for (auto& group : inst.rooms[entry.roomIdx].groups)
+            if (group.liveGroupID == entry.liveGroupID)
+                pGroup = &group;
+        if (pGroup != nullptr)
+            pGroup->alive.erase(entry.oldItemID);
+        uint32 itemID(SpawnNPC(inst, entry.roomIdx, entry.typeID, inst.factionID, entry.pos, true, entry.liveGroupID));
+        if (itemID == 0) {
+            if ((pGroup != nullptr) and pGroup->alive.empty()) {
+                pGroup->destroyed = true;
+                CheckImplicitCompletion(inst);
+            }
+            continue;
+        }
+        if (pGroup != nullptr) {
+            pGroup->alive.insert(itemID);
+        } else {
+            inst.rooms[entry.roomIdx].extraNPCs.insert(itemID);
+        }
+    }
+
+    // where the players are
+    std::vector<std::pair<uint32, GPoint>> ships;
+    if (!m_instances.empty()) {
+        std::vector<Client*> clients;
+        m_system->GetClientList(clients);
+        for (auto pClient : clients) {
+            ShipSE* pShip(pClient->GetShipSE());
+            if ((pShip == nullptr) or !pClient->IsInSpace() or (pShip->DestinyMgr() == nullptr) or pShip->DestinyMgr()->IsWarping())
+                continue;
+            ships.emplace_back(pClient->GetCharacterID(), pShip->GetPosition());
+        }
+    }
+
+    std::vector<uint32> despawn;
+    std::vector<uint32> ids;
+    for (auto& cur : m_instances)
+        ids.push_back(cur.first);
+    for (auto id : ids) {
+        auto itr = m_instances.find(id);
+        if (itr == m_instances.end())
+            continue;
+        ProcessPresence(itr->second, ships);
+        for (uint8 i = 0; (m_instances.find(id) != m_instances.end()) and (i < itr->second.rooms.size()); ++i) {
+            if (itr->second.rooms[i].groups.empty() and itr->second.rooms[i].objects.empty())
+                continue;
+            ProcessConditions(itr->second, i);
+            if (m_instances.find(id) != m_instances.end())
+                ProcessGates(itr->second, i);
+        }
+        itr = m_instances.find(id);
+        if (itr == m_instances.end())
+            continue;
+
+        // completed sites go a while after completion.  expired ones when nobody is there (or half an hour later anyway)
+        Instance& inst = itr->second;
+        if (inst.completed and (now >= inst.completedAt + (sConfig.dungeon.CompletedDespawn * EvE::Time::Second))) {
+            despawn.push_back(id);
+            continue;
+        }
+        if ((inst.expires > 0) and (now >= inst.expires)) {
+            bool occupied(false);
+            for (auto& room : inst.rooms)
+                occupied |= !room.playersInside.empty();
+            if (!occupied or (now >= inst.expires + (30 * EvE::Time::Minute)))
+                despawn.push_back(id);
+        }
+    }
+    for (auto id : despawn)
+        DespawnInstance(id, true);
+
+    FlushNotices();
+}
+
+/* acceleration gates */
+
+const DungeonMgr::LiveGate* DungeonMgr::GetGate(uint32 gateItemID)
+{
+    auto itr = m_gates.find(gateItemID);
+    if (itr == m_gates.end())
+        return nullptr;
+    return &itr->second;
+}
+
+bool DungeonMgr::IsGateOpen(const LiveGate& gate)
+{
+    if (!gate.open)
+        return false;
+    if ((gate.def != nullptr) and gate.def->requireClear) {
+        auto itr = m_instances.find(gate.instanceID);
+        if ((itr != m_instances.end()) and (gate.roomIdx < itr->second.rooms.size()) and (CountLiveNPCs(itr->second.rooms[gate.roomIdx]) > 0))
+            return false;
+    }
+    return true;
+}
+
+void DungeonMgr::OpenGate(uint32 gateItemID, LiveGate& gate, bool open)
+{
+    if (gate.open == open)
+        return;
+    gate.open = open;
+    gate.openUntil = (open ? Win32TimeNow() : 0);
+    ProcessGateState(gateItemID, gate);
+}
+
+void DungeonMgr::ProcessGateState(uint32 gateItemID, LiveGate& gate)
+{
+    // the gate model shows open/closed from the slim item
+    bool shown(IsGateOpen(gate));
+    if (shown == gate.shownOpen)
+        return;
+    gate.shownOpen = shown;
+    if (shown and (gate.openUntil == 0))
+        gate.openUntil = Win32TimeNow();
+    SendGateSlimUpdate(gateItemID);
+}
+
+void DungeonMgr::ProcessGates(Instance& inst, uint8 roomIdx)
+{
+    for (auto& cur : m_gates)
+        if ((cur.second.instanceID == inst.instanceID) and (cur.second.roomIdx == roomIdx))
+            ProcessGateState(cur.first, cur.second);
+}
+
+void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
+{
+    auto itr = m_gates.find(gateItemID);
+    const LiveGate* pGate((itr == m_gates.end()) ? nullptr : &itr->second);
+    const Dungeon::GateDef* pDef((pGate == nullptr) ? nullptr : pGate->def);
+
+    slim->SetItemString("dunObjectID", ((pGate != nullptr) and (pGate->objectID != 0)) ? new PyInt(pGate->objectID) : PyStatic.NewNone());
+    slim->SetItemString("dunToGateID", PyStatic.NewNone());
+    if ((pDef != nullptr) and (pDef->skillTypeID != 0)) {
+        slim->SetItemString("dunSkillTypeID", new PyInt(pDef->skillTypeID));
+        slim->SetItemString("dunSkillLevel", new PyInt(pDef->skillLevel));
+    } else {
+        slim->SetItemString("dunSkillTypeID", PyStatic.NewNone());
+        slim->SetItemString("dunSkillLevel", PyStatic.NewNone());
+    }
+    if ((pDef != nullptr) and (pDef->keyTypeID != 0)) {
+        slim->SetItemString("dunKeyTypeID", new PyInt(pDef->keyTypeID));
+        slim->SetItemString("dunKeyQuantity", new PyInt(pDef->keyQuantity));
+        slim->SetItemString("dunAmount", new PyFloat(pDef->keyQuantity));
+    } else {
+        slim->SetItemString("dunKeyTypeID", PyStatic.NewNone());
+        slim->SetItemString("dunKeyQuantity", PyStatic.NewNone());
+        slim->SetItemString("dunAmount", new PyFloat(0.0));
+    }
+    if ((pDef != nullptr) and !pDef->allowedGroups.empty()) {
+        PyList* classList = new PyList();
+        for (auto groupID : pDef->allowedGroups)
+            classList->AddItem(new PyInt(groupID));
+        slim->SetItemString("dunShipClasses", classList);
+    } else {
+        slim->SetItemString("dunShipClasses", PyStatic.NewNone());
+    }
+    slim->SetItemString("dunCloaked", new PyBool(false));
+    slim->SetItemString("dunWipeNPC", new PyBool((pDef != nullptr) and pDef->requireClear));
+    // None shows the gate's 'off' state
+    if ((pGate != nullptr) and IsGateOpen(*pGate)) {
+        slim->SetItemString("dunOpenUntil", new PyLong(pGate->openUntil != 0 ? pGate->openUntil : Win32TimeNow()));
+    } else {
+        slim->SetItemString("dunOpenUntil", PyStatic.NewNone());
+    }
+    if ((pDef != nullptr) and !pDef->musicUrl.empty()) {
+        slim->SetItemString("dunMusicUrl", new PyString(pDef->musicUrl));
+    } else {
+        slim->SetItemString("dunMusicUrl", PyStatic.NewNone());
+    }
+    // the gate points at the room it leads to
+    GVector dir(0, 0, 1);
+    if (pGate != nullptr) {
+        auto iItr = m_instances.find(pGate->instanceID);
+        if (iItr != m_instances.end()) {
+            uint8 dest(GetGateDestination(iItr->second, *pGate));
+            if ((dest != pGate->roomIdx) and (dest < iItr->second.rooms.size())) {
+                dir = GVector(iItr->second.rooms[pGate->roomIdx].origin, iItr->second.rooms[dest].origin);
+                if (dir.length() > 0)
+                    dir.normalize();
+                else
+                    dir = GVector(0, 0, 1);
+            }
+        }
+    }
+    PyList* dirList = new PyList();
+        dirList->AddItem(new PyFloat(dir.x));
+        dirList->AddItem(new PyFloat(dir.y));
+        dirList->AddItem(new PyFloat(dir.z));
+    slim->SetItemString("dunDirection", dirList);
+    slim->SetItemString("dunSpawnID", PyStatic.NewNone());
+    slim->SetItemString("dunScenarioID", PyStatic.NewNone());
+    if (pGate != nullptr) {
+        auto iItr = m_instances.find(pGate->instanceID);
+        if ((iItr != m_instances.end()) and (pGate->roomIdx < iItr->second.rooms.size()))
+            slim->SetItemString("dunRoomName", new PyString(iItr->second.rooms[pGate->roomIdx].def->roomName));
+    }
+}
+
+uint8 DungeonMgr::GetGateDestination(Instance& inst, const LiveGate& gate)
+{
+    if ((gate.def != nullptr) and (gate.def->destRoomID != 0))
+        for (uint8 i = 0; i < inst.rooms.size(); ++i)
+            if (inst.rooms[i].roomID == gate.def->destRoomID)
+                return i;
+    // the next room (the last room's gate leads back to the first)
+    if (gate.roomIdx + 1 < inst.rooms.size())
+        return gate.roomIdx + 1;
+    return 0;
+}
+
+void DungeonMgr::SendGateSlimUpdate(uint32 gateItemID)
+{
+    SystemEntity* pSE(m_system->GetSE(gateItemID));
+    if ((pSE == nullptr) or (pSE->DestinyMgr() == nullptr))
+        return;
+    PyTuple* shipData = new PyTuple(2);
+        shipData->SetItem(0, new PyLong(gateItemID));
+        shipData->SetItem(1, new PyObject("foo.SlimItem", pSE->MakeSlimItem()));
+    PyTuple* sItem = new PyTuple(2);
+        sItem->SetItem(0, new PyString("OnSlimItemChange"));
+        sItem->SetItem(1, shipData);
+    pSE->DestinyMgr()->SendSingleDestinyUpdate(&sItem);   // consumed
+}
+
+/* escalations */
+
+void DungeonMgr::OnVisitor(Instance& inst, uint8 roomIdx, uint32 charID)
+{
+    inst.visitors.insert(charID);
+}
+
+void DungeonMgr::TryEscalate(Instance& inst, uint32 charID)
+{
+}
+
+void DungeonMgr::LoadEscalations()
+{
+}
+
+void DungeonMgr::OnEscalationCompleted(Instance& inst)
+{
+}
+
+void DungeonMgr::SpawnEscalation(uint32 escalationInstanceID)
+{
+}
+
+uint32 DungeonMgr::GetEscalationInstance(uint32 escalationInstanceID)
+{
+    for (auto& cur : m_instances)
+        if (cur.second.escalationID == escalationInstanceID)
+            return cur.first;
+    return 0;
+}
+
+bool DungeonMgr::GetInstanceWarpIn(uint32 escalationInstanceID, uint32 charID, GPoint& into)
+{
+    for (auto& cur : m_instances)
+        if ((cur.second.escalationID == escalationInstanceID) and (cur.second.ownerID == charID) and !cur.second.rooms.empty()) {
+            into = cur.second.rooms[0].origin;
+            return true;
+        }
+    return false;
 }

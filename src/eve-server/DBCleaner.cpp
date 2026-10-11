@@ -71,4 +71,7 @@ void DBCleaner::CleanDungeonEntities() {
 
     sDatabase.RunQuery(err, "DELETE FROM entity WHERE "
     "customInfo LIKE '%%livedungeon%%'");
+
+    // dungeon sites (everything but wormholes) are made again when their system boots
+    sDatabase.RunQuery(err, "DELETE FROM sysSignatures WHERE dungeonType <> 6");
 }

@@ -10,6 +10,8 @@
 #ifndef _EVEMU_SYSTEM_DUNGEONMGR_H
 #define _EVEMU_SYSTEM_DUNGEONMGR_H
 
+#include <deque>
+#include <set>
 #include <unordered_map>
 #include "EVE_Dungeon.h"
 #include "system/SystemManager.h"
@@ -69,16 +71,74 @@ private:
 #define sDunDataMgr \
 ( DungeonDataMgr::get() )
 
+class AnomalyMgr;
+class SpawnMgr;
+class EVEServiceManager;
+class Client;
+class Damage;
+class ShipSE;
+
+namespace Dungeon {
+    // engine events for listeners.  above the client's trigger event values, which are passed through as they are
+    namespace Engine {
+        enum {
+            Completed       = 1001, // the dungeon was completed (charID did it)
+            Despawned       = 1002, // the instance is gone.  the listener is never called again
+            EntityKilled    = 1003, // an npc or object of the instance was destroyed (entityID, typeID, charID = killer)
+            RoomEntered     = 1004  // the first player entered a room (roomID, charID)
+        };
+    }
+
+    // what to spawn (DungeonMgr::SpawnInstance)
+    struct SpawnParams {
+        uint32 dungeonID = 0;           // 0 = DungeonDataMgr::PickDungeon(archetype, factionID, system true sec)
+        uint8  archetype = 0;           // Type::*  (for the pick, and the signature type of anomalies/signatures)
+        uint32 factionID = 0;           // npc faction.  0 = the dungeon's faction, else the region's pirates, else rogue drones
+        uint8  kind = Kind::Anomaly;    // Kind::*
+        bool   usePosition = false;     // else a random site position in the system
+        GPoint position = GPoint(0, 0, 0);
+        uint32 ownerID = 0;             // private owner (mission, escalation):  charID
+        uint32 escalationID = 0;        // chrEscalations.instanceID of an escalation site
+        uint32 lifetimeSec = 0;         // 0 = the dungeon's lifetimeHours, else the config default of its kind (0 there = forever)
+        class DungeonListener* listener = nullptr;  // not owned.  see ClearListener()
+    };
+
+    // what happened in an instance
+    struct DungeonEvent {
+        uint32 instanceID;
+        uint32 dungeonID;
+        uint32 roomID;
+        uint16 type;        // Engine::* or a passed-through Event::Trigger::* (MissionCompletion, MissionFailure, AgentTalkTo,
+                            //   AgentMsg, GrantGroupReward, GrantDelayedGroupReward, GrantGroupRewardLimitedRestrictions,
+                            //   AdjustSystemInfluence, FacWarVictoryPointsGranted)
+        uint32 entityID;
+        uint32 charID;
+        uint32 typeID;
+        uint32 messageID;
+        int32 quantity;
+        double value;
+    };
+
+    /* missions (F12) and incursions (F25) get their instance's events through this.
+     *  the listener must call DungeonMgr::ClearListener() (or DespawnInstance()) before it is destroyed
+     */
+    class DungeonListener {
+    public:
+        virtual ~DungeonListener()                      { }
+        virtual void OnDungeonEvent(const DungeonEvent& ev) = 0;
+    };
+}
+
 /*  this class is in charge of creating/destroying and maintaining
  * dungeons in a system.
  *
  *  a new iteration of this class is created for each system as that system is booted.
+ *
+ *  an instance is one spawned dungeon:  its rooms (room 0 at the site, the others 1/3 AU apart, reached through
+ *   acceleration gates), their objects, npc groups (waves), triggers and events, gates and counters.
+ *  all trigger evaluation runs in Process() (once a second), never inside damage/kill callbacks,
+ *   so events may freely create and remove entities.
  */
-
-class AnomalyMgr;
-class SpawnMgr;
-class EVEServiceManager;
-
 class DungeonMgr {
 public:
     DungeonMgr(SystemManager *system, EVEServiceManager& svc);
@@ -86,42 +146,205 @@ public:
 
     bool Init(AnomalyMgr* anomMgr, SpawnMgr* spawnMgr);
     void Process();
-    // system unload:  removes every live dungeon of this system
+    // system unload:  removes every live dungeon of this system (escalations stay in the db and come back on the next load)
     void Close();
 
+    /* instances */
+    // spawns a dungeon.  returns the instanceID (signature itemID for anomalies/signatures), 0 on failure.
+    //  anomalies and signatures fill sigOut (item, bubble, name, owner) for AnomalyMgr
+    uint32 SpawnInstance(const Dungeon::SpawnParams& params, CosmicSignature* sigOut = nullptr);
+    // AnomalyMgr / dungeon editor wrapper:  dungeon of sig.dungeonType (or dungeonID) at sig.position.  true on success
     bool MakeDungeon(CosmicSignature& sig, uint32 dungeonID = 0);
+    // removes the instance and all its entities (wrecks stay).  notifyAnomMgr: drop its scanner signal and queue a replacement
+    void DespawnInstance(uint32 instanceID, bool notifyAnomMgr = true);
+    // forget this listener in every instance (call before destroying it)
+    void ClearListener(Dungeon::DungeonListener* pListener);
 
-    // warp-in point of a dungeon instance (escalation sites, CmdWarpToStuff 'epinstance').  false if it isn't here or isn't charID's
-    bool GetInstanceWarpIn(uint32 instanceID, uint32 charID, GPoint& into);
+    /* queries */
+    bool IsDungeonEntity(uint32 itemID)                 { return (m_entityIndex.find(itemID) != m_entityIndex.end()); }
+    uint32 GetInstanceOf(uint32 itemID);
+    // point is in a room of a live instance
+    bool IsInDungeon(const GPoint& pos);
+    // point is in deadspace:  any room past the first, or any room of a signature/escalation/mission site
+    bool IsDeadspace(const GPoint& pos);
+    // warp-in point of an escalation site (CmdWarpToStuff 'epinstance').  false if it isn't here or isn't charID's
+    bool GetInstanceWarpIn(uint32 escalationInstanceID, uint32 charID, GPoint& into);
+
+    /* hooks (SystemEntity::Destroy, SystemEntity::ApplyDamage, ShipSE::Killed, hacking/salvage/containers/missions) */
+    void OnEntityDestroyed(SystemEntity* pSE, Damage& d);
+    void OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker);
+    void OnPlayerKilled(ShipSE* pShip, uint32 charID);
+    // Dungeon::Trigger::HackingSuccess..ArchaeologyFailure (11-16), ItemPlacedInMissionContainer (23),
+    //  ItemRemovedFromSpawnContainer (32), ItemInCargo (33) on the dungeon object itemID (typeID for item triggers)
+    void OnObjectEvent(uint32 itemID, uint16 triggerType, uint32 charID, uint32 typeID = 0);
+
+    /* acceleration gates */
+    struct LiveGate {
+        uint32 instanceID;
+        uint8 roomIdx;
+        uint32 objectID;
+        const Dungeon::GateDef* def;    // nullptr = plain open gate to the next room
+        bool open;          // not locked (ActivateGate events open locked gates)
+        int64 openUntil;    // FILETIME it opened (the model's 'on' curve starts there)
+        bool shownOpen;     // what the slim item shows (open and, for requireClear gates, no npcs left)
+    };
+    const LiveGate* GetGate(uint32 gateItemID);
+    // keeper.ActivateAccelerationGate.  throws the client's errors
+    void ActivateGate(Client* pClient, uint32 gateItemID);
+    // the dun* entries of an acceleration gate's slim item
+    void MakeGateSlim(uint32 gateItemID, PyDict* slim);
+
+    /* escalations */
+    // spawns the escalation site of this chrEscalations row (its system must be this one)
+    void SpawnEscalation(uint32 escalationInstanceID);
+    // the escalation's live instance (0 = not spawned here)
+    uint32 GetEscalationInstance(uint32 escalationInstanceID);
 
 protected:
     ManagerDB m_db;
 
-    void CreateDeco(uint32 templateID, CosmicSignature& sig);
-
-    /* we do not own any of these */
 private:
+    struct Ctx {
+        uint32 entityID = 0;        // item that caused it (npc, object, ship)
+        uint32 objectID = 0;        // dunRoomObjects.objectID of that item
+        uint32 liveGroupID = 0;     // live group of that npc
+        uint32 charID = 0;
+        uint32 typeID = 0;
+        bool groupWiped = false;    // Exploding:  the npc's whole group is dead
+        GPoint pos = GPoint(0, 0, 0);
+    };
+    struct LiveGroup {
+        uint32 liveGroupID;
+        const Dungeon::SpawnGroupDef* def;
+        std::set<uint32> alive;
+        bool spawned = false;
+        bool destroyed = false;
+    };
+    struct LiveRoom {
+        uint32 roomID;
+        const Dungeon::Room* def;
+        GPoint origin;
+        uint32 beltID = 0;                          // temp belt of the room's asteroids
+        bool entered = false;
+        bool populated = false;                     // its spawnMode 0 groups were spawned
+        std::map<uint32, uint32> objects;           // objectID -> itemID
+        std::set<uint32> asteroids;
+        std::set<uint32> extraNPCs;                 // npcs placed in the room and from SpawnGuardObject/SpawnShip events
+        std::set<uint32> extraObjects;              // objects from SpawnGuardObject events
+        std::vector<LiveGroup> groups;
+        std::set<uint32> firedTriggers;
+        std::set<uint32> playersInside;             // charIDs
+        std::map<uint32, std::set<uint32>> proximity;   // triggerID -> charIDs inside its range
+        std::set<std::pair<uint32, uint32>> conditionFired;   // (triggerID, itemID)
+    };
+    struct Instance {
+        uint32 instanceID = 0;
+        std::shared_ptr<const Dungeon::Dungeon> dungeon;
+        uint32 factionID = 0;
+        uint8 kind = 0;
+        uint32 ownerID = 0;
+        uint32 escalationID = 0;
+        std::string name;
+        std::vector<LiveRoom> rooms;
+        std::map<uint32, double> counters;
+        int64 created = 0;          // FILETIME
+        int64 expires = 0;          // FILETIME, 0 = never
+        int64 completedAt = 0;
+        bool completed = false;
+        bool hasAttackTriggers = false;
+        uint32 lastCharID = 0;
+        Dungeon::DungeonListener* listener = nullptr;
+        CosmicSignature sig;
+        bool hasSignal = false;
+        std::set<uint32> visitors;  // charIDs who entered (entered-notifications sent)
+    };
+    struct PendingTrigger {
+        uint32 instanceID;
+        uint8 roomIdx;
+        uint16 triggerType;
+        Ctx ctx;
+    };
+    struct ReturnEntry {
+        uint32 instanceID;
+        uint8 roomIdx;
+        uint32 typeID;
+        uint32 liveGroupID;
+        uint32 oldItemID;
+        GPoint pos;
+    };
+    struct PendingEvent {
+        uint32 instanceID;
+        uint8 roomIdx;
+        const Dungeon::EventDef* event;
+        Ctx ctx;
+    };
+
+    // instance building
+    uint32 ResolveFaction(const Dungeon::SpawnParams& params, const Dungeon::Dungeon& dungeon);
+    GPoint NextRoomOrigin(const GPoint& from);
+    bool IsNPCType(uint32 typeID);
+    uint32 SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius);
+    void PopulateRoom(Instance& inst, uint8 roomIdx);
+    void SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group);
+    uint32 SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID);
+    LiveGroup* FindGroup(Instance& inst, uint32 spawnGroupID, uint8& roomIdx);
+    void Index(uint32 itemID, uint32 instanceID, uint8 roomIdx)  { m_entityIndex[itemID] = std::make_pair(instanceID, roomIdx); }
+    // an entity leaves the instance without dying
+    void ForgetEntity(Instance& inst, uint32 itemID);
+
+    // triggers and events
+    void QueueTrigger(uint32 instanceID, uint8 roomIdx, uint16 triggerType, const Ctx& ctx);
+    void FireTriggers(Instance& inst, uint8 roomIdx, uint16 triggerType, const Ctx& ctx);
+    void RunEvent(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event, const Ctx& ctx);
+    void CheckCounters(Instance& inst, uint8 roomIdx, uint32 counterID);
+    void ProcessPending(PendingTrigger& pending);
+    void ProcessPresence(Instance& inst, const std::vector<std::pair<uint32, GPoint>>& ships);
+    void ProcessConditions(Instance& inst, uint8 roomIdx);
+    void ProcessGates(Instance& inst, uint8 roomIdx);
+    void FlushNotices();
+    void CheckImplicitCompletion(Instance& inst);
+    void CompleteInstance(Instance& inst, uint32 charID);
+    void SendMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event);
+    void Notify(Instance& inst, uint16 type, uint32 roomID, const Ctx& ctx, const Dungeon::EventDef* pEvent = nullptr);
+    void DropLoot(uint32 lootGroupID, uint32 wreckID, const GPoint& pos, uint32 ownerID);
+    uint32 FindWreck(uint32 deadItemID, const GPoint& pos);
+
+    // entity removal
+    void RemoveEntity(uint32 itemID, bool explode);
+    void WarpAway(uint32 itemID, bool comeBack, Instance& inst, uint8 roomIdx);
+    uint32 CountLiveNPCs(const LiveRoom& room);
+
+    // gates
+    void SendGateSlimUpdate(uint32 gateItemID);
+    void OpenGate(uint32 gateItemID, LiveGate& gate, bool open);
+    void ProcessGateState(uint32 gateItemID, LiveGate& gate);
+    bool IsGateOpen(const LiveGate& gate);
+    uint8 GetGateDestination(Instance& inst, const LiveGate& gate);
+
+    // escalations
+    void TryEscalate(Instance& inst, uint32 charID);
+    void LoadEscalations();
+    void OnVisitor(Instance& inst, uint8 roomIdx, uint32 charID);
+    void OnEscalationCompleted(Instance& inst);
+
     bool m_initalized;
 
+    /* we do not own any of these */
     AnomalyMgr* m_anomMgr;
     SpawnMgr* m_spawnMgr;
     SystemManager* m_system;
     EVEServiceManager& m_services;
 
-    int8 GetFaction(uint32 factionID);
-    int8 GetRandLevel();
-
-    // live dungeons in this system (anomaly itemID -> rooms)
-    struct LiveRoom {
-        GPoint position;
-        std::vector<uint32> items;
-    };
-    struct LiveDungeon {
-        uint32 systemID;
-        uint32 anomalyID;
-        std::map<uint16, LiveRoom> rooms;
-    };
-    std::map<uint32, LiveDungeon> m_dungeonList; // This holds all live dungeons in the current system
+    std::map<uint32, Instance> m_instances;
+    std::map<uint32, std::pair<uint32, uint8>> m_entityIndex;  // itemID -> (instanceID, roomIdx):  npcs, objects, asteroids
+    std::map<uint32, LiveGate> m_gates;                         // gate itemID ->
+    std::deque<PendingTrigger> m_pending;
+    std::multimap<int64, PendingEvent> m_delayed;               // due time (FILETIME) ->
+    std::multimap<int64, ReturnEntry> m_returns;                // WarpShipAwayAndComeBack:  due time ->
+    std::map<uint32, int64> m_warpedAway;                       // npc itemID -> removal time (WarpShipAway*)
+    std::deque<std::pair<Dungeon::DungeonListener*, Dungeon::DungeonEvent>> m_notices;   // listener calls, made at the end of Process()
+    std::set<uint16> m_unsupportedLogged;                       // trigger/event types already warned about
+    uint32 m_nextLiveGroupID;
 };
 
 #endif  // _EVEMU_SYSTEM_DUNGEONMGR_H

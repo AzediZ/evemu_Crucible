@@ -333,14 +333,25 @@ void ManagerDB::GetMoonResouces(DBQueryResult& res)
 void ManagerDB::SaveAnomaly(CosmicSignature& sig)
 {// sysSignatures (sigID,sigItemID,dungeonType,sigName,systemID,sigTypeID,sigGroupID,scanGroupID,scanAttributeID,x,y,z)
     DBerror err;
+    std::string sigID, sigName;
+    sDatabase.DoEscapeString(sigID, sig.sigID);
+    sDatabase.DoEscapeString(sigName, sig.sigName);
     if (!sDatabase.RunQuery(err,
         "INSERT INTO sysSignatures"
         " (sigID,sigItemID,dungeonType,sigName,systemID,sigTypeID,sigGroupID,scanGroupID,scanAttributeID,x,y,z)"
-        " VALUES ('%s', %u, %u, '%s', %u, %u, %u, %u, %u, %f, %f, %f)", \
-            sig.sigID.c_str(), sig.sigItemID, sig.dungeonType, sig.sigName.c_str(), sig.systemID, sig.sigTypeID, sig.sigGroupID, \
+        " VALUES ('%s', %u, %u, '%s', %u, %u, %u, %u, %u, %f, %f, %f)",
+            sigID.c_str(), sig.sigItemID, sig.dungeonType, sigName.c_str(), sig.systemID, sig.sigTypeID, sig.sigGroupID,
             sig.scanGroupID, sig.scanAttributeID, sig.position.x, sig.position.y, sig.position.z )) {
         _log(DATABASE__ERROR, "SaveAnomaly - unable to save dungeon");
         }
+}
+
+void ManagerDB::DeleteAnomaly(const std::string& sigID)
+{
+    DBerror err;
+    std::string escaped;
+    sDatabase.DoEscapeString(escaped, sigID);
+    sDatabase.RunQuery(err, "DELETE FROM sysSignatures WHERE sigID = '%s'", escaped.c_str());
 }
 
 void ManagerDB::GetAnomalyList(DBQueryResult& res)

@@ -247,6 +247,18 @@ boolean can use either 0/1 OR true/false.
         <Complex>4</Complex><!-- integer  -1 to disable.  max 128.  default 4 -->
     </exploring>
 
+    <dungeon><!-- dungeons: combat anomalies, signature sites, acceleration gates and escalations (needs cosmic DungeonEnabled) -->
+        <AnomalyLifetime>0</AnomalyLifetime><!-- hours an untouched combat anomaly lives.  0 = until it is completed (Crucible).  default 0 -->
+        <SignatureLifetime>72</SignatureLifetime><!-- hours an untouched signature site lives (+-25%).  0 = until completed.  default 72 -->
+        <CompletedDespawn>120</CompletedDespawn><!-- seconds after completion before the site's objects and npcs are removed.  default 120 -->
+        <RespawnDelay>300</RespawnDelay><!-- seconds before a completed or expired site is replaced elsewhere in its system.  default 300 -->
+        <EscalationChance>1.0</EscalationChance><!-- float  multiplier on the escalation chances of dunEscalations.  default 1.0 -->
+        <EscalationExpiry>48</EscalationExpiry><!-- hours an escalation stays in the journal (client dunExpirationDelay).  default 48 -->
+        <EscalationShareFleet>false</EscalationShareFleet><!-- bool  fleet members in the system also get the escalation (Crucible: only the pilot who triggered it).  default false -->
+        <GateKeysRequired>true</GateKeysRequired><!-- bool  acceleration gate keys are required (and consumed where the gate says so).  default true -->
+        <TriggerMessages>true</TriggerMessages><!-- bool  send dungeon trigger messages (wave warnings, story text) to local.  default true -->
+    </dungeon>
+
     <testing><!-- switches for various incomplete/testing code sections -->
         <EnableDrones>true</EnableDrones><!-- bool -->
     </testing>

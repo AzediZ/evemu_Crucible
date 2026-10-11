@@ -54,6 +54,13 @@ class AnomalyMgr
 
     void RegisterExitWH(CosmicSignature &sig);
 
+    // a random site position in this system (inside its edge, off other grids)
+    GPoint GetSitePosition();
+    // a dungeon site was completed or expired:  off the scanner, and a replacement is queued
+    void OnSiteCompleted(const CosmicSignature& sig);
+    // infrastructure hub upgrade levels (SovereigntyDataMgr):  pirate detection, survey networks, ore prospecting
+    void SetUpgradeBonus(uint8 combatLevel, uint8 exploreLevel, uint8 oreLevel = 0);
+
 protected:
     ManagerDB m_mdb;
     ServiceDB m_sdb;
@@ -91,6 +98,11 @@ private:
     uint16 m_Anoms; // this counts signals added thru sysmgr also
 
     std::vector<uint8> m_typeList; // List of pregenerated signature types for this system
+    std::multimap<int64, uint8> m_respawnQueue;     // due time -> site type replacing a completed one
+    std::map<uint8, uint8> m_skip;                  // site type -> completed sites not to replace (upgrade went offline)
+    uint8 m_bonusCombat;    // extra sites from sov upgrades
+    uint8 m_bonusExplore;
+    uint8 m_bonusOre;
 
     std::map<uint32, CosmicSignature> m_sigByItemID;            // signatures in system - need probes to scan down
     std::map<uint32, CosmicSignature> m_anomByItemID;           // anomalies in system - no probes needed

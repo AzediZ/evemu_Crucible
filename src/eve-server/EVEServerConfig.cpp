@@ -202,6 +202,17 @@ EVEServerConfig::EVEServerConfig()
     exploring.Unrated = 8;
     exploring.Complex = 4;
 
+    // dungeon
+    dungeon.AnomalyLifetime = 0;
+    dungeon.SignatureLifetime = 72;
+    dungeon.CompletedDespawn = 120;
+    dungeon.RespawnDelay = 300;
+    dungeon.EscalationChance = 1.0f;
+    dungeon.EscalationExpiry = 48;
+    dungeon.EscalationShareFleet = false;
+    dungeon.GateKeysRequired = true;
+    dungeon.TriggerMessages = true;
+
     // standings
     //  - mission
     standings.MissionBonus = 1.0;
@@ -327,6 +338,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "npc",         &EVEServerConfig::ProcessNPC );
     AddMemberParser( "cosmic",      &EVEServerConfig::ProcessCosmic );
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
+    AddMemberParser( "dungeon",     &EVEServerConfig::ProcessDungeon );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
@@ -352,6 +364,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "npc" );
     RemoveParser( "cosmic" );
     RemoveParser( "exploring" );
+    RemoveParser( "dungeon" );
     RemoveParser( "crime" );
     RemoveParser( "sov" );
     RemoveParser( "standings" );
@@ -790,6 +803,33 @@ bool EVEServerConfig::ProcessCosmic( const TiXmlElement* ele )
     RemoveParser( "WormHoleEnabled" );
     RemoveParser( "CiviliansEnabled" );
     RemoveParser( "BumpEnabled" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessDungeon( const TiXmlElement* ele )
+{
+    AddValueParser( "AnomalyLifetime",      dungeon.AnomalyLifetime );
+    AddValueParser( "SignatureLifetime",    dungeon.SignatureLifetime );
+    AddValueParser( "CompletedDespawn",     dungeon.CompletedDespawn );
+    AddValueParser( "RespawnDelay",         dungeon.RespawnDelay );
+    AddValueParser( "EscalationChance",     dungeon.EscalationChance );
+    AddValueParser( "EscalationExpiry",     dungeon.EscalationExpiry );
+    AddValueParser( "EscalationShareFleet", dungeon.EscalationShareFleet );
+    AddValueParser( "GateKeysRequired",     dungeon.GateKeysRequired );
+    AddValueParser( "TriggerMessages",      dungeon.TriggerMessages );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "AnomalyLifetime" );
+    RemoveParser( "SignatureLifetime" );
+    RemoveParser( "CompletedDespawn" );
+    RemoveParser( "RespawnDelay" );
+    RemoveParser( "EscalationChance" );
+    RemoveParser( "EscalationExpiry" );
+    RemoveParser( "EscalationShareFleet" );
+    RemoveParser( "GateKeysRequired" );
+    RemoveParser( "TriggerMessages" );
 
     return result;
 }

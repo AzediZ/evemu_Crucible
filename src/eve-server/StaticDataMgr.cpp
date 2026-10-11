@@ -868,8 +868,9 @@ uint16 StaticDataMgr::GetRandRatType(uint8 sClass, uint16 groupID)
                 break;
             }
     }
+    // MakeRandomInt() can return its upper bound
     if (typeVec.size())
-        return typeVec.at(MakeRandomInt(0, typeVec.size()));
+        return typeVec.at(std::min<size_t>(MakeRandomInt(0, typeVec.size()), typeVec.size() - 1));
 
     _log(DATA__WARNING, "Failed to get random rat for sClass %u and groupID %u", sClass, groupID);
     return 0;
