@@ -345,10 +345,10 @@ public:
     int64 GetLastDScan()                                { return m_lastDScan; }
     void SetLastDScan(int64 time)                       { m_lastDScan = time; }
 
-    //  trade
-    void SetTradeSession(TradeSession* ts)              { m_TS = ts; }
-    void ClearTradeSession()                            { m_TS = nullptr; }
-    TradeSession* GetTradeSession()                     { return m_TS; }
+    //  trade windows (trade container IDs) this client is part of
+    void AddTradeSession(uint32 containerID)            { m_tradeSessions.insert(containerID); }
+    void RemoveTradeSession(uint32 containerID)         { m_tradeSessions.erase(containerID); }
+    const std::set<uint32>& GetTradeSessions() const    { return m_tradeSessions; }
 
     // character notification messages
     void CharNowInStation();
@@ -384,7 +384,7 @@ protected:
     Scan* m_scan;
     int64 m_lastDScan;
     ShipSE* pShipSE;
-    TradeSession* m_TS;
+    std::set<uint32> m_tradeSessions;
     ClientSession* pSession;
     SystemManager* m_system;    //we do not own this
 

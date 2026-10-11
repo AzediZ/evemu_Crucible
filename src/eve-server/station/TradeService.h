@@ -27,11 +27,41 @@
 #ifndef __TRADE_SERVICE_H_INCL__
 #define __TRADE_SERVICE_H_INCL__
 
+#include <memory>
+#include <tuple>
+
 #include "services/BoundService.h"
 #include "packets/Trade.h"
 
 class Client;
 class TradeBound;
+
+/* one trade window between two docked characters (pvptradesvc).  a client can have several at once (one per pair).
+ *  offered items keep their owner and sit in the trade container until the trade ends */
+class TradeSession
+{
+public:
+    struct TradeItem {
+        uint32 ownerID;
+        uint32 locationID;      // where it came from, for a cancelled trade
+        EVEItemFlags flag;
+    };
+
+    uint32 containerID;
+    uint32 stationID;
+    uint32 myID;                // the initiator ("traders[0]")
+    uint32 herID;
+    uint32 warID;               // CEO surrender trade (IsCEOTrade)
+    bool myState;
+    bool herState;
+    double myMoney;
+    double herMoney;
+    int64 fileTime;             // moniker 'when'
+    std::map<uint32, TradeItem> items;  // itemID/data
+
+    bool HasTrader(uint32 charID) const                  { return ((charID == myID) or (charID == herID)); }
+    uint32 Other(uint32 charID) const                   { return ((charID == myID) ? herID : myID); }
+};
 
 class TradeService : public BindableService <TradeService, TradeBound>
 {
@@ -42,65 +72,27 @@ public:
 
     uint32 GetTradeSessionID();
 
-    void RemoveActiveSession(uint32 myID);
-
-    void CancelTrade(Client* pClient);
-    void TransferContainerContents(SystemManager* pSysMgr, InventoryItemRef itemRef, uint32 newOwnerID);
-
-    struct ActiveSession {
-        uint32 myID;
-        uint32 herID;
-        uint32 contID;
-        TradeSession* ourTS;
-    };
-    std::map<uint32, ActiveSession> m_activeSessions;      // mapped as myID, ActiveSession
+    std::shared_ptr<TradeSession> GetSession(uint32 containerID);
+    // items back where they came from, ('Cancel', containerID) to both, session closed
+    void CancelTrade(std::shared_ptr<TradeSession> pSession);
+    // every trade of this client (logout, undock)
+    void CancelAllTrades(Client* pClient);
+    // forgets a session (maps and both clients)
+    void CloseSession(std::shared_ptr<TradeSession> pSession);
+    // OnTrade(payload) to both traders that are online.  payload is consumed
+    void SendOnTrade(std::shared_ptr<TradeSession> pSession, PyTuple* payload);
+    void SendStateToggle(std::shared_ptr<TradeSession> pSession);
+    void TransferContainerContents(InventoryItemRef itemRef, uint32 newOwnerID);
 
 protected:
     BoundDispatcher* BindObject(Client* client, PyRep* bindParameters) override;
 
-    PyResult InitiateTrade(PyCallArgs& call, PyInt* characterID);
+    // client:  InitiateTrade(charID) or InitiateTrade(charID, warID) (CEO surrender trade)
+    PyResult InitiateTrade(PyCallArgs& call, PyInt* characterID, std::optional<PyRep*> warID);
 
     uint32 m_SessionID;
-};
-
-class TradeSession
-{
-    friend class TradeBound;
-    friend class TradeService;
-
-public:
-    TradeSession() {}
-    ~TradeSession() {}
-
-    struct Session {
-        uint32 containerID;
-        uint32 stationID;
-        uint32 myID;
-        uint32 herID;
-        bool myState;
-        bool herState;
-        double myMoney;
-        double herMoney;
-        int64 fileTime;
-    };
-
-    struct TradeItems {
-        uint32 itemID;
-        uint32 typeID;
-        uint32 ownerID;
-        uint32 locationID;
-        uint32 flagID;
-        uint32 quantity;
-        uint32 groupID;
-        uint32 categoryID;
-        bool singleton;
-        std::string customInfo;
-    };
-
-    Session m_tradeSession;         // 2 party trade session of this bound object
-
-    std::list<TradeItems> m_tradelist;    //list of items for this trade session
-
+    std::map<uint32, std::shared_ptr<TradeSession>> m_sessions;     // containerID/session
+    std::map<std::tuple<uint32, uint32, int64>, uint32> m_byBind;   // (myID, herID, when)/containerID
 };
 
 class TradeBound : public EVEBoundObject <TradeBound>
@@ -108,24 +100,28 @@ class TradeBound : public EVEBoundObject <TradeBound>
     friend TradeService;
 
 public:
-    TradeBound(EVEServiceManager& mgr, TradeService& parent);
-
-    void ExchangeItems(Client* pClient, Client* pOther, TradeSession* pTSes);
-    void CancelTrade(Client* pClient, Client* pOther, TradeSession* pTSes);
+    TradeBound(EVEServiceManager& mgr, TradeService& parent, uint32 containerID);
 
 protected:
     TradeService* m_TSvc;                // get registered TradeService object
+    uint32 m_containerID;
 
-    PyResult OfferMoney(PyCallArgs& call, PyFloat* amount);
+    // the session, if it still exists and the caller is one of its traders
+    std::shared_ptr<TradeSession> GetSession(Client* pClient);
+    // validates and moves one item into the trade.  qty 0 = the whole stack
+    void AddItem(Client* pClient, std::shared_ptr<TradeSession> pSession, uint32 itemID, int32 qty);
+    // trade completed.  perform item and money exchange
+    void ExchangeItems(std::shared_ptr<TradeSession> pSession);
+
+    PyResult OfferMoney(PyCallArgs& call, PyRep* amount);
     PyResult Abort(PyCallArgs& call);
-    PyResult ToggleAccept(PyCallArgs& call, PyBool* newAccept);
+    PyResult ToggleAccept(PyCallArgs& call, PyRep* newAccept);
     PyResult GetItemID(PyCallArgs& call);
-    PyResult Add(PyCallArgs& call, PyInt* itemID, PyInt* containerID);
-    PyResult MultiAdd(PyCallArgs& call, PyList* itemIDs, PyInt* containerID);
+    PyResult Add(PyCallArgs& call, PyInt* itemID, PyRep* containerID);
+    PyResult MultiAdd(PyCallArgs& call, PyList* itemIDs, PyRep* containerID);
     PyResult GetItem(PyCallArgs& call);
     PyResult IsCEOTrade(PyCallArgs& call);
     PyResult List(PyCallArgs& call);
-    PyResult InitiateTrade(PyCallArgs& call, PyInt* characterID);
 };
 
 #endif//__TRADE_SERVICE_H_INCL__

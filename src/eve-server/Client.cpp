@@ -70,7 +70,6 @@ static const uint32 PING_INTERVAL_MS = 600000; //10m
 
 Client::Client(EVEServiceManager& services, EVETCPConnection** con)
 : EVEClientSession(con),
-  m_TS(nullptr),
   m_char(CharacterRef(nullptr)),
   m_scan(nullptr),
   m_lastDScan(0),
@@ -177,9 +176,8 @@ Client::~Client() {
         if (!sConsole.IsShutdown()) {
             OnlineStatusService::NotifyStatusChange(m_char->itemID(), false);
             if (IsDocked()) {
-                if (GetTradeSession()) {
-                    this->services().Lookup <TradeService>("trademgr")->CancelTrade(this);
-                }
+                if (!m_tradeSessions.empty())
+                    this->services().Lookup <TradeService>("trademgr")->CancelAllTrades(this);
                 CharNoLongerInStation();
                 // remove char from station
                 sEntityList.GetStationByID(m_locationID)->RemoveItem(m_char);
@@ -211,7 +209,6 @@ Client::~Client() {
 
     m_system = nullptr; // DO NOT delete m_system here
 
-    SafeDelete(m_TS);
     ReleaseScan();
     SafeDelete(pShipSE);
     SafeDelete(pSession);
@@ -1030,9 +1027,8 @@ void Client::DockToStation() {
 }
 
 void Client::UndockFromStation() {
-    if (m_TS != nullptr) {
-        this->services().Lookup <TradeService>("trademgr")->CancelTrade(this);
-    }
+    if (!m_tradeSessions.empty())
+        this->services().Lookup <TradeService>("trademgr")->CancelAllTrades(this);
 
     m_invul = true;
     m_undock = true;

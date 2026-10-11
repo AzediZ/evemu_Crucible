@@ -33,16 +33,46 @@
 
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
+#include "market/MarketMgr.h"
+#include "ship/ShipDB.h"
+#include "station/StationDataMgr.h"
 #include "station/TradeService.h"
 #include "system/SystemManager.h"
 #include "system/Container.h"
 #include "services/ServiceManager.h"
 
-TradeBound::TradeBound (EVEServiceManager& mgr, TradeService& parent) :
-    EVEBoundObject(mgr, parent)
-{
-    this->m_TSvc = this->GetServiceManager().Lookup <TradeService>("trademgr");
+namespace {
+    // bool, int or None
+    bool IsTrue(PyRep* rep) {
+        if ((rep == nullptr) or rep->IsNone())
+            return false;
+        if (rep->IsBool())
+            return rep->AsBool()->value();
+        return (PyRep::IntegerValue(rep) != 0);
+    }
 
+    PyRep* GetKeyword(PyCallArgs& call, const char* name) {
+        std::map<std::string, PyRep*>::iterator itr = call.byname.find(name);
+        if (itr == call.byname.end())
+            return nullptr;
+        return itr->second;
+    }
+
+    // ceo of a corp (0 when unknown)
+    uint32 GetCorpCEO(uint32 corpID) {
+        DBQueryResult res;
+        DBResultRow row;
+        if (sDatabase.RunQuery(res, "SELECT ceoID FROM crpCorporation WHERE corporationID = %u", corpID) and res.GetRow(row))
+            return row.GetUInt(0);
+        return 0;
+    }
+}
+
+TradeBound::TradeBound (EVEServiceManager& mgr, TradeService& parent, uint32 containerID) :
+    EVEBoundObject(mgr, parent),
+    m_TSvc(&parent),
+    m_containerID(containerID)
+{
     EVEBoundObject::Add("List", &TradeBound::List);
     EVEBoundObject::Add("IsCEOTrade", &TradeBound::IsCEOTrade);
     EVEBoundObject::Add("GetItemID", &TradeBound::GetItemID);
@@ -54,147 +84,100 @@ TradeBound::TradeBound (EVEServiceManager& mgr, TradeService& parent) :
     EVEBoundObject::Add("Abort", &TradeBound::Abort);
 }
 
-PyResult TradeBound::OfferMoney(PyCallArgs &call, PyFloat* amount) {
-    TradeSession* pTSes = call.client->GetTradeSession();
-    Client* pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
-    Client* pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-    PyList* list = new PyList(2);
+std::shared_ptr<TradeSession> TradeBound::GetSession(Client* pClient)
+{
+    std::shared_ptr<TradeSession> pSession(m_TSvc->GetSession(m_containerID));
+    if ((pSession.get() == nullptr) or !pSession->HasTrader(pClient->GetCharacterID())) {
+        _log(PLAYER__TRADE_MESSAGE, "TradeBound - %s(%u) called trade session %u that is gone or isn't theirs.", \
+                pClient->GetName(), pClient->GetCharacterID(), m_containerID);
+        return nullptr;
+    }
+    return pSession;
+}
 
-    if (call.client->GetCharacterID() == pTSes->m_tradeSession.myID) {
-        // this is 'my'
-        pTSes->m_tradeSession.myMoney = amount->value();
-        list->SetItem(0, new PyFloat(pTSes->m_tradeSession.myMoney));  //myMoney
-        list->SetItem(1, new PyFloat(pTSes->m_tradeSession.herMoney)); //herMoney
-    } else if (call.client->GetCharacterID() == pTSes->m_tradeSession.herID) {
-        // this is 'her'
-        pTSes->m_tradeSession.herMoney = amount->value();
-        list->SetItem(0, new PyFloat(pTSes->m_tradeSession.myMoney));  //myMoney
-        list->SetItem(1, new PyFloat(pTSes->m_tradeSession.herMoney)); //herMoney
-    } else {
-        _log(CLIENT__ERROR, "TradeBound::Handle_OfferMoney() : %s(%u) - clients are neither mine nor hers.", \
-                call.client->GetName(), call.client->GetCharacterID());
-        PySafeDecRef(list);
+PyResult TradeBound::OfferMoney(PyCallArgs &call, PyRep* amount) {
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
         return PyStatic.NewNone();
+
+    // negative offers would move isk the other way, offers above the balance would fail half way through the exchange
+    double money(PyRep::FloatValue(amount));
+    if (!(money >= 0.0) or (money > 1e15))
+        throw CustomError("Invalid amount.");
+    money = std::round(money * 100.0) / 100.0;
+    // CEO trades use the corp's master wallet
+    uint32 walletID(pSession->warID ? call.client->GetCorporationID() : call.client->GetCharacterID());
+    double balance(MarketMgr::GetWalletBalance(walletID, Account::KeyType::Cash));
+    if (money > balance)
+        throw UserError("NotEnoughMoney")
+                .AddISK("amount", money)
+                .AddISK("balance", balance);
+
+    if (call.client->GetCharacterID() == pSession->myID) {
+        pSession->myMoney = money;
+    } else {
+        pSession->herMoney = money;
     }
 
     //  reset states after offer changes..
-    pTSes->m_tradeSession.myState  = false;
-    pTSes->m_tradeSession.herState = false;
-    // send changes
+    pSession->myState  = false;
+    pSession->herState = false;
+
+    // ('MoneyOffer', containerID, [money0, money1]).  the client resets its accept marks itself
+    PyList* list = new PyList(2);
+        list->SetItem(0, new PyFloat(pSession->myMoney));
+        list->SetItem(1, new PyFloat(pSession->herMoney));
     PyTuple* tuple = new PyTuple(3);
         tuple->SetItem(0, new PyString("MoneyOffer"));
-        tuple->SetItem(1, new PyInt(pTSes->m_tradeSession.containerID));
+        tuple->SetItem(1, new PyInt(pSession->containerID));
         tuple->SetItem(2, list);
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnTrade", "charid", &tuple);
-    pOther->SendNotification("OnTrade", "charid", &tuple);
-
-    // cleanup
-    PySafeDecRef(tuple);
-    PySafeDecRef(list);
+    m_TSvc->SendOnTrade(pSession, tuple);
 
     // returns none
     return PyStatic.NewNone();
 }
 
 PyResult TradeBound::Abort(PyCallArgs &call) {
-    TradeSession* pTSes = call.client->GetTradeSession();
-    Client* pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
-    Client* pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-
-    CancelTrade(pClient, pOther, pTSes);
-
-    PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyString("Cancel"));
-        tuple->SetItem(1, new PyInt(pTSes->m_tradeSession.containerID));
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnTrade", "charid", &tuple);
-    pOther->SendNotification("OnTrade", "charid", &tuple);
-    m_TSvc->RemoveActiveSession(pTSes->m_tradeSession.myID);
-    m_TSvc->RemoveActiveSession(pTSes->m_tradeSession.herID);
-    SafeDelete(pTSes);
-    pClient->ClearTradeSession();
-    pOther->ClearTradeSession();
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() != nullptr)
+        m_TSvc->CancelTrade(pSession);
     // returns none
     return PyStatic.NewNone();
 }
 
-void TradeBound::CancelTrade(Client* pClient, Client* pOther, TradeSession* pTSes)
-{
-    // trade canceled.  send items back to owner. (monies not taken at this point)
-    //PyDict* dict = new PyDict();
-    //dict->SetItem(new PyInt(Inv::Update::Location), new PyInt(pTSes->m_tradeSession.containerID));
-
-    uint32 stationID = pTSes->m_tradeSession.stationID;
-    for (auto cur : pTSes->m_tradelist) {
-        InventoryItemRef itemRef = sItemFactory.GetItemRef(cur.itemID);
-        if (itemRef.get() == nullptr)  {
-            _log(PLAYER__ERROR, "TradeBound::CancelTrade() - Failed to get ItemRef.");
-            continue;
-        }
-
-        itemRef->Move(stationID, flagHangar, true);
-    }
-}
-
-PyResult TradeBound::ToggleAccept(PyCallArgs &call, PyBool* newAccept) {
-    TradeSession* pTSes = call.client->GetTradeSession();
-    Client* pClient(nullptr);
-    Client* pOther(nullptr);
-
-    bool myAccept = pTSes->m_tradeSession.myState;
-    bool herAccept = pTSes->m_tradeSession.herState;
-
-    if (call.client->GetCharacterID() == pTSes->m_tradeSession.myID) {
-        // this is 'my'
-        pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
-        pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-        myAccept = newAccept->value();
-    } else if (call.client->GetCharacterID() == pTSes->m_tradeSession.herID) {
-        // this is 'her'
-        pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-        pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
-        herAccept = newAccept->value();
-    } else {
-        _log(PLAYER__TRADE_MESSAGE, "TradeBound::Handle_ToggleAccept() : %s(%u) - clients are neither mine nor hers.", \
-                    call.client->GetName(), call.client->GetCharacterID());
+PyResult TradeBound::ToggleAccept(PyCallArgs &call, PyRep* newAccept) {
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
         return PyStatic.NewNone();
+
+    uint32 charID(call.client->GetCharacterID());
+    bool accept(IsTrue(newAccept));
+    bool forceTrade(IsTrue(GetKeyword(call, "forceTrade")));
+
+    // receiving a ship needs the client's confirmation (pvptradewnd.OnClickAccept asks, then sends forceTrade)
+    if (accept and !forceTrade) {
+        for (auto cur : pSession->items) {
+            if (cur.second.ownerID == charID)
+                continue;
+            InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
+            if ((iRef.get() != nullptr) and (iRef->categoryID() == EVEDB::invCategories::Ship))
+                throw UserError("TradeShipWarning");
+        }
     }
 
-    bool forceTrade = false;
-    if (call.byname.find("forceTrade") != call.byname.cend())
-        if (!call.byname.find("forceTrade")->second->IsNone())
-            forceTrade = call.byname.find("forceTrade")->second->AsBool()->value();
-
-    if (forceTrade) {
-        pTSes->m_tradeSession.myState  = true;
-        pTSes->m_tradeSession.herState = true;
+    if (charID == pSession->myID) {
+        pSession->myState = accept;
     } else {
-        pTSes->m_tradeSession.myState  = myAccept;
-        pTSes->m_tradeSession.herState = herAccept;
+        pSession->herState = accept;
     }
 
     _log(PLAYER__TRADE_MESSAGE, "TradeBound::Handle_ToggleAccept() is now %s/%s. forceTrade is %s.", \
-                (myAccept ? "true" : "false"), (herAccept ? "true" : "false"), (forceTrade ? "true" : "false"));
+                (pSession->myState ? "true" : "false"), (pSession->herState ? "true" : "false"), (forceTrade ? "true" : "false"));
 
-    PyTuple* tuple = new PyTuple(3);
-        tuple->SetItem(0, new PyString("StateToggle"));
-        tuple->SetItem(1, new PyBool(myAccept));
-        tuple->SetItem(2, new PyBool(herAccept));
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnTrade", "charid", &tuple);
-    pOther->SendNotification("OnTrade", "charid", &tuple);
+    m_TSvc->SendStateToggle(pSession);
 
-    if (myAccept && herAccept) {
-        ExchangeItems(pClient, pOther, pTSes);      // trade completed.
-        m_TSvc->RemoveActiveSession(pTSes->m_tradeSession.myID);
-        m_TSvc->RemoveActiveSession(pTSes->m_tradeSession.herID);
-        pClient->ClearTradeSession();
-        pOther->ClearTradeSession();
-    }
+    if (pSession->myState and pSession->herState)
+        ExchangeItems(pSession);      // trade completed.
 
     // returns none
     return PyStatic.NewNone();
@@ -208,186 +191,114 @@ PyResult TradeBound::GetItemID(PyCallArgs &call) {
     return PyStatic.NewNone();
 }
 
-/** @todo  refresh other window when item added */
-PyResult TradeBound::Add(PyCallArgs &call, PyInt* itemID, PyInt* containerID) {
-    InventoryItemRef itemRef = sItemFactory.GetItemRef(itemID->value());
-    if (itemRef.get() == nullptr)  {
-        _log(PLAYER__TRADE_MESSAGE, "TradeBound::Handle_Add() - Failed to get ItemRef.");
-        //  should i abort trade, or just return null here?  single add, so not a big deal.
-        //     return null, let them try again if they want.  maybe later add config option?
-        //Handle_Abort(call);   << this will cancel and nullify the trade session
-        return PyStatic.NewNone();
+void TradeBound::AddItem(Client* pClient, std::shared_ptr<TradeSession> pSession, uint32 itemID, int32 qty)
+{
+    uint32 charID(pClient->GetCharacterID());
+    InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+    if (iRef.get() == nullptr)
+        throw CustomError("That item could not be found.");
+    if (itemID == pClient->GetShipID())
+        throw UserError("PeopleAboardShip");
+    if (pSession->items.find(itemID) != pSession->items.end())
+        return;
+
+    // own items in the station's item hangar, or in the active ship's cargo while docked there.
+    //  CEO trades can also offer the corp's items from its office here
+    bool allowed(false);
+    if (iRef->ownerID() == charID) {
+        if ((iRef->locationID() == pSession->stationID) and (iRef->flag() == flagHangar))
+            allowed = true;
+        if ((iRef->locationID() == pClient->GetShipID()) and ((uint32)pClient->GetStationID() == pSession->stationID)
+        and (iRef->flag() == flagCargoHold))
+            allowed = true;
+    } else if (pSession->warID and (iRef->ownerID() == (uint32)pClient->GetCorporationID())) {
+        uint32 officeID(stDataMgr.GetOfficeIDForCorp(pSession->stationID, pClient->GetCorporationID()));
+        if ((officeID != 0) and (iRef->locationID() == officeID) and ((pClient->GetCorpRole() & Corp::Role::Director) != 0))
+            allowed = true;
+    }
+    if (!allowed) {
+        _log(PLAYER__TRADE_MESSAGE, "TradeBound::AddItem() - %s(%u) tried to trade %s(%u) owned by %u in %u (flag %u).", \
+                pClient->GetName(), charID, iRef->name(), itemID, iRef->ownerID(), iRef->locationID(), iRef->flag());
+        throw CustomError("You can only trade your own items from your hangar or cargo hold in this station.");
     }
 
-    TradeSession* pTSes = call.client->GetTradeSession();
-    Client* pClient(sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID));
-    Client* pOther(sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID));
-
-    if (call.client->GetCharacterID() == pTSes->m_tradeSession.myID) {
-        // this is 'my'
-    } else if (call.client->GetCharacterID() == pTSes->m_tradeSession.herID) {
-        // this is 'her'
-    } else {
-        _log(PLAYER__TRADE_MESSAGE, "TradeBound::Handle_Add() : %s(%u) & %s(%u) - clients are neither mine nor hers.", \
-                pClient->GetName(), pClient->GetCharacterID(), pOther->GetName(), pOther->GetCharacterID());
-        return PyStatic.NewNone();
+    // part of a stack
+    if ((qty > 0) and (qty < iRef->quantity()) and !iRef->isSingleton()) {
+        InventoryItemRef split(iRef->Split(qty, true));
+        if (split.get() == nullptr)
+            throw CustomError("Unable to split that stack.");
+        iRef = split;
     }
 
-    uint32 flag(0);
-    if (call.byname.find("flag") != call.byname.cend())
-        flag = PyRep::IntegerValueU32(call.byname.find("flag")->second);
-    uint32 qty(0);
-    if (call.byname.find("qty") != call.byname.cend())
-        qty = PyRep::IntegerValue(call.byname.find("qty")->second);
+    TradeSession::TradeItem data = TradeSession::TradeItem();
+        data.ownerID = iRef->ownerID();
+        data.locationID = iRef->locationID();
+        data.flag = iRef->flag();
+    pSession->items[iRef->itemID()] = data;
 
-    uint32 tradeContainerID(pTSes->m_tradeSession.containerID);
-    TradeSession::TradeItems mTI = TradeSession::TradeItems();
-        mTI.itemID = itemID->value();
-        mTI.typeID = itemRef->typeID();
-        mTI.ownerID = call.client->GetCharacterID();
-        mTI.locationID = tradeContainerID;
-        mTI.flagID = itemRef->flag();
-        mTI.quantity = qty;
-        mTI.groupID = itemRef->groupID();
-        mTI.singleton = itemRef->isSingleton();
-        mTI.categoryID = itemRef->categoryID();
-        mTI.customInfo = "";
-        pTSes->m_tradelist.insert(pTSes->m_tradelist.end(), mTI);
+    // the owner sees it leave (Move notify), the other trader sees it arrive in the trade container
+    iRef->Move(pSession->containerID, flagNone, true);
+    Client* pOther(sEntityList.FindClientByCharID(pSession->Other(charID)));
+    if (pOther != nullptr) {
+        PyDict* changes = new PyDict();
+            changes->SetItem(new PyInt(Inv::Update::Location), new PyInt(data.locationID));
+            changes->SetItem(new PyInt(Inv::Update::Flag), new PyInt(data.flag));
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, iRef->GetItemRow());
+            tuple->SetItem(1, changes);
+        pOther->SendNotification("OnItemChange", "charid", &tuple);
+    }
+}
 
-    itemRef->Move(tradeContainerID, (EVEItemFlags)flag, true);
+PyResult TradeBound::Add(PyCallArgs &call, PyInt* itemID, PyRep* containerID) {
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
+        return PyStatic.NewNone();
 
-    PyDict* dict = new PyDict();
-        dict->SetItem(new PyInt(Inv::Update::Location), containerID);
-
-    PyPackedRow* row = new PyPackedRow( sDataMgr.CreateHeader() );
-        row->SetField("itemID",        new PyLong(mTI.itemID));
-        row->SetField("typeID",        new PyInt(mTI.typeID));
-        row->SetField("ownerID",       new PyInt(mTI.ownerID));
-        row->SetField("locationID",    new PyInt(mTI.locationID));
-        row->SetField("flagID",        new PyInt(mTI.flagID));
-        row->SetField("groupID",       new PyInt(mTI.groupID));
-        row->SetField("categoryID",    new PyInt(mTI.categoryID));
-        row->SetField("quantity",      new PyInt(mTI.singleton?-1:mTI.quantity));
-        row->SetField("customInfo",    new PyString(mTI.customInfo));
-
-    PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, row);
-        tuple->SetItem(1, dict);
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnItemChange", "charid", &tuple);
-    pOther->SendNotification("OnItemChange", "charid", &tuple);
+    PyRep* qty(GetKeyword(call, "qty"));
+    AddItem(call.client, pSession, itemID->value(), ((qty != nullptr) and !qty->IsNone()) ? (int32)PyRep::IntegerValue(qty) : 0);
 
     //  reset states after offer changes..
-    pTSes->m_tradeSession.myState  = false;
-    pTSes->m_tradeSession.herState = false;
+    pSession->myState  = false;
+    pSession->herState = false;
+    m_TSvc->SendStateToggle(pSession);
     // return none
     return PyStatic.NewNone();
 }
 
-PyResult TradeBound::MultiAdd(PyCallArgs &call, PyList* itemIDs, PyInt* containerID) {
+PyResult TradeBound::MultiAdd(PyCallArgs &call, PyList* itemIDs, PyRep* containerID) {
     /*  .ints = list of itemIDs to insert into trade
      *  .contID = item's current containerID
      *  call.byname "flag"
      */
-    std::vector<int32> ints;
-
-    PyList::const_iterator list_2_cur = itemIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != itemIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode TradeMultiAddList failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        ints.push_back(t->value());
-    }
-
-    uint32 flag(0);
-    if (call.byname.find("flag") != call.byname.end())
-        flag = PyRep::IntegerValueU32(call.byname.find("flag")->second);
-
-    PyDict* dict = new PyDict();
-        dict->SetItem(new PyInt(Inv::Update::Location), containerID);
-
-    TradeSession* pTSes = call.client->GetTradeSession();
-    Client* pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
-    Client* pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-
-    if ((call.client->GetCharacterID() != pTSes->m_tradeSession.myID)
-    and (call.client->GetCharacterID() != pTSes->m_tradeSession.herID)) {
-        _log(PLAYER__TRADE_MESSAGE, "TradeBound::Handle_MultiAdd() : %s(%u) & %s(%u) - clients are neither mine nor hers.", \
-                pClient->GetName(), pClient->GetCharacterID(), pOther->GetName(), pOther->GetCharacterID());
-        PySafeDecRef(dict);
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
         return PyStatic.NewNone();
-    }
 
-    uint32 charID = call.client->GetCharacterID();
-    uint32 tradeContID = pTSes->m_tradeSession.containerID;
-
-    DBRowDescriptor* header = sDataMgr.CreateHeader();
-    std::vector<int32> list = ints;
-    for (auto cur : list) {
-        InventoryItemRef itemRef = sItemFactory.GetItemRef(cur);
-        if (itemRef.get() == nullptr)  {
-            _log(PLAYER__ERROR, "TradeBound::Handle_Add() - Failed to get ItemRef.");
+    for (auto cur : *itemIDs) {
+        if (!cur->IsInt() and !cur->IsLong())
             continue;
-        }
-
-        /** @todo figure out how to update this to avoid multiple create/sends in this loop */
-        TradeSession::TradeItems mTI = TradeSession::TradeItems();
-            mTI.itemID = cur;
-            mTI.typeID = itemRef->typeID();
-            mTI.ownerID = charID;
-            mTI.locationID = tradeContID;
-            mTI.flagID = flag;
-            mTI.quantity = itemRef->quantity();
-            mTI.groupID = itemRef->groupID();
-            mTI.singleton = itemRef->isSingleton();
-            mTI.categoryID = itemRef->categoryID();
-            mTI.customInfo = "";
-        pTSes->m_tradelist.insert(pTSes->m_tradelist.end(), mTI);
-        itemRef->Move(tradeContID, (EVEItemFlags)flag, true);
-
-        PyPackedRow* row = new PyPackedRow(header);
-            row->SetField("itemID",        new PyLong(mTI.itemID));
-            row->SetField("typeID",        new PyInt(mTI.typeID));
-            row->SetField("ownerID",       new PyInt(mTI.ownerID));
-            row->SetField("locationID",    new PyInt(mTI.locationID));
-            row->SetField("flagID",        new PyInt(mTI.flagID));
-            row->SetField("groupID",       new PyInt(mTI.groupID));
-            row->SetField("categoryID",    new PyInt(mTI.categoryID));
-            row->SetField("quantity",      new PyInt(mTI.singleton?-1:mTI.quantity));
-            row->SetField("customInfo",    new PyString(mTI.customInfo));
-        PyTuple* tuple = new PyTuple(2);
-            tuple->SetItem(0, row);
-            tuple->SetItem(1, dict);
-        PyIncRef(tuple);
-        // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-        pClient->SendNotification("OnItemChange", "charid", &tuple);
-        pOther->SendNotification("OnItemChange", "charid", &tuple);
+        AddItem(call.client, pSession, (uint32)PyRep::IntegerValue(cur), 0);
     }
 
     //  reset states after offer changes.
-    pTSes->m_tradeSession.myState  = false;
-    pTSes->m_tradeSession.herState = false;
-
-    // cleanup
-    PySafeDecRef(dict);
-    PySafeDecRef(header);
+    pSession->myState  = false;
+    pSession->herState = false;
+    m_TSvc->SendStateToggle(pSession);
 
     // return none
     return PyStatic.NewNone();
 }
 
 PyResult TradeBound::GetItem(PyCallArgs &call) {
-    // TODO: this might need parameters but I'm not sure
-    TradeSession* pTSes = call.client->GetTradeSession();
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
+        return PyStatic.NewNone();
     PyPackedRow* row = new PyPackedRow( sDataMgr.CreateHeader() );
-        row->SetField("itemID",        new PyLong(pTSes->m_tradeSession.containerID));
+        row->SetField("itemID",        new PyLong(pSession->containerID));
         row->SetField("typeID",        new PyInt(53));     // type Trade Window
         row->SetField("ownerID",       PyStatic.NewOne());      // EvE_System
-        row->SetField("locationID",    new PyInt(pTSes->m_tradeSession.stationID));
+        row->SetField("locationID",    new PyInt(pSession->stationID));
         row->SetField("flagID",        PyStatic.NewNone());
         row->SetField("quantity",      new PyInt(-1));     // singleton
         row->SetField("groupID",       new PyInt(EVEDB::invGroups::Trade_Session ) );
@@ -397,30 +308,23 @@ PyResult TradeBound::GetItem(PyCallArgs &call) {
 }
 
 PyResult TradeBound::IsCEOTrade(PyCallArgs &call) {
-    _log(CLIENT__CALL_DUMP, "TradeBound::Handle_IsCEOTrade()");
-    call.Dump(CLIENT__CALL_DUMP);
-
-    //TODO will have to work on this later.  need corps working correctly first.
-    return new PyBool(false);
+    // a trade started with a warID (CEO surrender trade, form.CEOVCEOTrade)
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    return new PyBool((pSession.get() != nullptr) and (pSession->warID != 0));
 }
 
 PyResult TradeBound::List(PyCallArgs &call) {
-    TradeSession* pTSes = call.client->GetTradeSession();
-    PyList* list = new PyList();
+    std::shared_ptr<TradeSession> pSession(GetSession(call.client));
+    if (pSession.get() == nullptr)
+        throw CustomError("This trade session has ended.");
 
-    DBRowDescriptor* header = sDataMgr.CreateHeader();
-    for (auto cur : pTSes->m_tradelist) {
-        PyPackedRow* row = new PyPackedRow( header );
-            row->SetField("itemID",        new PyLong(cur.itemID));
-            row->SetField("typeID",        new PyInt(cur.typeID));
-            row->SetField("ownerID",       new PyInt(cur.ownerID));
-            row->SetField("locationID",    new PyInt(cur.locationID));
-            row->SetField("flagID",        new PyInt(cur.flagID));
-            row->SetField("groupID",       new PyInt(cur.groupID));
-            row->SetField("quantity",      new PyInt(cur.singleton?-1:cur.quantity));
-            row->SetField("categoryID",    new PyInt(cur.categoryID));
-            row->SetField("customInfo",    new PyString(cur.customInfo));
-        list->AddItem(row);
+    // util.Row(header=[tradeContainerID, traders, state, money, items])
+    PyList* list = new PyList();
+    for (auto cur : pSession->items) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
+        if ((iRef.get() == nullptr) or (iRef->locationID() != pSession->containerID))
+            continue;
+        list->AddItem(iRef->GetItemRow());
     }
 
     PyTuple* tuple2 = new PyTuple(1);
@@ -430,13 +334,13 @@ PyResult TradeBound::List(PyCallArgs &call) {
         tuple->SetItem(0, token);
         tuple->SetItem(1, tuple2);
     TradeListData tld;
-        tld.tradeContainerID = pTSes->m_tradeSession.containerID;
-        tld.myID             = pTSes->m_tradeSession.myID;
-        tld.herID            = pTSes->m_tradeSession.herID;
-        tld.myMoney          = pTSes->m_tradeSession.myMoney;
-        tld.herMoney         = pTSes->m_tradeSession.herMoney;
-        tld.myState          = pTSes->m_tradeSession.myState;
-        tld.herState         = pTSes->m_tradeSession.herState;
+        tld.tradeContainerID = pSession->containerID;
+        tld.myID             = pSession->myID;
+        tld.herID            = pSession->herID;
+        tld.myMoney          = pSession->myMoney;
+        tld.herMoney         = pSession->herMoney;
+        tld.myState          = pSession->myState;
+        tld.herState         = pSession->herState;
         tld.list             = new PyObjectEx(false, tuple);
     PyList* itemNames = new PyList(5);
         itemNames->SetItem(0, new PyString("tradeContainerID"));
@@ -450,52 +354,88 @@ PyResult TradeBound::List(PyCallArgs &call) {
     return tlr.Encode();
 }
 
-void TradeBound::ExchangeItems(Client* pClient, Client* pOther, TradeSession* pTSes) {
-    // trade completed.  perform item and money exchange
-    if (pClient->GetCharacterID() == pTSes->m_tradeSession.herID) {
-        pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-        pClient = sEntityList.FindClientByCharID(pTSes->m_tradeSession.myID);
+void TradeBound::ExchangeItems(std::shared_ptr<TradeSession> pSession) {
+    Client* pMe(sEntityList.FindClientByCharID(pSession->myID));
+    Client* pHer(sEntityList.FindClientByCharID(pSession->herID));
+    if ((pMe == nullptr) or (pHer == nullptr)) {
+        m_TSvc->CancelTrade(pSession);
+        return;
     }
-    // transfer funds and add journal entries for both sides
+
+    // CEO trades move isk between the corps' master wallets and items between their offices
+    bool ceoTrade(pSession->warID != 0);
+    uint32 myWallet(ceoTrade ? pMe->GetCorporationID() : pMe->GetCharacterID());
+    uint32 herWallet(ceoTrade ? pHer->GetCorporationID() : pHer->GetCharacterID());
+
+    // check everything again before anything moves
+    std::string problem;
+    if (MarketMgr::GetWalletBalance(myWallet, Account::KeyType::Cash) < pSession->myMoney)
+        problem = std::string(pMe->GetName()) + " no longer has the offered ISK.";
+    if (MarketMgr::GetWalletBalance(herWallet, Account::KeyType::Cash) < pSession->herMoney)
+        problem = std::string(pHer->GetName()) + " no longer has the offered ISK.";
+    for (auto cur : pSession->items) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
+        if ((iRef.get() == nullptr) or (iRef->locationID() != pSession->containerID) or (iRef->ownerID() != cur.second.ownerID))
+            problem = "One of the offered items is no longer available.";
+    }
+    if (!problem.empty()) {
+        pSession->myState  = false;
+        pSession->herState = false;
+        m_TSvc->SendStateToggle(pSession);
+        throw CustomError("%s", problem.c_str());
+    }
+
+    // transfer funds and add journal entries for both sides.  if the second transfer fails, the first is undone
     std::string reason = "Player Trade between ";
-    reason += pClient->GetCharName();
+    reason += pMe->GetCharName();
     reason += " and ";
-    reason += pOther->GetCharName();
+    reason += pHer->GetCharName();
     reason += " in ";
-    reason += pClient->GetSystemName();     // use system name or station name here?
-    AccountService::TransferFunds(pClient->GetCharacterID(), pOther->GetCharacterID(), pTSes->m_tradeSession.myMoney, reason, Journal::EntryType::PlayerTrading, pClient->GetStationID());
-    AccountService::TransferFunds(pOther->GetCharacterID(), pClient->GetCharacterID(), pTSes->m_tradeSession.herMoney, reason, Journal::EntryType::PlayerTrading, pClient->GetStationID());
-
-    //PyDict* dict = new PyDict();
-    //    dict->SetItem(new PyInt(Inv::Update::Location), new PyInt(pTSes->m_tradeSession.containerID));
-
-    uint32 stationID = pTSes->m_tradeSession.stationID;
-    for (auto cur : pTSes->m_tradelist) {
-        InventoryItemRef itemRef = sItemFactory.GetItemRef(cur.itemID);
-        if (!itemRef)  {
-            _log(PLAYER__ERROR, "TradeBound::Handle_Add() - Failed to get ItemRef.");
-            continue;
+    reason += stDataMgr.GetStationName(pSession->stationID);
+    if (pSession->myMoney > 0)
+        AccountService::TransferFunds(myWallet, herWallet, pSession->myMoney, reason, Journal::EntryType::PlayerTrading, pSession->stationID, Account::KeyType::Cash, Account::KeyType::Cash, pMe);
+    if (pSession->herMoney > 0) {
+        try {
+            AccountService::TransferFunds(herWallet, myWallet, pSession->herMoney, reason, Journal::EntryType::PlayerTrading, pSession->stationID, Account::KeyType::Cash, Account::KeyType::Cash, pHer);
+        } catch (...) {
+            if (pSession->myMoney > 0)
+                AccountService::TransferFunds(herWallet, myWallet, pSession->myMoney, reason, Journal::EntryType::PlayerTrading, pSession->stationID, Account::KeyType::Cash, Account::KeyType::Cash, pMe);
+            pSession->myState  = false;
+            pSession->herState = false;
+            m_TSvc->SendStateToggle(pSession);
+            throw;
         }
-
-        uint32 newOwnerID = (cur.ownerID == pTSes->m_tradeSession.myID ? pTSes->m_tradeSession.herID : pTSes->m_tradeSession.myID);
-        itemRef->ChangeOwner(newOwnerID, true);
-        itemRef->Move(stationID, flagHangar, true);
-
-        if ((itemRef->categoryID() == EVEDB::invCategories::Ship)
-            || (itemRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container)
-            || (itemRef->groupID() == EVEDB::invGroups::Cargo_Container)
-            || (itemRef->groupID() == EVEDB::invGroups::Freight_Container)
-            || (itemRef->groupID() == EVEDB::invGroups::Secure_Cargo_Container))
-            m_TSvc->TransferContainerContents(pClient->SystemMgr(), itemRef, newOwnerID);
     }
+
+    // items change hands in the station (CEO trades:  the receiving corp's office deliveries hangar)
+    for (auto cur : pSession->items) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
+        if (iRef.get() == nullptr)
+            continue;
+        bool fromMe(cur.second.ownerID == myWallet);
+        uint32 newOwnerID(fromMe ? herWallet : myWallet);
+        uint32 receiverCharID(fromMe ? pSession->herID : pSession->myID);
+        uint32 itemOwnerID(newOwnerID), locationID(pSession->stationID);
+        EVEItemFlags flag(flagHangar);
+        MarketMgr::GetDeliveryLocation(newOwnerID, ceoTrade and IsPlayerCorp(newOwnerID), receiverCharID, pSession->stationID, itemOwnerID, locationID, flag);
+
+        iRef->ChangeOwner(itemOwnerID, true);
+        iRef->Move(locationID, flag, true);
+        if ((iRef->categoryID() == EVEDB::invCategories::Ship)
+            || (iRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container)
+            || (iRef->groupID() == EVEDB::invGroups::Cargo_Container)
+            || (iRef->groupID() == EVEDB::invGroups::Freight_Container)
+            || (iRef->groupID() == EVEDB::invGroups::Secure_Cargo_Container))
+            m_TSvc->TransferContainerContents(iRef, itemOwnerID);
+    }
+
+    /** @todo F22:  a CEO trade with a warID is the war's surrender offer (sWarMgr hook) */
 
     PyTuple* tuple = new PyTuple(2);
         tuple->SetItem(0, new PyString("TradeComplete"));
-        tuple->SetItem(1, new PyInt(pTSes->m_tradeSession.containerID));
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnTrade", "charid", &tuple);
-    pOther->SendNotification("OnTrade", "charid", &tuple);
+        tuple->SetItem(1, new PyInt(pSession->containerID));
+    m_TSvc->SendOnTrade(pSession, tuple);
+    m_TSvc->CloseSession(pSession);
 }
 
 TradeService::TradeService(EVEServiceManager& mgr)
@@ -504,13 +444,19 @@ TradeService::TradeService(EVEServiceManager& mgr)
     m_SessionID = minTradeCont;
 
     this->Add("InitiateTrade", &TradeService::InitiateTrade);
+
+    // items of a trade that never ended (server stopped) go back to their owner's hangar in the owner's station
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "UPDATE entity e JOIN chrCharacters c ON c.characterID = e.ownerID"
+        " SET e.locationID = c.stationID, e.flag = %u"
+        " WHERE e.locationID BETWEEN %u AND %u AND c.stationID > 0",
+        flagHangar, minTradeCont, maxTradeCont);
 }
 
 BoundDispatcher* TradeService::BindObject(Client* client, PyRep* bindParameters) {
-    // each client's trade session has it's own bound object.
-    //   create code for multiple sessions per client, using TradeBound and TradeSession.
+    // each trade window binds the moniker from InitiateTrade:  (stationID, (myID, herID), money, state, when)
     Trade_BindArgs args;
-    //crap
     PyRep* tmp(bindParameters->Clone());
     if (!args.Decode(&tmp)) {
         codelog(SERVICE__ERROR, "%s: Failed to decode bind args.", GetName());
@@ -520,136 +466,204 @@ BoundDispatcher* TradeService::BindObject(Client* client, PyRep* bindParameters)
     _log(COLLECT__OTHER_DUMP, "Trade bind request for:");
     args.Dump(COLLECT__OTHER_DUMP, "    ");
 
-    /** @todo update to multiple trade sessions per client.  current code only allows one at a time. */
-
-    // check to see if this is target calling for a bound object.  if not, create new session
-    std::map<uint32, ActiveSession>::iterator itr = m_activeSessions.find(args.myID);
-    if (itr == m_activeSessions.end()) {
-        TradeSession* pTSes = new TradeSession();
-        client->SetTradeSession(pTSes);
-        uint32 contID(GetTradeSessionID());
-        pTSes->m_tradeSession.containerID = contID;
-        pTSes->m_tradeSession.stationID = args.stationID;
-        pTSes->m_tradeSession.myID = args.myID;
-        pTSes->m_tradeSession.herID = args.herID;
-        pTSes->m_tradeSession.myState = false;
-        pTSes->m_tradeSession.herState = false;
-        pTSes->m_tradeSession.myMoney = args.myMoney;
-        pTSes->m_tradeSession.herMoney = args.herMoney;
-        pTSes->m_tradeSession.fileTime = args.fileTime;
-        ActiveSession cAS = ActiveSession();
-        cAS.myID = args.myID;
-        cAS.herID = args.herID;
-        cAS.contID = contID;
-        cAS.ourTS = pTSes;
-        m_activeSessions.insert(std::make_pair(args.myID, cAS));
-        m_activeSessions.insert(std::make_pair(args.herID, cAS));
-    } else {
-        client->SetTradeSession(itr->second.ourTS);
+    std::map<std::tuple<uint32, uint32, int64>, uint32>::iterator itr = m_byBind.find(std::make_tuple(args.myID, args.herID, args.fileTime));
+    if (itr == m_byBind.end()) {
+        _log(PLAYER__TRADE_MESSAGE, "TradeService::BindObject() - no trade session for %u/%u.", args.myID, args.herID);
+        return nullptr;
     }
+    std::shared_ptr<TradeSession> pSession(GetSession(itr->second));
+    if ((pSession.get() == nullptr) or !pSession->HasTrader(client->GetCharacterID()))
+        return nullptr;
 
-    return new TradeBound(this->GetServiceManager(), *this);
+    client->AddTradeSession(pSession->containerID);
+    return new TradeBound(this->GetServiceManager(), *this, pSession->containerID);
 }
 
 void TradeService::BoundReleased (TradeBound* bound) {
 
 }
 
-void TradeService::TransferContainerContents(SystemManager* pSysMgr, InventoryItemRef itemRef, uint32 newOwnerID)
+std::shared_ptr<TradeSession> TradeService::GetSession(uint32 containerID)
 {
-    std::map<uint32, InventoryItemRef> InventoryMap;
-    InventoryMap.clear();
-
-    if (itemRef->categoryID() == EVEDB::invCategories::Ship) {
-        //  if we change this to use shipItem, this will need rework
-        ShipDB::DeleteInsuranceByShipID(itemRef->itemID());
-        ShipItemRef shipRef = pSysMgr->GetShipFromInventory(itemRef->itemID());
-        if (shipRef.get() == nullptr)
-            shipRef = sItemFactory.GetShipRef(itemRef->itemID());
-        if (!shipRef->GetMyInventory()->IsEmpty())
-            shipRef->GetMyInventory()->GetInventoryMap(InventoryMap);
-    } else {
-        CargoContainerRef contRef = pSysMgr->GetContainerFromInventory(itemRef->itemID());
-        if (contRef.get() == nullptr)
-            contRef = sItemFactory.GetCargoRef(itemRef->itemID());
-        if (!contRef->IsEmpty())
-            contRef->GetMyInventory()->GetInventoryMap(InventoryMap);
-    }
-
-    for (auto cur : InventoryMap)
-        cur.second->ChangeOwner(newOwnerID, true);
+    std::map<uint32, std::shared_ptr<TradeSession>>::iterator itr = m_sessions.find(containerID);
+    if (itr == m_sessions.end())
+        return nullptr;
+    return itr->second;
 }
 
-PyResult TradeService::InitiateTrade(PyCallArgs &call, PyInt* characterID) {
-    Client* target(nullptr);
-    if (call.client->GetTradeSession()) {
-        target = sEntityList.FindClientByCharID( call.client->GetTradeSession()->m_tradeSession.herID );
-        call.client->SendErrorMsg("You are currently trading with %s.  You can only trade with one player at a time.", target->GetName());
-        return nullptr;
+void TradeService::SendOnTrade(std::shared_ptr<TradeSession> pSession, PyTuple* payload)
+{
+    Client* pMe(sEntityList.FindClientByCharID(pSession->myID));
+    Client* pHer(sEntityList.FindClientByCharID(pSession->herID));
+    if (pMe != nullptr) {
+        PyIncRef(payload);
+        pMe->SendNotification("OnTrade", "charid", &payload);
     }
-
-    target = sEntityList.FindClientByCharID( characterID->value() );
-    if (target->GetTradeSession()) {
-        Client* otarget = sEntityList.FindClientByCharID( call.client->GetTradeSession()->m_tradeSession.herID );
-        call.client->SendErrorMsg("%s is currently trading with %s.  Try again later.", target->GetName(), otarget->GetName());
-        return nullptr;
+    if (pHer != nullptr) {
+        PyIncRef(payload);
+        pHer->SendNotification("OnTrade", "charid", &payload);
     }
+    PyDecRef(payload);
+}
 
-    // wtf is this ???
-    uint32 warID(0);
-    if (call.byname.find("warID") != call.byname.cend())
-        warID = PyRep::IntegerValue(call.byname.find("warID")->second);
-
-    InitiateTradeRsp_NoCash rsp_nc;
-        rsp_nc.nodeID    = call.client->services().GetNodeID();
-        rsp_nc.stationID = target->GetStationID();
-        rsp_nc.myID      = call.client->GetCharacterID();
-        rsp_nc.herID     = target->GetCharacterID();
-        rsp_nc.money     = 0;
-        rsp_nc.state     = 0;
-        rsp_nc.when      = GetFileTimeNow();
-
-    PyObject* resp = rsp_nc.Encode();
+void TradeService::SendStateToggle(std::shared_ptr<TradeSession> pSession)
+{
+    // ('StateToggle', containerID, [state0, state1]), indexed like 'traders'
+    PyList* states = new PyList(2);
+        states->SetItem(0, new PyBool(pSession->myState));
+        states->SetItem(1, new PyBool(pSession->herState));
     PyTuple* tuple = new PyTuple(3);
-    tuple->SetItem(0, new PyString("Initiate"));
-    tuple->SetItem(1, new PyInt(call.client->GetCharacterID()));
-    tuple->SetItem(2, resp->Clone());
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    call.client->SendNotification("OnTrade", "charid", &tuple);
-    return resp;
+        tuple->SetItem(0, new PyString("StateToggle"));
+        tuple->SetItem(1, new PyInt(pSession->containerID));
+        tuple->SetItem(2, states);
+    SendOnTrade(pSession, tuple);
 }
 
-void TradeService::RemoveActiveSession(uint32 myID) {
-    m_activeSessions.erase(myID);
-}
+void TradeService::CancelTrade(std::shared_ptr<TradeSession> pSession)
+{
+    // trade canceled.  send items back to where they came from (monies not taken at this point)
+    for (auto cur : pSession->items) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
+        if ((iRef.get() == nullptr) or (iRef->locationID() != pSession->containerID))
+            continue;
+        uint32 locationID(cur.second.locationID);
+        EVEItemFlags flag(cur.second.flag);
+        // a cargo hold that left the station:  the hangar instead
+        if (locationID != pSession->stationID) {
+            InventoryItemRef origin(sItemFactory.GetItemRef(locationID));
+            if ((origin.get() == nullptr) or (origin->locationID() != pSession->stationID)) {
+                locationID = pSession->stationID;
+                flag = flagHangar;
+            }
+        }
+        iRef->Move(locationID, flag, true);
 
-void TradeService::CancelTrade(Client* pClient) {
-    TradeSession* pTSes = pClient->GetTradeSession();
-    Client* pOther = sEntityList.FindClientByCharID(pTSes->m_tradeSession.herID);
-
-    TradeBound* pTB = new TradeBound(this->GetServiceManager(), *this);
-    pTB->CancelTrade(pClient, pOther, pTSes);
-    delete pTB;
+        Client* pOther(sEntityList.FindClientByCharID(pSession->Other(cur.second.ownerID)));
+        if (pOther != nullptr) {
+            PyDict* changes = new PyDict();
+                changes->SetItem(new PyInt(Inv::Update::Location), new PyInt(pSession->containerID));
+            PyTuple* tuple = new PyTuple(2);
+                tuple->SetItem(0, iRef->GetItemRow());
+                tuple->SetItem(1, changes);
+            pOther->SendNotification("OnItemChange", "charid", &tuple);
+        }
+    }
 
     PyTuple* tuple = new PyTuple(2);
         tuple->SetItem(0, new PyString("Cancel"));
-        tuple->SetItem(1, new PyInt(pTSes->m_tradeSession.containerID));
-    PyIncRef(tuple);
-    // now send it, bypassing the extra shit and wrong dest name added in Client::SendNotification
-    pClient->SendNotification("OnTrade", "charid", &tuple);
-    pOther->SendNotification("OnTrade", "charid", &tuple);
-    RemoveActiveSession(pTSes->m_tradeSession.myID);
-    RemoveActiveSession(pTSes->m_tradeSession.herID);
-    SafeDelete(pTSes);
-    pClient->ClearTradeSession();
-    pOther->ClearTradeSession();
-    // returns none
+        tuple->SetItem(1, new PyInt(pSession->containerID));
+    SendOnTrade(pSession, tuple);
+    CloseSession(pSession);
+}
+
+void TradeService::CancelAllTrades(Client* pClient)
+{
+    // copy, CancelTrade changes the client's list
+    std::set<uint32> sessions(pClient->GetTradeSessions());
+    for (auto cur : sessions) {
+        std::shared_ptr<TradeSession> pSession(GetSession(cur));
+        if (pSession.get() != nullptr) {
+            CancelTrade(pSession);
+        } else {
+            pClient->RemoveTradeSession(cur);
+        }
+    }
+}
+
+void TradeService::CloseSession(std::shared_ptr<TradeSession> pSession)
+{
+    m_byBind.erase(std::make_tuple(pSession->myID, pSession->herID, pSession->fileTime));
+    m_sessions.erase(pSession->containerID);
+    Client* pMe(sEntityList.FindClientByCharID(pSession->myID));
+    if (pMe != nullptr)
+        pMe->RemoveTradeSession(pSession->containerID);
+    Client* pHer(sEntityList.FindClientByCharID(pSession->herID));
+    if (pHer != nullptr)
+        pHer->RemoveTradeSession(pSession->containerID);
+}
+
+void TradeService::TransferContainerContents(InventoryItemRef itemRef, uint32 newOwnerID)
+{
+    // everything inside a traded ship or container goes with it
+    Inventory* pInv(itemRef->GetMyInventory());
+    if (pInv == nullptr)
+        return;
+    pInv->LoadContents();
+    std::vector<InventoryItemRef> contents;
+    pInv->GetInventoryVec(contents);
+    for (auto cur : contents) {
+        cur->ChangeOwner(newOwnerID, true);
+        TransferContainerContents(cur, newOwnerID);
+    }
+}
+
+PyResult TradeService::InitiateTrade(PyCallArgs &call, PyInt* characterID, std::optional<PyRep*> warID) {
+    Client* pClient(call.client);
+    Client* target(sEntityList.FindClientByCharID(characterID->value()));
+    if ((target == nullptr) or (target == pClient))
+        throw CustomError("That character is not available for trading.");
+    // both docked in the same station
+    if ((pClient->GetStationID() == 0) or (pClient->GetStationID() != target->GetStationID()))
+        throw CustomError("%s is not in this station.", target->GetName());
+
+    // one session per pair
+    for (auto cur : m_sessions) {
+        if (cur.second->HasTrader(pClient->GetCharacterID()) and cur.second->HasTrader(target->GetCharacterID()))
+            throw CustomError("You are already trading with %s.", target->GetName());
+    }
+
+    // CEO surrender trades (form.CEOVCEOTrade) are between the CEOs of the two corps
+    uint32 war(0);
+    if (warID.has_value() and !warID.value()->IsNone())
+        war = (uint32)PyRep::IntegerValue(warID.value());
+    if (war != 0) {
+        if ((GetCorpCEO(pClient->GetCorporationID()) != (uint32)pClient->GetCharacterID())
+        or (GetCorpCEO(target->GetCorporationID()) != (uint32)target->GetCharacterID()))
+            throw CustomError("Surrender trades are made between the CEOs of the corporations at war.");
+    }
+
+    std::shared_ptr<TradeSession> pSession(std::make_shared<TradeSession>());
+        pSession->containerID = GetTradeSessionID();
+        pSession->stationID = pClient->GetStationID();
+        pSession->myID = pClient->GetCharacterID();
+        pSession->herID = target->GetCharacterID();
+        pSession->warID = war;
+        pSession->myState = false;
+        pSession->herState = false;
+        pSession->myMoney = 0;
+        pSession->herMoney = 0;
+        pSession->fileTime = GetFileTimeNow();
+    m_sessions[pSession->containerID] = pSession;
+    m_byBind[std::make_tuple(pSession->myID, pSession->herID, pSession->fileTime)] = pSession->containerID;
+
+    InitiateTradeRsp_NoCash rsp_nc;
+        rsp_nc.nodeID    = pClient->services().GetNodeID();
+        rsp_nc.stationID = pSession->stationID;
+        rsp_nc.myID      = pSession->myID;
+        rsp_nc.herID     = pSession->herID;
+        rsp_nc.money     = 0;
+        rsp_nc.state     = 0;
+        rsp_nc.when      = pSession->fileTime;
+
+    PyObject* resp = rsp_nc.Encode();
+    // the target opens its window with OnTrade('Initiate', initiatorID, moniker).  the caller opens its own from the reply
+    PyTuple* tuple = new PyTuple(3);
+        tuple->SetItem(0, new PyString("Initiate"));
+        tuple->SetItem(1, new PyInt(pClient->GetCharacterID()));
+        tuple->SetItem(2, resp->Clone());
+    target->SendNotification("OnTrade", "charid", &tuple);
+    return resp;
 }
 
 uint32 TradeService::GetTradeSessionID()
 {
-    if (m_SessionID < maxTradeCont)
-        return ++m_SessionID;
-
-    return (m_SessionID = minTradeCont);
+    // the next free trade container id
+    do {
+        if (m_SessionID < maxTradeCont) {
+            ++m_SessionID;
+        } else {
+            m_SessionID = minTradeCont + 1;
+        }
+    } while (m_sessions.find(m_SessionID) != m_sessions.end());
+    return m_SessionID;
 }
