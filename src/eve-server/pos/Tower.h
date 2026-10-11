@@ -178,6 +178,14 @@ public:
     void ExitReinforced();
     // who attacked this tower's structures (charID for pilots and their drones, itemID for npcs) and when (FILETIME)
     bool IsRecentAggressor(uint32 id, int64 window);
+
+    /* notifications */
+    // TowerAlertMsg to the starbase managers and defense operators, at most once an hour (final = the tower died)
+    void NotifyAttack(StructureSE* pVictim, SystemEntity* pAttacker, bool final = false);
+    // TowerResourceAlertMsg when the fuel lasts less than a day (once a day), or the tower ran out
+    void CheckLowFuel(bool outOfFuel = false);
+    // anchoring done:  AllAnchoringMsg to the alliance holding sovereignty here
+    void OnAnchored();
     // the fuel expiry event in the corp calendar (showInCalendar)
     void UpdateFuelCalendar();
 
@@ -197,6 +205,7 @@ private:
     void CatchUp();
 
     std::map<uint32, int64> m_aggressors;   // aggressor id / last attack
+    int64 m_lastAttackNotify;               // last TowerAlertMsg
     bool m_fuelOut;         // ran out of fuel while reinforced:  offline when reinforcement ends
     bool m_catchUp;         // catch up on the first tic after loading
     bool m_replaying;       // replaying missed hours (saves once at the end)

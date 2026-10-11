@@ -576,6 +576,8 @@ void StructureSE::Process()
                 m_gateSE->SetSBU(this);
 
             m_db.UpdateBaseData(m_data);
+            if (m_tower)
+                GetTowerSE()->OnAnchored();
         }
         break;
         case ProcState::Offlining:

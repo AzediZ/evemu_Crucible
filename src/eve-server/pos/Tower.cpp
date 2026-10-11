@@ -30,6 +30,8 @@
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/CalendarDB.h"
+#include "mail/NotificationMgr.h"
+#include "../eve-common/EVE_Mail.h"
 #include "../eve-common/EVE_Calendar.h"
 
 /** @todo (Allan) this class needs more research to finish
@@ -108,6 +110,7 @@
 TowerSE::TowerSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& fData)
 : StructureSE(structure, services, system, fData),
 m_pShieldSE(nullptr),
+m_lastAttackNotify(0),
 m_fuelOut(false),
 m_catchUp(false),
 m_replaying(false),
@@ -233,6 +236,11 @@ void TowerSE::Killed(Damage& damage)
     if ((m_bubble != nullptr) and (m_bubble->GetTowerSE() == this))
         m_bubble->SetTowerSE(nullptr);
     OrphanModules();
+    // the last alert:  destroyed
+    NotifyAttack(this, damage.srcSE, true);
+    // no more fuel expiry
+    if (m_tdata.fuelEventID != 0)
+        CalendarDB::DeleteEvent(m_tdata.fuelEventID);
 
     StructureSE::Killed(damage);
 }
@@ -501,6 +509,7 @@ void TowerSE::ProcessCycle(int64 cycleTime)
     // replayed hours save once at the end
     if (m_replaying)
         return;
+    CheckLowFuel();
     UpdateFuelCalendar();
     m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
 }
@@ -532,6 +541,8 @@ void TowerSE::CatchUp()
         ++replayed;
     }
     m_replaying = false;
+    if (IsPowered())
+        CheckLowFuel();
     UpdateFuelCalendar();
     m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
     if (replayed > 0)
@@ -600,8 +611,10 @@ void TowerSE::GoOffline(bool outOfFuel)
     m_tdata.lastCycle = 0;
     UpdateFuelCalendar();
     m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
-    if (outOfFuel)
+    if (outOfFuel) {
         _log(POS__MESSAGE, "TowerSE::GoOffline() - %s(%u) in %s ran out of fuel.", GetName(), m_data.itemID, m_system->GetName());
+        CheckLowFuel(true);
+    }
 }
 
 void TowerSE::UpdateFuelCalendar()
@@ -653,8 +666,149 @@ void TowerSE::OnStructureDamaged(StructureSE* pVictim, SystemEntity* pAttacker)
         m_aggressors[id] = GetFileTimeNow();
     }
 
+    NotifyAttack(pVictim, pAttacker);
+
     if (pVictim == this)
         CheckReinforce();
+}
+
+void TowerSE::NotifyAttack(StructureSE* pVictim, SystemEntity* pAttacker, bool final/*false*/)
+{
+    // at most once an hour per tower (the last word when it dies)
+    int64 now(GetFileTimeNow());
+    if (!final and ((now - m_lastAttackNotify) < EvE::Time::Hour))
+        return;
+    m_lastAttackNotify = now;
+
+    // pilots (and their drones) by character, anything else by its owner
+    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
+    if (pAttacker != nullptr) {
+        if (pAttacker->HasPilot()) {
+            Client* pPilot(pAttacker->GetPilot());
+            aggressorID = pPilot->GetCharacterID();
+            aggressorCorpID = pPilot->GetCorporationID();
+            aggressorAllyID = pPilot->GetAllianceID();
+        } else if (pAttacker->IsDroneSE() and IsCharacterID(pAttacker->GetSelf()->ownerID())) {
+            aggressorID = pAttacker->GetSelf()->ownerID();
+            aggressorCorpID = pAttacker->GetCorporationID();
+            aggressorAllyID = pAttacker->GetAllianceID();
+        } else {
+            aggressorID = pAttacker->GetOwnerID();
+            aggressorCorpID = pAttacker->GetCorporationID();
+            aggressorAllyID = pAttacker->GetAllianceID();
+        }
+    }
+
+    // what is left of the attacked structure (fractions)
+    float shield(0.0f), armor(0.0f), hull(0.0f);
+    if (!final and (pVictim != nullptr)) {
+        InventoryItemRef vRef(pVictim->GetSelf());
+        shield = pVictim->GetShieldFraction();
+        float armorHP(vRef->GetAttribute(AttrArmorHP).get_float()), hp(vRef->GetAttribute(AttrHP).get_float());
+        armor = (armorHP > 0.0f ? 1.0f - vRef->GetAttribute(AttrArmorDamage).get_float() / armorHP : 0.0f);
+        hull = (hp > 0.0f ? 1.0f - vRef->GetAttribute(AttrDamage).get_float() / hp : 0.0f);
+    }
+
+    PyDict* data = new PyDict();
+        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
+        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
+        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
+        data->SetItemString("moonID",               (m_moonSE == nullptr ? PyStatic.NewNone() : new PyInt(m_moonSE->GetID())));
+        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
+        data->SetItemString("typeID",               new PyInt(pVictim == nullptr ? GetTypeID() : pVictim->GetTypeID()));
+        data->SetItemString("shieldValue",          new PyFloat(shield));
+        data->SetItemString("armorValue",           new PyFloat(armor));
+        data->SetItemString("hullValue",            new PyFloat(hull));
+    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::InfrastructureTacticalOfficer,
+                                Notify::Types::TowerAlert, m_corpID, data);
+}
+
+void TowerSE::CheckLowFuel(bool outOfFuel/*false*/)
+{
+    if (!m_tdata.sendFuelNotifications)
+        return;
+    int64 now(GetFileTimeNow());
+    if (!outOfFuel) {
+        uint32 hours(FuelHoursLeft());
+        if (hours >= EVEPOS::LowFuelHours)
+            return;
+        if ((now - m_tdata.lowFuelNotified) < EvE::Time::Day)
+            return;
+    }
+
+    // what the bay holds of each fuel the tower burns
+    std::map<uint16, uint32> online, strontium;
+    GetFuelRequirements(GetTypeID(), m_system->GetID(), (IsAlliance(m_allyID) ? m_allyID : 0), online, strontium);
+    PyList* wants = new PyList();
+    for (auto cur : online) {
+        PyDict* want = new PyDict();
+            want->SetItemString("typeID",   new PyInt(cur.first));
+            want->SetItemString("quantity", new PyInt(CountResource(cur.first, flagNone)));
+        wants->AddItem(want);
+    }
+
+    PyDict* data = new PyDict();
+        data->SetItemString("corpID",           new PyInt(m_corpID));
+        data->SetItemString("allianceID",       (IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone()));
+        data->SetItemString("solarSystemID",    new PyInt(m_system->GetID()));
+        data->SetItemString("moonID",           (m_moonSE == nullptr ? PyStatic.NewNone() : new PyInt(m_moonSE->GetID())));
+        data->SetItemString("typeID",           new PyInt(GetTypeID()));
+        data->SetItemString("wants",            wants);
+    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::StarbaseCaretaker,
+                                Notify::Types::TowerResourceAlert, m_corpID, data);
+
+    m_tdata.lowFuelNotified = now;
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+}
+
+void TowerSE::OnAnchored()
+{
+    // the alliance holding sovereignty here hears about other people's towers
+    uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(m_system->GetID()));
+    if (!IsAlliance(sovAllianceID) or (IsAlliance(m_allyID) and ((uint32)m_allyID == sovAllianceID)))
+        return;
+
+    // the other towers anchored in the system, by corp
+    std::map<uint32, PyList*> towersByCorp;
+    std::map<uint32, int32> allianceByCorp;
+    for (auto cur : m_system->GetEntities()) {
+        if ((cur.second == this) or !cur.second->IsTowerSE())
+            continue;
+        TowerSE* pTower(cur.second->GetTowerSE());
+        if (!pTower->IsAnchored())
+            continue;
+        PyList*& list(towersByCorp[pTower->GetCorporationID()]);
+        if (list == nullptr)
+            list = new PyList();
+        allianceByCorp[pTower->GetCorporationID()] = pTower->GetAllianceID();
+        PyDict* tower = new PyDict();
+            tower->SetItemString("moonID",  (pTower->GetMoonSE() == nullptr ? PyStatic.NewNone() : new PyInt(pTower->GetMoonSE()->GetID())));
+            tower->SetItemString("typeID",  new PyInt(pTower->GetTypeID()));
+        list->AddItem(tower);
+    }
+    PyRep* corpsPresent(nullptr);
+    if (towersByCorp.empty()) {
+        corpsPresent = PyStatic.NewNone();
+    } else {
+        PyList* corps = new PyList();
+        for (auto cur : towersByCorp) {
+            PyDict* corp = new PyDict();
+                corp->SetItemString("corpID",       new PyInt(cur.first));
+                corp->SetItemString("allianceID",   (IsAlliance(allianceByCorp[cur.first]) ? new PyInt(allianceByCorp[cur.first]) : PyStatic.NewNone()));
+                corp->SetItemString("towers",       cur.second);
+            corps->AddItem(corp);
+        }
+        corpsPresent = corps;
+    }
+
+    PyDict* data = new PyDict();
+        data->SetItemString("corpID",           new PyInt(m_corpID));
+        data->SetItemString("allianceID",       (IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone()));
+        data->SetItemString("solarSystemID",    new PyInt(m_system->GetID()));
+        data->SetItemString("moonID",           (m_moonSE == nullptr ? PyStatic.NewNone() : new PyInt(m_moonSE->GetID())));
+        data->SetItemString("typeID",           new PyInt(GetTypeID()));
+        data->SetItemString("corpsPresent",     corpsPresent);
+    NotificationMgr::SendToAlliance(sovAllianceID, 0, Notify::Types::AllAnchoring, m_corpID, data);
 }
 
 bool TowerSE::IsRecentAggressor(uint32 id, int64 window)
