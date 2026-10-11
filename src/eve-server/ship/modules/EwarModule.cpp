@@ -93,6 +93,48 @@ void Ewar::SendEwarNotify(bool start, uint32 sourceID, uint32 moduleID, SystemEn
     pTarget->GetPilot()->SendNotification((start ? "OnEwarStart" : "OnEwarEnd"), "charid", &tuple);
 }
 
+float Ewar::DrainCapacitor(SystemEntity* pTarget, float amount)
+{
+    if ((pTarget == nullptr) or (amount <= 0.0f))
+        return 0.0f;
+    InventoryItemRef tRef(pTarget->GetSelf());
+    if (!tRef->HasAttribute(AttrCapacitorCharge))
+        return 0.0f;
+    float cap(tRef->GetAttribute(AttrCapacitorCharge).get_float());
+    if (cap <= 0.0f)
+        return 0.0f;
+    if (amount > cap)
+        amount = cap;
+    tRef->SetAttribute(AttrCapacitorCharge, cap - amount);
+    _log(EFFECTS__TRACE, "Ewar::DrainCapacitor() - %s(%u) loses %.1f GJ (%.1f left)", pTarget->GetName(), pTarget->GetID(), amount, cap - amount);
+    return amount;
+}
+
+float Ewar::LeechCapacitor(InventoryItemRef srcRef, SystemEntity* pTarget, float amount)
+{
+    if ((srcRef.get() == nullptr) or (pTarget == nullptr) or (amount <= 0.0f))
+        return 0.0f;
+    InventoryItemRef tRef(pTarget->GetSelf());
+    if (!tRef->HasAttribute(AttrCapacitorCharge))
+        return 0.0f;
+    // the nosferatu only drains while we have less energy than the target (absolute GJ, since the 2007 change)
+    float mine(srcRef->GetAttribute(AttrCapacitorCharge).get_float());
+    float theirs(tRef->GetAttribute(AttrCapacitorCharge).get_float());
+    if (mine >= theirs)
+        return 0.0f;
+    float room(srcRef->GetAttribute(AttrCapacitorCapacity).get_float() - mine);
+    if (amount > theirs)
+        amount = theirs;
+    if (amount > room)
+        amount = room;
+    if (amount <= 0.0f)
+        return 0.0f;
+    tRef->SetAttribute(AttrCapacitorCharge, theirs - amount);
+    srcRef->SetAttribute(AttrCapacitorCharge, mine + amount);
+    _log(EFFECTS__TRACE, "Ewar::LeechCapacitor() - %s(%u) takes %.1f GJ from %s(%u)", srcRef->name(), srcRef->itemID(), amount, pTarget->GetName(), pTarget->GetID());
+    return amount;
+}
+
 void Ewar::SendJamNotify(bool start, uint32 sourceID, uint32 moduleID, SystemEntity* pTarget, int64 startTime/*0*/, uint32 durationMs/*0*/)
 {
     if (pTarget == nullptr)

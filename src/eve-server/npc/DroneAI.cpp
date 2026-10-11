@@ -37,6 +37,7 @@
 #include "npc/Drone.h"
 #include "npc/DroneAI.h"
 #include "ship/Ship.h"
+#include "ship/modules/EwarModule.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
@@ -596,9 +597,14 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
         case DroneAI::Action::Web: {
             StartWeb(pTarget);
         } break;
-        default:
-            // electronic warfare and neutralizing drones show their effect, but have none yet
-            break;
+        default: {
+            switch (stats.effectID) {
+                case EVEEffectID::energyDestabilizationNew: {
+                    Ewar::DrainCapacitor(pTarget, m_pDrone->GetSelf()->GetAttribute(AttrEnergyDestabilizationAmount).get_float());
+                } break;
+                // damp, tracking disruption and painting drones need target dogma modifiers (F10).  they only show their effect
+            }
+        } break;
     }
 }
 

@@ -683,9 +683,14 @@ uint32 ActiveModule::DoCycle() {
             UpdateCharge(AttrCapacitorCharge, AttrCapacitorCapacity, AttrPowerTransferAmount, m_shipRef);
             m_repeat = 1;
         } break;
-        // i *think* these first 2 go here....need testing
-        case EVEDB::invGroups::Energy_Vampire:
-        case EVEDB::invGroups::Energy_Destabilizer:
+        case EVEDB::invGroups::Energy_Destabilizer: {
+            if (m_targetSE != nullptr)
+                Ewar::DrainCapacitor(m_targetSE, GetAttribute(AttrEnergyDestabilizationAmount).get_float());
+        } break;
+        case EVEDB::invGroups::Energy_Vampire: {
+            if (m_targetSE != nullptr)
+                Ewar::LeechCapacitor(m_shipRef, m_targetSE, GetAttribute(AttrPowerTransferAmount).get_float());
+        } break;
         case EVEDB::invGroups::Energy_Transfer_Array: {
             if (m_targetSE != nullptr)
                 UpdateCharge(AttrCapacitorCharge, AttrCapacitorCapacity, AttrPowerTransferAmount, m_targetSE->GetSelf());
