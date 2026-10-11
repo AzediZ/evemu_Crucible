@@ -27,7 +27,7 @@
 #include "inventory/ItemFactory.h"
 #include "inventory/InventoryItem.h"
 #include "planet/PlanetDataMgr.h"
-#include "planet/Colony.h"
+#include "StaticDataMgr.h"
 
 PlanetDataMgr::PlanetDataMgr()
 {
@@ -100,295 +100,212 @@ int PIDataMgr::Initialize()
     return 1;
 }
 
-// do we need anything from piPinMap?  - maps SchematicID to manuf facility's typeID
 void PIDataMgr::_Populate()
 {
     double start = GetTimeMSeconds();
     DBQueryResult* res = new DBQueryResult();
+    DBResultRow row;
 
     m_db.GetSchematicData(*res);
-    DBResultRow row;
-    std::map<uint8, PI_Schematic>::iterator itr;
     while (res->GetRow(row)) {
-        // SELECT `schematicID`, `typeID`, `quantity`, `isInput`
-        itr = m_schematicData.find(row.GetInt(0));
-        if (itr != m_schematicData.end()) {
-            if (row.GetBool(3)) {
-                itr->second.inputs[row.GetInt(1)] = row.GetInt(2);
-            } else {
-                itr->second.outputType = row.GetInt(1);
-                itr->second.outputQty = row.GetInt(2);
-            }
+        // SELECT schematicID, typeID, quantity, isInput
+        PI_Schematic& data = m_schematicData[row.GetInt(0)];
+        data.schematicID = row.GetInt(0);
+        if (row.GetBool(3)) {
+            data.inputs[row.GetInt(1)] = row.GetUInt(2);
         } else {
-            PI_Schematic data = PI_Schematic();
-            if (row.GetBool(3)) {
-                data.inputs[row.GetInt(1)] = row.GetInt(2);
-            } else {
-                data.outputType = row.GetInt(1);
-                data.outputQty = row.GetInt(2);
-            }
-            m_schematicData[row.GetInt(0)] = data;
+            data.outputs[row.GetInt(1)] = row.GetUInt(2);
         }
     }
 
     m_db.GetSchematicTimes(*res);
     while (res->GetRow(row)) {
-        // SELECT `schematicID`, `cycleTime`
-        itr = m_schematicData.find(row.GetInt(0));
+        // SELECT schematicID, cycleTime
+        std::map<uint16, PI_Schematic>::iterator itr = m_schematicData.find(row.GetInt(0));
         if (itr != m_schematicData.end())
-            itr->second.cycleTime = row.GetInt(1);
+            itr->second.cycleTime = row.GetUInt(1);
+    }
+
+    m_db.GetSchematicPins(*res);
+    while (res->GetRow(row)) {
+        // SELECT schematicID, pinTypeID
+        m_schematicPins[row.GetInt(0)].insert(row.GetInt(1));
+    }
+
+    m_db.GetAttributeDefaults(*res);
+    while (res->GetRow(row)) {
+        // SELECT attributeID, defaultValue
+        m_attrDefaults[row.GetInt(0)] = row.IsNull(1) ? 0 : row.GetDouble(1);
+    }
+
+    m_db.GetPITypeAttributes(*res);
+    uint32 count = 0;
+    while (res->GetRow(row)) {
+        // SELECT typeID, attributeID, value
+        m_typeAttrs[row.GetInt(0)][row.GetInt(1)] = row.IsNull(2) ? 0 : row.GetDouble(2);
+        ++count;
     }
 
     //cleanup
     SafeDelete(res);
-    sLog.Cyan("        PIDataMgr", "%u PI Schematic data groups loaded in %.3fms.", m_schematicData.size(), (GetTimeMSeconds() - start));
+    sLog.Cyan("        PIDataMgr", "%u PI Schematics, %u attribute defaults and %u type attributes of %u PI types loaded in %.3fms.", \
+            m_schematicData.size(), m_attrDefaults.size(), count, m_typeAttrs.size(), (GetTimeMSeconds() - start));
 }
 
-void PIDataMgr::GetSchematicData(uint8 schematicID, PI_Schematic& data)
+double PIDataMgr::GetTypeAttribute(uint16 typeID, uint16 attributeID)
 {
-    std::map<uint8, PI_Schematic>::iterator itr = m_schematicData.find(schematicID);
-    if (itr != m_schematicData.end()) {
-        data = itr->second;
-        return;
+    std::unordered_map<uint16, std::map<uint16, double>>::const_iterator itr = m_typeAttrs.find(typeID);
+    if (itr != m_typeAttrs.end()) {
+        std::map<uint16, double>::const_iterator itr2 = itr->second.find(attributeID);
+        if (itr2 != itr->second.end())
+            return itr2->second;
     }
-    _log(PLANET__ERROR, "PIDataMgr::GetSchematicData() - Data not found for schematic %u", schematicID);
+    std::unordered_map<uint16, double>::const_iterator dItr = m_attrDefaults.find(attributeID);
+    if (dItr != m_attrDefaults.end())
+        return dItr->second;
+    return 0;
 }
 
-/* these are for PI */
-/*
- *    AttrHarvesterType = 709,
- *    AttrHarvesterQuality = 710,
- *    AttrLogisticalCapacity = 1631,
- *    AttrPlanetRestriction = 1632,
- *    AttrPowerLoadPerKm = 1633,
- *    AttrCPULoadPerKm = 1634,
- *    AttrCPULoadLevelModifier = 1635,
- *    AttrPowerLoadLevelModifier = 1636,
- *    AttrImportTax = 1638,
- *    AttrExportTax = 1639,
- *    AttrImportTaxMultiplier = 1640,
- *    AttrExportTaxMultiplier = 1641,
- *    AttrPinExtractionQuantity = 1642,
- *    AttrPinCycleTime = 1643,
- *    AttrExtractorDepletionRange = 1644,
- *    AttrExtractorDepletionRate = 1645,
- *    AttrCommandCenterHoldCapacity = 1646,
- *    AttrECUDecayFactor = 1683,            // this attr is empty
- *    AttrECUMaxVolume = 1684,
- *    AttrECUOverlapFactor = 1685,
- *    AttrECUNoiseFactor = 1687,            // this attr is empty
- *    AttrECUAreaOfInfluence = 1689,
- *    AttrECUExtractorHeadCPU = 1690,
- *    AttrECUExtractorHeadPower = 1691,
- *
- * decayFactor = 0.012
- * noiseFactor = 0.8
- * baseValue = 1998.0
- */
-
-PyRep* PIDataMgr::GetProgramResultInfo(Colony* pColony, uint32 pinID, uint16 typeID, PyList* heads, float headRadius)
+double PIDataMgr::GetTypeAttributeNoDefault(uint16 typeID, uint16 attributeID)
 {
-    //  ECU pinID, resource typeID, list of {headID, lat, long}, radius of head (small number...rad maybe?)
-    // qtyToDistribute, cycleTime, numCycles = self.remoteHandler.GetProgramResultInfo(pinID, typeID, pin.heads, headRadius)
-
-    /** @todo get head interference and calculate decayFactor, noiseFactor and overlapFactor for heads.  */
-
-    /*
-     *    SEC = 10000000L
-     *    MIN = SEC * 60L
-     *    HOUR = MIN * 60L
-     * RADIUS_DRILLAREAMAX = 0.05
-     * RADIUS_DRILLAREAMIN = 0.01
-     * RADIUS_DRILLAREADIFF = RADIUS_DRILLAREAMAX - RADIUS_DRILLAREAMIN
-     *
-     * def GetProgramLengthFromHeadRadius(headRadius):
-     *    return ((headRadius - RADIUS_DRILLAREAMIN) / RADIUS_DRILLAREADIFF) * 335 + 1   << length in hours between 1 and 336  (336h = 14d)
-     * def GetCycleTimeFromProgramLength(programLength):
-     *    return 0.25 * 2 ^ max(0, math.floor(math.log(programLength / 25.0, 2)) + 1)
-     *
-     *        programLength = planetCommon.GetProgramLengthFromHeadRadius(headRadius)
-     *        cycleTime = planetCommon.GetCycleTimeFromProgramLength(programLength)
-     *        numCycles = int(programLength / cycleTime)
-     *        cycleTime = int(cycleTime * HOUR)
-     */
-    InventoryItemRef iRef = sItemFactory.GetItemRef(pinID);
-    float cycleTime = iRef->GetAttribute(AttrPinCycleTime).get_int()/*300*/, length = 0;
-    uint16 numCycles = 0;
-    double one = ((headRadius - 0.01f) /0.04);
-    length = one * 335 + 1;  //293
-    double two = log2(length /25);  //3.584962501
-    cycleTime = EvE::max(floor(two) + 1);    //4
-    cycleTime = 0.25 * (pow(2, cycleTime));  // this is (float) in hours (0.25, 0.5, etc)
-    numCycles = (uint16)(length / cycleTime);   //73
-    int64 iCycleTime = cycleTime * EvE::Time::Hour;
-
-    uint32 qtyPerCycle = GetProgramOutput(iRef, iCycleTime);
-    //qtyPerCycle *= heads->size();
-
-    _log(PLANET__TRACE, "PlanetMgr::GetProgramResultInfo() - cycleTime:%.2f, iCycleTime:%lli, length:%.2f, numCycles:%u, qtyPerCycle:%u, heads: %u, headRadius:%.4f", \
-                cycleTime, iCycleTime, length, numCycles, qtyPerCycle, heads->size(), headRadius);
-
-    PyTuple* res = new PyTuple(3);
-        res->SetItem(0, new PyInt(qtyPerCycle));    //qtyToDistribute  (2843)
-        res->SetItem(1, new PyLong(iCycleTime));    //cycleTime - in usec  (9000000000)
-        res->SetItem(2, new PyInt(numCycles));      //numCycles   (12)
-
-    if (is_log_enabled(PLANET__RES_DUMP))
-        res->Dump(PLANET__RES_DUMP, "    ");
-
-    pColony->SetProgramResults(pinID, typeID, numCycles, headRadius, cycleTime, qtyPerCycle);
-
-    /*  based on values noted in GetProgramOutput()
-    13:17:37 [PlanetTrace] PlanetMgr::GetProgramResultInfo() -  cycleTime:0.25, iCycleTime:1251639296, length:8.28, numCycles:33, qtyPerCycle:1380 (one:0.02172, two:-1.59504) headRadius:0.0109
-    13:17:37 [PlanetResDump]      Tuple: 3 elements
-    13:17:37 [PlanetResDump]       [ 0]    Integer: 1380
-    13:17:37 [PlanetResDump]       [ 1]       Long: 1251639296
-    13:17:37 [PlanetResDump]       [ 2]    Integer: 33
-    */
-    PySafeDecRef(heads);
-    return res;
+    std::unordered_map<uint16, std::map<uint16, double>>::const_iterator itr = m_typeAttrs.find(typeID);
+    if (itr != m_typeAttrs.end()) {
+        std::map<uint16, double>::const_iterator itr2 = itr->second.find(attributeID);
+        if (itr2 != itr->second.end())
+            return itr2->second;
+    }
+    return 0;
 }
 
-/*              heads.append((headID, latitude, longitude))
-                headID, phi, theta = head
-                if surfacePoint:        <<--  this is mousePoint
-                    theta = 2.0 * math.pi - surfacePoint.theta
-                    phi = surfacePoint.phi
-                else:
-                    theta = 2.0 * math.pi - theta
-                    phi = phi
-                return max(0.0, builder.GetValueAt(self.sh, theta, phi))
-                */
-// ecu program methods from client
-
-uint32 PIDataMgr::GetProgramOutput(InventoryItemRef iRef, int64 cycleTime, int64 startTime, int64 currentTime)
+bool PIDataMgr::HasTypeAttribute(uint16 typeID, uint16 attributeID)
 {
-    // this is in client to display the Extractor window program results.
-
-    if (startTime == 0)
-        startTime = GetFileTimeNow() - 2 * EvE::Time::Second;
-    if (currentTime == 0)
-        currentTime = GetFileTimeNow();
-
-    int cycleNum = EvE::max((currentTime - startTime + EvE::Time::Second) / cycleTime - 1, 1);
-    float barWidth = cycleTime / EvE::Time::Second / 900.0; //0.13888
-    float t = (cycleNum + 0.5f) * barWidth; // 0.20833
-    // qtyPerCycle default is 1000.  it is reset to calculated after this returns
-    /*
-    uint32 qtyPerCycle = iRef->GetDefaultAttribute(AttrPinExtractionQuantity).get_uint32();
-    float decayValue = qtyPerCycle / (1 + t * iRef->GetAttribute(AttrECUDecayFactor).get_float());     // 1000
-    float f1 = 1.0f / 12;   // 0.08333
-    float f2 = 1.0f / 5;    // 0.2
-    float f3 = 1.0f / 2;    // 0.5
-    float phaseShift = pow(qtyPerCycle, 0.7);   // 125.89254
-    float sinA = cos(phaseShift + t * f1);      // 0.96985
-    float sinB = cos(phaseShift / 2 + t * f2);  // 0.98784
-    float sinC = cos(t * f3);                   // 0.99457
-    float sinStuff = (sinA + sinB + sinC) / 3;  // 0.98408
-    sinStuff = EvE::max(sinStuff);
-    float barHeight = decayValue * (1 + iRef->GetAttribute(AttrECUNoiseFactor).get_float() * sinStuff);     //0.8
-    */
-    return uint32(barWidth * 1000);     // 0.13888 * 1000          16
+    std::unordered_map<uint16, std::map<uint16, double>>::const_iterator itr = m_typeAttrs.find(typeID);
+    if (itr == m_typeAttrs.end())
+        return false;
+    return (itr->second.find(attributeID) != itr->second.end());
 }
 
-uint32 PIDataMgr::GetProgramOutputPrediction(InventoryItemRef iRef, int64 cycleTime, uint32 numCycles/*0*/)
+const PIDataMgr::TypeInfo& PIDataMgr::GetTypeInfo(uint16 typeID)
 {
-    uint32 val = 0;
-    if (numCycles > 120)    // hardcoded in client
-        numCycles = 120;
-    for (int i=1; i <= numCycles; ++i)
-        val += GetProgramOutput(iRef, cycleTime, i * cycleTime);
-    return val;
+    std::unordered_map<uint16, TypeInfo>::const_iterator itr = m_typeInfo.find(typeID);
+    if (itr != m_typeInfo.end())
+        return itr->second;
+
+    Inv::TypeData data = Inv::TypeData();
+    sDataMgr.GetType(typeID, data);
+    Inv::GrpData grp = Inv::GrpData();
+    if (data.groupID)
+        sDataMgr.GetGroup(data.groupID, grp);
+    TypeInfo info = TypeInfo();
+        info.categoryID = grp.catID;
+        info.groupID = data.groupID;
+        info.volume = data.volume;
+        info.capacity = data.capacity;
+        info.basePrice = data.basePrice;
+    return m_typeInfo.emplace(typeID, info).first->second;
 }
 
-uint32 PIDataMgr::GetMaxOutput(InventoryItemRef iRef, uint32 qtyPerCycle/*0*/, int64 cycleTime/*0*/)
+uint16 PIDataMgr::GetGroupID(uint16 typeID)
 {
-    if (qtyPerCycle == 0)
-        qtyPerCycle = iRef->GetAttribute(AttrPinExtractionQuantity).get_uint32();
-    if (cycleTime == 0)
-        cycleTime = iRef->GetAttribute(AttrPinCycleTime).get_int() * EvE::Time::Second; // base time is 300s
-    float scalar = iRef->GetAttribute(AttrECUNoiseFactor).get_float() +1;
-    return (scalar * qtyPerCycle) * cycleTime / EvE::Time::Second / 900.0;
+    return GetTypeInfo(typeID).groupID;
+}
+
+uint8 PIDataMgr::GetCategoryID(uint16 typeID)
+{
+    return GetTypeInfo(typeID).categoryID;
+}
+
+float PIDataMgr::GetVolume(uint16 typeID)
+{
+    return GetTypeInfo(typeID).volume;
+}
+
+float PIDataMgr::GetCapacity(uint16 typeID)
+{
+    return GetTypeInfo(typeID).capacity;
+}
+
+double PIDataMgr::GetBasePrice(uint16 typeID)
+{
+    return GetTypeInfo(typeID).basePrice;
+}
+
+uint8 PIDataMgr::GetPinKind(uint16 typeID)
+{
+    using namespace EVEDB::invGroups;
+    switch (GetGroupID(typeID)) {
+        case Command_Centers:           return PI::Pin::Kind::CommandCenter;
+        case Spaceports:                return PI::Pin::Kind::Spaceport;
+        case Storage_Facilities:        return PI::Pin::Kind::Storage;
+        case Processors:                return PI::Pin::Kind::Process;
+        case Extractor_Control_Units:   return PI::Pin::Kind::ECU;
+        case Mercenary_Bases:
+        case Capsuleer_Bases:           return PI::Pin::Kind::Base;
+    }
+    return PI::Pin::Kind::None;
+}
+
+const PI_Schematic* PIDataMgr::GetSchematic(uint16 schematicID)
+{
+    std::map<uint16, PI_Schematic>::const_iterator itr = m_schematicData.find(schematicID);
+    if (itr != m_schematicData.end())
+        return &itr->second;
+    return nullptr;
+}
+
+bool PIDataMgr::IsSchematicAllowed(uint16 schematicID, uint16 pinTypeID)
+{
+    std::map<uint16, std::set<uint16>>::const_iterator itr = m_schematicPins.find(schematicID);
+    if (itr == m_schematicPins.end())
+        return false;
+    return (itr->second.find(pinTypeID) != itr->second.end());
+}
+
+double PIDataMgr::GetImportTax(uint16 pinTypeID, const std::map<uint16, uint32>& commodities, double taxRate)
+{
+    // spaceportPin.GetImportTax
+    double importTaxRate = GetTypeAttribute(pinTypeID, AttrImportTax);
+    double totalTax = 0;
+    for (auto cur : commodities)
+        totalTax += cur.second * importTaxRate * GetTypeAttribute(cur.first, AttrImportTaxMultiplier);
+    return totalTax * taxRate;
+}
+
+double PIDataMgr::GetExportTax(uint16 pinTypeID, const std::map<uint16, uint32>& commodities, double taxRate)
+{
+    // spaceportPin.GetExportTax - uses the import tax multiplier of the commodity, as the client does
+    double exportTaxRate = GetTypeAttribute(pinTypeID, AttrExportTax);
+    double totalTax = 0;
+    for (auto cur : commodities)
+        totalTax += cur.second * exportTaxRate * GetTypeAttribute(cur.first, AttrImportTaxMultiplier);
+    return totalTax * taxRate;
+}
+
+double PIDataMgr::GetCommodityVolume(const std::map<uint16, uint32>& commodities)
+{
+    // planetCommon.GetCommodityTotalVolume
+    double totalVolume = 0;
+    for (auto cur : commodities)
+        totalVolume += GetVolume(cur.first) * cur.second;
+    return totalVolume;
 }
 
 uint16 PIDataMgr::GetHeadType(uint16 ecuTypeID, uint16 programType)
 {
-    switch (ecuTypeID) {
-        case 2848: {  //Barren ECU
-            switch (programType) {
-                case 2268: return 2409; //Barren Aqueous Liquid Extractor
-                case 2267: return 2430; //Barren Base Metals Extractor
-                case 2270: return 2435; //Barren Noble Metals Extractor
-                case 2073: return 2449; //Barren Microorganisms Extractor
-                case 2288: return 2459; //Barren Carbon Compounds Extractor
-            }
-        } break;
-        case 3060: {  //Gas ECU
-            switch (programType) {
-                case 2268: return 2416; //Gas Aqueous Liquid Extractor
-                case 2309: return 2424; //Gas Ionic Solutions Extractor
-                case 2310: return 2426; //Gas Noble Gas Extractor
-                case 2311: return 2427; //Gas Reactive Gas Extractor
-                case 2267: return 2433; //Gas Base Metals Extractor
-            }
-        } break;
-        case 3061: {  //Ice ECU
-            switch (programType) {
-                case 2268: return 2415; //Ice Aqueous Liquid Extractor
-                case 2310: return 2423; //Ice Noble Gas Extractor
-                case 2073: return 2432; //Ice Microorganisms Extractor
-                case 2286: return 2438; //Ice Planktic Colonies Extractor
-                case 2272: return 2441; //Ice Heavy Metals Extractor
-            }
-        } break;
-        case 3062: {  //Lava ECU
-            switch (programType) {
-                case 2308: return 2418; //Lava Suspended Plasma Extractor
-                case 2267: return 2428; //Lava Base Metals Extractor
-                case 2272: return 2439; //Lava Heavy Metals Extractor
-                case 2306: return 2442; //Lava Non-CS Crystals Extractor
-                case 2307: return 2448; //Lava Felsic Magma Extractor
-            }
-        } break;
-        case 3063: {  //Oceanic ECU
-            switch (programType) {
-                case 2268: return 2414; //Oceanic Aqueous Liquid Extractor
-                case 2287: return 2458; //Oceanic Complex Organisms Extractor
-                case 2286: return 2452; //Oceanic Planktic Colonies Extractor
-                case 2288: return 2461; //Oceanic Carbon Compounds Extractor
-                case 2073: return 2451; //Oceanic Microorganisms Extractor
-            }
-        } break;
-        case 3064: {  //Plasma ECU
-            switch (programType) {
-                case 2308: return 2417; //Plasma Suspended Plasma Extractor
-                case 2267: return 2429; //Plasma Base Metals Extractor
-                case 2270: return 2434; //Plasma Noble Metals Extractor
-                case 2272: return 2440; //Plasma Heavy Metals Extractor
-                case 2306: return 2443; //Plasma Non-CS Crystals Extractor
-            }
-        } break;
-        case 3067: {  //Storm ECU
-            switch (programType) {
-                case 2268: return 2413; //Storm Aqueous Liquid Extractor
-                case 2308: return 2419; //Storm Suspended Plasma Extractor
-                case 2309: return 2422; //Storm Ionic Solutions Extractor
-                case 2310: return 2425; //Storm Noble Gas Extractor
-                case 2267: return 2431; //Storm Base Metals Extractor
-            }
-        } break;
-        case 3068: {  //Temperate ECU
-            switch (programType) {
-                case 2268: return 2412; //Temperate Aqueous Liquid Extractor
-                case 2073: return 2450; //Temperate Microorganisms Extractor
-                case 2287: return 2453; //Temperate Complex Organisms Extractor
-                case 2288: return 2460; //Temperate Carbon Compounds Extractor
-                case 2305: return 2462; //Temperate Autotrophs Extractor
-            }
-        } break;
+    // extractor head types are per planet type:  same planet restriction as the ecu, harvesting the program's resource
+    double planetType = GetTypeAttribute(ecuTypeID, AttrPlanetRestriction);
+    for (auto cur : m_typeAttrs) {
+        if (GetGroupID(cur.first) != EVEDB::invGroups::Extractors)
+            continue;
+        std::map<uint16, double>::const_iterator itr = cur.second.find(AttrHarvesterType);
+        if ((itr == cur.second.end()) or (itr->second != programType))
+            continue;
+        itr = cur.second.find(AttrPlanetRestriction);
+        if ((itr != cur.second.end()) and (itr->second == planetType))
+            return cur.first;
     }
     _log(PLANET__ERROR, "PIDataMgr::GetHeadType() - Extractor typeID not found using ECU typeID: %u and Resource typeID: %u", ecuTypeID, programType);
-    return 2412; //Temperate Aqueous Liquid Extractor  <<< as good a default as any...
+    return 0;
 }
 
 uint8 PIDataMgr::GetProductLevel(uint16 typeID)

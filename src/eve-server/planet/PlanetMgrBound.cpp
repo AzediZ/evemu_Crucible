@@ -224,7 +224,7 @@ PyResult PlanetMgrBound::UserUpdateNetwork(PyCallArgs &call, PyList* commandList
     return mgr.UpdateNetwork(commandList);
 }
 
-PyResult PlanetMgrBound::GetProgramResultInfo(PyCallArgs &call, PyInt* ecuID, PyInt* typeID, PyList* heads, PyFloat* headRadius) {
+PyResult PlanetMgrBound::GetProgramResultInfo(PyCallArgs &call, PyRep* ecuID, PyInt* typeID, PyList* heads, PyRep* headRadius) {
     /*
         qtyToDistribute, cycleTime, numCycles = self.remoteHandler.GetProgramResultInfo(pinID, typeID, pin.heads, headRadius)
 
@@ -254,7 +254,8 @@ PyResult PlanetMgrBound::GetProgramResultInfo(PyCallArgs &call, PyInt* ecuID, Py
     call.Dump(PLANET__DUMP);
      */
     CheckCaller(call.client);
-    return sPIDataMgr.GetProgramResultInfo(GetColony(), ecuID->value(), typeID->value(), heads, headRadius->value());
+    double radius = (headRadius->IsFloat() ? headRadius->AsFloat()->value() : (double)PyRep::IntegerValue(headRadius));
+    return GetColony()->GetProgramResultInfo(ecuID, typeID->value(), heads, radius);
 }
 
 PyResult PlanetMgrBound::GetResourceData(PyCallArgs &call, PyObject* info) {
@@ -371,6 +372,9 @@ PyResult PlanetMgrBound::UserTransferCommodities(PyCallArgs &call, PyList* path,
     CheckCaller(call.client);
     if (path->size() < 2)
         throw UserError("CreateRouteTooShort");
+    std::vector<uint32> pinPath;
+    for (size_t i = 0; i < path->size(); ++i)
+        pinPath.push_back(PyRep::IntegerValueU32(path->GetItem(i)));
     std::map<uint16, uint32> items;
     PyDict::const_iterator itr = commodities->begin();
     for (; itr != commodities->end(); ++itr) {
@@ -379,7 +383,7 @@ PyResult PlanetMgrBound::UserTransferCommodities(PyCallArgs &call, PyList* path,
             items[PyRep::IntegerValue(itr->first)] = (uint32)qty;
     }
 
-    return GetColony()->TransferCommodities(call.client, PyRep::IntegerValue(path->items.front()), PyRep::IntegerValue(path->items.back()), items);
+    return GetColony()->TransferCommodities(call.client, pinPath, items);
 }
 
 

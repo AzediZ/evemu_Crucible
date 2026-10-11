@@ -67,7 +67,7 @@ protected:
     PyResult GetPlanetInfo(PyCallArgs& call);
     PyResult GetExtractorsForPlanet(PyCallArgs& call, PyInt* planetID);
     PyResult UserUpdateNetwork(PyCallArgs& call, PyList* commandList);
-    PyResult GetProgramResultInfo(PyCallArgs& call, PyInt* ecuID, PyInt* typeID, PyList* heads, PyFloat* headRadius);
+    PyResult GetProgramResultInfo(PyCallArgs& call, PyRep* ecuID, PyInt* typeID, PyList* heads, PyRep* headRadius);
     PyResult GetResourceData(PyCallArgs& call, PyObject* info);
     PyResult UserAbandonPlanet(PyCallArgs& call);
     PyResult UserLaunchCommodities(PyCallArgs& call, PyInt* commandPinID, PyDict* commoditiesToLaunch);

@@ -218,6 +218,22 @@ EVEServerConfig::EVEServerConfig()
     cosmic.WormHoleEnabled = false;
     cosmic.CiviliansEnabled = false;
     cosmic.BumpEnabled = false;
+    cosmic.PIRestrictTradeHubs = true;
+    cosmic.PISpawnAllCustomsOffices = true;
+    cosmic.PICONCORDTaxMultiplier = 1.0f;
+    cosmic.PIInterbusTaxMultiplier = 1.0f;
+    cosmic.PIResourceSeed = 20111129;
+    cosmic.PIResourceScale = 1.0f;
+    cosmic.PIResourceSpectrum = 1.2f;
+    cosmic.PIRichnessHighsec = 0.55f;
+    cosmic.PIRichnessLowsec = 0.8f;
+    cosmic.PIRichnessNullsec = 1.0f;
+    cosmic.PIDepletionEnabled = true;
+    cosmic.PIDepletionPerUnit = 0.0001f;
+    cosmic.PIDepletionMaxFraction = 0.6f;
+    cosmic.PIDepletionRadius = 1.5f;
+    cosmic.PIDepletionRegenHours = 168.0f;
+    cosmic.PIGantryMaxDistanceKm = 100000.0f;
 
     // exploring
     exploring.Gravametric = 5;
@@ -912,6 +928,22 @@ bool EVEServerConfig::ProcessCosmic( const TiXmlElement* ele )
     AddValueParser( "WormHoleEnabled",      cosmic.WormHoleEnabled );
     AddValueParser( "CiviliansEnabled",     cosmic.CiviliansEnabled);
     AddValueParser( "BumpEnabled",          cosmic.BumpEnabled );
+    AddValueParser( "PIRestrictTradeHubs", cosmic.PIRestrictTradeHubs );
+    AddValueParser( "PISpawnAllCustomsOffices", cosmic.PISpawnAllCustomsOffices );
+    AddValueParser( "PICONCORDTaxMultiplier", cosmic.PICONCORDTaxMultiplier );
+    AddValueParser( "PIInterbusTaxMultiplier", cosmic.PIInterbusTaxMultiplier );
+    AddValueParser( "PIResourceSeed", cosmic.PIResourceSeed );
+    AddValueParser( "PIResourceScale", cosmic.PIResourceScale );
+    AddValueParser( "PIResourceSpectrum", cosmic.PIResourceSpectrum );
+    AddValueParser( "PIRichnessHighsec", cosmic.PIRichnessHighsec );
+    AddValueParser( "PIRichnessLowsec", cosmic.PIRichnessLowsec );
+    AddValueParser( "PIRichnessNullsec", cosmic.PIRichnessNullsec );
+    AddValueParser( "PIDepletionEnabled", cosmic.PIDepletionEnabled );
+    AddValueParser( "PIDepletionPerUnit", cosmic.PIDepletionPerUnit );
+    AddValueParser( "PIDepletionMaxFraction", cosmic.PIDepletionMaxFraction );
+    AddValueParser( "PIDepletionRadius", cosmic.PIDepletionRadius );
+    AddValueParser( "PIDepletionRegenHours", cosmic.PIDepletionRegenHours );
+    AddValueParser( "PIGantryMaxDistanceKm", cosmic.PIGantryMaxDistanceKm );
 
     const bool result = ParseElementChildren( ele );
 
@@ -925,6 +957,22 @@ bool EVEServerConfig::ProcessCosmic( const TiXmlElement* ele )
     RemoveParser( "WormHoleEnabled" );
     RemoveParser( "CiviliansEnabled" );
     RemoveParser( "BumpEnabled" );
+    RemoveParser( "PIRestrictTradeHubs" );
+    RemoveParser( "PISpawnAllCustomsOffices" );
+    RemoveParser( "PICONCORDTaxMultiplier" );
+    RemoveParser( "PIInterbusTaxMultiplier" );
+    RemoveParser( "PIResourceSeed" );
+    RemoveParser( "PIResourceScale" );
+    RemoveParser( "PIResourceSpectrum" );
+    RemoveParser( "PIRichnessHighsec" );
+    RemoveParser( "PIRichnessLowsec" );
+    RemoveParser( "PIRichnessNullsec" );
+    RemoveParser( "PIDepletionEnabled" );
+    RemoveParser( "PIDepletionPerUnit" );
+    RemoveParser( "PIDepletionMaxFraction" );
+    RemoveParser( "PIDepletionRadius" );
+    RemoveParser( "PIDepletionRegenHours" );
+    RemoveParser( "PIGantryMaxDistanceKm" );
 
     return result;
 }

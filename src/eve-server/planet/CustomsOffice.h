@@ -72,6 +72,12 @@ public:
 
     void    VerifyAddItem(InventoryItemRef iRef);   // this must throw on failure
 
+    // the office's storage is per character (type capacity each)
+    double  GetUsedSpace(uint32 ownerID);
+    double  GetAvailableSpace(uint32 ownerID);
+    // an exported commodity:  onto the owner's stack of that type in the hangar, or a new stack
+    void    AddCommodity(uint32 ownerID, uint16 typeID, uint32 quantity);
+
     // GM: Take Control
     void    ChangeOwner(uint32 corpID, int32 allianceID);
 

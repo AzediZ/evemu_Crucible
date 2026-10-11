@@ -265,6 +265,23 @@ boolean can use either 0/1 OR true/false.
         <WormHoleEnabled>true</WormHoleEnabled><!-- bool -->
         <CiviliansEnabled>false</CiviliansEnabled><!-- bool  no effect: Crucible had no ambient civilian traffic, so the civilian manager does nothing -->
         <BumpEnabled>false</BumpEnabled><!-- bool.  makes player ships solid, so they bump into each other, NPCs and stations -->
+        <!-- planetary interaction -->
+        <PIRestrictTradeHubs>true</PIRestrictTradeHubs><!-- bool.  Crucible: no colonies in the 18 trade hub systems (Jita, Amarr, Rens, Dodixie...).  false allows them -->
+        <PISpawnAllCustomsOffices>true</PISpawnAllCustomsOffices><!-- bool.  Crucible: every planet has a customs office.  they are spawned when a system boots, once (a destroyed Interbus office never comes back).  false = only when a colony is built -->
+        <PICONCORDTaxMultiplier>1.0</PICONCORDTaxMultiplier><!-- float.  scales the high security CONCORD customs office tax (10%) -->
+        <PIInterbusTaxMultiplier>1.0</PIInterbusTaxMultiplier><!-- float.  scales the Interbus customs office tax (17%) -->
+        <PIResourceSeed>20111129</PIResourceSeed><!-- integer.  seed of the generated planet resource maps.  changing it gives every planet new maps -->
+        <PIResourceScale>1.0</PIResourceScale><!-- float.  scales every resource value (extraction yields) -->
+        <PIResourceSpectrum>1.2</PIResourceSpectrum><!-- float.  how fast the detail of the resource maps falls off.  higher = fewer, bigger deposits -->
+        <PIRichnessHighsec>0.55</PIRichnessHighsec><!-- float.  base richness of planets in high security (0.45 and up).  each planet gets 50-100% of its base -->
+        <PIRichnessLowsec>0.8</PIRichnessLowsec><!-- float.  base richness of planets in low security -->
+        <PIRichnessNullsec>1.0</PIRichnessNullsec><!-- float.  base richness of planets in null security and wormholes -->
+        <PIDepletionEnabled>true</PIDepletionEnabled><!-- bool.  extraction programs deplete the resource around their heads, which grows back over time -->
+        <PIDepletionPerUnit>0.0001</PIDepletionPerUnit><!-- float.  resource value removed at a head per unit extracted -->
+        <PIDepletionMaxFraction>0.6</PIDepletionMaxFraction><!-- float.  at most this part of the resource at a head can be depleted -->
+        <PIDepletionRadius>1.5</PIDepletionRadius><!-- float.  size of the depleted area, in head radii -->
+        <PIDepletionRegenHours>168</PIDepletionRegenHours><!-- float.  half-life of depletion in hours once the program is done -->
+        <PIGantryMaxDistanceKm>100000</PIGantryMaxDistanceKm><!-- float.  a Customs Office Gantry anchors no further than this from the planet surface (km) -->
     </cosmic>
 
     <exploring><!--  control amount of specific sites per system (adjusted by truSec) -->

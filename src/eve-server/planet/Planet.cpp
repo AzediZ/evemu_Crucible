@@ -52,8 +52,9 @@ pCO(nullptr)
 
 PlanetSE::~PlanetSE()
 {
+    // colonies are saved after every change.  this keeps the simulated time
     for (auto cur : m_colonies) {
-        cur.second->Shutdown();
+        cur.second->Save();
         SafeDelete(cur.second);
     }
 }
@@ -130,8 +131,20 @@ bool PlanetSE::LoadExtras() {
 // called from SystemManager::Process() @ 1m
 void PlanetSE::Process()
 {
-    for (auto cur : m_colonies)
-        cur.second->Process();
+    // colonies are simulated when they are looked at (Colony::SimulateToNow), not on a timer
+}
+
+bool PlanetSE::IsResourceType(uint16 typeID)
+{
+    return ((typeID != 0) and ((typeID == m_data.type_1) or (typeID == m_data.type_2) or (typeID == m_data.type_3)
+                           or  (typeID == m_data.type_4) or (typeID == m_data.type_5)));
+}
+
+ColonySim::ResourceField PlanetSE::GetResourceField(uint16 typeID)
+{
+    // a flat resource:  every spot of the planet has the same value
+    double value = (IsResourceType(typeID) ? 15.0 : 0.0);
+    return [value](double, double) { return value; };
 }
 
 PyRep* PlanetSE::GetResourceData(Call_ResourceDataDict& dict)
@@ -213,13 +226,10 @@ PyRep* PlanetSE::GetPlanetInfo(Colony* pColony) {
     args->SetItem("solarSystemID", new PyInt(m_system->GetID()));
     args->SetItem("radius", new PyInt(GetRadius()));
     args->SetItem("planetID", new PyInt(m_self->itemID()));
-    if (pColony->HasColony()) {
-        //pColony->Update();
-        args->SetItem("level", new PyInt(pColony->GetLevel()));
-        args->SetItem("pins", pColony->GetPins());
-        args->SetItem("links", pColony->GetLinks());
-        args->SetItem("routes", pColony->GetRoutes());
-        args->SetItem("currentSimTime", new PyLong(pColony->GetSimTime()));
+    // the colony keys only when the caller has a colony here.  the client runs its simulation from currentSimTime
+    if ((pColony != nullptr) and pColony->HasColony()) {
+        pColony->SimulateToNow();
+        pColony->SerializeInto(args);
     }
     //PyIncRef(args);
     PyObject *rtn = new PyObject("util.KeyVal", args);
@@ -232,19 +242,24 @@ PyRep* PlanetSE::GetExtractorsForPlanet(int32 planetID) {
     // NOTE this gets ALL extractors on this planet
     // returns typeID, ownerID, latitude?, longitude?
 
+    //  the heads of running programs:  KeyVal(pinID, typeID, ownerID, latitude, longitude).  typeID is the extractor head type;
+    //  the client shows the ones whose harvesterType is the resource it is looking at (otherPinManager)
     DBQueryResult res;
-    // {for ecu in planetID}  SELECT `headID`, `typeID`, `ownerID`, `latitude`, `longitude` FROM `piECUHeads`
     PlanetDB::GetExtractorsForPlanet(planetID, res);
 
     PyList* list = new PyList();
     DBResultRow row;
     while (res.GetRow(row)) {
+        // SELECT ecuID, headID, ecuTypeID, programType, ownerID, latitude, longitude
+        uint16 headType = sPIDataMgr.GetHeadType(row.GetUInt(2), row.GetUInt(3));
+        if (headType == 0)
+            continue;
         PyDict* dict(new PyDict());
-            dict->SetItem("pinID", new PyInt(row.GetInt(0)));
-            dict->SetItem("typeID", new PyInt(row.GetInt(1)));
-            dict->SetItem("ownerID", new PyInt(row.GetInt(2)));
-            dict->SetItem("latitude", new PyFloat(row.GetFloat(3)));
-            dict->SetItem("longitude", new PyFloat(row.GetFloat(4)));
+            dict->SetItem("pinID", new PyLong(int64(row.GetUInt(0)) * 16 + row.GetUInt(1)));    // unique per head
+            dict->SetItem("typeID", new PyInt(headType));
+            dict->SetItem("ownerID", new PyInt(row.GetUInt(4)));
+            dict->SetItem("latitude", new PyFloat(row.GetDouble(5)));
+            dict->SetItem("longitude", new PyFloat(row.GetDouble(6)));
         list->AddItem(new PyObject("util.KeyVal", dict));
     }
 

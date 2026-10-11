@@ -14,6 +14,7 @@
 
 #include "EntityList.h"
 #include "StaticDataMgr.h"
+#include "planet/ColonySim.h"
 #include "system/SystemEntity.h"
 
 /** @todo update this to create a planet item instead of the default celestial item */
@@ -54,7 +55,12 @@ public:
     virtual bool                LoadExtras();
 
     /* specific functions for this class */
+    // KeyVal(planetID, solarSystemID, planetTypeID, radius[, level, pins, links, routes, currentSimTime])
     PyRep*                      GetPlanetInfo(Colony* pColony);
+    // is this one of the planet's resources
+    bool                        IsResourceType(uint16 typeID);
+    // the resource's value at a surface point, for extraction programs
+    ColonySim::ResourceField    GetResourceField(uint16 typeID);
     PyRep*                      GetResourceData(Call_ResourceDataDict& dict);
     PyRep*                      GetPlanetResourceInfo();
     PyRep*                      GetExtractorsForPlanet(int32 planetID);

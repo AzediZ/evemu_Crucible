@@ -321,6 +321,23 @@ public:
         uint8 BeltRespawn;
         uint8 BeltGrowth;
         float roidRadiusMultiplier;
+        // planetary interaction (F19)
+        bool PIRestrictTradeHubs;
+        bool PISpawnAllCustomsOffices;
+        float PICONCORDTaxMultiplier;
+        float PIInterbusTaxMultiplier;
+        int32 PIResourceSeed;
+        float PIResourceScale;
+        float PIResourceSpectrum;
+        float PIRichnessHighsec;
+        float PIRichnessLowsec;
+        float PIRichnessNullsec;
+        bool PIDepletionEnabled;
+        float PIDepletionPerUnit;
+        float PIDepletionMaxFraction;
+        float PIDepletionRadius;
+        float PIDepletionRegenHours;
+        float PIGantryMaxDistanceKm;
     } cosmic;
 
     // From exploring

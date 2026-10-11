@@ -10,6 +10,8 @@
 #ifndef EVE_PLANET_H
 #define EVE_PLANET_H
 #include <map>
+#include <set>
+#include <vector>
 
 #include "eve-common.h"
 
@@ -58,6 +60,19 @@ namespace PI {
             Level9  = 9,
             Level10 = 10
         };
+
+        // which of the client's pin classes a pin type is  (planetCommon.GetPinEntityType)
+        namespace Kind {
+            enum {
+                None            = 0,
+                CommandCenter   = 1,    // CommandPin
+                Spaceport       = 2,    // SpaceportPin
+                Storage         = 3,    // StoragePin
+                Process         = 4,    // ProcessPin
+                ECU             = 5,    // EcuPin
+                Base            = 6     // capsuleer/mercenary bases (DUST, not supported)
+            };
+        }
     }
 
     namespace Route {
@@ -114,100 +129,76 @@ struct PlanetResourceData {
     std::string buffer_5;
 };
 
+/* colony data.  this is the state the client's shared planet code (common/script/planet/*) works on.
+ *  ColonySim (planet/ColonySim.h) runs the client's simulation on it.
+ *  times are FILETIME.  a time of 0 stands for the client's None.
+ */
 struct PI_Link {
-    int8 state;
-    uint16 level;
+    uint8 level;
     uint16 typeID;
-    uint32 endpoint1;
+    uint32 linkID;                      // item for this link
+    uint32 endpoint1;                   // endpoint1 < endpoint2, always
     uint32 endpoint2;
+    std::vector<uint32> routesTransiting;
 };
 
 struct PI_Route {
-    int8 state;
-    int8 priority;
     uint16 commodityTypeID;
-    uint16 commodityQuantity;
-    uint32 srcPinID;
-    uint32 destPinID;
-    std::list<uint32> path;
+    uint32 commodityQuantity;
+    uint32 routeID;
+    std::vector<uint32> path;           // source ... destination
 };
 
 struct PI_Heads {
-    uint16 typeID;
+    uint16 typeID;                      // extractor head type for the running program (attr harvesterType = programType)
     uint32 ecuPinID;
     double latitude;
     double longitude;
 };
 
 struct PI_Schematic {
-    uint16 outputQty;
-    uint16 outputType;
-    uint16 cycleTime;                   // in seconds
-
+    uint16 schematicID;
+    uint32 cycleTime;                   // in seconds
     // typeID, qty
-    std::map<uint16, uint16> inputs;
-};
-
-struct PI_Plant {
-    // specifically for processing plants. this is not saved in db as a group, but is in pinData
-    bool hasReceivedInputs :1;          // plant has received material from upstream process.  this enables check to verify type/qty for processing
-    bool receivedInputsLastCycle :1;    // plant has received all required mat'l to make a production run.
-
-    int8 state;
-    uint8 pLevel;                       // production level of this plant
-    uint8 schematicID;
-    uint16 qtyPerCycle;
-    int64 cycleTime;                    // in filetime
-    //int64 expiryTime;                   // in filetime
-    int64 installTime;                  // in filetime
-    int64 lastRunTime;                  // in filetime
-
-    PI_Schematic data;
+    std::map<uint16, uint32> inputs;
+    std::map<uint16, uint32> outputs;
 };
 
 struct PI_Pin {
-    bool update :1;                     // specifically for updating contents in db. this is a runtime value.
+    PI_Pin()
+    : kind(0), state(0), hasReceivedInputs(true), receivedInputsLastCycle(true), typeID(0), schematicID(0), programType(0),
+      ownerID(0), qtyPerCycle(0), lastRunTime(0), lastLaunchTime(0), cycleTime(0), installTime(0), expiryTime(0),
+      latitude(0), longitude(0), capacityUsed(0), headRadius(0)
+    { }
 
-    bool isECU :1;                      // common for all pins
-    bool isBase :1;                     // common for all pins
-    bool isStorage :1;                  // common for all pins
-    bool isProcess :1;                  // common for all pins
-    bool isConsumer :1;                 // common for all pins
-    bool isLaunchable :1;               // common for all pins
-    bool isCommandCenter :1;            // common for all pins
+    uint8 kind;                         // PI::Pin::Kind
+    int8 state;                         // PI::Pin::State
+    bool hasReceivedInputs;             // Process
+    bool receivedInputsLastCycle;       // Process
+    uint16 typeID;
+    uint16 schematicID;                 // Process  (0 = none)
+    uint16 programType;                 // ECU - extracted resource typeID  (0 = none)
+    uint32 ownerID;
+    uint32 qtyPerCycle;                 // ECU
+    int64 lastRunTime;
+    int64 lastLaunchTime;               // Command Center and Spaceports
+    int64 cycleTime;                    // Process (from schematic) and ECU (program)
+    int64 installTime;                  // ECU
+    int64 expiryTime;                   // ECU
+    double latitude;
+    double longitude;
+    double capacityUsed;                // m3 of contents
+    double headRadius;                  // ECU  (0 = none)
 
-    // these two are checked in client for the pin.CanActivate() method.  it will return true if either are true.  that is the only reference i can find.
-    bool hasReceivedInputs :1;          // Process Only
-    bool receivedInputsLastCycle :1;    // Process Only
-
-    int8 state;                         // common for all pins
-    uint16 level;                       // common for all pins
-    uint16 typeID;                      // common for all pins
-    uint16 schematicID;                 // used in ecu as extractor head typeID
-    uint16 programType;                 // used in extractors as extracted resource typeID
-    uint32 qtyPerCycle;                 // Process and ECU
-    uint32 ownerID;                     // common for all pins
-    int64 lastRunTime;                  // common for all pins - copy of launchTime for Spaceports
-    int64 cycleTime;                    // Process and ECU      // saved as filetime
-    int64 expiryTime;                   // ECU Only             // saved as filetime
-    int64 installTime;                  // Process and ECU processing time, Pin Creation Time for others      // saved as filetime
-    int64 lastLaunchTime;               // Command Center and Spaceports  // saved as filetime
-
-    float latitude;                     // planetary location common for all pins
-    float longitude;                    // planetary location common for all pins
-
-    float capacity;                     // pin volume cap in m3.  - this is not implemented yet
-    float quantity;                     // volume of current contents in m3.  - this is not implemented yet
-    float headRadius;                   // ECU Only
-
-    std::map<uint16, PI_Heads> heads;   // ECU Only
-    std::map<uint16, uint32> contents;  // Storage    <typeID, qty>
+    std::map<uint16, uint32> contents;  // typeID, qty
+    std::map<uint16, uint32> demands;   // Process - schematic inputs
+    std::map<uint16, uint32> products;  // Process - schematic outputs
+    std::map<uint16, PI_Heads> heads;   // ECU - headID, head
 };
 
 
 class PI_CCPin {
 public:
-
     PI_CCPin()                                          { Init(); }
     ~PI_CCPin()                                         { /* do nothing here */ }
 
@@ -215,15 +206,20 @@ public:
     {
         pins.clear();
         links.clear();
-        plants.clear();
         routes.clear();
+        megaRoutesBySource.clear();
+        routesBySource.clear();
+        routesByDestination.clear();
+        linksByEndpoint.clear();
     }
     void Init()
     {
         Clear();
         level = 0;
         ccPinID = 0;
-        qtyPerCycle = 0;
+        ownerID = 0;
+        planetID = 0;
+        currentSimTime = 0;
     }
 
     uint8 GetLevel()                                    { return level; }
@@ -231,16 +227,26 @@ public:
 
     uint8 level;
     uint32 ccPinID;
-    uint32 qtyPerCycle; 
+    uint32 ownerID;
+    uint32 planetID;
+    int64 currentSimTime;               // 0 = None
 
     // pinID, pinData
     std::map<uint32, PI_Pin> pins;
-    // linkID, linkData
-    std::map<uint32, PI_Link> links;
-    // routeID, routeData
-    std::map<uint16, PI_Route> routes;
-    // plantPinID, plantData   - this dynamic data is not saved
-    std::map<uint32, PI_Plant> plants;
+    // (endpoint1, endpoint2), linkData
+    std::map<std::pair<uint32, uint32>, PI_Link> links;
+    // routeID, routeData.  ascending routeID is the client's route order
+    std::map<uint32, PI_Route> routes;
+
+    /* derived indices, rebuilt by ColonySim::RebuildIndices() */
+    // sourceID, ((destID, typeID), qty)
+    std::map<uint32, std::map<std::pair<uint32, uint16>, uint32>> megaRoutesBySource;
+    // sourceID, routeIDs
+    std::map<uint32, std::set<uint32>> routesBySource;
+    // destID, routeIDs in creation order
+    std::map<uint32, std::vector<uint32>> routesByDestination;
+    // pinID, linked pinIDs
+    std::map<uint32, std::vector<uint32>> linksByEndpoint;
 };
 
 /*  these are internal client state events

@@ -161,12 +161,13 @@ PyResult InventoryBound::ImportExportWithPlanet(PyCallArgs &call, PyInt* spacepo
         return nullptr;
     }
 
-    std::map<uint32, uint32> importItems, exportItems;
+    std::map<uint32, uint32> importItems;
+    std::map<uint16, uint32> exportItems;
     for (PyDict::const_iterator itr = importData->begin(); itr != importData->end(); ++itr)
         importItems[PyRep::IntegerValueU32(itr->first)] = PyRep::IntegerValue(itr->second);
 
     for (PyDict::const_iterator itr = exportData->begin(); itr != exportData->end(); ++itr)
-        exportItems[PyRep::IntegerValueU32(itr->first)] = PyRep::IntegerValue(itr->second);
+        exportItems[(uint16)PyRep::IntegerValue(itr->first)] = PyRep::IntegerValue(itr->second);
 
     // ok, so from here, we need to get officeRef->officeSE->planet->colony to make xfer....crazy shit
     StructureItemRef sRef = StructureItemRef::StaticCast(m_self);

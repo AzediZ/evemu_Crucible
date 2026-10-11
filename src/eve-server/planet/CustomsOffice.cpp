@@ -237,6 +237,40 @@ void CustomsSE::VerifyAddItem(InventoryItemRef iRef)
         throw CustomError ("You cannot put %s in a %s", iRef->name(), m_self->name());
 }
 
+double CustomsSE::GetUsedSpace(uint32 ownerID)
+{
+    double used = 0;
+    std::vector<InventoryItemRef> items;
+    m_self->GetMyInventory()->GetItemsByFlag(flagHangar, items);
+    for (auto cur : items)
+        if (cur->ownerID() == ownerID)
+            used += cur->type().volume() * cur->quantity();
+    return used;
+}
+
+double CustomsSE::GetAvailableSpace(uint32 ownerID)
+{
+    return m_self->type().capacity() - GetUsedSpace(ownerID);
+}
+
+void CustomsSE::AddCommodity(uint32 ownerID, uint16 typeID, uint32 quantity)
+{
+    std::vector<InventoryItemRef> items;
+    m_self->GetMyInventory()->GetItemsByFlag(flagHangar, items);
+    for (auto cur : items)
+        if ((cur->ownerID() == ownerID) and (cur->typeID() == typeID) and !cur->isSingleton()) {
+            cur->AlterQuantity(quantity, true);
+            return;
+        }
+    ItemData data(typeID, ownerID, locTemp, flagNone, quantity);
+    InventoryItemRef iRef = sItemFactory.SpawnItem(data);
+    if (iRef.get() == nullptr) {
+        _log(POS__ERROR, "CustomsSE::AddCommodity() - unable to spawn %u of type %u for %u in %u", quantity, typeID, ownerID, m_self->itemID());
+        return;
+    }
+    iRef->Move(m_self->itemID(), flagHangar, true);
+}
+
 void CustomsSE::GetEffectState(PyList& into)
 {
     // not used yet - cannot use OnSpecialFX14 packet.

@@ -1,4 +1,3 @@
-
  /**
   * @name PlanetMgr.cpp
   *   Specific Class for managing planet resources
@@ -8,523 +7,539 @@
   * @update:  4 November 2016  - began rewrite
   *          16 November 2016  - basic system working
   *          19 July 2019      - all systems working properly
+  *          F19               - commands validated and applied with the client's rules, transactional, paid for
   */
+
+/*
+ * PLANET__ERROR
+ * PLANET__WARNING
+ * PLANET__DEBUG
+ * PLANET__TRACE
+ */
 
 
 #include "eve-server.h"
 
 #include "Client.h"
+#include "EVEServerConfig.h"
 
 #include "account/AccountService.h"
+#include "inventory/ItemDB.h"
 #include "inventory/ItemType.h"
 #include "inventory/InventoryItem.h"
-#include "packets/Planet.h"
 #include "planet/Colony.h"
 #include "planet/Planet.h"
 #include "planet/PlanetMgr.h"
 #include "planet/PlanetDataMgr.h"
 #include "system/SystemManager.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
+
+namespace {
+    // provisional IDs of pins and routes created in a stream.  real itemIDs and routeIDs are far below this
+    const uint32 ProvisionalID = 0xF0000000;
+
+    /* colonies can't be built in these systems (since Tyrannis):  PlanetBlackListed
+     *  Amarr, Arnon, Aunia, Auvergne, Balginia, Dodixie, Fricoure, Ichoriya, Irjunen, Isaziwa, Isinokka, Jita, Lustrevik, Motsu,
+     *  Oursulaert, Rens, Sankkasen, Umokka
+     */
+    const char* BlackListedSystems[] = {
+        "Amarr", "Arnon", "Aunia", "Auvergne", "Balginia", "Dodixie", "Fricoure", "Ichoriya", "Irjunen",
+        "Isaziwa", "Isinokka", "Jita", "Lustrevik", "Motsu", "Oursulaert", "Rens", "Sankkasen", "Umokka"
+    };
+
+    // deletes a pin or link item of a colony
+    void DeleteColonyItem(uint32 itemID)
+    {
+        InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+        if (iRef.get() != nullptr) {
+            iRef->Delete();
+        } else {
+            ItemDB::DeleteItem(itemID);
+        }
+    }
+
+    double GetNumber(PyRep* rep)
+    {
+        if (rep == nullptr)
+            return 0;
+        if (rep->IsFloat())
+            return rep->AsFloat()->value();
+        return (double)PyRep::IntegerValue(rep);
+    }
+}
 
 PlanetMgr::PlanetMgr(Client* pClient, PlanetSE* pPlanet, Colony* pColony) :
  m_client(pClient),
  m_colony(pColony),
-m_planet(pPlanet)
+ m_planet(pPlanet),
+ m_charID(pClient->GetCharacterID()),
+ m_now(0),
+ m_cost(0),
+ m_sim(nullptr),
+ m_nextPinID(ProvisionalID),
+ m_nextRouteID(ProvisionalID),
+ m_newCommandCenter(0)
 {
+}
+
+PlanetMgr::~PlanetMgr()
+{
+    SafeDelete(m_sim);
+}
+
+PyRep* PlanetMgr::GetArg(PyTuple* args, size_t index)
+{
+    if ((args == nullptr) or (index >= args->size()))
+        throw CustomError ("Malformed planet command.");
+    return args->GetItem(index);
+}
+
+uint32 PlanetMgr::GetPinID(PyRep* id)
+{
+    if (id->IsInt() or id->IsLong())
+        return PyRep::IntegerValueU32(id);
+    if (id->IsTuple() and (id->AsTuple()->size() == 2)) {
+        std::pair<int64, int64> key(PyRep::IntegerValue(id->AsTuple()->GetItem(0)), PyRep::IntegerValue(id->AsTuple()->GetItem(1)));
+        std::map<std::pair<int64, int64>, uint32>::const_iterator itr = m_tempPins.find(key);
+        if (itr != m_tempPins.end())
+            return itr->second;
+    }
+    throw UserError("PinDoesNotExist");
+}
+
+uint32 PlanetMgr::GetRouteID(PyRep* id)
+{
+    if (id->IsInt() or id->IsLong())
+        return PyRep::IntegerValueU32(id);
+    if (id->IsTuple() and (id->AsTuple()->size() == 2)) {
+        std::pair<int64, int64> key(PyRep::IntegerValue(id->AsTuple()->GetItem(0)), PyRep::IntegerValue(id->AsTuple()->GetItem(1)));
+        std::map<std::pair<int64, int64>, uint32>::const_iterator itr = m_tempRoutes.find(key);
+        if (itr != m_tempRoutes.end())
+            return itr->second;
+    }
+    throw UserError("RouteDoesNotExist");
 }
 
 PyRep* PlanetMgr::UpdateNetwork(PyList* commandList)
 {
     using namespace PI;
-    bool cancel = false;
-    for (int i = 0; i < commandList->size(); ++i) {
-        if (cancel)
-            return m_colony->GetColony();
-        UUNCommand uunc;
-        if (!uunc.Decode(commandList->GetItem(i)->AsTuple())) {
-            _log(SERVICE__ERROR, "Failed to decode args for UUNCommand");
+    // the colony as of now, and a copy the commands work on
+    m_colony->SimulateToNow();
+    m_now = GetFileTimeNow();
+    m_work = m_colony->GetData();
+    m_work.ownerID = m_charID;
+    m_work.planetID = m_planet->GetID();
+    if (m_work.currentSimTime == 0)
+        m_work.currentSimTime = m_now;
+    m_sim = new ColonySim(m_work, m_planet->GetRadius(), m_planet->GetTypeID());
+    m_sim->RebuildIndices();
+
+    for (size_t i = 0; i < commandList->size(); ++i) {
+        PyRep* rep = commandList->GetItem(i);
+        if ((rep == nullptr) or !rep->IsTuple() or (rep->AsTuple()->size() < 2) or !rep->AsTuple()->GetItem(1)->IsTuple()) {
+            _log(PLANET__ERROR, "PlanetMgr::UpdateNetwork() - malformed command %u", i);
             commandList->Dump(PLANET__WARNING, "      ");
-            m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
-            return nullptr;
+            throw CustomError ("Malformed planet command.");
         }
-        _log(PLANET__TRACE, "PlanetMgr::UserUpdateNetwork() - loop: %u, command: %s(%i)", i, sPlanetDataMgr.GetCommandName(uunc.command), uunc.command);
-        switch (uunc.command) {
-            case Command::CreatePin:                cancel = CreatePin(uunc);               break;
-            case Command::RemovePin:                RemovePin(uunc);                        break;
-            case Command::CreateLink:               CreateLink(uunc);                       break;
-            case Command::RemoveLink:               RemoveLink(uunc);                       break;
-            case Command::CreateRoute:              CreateRoute(uunc);                      break;
-            case Command::SetLinkLevel:             SetLinkLevel(uunc);                     break;
-            case Command::UpgradeCommandCenter:     cancel = UpgradeCommandCenter(uunc);    break;
-            case Command::SetSchematic:             SetSchematic(uunc);                     break;
-            case Command::RemoveRoute:              RemoveRoute(uunc);                      break;
-            case Command::AddExtractorHead:         AddExtractorHead(uunc);                 break;
-            case Command::MoveExtractorHead:        MoveExtractorHead(uunc);                break;
-            case Command::InstallProgram:           InstallProgram(uunc);                   break;
-            case Command::KillExtractorHead:        KillExtractorHead(uunc);                break;
-            case Command::PrioritizeRoute:          PrioritizeRoute(uunc);                  break;
+        int32 command = PyRep::IntegerValue(rep->AsTuple()->GetItem(0));
+        PyTuple* args = rep->AsTuple()->GetItem(1)->AsTuple();
+        _log(PLANET__TRACE, "PlanetMgr::UpdateNetwork() - %s: command %u, %s(%i)", m_client->GetName(), i, sPlanetDataMgr.GetCommandName(command), command);
+        switch (command) {
+            case Command::CreatePin:                CreatePin(args);            break;
+            case Command::RemovePin:                RemovePin(args);            break;
+            case Command::CreateLink:               CreateLink(args);           break;
+            case Command::RemoveLink:               RemoveLink(args);           break;
+            case Command::SetLinkLevel:             SetLinkLevel(args);         break;
+            case Command::CreateRoute:              CreateRoute(args);          break;
+            case Command::RemoveRoute:              RemoveRoute(args);          break;
+            case Command::SetSchematic:             SetSchematic(args);         break;
+            case Command::UpgradeCommandCenter:     UpgradeCommandCenter(args); break;
+            case Command::AddExtractorHead:         AddExtractorHead(args);     break;
+            case Command::KillExtractorHead:        KillExtractorHead(args);    break;
+            case Command::MoveExtractorHead:        MoveExtractorHead(args);    break;
+            case Command::InstallProgram:           InstallProgram(args);       break;
             default: {
-                _log(PLANET__ERROR, "PlanetMgr::UserUpdateNetwork() %s command %i", sPlanetDataMgr.GetCommandName(uunc.command), uunc.command);
-            } break;
+                // route priorities are not in the Crucible command stream
+                _log(PLANET__ERROR, "PlanetMgr::UpdateNetwork() - %s command %i not supported", sPlanetDataMgr.GetCommandName(command), command);
+                throw CustomError ("Planet command %i is not supported.", command);
+            }
         }
     }
 
-    m_colony->Save();
-
+    Commit();
     return m_colony->GetColony();
 }
 
-bool PlanetMgr::UpgradeCommandCenter(UUNCommand& nc) {
-    // the return here is used to cancel loop in UpdateNetwork.  return false = continue
+void PlanetMgr::ValidateCommandCenter(uint32 itemID, uint16 typeID)
+{
+    // the command center is the item from the ship (ClientPlanet.CreateCommandPin)
+    InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+    if ((iRef.get() == nullptr) or (iRef->typeID() != typeID) or (iRef->ownerID() != m_charID)
+    or  (m_client->GetShipID() == 0) or (iRef->locationID() != m_client->GetShipID())
+    or  ((iRef->flag() != flagCargoHold) and (iRef->flag() != flagCommandCenterHold)))
+        throw UserError("CannotBuildCommandPin");
 
-    int8 oldLevel = m_colony->GetLevel(), newLevel = (int8)PyRep::IntegerValue(nc.command_data->GetItem(1));
-    int32 cost = 0;
-    using namespace PI::Pin;
-
-    while (oldLevel != newLevel) {
-        //  calculate total upgrade cost in cases where upgrading multiple levels at once
-        switch (oldLevel) {
-            case Level0: cost += 580000; break;
-            case Level1: cost += 930000; break;
-            case Level2: cost += 1200000; break;
-            case Level3: cost += 1500000; break;
-            case Level4: cost += 2100000; break;
-        }
-        ++oldLevel;
+    // colonies are refused in the trade hubs
+    if (sConfig.cosmic.PIRestrictTradeHubs) {
+        const std::string& systemName = m_planet->SystemMgr()->GetNameStr();
+        for (auto cur : BlackListedSystems)
+            if (systemName == cur)
+                throw UserError("PlanetBlackListed").AddLocationName("planet", m_planet->GetID());
     }
 
-    //take the money, send wallet blink event record the transaction in their journal.
-    std::string reason = "DESC:  Command Center upgrade on ";
-    reason += m_planet->GetName();
-    uint32 ownerID = corpCONCORD;
-
-    if (m_planet->SystemMgr()->GetSystemSecurityRating() < 0.5) {
-        ownerID = corpInterbus;
+    // ClientColony.PostValidateCreatePin
+    uint32 planets = PlanetDB::CountPlanetsForChar(m_charID);
+    if ((planets > 0) and (m_client->GetAccountRole() & Acct::Role::GML) == 0) {
+        int8 level = m_client->GetChar()->GetSkillLevel(EvESkill::InterplanetaryConsolidation);
+        if (level < 1)
+            throw UserError("CannotPlaceCommandCenterNotEnoughSkill").AddAmount("maxPlanets", 1);
+        if ((uint32)level < planets)
+            throw UserError("CannotPlaceCommandCenterNotEnoughSkill").AddAmount("maxPlanets", (int)planets);
     }
-
-    AccountService::TransferFunds(
-        m_client->GetCharacterID(),
-        ownerID,  // concord in empire, interbus otherwise
-        cost,
-        reason.c_str(),
-        Journal::EntryType::PlanetaryConstruction,
-        m_planet->GetID(),
-        Account::KeyType::Cash
-    );
-
-    m_colony->UpgradeCommandCenter(PyRep::IntegerValue(nc.command_data->GetItem(0)), newLevel);
-    return false;
+    uint32 sovAllianceID = svDataMgr.GetSystemAllianceID(m_planet->SystemMgr()->GetID());
+    if ((sovAllianceID != 0) and (sovAllianceID != (uint32)m_client->GetAllianceID()))
+        throw UserError("SovPreventsCommandPin");
 }
 
-bool PlanetMgr::CreatePin(UUNCommand& nc) {
-    // the return here is used to break out of loop if needed.  return false = continue
-    using namespace EVEDB::invGroups;
-    uint32 typeID = PyRep::IntegerValueU32(nc.command_data->GetItem(1));
-    uint32 groupID = sItemFactory.GetType(typeID)->groupID();
-
-    switch (groupID) {
-        case Command_Centers: {
-            //take the money, send wallet blink event record the transaction in their journal.
-            std::string reason = "DESC:  Command Center construction on ";
-            reason += m_planet->GetName();
-            uint32 ownerID = corpCONCORD;
-            if (m_planet->SystemMgr()->GetSystemSecurityRating() < 0.5) {
-                ownerID = corpInterbus;
-            }
-
-            AccountService::TransferFunds(
-                m_client->GetCharacterID(),
-                ownerID,  // concord in empire, interbus otherwise
-                90000,
-                reason.c_str(),
-                Journal::EntryType::PlanetaryConstruction,
-                m_planet->GetID(),
-                Account::KeyType::Cash
-            );
-
-            UUNCCommandCenter uunccc;
-            if (!uunccc.Decode(nc.command_data)) {
-                _log(SERVICE__ERROR, "Failed to decode args for UUNCCommandCenter");
-                nc.command_data->Dump(PLANET__WARNING, "      ");
-                m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
-                return true;
-            }
-            m_colony->CreateCommandPin(m_client, uunccc.pinID, uunccc.typeID, uunccc.latitude, uunccc.longitude);
-            if (m_planet->GetCustomsOffice() == nullptr)
-                m_planet->CreateCustomsOffice();
-            return false;
-        } break;
-        case Mercenary_Bases:
-        case Capsuleer_Bases:{
-            // Not Supported yet
-            _log(PLANET__ERROR, "PlanetMgr::UserUpdateNetwork::CreatePin() Planet Bases (type/group %u/%u) not supported.", typeID, groupID);
-            m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04109.");
-            return true;
-        } break;
+void PlanetMgr::CheckRequiredSkills(uint16 typeID)
+{
+    // ClientColony.PostValidateCreatePin
+    static const uint16 skillAttrs[3][2] = {
+        { AttrRequiredSkill1, AttrRequiredSkill1Level },
+        { AttrRequiredSkill2, AttrRequiredSkill2Level },
+        { AttrRequiredSkill3, AttrRequiredSkill3Level }
+    };
+    std::string lackingSkills;
+    for (auto cur : skillAttrs) {
+        uint16 skillID = (uint16)sPIDataMgr.GetTypeAttributeNoDefault(typeID, cur[0]);
+        if (skillID == 0)
+            continue;
+        uint8 level = (uint8)sPIDataMgr.GetTypeAttributeNoDefault(typeID, cur[1]);
+        if (m_client->GetChar()->GetSkillLevel(skillID) >= level)
+            continue;
+        if (!lackingSkills.empty())
+            lackingSkills += ", ";
+        Inv::TypeData data = Inv::TypeData();
+        sDataMgr.GetType(skillID, data);
+        lackingSkills += data.name;
+        if (level)
+            lackingSkills += " Level " + std::to_string(level);
     }
-    uint32 cost = 0;
-    std::string pinString = "";
-    switch (groupID) {
-        case Storage_Facilities: {
-            cost = 250000;
-            pinString = "Silo";
-        } break;
-        case Processors: {
-            switch (typeID) {
-                case 2469:   //   Lava Basic Industry Facility
-                case 2471:   //   Plasma Basic Industry Facility
-                case 2473:   //   Barren Basic Industry Facility
-                case 2481:   //   Temperate Basic Industry Facility
-                case 2483:   //   Storm Basic Industry Facility
-                case 2490:   //   Oceanic Basic Industry Facility
-                case 2492:   //   Gas Basic Industry Facility
-                case 2493: { //   Ice Basic Industry Facility
-                    cost = 75000;
-                    pinString = "Basic Plant";
-                } break;
-                case 2470:   //   Lava Advanced Industry Facility
-                case 2472:   //   Plasma Advanced Industry Facility
-                case 2474:   //   Barren Advanced Industry Facility
-                case 2480:   //   Temperate Advanced Industry Facility
-                case 2484:   //   Storm Advanced Industry Facility
-                case 2485:   //   Oceanic Advanced Industry Facility
-                case 2491:   //   Ice Advanced Industry Facility
-                case 2494: { //   Gas Advanced Industry Facility
-                    cost = 250000;
-                    pinString = "Advanced Plant";
-                } break;
-                case 2475:   //   Barren High-Tech Production Plant
-                case 2482: { //   Temperate High-Tech Production Plant
-                    cost = 525000;
-                    pinString = "High-Tech Plant";
-                } break;
-            }
-        } break;
-        case Extractor_Control_Units: {
-            cost = 45000;
-            pinString = "ECU";
-        } break;
-        case Spaceports: {
-            cost = 900000;
-            pinString = "LaunchPad";
-        } break;
-        case Planetary_Links: {
-            cost = 1000;
-            pinString = "Link";
-        } break;
-        case Extractors: {
-            cost = 100;
-            pinString = "Extractor Head";
-        } break;
+    if (!lackingSkills.empty()) {
+        Inv::TypeData data = Inv::TypeData();
+        sDataMgr.GetType(typeID, data);
+        throw UserError("CannotPlacePinNotEnoughSkill")
+                .AddFormatValue("requiredSkills", new PyString(lackingSkills))
+                .AddFormatValue("itemName", new PyString(data.name));
     }
-
-    if (cost < 1) {
-        // error here....
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 02001.");
-        return true;
-    }
-
-    UUNCStandardPin uuncsp;
-    if (!uuncsp.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for UUNCStandardPin");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return true;
-    }
-
-    m_colony->CreatePin(m_client, groupID, uuncsp.pinID2, uuncsp.typeID, uuncsp.latitude, uuncsp.longitude);
-
-    //take the money, send wallet blink event record the transaction in their journal.
-    std::string reason = "DESC:  ";
-    reason += pinString.c_str();
-    reason += " Construction on ";
-    reason += m_planet->GetName();
-    uint32 ownerID = corpCONCORD;
-
-    if (m_planet->SystemMgr()->GetSystemSecurityRating() < 0.5) {
-        ownerID = corpInterbus;
-    }
-
-    AccountService::TransferFunds(
-        m_client->GetCharacterID(),
-        ownerID,  // concord in empire, interbus otherwise
-        cost,
-        reason.c_str(),
-        Journal::EntryType::PlanetaryConstruction,
-        m_planet->GetID(),
-        Account::KeyType::Cash
-    );
-
-    return false;
 }
 
-void PlanetMgr::CreateLink(UUNCommand& nc) {
-    uint32 src = 0, dest = 0, level = 0;
-    if (nc.command_data->GetItem(0)->IsInt()) {
-        if (nc.command_data->GetItem(1)->IsInt()) {
-            UUNCLinkExist uuncle;
-            if (!uuncle.Decode(nc.command_data)) {
-                _log(SERVICE__ERROR, "Failed to decode args for UUNCLinkExist");
-                nc.command_data->Dump(PLANET__WARNING, "      ");
-                m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-                return;
-            }
-            src = uuncle.src;
-            dest = uuncle.dest;
-            level = uuncle.level;
-        } else {
-            UUNCLinkCommand uunclc;
-            if (!uunclc.Decode(nc.command_data)) {
-                _log(SERVICE__ERROR, "Failed to decode args for UUNCLinkCommand");
-                nc.command_data->Dump(PLANET__WARNING, "      ");
-                m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-                return;
-            }
-            src = uunclc.src;
-            dest = uunclc.dest2;
-            level = uunclc.level;
-        }
-    } else if (nc.command_data->GetItem(0)->IsTuple()) {
-        UUNCLinkStandard uuncls;
-        if (!uuncls.Decode(nc.command_data)) {
-            _log(SERVICE__ERROR, "Failed to decode args for UUNCLinkStandard");
-            nc.command_data->Dump(PLANET__WARNING, "      ");
-            m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-            return;
-        }
-        src = uuncls.src2;
-        dest = uuncls.dest2;
-        level = uuncls.level;
+void PlanetMgr::CreatePin(PyTuple* args)
+{
+    // (pinID, typeID, latitude, longitude)
+    PyRep* id = GetArg(args, 0);
+    uint16 typeID = PyRep::IntegerValue(GetArg(args, 1));
+    double latitude = GetNumber(GetArg(args, 2));
+    double longitude = GetNumber(GetArg(args, 3));
+
+    uint8 kind = sPIDataMgr.GetPinKind(typeID);
+    if (kind == PI::Pin::Kind::Base) {
+        // planetary bases are DUST
+        _log(PLANET__ERROR, "PlanetMgr::CreatePin() Planet Bases (type %u) not supported.", typeID);
+        throw UserError("InvalidPinType");
+    }
+
+    if (kind == PI::Pin::Kind::CommandCenter) {
+        if (!id->IsInt() and !id->IsLong())
+            throw UserError("CannotBuildCommandPin");
+        uint32 itemID = PyRep::IntegerValueU32(id);
+        m_sim->ValidateCreatePin(m_charID, typeID, latitude, longitude);
+        ValidateCommandCenter(itemID, typeID);
+        CheckRequiredSkills(typeID);
+        if (m_sim->PrimePin(itemID, typeID, m_charID, latitude, longitude) == nullptr)
+            throw UserError("InvalidPinType");
+        // ClientPlanet.CreateCommandPin:  the colony level is the command center's meta level
+        m_sim->SetLevel((uint8)std::min(sPIDataMgr.GetTypeAttribute(typeID, AttrMetaLevel), (double)PI::Sim::MaxCommandUpgradeLevel));
+        m_newCommandCenter = itemID;
+        return;
+    }
+
+    if (!id->IsTuple() or (id->AsTuple()->size() != 2))
+        throw UserError("InvalidPinType");
+    m_sim->ValidateCreatePin(m_charID, typeID, latitude, longitude);
+    CheckRequiredSkills(typeID);
+
+    uint32 pinID = m_nextPinID++;
+    if (m_sim->PrimePin(pinID, typeID, m_charID, latitude, longitude) == nullptr)
+        throw UserError("InvalidPinType");
+    m_tempPins[std::make_pair(PyRep::IntegerValue(id->AsTuple()->GetItem(0)), PyRep::IntegerValue(id->AsTuple()->GetItem(1)))] = pinID;
+    // ClientColony:  new pins (not the command center) cost their base price
+    m_cost += sPIDataMgr.GetBasePrice(typeID);
+}
+
+void PlanetMgr::RemovePin(PyTuple* args)
+{
+    // (pinID,)
+    PyRep* id = GetArg(args, 0);
+    if (!m_sim->HasCommandPin() and (id->IsInt() or id->IsLong()) and (m_sim->GetPin(PyRep::IntegerValueU32(id)) == nullptr))
+        return;     // a command center placed and removed again in the same edit session
+    uint32 pinID = GetPinID(id);
+    m_sim->ValidateRemovePin(m_charID, pinID);
+    if (pinID == m_work.ccPinID)
+        throw CustomError ("Abandon the colony to remove its command center.");
+
+    // the items of the pin and its links go at commit
+    PI_Pin* pPin = m_sim->GetPin(pinID);
+    if (pinID < ProvisionalID) {
+        m_removedItems.insert(pinID);
     } else {
-        //Invalid...
-        _log(PLANET__ERROR, "PlanetMgr::UserUpdateNetwork::CreateLink() command_data type unrecognized: %s", nc.command_data->GetItem(0)->TypeString());
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
-        return;
+        // ClientColony.RemoveCreationCost
+        m_cost = std::max(0.0, m_cost - sPIDataMgr.GetBasePrice(pPin->typeID));
     }
-    m_colony->CreateLink(src, dest, level);
+    std::map<uint32, std::vector<uint32>>::const_iterator itr = m_work.linksByEndpoint.find(pinID);
+    if (itr != m_work.linksByEndpoint.end())
+        for (auto cur : itr->second) {
+            PI_Link* pLink = m_sim->GetLink(pinID, cur);
+            if ((pLink != nullptr) and pLink->linkID)
+                m_removedItems.insert(pLink->linkID);
+        }
+    m_sim->RemovePin(pinID);
 }
 
-void PlanetMgr::CreateRoute(UUNCommand& nc)
+void PlanetMgr::CreateLink(PyTuple* args)
 {
-    Call_CreateRoute args;
-    if (!args.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for Call_CreateRoute");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return;
-    }
-
-    PyIncRef(args.path);
-    m_colony->CreateRoute(args.routeID, args.typeID, args.qty, args.path);
+    // (endpoint1, endpoint2, level)
+    uint32 endpoint1 = GetPinID(GetArg(args, 0));
+    uint32 endpoint2 = GetPinID(GetArg(args, 1));
+    uint8 level = (uint8)PyRep::IntegerValue(GetArg(args, 2));
+    m_sim->ValidateCreateLink(m_charID, endpoint1, endpoint2, PI::Sim::LinkTypeID, level);
+    m_sim->PrimeLink(PI::Sim::LinkTypeID, endpoint1, endpoint2, level);
 }
 
-void PlanetMgr::RemovePin(UUNCommand& nc)
+void PlanetMgr::RemoveLink(PyTuple* args)
 {
-    uint32 pinID = 0;
-    if (nc.command_data->GetItem(0)->IsInt()) {
-        pinID = PyRep::IntegerValue(nc.command_data->GetItem(0));
-    } else if (nc.command_data->GetItem(0)->IsTuple()) {
-        pinID = PyRep::IntegerValue(nc.command_data->GetItem(0)->AsTuple()->GetItem(1));
+    // (endpoint1, endpoint2)
+    uint32 endpoint1 = GetPinID(GetArg(args, 0));
+    uint32 endpoint2 = GetPinID(GetArg(args, 1));
+    m_sim->ValidateRemoveLink(m_charID, endpoint1, endpoint2);
+    PI_Link* pLink = m_sim->GetLink(endpoint1, endpoint2);
+    if (pLink->linkID)
+        m_removedItems.insert(pLink->linkID);
+    m_sim->RemoveLink(endpoint1, endpoint2);
+}
+
+void PlanetMgr::SetLinkLevel(PyTuple* args)
+{
+    // (endpoint1, endpoint2, level)
+    uint32 endpoint1 = GetPinID(GetArg(args, 0));
+    uint32 endpoint2 = GetPinID(GetArg(args, 1));
+    int64 level = PyRep::IntegerValue(GetArg(args, 2));
+    if (level < 0)
+        throw UserError("PinDoesNotExist");
+    m_sim->ValidateSetLinkLevel(m_charID, endpoint1, endpoint2, (uint8)std::min(level, (int64)UINT8_MAX));
+    m_sim->SetLinkLevel(endpoint1, endpoint2, (uint8)level);
+}
+
+void PlanetMgr::CreateRoute(PyTuple* args)
+{
+    // (routeID, path, typeID, quantity)
+    PyRep* id = GetArg(args, 0);
+    PyRep* pathRep = GetArg(args, 1);
+    uint16 typeID = PyRep::IntegerValue(GetArg(args, 2));
+    int64 quantity = (int64)GetNumber(GetArg(args, 3));
+    if (!id->IsTuple() or (id->AsTuple()->size() != 2))
+        throw UserError("RouteDoesNotExist");
+    if (!pathRep->IsList() and !pathRep->IsTuple())
+        throw UserError("CreateRouteTooShort");
+    std::vector<uint32> path;
+    if (pathRep->IsList()) {
+        for (size_t i = 0; i < pathRep->AsList()->size(); ++i)
+            path.push_back(GetPinID(pathRep->AsList()->GetItem(i)));
     } else {
-        //Invalid...
-        _log(PLANET__ERROR, "PlanetMgr::UserUpdateNetwork::RemovePin() command_data type unrecognized: %s", nc.command_data->GetItem(0)->TypeString());
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
+        for (size_t i = 0; i < pathRep->AsTuple()->size(); ++i)
+            path.push_back(GetPinID(pathRep->AsTuple()->GetItem(i)));
+    }
+    if (quantity < 1)
+        throw UserError("CreateRouteWithoutCommodities");
+    m_sim->ValidateCreateRoute(m_charID, path, typeID, (uint32)std::min(quantity, (int64)UINT32_MAX));
+
+    uint32 routeID = m_nextRouteID++;
+    m_sim->PrimeRoute(routeID, path, typeID, (uint32)quantity);
+    m_tempRoutes[std::make_pair(PyRep::IntegerValue(id->AsTuple()->GetItem(0)), PyRep::IntegerValue(id->AsTuple()->GetItem(1)))] = routeID;
+    m_sim->OnRouteCreated(routeID);
+}
+
+void PlanetMgr::RemoveRoute(PyTuple* args)
+{
+    // (routeID,)
+    uint32 routeID = GetRouteID(GetArg(args, 0));
+    m_sim->ValidateRemoveRoute(m_charID, routeID);
+    m_sim->RemoveRoute(routeID);
+}
+
+void PlanetMgr::SetSchematic(PyTuple* args)
+{
+    // (pinID, schematicID)
+    uint32 pinID = GetPinID(GetArg(args, 0));
+    uint16 schematicID = PyRep::IntegerValue(GetArg(args, 1));
+    m_sim->ValidateInstallSchematic(m_charID, pinID, schematicID);
+    m_sim->InstallSchematicForPin(pinID, schematicID);
+}
+
+void PlanetMgr::UpgradeCommandCenter(PyTuple* args)
+{
+    // (pinID, level)
+    int64 level = PyRep::IntegerValue(GetArg(args, 1));
+    if ((level < 0) or (level > PI::Sim::MaxCommandUpgradeLevel))
+        throw CustomError ("Trying to upgrade past maximum level");
+    m_sim->ValidateCommandCenterUpgrade((uint8)level);
+    // ClientColony.PostValidateCommandCenterUpgrade
+    int8 skillLevel = m_client->GetChar()->GetSkillLevel(EvESkill::CommandCenterUpgrades);
+    if (level > skillLevel)
+        throw UserError("CantUpgradeCommandCenterSkillRequired")
+                .AddTypeName("skillName", EvESkill::CommandCenterUpgrades)
+                .AddAmount("currentLevel", (int)skillLevel)
+                .AddAmount("requestedLevel", (int)level);
+    m_cost += PI::Sim::GetUpgradeCost(m_work.level, (uint8)level);
+    m_sim->SetLevel((uint8)level);
+}
+
+void PlanetMgr::AddExtractorHead(PyTuple* args)
+{
+    // (pinID, headID, latitude, longitude)
+    uint32 pinID = GetPinID(GetArg(args, 0));
+    int64 headID = PyRep::IntegerValue(GetArg(args, 1));
+    double latitude = GetNumber(GetArg(args, 2));
+    double longitude = GetNumber(GetArg(args, 3));
+    if ((headID < 0) or (headID > UINT16_MAX))
+        throw UserError("CannotPlaceHeadLimitReached");
+    m_sim->ValidateAddExtractorHead(pinID, (uint16)headID, latitude, longitude);
+    m_sim->AddExtractorHead(pinID, (uint16)headID, latitude, longitude);
+}
+
+void PlanetMgr::KillExtractorHead(PyTuple* args)
+{
+    // (pinID, headID)
+    uint32 pinID = GetPinID(GetArg(args, 0));
+    int64 headID = PyRep::IntegerValue(GetArg(args, 1));
+    if ((headID < 0) or (headID > UINT16_MAX))
+        throw UserError("CannotRemoveHeadNotPresent");
+    m_sim->ValidateRemoveExtractorHead(pinID, (uint16)headID);
+    m_sim->RemoveExtractorHead(pinID, (uint16)headID);
+}
+
+void PlanetMgr::MoveExtractorHead(PyTuple* args)
+{
+    // (pinID, headID, latitude, longitude)
+    uint32 pinID = GetPinID(GetArg(args, 0));
+    int64 headID = PyRep::IntegerValue(GetArg(args, 1));
+    double latitude = GetNumber(GetArg(args, 2));
+    double longitude = GetNumber(GetArg(args, 3));
+    if ((headID < 0) or (headID > UINT16_MAX))
+        throw UserError("CannotMoveHeadNotPresent");
+    m_sim->ValidateMoveExtractorHead(pinID, (uint16)headID, latitude, longitude);
+    m_sim->MoveExtractorHead(pinID, (uint16)headID, latitude, longitude);
+}
+
+void PlanetMgr::InstallProgram(PyTuple* args)
+{
+    // (pinID, typeID | None, headRadius)
+    uint32 pinID = GetPinID(GetArg(args, 0));
+    PyRep* typeRep = GetArg(args, 1);
+    uint16 typeID = (typeRep->IsNone() ? 0 : (uint16)PyRep::IntegerValue(typeRep));
+    double headRadius = GetNumber(GetArg(args, 2));
+    m_sim->ValidateInstallProgram(pinID, typeID, headRadius);
+    // ClientColony.PostValidateInstallProgram:  a running program can only be changed after the cooldown
+    if (pinID < ProvisionalID)
+        ColonySim::CanInstallProgram(*m_sim->GetPin(pinID), m_now);
+    if ((typeID != 0) and !m_planet->IsResourceType(typeID))
+        throw CustomError ("%s is not found on this planet.", sPIDataMgr.GetProductName(typeID));
+    m_sim->InstallProgram(pinID, typeID, headRadius, m_planet->GetResourceField(typeID), m_now);
+}
+
+void PlanetMgr::Commit()
+{
+    // CannotBuildNotEnoughCash  (ClientColony.PostValidateCreatePin, checked by the client against the sum of the session's costs)
+    if ((m_cost > 0) and (m_client->GetBalance() < m_cost))
+        throw UserError("CannotBuildNotEnoughCash").AddISK("cost", m_cost);
+
+    if (m_work.ccPinID == 0) {
+        // nothing was built (a command center placed and removed again)
         return;
     }
-    m_colony->RemovePin(pinID);
-}
 
-void PlanetMgr::RemoveLink(UUNCommand& nc)
-{
-    _log(PLANET__TRACE, "PlanetMgr::UserUpdateNetwork::RemoveLink()");
-    nc.Dump(PLANET__WARNING, "      ");
-
-    m_colony->RemoveLink(PyRep::IntegerValue(nc.command_data->GetItem(0)), PyRep::IntegerValue(nc.command_data->GetItem(1)));
-}
-
-void PlanetMgr::RemoveRoute(UUNCommand& nc)
-{
-    uint32 routeID = 0;
-    if (nc.command_data->GetItem(0)->IsInt()) {
-        routeID = PyRep::IntegerValue(nc.command_data->GetItem(0));
-    } else if (nc.command_data->GetItem(0)->IsTuple()) {
-        routeID = PyRep::IntegerValue(nc.command_data->GetItem(0)->AsTuple()->GetItem(1));
-    } else {
-        //Invalid...
-        _log(PLANET__ERROR, "PlanetMgr::UserUpdateNetwork::RemoveRoute() command_data type unrecognized: %s", nc.command_data->GetItem(0)->TypeString());
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
-        return;
-    }
-    m_colony->RemoveRoute(routeID);
-}
-
-void PlanetMgr::SetLinkLevel(UUNCommand& nc)
-{
-    m_colony->UpgradeLink(PyRep::IntegerValue(nc.command_data->GetItem(0)),
-                          PyRep::IntegerValue(nc.command_data->GetItem(1)),
-                          PyRep::IntegerValue(nc.command_data->GetItem(2)));
-}
-
-void PlanetMgr::SetSchematic(UUNCommand& nc)
-{
-    uint32 pinID = 0;
-    if (nc.command_data->GetItem(0)->IsTuple()) {
-        pinID = PyRep::IntegerValue(nc.command_data->GetItem(0)->AsTuple()->GetItem(1));
-    } else if (nc.command_data->GetItem(0)->IsInt()) {
-        pinID = PyRep::IntegerValue(nc.command_data->GetItem(0));
-    }
-    m_colony->SetSchematic(pinID, PyRep::IntegerValue(nc.command_data->GetItem(1))); // 65 - 137
-}
-
-void PlanetMgr::AddExtractorHead(UUNCommand& nc)
-{
-    Call_AddMoveExtractorHead args;
-    if (!args.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for Call_AddMoveExtractorHead");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return;
+    // the command center is the item from the ship.  a stack is split, one goes down to the planet
+    if (m_newCommandCenter) {
+        ValidateCommandCenter(m_newCommandCenter, m_work.pins[m_newCommandCenter].typeID);
+        InventoryItemRef iRef = sItemFactory.GetItemRef(m_newCommandCenter);
+        if (iRef->quantity() > 1) {
+            ItemData data(iRef->typeID(), m_charID, locTemp, flagNone, iRef->quantity() - 1);
+            InventoryItemRef iRef2 = sItemFactory.SpawnItem(data);
+            if (iRef2.get() != nullptr)
+                iRef2->Move(iRef->locationID(), iRef->flag(), true);
+            iRef->SetQuantity(1, true);
+        }
+        iRef->Move(m_planet->GetID(), flagPlanetSurface, true);
+        iRef->ChangeSingleton(true);
     }
 
-    m_colony->AddExtractorHead(args.ecuID, (uint16)args.headID, args.latitude, args.longitude);
-}
+    // new pins become items
+    std::map<uint32, uint32> pinIDs, routeIDs;
+    for (auto& cur : m_work.pins) {
+        if (cur.first < ProvisionalID)
+            continue;
+        ItemData data(cur.second.typeID, m_charID, locTemp, flagNone, 1);
+        InventoryItemRef iRef = sItemFactory.SpawnItem(data);
+        if (iRef.get() == nullptr)
+            throw CustomError ("Unable to build %s.", sPIDataMgr.GetProductName(cur.second.typeID));
+        iRef->Move(m_planet->GetID(), flagPlanetSurface, true);
+        iRef->ChangeSingleton(true);
+        pinIDs[cur.first] = iRef->itemID();
+    }
+    m_sim->RemapIDs(pinIDs, routeIDs);
 
-void PlanetMgr::MoveExtractorHead(UUNCommand& nc)
-{
-    Call_AddMoveExtractorHead args;
-    if (!args.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for Call_AddMoveExtractorHead");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return;
+    // new routes get their IDs from piRoutes
+    for (auto& cur : m_work.routes) {
+        if (cur.first < ProvisionalID)
+            continue;
+        uint32 routeID = m_db.InsertRoute(m_work.ccPinID, cur.second);
+        if (routeID == 0)
+            throw CustomError ("Unable to save the route.");
+        routeIDs[cur.first] = routeID;
+    }
+    pinIDs.clear();
+    m_sim->RemapIDs(pinIDs, routeIDs);
+
+    // new links become items
+    for (auto& cur : m_work.links) {
+        if (cur.second.linkID)
+            continue;
+        ItemData data(cur.second.typeID, m_charID, locTemp, flagNone, 1);
+        InventoryItemRef iRef = sItemFactory.SpawnItem(data);
+        if (iRef.get() == nullptr)
+            throw CustomError ("Unable to build the link.");
+        iRef->Move(m_planet->GetID(), flagPlanetSurface, true);
+        iRef->ChangeSingleton(true);
+        cur.second.linkID = iRef->itemID();
     }
 
-    m_colony->MoveExtractorHead(args.ecuID, (uint16)args.headID, args.latitude, args.longitude);
-}
+    for (auto cur : m_removedItems)
+        DeleteColonyItem(cur);
 
-void PlanetMgr::InstallProgram(UUNCommand& nc)
-{
-    Call_InstallProgram args;
-    if (!args.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for Call_InstallProgram");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return;
+    m_work.currentSimTime = m_now;
+    m_colony->Commit(m_work);
+
+    // every planet with a colony has a customs office
+    if (m_newCommandCenter and (m_planet->GetCustomsOffice() == nullptr))
+        m_planet->CreateCustomsOffice();
+
+    if (m_cost > 0) {
+        std::string reason = "DESC:  Planetary construction on ";
+        reason += m_planet->GetName();
+        AccountService::TransferFunds(m_charID, m_colony->GetNPCOwner(), m_cost, reason.c_str(), Journal::EntryType::PlanetaryConstruction, m_planet->GetID());
     }
 
-    m_colony->InstallProgram(args.ecuID, (uint16)args.typeID, args.headRadius, this);
+    _log(PLANET__TRACE, "PlanetMgr::Commit() - %s updated colony %u on %s:  %u pins, %u links, %u routes, cost %.2f", \
+            m_client->GetName(), m_work.ccPinID, m_planet->GetName(), m_work.pins.size(), m_work.links.size(), m_work.routes.size(), m_cost);
 }
-
-void PlanetMgr::KillExtractorHead(UUNCommand& nc)
-{
-    m_colony->KillExtractorHead(PyRep::IntegerValue(nc.command_data->GetItem(0)), PyRep::IntegerValue(nc.command_data->GetItem(1)));
-}
-
-void PlanetMgr::PrioritizeRoute(UUNCommand& nc)
-{
-    _log(PLANET__TRACE, "PlanetMgr::UserUpdateNetwork::PrioritizeRoute()");
-    nc.Dump(COLONY__PKT_TRACE, "      ");
-
-    Call_PrioritizeRoute args;
-    if (!args.Decode(nc.command_data)) {
-        _log(SERVICE__ERROR, "Failed to decode args for Call_PrioritizeRoute");
-        nc.command_data->Dump(PLANET__WARNING, "      ");
-        m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04588.");
-        return;
-    }
-
-    m_colony->PrioritizeRoute(args.routeID, args.priority);
-}
-
-/** @note   link distance formula from client
- *
- *    def GetDistance(self, otherInstallation):
- *        diffLong = self.longitude - otherInstallation.longitude
- *        cosDiffLong = math.cos(diffLong)
- *        cosMyLat = math.cos(self.latitude)
- *        sinMyLat = math.sin(self.latitude)
- *        cosOthLat = math.cos(otherInstallation.latitude)
- *        sinOthLat = math.sin(otherInstallation.latitude)
- *        nom1 = (cosMyLat + math.sin(diffLong)) ** 2
- *        nom2 = (cosMyLat * sinOthLat - sinMyLat * cosOthLat * cosDiffLong) ** 2
- *        denom = sinMyLat * sinOthLat + cosMyLat * cosOthLat * cosDiffLong
- *        return math.atan2(math.sqrt(nom1 + nom2), denom)
- */
-
-/** @note CC Info
- *
-commandCenterInfoPerLevel = {0: util.KeyVal(powerOutput=6000, cpuOutput=1675, upgradeCost=0),
- 1: util.KeyVal(powerOutput=9000, cpuOutput=7057, upgradeCost=580000),
- 2: util.KeyVal(powerOutput=12000, cpuOutput=12136, upgradeCost=1510000),
- 3: util.KeyVal(powerOutput=15000, cpuOutput=17215, upgradeCost=2710000),
- 4: util.KeyVal(powerOutput=17000, cpuOutput=21315, upgradeCost=4210000),
- 5: util.KeyVal(powerOutput=19000, cpuOutput=25415, upgradeCost=6310000)}
- */
-
-/** @note routing info (from client)
- *
-    def FindShortestPath(self, sourcePin, destinationPin):
-        """
-            Simple shortest-path/undirected-graph thing.
-            Uses a Dijkstra subfunction.
-        """
-        if sourcePin is None or destinationPin is None:
-            return
-        if sourcePin == destinationPin:
-            return []
-        distanceDict, predecessorDict = self.Dijkstra(sourcePin, destinationPin)
-        if destinationPin not in distanceDict or destinationPin not in predecessorDict:
-            return []
-        path = []
-        currentPin = destinationPin
-        while currentPin is not None:
-            path.append(currentPin.id)
-            if currentPin is sourcePin:
-                break
-            if currentPin not in predecessorDict:
-                raise RuntimeError("CurrentPin not in predecessor dict. There's no path. How did we get here?")
-            currentPin = predecessorDict[currentPin]
-
-        path.reverse()
-        if path[0] != sourcePin.id:
-            return []
-        return path
-
-    def FindShortestPathIDs(self, sourcePinID, destinationPinID):
-        return self.FindShortestPath(self.GetPin(sourcePinID), self.GetPin(destinationPinID))
-
-    def Dijkstra(self, sourcePin, destinationPin):
-        """
-        (from http://aspn.activestate.com/ASPN/Cookbook/Python/Recipe/119466)
-        Find shortest paths from the start vertex to all
-        vertices nearer than or equal to the end.
-
-        This particular implementation is adapted from the starMapSvc's
-        copy of the algorithm, which is apparently unused.
-        However, it matches up with the algorithm.
-        """
-        D = {}
-        P = {}
-        Q = planetCommon.priority_dict()
-        Q[sourcePin] = 0.0
-        while len(Q) > 0:
-            vPin = Q.smallest()
-            D[vPin] = Q[vPin]
-            if vPin == destinationPin:
-                break
-            Q.pop_smallest()
-            for wDestinationID in self.colonyData.GetLinksForPin(vPin.id):
-                wLink = self.GetLink(vPin.id, wDestinationID)
-                wPin = self.GetPin(wDestinationID)
-                vwLength = D[vPin] + self._GetLinkWeight(wLink, wPin, vPin)
-                if wPin in D:
-                    if vwLength < D[wPin]:
-                        raise ValueError, 'Dijkstra: found better path to already-final vertex'
-                elif wPin not in Q or vwLength < Q[wPin]:
-                    Q[wPin] = vwLength
-                    P[wPin] = vPin
-
-        return (D, P)
- */
