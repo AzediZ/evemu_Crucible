@@ -34,6 +34,8 @@
 #include "planet/Moon.h"
 #include "pos/Structure.h"
 #include "ship/BeyonceService.h"
+#include "ship/JumpDrive.h"
+#include "ship/modules/JumpPortalModule.h"
 #include "station/StationDataMgr.h"
 #include "system/BookmarkService.h"
 #include "system/Container.h"
@@ -110,6 +112,8 @@ BeyonceBound::BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Clien
     this->Add("CmdJumpThroughFleet", &BeyonceBound::CmdJumpThroughFleet);
     this->Add("CmdJumpThroughAlliance", &BeyonceBound::CmdJumpThroughAlliance);
     this->Add("CmdJumpThroughCorporationStructure", &BeyonceBound::CmdJumpThroughCorporationStructure);
+    this->Add("CmdBridgeToMember", &BeyonceBound::CmdBridgeToMember);
+    this->Add("CmdBridgeToStructure", &BeyonceBound::CmdBridgeToStructure);
 
     client->SetBeyonce(true);
     if (client->IsLogin() and !client->IsSetStateSent())
@@ -796,11 +800,10 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
 }
 
 /**     ***********************************************************************
- * @note   these do absolutely nothing at this time....
+ * @note   cynosural jumps, and titan / black ops jump portals (bridges).  checks and helpers are in ship/JumpDrive.cpp
  */
 
-
-/** @todo these will need work....
+/** client code for these calls:
  *    def BridgeToMember(self, charID):
  *        beaconStuff = sm.GetService('fleet').GetActiveBeaconForChar(charID)
  *        if beaconStuff is None:
@@ -877,17 +880,132 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
  *            return
  *        effect.Activate(beaconID, False)
  */
+
+// checks shared by jumps and jump portals.  tells the client why and returns false when the ship can't
+static bool CanStartJump(Client* pClient)
+{
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
+        return false;
+    }
+    if (pClient->GetShipSE() == nullptr)
+        return false;
+
+    DestinyManager* pDestiny = pClient->GetShipSE()->DestinyMgr();
+    if (pDestiny == nullptr) {
+        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
+        return false;
+    } else if (pDestiny->IsWarping()) {
+        pClient->SendNotifyMsg( "You can't do this while warping");
+        return false;
+    } else if (pDestiny->IsFrozen()) {
+        // a lit cyno or an open jump portal holds the ship
+        pClient->SendNotifyMsg( "Your ship is frozen and cannot move");
+        return false;
+    }  else if (pDestiny->AbortIfLoginWarping(true)) {
+        return false;
+    }
+
+    return true;
+}
+
+// opens pClient's jump portal (titan or black ops) to the beacon
+static void OpenJumpPortal(Client* pClient, const JumpDrive::Beacon& beacon)
+{
+    JumpPortalModule* pPortal = JumpDrive::GetPortalModule(pClient);
+    if (pPortal == nullptr) {
+        pClient->SendNotifyMsg("You need an online jump portal generator to open a jump portal.");
+        return;
+    }
+    if (pPortal->IsOpen()) {
+        pClient->SendNotifyMsg("Your jump portal is already open.");
+        return;
+    }
+    if (pClient->GetShipSE()->DestinyMgr()->IsCloaked()) {
+        pClient->SendNotifyMsg("You can't open a jump portal while cloaked.");
+        return;
+    }
+    if (beacon.systemID == pClient->GetSystemID()) {
+        pClient->SendNotifyMsg("That beacon is in this system.");
+        return;
+    }
+    if (beacon.covert and !pPortal->IsCovert()) {
+        pClient->SendNotifyMsg("Only a Black Ops covert jump portal can open to a covert cynosural field.");
+        return;
+    }
+    if (!JumpDrive::CheckRange(pClient, pClient->GetShip(), beacon.systemID, "jump portal"))
+        return;
+
+    if (pPortal->OpenPortal(beacon))
+        pClient->SendNotifyMsg("Jump portal open.  Fleet members within %.0f m of your ship can jump through it.", JumpDrive::PortalUseRange);
+}
+
+PyResult BeyonceBound::CmdBridgeToMember(PyCallArgs &call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID) {
+    // bp.CmdBridgeToMember(charID, beaconID, solarsystemID)
+    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdBridgeToMember");
+    call.Dump(SHIP__WARNING);
+
+    if (!CanStartJump(call.client))
+        return PyStatic.NewNone();
+
+    JumpDrive::Beacon beacon;
+    if (JumpDrive::FindFleetBeacon(call.client, charID->value(), beaconID->value(), beacon))
+        OpenJumpPortal(call.client, beacon);
+
+    return PyStatic.NewNone();
+}
+
+PyResult BeyonceBound::CmdBridgeToStructure(PyCallArgs &call, PyInt* beaconID, PyInt* solarSystemID) {
+    // bp.CmdBridgeToStructure(beaconID, solarSystemID)    to an alliance beacon (cynosural generator array)
+    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdBridgeToStructure");
+    call.Dump(SHIP__WARNING);
+
+    if (!CanStartJump(call.client))
+        return PyStatic.NewNone();
+
+    JumpDrive::Beacon beacon;
+    if (JumpDrive::FindAllianceBeacon(call.client, beaconID->value(), beacon))
+        OpenJumpPortal(call.client, beacon);
+
+    return PyStatic.NewNone();
+}
+
 PyResult BeyonceBound::CmdJumpThroughFleet(PyCallArgs &call, PyInt* otherCharID, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
     // sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughFleet, otherCharID, otherShipID, beaconID, solarsystemID)
     _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughFleet");
     call.Dump(SHIP__WARNING);
-    return PyStatic.NewNone();
+
+    if (!CanStartJump(call.client))
+        return PyStatic.NewNone();
+
+    Client* pOwner = sEntityList.FindClientByCharID(otherCharID->value());
+    if ((pOwner == nullptr) or !call.client->InFleet() or (pOwner->GetFleetID() != call.client->GetFleetID())
+    or (pOwner->GetShipID() != (uint32)otherShipID->value())) {
+        call.client->SendNotifyMsg("That jump portal is no longer available to your fleet.");
+        return PyStatic.NewNone();
+    }
+
+    JumpPortalModule* pPortal = JumpDrive::GetPortalModule(pOwner);
+    if ((pPortal == nullptr) or !pPortal->IsOpen() or (pPortal->GetBeacon().item->itemID() != (uint32)beaconID->value())) {
+        call.client->SendNotifyMsg("%s's jump portal is closed.", pOwner->GetName());
+        return PyStatic.NewNone();
+    }
+
+    if (!JumpDrive::PortalJump(call.client, pOwner, pPortal))
+        return PyStatic.NewNone();
+
+    /* return error msg from this call, if applicable, else nodeid and timestamp */
+    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
+    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
+    return this->GetOID();
 }
 
 PyResult BeyonceBound::CmdJumpThroughAlliance(PyCallArgs &call, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
     //sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughAlliance, otherShipID, beaconID, solarsystemID)
     _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughAlliance");
     call.Dump(SHIP__WARNING);
+    /** @todo  alliance (non-fleet) jump portals.  the client finds these through the 'pwn' service, which isn't written */
+    call.client->SendNotifyMsg("Jumping through an alliance member's portal isn't supported yet.  Join their fleet and use Jump Through from there.");
     return PyStatic.NewNone();
 }
 
@@ -970,79 +1088,17 @@ PyResult BeyonceBound::CmdBeaconJumpFleet(PyCallArgs &call, PyInt* characterID, 
     call.Dump(SHIP__WARNING);
 
     _log(AUTOPILOT__MESSAGE, "%s called beacon jump.", call.client->GetName());
-    if (call.client->IsSessionChange()) {
-        call.client->SendNotifyMsg("Session Change currently active.");
+    if (!CanStartJump(call.client))
         return PyStatic.NewNone();
-    }
 
-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
-    if (pDestiny == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+    // checks the cyno is still lit and its pilot is still in our fleet
+    JumpDrive::Beacon beacon;
+    if (!JumpDrive::FindFleetBeacon(call.client, characterID->value(), beaconID->value(), beacon))
         return PyStatic.NewNone();
-    } else if (pDestiny->IsWarping()) {
-        call.client->SendNotifyMsg( "You can't do this while warping");
+
+    // range, capacitor and fuel
+    if (!JumpDrive::DriveJump(call.client, beacon))
         return PyStatic.NewNone();
-    } else if (pDestiny->IsFrozen()) {
-        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
-        return PyStatic.NewNone();
-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
-        return PyStatic.NewNone();
-    }
-
-    InventoryItemRef beacon = sItemFactory.GetItemRefFromID(beaconID->value());
-
-    //Check for jump fuel and make sure there is enough fuel available
-    ShipItemRef ship = call.client->GetShip();
-
-    std::vector<InventoryItemRef> fuelBayItems;
-    std::vector<InventoryItemRef> requiredItems;
-    uint32 fuelType = ship->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
-    uint32 fuelBaseConsumption = uint32(ceil(ship->GetAttribute(AttrJumpDriveConsumptionAmount).get_float()));
-    uint32 fuelQuantity;
-
-    GPoint startPosition = SystemDB::GetSolarSystemPosition(call.client->GetSystemID());
-    GPoint endPosition = SystemDB::GetSolarSystemPosition(beacon->locationID());
-
-    GVector heading ( startPosition, endPosition );
-    double jumpDistance = EvEMath::Units::MetersToLightYears(heading.length());
-
-    int8 jumpFuelConservationLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFuelConservation);
-    int8 jumpFreightersLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFreighters);
-
-    if (ship->groupID() == EVEDB::invGroups::JumpFreighter) {
-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel) * (1 - 0.1 * jumpFreightersLevel)));
-    } else {
-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel)));
-    }
-
-    ship->GetMyInventory()->GetItemsByFlag(flagFuelBay, fuelBayItems);
-    uint32 quantity = 0;
-    for (auto cur : fuelBayItems) {
-        if (cur->type().id() == fuelType) {
-            quantity += cur->quantity();
-            requiredItems.push_back(cur);
-            if (quantity >= fuelQuantity) {
-                break;
-            }
-        }
-    }
-    if (quantity < fuelQuantity) {
-        ship->GetPilot()->SendNotifyMsg("This jump requires you to have %u units of %s in your fuel bay.", fuelQuantity, sItemFactory.GetType(fuelType)->name().c_str());
-        return PyStatic.NewNone();
-    }
-
-    for (auto cur : requiredItems) {
-        if (cur->quantity() > fuelQuantity) {
-            //If we have all the quantity we need in the current stack, decrement the amount we need and break
-            cur->AlterQuantity(-fuelQuantity, true);
-            break;
-        } else {
-            //If the stack doesn't have the full amount delete item
-            cur->SetQuantity(0, true, true);
-        }
-    }
-
-    call.client->CynoJump(beacon);
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */
     // returns nodeID and timestamp
@@ -1057,81 +1113,17 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID, 
     call.Dump(SHIP__WARNING);
 
     _log(AUTOPILOT__MESSAGE, "%s called beacon jump.", call.client->GetName());
-    if (call.client->IsSessionChange()) {
-        call.client->SendNotifyMsg("Session Change currently active.");
+    if (!CanStartJump(call.client))
         return PyStatic.NewNone();
-    }
 
-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
-    if (pDestiny == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+    // checks the beacon is still online for our alliance
+    JumpDrive::Beacon beacon;
+    if (!JumpDrive::FindAllianceBeacon(call.client, beaconID->value(), beacon))
         return PyStatic.NewNone();
-    } else if (pDestiny->IsWarping()) {
-        call.client->SendNotifyMsg( "You can't do this while warping");
+
+    // range, capacitor and fuel
+    if (!JumpDrive::DriveJump(call.client, beacon))
         return PyStatic.NewNone();
-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
-        return PyStatic.NewNone();
-    }
-
-    InventoryItemRef beacon = sItemFactory.GetItemRefFromID(beaconID->value());
-
-    //Check for jump fuel and make sure there is enough fuel available
-    ShipItemRef ship = call.client->GetShip();
-
-    std::vector<InventoryItemRef> fuelBayItems;
-    std::vector<InventoryItemRef> requiredItems;
-    uint32 fuelType = ship->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
-    uint32 fuelBaseConsumption = uint32(ceil(ship->GetAttribute(AttrJumpDriveConsumptionAmount).get_float()));
-    uint32 fuelQuantity;
-
-    GPoint startPosition = SystemDB::GetSolarSystemPosition(call.client->GetSystemID());
-    GPoint endPosition = SystemDB::GetSolarSystemPosition(beacon->locationID());
-
-    GVector heading ( startPosition, endPosition );
-    double jumpDistance = EvEMath::Units::MetersToLightYears(heading.length());
-
-    int8 jumpFuelConservationLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFuelConservation);
-    int8 jumpFreightersLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFreighters);
-
-    if (ship->groupID() == EVEDB::invGroups::JumpFreighter) {
-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel) * (1 - 0.1 * jumpFreightersLevel)));
-    } else {
-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel)));
-    }
-
-    ship->GetMyInventory()->GetItemsByFlag(flagFuelBay, fuelBayItems);
-    uint32 quantity = 0;
-    for (auto cur : fuelBayItems) {
-        if (cur->type().id() == fuelType) {
-            quantity += cur->quantity();
-            requiredItems.push_back(cur);
-            if (quantity >= fuelQuantity) {
-                break;
-            }
-        }
-    }
-    if (quantity < fuelQuantity) {
-        ship->GetPilot()->SendNotifyMsg("This jump requires you to have %u units of %s in your inventory.", fuelQuantity, sItemFactory.GetType(fuelType)->name().c_str());
-        return nullptr;
-    }
-
-    uint32 quantityLeft = fuelQuantity;
-    for (auto cur : requiredItems) {
-        if (cur->quantity() >= quantityLeft) {
-            //If we have all the quantity we need in the current stack, decrement the amount we need and break
-            cur->AlterQuantity(-quantityLeft, true);
-            break;
-        } else {
-            //If the stack doesn't have the full amount, decrement the quantity from what we need and zero out the stack
-            quantityLeft -= cur->quantity();
-            // Delete item after we zero it's quantity
-            cur->SetQuantity(0, true, true);
-        }
-    }
-
-    GPoint position = beacon->position();
-    position.MakeRandomPointOnSphere(2500.0);
-    call.client->CynoJump(beacon);
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */
     // returns nodeID and timestamp
@@ -1139,6 +1131,7 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID, 
     //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
     return this->GetOID();
 }
+
 
 PyResult BeyonceBound::CmdFleetRegroup(PyCallArgs &call) {
     // not sure what this is supposed to do yet

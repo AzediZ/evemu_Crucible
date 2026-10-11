@@ -73,6 +73,8 @@ protected:
     PyResult CmdJumpThroughCorporationStructure(PyCallArgs& call, PyInt* itemID, PyInt* remoteStructureID, PyInt* remoteSystemID);
     PyResult CmdBeaconJumpFleet(PyCallArgs& call, PyInt* characterID, PyInt* beaconID, PyInt* solarSystemID);
     PyResult CmdBeaconJumpAlliance(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
+    PyResult CmdBridgeToMember(PyCallArgs& call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID);
+    PyResult CmdBridgeToStructure(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
     PyResult CmdFleetRegroup(PyCallArgs& call);
     PyResult CmdFleetTagTarget(PyCallArgs& call, PyInt* itemID, PyString* tag);
     

@@ -15,6 +15,7 @@
 #include "eve-server.h"
 #include "chat/LSCService.h"
 #include "fleet/FleetService.h"
+#include "ship/JumpDrive.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
@@ -373,6 +374,9 @@ bool FleetService::AddMember(Client* pClient, uint32 fleetID, int32 wingID, int3
     SendFleetUpdate(fleetID, "OnFleetJoin", res);
 
     UpdateBoost(fleetID, fleet, wing, squad);
+
+    // cynos lit and jump portals opened before this member joined
+    JumpDrive::SendActiveBeacons(pClient);
     return true;
 }
 

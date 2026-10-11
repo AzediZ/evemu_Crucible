@@ -18,6 +18,7 @@
 
 
 #include "fleet/FleetBound.h"
+#include "ship/JumpDrive.h"
 #include "fleet/FleetObject.h"
 #include "services/ServiceManager.h"
 
@@ -226,6 +227,10 @@ PyResult FleetBound::GetInitState(PyCallArgs &call) {
     rsp.members = dict2;
     if (is_log_enabled(FLEET__DEBUG))
         rsp.Dump(FLEET__DEBUG);
+
+    // cynos lit and jump portals open in this fleet.  also sent on joining; sent again here in case the client
+    //  resets its lists when it loads the fleet
+    JumpDrive::SendActiveBeacons(call.client);
 
     //response should be sequenced
     return rsp.Encode();

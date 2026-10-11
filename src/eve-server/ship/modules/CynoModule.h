@@ -22,6 +22,13 @@ public:
     virtual CynoModule*       GetCynoModule()             { return this; }
     virtual bool        IsCynoModule() const        { return true; }
 
+    /* the lit field.  fleet members' jump drives and jump portals go to it */
+    bool                IsFieldUp()                 { return (cSE != nullptr); }
+    uint32              GetFieldID()                { return ((cSE != nullptr) ? cSE->GetID() : 0); }
+    InventoryItemRef    GetField()                  { return ((cSE != nullptr) ? cSE->GetSelf() : InventoryItemRef(nullptr)); }
+    // covert cynosural field generator.  only black ops can jump to its field, and cyno jammers don't stop it
+    bool                IsCovert()                  { return (groupID() == EVEDB::invGroups::Covert_Cynosural_Field_Generator); }
+
     /* ActiveModule overrides */
     virtual void Activate(uint16 effectID, uint32 targetID=0, int16 repeat=0);
     virtual void DeactivateCycle(bool abort=false);
@@ -39,7 +46,7 @@ private:
 
     float m_shipVelocity;
 
-    void SendOnJumpBeaconChange(bool status=false);
+    void SendOnJumpBeaconChange(bool active=false);
     void CreateCyno();
 };
 

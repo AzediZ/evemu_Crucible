@@ -464,12 +464,14 @@ SET( search_SOURCE
 
 SET( ship_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/BeyonceService.h"
+     "${TARGET_INCLUDE_DIR}/ship/JumpDrive.h"
      "${TARGET_INCLUDE_DIR}/ship/Missile.h"
      "${TARGET_INCLUDE_DIR}/ship/Ship.h"
      "${TARGET_INCLUDE_DIR}/ship/ShipDB.h"
      "${TARGET_INCLUDE_DIR}/ship/ShipService.h")
 SET( ship_SOURCE
      "${TARGET_SOURCE_DIR}/ship/BeyonceService.cpp"
+     "${TARGET_SOURCE_DIR}/ship/JumpDrive.cpp"
      "${TARGET_SOURCE_DIR}/ship/Missile.cpp"
      "${TARGET_SOURCE_DIR}/ship/Ship.cpp"
      "${TARGET_SOURCE_DIR}/ship/ShipDB.cpp"
@@ -489,7 +491,8 @@ SET( ship_modules_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/modules/SubSystemModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/TurretFormulas.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/TurretModule.h"
-     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h" )
+     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h"
+     "${TARGET_INCLUDE_DIR}/ship/modules/JumpPortalModule.h" )
 SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/ActiveModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/GenericModule.cpp"
@@ -502,7 +505,8 @@ SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/SubSystemModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/TurretFormulas.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/TurretModule.cpp"
-     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp" )
+     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp"
+     "${TARGET_SOURCE_DIR}/ship/modules/JumpPortalModule.cpp" )
 
 SET( standing_INCLUDE
      "${TARGET_INCLUDE_DIR}/standing/Standing.h"

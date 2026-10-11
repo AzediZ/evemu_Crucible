@@ -5,6 +5,7 @@
   * @date:   8 October 2021
   */
 
+#include "ship/JumpDrive.h"
 #include "ship/modules/CynoModule.h"
 #include "system/SystemManager.h"
 #include "fleet/FleetService.h"
@@ -19,20 +20,20 @@ cSE(nullptr),
 m_firstRun(true),
 m_shipVelocity(0.0f)
 {
-    if (!m_shipRef->HasPilot())
-        return;
-
-    pClient = m_shipRef->GetPilot();
-
-    // increase scan speed by level of survey skill
-    float cycleTime = GetAttribute(AttrDuration).get_float();
-    cycleTime *= (1 + (0.03f * (pClient->GetChar()->GetSkillLevel(EvESkill::Survey, true))));
-    SetAttribute(AttrDuration, cycleTime);
+    /* the field lasts one cycle of the module (10 minutes), which no skill changes.
+     *  (this used to add 3% a level of Survey, copied from the survey scanner code)
+     */
 }
 
 void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
 {
+    // the pilot can change since the module was loaded (relog, someone else boarding the ship)
+    pClient = m_shipRef->GetPilot();
+    if (pClient == nullptr)
+        return;
     pShipSE = pClient->GetShipSE();
+    if (pShipSE == nullptr)
+        return;
 
     m_firstRun = true;
     ActiveModule::Activate(effectID, targetID, repeat);
@@ -45,14 +46,17 @@ void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
 
     // hack to disable ship movement here
     m_shipVelocity = pShipSE->DestinyMgr()->GetMaxVelocity();
+    pShipSE->DestinyMgr()->Stop();
     pShipSE->DestinyMgr()->SetFrozen(true);
 }
 
 void CynoModule::DeactivateCycle(bool abort)
 {
-    SendOnJumpBeaconChange(false);
-    cSE->Delete();
-    SafeDelete(cSE);
+    if (cSE != nullptr) {
+        SendOnJumpBeaconChange(false);
+        cSE->Delete();
+        SafeDelete(cSE);
+    }
     ActiveModule::DeactivateCycle(abort);
 
     // hack to reinstate ship movement here
@@ -63,6 +67,9 @@ void CynoModule::DeactivateCycle(bool abort)
 
 bool CynoModule::CanActivate()
 {
+    if ((pClient == nullptr) or (pShipSE == nullptr))
+        return false;
+
     if (!pClient->InFleet())
         throw UserError("CynoMustBeInFleet");
 
@@ -78,9 +85,9 @@ bool CynoModule::CanActivate()
     //if (m_sysMgr->HasCynoJammer())
     //    throw UserError("CynosuralGenerationJammed");
 
-    //Send message if the system is being jammed
+    //Send message if the system is being jammed.  covert fields aren't stopped by jammers
     SovereigntyData sovData = svDataMgr.GetSovereigntyData(pClient->GetLocationID());
-    if (sovData.jammerID != 0) {
+    if ((sovData.jammerID != 0) and !IsCovert()) {
         pClient->SendNotifyMsg("This system is currently being jammed.");
         return false;
     }
@@ -117,7 +124,7 @@ void CynoModule::CreateCyno()
         return;
 
     // Create Cyno field here
-    ItemData cData(EVEDB::invTypes::CynosuralFieldI, pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone);
+    ItemData cData((IsCovert() ? EVEDB::invTypes::CovertCynosuralFieldI : EVEDB::invTypes::CynosuralFieldI), pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone);
     InventoryItemRef cRef = sItemFactory.SpawnItem(cData);
 
     _log(MODULE__DEBUG, "Creating Cynosural field");
@@ -133,26 +140,11 @@ void CynoModule::CreateCyno()
 }
 
 void CynoModule::SendOnJumpBeaconChange(bool active/*false*/) {
-        //Send ProcessSovStatusChanged Notification
-        _log(MODULE__DEBUG, "Sending OnJumpBeaconChange (active = %s)", active ? "true" : "false");
-
-        uint32 fieldID(0);
-        if (cSE != nullptr)
-            fieldID = cSE->GetID();
-
-        PyTuple* data = new PyTuple(4);
-            data->SetItem(0, new PyInt(pClient->GetCharacterID()));
-            data->SetItem(1, new PyInt(m_sysMgr->GetID()));
-            data->SetItem(2, new PyInt(fieldID));
-            data->SetItem(3, new PyBool(active));
-
-        std::vector<Client *> fleetClients;
-        fleetClients = sFltSvc.GetFleetClients(pClient->GetFleetID());
-        for (auto cur : fleetClients)
-            if (cur != nullptr) {
-                cur->SendNotification("OnJumpBeaconChange", "clientID", &data);
-                _log(MODULE__DEBUG, "OnJumpBeaconChange sent to %s (%u)", cur->GetName(), cur->GetCharID());
-            }
+    // tells the fleet, so members get "Jump to" (and "Bridge to") for this field.  members joining the fleet later are told
+    //  when they join (JumpDrive::SendActiveBeacons)
+    if ((pClient == nullptr) or (cSE == nullptr))
+        return;
+    JumpDrive::SendBeaconChange(pClient, cSE->GetSelf()->locationID(), GetFieldID(), active);
 }
 
 /*
