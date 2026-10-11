@@ -76,6 +76,8 @@ public:
     ~LSCChannelMod() { }
     PyRep * Encode();
 
+    LSC::Mode GetMode() const                           { return m_mode; }
+
 protected:
     LSCChannel * m_parent;    // we do not own this
     uint32 m_accessor;
@@ -95,8 +97,9 @@ public:
     ~LSCChannel();
 
     PyRep *EncodeID();
-    PyRep *EncodeStaticChannel(uint32 charID);
-    PyRep *EncodeDynamicChannel(uint32 charID);
+    // the password is only sent when showPassword (owner/operator/GM)
+    PyRep *EncodeStaticChannel(uint32 charID, bool showPassword = false);
+    PyRep *EncodeDynamicChannel(uint32 charID, bool showPassword = false);
     PyRep *EncodeChannelMods();
     PyRep *EncodeChannelChars();
     PyRep *EncodeEmptyChannelChars();
@@ -105,6 +108,9 @@ public:
     bool JoinChannel(Client *pClient);
     void LeaveChannel(Client* pClient);
     bool IsJoined(uint32 charID);
+    // true when charID has operator (or creator) mode in this channel's access list
+    bool IsOperator(uint32 charID);
+    bool HasPassword() const                            { return !m_password.empty(); }
 
     // this is used for updating joined clients when channel config is changed.
     void UpdateConfig();

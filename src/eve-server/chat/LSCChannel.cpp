@@ -316,7 +316,14 @@ PyRep *LSCChannel::EncodeID() {
     return new PyInt(m_channelID);
 }
 
-PyRep *LSCChannel::EncodeStaticChannel(uint32 charID) {
+bool LSCChannel::IsOperator(uint32 charID) {
+    std::map<uint32, LSCChannelMod>::iterator itr = m_mods.find(charID);
+    if (itr == m_mods.end())
+        return false;
+    return (itr->second.GetMode() >= LSC::Mode::chOperator);
+}
+
+PyRep *LSCChannel::EncodeStaticChannel(uint32 charID, bool showPassword/*false*/) {
     ChannelInfoLine line;
         line.channelID = m_channelID;
         line.ownerID = m_ownerID;
@@ -324,7 +331,7 @@ PyRep *LSCChannel::EncodeStaticChannel(uint32 charID) {
         line.motd = m_motd;
         line.comparisonKey = m_comparisonKey;
         line.memberless = m_memberless;
-        line.password = m_password;
+        line.password = (showPassword ? m_password : "");
         line.mailingList = m_mailingList;
         line.cspa = m_cspa;
         line.temporary = m_temporary;
@@ -338,7 +345,7 @@ PyRep *LSCChannel::EncodeStaticChannel(uint32 charID) {
     return line.Encode();
 }
 
-PyRep *LSCChannel::EncodeDynamicChannel(uint32 charID) {
+PyRep *LSCChannel::EncodeDynamicChannel(uint32 charID, bool showPassword/*false*/) {
     ChannelJoinChannelInfo info;
         info.channelID = m_channelID;
         info.comparisonKey = m_comparisonKey;
@@ -348,7 +355,7 @@ PyRep *LSCChannel::EncodeDynamicChannel(uint32 charID) {
         info.memberless = m_memberless;
         info.motd = m_motd;
         info.ownerID = m_ownerID;
-        info.password = m_password;
+        info.password = (showPassword ? m_password : "");
         //HACK auto-subscribe to system channels.  TODO determine if calling char is subscribed to this channel
         info.subscribed = IsStaticChannel(m_channelID);
         info.temporary = m_temporary;

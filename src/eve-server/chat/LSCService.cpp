@@ -66,6 +66,9 @@ LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
     this->Add("GetChannels", &LSCService::GetChannels);
     this->Add("GetRookieHelpChannel", &LSCService::GetRookieHelpChannel);
     this->Add("JoinChannels", &LSCService::JoinChannels);
+    // password join path (lscengine TryOpenChannel)
+    this->Add("JoinChannel", static_cast <PyResult (LSCService::*)(PyCallArgs& call, PyInt* channelID)> (&LSCService::JoinChannel));
+    this->Add("JoinChannel", static_cast <PyResult (LSCService::*)(PyCallArgs& call, PyTuple* channelID)> (&LSCService::JoinChannel));
     this->Add("LeaveChannels", static_cast <PyResult (LSCService::*)(PyCallArgs& call, PyList* channels, PyBool* usubscribe, PyLong* role)> (&LSCService::LeaveChannels));
     this->Add("LeaveChannels", static_cast <PyResult (LSCService::*)(PyCallArgs& call, PyList* channels, PyInt* usubscribe, PyLong* role)> (&LSCService::LeaveChannels));
     this->Add("LeaveChannel", &LSCService::LeaveChannel);
@@ -156,7 +159,7 @@ PyResult LSCService::GetChannels(PyCallArgs &call)
             } break;
         }
 
-        info.lines->AddItem(cur->second->EncodeStaticChannel(call.client->GetCharacterID()));
+        info.lines->AddItem(cur->second->EncodeStaticChannel(call.client->GetCharacterID(), IsPrivileged(call.client, cur->second)));
     }
 
     if (is_log_enabled(LSC__RSP_DUMP))
@@ -233,11 +236,21 @@ PyResult LSCService::CreateChannel(PyCallArgs& call, PyRep* channelName)
         return reply.Encode();
     }
 
+    // joining an existing channel by name is subject to the same rules as JoinChannels
+    if (joinExisting) {
+        std::string msg;
+        if (!CanAccess(pClient, channel, msg))
+            throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString(msg));
+        // the client only handles CHTERR_NOSUCHCHANNEL/ALREADYEXISTS here, so a password failure is a user error
+        if (!CheckPassword(pClient, channel, nullptr))
+            throw UserError("LSCWrongPassword").AddFormatValue("channelName", new PyString(channel->GetDisplayName()));
+    }
+
     // join channel and send response
     if (!channel->IsJoined(pClient->GetCharacterID()))  {
         if (channel->JoinChannel(pClient)) {
             //if ((channel->GetChannelID() < 0) or (channel->GetChannelID() > maxStaticChannel)) {
-                reply.ChannelInfo = channel->EncodeDynamicChannel(pClient->GetCharacterID());
+                reply.ChannelInfo = channel->EncodeDynamicChannel(pClient->GetCharacterID(), IsPrivileged(pClient, channel));
             //} else {
             //    reply.ChannelInfo = channel->EncodeStaticChannel(pClient->GetCharacterID());
             //}
@@ -321,12 +334,29 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
         ChannelJoinReply chjr;
             chjr.ChannelID = channel->EncodeID();
 
-        /** @todo  query/check password and other stipulations */
-        if (!channel->IsJoined(charID)) {
+        std::string msg;
+        if (channel->IsJoined(charID)) {
+            //{'FullPath': u'UI/Messages', 'messageID': 256739, 'label': u'LSCChannelIsJoinedBody'}(u'You are already in the channel ({displayName})', None, {u'{displayName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'displayName'}})
+            PyDict* args = new PyDict();
+                args->SetItemString("displayName", new PyString(channel->GetDisplayName()));
+            chjr.JoinRsp = MakeJoinError("LSCChannelIsJoined", args);
+            chjr.ok = 0;
+        } else if (!CanAccess(call.client, channel, msg)) {
+            PyDict* args = new PyDict();
+                args->SetItemString("msg", new PyString(msg));
+            chjr.JoinRsp = MakeJoinError("LSCCannotJoin", args);
+            chjr.ok = 0;
+        } else if (!CheckPassword(call.client, channel, nullptr)) {
+            // lscengine handles LSCWrongPassword {channelName} here
+            PyDict* args = new PyDict();
+                args->SetItemString("channelName", new PyString(channel->GetDisplayName()));
+            chjr.JoinRsp = MakeJoinError("LSCWrongPassword", args);
+            chjr.ok = 0;
+        } else {
             if (channel->JoinChannel(call.client)) {
                 ChannelJoinOK cjok;
                 //if ((channelID < 0) or (channelID > maxStaticChannel)) {
-                    cjok.ChannelInfo = channel->EncodeDynamicChannel(charID);
+                    cjok.ChannelInfo = channel->EncodeDynamicChannel(charID, IsPrivileged(call.client, channel));
                 //} else {
                 //    cjok.ChannelInfo = channel->EncodeStaticChannel(charID);
                 //}
@@ -335,19 +365,11 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
                 chjr.JoinRsp = cjok.Encode();
                 chjr.ok = 1;
             } else {
-                ChannelJoinNotOK cjnok;
-                    cjnok.Error = "LSCCannotJoin";
-                    cjnok.rspDict = new PyDict();   // dunno what goes here...
-                chjr.JoinRsp = cjnok.Encode();
+                PyDict* args = new PyDict();
+                    args->SetItemString("msg", new PyString(""));
+                chjr.JoinRsp = MakeJoinError("LSCCannotJoin", args);
                 chjr.ok = 0;
             }
-        } else {
-            ChannelJoinNotOK cjnok;
-            //{'FullPath': u'UI/Messages', 'messageID': 256739, 'label': u'LSCChannelIsJoinedBody'}(u'You are already in the channel ({displayName})', None, {u'{displayName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'displayName'}})
-                cjnok.Error = "LSCChannelIsJoined";
-                cjnok.rspDict = new PyDict();   // dunno what goes here...
-            chjr.JoinRsp = cjnok.Encode();
-            chjr.ok = 0;
         }
         ml->AddItem(chjr.Encode());
     }
@@ -399,6 +421,10 @@ PyResult LSCService::SendMessage(PyCallArgs& call, PyRep* channelInfo, PyWString
         _log(LSC__ERROR, "%s: Couldn't find channel %u", call.client->GetName(), channel_id);
         return PyStatic.NewNone();
     }
+
+    // only members of a channel may speak in it (this covers the '.' slash path too)
+    if (!itr->second->IsJoined(call.client->GetCharacterID()))
+        throw UserError("LSCCannotSendMessage").AddFormatValue("msg", new PyString("You are not a member of this channel."));
 
     if (message.empty())
         return PyStatic.NewNone();
@@ -613,6 +639,21 @@ PyResult LSCService::Configure(PyCallArgs& call, PyInt* channelID)
     }
 
     channel = m_channels.find(channel_id)->second;
+    if (!CanConfigure(call.client, channel)) {
+        // pick the client message matching the requested change
+        const char* key = "LSCCannotSetMOTD";
+        if (call.byname.find("motd") != call.byname.end()) {
+            key = "LSCCannotSetMOTD";
+        } else if (call.byname.find("newPassword") != call.byname.end()) {
+            key = "LSCCannotSetPassword";
+        } else if (call.byname.find("memberless") != call.byname.end()) {
+            key = "LSCCannotSetMemberless";
+        } else if (call.byname.find("displayName") != call.byname.end()) {
+            key = "LSCCannotRename";
+        }
+        throw UserError(key).AddFormatValue("msg", new PyString("You are not allowed to configure this channel."));
+    }
+
     if (call.byname.find("displayName") != call.byname.end()) {
         if (call.byname.find("displayName")->second->IsWString()) {
             channel->SetDisplayName(call.byname.find("displayName")->second->AsWString()->content());
@@ -665,7 +706,7 @@ PyResult LSCService::Configure(PyCallArgs& call, PyInt* channelID)
                 }
             }
         } else {
-            _log(LSC__ERROR, "%s: oldPassword is of an unexpected type: '%s'", call.client->GetName(), call.byname.find("newPassword")->second->TypeString());
+            _log(LSC__ERROR, "%s: oldPassword is of an unexpected type: '%s'", call.client->GetName(), call.byname.find("oldPassword")->second->TypeString());
             return nullptr;
         }
     }
@@ -806,11 +847,11 @@ PyResult LSCService::DestroyChannel(PyCallArgs& call, PyInt* channelID)
         return PyStatic.NewNone();
     }
 
-    // ********** TODO **********
-    // Figure out how to validate whether this character (call.client->GetCharacterID()) is allowed
-    // to destroy this chat channel, and proceed if they are, otherwise, do not.  And, is there an error
-    // packet sent back to the client?
-    // **************************
+    // only user-created channels can be destroyed, by their owner or a GM (the client refuses system channels itself)
+    LSCChannel* pChan = itr->second;
+    if ((pChan->GetType() != LSC::Type::normal) or (pChan->GetChannelID() <= 0) or IsStaticChannel(pChan->GetChannelID())
+    or (!IsGM(call.client) and (pChan->GetOwnerID() != call.client->GetCharacterID())))
+        throw UserError("LSCCannotDestroy").AddFormatValue("msg", new PyString("You are not allowed to destroy this channel."));
 
     // Now, remove the channel from the database:
     m_db.DeleteChannel(itr->second->GetChannelID());
@@ -852,15 +893,223 @@ PyResult LSCService::GetMembers(PyCallArgs &call, PyRep* channelInfo) {
         return nullptr;
     }
 
-    if (m_channels.find(channelID) != m_channels.end())
-        return m_channels[channelID]->EncodeChannelChars();
-
-    return nullptr;
+    std::map<int32, LSCChannel*>::iterator itr = m_channels.find(channelID);
+    if (itr == m_channels.end())
+        return nullptr;
+    // member lists are for members (the client only asks for joined channels)
+    if (!itr->second->IsJoined(call.client->GetCharacterID()) and !IsGM(call.client))
+        return nullptr;
+    return itr->second->EncodeChannelChars();
 }
 
 
 PyResult LSCService::GetMember(PyCallArgs &call) {
     return nullptr;
+}
+
+PyResult LSCService::JoinChannel(PyCallArgs& call, PyTuple* channelID)
+{
+    int32 id = DecodeChannelID(channelID);
+    if (id == 0)
+        throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString("That channel does not exist."));
+    return JoinChannel(call, new PyInt(id));
+}
+
+PyResult LSCService::JoinChannel(PyCallArgs& call, PyInt* channelID)
+{
+    /* lscengine.TryOpenChannel:  tmp = sm.RemoteSvc('LSC').JoinChannel(channelID, password=password)
+     *   returns (info, acl, memberList) on success, None for a wrong password (the client asks again),
+     *   UserError for anything else
+     */
+    if (is_log_enabled(LSC__CALL_DUMP)) {
+        sLog.Warning("LSCService::Handle_JoinChannel()", "size=%lu", call.tuple->size());
+        call.Dump(LSC__CALL_DUMP);
+    }
+
+    LSCChannel* channel = GetChannelByID(channelID->value());
+    if (channel == nullptr)
+        throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString("That channel does not exist."));
+
+    std::string msg;
+    if (!CanAccess(call.client, channel, msg))
+        throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString(msg));
+
+    std::string password;
+    std::map<std::string, PyRep*>::iterator itr = call.byname.find("password");
+    if (itr != call.byname.end())
+        password = PyRep::StringContent(itr->second);
+    if (!CheckPassword(call.client, channel, &password))
+        return PyStatic.NewNone();
+
+    uint32 charID = call.client->GetCharacterID();
+    if (!channel->IsJoined(charID))
+        if (!channel->JoinChannel(call.client))
+            throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString(""));
+
+    ChannelJoinOK cjok;
+        cjok.ChannelInfo = channel->EncodeDynamicChannel(charID, IsPrivileged(call.client, channel));
+        cjok.ChannelMods = channel->EncodeChannelMods();
+        cjok.ChannelChars = channel->EncodeChannelChars();
+    return cjok.Encode();
+}
+
+bool LSCService::IsGM(Client* pClient)
+{
+    if (pClient == nullptr)
+        return false;
+    return ((pClient->GetAccountRole() & (Acct::Role::CHTADMINISTRATOR | Acct::Role::GMH)) != 0);
+}
+
+bool LSCService::CanAccess(Client* pClient, LSCChannel* pChan, std::string& msg)
+{
+    if ((pClient == nullptr) or (pChan == nullptr))
+        return false;
+    if (!sConfig.chat.EnforceChannelAccess or IsGM(pClient))
+        return true;
+
+    int32 channelID = pChan->GetChannelID();
+    Character* pChar = pClient->GetChar().get();
+    switch (pChan->GetType()) {
+        case LSC::Type::corp: {
+            if ((int32)pClient->GetCorporationID() == channelID)
+                return true;
+            msg = "You are not a member of this corporation.";
+        } break;
+        case LSC::Type::alliance: {
+            if ((pClient->GetAllianceID() != 0) and (pClient->GetAllianceID() == channelID))
+                return true;
+            msg = "You are not a member of this alliance.";
+        } break;
+        case LSC::Type::solarsystem:
+        case LSC::Type::solarsystem2: {
+            if ((int32)pClient->GetSystemID() == channelID)
+                return true;
+            msg = "You are not in this solar system.";
+        } break;
+        case LSC::Type::constellation: {
+            if ((int32)pClient->GetConstellationID() == channelID)
+                return true;
+            msg = "You are not in this constellation.";
+        } break;
+        case LSC::Type::region: {
+            if ((int32)pClient->GetRegionID() == channelID)
+                return true;
+            msg = "You are not in this region.";
+        } break;
+        case LSC::Type::fleet: {
+            if ((pChar != nullptr) and (pChar->fleetID() == channelID))
+                return true;
+            msg = "You are not a member of this fleet.";
+        } break;
+        case LSC::Type::wing: {
+            // fleetSvc.CanIJoinChannel: boss/FC any wing, everyone else their own wing
+            if ((pChar != nullptr) and (pChar->fleetID() != 0) and sFltSvc.IsWingInFleet(channelID, pChar->fleetID()))
+                if (sFltSvc.IsBoss(pChar) or (pChar->fleetRole() == Fleet::Role::FleetLeader) or (pChar->wingID() == channelID))
+                    return true;
+            msg = "You are not a member of this wing.";
+        } break;
+        case LSC::Type::squad: {
+            // boss/FC any squad, a WC the squads of his wing, everyone else their own squad
+            if ((pChar != nullptr) and (pChar->fleetID() != 0) and sFltSvc.IsSquadInFleet(channelID, pChar->fleetID())) {
+                if (sFltSvc.IsBoss(pChar) or (pChar->fleetRole() == Fleet::Role::FleetLeader) or (pChar->squadID() == channelID))
+                    return true;
+                if (pChar->fleetRole() == Fleet::Role::WingLeader) {
+                    SquadData sData = SquadData();
+                    sFltSvc.GetSquadData(channelID, sData);
+                    if ((int32)sData.wingID == pChar->wingID())
+                        return true;
+                }
+            }
+            msg = "You are not a member of this squad.";
+        } break;
+        default:
+            // global, help and user channels are open (subject to password)
+            return true;
+    }
+
+    return false;
+}
+
+bool LSCService::IsPrivileged(Client* pClient, LSCChannel* pChan)
+{
+    if ((pClient == nullptr) or (pChan == nullptr))
+        return false;
+    if (IsGM(pClient))
+        return true;
+    uint32 charID = pClient->GetCharacterID();
+    return ((pChan->GetOwnerID() == charID) or pChan->IsOperator(charID));
+}
+
+bool LSCService::CheckPassword(Client* pClient, LSCChannel* pChan, const std::string* password)
+{
+    if (!pChan->HasPassword())
+        return true;
+    if (IsPrivileged(pClient, pChan))
+        return true;
+    return ((password != nullptr) and (*password == pChan->GetPassword()));
+}
+
+bool LSCService::CanConfigure(Client* pClient, LSCChannel* pChan)
+{
+    if ((pClient == nullptr) or (pChan == nullptr))
+        return false;
+    if (IsGM(pClient))
+        return true;
+
+    int32 channelID = pChan->GetChannelID();
+    switch (pChan->GetType()) {
+        // lscengine: corp/alliance channel settings need the ChatManager corp role
+        case LSC::Type::corp:
+            return (((int32)pClient->GetCorporationID() == channelID) and ((pClient->GetCorpRole() & Corp::Role::ChatManager) == Corp::Role::ChatManager));
+        case LSC::Type::alliance:
+            return ((pClient->GetAllianceID() != 0) and (pClient->GetAllianceID() == channelID)
+                and ((pClient->GetCorpRole() & Corp::Role::ChatManager) == Corp::Role::ChatManager));
+        // the fleet MOTD belongs to the boss
+        case LSC::Type::fleet: {
+            Character* pChar = pClient->GetChar().get();
+            return ((pChar != nullptr) and (pChar->fleetID() == channelID) and sFltSvc.IsBoss(pChar));
+        }
+        case LSC::Type::normal:
+        case LSC::Type::custom:
+        case LSC::Type::character: {
+            // static (server) channels are owned by the system
+            if (IsStaticChannel(channelID))
+                return false;
+            uint32 charID = pClient->GetCharacterID();
+            return ((pChan->GetOwnerID() == charID) or pChan->IsOperator(charID));
+        }
+        default:
+            break;
+    }
+
+    return false;
+}
+
+PyRep* LSCService::MakeJoinError(const char* key, PyDict* args)
+{
+    ChannelJoinNotOK cjnok;
+        cjnok.Error = key;
+        cjnok.rspDict = (args != nullptr ? args : new PyDict());
+    return cjnok.Encode();
+}
+
+int32 LSCService::DecodeChannelID(PyRep* rep)
+{
+    // channelID is either an int (user channels) or ((type, id),) / (type, id) for system channels
+    if (rep == nullptr)
+        return 0;
+    if (rep->IsInt())
+        return rep->AsInt()->value();
+    if (!rep->IsTuple() or (rep->AsTuple()->size() < 1))
+        return 0;
+    PyTuple* prt = rep->AsTuple();
+    if ((prt->size() == 1) and prt->GetItem(0)->IsTuple())
+        prt = prt->GetItem(0)->AsTuple();
+    if ((prt->size() == 2) and prt->GetItem(1)->IsInt())
+        return prt->GetItem(1)->AsInt()->value();
+    if ((prt->size() == 1) and prt->GetItem(0)->IsInt())
+        return prt->GetItem(0)->AsInt()->value();
+    return 0;
 }
 
 

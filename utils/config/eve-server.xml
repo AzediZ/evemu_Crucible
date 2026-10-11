@@ -201,6 +201,9 @@ boolean can use either 0/1 OR true/false.
         <EnableSquadChat>false</EnableSquadChat><!-- bool -->
         <EnableVoiceChat>false</EnableVoiceChat><!-- bool -->
         <EnforceRookieInHelp>false</EnforceRookieInHelp><!-- bool -->
+        <!-- Restrict joining corp/alliance/fleet/local/region channels to members (Crucible behaviour). Disable only on test servers.
+             Channel passwords and the send/configure/destroy checks always apply. -->
+        <EnforceChannelAccess>true</EnforceChannelAccess><!-- bool -->
     </chat>
 
     <cosmic>

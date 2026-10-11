@@ -212,6 +212,7 @@ EVEServerConfig::EVEServerConfig()
     chat.EnableSquadChat = false;
     chat.EnableVoiceChat = false;
     chat.EnforceRookieInHelp = false;
+    chat.EnforceChannelAccess = true;
 
     // crime
     crime.Enabled = true;
@@ -763,6 +764,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     AddValueParser( "EnableSquadChat",      chat.EnableSquadChat );
     AddValueParser( "EnableVoiceChat",      chat.EnableVoiceChat );
     AddValueParser( "EnforceRookieInHelp",  chat.EnforceRookieInHelp );
+    AddValueParser( "EnforceChannelAccess", chat.EnforceChannelAccess );
 
     const bool result = ParseElementChildren( ele );
 
@@ -771,6 +773,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     RemoveParser( "EnableSquadChat" );
     RemoveParser( "EnableVoiceChat" );
     RemoveParser( "EnforceRookieInHelp" );
+    RemoveParser( "EnforceChannelAccess" );
 
     return result;
 }

@@ -76,6 +76,16 @@ public:
     }
     void SendMail(uint32 sender, const std::vector<int32> &recipients, const std::string &subject, const std::string &content);
 
+    /* channel access rules (Crucible).  GMs (CHTADMINISTRATOR/GMH) pass every test */
+    // membership rules by channel type (corp/alliance/local/constellation/region/fleet/wing/squad).  fills msg on refusal
+    bool CanAccess(Client* pClient, LSCChannel* pChan, std::string& msg);
+    // GM, channel owner or operator
+    bool IsPrivileged(Client* pClient, LSCChannel* pChan);
+    // true when the channel has no password, the client is privileged, or password matches
+    bool CheckPassword(Client* pClient, LSCChannel* pChan, const std::string* password);
+    // may change MOTD/name/password/memberless
+    bool CanConfigure(Client* pClient, LSCChannel* pChan);
+
 protected:
     CommandDispatcher *const m_commandDispatch;
 
@@ -87,6 +97,8 @@ protected:
     PyResult GetChannels(PyCallArgs& call);
     PyResult GetRookieHelpChannel(PyCallArgs& call);
     PyResult JoinChannels(PyCallArgs& call, PyList* channelIDs, PyLong* role);
+    PyResult JoinChannel(PyCallArgs& call, PyInt* channelID);
+    PyResult JoinChannel(PyCallArgs& call, PyTuple* channelID);
     PyResult LeaveChannels(PyCallArgs& call, PyList* channels, PyInt* usubscribe, PyLong* role);
     PyResult LeaveChannels(PyCallArgs& call, PyList* channels, PyBool* usubscribe, PyLong* role);
     PyResult LeaveChannel(PyCallArgs& call, PyRep* channelInfo, PyInt* unsubscribe);
@@ -107,6 +119,12 @@ protected:
 
 private:
     SlashService* m_slash;
+
+    static bool IsGM(Client* pClient);
+    // builds the ChannelJoinNotOK reply entry (msgKey, args)
+    PyRep* MakeJoinError(const char* key, PyDict* args);
+    // decodes a channelID sent as int or ((type, id),) / (type, id)
+    static int32 DecodeChannelID(PyRep* rep);
 
     void CreateStaticChannels();
     LSCChannel *GetChannelByID(int32 channelID);

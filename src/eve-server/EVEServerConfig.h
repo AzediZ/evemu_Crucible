@@ -310,6 +310,7 @@ public:
         bool EnableSquadChat;
         bool EnableVoiceChat;
         bool EnforceRookieInHelp;
+        bool EnforceChannelAccess;
     } chat;
 
     // From <crime>
