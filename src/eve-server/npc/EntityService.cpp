@@ -252,6 +252,8 @@ PyResult EntityBound::CmdEngage(PyCallArgs &call, PyList* droneIDs, PyInt* targe
             //{'FullPath': u'UI/Messages', 'label': u'EntityUnknownCommandBody'}(u'{targetTypeName} does not recognize the command you are trying to give it.')
             if ((action == DroneAI::Action::None) or (action == DroneAI::Action::Mine)) {
                 err = DroneError("EntityUnknownCommand", pDrone);
+            } else if (!pDrone->CanAttack(pTarget)) {
+                err = MakeError("CustomError", {{"error", new PyString(std::string(pDrone->GetName()) + " can only attack capital ships, stations and structures.")}});
             } else if (pShip->TargetMgr()->GetTarget(pTarget->GetID(), true) == nullptr) {
                 //{'FullPath': u'UI/Messages', 'label': u'EntityTargetMustBeTargetedBody'}(u'{targetTypeName} requires the target be locked onto by you, which it is not.')
                 err = DroneError("EntityTargetMustBeTargeted", pDrone);

@@ -71,6 +71,12 @@ struct DroneStats {
     double miningAmount;        // m3 per cycle
     double repairAmount;        // shield or armor HP per cycle
     double bandwidth;
+    // fighter bombers launch missiles instead of firing turrets.  damage falls off with the target's signature and speed
+    bool bomber;
+    double aoeCloudSize;
+    double aoeVelocity;
+    double aoeDrf;              // aoeDamageReductionFactor
+    double aoeDrs;              // aoeDamageReductionSensitivity
 };
 
 class DroneSE
@@ -126,6 +132,8 @@ public:
 
     DroneAIMgr* GetAI()                                 { return m_AI; }
     const DroneStats& Stats() const                     { return m_stats; }
+    // fighter bombers only attack capital ships, stations and structures; everything else can attack anything
+    bool CanAttack(SystemEntity* pTarget) const;
 
     uint8 GetState()                                    { return m_AI->GetState(); }
     uint32 GetTargetID()                                { return m_AI->GetTargetID(); }
