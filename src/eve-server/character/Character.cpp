@@ -996,6 +996,9 @@ int64 Character::GetNextBoosterExpiry() const
 
 void Character::ProcessBoosterExpiry()
 {
+    // in space between ships (jumping, boarding), the expiry waits for the ship, so the effects come off it
+    if ((m_pClient != nullptr) and m_pClient->IsInSpace() and (m_pClient->GetShipSE() == nullptr))
+        return;
     int64 now(GetFileTimeNow());
     std::vector<uint32> expired;
     for (auto cur : m_boosters)

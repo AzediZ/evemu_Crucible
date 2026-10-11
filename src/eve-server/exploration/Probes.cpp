@@ -225,8 +225,16 @@ void ProbeSE::CalcStats()
         if (sType.HasEffect(hull.effectID))
             strength *= (1.0 + 0.01 * sType.GetAttribute(hull.attr).get_double() * pChar->GetSkillLevel(hull.skill));
 
-    /** @todo F15 (implants):  implants with effect 4162/4161 (Virtue set, PPH/PPF hardwirings) multiply here like the
-     *   rigs, once Character exposes its fitted implants.  the Virtue set bonus is F15's */
+    /* implants with effect 4162/4161 (Virtue set, Poteque PPH/PPF hardwirings) multiply like the rigs.  their live attribs
+     *  carry the Virtue set multiplier (Character::ProcessEffects applies set bonuses to the implants)  (F15) */
+    std::vector<InventoryItemRef> implants;
+    pChar->GetImplants(implants);
+    for (auto cur : implants) {
+        if (cur->type().HasEffect(4162))
+            strength *= (1.0 + 0.01 * cur->GetAttribute(AttrScanStrengthBonus).get_double());
+        if (cur->type().HasEffect(4161))
+            deviation *= (1.0 + 0.01 * cur->GetAttribute(AttrMaxScanDeviationModifier).get_double());
+    }
 
     m_scanStrength = strength * sConfig.exploring.ProbeStrengthScale;
     m_scanDeviation = deviation;
