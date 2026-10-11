@@ -85,6 +85,9 @@ void BeltMgr::CheckSpawn(uint16 bubbleID)
 {
     if (IsSpawned(bubbleID))
         return;
+    // a mined out belt waits for its respawn (Process)
+    if (m_depletedAt.find(sBubbleMgr.GetBeltID(bubbleID)) != m_depletedAt.end())
+        return;
     /*  if there are already roids created for this belt, they will be loaded in Load()
      * if Load() has roids for this belt, this belt will have true already set, and checked in SpawnBelt()
      */

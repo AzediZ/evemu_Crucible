@@ -96,8 +96,10 @@ bool MiningLaser::CanActivate()
     bool canActivate(false);
     // verify module vs target for activation.  disallow if not compatible.  set special ore hold if applicable
     if (m_rMiner) {
+        // ice is in the asteroid category but needs an ice harvester
         if ((m_targetSE->GetSelf()->categoryID() == EVEDB::invCategories::Asteroid)
-        and (m_targetSE->GetSelf()->groupID() != EVEDB::invGroups::Mercoxit)) {
+        and (m_targetSE->GetSelf()->groupID() != EVEDB::invGroups::Mercoxit)
+        and (m_targetSE->GetSelf()->groupID() != EVEDB::invGroups::Ice)) {
             canActivate = true;
             if (m_shipRef->HasAttribute(AttrOreHoldCapacity))
                 m_holdFlag = flagOreHold;

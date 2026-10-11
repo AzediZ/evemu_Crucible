@@ -931,6 +931,9 @@ void StructureSE::CheckSovRequirements(bool online)
         throw UserError(online ? "CantOnlineNotSovereign" : "CantAnchorNotSovereign")
                 .AddFormatValue("structure", new PyString(m_self->itemName()));
 
+    // one hub serves the claim
+    if (m_ihub and online and (sovData.hubID != 0) and (sovData.hubID != m_data.itemID))
+        throw UserError("CantOnlineInfrastructureHubAlreadyInSystem");
     if (m_ihub or (upgradeID == 0))
         return;
 
