@@ -51,6 +51,7 @@
 #include "planet/Planet.h"
 #include "planet/PlanetMgr.h"
 #include "planet/PlanetMgrBound.h"
+#include "planet/PlanetDataMgr.h"
 #include "system/SystemManager.h"
 
 PlanetMgrService::PlanetMgrService(EVEServiceManager &mgr) :
@@ -153,13 +154,15 @@ PlanetMgrBound::PlanetMgrBound (EVEServiceManager& mgr, PlanetMgrService& parent
     this->Add("UserLaunchCommodities", &PlanetMgrBound::UserLaunchCommodities);
     this->Add("UserTransferCommodities", &PlanetMgrBound::UserTransferCommodities);
     this->Add("UserUpdateNetwork", &PlanetMgrBound::UserUpdateNetwork);
-    /* not supported yet */
+    /* GM tools */
     this->Add("GMAddCommodity", &PlanetMgrBound::GMAddCommodity);
     this->Add("GMConvertCommandCenter", &PlanetMgrBound::GMConvertCommandCenter);
     this->Add("GMForceInstallProgram", &PlanetMgrBound::GMForceInstallProgram);
     this->Add("GMGetLocalDistributionReport", &PlanetMgrBound::GMGetLocalDistributionReport);
     this->Add("GMGetSynchedServerState", &PlanetMgrBound::GMGetSynchedServerState);
     this->Add("GMRunDepletionSim", &PlanetMgrBound::GMRunDepletionSim);
+    this->Add("GMGetCompleteResource", &PlanetMgrBound::GMGetCompleteResource);
+    this->Add("GMCreateNuggetLayer", &PlanetMgrBound::GMCreateNuggetLayer);
 }
 
 PlanetSE* PlanetMgrBound::GetPlanetSE()
@@ -453,134 +456,157 @@ PyResult PlanetMgrBound::GetFullNetworkForOwner(PyCallArgs &call, PyInt* planetI
     return res;
 }
 
-PyResult PlanetMgrBound::GMAddCommodity(PyCallArgs &call, PyInt* pinID, PyInt* typeID, PyInt* quantity) {
-    _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMAddCommodity() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
-
-    return nullptr;
+void PlanetMgrBound::CheckGM(Client* pClient)
+{
+    if ((pClient->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::WORLDMOD | Acct::Role::PROGRAMMER)) == 0)
+        throw CustomError ("This planet command is for GMs only.");
 }
 
-PyResult PlanetMgrBound::GMConvertCommandCenter(PyCallArgs &call, PyInt* pinID) {
-    //self.remoteHandler.GMConvertCommandCenter(pinID)
-    //  this is an option in the GM planet menu.  no clue what it's for or what it does.....
-    /*
-     * 02:48:32 [PlanetDebug] PlanetMgrBound::Handle_GMConvertCommandCenter() size=1
-     * 02:48:32 [PlanetCallDump]   Call Arguments:
-     * 02:48:32 [PlanetCallDump]       Tuple: 1 elements
-     * 02:48:32 [PlanetCallDump]         [ 0] Integer field: 140006224      << CC PinID (currently wrong)
-     */
-
-    _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMConvertCommandCenter() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
-
-    return nullptr;
+void PlanetMgrBound::NotifyOwner(bool numCommandCentersChanged/*false*/)
+{
+    // planetSvc.OnMajorPlanetStateUpdate(planetID, numCommandCentersChanged):  the client re-reads the planet
+    Client* pClient(sEntityList.FindClientByCharID(m_charID));
+    if (pClient == nullptr)
+        return;
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(m_planetID));
+        tuple->SetItem(1, new PyBool(numCommandCentersChanged));
+    pClient->SendNotification("OnMajorPlanetStateUpdate", "clientID", &tuple);
 }
 
-PyResult PlanetMgrBound::GMForceInstallProgram(PyCallArgs &call, PyInt* pinID, PyInt* typeID, PyInt* cycleTime, PyInt* lifetimeHours, PyInt* qtyPerCycle, PyFloat* radius) {
-    _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMForceInstallProgram() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
-    /*
+PyResult PlanetMgrBound::GMAddCommodity(PyCallArgs &call, PyRep* pinID, PyInt* typeID, PyRep* quantity) {
+    // GMAddCommodity(pinID, typeID, quantity):  puts commodities into a pin (as much as it takes) and lets them flow on
+    CheckGM(call.client);
+    if (!pinID->IsInt() and !pinID->IsLong())
+        throw CustomError ("Submit the network first.");
+    int64 qty = (quantity->IsFloat() ? (int64)quantity->AsFloat()->value() : PyRep::IntegerValue(quantity));
+    if (qty < 1)
+        return PyStatic.NewNone();
+    uint32 added = GetColony()->GMAddCommodity(PyRep::IntegerValueU32(pinID), typeID->value(), (uint32)std::min(qty, (int64)UINT32_MAX));
+    _log(PLANET__INFO, "PlanetMgrBound::GMAddCommodity() - %s added %u of %u %s to pin %u", \
+            call.client->GetName(), added, (uint32)qty, sPIDataMgr.GetProductName(typeID->value()), PyRep::IntegerValueU32(pinID));
+    NotifyOwner();
+    return PyStatic.NewNone();
+}
+
+PyResult PlanetMgrBound::GMConvertCommandCenter(PyCallArgs &call, PyRep* pinID) {
+    // a CCP tool without a known purpose (the GM planet menu offers it for command centers)
+    CheckGM(call.client);
+    throw CustomError ("Not supported.");
+}
+
+PyResult PlanetMgrBound::GMForceInstallProgram(PyCallArgs &call, PyRep* pinID, PyInt* typeID, PyRep* cycleTime, PyRep* lifetimeHours, PyRep* qtyPerCycle, PyRep* radius) {
+    /*  ClientPlanet.GMInstallProgram (deposit designer):
      *        if typeID not in resourceInfo or qtyPerCycle < 0 or cycleTime < 10 * SEC or lifetimeHours < 1 or headRadius <= 0.0:
      *            return
      *        self.remoteHandler.GMForceInstallProgram(pinID, typeID, cycleTime, lifetimeHours, qtyPerCycle, headRadius)
-     *
-     * 16:40:57 L PlanetMgrBound: Handle_GMForceInstallProgram() size=6
-     * 16:40:57 [PlanetCallDump]   Call Arguments:
-     * 16:40:57 [PlanetCallDump]       Tuple: 6 elements
-     * 16:40:57 [PlanetCallDump]         [ 0] Tuple: 2 elements
-     * 16:40:57 [PlanetCallDump]         [ 0]   [ 0] Integer field: 1
-     * 16:40:57 [PlanetCallDump]         [ 0]   [ 1] Integer field: 1
-     * 16:40:57 [PlanetCallDump]         [ 1] Integer field: 2272
-     * 16:40:57 [PlanetCallDump]         [ 2] Integer field: 600000000
-     * 16:40:57 [PlanetCallDump]         [ 3] Integer field: 24
-     * 16:40:57 [PlanetCallDump]         [ 4] Integer field: 100
-     * 16:40:57 [PlanetCallDump]         [ 5] Real field: 1.000000
      */
-    return nullptr;
+    CheckGM(call.client);
+    if (!pinID->IsInt() and !pinID->IsLong())
+        throw CustomError ("Submit the network first.");
+    int64 cycle = PyRep::IntegerValue(cycleTime);
+    int64 hours = PyRep::IntegerValue(lifetimeHours);
+    int64 qty = PyRep::IntegerValue(qtyPerCycle);
+    double headRadius = (radius->IsFloat() ? radius->AsFloat()->value() : (double)PyRep::IntegerValue(radius));
+    if (!GetPlanetSE()->IsResourceType(typeID->value()))
+        throw CustomError ("That resource is not found on this planet.");
+    if ((qty < 0) or (cycle < 10 * EvE::Time::Second) or (hours < 1) or (headRadius <= 0))
+        throw CustomError ("Invalid program.");
+    GetColony()->GMForceInstallProgram(PyRep::IntegerValueU32(pinID), typeID->value(), cycle, hours * EvE::Time::Hour, (uint32)std::min(qty, (int64)UINT32_MAX), headRadius);
+    NotifyOwner();
+    return PyStatic.NewNone();
 }
 
-//15:15:02[00m L [37;01mPlanetMgrBound: [00mHandle_GMGetLocalDistributionReport() size=2
 PyResult PlanetMgrBound::GMGetLocalDistributionReport(PyCallArgs &call, PyInt* planetID, PyTuple* surfacePoint) {
-    /*
-     *      return self.remoteHandler.GMGetLocalDistributionReport(self.planetID, (surfacePoint.theta, surfacePoint.phi))
-     */
-    /*
-     *     15:15:02 [PlanetCallDump]   Call Arguments:
-     *     15:15:02 [PlanetCallDump]       Tuple: 2 elements
-     *     15:15:02 [PlanetCallDump]         [ 0] Integer field: 40216265      << planetID
-     *     15:15:02 [PlanetCallDump]         [ 1] Tuple: 2 elements
-     *     15:15:02 [PlanetCallDump]         [ 1]   [ 0] Real field: 0.359286  << theta
-     *     15:15:02 [PlanetCallDump]         [ 1]   [ 1] Real field: 1.014020  << phi
-     *     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMGetLocalDistributionReport() size=%lli", call.tuple->size());
-     *     call.Dump(PLANET__DUMP);
-     */
-
-    return nullptr;
+    // GMGetLocalDistributionReport(planetID, (surfacePoint.theta, surfacePoint.phi)):  {'base':{}, 'quality':{}, 'deplete':{}, 'final':{}, 'raw':{}}
+    CheckGM(call.client);
+    if (surfacePoint->size() < 2)
+        throw CustomError ("Invalid surface point.");
+    double theta = PyRep::FloatValue(surfacePoint->GetItem(0));    // longitude
+    double phi = PyRep::FloatValue(surfacePoint->GetItem(1));      // latitude
+    return GetPlanetSE()->GetLocalDistributionReport(2.0 * M_PI - theta, phi);
 }
 
 PyResult PlanetMgrBound::GMGetSynchedServerState(PyCallArgs &call, PyInt* characterID) {
-    /*
-     *    def GMVerifySimulation(self):
-     *        self.LogNotice('VerifySimulation -- starting')
+    /*  ClientPlanet.GMVerifySimulation:
      *        simulationDuration, remoteColonyData = self.remoteHandler.GMGetSynchedServerState(session.charid)
      *        simEndTime = remoteColonyData.currentSimTime
-     *        colony = self.GetColony(session.charid)
-     *        startTime = blue.os.GetWallclockTimeNow()
-     *        colony.RunSimulation(runSimUntil=simEndTime)
-     *        clientSimulationRuntime = blue.os.GetWallclockTimeNow() - startTime
-     *        pins = remoteColonyData.pins
-     *        self.LogNotice('simulation ran for', clientSimulationRuntime, 'on client, ', simulationDuration, 'on server')
-     *        for pin in pins:
-     *            clientPin = colony.GetPin(pin.id)
-     *            if clientPin is None:
-     *                self.LogError(pin.id, 'exists on server but not on client')
-     *                continue
-     *            for key, value in pin.__dict__.iteritems():
-     *                if not hasattr(clientPin, key):
-     *                    self.LogError(pin.id, 'on client does not have attribute ', key)
-     *                    continue
-     *                clientValue = getattr(clientPin, key)
-     *                if clientValue != value:
-     *                    self.LogError(pin.id, 'does not agree on a value for', key, 'Client says ', clientValue, 'but server', value)
-     *
-     *        self.LogNotice('VerifySimulation -- finished')
+     *        colony.RunSimulation(runSimUntil=simEndTime)   ... then compares every pin attribute
      */
-    _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMGetSynchedServerState() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
-
-    return nullptr;
+    CheckGM(call.client);
+    if (characterID->value() != m_charID)
+        throw CustomError ("Only the bound character's colony can be verified.");
+    Colony* pColony(GetColony());
+    double start(GetTimeUSeconds());
+    pColony->SimulateToNow();
+    int64 duration = (int64)((GetTimeUSeconds() - start) * 10);     // FILETIME units
+    PyTuple* res = new PyTuple(2);
+        res->SetItem(0, new PyLong(duration));
+        res->SetItem(1, pColony->GetColony());
+    return res;
 }
 
-PyResult PlanetMgrBound::GMRunDepletionSim(PyCallArgs &call) {
-    /*
-     * 18:37:58 [ClientCallRep] GMRunDepletionSim call made to
-     * 18:37:58 [PlanetDebug] PlanetMgrBound::Handle_GMRunDepletionSim() size=2
-     * 18:37:58 [PlanetCallDump]   Call Arguments:
-     * 18:37:58 [PlanetCallDump]       Tuple: 2 elements
-     * 18:37:58 [PlanetCallDump]         [ 0] (None)
-     * 18:37:58 [PlanetCallDump]         [ 1] Object:
-     * 18:37:58 [PlanetCallDump]         [ 1]   Type: String: 'util.KeyVal'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args: Dictionary: 2 entries
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 0] Key: String: 'totalDuration'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 0] Value: Integer field: 12096000000000
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Key: String: 'points'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value: List: 1 elements
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0] Object:
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Type: String: 'util.KeyVal'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args: Dictionary: 5 entries
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 0] Key: String: 'duration'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 0] Value: Integer field: 1440
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 1] Key: String: 'amount'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 1] Value: Integer field: 500
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 2] Key: String: 'longitude'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 2] Value: Real field: 2.646786
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 3] Key: String: 'headRadius'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 3] Value: Real field: 0.050000
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 4] Key: String: 'latitude'
-     * 18:37:58 [PlanetCallDump]         [ 1]   Args:   [ 1] Value:   [ 0]   Args:   [ 4] Value: Real field: 1.104679
+PyResult PlanetMgrBound::GMRunDepletionSim(PyCallArgs &call, PyRep* typeID, PyObject* info) {
+    /*  myPinManager.GMRunDepletionSim:  KeyVal(totalDuration, points=[KeyVal(longitude, latitude, amount, duration, headRadius)])
+     *   totalDuration in FILETIME (days), a point's duration in minutes.  the points are added as depletion that started
+     *   totalDuration ago, so the GM sees the map as it would be now
      */
-    _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GMRunDepletionSim() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
+    CheckGM(call.client);
+    if (typeID->IsNone())
+        throw CustomError ("Select a resource first.");
+    uint16 resourceTypeID = (uint16)PyRep::IntegerValue(typeID);
+    if (!GetPlanetSE()->IsResourceType(resourceTypeID))
+        throw CustomError ("That resource is not found on this planet.");
+    if ((info->arguments() == nullptr) or !info->arguments()->IsDict())
+        throw CustomError ("Invalid depletion info.");
+    PyDict* dict = info->arguments()->AsDict();
+    PyRep* durationRep = dict->GetItemString("totalDuration");
+    PyRep* pointsRep = dict->GetItemString("points");
+    if ((durationRep == nullptr) or (pointsRep == nullptr) or !pointsRep->IsList())
+        throw CustomError ("Invalid depletion info.");
+    int64 totalDuration = PyRep::IntegerValue(durationRep);
+    int64 start = GetFileTimeNow() - totalDuration;
+    std::vector<PIResource::Depletion> rows;
+    PyList* points = pointsRep->AsList();
+    for (size_t i = 0; i < points->size(); ++i) {
+        PyRep* rep = points->GetItem(i);
+        if (!rep->IsObject() or (rep->AsObject()->arguments() == nullptr) or !rep->AsObject()->arguments()->IsDict())
+            continue;
+        PyDict* point = rep->AsObject()->arguments()->AsDict();
+        PyRep* lat = point->GetItemString("latitude");
+        PyRep* lon = point->GetItemString("longitude");
+        PyRep* amount = point->GetItemString("amount");
+        PyRep* duration = point->GetItemString("duration");
+        PyRep* headRadius = point->GetItemString("headRadius");
+        if ((lat == nullptr) or (lon == nullptr) or (amount == nullptr) or (duration == nullptr) or (headRadius == nullptr))
+            continue;
+        PIResource::Depletion row = PIResource::Depletion();
+            row.latitude = PyRep::FloatValue(lat);
+            row.longitude = PyRep::FloatValue(lon);
+            row.amount = (amount->IsFloat() ? amount->AsFloat()->value() : (double)PyRep::IntegerValue(amount));
+            row.duration = PyRep::IntegerValue(duration) * EvE::Time::Minute;
+            row.headRadius = PyRep::FloatValue(headRadius);
+            row.startTime = start;
+        rows.push_back(row);
+    }
+    GetPlanetSE()->AddDepletion(resourceTypeID, rows);
+    _log(PLANET__INFO, "PlanetMgrBound::GMRunDepletionSim() - %s added %u depletion points for %s on %u", \
+            call.client->GetName(), rows.size(), sPIDataMgr.GetProductName(resourceTypeID), m_planetID);
+    return PyStatic.NewNone();
+}
 
-    return nullptr;
+PyResult PlanetMgrBound::GMGetCompleteResource(PyCallArgs &call, PyInt* typeID, PyRep* layer) {
+    /*  planetUISvc.GMShowResource(resourceTypeID, layer):
+     *        data = planet.remoteHandler.GMGetCompleteResource(resourceTypeID, layer)
+     *        sh = builder.CreateSHFromBuffer(data.data, data.numBands)
+     *   layers:  current (server), player, base, depletion, nuggets
+     */
+    CheckGM(call.client);
+    return GetPlanetSE()->GetLayerData(call.client, typeID->value(), PyRep::StringContent(layer));
+}
+
+PyResult PlanetMgrBound::GMCreateNuggetLayer(PyCallArgs &call, PyInt* planetID, PyInt* typeID) {
+    // CCP's internal resource seeding.  not known, and the maps here are generated
+    CheckGM(call.client);
+    throw CustomError ("Not supported.");
 }

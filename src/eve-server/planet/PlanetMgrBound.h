@@ -74,12 +74,19 @@ protected:
     PyResult UserTransferCommodities(PyCallArgs& call, PyList* path, PyDict* commodities);
     PyResult GetCommandPinsForPlanet(PyCallArgs& call, PyInt* planetID);
     PyResult GetFullNetworkForOwner(PyCallArgs& call, PyInt* planetID, PyInt* characterID);
-    PyResult GMAddCommodity(PyCallArgs& call, PyInt* pinID, PyInt* typeID, PyInt* quantity);
-    PyResult GMConvertCommandCenter(PyCallArgs& call, PyInt* pinID);
-    PyResult GMForceInstallProgram(PyCallArgs& call, PyInt* pinID, PyInt* typeID, PyInt* cycleTime, PyInt* lifetimeHours, PyInt* qtyPerCycle, PyFloat* radius);
+    PyResult GMAddCommodity(PyCallArgs& call, PyRep* pinID, PyInt* typeID, PyRep* quantity);
+    PyResult GMConvertCommandCenter(PyCallArgs& call, PyRep* pinID);
+    PyResult GMForceInstallProgram(PyCallArgs& call, PyRep* pinID, PyInt* typeID, PyRep* cycleTime, PyRep* lifetimeHours, PyRep* qtyPerCycle, PyRep* radius);
     PyResult GMGetLocalDistributionReport(PyCallArgs& call, PyInt* planetID, PyTuple* surfacePoint);
     PyResult GMGetSynchedServerState(PyCallArgs& call, PyInt* characterID);
-    PyResult GMRunDepletionSim(PyCallArgs& call);
+    PyResult GMRunDepletionSim(PyCallArgs& call, PyRep* typeID, PyObject* info);
+    PyResult GMGetCompleteResource(PyCallArgs& call, PyInt* typeID, PyRep* layer);
+    PyResult GMCreateNuggetLayer(PyCallArgs& call, PyInt* planetID, PyInt* typeID);
+
+    // the GM planet tools:  GML, GMH, WORLDMOD or PROGRAMMER
+    static void CheckGM(Client* pClient);
+    // tells the colony's owner to re-read it (planetSvc.OnMajorPlanetStateUpdate)
+    void NotifyOwner(bool numCommandCentersChanged = false);
 
     /*
 

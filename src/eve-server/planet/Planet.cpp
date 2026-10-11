@@ -213,6 +213,61 @@ PyRep* PlanetSE::GetResourceData(Client* pClient, Call_ResourceDataDict& dict)
     return rtn;
 }
 
+PyRep* PlanetSE::GetLocalDistributionReport(double azimuth, double polar)
+{
+    PyDict* base = new PyDict();
+    PyDict* quality = new PyDict();
+    PyDict* deplete = new PyDict();
+    PyDict* final = new PyDict();
+    PyDict* raw = new PyDict();
+    for (auto cur : m_resourceTypes) {
+        ResourceState& state = GetResourceState(cur);
+        double baseValue = state.base.Value(azimuth, polar);
+        double finalValue = state.final.Value(azimuth, polar);
+        base->SetItem(new PyInt(cur), new PyFloat(baseValue));
+        quality->SetItem(new PyInt(cur), new PyFloat(state.richness));
+        deplete->SetItem(new PyInt(cur), new PyFloat(baseValue - finalValue));
+        final->SetItem(new PyInt(cur), new PyFloat(std::max(0.0, finalValue)));
+        raw->SetItem(new PyInt(cur), new PyFloat(state.richness > 0 ? baseValue / state.richness : 0.0));
+    }
+    PyDict* report = new PyDict();
+        report->SetItemString("base", base);
+        report->SetItemString("quality", quality);
+        report->SetItemString("deplete", deplete);
+        report->SetItemString("final", final);
+        report->SetItemString("raw", raw);
+    return report;
+}
+
+PyRep* PlanetSE::GetLayerData(Client* pClient, uint16 typeID, const std::string& layer)
+{
+    if (!IsResourceType(typeID))
+        throw CustomError ("That resource is not found on this planet.");
+    ResourceState& state = GetResourceState(typeID);
+    PIResource::Field field;
+    if ((layer == "current") or (layer == "final")) {
+        field = state.final;
+    } else if (layer == "base") {
+        field = state.base;
+    } else if (layer == "depletion") {
+        field = state.base;
+        for (size_t i = 0; i < field.coeff.size(); ++i)
+            field.coeff[i] = state.base.coeff[i] - state.final.coeff[i];
+    } else if (layer == "player") {
+        // what this character's scan gets (all the bands a scan from here allows)
+        Call_ResourceDataDict dict;
+            dict.resourceTypeID = typeID;
+            dict.newBand = PIResource::MaxBands;
+        return GetResourceData(pClient, dict);
+    } else {
+        throw CustomError ("Resource layer %s is not supported.", layer.c_str());
+    }
+    PyDict* args = new PyDict();
+        args->SetItemString("data", new PyString(field.GetBuffer(field.bands)));
+        args->SetItemString("numBands", new PyInt(field.bands));
+    return new PyObject("util.KeyVal", args);
+}
+
 PyRep* PlanetSE::GetPlanetResourceInfo()
 {
     // {typeID: quality}.  the client's quality bar is quality / (1.21 x 255 x 0.5), so the bar shows the richness

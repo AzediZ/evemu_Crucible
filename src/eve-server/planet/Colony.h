@@ -80,6 +80,12 @@ public:
     // GetProgramResultInfo(pinID, typeID, heads, headRadius) -> (qtyToDistribute, cycleTime, numCycles).  does not change the colony
     PyRep* GetProgramResultInfo(PyRep* pinID, uint16 typeID, PyList* heads, double headRadius);
 
+    /* GM tools */
+    // puts commodities into a pin (what it can take) and routes them on.  returns the quantity added
+    uint32 GMAddCommodity(uint32 pinID, uint16 typeID, uint32 quantity);
+    // a program with the given output, cycle and lifetime, whatever the resource map says
+    void GMForceInstallProgram(uint32 pinID, uint16 typeID, int64 cycleTime, int64 lifetime, uint32 qtyPerCycle, double headRadius);
+
     // where planetary construction, upgrade and launch taxes go:  CONCORD in high security, Interbus elsewhere
     uint32 GetNPCOwner();
 

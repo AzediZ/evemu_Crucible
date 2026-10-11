@@ -84,6 +84,11 @@ public:
     // the final map is rebuilt on its next use
     void                        InvalidateResource(uint16 typeID);
     const std::vector<uint16>&  GetResourceTypes()      { return m_resourceTypes; }
+    /* GM tools */
+    // {'base':{typeID: value}, 'quality':{}, 'deplete':{}, 'final':{}, 'raw':{}} at a point
+    PyRep*                      GetLocalDistributionReport(double azimuth, double polar);
+    // KeyVal(data, numBands) of a resource layer:  current, player, base, depletion
+    PyRep*                      GetLayerData(Client* pClient, uint16 typeID, const std::string& layer);
     PyRep*                      GetExtractorsForPlanet(int32 planetID);
 
     void                        AbandonColony(Client* pClient, Colony* pColony);

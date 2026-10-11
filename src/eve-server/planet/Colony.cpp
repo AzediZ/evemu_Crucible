@@ -346,6 +346,41 @@ PyRep* Colony::GetColony()
     return res;
 }
 
+uint32 Colony::GMAddCommodity(uint32 pinID, uint16 typeID, uint32 quantity)
+{
+    if (!HasColony())
+        throw UserError("CannotManagePlanetWithoutCommandCenter");
+    SimulateToNow();
+    ColonySim sim(m_colony, GetPlanetRadius(), GetPlanetTypeID());
+    PI_Pin* pPin = sim.GetPin(pinID);
+    if (pPin == nullptr)
+        throw UserError("PinDoesNotExist");
+    uint32 added = ColonySim::AddCommodity(*pPin, typeID, quantity);
+    sim.StimulateIdlePin(pinID);
+    Save();
+    return added;
+}
+
+void Colony::GMForceInstallProgram(uint32 pinID, uint16 typeID, int64 cycleTime, int64 lifetime, uint32 qtyPerCycle, double headRadius)
+{
+    if (!HasColony())
+        throw UserError("CannotManagePlanetWithoutCommandCenter");
+    SimulateToNow();
+    ColonySim sim(m_colony, GetPlanetRadius(), GetPlanetTypeID());
+    PI_Pin* pPin = sim.GetPin(pinID);
+    if (pPin == nullptr)
+        throw UserError("PinDoesNotExist");
+    if (!ColonySim::IsExtractor(*pPin))
+        throw UserError("PinDoesNotHaveHeads");
+    int64 now = GetFileTimeNow();
+    // EcuPin.InstallProgram with the GM's numbers
+    ColonySim::EcuInstallProgram(*pPin, typeID, cycleTime, now + lifetime, qtyPerCycle, headRadius, now);
+    uint16 headType = (pPin->programType ? sPIDataMgr.GetHeadType(pPin->typeID, pPin->programType) : 0);
+    for (auto& cur : pPin->heads)
+        cur.second.typeID = headType;
+    Save();
+}
+
 /* ----------------------------------------------------------------------------------------------------------------
  *  colony actions outside the edit mode
  */
