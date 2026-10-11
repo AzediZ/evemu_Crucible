@@ -20,6 +20,7 @@
 #include "missions/MissionInstance.h"
 #include "missions/MissionObjectives.h"
 #include "inventory/ItemFactory.h"
+#include "map/MapData.h"
 #include "station/StationDataMgr.h"
 #include "../../eve-common/EVE_Character.h"
 #include "../../eve-common/EVE_Mail.h"
@@ -470,6 +471,78 @@ bool MissionDataMgr::GetOfferByID(uint32 offerID, MissionOffer& data)
     return false;
 }
 
+bool MissionDataMgr::HasStorylineContent(uint8 typeID, uint8 level)
+{
+    if (HasContent(typeID, level, true))
+        return true;
+    return ((typeID == Mission::Type::Courier) and (m_courierImp.count(level) > 0));
+}
+
+void MissionDataMgr::OnMissionCompleted(Client* pClient, Agent* pAgent, MissionOffer& data)
+{
+    // storyline missions come from the missions of basic and CONCORD agents
+    if (data.storyline or (sConfig.missions.StorylineEvery == 0))
+        return;
+    if ((pAgent->GetTypeID() != Agents::Type::Basic) and (pAgent->GetTypeID() != 5 /*CONCORD*/))
+        return;
+
+    uint32 charID(pClient->GetCharacterID());
+    uint8 level(pAgent->GetLevel());
+    uint32 count(MissionDB::IncrementCounter(charID, pAgent->GetFactionID(), level));
+    if (count < sConfig.missions.StorylineEvery)
+        return;
+
+    // an agent that already has an offer for the pilot is skipped;  the count stays and the next mission tries again
+    Agent* pSL(FindStorylineAgent(pAgent->GetFactionID(), pAgent->GetSystemID()));
+    if ((pSL == nullptr) or pSL->HasMission(charID))
+        return;
+    MissionOffer offer = MissionOffer();
+    if (!pSL->MakeStorylineOffer(charID, level, offer))
+        return;
+    MissionDB::SetCounter(charID, pAgent->GetFactionID(), level, count - sConfig.missions.StorylineEvery);
+
+    pSL->SendMissionUpdate(pClient, "offered");
+    // "I am in need of your services ... for a very special mission"
+    NotificationMgr::Send(charID, Notify::Types::StoryLineMissionAvailable, pSL->GetID(), new PyDict());
+    _log(AGENT__DEBUG, "%s gets the level %u storyline mission '%s' from agent %u.", pClient->GetName(), level, offer.name.c_str(), pSL->GetID());
+}
+
+Agent* MissionDataMgr::FindStorylineAgent(uint32 factionID, uint32 systemID)
+{
+    std::vector<std::pair<uint32, uint32>> agents;
+    sDataMgr.GetStorylineAgents(factionID, agents);
+    if (agents.empty())
+        return nullptr;
+
+    // the nearest by jumps, else one of the same region, else any
+    std::vector<std::pair<uint32, uint8>> systems;
+    sMapData.GetSystemsWithinJumps(systemID, 15, systems);
+    std::map<uint32, uint8> jumps(systems.begin(), systems.end());
+    uint32 best(0);
+    uint8 bestJumps(255);
+    for (auto& cur : agents) {
+        std::map<uint32, uint8>::iterator itr = jumps.find(cur.second);
+        if ((itr != jumps.end()) and (itr->second < bestJumps)) {
+            best = cur.first;
+            bestJumps = itr->second;
+        }
+    }
+    if (best == 0) {
+        SystemData from = SystemData();
+        sDataMgr.GetSystemData(systemID, from);
+        for (auto& cur : agents) {
+            SystemData to = SystemData();
+            if (sDataMgr.GetSystemData(cur.second, to) and (to.regionID == from.regionID)) {
+                best = cur.first;
+                break;
+            }
+        }
+    }
+    if (best == 0)
+        best = agents[MakeRandomInt(0, agents.size() - 1)].first;
+    return sEntityList.GetAgent(best);
+}
+
 const MissionContent* MissionDataMgr::GetContent(uint32 contentID)
 {
     std::map<uint32, MissionContent>::iterator itr = m_content.find(contentID);
@@ -614,13 +687,14 @@ bool MissionDataMgr::CreateMissionOffer(uint8 typeID, uint8 level, Agent* pAgent
     uint8 raceID(sDataMgr.GetFactionRace(pAgent->GetFactionID()));
     switch (typeID) {
         case Mission::Type::Courier: {
-            // storyline courier missions come from the content table
+            // storyline courier missions come from the content table, else the important courier rows
             if (storyline) {
                 MissionContent content = MissionContent();
-                if (!PickContent(typeID, level, pAgent, true, content))
-                    return false;
-                ApplyContent(content, level, data);
-                break;
+                if (PickContent(typeID, level, pAgent, true, content)) {
+                    ApplyContent(content, level, data);
+                    break;
+                }
+                important = true;
             }
             std::vector<CourierData> cVec, raceVec;
             auto itr = (important ? m_courierImp.equal_range(level) : m_courier.equal_range(level));

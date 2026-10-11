@@ -119,10 +119,28 @@ bool Agent::MakeOffer(uint32 charID, MissionOffer& offer)
         }
     }
 
-    return FinishOffer(charID, offer);
+    return FinishOffer(charID, m_agentData.level, offer);
 }
 
-bool Agent::FinishOffer(uint32 charID, MissionOffer& offer)
+bool Agent::MakeStorylineOffer(uint32 charID, uint8 level, MissionOffer& offer)
+{
+    // the kinds of storyline mission there is content for, one of them at random
+    std::vector<uint8> types;
+    const uint8 kinds[3] = { Mission::Type::Encounter, Mission::Type::Courier, Mission::Type::Trade };
+    for (auto type : kinds)
+        if (sMissionDataMgr.HasStorylineContent(type, level))
+            types.push_back(type);
+    if (types.empty()) {
+        _log(AGENT__WARNING, "Agent::MakeStorylineOffer() - no level %u storyline missions for agent %u.", level, m_agentID);
+        return false;
+    }
+    uint8 typeID(types[MakeRandomInt(0, types.size() - 1)]);
+    if (!sMissionDataMgr.CreateMissionOffer(typeID, level, this, true, true, offer))
+        return false;
+    return FinishOffer(charID, level, offer);
+}
+
+bool Agent::FinishOffer(uint32 charID, uint8 level, MissionOffer& offer)
 {
     offer.characterID        = charID;
 
@@ -137,7 +155,7 @@ bool Agent::FinishOffer(uint32 charID, MissionOffer& offer)
         case Mission::Type::Encounter:
         case Mission::Type::Mining: {
             // a pocket in space near the agent
-            if (!sMapData.GetMissionDungeonLocation(this, m_agentData.level, offer))
+            if (!sMapData.GetMissionDungeonLocation(this, level, offer))
                 return false;
         } break;
         case Mission::Type::Trade: {

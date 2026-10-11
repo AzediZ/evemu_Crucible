@@ -498,6 +498,8 @@ void AgentBound::CompleteMission(Client* pClient, uint8 action, PyTuple* agentSa
     m_agent->UpdateStandings(pClient, Standings::MissionCompleted, offer.important, &sharers);
     m_agent->RemoveOffer(charID);
     sMissionInstanceMgr.Release(offer.offerID);
+    // the storyline counter
+    sMissionDataMgr.OnMissionCompleted(pClient, m_agent, offer);
 }
 
 PyDict* AgentBound::BuildMissionKeywords(MissionOffer& offer)

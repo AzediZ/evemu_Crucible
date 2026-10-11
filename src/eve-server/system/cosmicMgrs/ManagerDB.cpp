@@ -320,7 +320,8 @@ void ManagerDB::GetStaticData(DBQueryResult& res)
 
 void ManagerDB::GetAgentLocation(DBQueryResult& res)
 {
-    if (!sDatabase.RunQuery(res, "SELECT agentID, locationID FROM agtAgents"))
+    if (!sDatabase.RunQuery(res, "SELECT a.agentID, a.locationID, a.agentTypeID, c.factionID FROM agtAgents AS a"
+        " LEFT JOIN crpNPCCorporations AS c ON c.corporationID = a.corporationID"))
         codelog(DATABASE__ERROR, "Error in GetAgentLocation query: %s", res.error.c_str());
 }
 

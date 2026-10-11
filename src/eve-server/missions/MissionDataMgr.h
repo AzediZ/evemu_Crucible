@@ -51,6 +51,13 @@ public:
     bool                PickContent(uint8 typeID, uint8 level, Agent* pAgent, bool storyline, MissionContent& out);
     // is there storyline/normal content of this type and level
     bool                HasContent(uint8 typeID, uint8 level, bool storyline);
+    // can a storyline mission of this type and level be made (content, or the important courier rows for couriers)
+    bool                HasStorylineContent(uint8 typeID, uint8 level);
+    /* counts a completed mission towards the storyline mission of its faction and level (after missions.StorylineEvery
+     *  of them the nearest storyline agent of the faction offers one) */
+    void                OnMissionCompleted(Client* pClient, Agent* pAgent, MissionOffer& data);
+    // the faction's storyline agent nearest to systemID (nullptr if it has none)
+    Agent*              FindStorylineAgent(uint32 factionID, uint32 systemID);
     const MissionContent* GetContent(uint32 contentID);
 
     // an accepted mission ran out of time (or its pocket failed it):  failed, cargo taken back, journal updated

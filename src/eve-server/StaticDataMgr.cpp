@@ -16,6 +16,7 @@
 #include "../eve-common/EVE_POS.h"
 
 #include "StaticDataMgr.h"
+#include "../eve-common/EVE_Agent.h"
 #include "EVEServerConfig.h"
 #include "database/EVEDBUtils.h"
 #include "config/ConfigDB.h"
@@ -659,7 +660,7 @@ void StaticDataMgr::Populate()
     uint32 locationID = 0;
     ManagerDB::GetAgentLocation(*res);
     while (res->GetRow(row)) {
-        //SELECT agentID, locationID FROM agtAgents
+        //SELECT agentID, locationID, agentTypeID, factionID FROM agtAgents
         locationID = row.GetInt(1);
         if (IsStationID(locationID)) {
             locationID = GetStationSystem(locationID);
@@ -670,6 +671,8 @@ void StaticDataMgr::Populate()
         }
 
         m_agentSystem.emplace(row.GetInt(0), locationID);
+        if ((row.GetInt(2) == Agents::Type::GenericStoryLine) and !row.IsNull(3))
+            m_storylineAgents.emplace(row.GetUInt(3), std::make_pair(row.GetUInt(0), locationID));
     }
     sLog.Cyan("    StaticDataMgr", "%lu Agent Data Sets loaded in %.3fms.", m_agentSystem.size(), (GetTimeMSeconds() - startTime));
 
@@ -765,6 +768,13 @@ PyInt* StaticDataMgr::GetAgentSystemID(int32 agentID)
 
     _log(DATA__WARNING, "Failed to query system info for agent %u: Agent not found.", agentID);
     return new PyInt(0);
+}
+
+void StaticDataMgr::GetStorylineAgents(uint32 factionID, std::vector<std::pair<uint32, uint32>>& into)
+{
+    auto range = m_storylineAgents.equal_range(factionID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
 }
 
 void StaticDataMgr::GetSalvage(uint32 factionID, std::vector<uint32> &itemList) {

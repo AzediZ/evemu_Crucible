@@ -53,6 +53,8 @@ public:
     uint8 GetMissionType();
     // makes, saves and keeps a new offer for charID.  false (nothing saved) when the agent has nothing to offer
     bool MakeOffer(uint32 charID, MissionOffer& offer);
+    // an important storyline mission of this level for charID (storyline agents), its type picked from the content there is
+    bool MakeStorylineOffer(uint32 charID, uint8 level, MissionOffer& offer);
     void GetOffer(uint32 charID, MissionOffer& offer);
     void UpdateOffer(uint32 charID, MissionOffer& offer);
     // closes the offer (declined = Rejected, quit = Failed, removed = Expired):  saved with that state and dropped from agent and missionMgr data
@@ -81,7 +83,7 @@ public:
 protected:
     std::string GetMinReqStanding(uint8 level);
     // destination, expiry and agent data of a new offer, then saved.  false if it can't be placed
-    bool FinishOffer(uint32 charID, MissionOffer& offer);
+    bool FinishOffer(uint32 charID, uint8 level, MissionOffer& offer);
     const uint32 m_agentID;
     AgentData m_agentData;
 

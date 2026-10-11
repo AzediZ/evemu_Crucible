@@ -153,6 +153,8 @@ public:
     const char*         GetRigSizeName(uint8 size);
 
     PyInt*              GetAgentSystemID(int32 agentID);
+    // the generic storyline agents (agentTypeID 6) of a faction:  (agentID, systemID)
+    void                GetStorylineAgents(uint32 factionID, std::vector<std::pair<uint32, uint32>>& into);
 
     // this will return owner's name from any type of ID...system, region, station, player item, etc.
     std::string         GetOwnerName(int32 ownerID);
@@ -199,6 +201,7 @@ private:
     std::map<uint32, uint32>                            m_ratRegions;       // regionID/ratFactionID
     std::map<uint32, SystemData>                        m_systemData;       // systemID/data
     std::map<uint32, uint32>                            m_agentSystem;      // agentID/systemID
+    std::multimap<uint32, std::pair<uint32, uint32>>    m_storylineAgents;  // factionID/(agentID, systemID)
     std::map<uint32, uint32>                            m_corpFaction;      // corpID/factionID
     std::map<uint32, uint8>                             m_stationCount;     // systemID/count
     std::map<uint32, std::vector<uint32>>               m_stationList;      // systemID/data<stationID>
