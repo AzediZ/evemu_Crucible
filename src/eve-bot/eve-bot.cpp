@@ -14,6 +14,7 @@
  *   movetobay <shipID> <itemID> <qty>  move a stack from the hangar into that docked ship's drone bay
  *   undock                            undock the active ship and wait for the ballpark
  *   stop                              stop the ship
+ *   lock <targetID>                   lock a target (drones only engage targets you have locked)
  *   launch <itemID> <qty>             launch drones from the drone bay (one Drop call, like dragging a stack)
  *   drones <command> [targetID]       entity command on every drone we have in space:
  *                                     engage, returnhome, returnbay, abandon, reconnect
@@ -906,6 +907,15 @@ int main(int argc, char* argv[]) {
             bot.Call("beyonce", "", "GetFormations", new PyTuple(0));
         } else if (cmd == "stop") {
             bot.Call("", oidBeyonce, "CmdStop", new PyTuple(0));
+        } else if (cmd == "lock") {
+            // dogma location manager for the solar system (groupID 5), as the client binds it in space
+            PyTuple* bp = new PyTuple(2);
+            bp->SetItem(0, new PyInt((int32)bot.Session("solarsystemid")));
+            bp->SetItem(1, new PyInt(5));
+            std::string oid = bot.Bind("dogmaIM", bp);
+            PyTuple* args = new PyTuple(1);
+            args->SetItem(0, new PyInt(std::atoi(w[1].c_str())));
+            bot.Call("", oid, "AddTarget", args);
         } else if (cmd == "launch") {
             PyTuple* bp = new PyTuple(2);
             bp->SetItem(0, new PyInt((int32)bot.Session("solarsystemid")));
