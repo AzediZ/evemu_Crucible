@@ -39,6 +39,7 @@
 #include "ship/modules/CynoModule.h"
 #include "ship/modules/EwarModule.h"
 #include "ship/modules/CloakModule.h"
+#include "ship/modules/SmartBombModule.h"
 
 static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
 {
@@ -53,7 +54,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::Gyrostabilizer:                          return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Energy_Vampire:                          return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Energy_Destabilizer:                     return (new ActiveModule(mRef, sRef));    // Active - external
-            case EVEDB::invGroups::Smart_Bomb:                              return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Smart_Bomb:                              return (new SmartBombModule(mRef, sRef)); // Active - area
             case EVEDB::invGroups::Hybrid_Weapon:                           return (new TurretModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Heat_Sink:                               return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Magnetic_Field_Stabilizer:               return (new PassiveModule(mRef, sRef));

@@ -61,6 +61,8 @@ public:
     void SetSpeed(double speed)                         { m_speed = speed; }
 
     bool IsAlive()                                      { return m_alive; }
+    // destroyed in flight (smart bombs).  it goes away on its next tick without hitting anything
+    void Intercepted()                                  { m_alive = false; }
 
     double GetSpeed()                                   { return m_speed; }
 

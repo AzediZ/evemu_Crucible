@@ -175,6 +175,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             // should this be adjusted based on damage?
             damageID = 6;
         } break;
+        case EVEDB::invGroups::Smart_Bomb: {
+            // area damage always lands in full.  only resistances reduce it
+            damageID = 6;
+        } break;
         case EVEDB::invGroups::Super_Weapon: {
         /*   TODO
          * this damage will need to be adjusted based on distance from target, then called for each target,
