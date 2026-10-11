@@ -57,6 +57,7 @@ void FleetService::Initialize(EVEServiceManager& svc)
     m_reconnect.clear();
     m_watchlists.clear();
     m_beacons.clear();
+    m_bridges.clear();
 
     //  these will have to be incremented individually, then stored according to fleet
     m_fleetID = FLEET_ID;  //950000000
@@ -1240,6 +1241,12 @@ void FleetService::DeleteFleet(uint32 fleetID)
         } else {
             ++itr;
         }
+    for (auto itr = m_bridges.begin(); itr != m_bridges.end(); )
+        if (!itr->second.alliance and (itr->second.fleetID == fleetID)) {
+            itr = m_bridges.erase(itr);
+        } else {
+            ++itr;
+        }
 
     for (auto itr = m_inviteData.begin(); itr != m_inviteData.end(); )
         if (itr->second.fleetID == fleetID) {
@@ -1458,6 +1465,12 @@ void FleetService::LeaveFleet(Client* pClient)
     // the leaver's cyno can no longer be used by the fleet (the field stays lit until its cycle ends)
     uint32 charID(pChar->itemID());
     RemoveBeacon(charID);
+    // and its fleet bridge closes for the fleet (the portal generator still runs its cycle)
+    for (auto itr = m_bridges.begin(); itr != m_bridges.end(); ++itr)
+        if (!itr->second.alliance and (itr->second.charID == charID) and (itr->second.fleetID == fleetID)) {
+            RemoveBridge(itr->first);
+            break;
+        }
 
     // the leaver's watch list goes, and nobody watches the leaver any more
     m_watchlists.erase(charID);
@@ -2032,6 +2045,20 @@ bool FleetService::GetBeacon(uint32 charID, BeaconData& data)
     return true;
 }
 
+// OnBridgeModeChange (fleetSvc.activeBridge) or OnAllianceBridgeModeChange (pwn.allianceBridgesByShip):
+//  (shipID, toSolarsystemID, toBeaconID, active)
+static void SendBridgeChange(Client* pClient, const BridgeData& data, bool active)
+{
+    if (pClient == nullptr)
+        return;
+    PyTuple* tuple = new PyTuple(4);
+        tuple->SetItem(0, new PyInt(data.shipID));
+        tuple->SetItem(1, new PyInt(data.toSystemID));
+        tuple->SetItem(2, new PyInt(data.beaconID));
+        tuple->SetItem(3, new PyBool(active));
+    pClient->SendNotification((data.alliance ? "OnAllianceBridgeModeChange" : "OnBridgeModeChange"), "clientID", &tuple);
+}
+
 void FleetService::SendJumpState(Client* pClient)
 {
     if ((pClient == nullptr) or !pClient->InFleet())
@@ -2039,6 +2066,80 @@ void FleetService::SendJumpState(Client* pClient)
     for (auto& cur : m_beacons)
         if (cur.second.fleetID == pClient->GetFleetID())
             SendBeaconChange(pClient, cur.second, true);
+    for (auto& cur : m_bridges)
+        if (!cur.second.alliance and (cur.second.fleetID == pClient->GetFleetID()))
+            SendBridgeChange(pClient, cur.second, true);
+}
+
+// everyone who may use the bridge:  the fleet, or the alliance's pilots in the bridging ship's system
+static void GetBridgeAudience(const BridgeData& data, std::vector<Client*>& into)
+{
+    if (!data.alliance) {
+        into = sFltSvc.GetFleetClients(data.fleetID);
+        return;
+    }
+    SystemManager* pSystem(sEntityList.FindSystem(data.fromSystemID));
+    if (pSystem == nullptr)
+        return;
+    std::vector<Client*> clients;
+    pSystem->GetClientList(clients);
+    for (auto pClient : clients)
+        if ((pClient != nullptr) and ((uint32)pClient->GetAllianceID() == data.allianceID))
+            into.push_back(pClient);
+}
+
+void FleetService::AddBridge(const BridgeData& data)
+{
+    RemoveBridge(data.shipID);
+    m_bridges[data.shipID] = data;
+
+    _log(FLEET__TRACE, "FleetService::AddBridge() - %s bridge from ship %u in %u to %u in %u", (data.alliance ? "alliance" : "fleet"),
+            data.shipID, data.fromSystemID, data.beaconID, data.toSystemID);
+    std::vector<Client*> clients;
+    GetBridgeAudience(data, clients);
+    for (auto pClient : clients)
+        if (pClient != m_departing)
+            SendBridgeChange(pClient, data, true);
+}
+
+void FleetService::RemoveBridge(uint32 shipID)
+{
+    std::map<uint32, BridgeData>::iterator itr = m_bridges.find(shipID);
+    if (itr == m_bridges.end())
+        return;
+    BridgeData data(itr->second);
+    m_bridges.erase(itr);
+
+    _log(FLEET__TRACE, "FleetService::RemoveBridge() - bridge from ship %u closed", shipID);
+    std::vector<Client*> clients;
+    GetBridgeAudience(data, clients);
+    for (auto pClient : clients)
+        if (pClient != m_departing)
+            SendBridgeChange(pClient, data, false);
+}
+
+bool FleetService::GetBridge(uint32 shipID, BridgeData& data)
+{
+    std::map<uint32, BridgeData>::iterator itr = m_bridges.find(shipID);
+    if (itr == m_bridges.end())
+        return false;
+    data = itr->second;
+    return true;
+}
+
+void FleetService::GetAllianceBridges(uint32 systemID, uint32 allianceID, PyList* into)
+{
+    if ((into == nullptr) or (allianceID == 0))
+        return;
+    for (auto& cur : m_bridges) {
+        if (!cur.second.alliance or (cur.second.allianceID != allianceID) or (cur.second.fromSystemID != systemID))
+            continue;
+        PyTuple* tuple = new PyTuple(3);
+            tuple->SetItem(0, new PyInt(cur.second.shipID));
+            tuple->SetItem(1, new PyInt(cur.second.toSystemID));
+            tuple->SetItem(2, new PyInt(cur.second.beaconID));
+        into->AddItem(tuple);
+    }
 }
 
 bool FleetService::CanSeeAdvert(uint32 fleetID, Client* pViewer)

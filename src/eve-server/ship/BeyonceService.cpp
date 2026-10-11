@@ -39,6 +39,7 @@
 #include "pos/Structure.h"
 #include "ship/BeyonceService.h"
 #include "ship/modules/CloakModule.h"
+#include "ship/modules/JumpPortalModule.h"
 #include "ship/modules/ModuleManager.h"
 #include "station/StationDataMgr.h"
 #include "system/BookmarkService.h"
@@ -117,6 +118,8 @@ BeyonceBound::BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Clien
     this->Add("CmdBeaconJumpAlliance", &BeyonceBound::CmdBeaconJumpAlliance);
     this->Add("CmdJumpThroughFleet", &BeyonceBound::CmdJumpThroughFleet);
     this->Add("CmdJumpThroughAlliance", &BeyonceBound::CmdJumpThroughAlliance);
+    this->Add("CmdBridgeToMember", &BeyonceBound::CmdBridgeToMember);
+    this->Add("CmdBridgeToStructure", &BeyonceBound::CmdBridgeToStructure);
     this->Add("CmdJumpThroughCorporationStructure", &BeyonceBound::CmdJumpThroughCorporationStructure);
 
     client->SetBeyonce(true);
@@ -997,12 +1000,9 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
     return PyStatic.NewNone();
 }
 
-/**     ***********************************************************************
- * @note   these do absolutely nothing at this time....
- */
 
 
-/** @todo these will need work....
+/** client side of the bridge and beacon jump calls (menusvc.py):
  *    def BridgeToMember(self, charID):
  *        beaconStuff = sm.GetService('fleet').GetActiveBeaconForChar(charID)
  *        if beaconStuff is None:
@@ -1079,18 +1079,186 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
  *            return
  *        effect.Activate(beaconID, False)
  */
+PyResult BeyonceBound::DoOpenBridge(Client* pClient, bool alliance, uint32 charID, uint32 beaconID, uint32 systemID)
+{
+    _log(AUTOPILOT__MESSAGE, "%s called %s bridge to %u in %u.", pClient->GetName(), (alliance ? "alliance" : "fleet"), beaconID, systemID);
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
+        return PyStatic.NewNone();
+    }
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pShipSE == nullptr) or !pClient->IsInSpace())
+        throw CustomError("You are not in space.");
+    DestinyManager* pDestiny(pShipSE->DestinyMgr());
+    if (pDestiny == nullptr) {
+        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsWarping()) {
+        pClient->SendNotifyMsg( "You can't do this while warping");
+        return PyStatic.NewNone();
+    } else if (pDestiny->AbortIfLoginWarping(true)) {
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsCloaked()) {
+        throw UserError("DeniedActivateCloaked");
+    }
+
+    ShipItemRef ship(pClient->GetShip());
+    GenericModule* pMod(ship->GetModuleManager()->GetModuleByGroup(EVEDB::invGroups::Jump_Portal_Generator));
+    if ((pMod == nullptr) or !pMod->IsJumpPortalModule())
+        throw UserError("JumpNoPortal");
+    if (!pMod->isOnline())
+        throw CustomError("Your %s is offline.", pMod->GetSelf()->name());
+    if (pMod->IsActive())
+        throw CustomError("Your jump portal is already open.");
+    JumpPortalModule* pPortal(pMod->GetJumpPortalModule());
+
+    // other blocking modules, the doomsday's jump lockout, warp scramble, bubbles
+    JumpDrive::CheckDriveFree(pClient, pMod);
+    if (alliance and (pClient->GetAllianceID() == 0))
+        throw CustomError("You must be in an alliance to open an alliance jump portal.");
+    if (!alliance and !pClient->InFleet())
+        throw CustomError("You must be in a fleet to open a jump portal to a fleet member's cynosural field.");
+
+    BeaconData beacon = BeaconData();
+    JumpDrive::ResolveBeacon(pClient, alliance, charID, beaconID, systemID, beacon);
+    JumpDrive::CheckDestination(pClient->GetSystemID(), beacon.systemID);
+    // titan portals (0) can't reach covert fields (5).  black ops portals (5) reach both
+    if (pPortal->GetHarmonics() < beacon.harmonics)
+        throw UserError("JumpHarmonicsDoNotMatch");
+
+    double ly(JumpDrive::LightYears(pClient->GetSystemID(), beacon.systemID));
+    double range(ship->GetAttribute(AttrJumpDriveRange).get_double());
+    if (ly > range)
+        throw UserError("JumpTooFar")
+                .AddFormatValue("dist", new PyFloat(ly))
+                .AddFormatValue("range", new PyFloat(range));
+
+    BridgeData data = BridgeData();
+        data.shipID = ship->itemID();
+        data.charID = pClient->GetCharacterID();
+        data.fleetID = (alliance ? 0 : pClient->GetFleetID());
+        data.allianceID = (alliance ? pClient->GetAllianceID() : 0);
+        data.fromSystemID = pClient->GetSystemID();
+        data.toSystemID = beacon.systemID;
+        data.beaconID = beacon.beaconID;
+        data.moduleID = pMod->itemID();
+        data.harmonics = pPortal->GetHarmonics();
+        data.alliance = alliance;
+        data.position = beacon.position;
+    // the generator's capacitor and strontium are taken by the module cycle
+    pPortal->OpenBridge(data);
+
+    return PyStatic.NewNone();
+}
+
+PyResult BeyonceBound::DoBridgeJump(Client* pClient, bool alliance, uint32 otherCharID, uint32 otherShipID, uint32 beaconID, uint32 systemID)
+{
+    _log(AUTOPILOT__MESSAGE, "%s called %s jump through %u to %u in %u.", pClient->GetName(), (alliance ? "alliance" : "fleet"), otherShipID, beaconID, systemID);
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
+        return PyStatic.NewNone();
+    }
+    ShipSE* pShipSE(pClient->GetShipSE());
+    SystemManager* pSystem(pClient->SystemMgr());
+    if ((pShipSE == nullptr) or (pSystem == nullptr) or !pClient->IsInSpace())
+        throw CustomError("You are not in space.");
+    DestinyManager* pDestiny(pShipSE->DestinyMgr());
+    if (pDestiny == nullptr) {
+        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsWarping()) {
+        pClient->SendNotifyMsg( "You can't do this while warping");
+        return PyStatic.NewNone();
+    } else if (pDestiny->AbortIfLoginWarping(true)) {
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsFrozen()) {
+        pClient->SendNotifyMsg( "Your ship is frozen and cannot move");
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsModuleCloaked()) {
+        throw UserError("CantJumpWhileCloaked");
+    }
+    // modules that can't be stopped early keep the ship here (siege, cyno, ...)
+    GenericModule* pBlocking(pClient->GetShip()->GetModuleManager()->GetActiveBlockingModule());
+    if (pBlocking != nullptr)
+        throw UserError("CantJumpWhileModuleActive")
+                .AddFormatValue("moduleType", new PyInt(pBlocking->typeID()));
+    // weapons timer and criminal lockdown, as for stargates
+    sCrimeWatch.CheckDockOrJump(pClient, true);
+
+    // the bridge must be open, lead there, and be open to us
+    BridgeData bridge = BridgeData();
+    if (!sFltSvc.GetBridge(otherShipID, bridge) or (bridge.alliance != alliance)
+    or (bridge.beaconID != beaconID) or (bridge.toSystemID != systemID) or (bridge.fromSystemID != pClient->GetSystemID())
+    or (alliance and ((bridge.allianceID == 0) or (bridge.allianceID != (uint32)pClient->GetAllianceID())))
+    or (!alliance and (!pClient->InFleet() or (bridge.fleetID != pClient->GetFleetID()) or (bridge.charID != otherCharID))))
+        throw UserError("JumpNoBridge");
+    if (otherShipID == pClient->GetShipID())
+        throw CustomError("You cannot jump through your own jump portal.");
+    SystemEntity* pBridger(pSystem->GetSE(otherShipID));
+    if ((pBridger == nullptr) or !pBridger->IsShipSE())
+        throw UserError("JumpNoBridge");
+
+    // the client's own range test (menusvc: surface distance within const.maxStargateJumpingDistance)
+    double dist(pShipSE->GetPosition().distance(pBridger->GetPosition()) - pShipSE->GetRadius() - pBridger->GetRadius());
+    double allowance(pDestiny->GetSpeed());     // one second of travel for client/server position skew
+    if (dist > maxStargateJumpingDistance + allowance)
+        throw UserError("TargetNotWithinRange")
+                .AddGroupName("targetGroupName", pBridger->GetSelf()->groupID())
+                .AddFormatValue("desiredRange", new PyFloat(maxStargateJumpingDistance))
+                .AddFormatValue("actualDistance", new PyFloat(dist));
+
+    // capitals (-5) can't use a titan portal (0).  only covert ops capable ships (5) can use a black ops portal (5)
+    ShipItemRef ship(pClient->GetShip());
+    if (JumpDrive::Harmonics(ship.get()) < bridge.harmonics)
+        throw UserError("JumpHarmonicsDoNotMatch");
+    JumpDrive::CheckDestination(pClient->GetSystemID(), bridge.toSystemID);
+
+    /* the bridging ship pays:  ly x its jumpDriveConsumptionAmount x our mass x its jumpPortalConsumptionMassFactor
+     *  of its jumpDriveConsumptionType (menusvc / posConst.GetJumpFuelConsumption) */
+    ShipItemRef bridger(pBridger->GetShipSE()->GetShipItemRef());
+    double ly(JumpDrive::LightYears(pClient->GetSystemID(), bridge.toSystemID));
+    uint16 fuelType(bridger->GetAttribute(AttrJumpDriveConsumptionType).get_uint32());
+    double massFactor(ship->GetAttribute(AttrMass).get_double() * bridger->GetAttribute(AttrJumpPortalConsumptionMassFactor).get_double());
+    uint32 qty(JumpDrive::FuelNeeded(ly, bridger->GetAttribute(AttrJumpDriveConsumptionAmount).get_double(), massFactor));
+    if (JumpDrive::CountFuel(bridger, fuelType) < qty) {
+        const ItemType* pType(sItemFactory.GetType(fuelType));
+        throw CustomError("The bridging ship does not have enough %s to bridge your ship (%u units required).", (pType != nullptr ? pType->name().c_str() : "fuel"), qty);
+    }
+
+    // throws when a move is already pending, before anything is taken
+    bool covert(bridge.harmonics > 0);
+    pClient->CynoJump(bridge.toSystemID, bridge.position, (covert ? "effects.JumpDriveOutBO" : "effects.JumpDriveOut"),
+            (covert ? "effects.JumpDriveInBO" : "effects.JumpDriveIn"));
+    JumpDrive::ConsumeFuel(bridger, fuelType, qty);
+
+    _log(SHIP__MESSAGE, "%s bridged %.2f ly through %s(%u) to %u in %u for %u units of %u", pClient->GetName(), ly, pBridger->GetName(),
+            otherShipID, bridge.beaconID, bridge.toSystemID, qty, fuelType);
+
+    /* return error msg from this call, if applicable, else nodeid and timestamp */
+    // returns nodeID and timestamp
+    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
+    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
+    return this->GetOID();
+}
+
+PyResult BeyonceBound::CmdBridgeToMember(PyCallArgs &call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID) {
+    // bp.CmdBridgeToMember(charID, beaconID, solarsystemID)
+    return DoOpenBridge(call.client, false, charID->value(), beaconID->value(), solarSystemID->value());
+}
+
+PyResult BeyonceBound::CmdBridgeToStructure(PyCallArgs &call, PyInt* beaconID, PyInt* solarSystemID) {
+    // bp.CmdBridgeToStructure(beaconID, solarSystemID)
+    return DoOpenBridge(call.client, true, 0, beaconID->value(), solarSystemID->value());
+}
+
 PyResult BeyonceBound::CmdJumpThroughFleet(PyCallArgs &call, PyInt* otherCharID, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
     // sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughFleet, otherCharID, otherShipID, beaconID, solarsystemID)
-    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughFleet");
-    call.Dump(SHIP__WARNING);
-    return PyStatic.NewNone();
+    return DoBridgeJump(call.client, false, otherCharID->value(), otherShipID->value(), beaconID->value(), solarSystemID->value());
 }
 
 PyResult BeyonceBound::CmdJumpThroughAlliance(PyCallArgs &call, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
     //sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughAlliance, otherShipID, beaconID, solarsystemID)
-    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughAlliance");
-    call.Dump(SHIP__WARNING);
-    return PyStatic.NewNone();
+    return DoBridgeJump(call.client, true, 0, otherShipID->value(), beaconID->value(), solarSystemID->value());
 }
 
 PyResult BeyonceBound::CmdJumpThroughCorporationStructure(PyCallArgs &call, PyInt* itemID, PyInt* remoteStructureID, PyInt* remoteSystemID) {

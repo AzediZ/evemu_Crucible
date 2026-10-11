@@ -494,6 +494,7 @@ SET( ship_SOURCE
 SET( ship_modules_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/modules/ActiveModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/GenericModule.h"
+     "${TARGET_INCLUDE_DIR}/ship/modules/JumpPortalModule.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/MiningLaser.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/ModuleItem.h"
      "${TARGET_INCLUDE_DIR}/ship/modules/ModuleDefs.h"
@@ -514,6 +515,7 @@ SET( ship_modules_INCLUDE
 SET( ship_modules_SOURCE
      "${TARGET_SOURCE_DIR}/ship/modules/ActiveModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/GenericModule.cpp"
+     "${TARGET_SOURCE_DIR}/ship/modules/JumpPortalModule.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/MiningLaser.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/ModuleItem.cpp"
      "${TARGET_SOURCE_DIR}/ship/modules/ModuleManager.cpp"

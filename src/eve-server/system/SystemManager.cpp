@@ -30,6 +30,7 @@
 #include "account/AccountService.h"
 #include "chat/LSCService.h"
 #include "exploration/Probes.h"
+#include "fleet/FleetService.h"
 #include "map/MapData.h"
 #include "map/MapDB.h"
 #include "npc/Drone.h"
@@ -1541,11 +1542,15 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
 
     into.destiny_state = new PyBuffer( &stateBuffer );
     {
-        uint32 charID(0);
+        uint32 charID(0), allianceID(0);
         std::map<uint32, SystemEntity*>::const_iterator ego = m_entities.find(into.ego);
-        if ((ego != m_entities.end()) and ego->second->HasPilot())
+        if ((ego != m_entities.end()) and ego->second->HasPilot()) {
             charID = ego->second->GetPilot()->GetCharacterID();
+            allianceID = ego->second->GetPilot()->GetAllianceID();
+        }
         into.droneState = MakeDroneState(charID);
+        // titan/black ops alliance jump portals open in this system (michelle -> pwn.OnAllianceBridgeModeChange)
+        sFltSvc.GetAllianceBridges(m_data.systemID, allianceID, into.allianceBridges);
     }
 
     /* SolarSystem info.  this avoids the old way of a DB hit for every call.  */

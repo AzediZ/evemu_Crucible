@@ -157,6 +157,21 @@ struct BeaconData {
     GPoint position;    // the field's position (ships land around it)
 };
 
+// an open jump portal (titan or black ops jump portal generator).  the client keys it by the bridging ship
+struct BridgeData {
+    uint32 shipID;      // bridging ship
+    uint32 charID;      // its pilot
+    uint32 fleetID;     // fleet bridge: the fleet that may use it (0 for an alliance bridge)
+    uint32 allianceID;  // alliance bridge: the alliance that may use it
+    uint32 fromSystemID;
+    uint32 toSystemID;
+    uint32 beaconID;
+    uint32 moduleID;
+    int8 harmonics;     // the generator's jumpHarmonics (0 titan, 5 covert/black ops)
+    bool alliance;
+    GPoint position;    // the beacon's position (ships land around it)
+};
+
 // a member's fleet position, kept for FleetBound::Reconnect when the client disconnects
 struct ReconnectData {
     uint32 fleetID;

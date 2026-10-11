@@ -144,6 +144,14 @@ public:
     // the active beacons (and bridges) of the client's fleet, to a member who just (re)joined (FleetBound::Init)
     void SendJumpState(Client* pClient);
 
+    /* jump portals.  fleet bridges: OnBridgeModeChange(shipID, toSystemID, beaconID, active) to the fleet.
+     *  alliance bridges: OnAllianceBridgeModeChange(...) to the alliance's pilots in the bridging ship's system (and SetState allianceBridges) */
+    void AddBridge(const BridgeData& data);
+    void RemoveBridge(uint32 shipID);
+    bool GetBridge(uint32 shipID, BridgeData& data);
+    // (shipID, toSolarsystemID, toBeaconID) of the alliance's open bridges in systemID, for michelle's SetState
+    void GetAllianceBridges(uint32 systemID, uint32 allianceID, PyList* into);
+
     /* fleet finder */
     // the advert is visible to pViewer (scope bits, allowed entities, security status; members always see their fleet)
     bool CanSeeAdvert(uint32 fleetID, Client* pViewer);
@@ -206,6 +214,7 @@ private:
     std::map<uint32, ReconnectData>     m_reconnect;        // charID/fleet position at disconnect
     std::map<uint32, std::set<uint32>>  m_watchlists;       // watcher charID/watched charIDs
     std::map<uint32, BeaconData>        m_beacons;          // charID/active cyno
+    std::map<uint32, BridgeData>        m_bridges;          // bridging shipID/open jump portal
 
     std::map<uint32, FleetAdvert>       m_fleetAdvertMap;   // fleetID/data
 

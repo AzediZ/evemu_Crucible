@@ -72,6 +72,10 @@ protected:
     void FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed);
     // capital jump drive to a fleet member's cyno or an alliance cynosural generator array (CmdBeaconJumpFleet/Alliance)
     PyResult DoBeaconJump(Client* pClient, bool alliance, uint32 charID, uint32 beaconID, uint32 systemID);
+    // opens the fitted jump portal generator to a fleet member's cyno or an alliance generator array (CmdBridgeToMember/Structure)
+    PyResult DoOpenBridge(Client* pClient, bool alliance, uint32 charID, uint32 beaconID, uint32 systemID);
+    // jump through another ship's open portal (CmdJumpThroughFleet/Alliance).  the bridging ship pays the fuel
+    PyResult DoBridgeJump(Client* pClient, bool alliance, uint32 otherCharID, uint32 otherShipID, uint32 beaconID, uint32 systemID);
 
     PyResult CmdFollowBall(PyCallArgs& call, PyInt* ballID, PyRep* distance);
     PyResult CmdSetSpeedFraction(PyCallArgs& call, PyFloat* speedFraction);
@@ -92,6 +96,8 @@ protected:
     PyResult CmdJumpThroughCorporationStructure(PyCallArgs& call, PyInt* itemID, PyInt* remoteStructureID, PyInt* remoteSystemID);
     PyResult CmdBeaconJumpFleet(PyCallArgs& call, PyInt* characterID, PyInt* beaconID, PyInt* solarSystemID);
     PyResult CmdBeaconJumpAlliance(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
+    PyResult CmdBridgeToMember(PyCallArgs& call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID);
+    PyResult CmdBridgeToStructure(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
     PyResult CmdFleetRegroup(PyCallArgs& call);
     PyResult CmdFleetTagTarget(PyCallArgs& call, PyInt* itemID, PyString* tag);
     
