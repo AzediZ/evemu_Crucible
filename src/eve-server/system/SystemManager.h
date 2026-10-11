@@ -51,6 +51,7 @@ class BeltMgr;
 class DungeonMgr;
 class SpawnMgr;
 class LawEnforcement;
+class InterdictionMgr;
 class EVEServiceManager;
 
 class DynamicEntityFactory {
@@ -117,6 +118,8 @@ public:
     DungeonMgr* GetDungMgr()                            { return m_dungMgr; }
     // CONCORD, faction police, sentries, logged-off ships
     LawEnforcement* GetLaw()                            { return m_law; }
+    // warp disruption fields (bubbles) and the warp rules
+    InterdictionMgr* GetInterdictionMgr()               { return m_interdiction; }
 
     // range is 0.1 for 1.0 system to 2.0 for -0.9 system
     float GetSecValue()                                 { return m_secValue; }
@@ -200,6 +203,7 @@ private:
     DungeonMgr* m_dungMgr;      //we own this, never NULL.
     SpawnMgr* m_spawnMgr;       //we own this, never NULL.
     LawEnforcement* m_law;      //we own this, never NULL.
+    InterdictionMgr* m_interdiction;    //we own this, never NULL.
 
     EVEServiceManager& m_services;
     LSCService* m_lsc;

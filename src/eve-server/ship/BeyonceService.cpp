@@ -41,6 +41,7 @@
 #include "system/BookmarkService.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
+#include "system/Interdiction.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
@@ -364,6 +365,9 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
    // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
    if (call.client->GetShipSE()->IsWarpScrambled())
         throw UserError ("WarpScrambled");
+    // warp disruption fields (bubbles)
+    if (call.client->SystemMgr() != nullptr)
+        call.client->SystemMgr()->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE());
     CheckCloakedWarp(call.client);
 
     DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
@@ -622,6 +626,8 @@ PyResult BeyonceBound::CmdWarpToStuffAutopilot(PyCallArgs &call, PyInt* destID) 
     // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
     if (call.client->GetShipSE()->IsWarpScrambled())
         throw UserError ("WarpScrambled");
+    // warp disruption fields (bubbles).  the autopilot turns itself off on 'WarpDisrupted' (autopilot.py)
+    pSystem->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE(), true);
     CheckCloakedWarp(call.client);
 
     call.client->SetInvul(false);

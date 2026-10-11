@@ -132,9 +132,6 @@ public:
     void MarkCenter();
     void RemoveMarkers();
 
-    /* for warp bubble checks */
-    bool HasWarpBubble()                                { return m_hasBubble; }
-    void SetWarpBubble(bool set=false)                  { m_hasBubble = set; }
     /* for SetState */
     void GetEntities(std::map< uint32, SystemEntity* >& into) const;    // this one only sends visible entities
     /* for ??? */
@@ -192,7 +189,6 @@ private:
     ContainerSE* m_centerSE;
 
     bool m_hasMarkers :1;
-    bool m_hasBubble :1;       // for warp disruption bubbles (placeholder for later)
 
     uint16 m_bubbleID;
     uint32 m_systemID;

@@ -81,6 +81,7 @@ EVEServerConfig::EVEServerConfig()
     world.apWarptoDistance = 15000;
     world.shipBoardDistance = 300;
     world.highSecCyno = false;
+    world.empireInterdiction = false;
 
     // rates
     rates.npcBountyMultiply = 1.0;
@@ -409,6 +410,7 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     AddValueParser( "saveOnMove",        world.saveOnMove );
     AddValueParser( "saveOnUpdate",      world.saveOnUpdate );
     AddValueParser( "highSecCyno",       world.highSecCyno );
+    AddValueParser( "empireInterdiction", world.empireInterdiction );
     AddValueParser( "mailDelay",         world.mailDelay );
     AddValueParser( "shootRoids",        world.shootRoids );
     AddValueParser( "shootWrecks",       world.shootWrecks );
@@ -427,6 +429,7 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     RemoveParser( "saveOnMove" );
     RemoveParser( "saveOnUpdate" );
     RemoveParser( "highSecCyno" );
+    RemoveParser( "empireInterdiction" );
     RemoveParser( "mailDelay" );
     RemoveParser( "shootRoids" );
     RemoveParser( "shootWrecks" );

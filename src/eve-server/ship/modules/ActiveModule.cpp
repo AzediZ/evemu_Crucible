@@ -22,6 +22,8 @@
 #include "system/Container.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/CrimeWatch.h"
+#include "system/Interdiction.h"
+#include "system/SystemManager.h"
 #include "effects/EffectsDataMgr.h"
 
 
@@ -1165,6 +1167,18 @@ void ActiveModule::ReprocessCharge()
 bool ActiveModule::CanActivate() {
     // there is still more to be done here.  wip
     //  modules that require specific tests are coded in their module class, which will call this if their specific checks pass
+
+    /* modules and charges flagged disallowInEmpireSpace (bubbles, HIC field, bombs, doomsday) only work in 0.0 and w-space.
+     *   type values, not the module's modified attribute: a loaded charge decides (the focused script (0) frees the
+     *   field generator (1), the warp disrupt probe (1) restricts its launcher)
+     */
+    EvilNumber disallow(m_modRef->type().HasAttribute(AttrDisallowInEmpireSpace) ? m_modRef->type().GetAttribute(AttrDisallowInEmpireSpace) : EvilZero);
+    if ((m_chargeRef.get() != nullptr) and m_chargeRef->type().HasAttribute(AttrDisallowInEmpireSpace))
+        disallow = m_chargeRef->type().GetAttribute(AttrDisallowInEmpireSpace);
+    if ((disallow > EvilZero) and m_shipRef->HasPilot() and InterdictionMgr::IsRestricted(m_shipRef->GetPilot()->SystemMgr())) {
+        Clear();
+        throw UserError("CantInEmpireSpace");
+    }
 
     // Check for (13) modules which consume items.
     if (m_modRef->HasAttribute(AttrConsumptionType)) {

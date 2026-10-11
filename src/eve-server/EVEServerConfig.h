@@ -79,6 +79,7 @@ public:
         bool saveOnMove;
         bool saveOnUpdate;
         bool highSecCyno;
+        bool empireInterdiction;
         bool shootRoids;
         bool shootWrecks;
         uint8 mailDelay;

@@ -66,6 +66,7 @@
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "npc/LawEnforcement.h"
 #include "system/CrimeWatch.h"
+#include "system/Interdiction.h"
 #include "ConsoleCommands.h"
 #include "station/Outpost.h"
 #include "services/ServiceManager.h"
@@ -79,6 +80,7 @@ m_beltMgr(new BeltMgr(this, svc)),
 m_dungMgr(new DungeonMgr(this, svc)),
 m_spawnMgr(new SpawnMgr(this, svc)),
 m_law(new LawEnforcement(this, svc)),
+m_interdiction(new InterdictionMgr(this)),
 m_loaded(false),
 m_entityChanged(false),
 m_docked(0),
@@ -134,6 +136,7 @@ SystemManager::~SystemManager() {
     SafeDelete(m_beltMgr);
     SafeDelete(m_spawnMgr);
     SafeDelete(m_law);
+    SafeDelete(m_interdiction);
 }
 
 bool SystemManager::BootSystem() {
@@ -354,6 +357,8 @@ void SystemManager::UnloadSystem() {
     
     // law enforcement forgets its entities (they're deleted below)
     m_law->Close();
+    // so do the warp disruption fields
+    m_interdiction->Clear();
 
     // unload belts, which saves and removes roids from system
     m_beltMgr->ClearAll();
@@ -1165,6 +1170,8 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
     if (pSE->IsShipSE())
         DroneSE::ReleaseDronesOf(this, pSE->GetID());
     m_drones.erase(pSE->GetID());
+    // a field source leaving space (probe expired, deployable destroyed or scooped, HIC docked/jumped/died) takes its field along
+    m_interdiction->RemoveField(pSE->GetID());
     sBubbleMgr.Remove(pSE);
     // Remove Entity's Item Ref from Solar System Dynamic Inventory:
     RemoveItemFromInventory(pSE->GetSelf());

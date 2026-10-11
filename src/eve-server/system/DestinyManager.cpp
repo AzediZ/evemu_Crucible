@@ -64,6 +64,7 @@
 #include "system/BubbleManager.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
+#include "system/Interdiction.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "utils/Buffer.h"
@@ -1060,6 +1061,52 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     GVector toDestination(m_position, destination);
     double warpDistance(toDestination.length() - minRange);
 
+    // warp disruption fields (bubbles).  only player ships and pods are affected (see InterdictionMgr)
+    InterdictionMgr* pInterdict((mySE->SystemMgr() != nullptr) ? mySE->SystemMgr()->GetInterdictionMgr() : nullptr);
+    bool dragged(false);
+    if ((pInterdict != nullptr) and pInterdict->HasFields() and mySE->IsShipSE()) {
+        // inside a field: no warp at all
+        if (pInterdict->IsWarpDisrupted(mySE)) {
+            double escape(0);
+            const WarpDisruptField* pField(pInterdict->GetFieldAt(mySE->GetPosition(), &escape));
+            if (mySE->HasPilot()) {
+                if (mySE->GetPilot()->CanThrow() and (pField != nullptr))
+                    throw InterdictionMgr::MakeDisruptedError(pField, escape, autoPilot);
+                mySE->GetPilot()->SendNotifyMsg("You are within a warp disruption zone and cannot warp.");
+            }
+            _log(DESTINY__WARP_TRACE, "Destiny::WarpTo() - %s(%u) is inside a warp disruption field.  warp refused.", mySE->GetName(), mySE->GetID());
+            return;
+        }
+
+        /* a field on the destination grid that the warp line crosses ends the warp at its edge (stop and drag bubbles).
+         *   only fields that exist when the warp starts count.  this does NOT change the capacitor needed for the warp
+         */
+        if (!InterdictionMgr::IsImmune(mySE) and !(mySE->HasPilot() and mySE->GetPilot()->IsLoginWarping())) {
+            GVector back(destination, m_position);
+            back.normalize();
+            GPoint exitPoint(destination + (back * minRange));
+            GPoint drop(destination);
+            const WarpDisruptField* pField(nullptr);
+            if (pInterdict->GetWarpPathDrop(m_position, destination, exitPoint, 1000.0 + m_radius, drop, pField)) {
+                if (m_position.distance(drop) < static_cast<double>(minWarpDistance)) {
+                    if (mySE->HasPilot()) {
+                        if (mySE->GetPilot()->CanThrow())
+                            throw UserError("WarpPathDisrupted").AddTypeName("object", pField->typeID);
+                        mySE->GetPilot()->SendNotifyMsg("You cannot enter warp because a warp disruption field is intersecting your warp path.");
+                    }
+                    return;
+                }
+                _log(DESTINY__WARP_TRACE, "Destiny::WarpTo() - %s(%u) warp line crosses the field of %s(%u) (%.0fm).  exit moved from %.2f,%.2f,%.2f to %.2f,%.2f,%.2f (%.0fm from its centre)",
+                        mySE->GetName(), mySE->GetID(), pField->pSE->GetName(), pField->pSE->GetID(), pField->radius,
+                        exitPoint.x, exitPoint.y, exitPoint.z, drop.x, drop.y, drop.z, drop.distance(pField->pSE->GetPosition()));
+                destination = drop;
+                minRange = 0.0;
+                distance = 0;
+                dragged = true;
+            }
+        }
+    }
+
     if (mySE->HasPilot()) {
         if (warpDistance < static_cast<double>(minWarpDistance)) {
             mySE->GetPilot()->SendErrorMsg("That is too close for your Warp Drive.");
@@ -1092,23 +1139,18 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
                         mySE->GetName(), mySE->GetID(), capNeeded, currentShipCap);
                 return;
             }
-            toDestination.normalize();
-            destination = m_position + (toDestination * (possibleAU * DST_AU));
-            minRange = 0.0;
-            distance = 0;
+            // a warp shortened by a bubble may still end before the capacitor runs out
+            if (!dragged or ((possibleAU * DST_AU) < m_position.distance(destination))) {
+                toDestination.normalize();
+                destination = m_position + (toDestination * (possibleAU * DST_AU));
+                minRange = 0.0;
+                distance = 0;
+            }
             m_capNeeded = 0;
         } else {
             m_capNeeded = currentShipCap - capNeeded;
         }
     }
-
-    /*  TODO PUT CHECK HERE FOR WARP BUBBLES
-     *     and other things that affect warp-in point.....when we get to there.
-     * AttrWarpBubbleImmune = 1538,
-     * AttrWarpBubbleImmuneModifier = 1539,
-     *   NOTE:  warp bubble in path (or within 100km of the exit point) will change the warp
-     *   however, this does NOT affect original calculations for energy needed, etc...
-     */
 
     BeginMovement();
     // the client needs over 75% of max speed to enter warp
