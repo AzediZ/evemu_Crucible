@@ -382,3 +382,16 @@ void StationDB::GetOutpostImprovements(uint32 stationID, DBQueryResult& res)
     "FROM staImprovementsInstalled "
     "WHERE stationID=%u", stationID);
 }
+
+PyRep* StationDB::GetStationsByRegion(uint32 regionID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT stationID, stationName, x, y, z, solarSystemID, stationTypeID, corporationID AS ownerID"
+        " FROM staStations WHERE regionID = %u", regionID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+    return DBResultToRowset(res);
+}

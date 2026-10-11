@@ -252,10 +252,10 @@ float EvEMath::Market::RelistFee(float oldPrice, float newPrice, float brokerPer
 
 float EvEMath::Market::SalesTax(float baseSalesTax, uint8 accountingLvl/*0*/, uint8 taxEvasionLvl/*0*/)
 {
-    /** @todo  add skillTaxEvasion to this formula; its not calculated in client... */
+    // Accounting -10%/level (client quote), Tax Evasion -2%/level of the SCC tax (skill description; the client's quote leaves it out)
     float maximumTax = baseSalesTax / 100.0f;
-    float tax = maximumTax * (1 - 0.1f * accountingLvl);
-    return EvE::min(tax, maximumTax);
+    float tax = maximumTax * (1 - 0.1f * accountingLvl) * (1 - 0.02f * taxEvasionLvl);
+    return EvE::max(EvE::min(tax, maximumTax), 0.0f);
 }
 
 void EvEMath::PI::Dijkstra(uint32 sourcePin, uint32 destinationPin)

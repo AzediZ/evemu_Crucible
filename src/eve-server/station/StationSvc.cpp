@@ -28,6 +28,7 @@
 #include "Client.h"
 #include "StaticDataMgr.h"
 #include "cache/ObjCacheService.h"
+#include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 #include "station/StationSvc.h"
 #include "system/sov/SovereigntyDataMgr.h"
@@ -41,6 +42,7 @@ StationSvc::StationSvc(EVEServiceManager& mgr) :
     this->Add("GetStation", &StationSvc::GetStation);
     this->Add("GetAllianceSystems", &StationSvc::GetAllianceSystems);
     this->Add("GetSystemsForAlliance", &StationSvc::GetSystemsForAlliance);
+    this->Add("GetStationsByRegion", &StationSvc::GetStationsByRegion);
 
     this->m_cache = m_manager.Lookup <ObjCacheService>("objectCaching");
 }
@@ -79,4 +81,18 @@ PyResult StationSvc::GetSystemsForAlliance(PyCallArgs &call, PyInt* allianceID) 
   sLog.White( "StationSvc::Handle_GetSystemsForAlliance()", "size=%lu", call.tuple->size());
     call.Dump(SERVICE__CALL_DUMP);
     return nullptr;
+}
+
+// quote.py PickStation:  choosing the station of a remote buy order.  rows need stationID, stationName, x, y, z
+PyResult StationSvc::GetStationsByRegion(PyCallArgs& call, PyInt* regionID) {
+    std::string method_name("GetStationsByRegion_");
+    method_name += std::to_string(regionID->value());
+    ObjectCachedMethodID method_id(GetName().c_str(), method_name.c_str());
+    if (!m_cache->IsCacheLoaded(method_id)) {
+        PyRep* result = StationDB::GetStationsByRegion(regionID->value());
+        if (result == nullptr)
+            result = PyStatic.NewNone();
+        m_cache->GiveCache(method_id, &result);
+    }
+    return m_cache->MakeObjectCachedMethodCallResult(method_id);
 }

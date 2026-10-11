@@ -38,6 +38,8 @@ public:
 
     static double OfflineFundXfer(uint32 charID, double amount, uint8 type=Account::CreditType::ISK);
     static double GetCorpBalance(uint32 corpID, uint16 accountKey);
+    // isk balance of a character from the db (use Client::GetBalance() for online characters)
+    static double GetCharBalance(uint32 charID);
     static void UpdateCorpBalance(uint32 corpID, uint16 accountKey, double amount);
 
     static void AddJournalEntry(uint32 ownerID, int8 entryTypeID, uint32 ownerFromID, uint32 ownerToID, int8 currency, uint16 accountKey, \

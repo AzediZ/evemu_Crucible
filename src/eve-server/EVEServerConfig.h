@@ -158,6 +158,19 @@ public:
         uint8 HistoryUpdateTime;
         float salesTax;
         uint32 OrderModificationDelay;  // seconds between modifications of one order (0 disables)
+        uint16 HistoryDays;             // days of daily price history served and kept
+        bool UseMarginTrading;          // buy order escrow is price*qty*0.75^MarginTrading (Crucible)
+        uint32 OrderCancelDelay;        // seconds after placing before an order can be cancelled (0 disables)
+        bool ContractFees;              // contract broker's fee, deposit and sales tax
+        uint16 ContractExpiredCleanupDays;  // 0 = Crucible (issuer deletes expired contracts).  N = removed N days after expiry
+        bool ContractCourierAutoFail;   // overdue couriers fail by themselves a day after they're due
+        bool InsuranceUseMaterialIndex; // insurance value from market material prices (Tyrannis); false = invTypes.basePrice
+        uint16 InsuranceIndexDays;      // days of sell transactions for the material index
+        uint16 InsuranceIndexMinTrades; // trades a material needs before its market price replaces basePrice
+        float InsuranceDefaultPayout;   // payout fraction for uninsured ships
+        float InsuranceMultiplierT1;
+        float InsuranceMultiplierT2;
+        float InsuranceMultiplierT3;
     } market;
 
     // From <ram>

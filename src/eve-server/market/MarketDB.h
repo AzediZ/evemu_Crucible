@@ -45,18 +45,37 @@ public:
     static PyRep* GetStationAsks(uint32 stationID);
     static PyRep* GetOrdersForOwner(uint32 ownerID);
 
-    static PyRep* GetTransactions(uint32 ownerID, Market::TxData &data);
+    // transactions of one owner.  isCorp: corp rows of data.accountKey (and data.memberID when set), else the character's own rows
+    static PyRep* GetTransactions(uint32 ownerID, Market::TxData &data, bool isCorp);
 
     static bool DeleteOrder(uint32 orderID);
     static bool GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo);
     // new_escrow < 0 leaves the escrow column alone
     static bool AlterOrderPrice(uint32 orderID, double new_price, double new_escrow = -1.0);
+    static bool AlterOrderEscrow(uint32 orderID, double escrow);
     static bool RecordTransaction(Market::TxData &data);
     static bool AlterOrderQuantity(uint32 orderID, uint32 new_qty);
 
-    static uint32 FindBuyOrder(uint32 typeID, uint32 stationID, uint32 quantity, double price);
-    static uint32 FindSellOrder(uint32 typeID, uint32 stationID, uint32 quantity, double price);
+    // open orders of a type in a region that an immediate sell at >= minPrice / buy at <= maxPrice could fill.
+    //  best price first, then oldest first
+    static void GetMatchingBuyOrders(uint32 regionID, uint16 typeID, double minPrice, std::vector<Market::OrderInfo>& into);
+    static void GetMatchingSellOrders(uint32 regionID, uint16 typeID, double maxPrice, std::vector<Market::OrderInfo>& into);
+    // player and player corp orders whose duration ran out before 'now'
+    static void GetExpiredOrders(int64 now, uint32 limit, std::vector<uint32>& into);
+    // open orders placed by this character (own orders and corp orders it placed)
+    static uint32 CountOpenOrders(uint32 charID);
     static uint32 StoreOrder(Market::SaveData& data);
+
+    /* price history */
+    // daily rows of [dayStart, dayEnd) from the sell side of the transactions.  re-running a day replaces its rows
+    static void RollupHistory(int64 dayStart, int64 dayEnd);
+    // first transaction date, 0 when none
+    static int64 GetFirstTransactionTime();
+    // daily rows in [from, to), oldest first
+    static PyRep* GetHistoryOld(uint32 regionID, uint16 typeID, int64 from, int64 to);
+    // one row for today (since midnight), or an empty rowset
+    static PyRep* GetHistoryToday(uint32 regionID, uint16 typeID, int64 midnight);
+    static void DeleteTransactionsBefore(int64 time);
 
 
     /* for base price estimator */
@@ -73,8 +92,6 @@ public:
     /* for marketMgr update service */
     static int64 GetUpdateTime();
     static void SetUpdateTime(int64 setTime);
-
-    static void UpdateHistory();
 };
 
 #endif

@@ -48,6 +48,8 @@ public:
     static void GetOwnerIDsOfClonesAtStation(uint32 stationID, uint32 corpID, DBQueryResult& res);
     static void GetOutpostImprovementStaticData(DBQueryResult& res);
     static void GetOutpostImprovements(uint32 stationID, DBQueryResult& res);
+    // stations of a region for the remote buy order station picker (quote.py PickStation)
+    static PyRep* GetStationsByRegion(uint32 regionID);
 
 };
 

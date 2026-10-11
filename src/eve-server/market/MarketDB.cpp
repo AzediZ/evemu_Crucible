@@ -189,52 +189,101 @@ PyRep *MarketDB::GetOrderRow(uint32 orderID) {
     return DBRowToPackedRow(row);
 }
 
-//NOTE: needs a lot of work to implement orderRange
-uint32 MarketDB::FindBuyOrder(uint32 typeID, uint32 stationID, uint32 quantity, double price) {
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT orderID"
-        " FROM mktOrders"
-        " WHERE bid=1"
-        "  AND typeID=%u"
-        "  AND stationID=%u"
-        "  AND volRemaining >= %u"
-        "  AND price > %.3f"
-        " ORDER BY price DESC"
-        " LIMIT 1;",
-        typeID,
-        stationID,
-        quantity,
-        price - 0.005/* tolerance for float price columns.  trades settle at the order's price */))
-    {
-        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
-        return 0;
-    }
+// columns read by FillOrderInfo(), in this order
+static const char* s_orderInfoCols =
+    " orderID, volRemaining, price, typeID, stationID, regionID, ownerID, bid, isCorp, memberID,"
+    " accountKey, issued, escrow, orderRange, minVolume, solarSystemID, duration";
 
-    DBResultRow row;
-    if (res.GetRow(row))
-        return row.GetUInt(0);
-
-    return 0;    //no order found.
+static void FillOrderInfo(DBResultRow& row, Market::OrderInfo& oInfo)
+{
+    oInfo.orderID       = row.GetUInt(0);
+    oInfo.quantity      = row.GetUInt(1);
+    oInfo.price         = row.GetDouble(2);
+    oInfo.typeID        = row.GetUInt(3);
+    oInfo.stationID     = row.GetUInt(4);
+    oInfo.regionID      = row.GetUInt(5);
+    oInfo.ownerID       = row.GetUInt(6);
+    oInfo.isBuy         = row.GetBool(7);
+    oInfo.isCorp        = row.GetBool(8);
+    oInfo.memberID      = row.GetUInt(9);
+    oInfo.accountKey    = row.GetUInt(10);
+    oInfo.issued        = row.GetInt64(11);
+    oInfo.escrow        = row.GetDouble(12);
+    // unsigned column.  the station range (-1) is stored as 4294967295
+    oInfo.orderRange    = (int32)row.GetUInt(13);
+    oInfo.minVolume     = row.GetUInt(14);
+    oInfo.solarSystemID = row.GetUInt(15);
+    oInfo.duration      = row.GetUInt(16);
 }
 
-uint32 MarketDB::FindSellOrder(uint32 typeID, uint32 stationID, uint32 quantity, double price)
+void MarketDB::GetMatchingBuyOrders(uint32 regionID, uint16 typeID, double minPrice, std::vector<Market::OrderInfo>& into)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        "SELECT orderID"
-        " FROM mktOrders"
-        " WHERE bid=0"
-        "  AND typeID=%u"
-        "  AND stationID=%u"
-        "  AND volRemaining >= %u"
-        "  AND price < %.3f"
-        " ORDER BY price ASC"
-        " LIMIT 1;",
-        typeID,
-        stationID,
-        quantity,
-        price + 0.005/* tolerance for float price columns.  trades settle at the order's price */))
+        "SELECT %s FROM mktOrders"
+        " WHERE regionID=%u AND typeID=%u AND bid=1 AND volRemaining > 0 AND price >= %.2f"
+        " ORDER BY price DESC, issued ASC, orderID ASC",
+        s_orderInfoCols, regionID, typeID, minPrice))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Market::OrderInfo oInfo = Market::OrderInfo();
+        FillOrderInfo(row, oInfo);
+        into.push_back(oInfo);
+    }
+}
+
+void MarketDB::GetMatchingSellOrders(uint32 regionID, uint16 typeID, double maxPrice, std::vector<Market::OrderInfo>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT %s FROM mktOrders"
+        " WHERE regionID=%u AND typeID=%u AND bid=0 AND volRemaining > 0 AND price <= %.2f"
+        " ORDER BY price ASC, issued ASC, orderID ASC",
+        s_orderInfoCols, regionID, typeID, maxPrice))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Market::OrderInfo oInfo = Market::OrderInfo();
+        FillOrderInfo(row, oInfo);
+        into.push_back(oInfo);
+    }
+}
+
+void MarketDB::GetExpiredOrders(int64 now, uint32 limit, std::vector<uint32>& into)
+{
+    // seeded npc orders and market bot orders are not owned by characters or player corps and never expire here
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT orderID FROM mktOrders"
+        " WHERE duration > 0 AND (issued + duration * %lli) < %lli"
+        "  AND ((ownerID BETWEEN %u AND %u) OR isCorp = 1)"
+        " ORDER BY issued LIMIT %u",
+        EvE::Time::Day, now, minCharacter, maxCharacter, limit))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+uint32 MarketDB::CountOpenOrders(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT COUNT(*) FROM mktOrders WHERE (ownerID = %u AND isCorp = 0) OR (isCorp = 1 AND memberID = %u)",
+        charID, charID))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return 0;
@@ -243,32 +292,12 @@ uint32 MarketDB::FindSellOrder(uint32 typeID, uint32 stationID, uint32 quantity,
     DBResultRow row;
     if (res.GetRow(row))
         return row.GetUInt(0);
-
     return 0;
 }
 
 bool MarketDB::GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo) {
-    //orderID, typeID, ownerID, regionID, stationID, orderRange, bid, price, escrow,
-    // minVolume, volEntered, volRemaining, issued, contraband, duration, jumps, isCorp, accountKey, memberID
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        " volRemaining,"
-        " price,"
-        " typeID,"
-        " stationID,"
-        " regionID,"
-        " ownerID,"
-        " bid,"
-        " isCorp,"
-        " memberID,"
-        " accountKey,"
-        " issued,"
-        " escrow"
-        " FROM mktOrders"
-        " WHERE orderID=%u",
-        orderID))
-    {
+    if (!sDatabase.RunQuery(res, "SELECT %s FROM mktOrders WHERE orderID=%u", s_orderInfoCols, orderID)) {
         _log(MARKET__DB_ERROR, "Error in query: %s.", res.error.c_str());
         return false;
     }
@@ -279,20 +308,16 @@ bool MarketDB::GetOrderInfo(uint32 orderID, Market::OrderInfo &oInfo) {
         return false;
     }
 
-    oInfo.orderID    = orderID;
-    oInfo.quantity   = row.GetUInt(0);
-    oInfo.price      = row.GetDouble(1);
-    oInfo.typeID     = row.GetUInt(2);
-    oInfo.stationID  = row.GetUInt(3);
-    oInfo.regionID   = row.GetUInt(4);
-    oInfo.ownerID    = row.GetUInt(5);
-    oInfo.isBuy      = row.GetBool(6);
-    oInfo.isCorp     = row.GetBool(7);
-    oInfo.memberID   = row.GetUInt(8);
-    oInfo.accountKey = row.GetUInt(9);
-    oInfo.issued     = row.GetInt64(10);
-    oInfo.escrow     = row.GetDouble(11);
+    FillOrderInfo(row, oInfo);
+    return true;
+}
 
+bool MarketDB::AlterOrderEscrow(uint32 orderID, double escrow) {
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "UPDATE mktOrders SET escrow = %.2f WHERE orderID = %u", EvE::max(escrow, 0.0), orderID)) {
+        _log(MARKET__DB_ERROR, "Error in query: %s.", err.c_str());
+        return false;
+    }
     return true;
 }
 
@@ -355,24 +380,33 @@ uint32 MarketDB::StoreOrder(Market::SaveData &data) {
     return orderID;
 }
 
-// Retrieves the market transactions owned by the current `characterID`.
-PyRep *MarketDB::GetTransactions(uint32 characterID, Market::TxData& data) {
-    std::string typeID = "";
+// Retrieves the market transactions of one owner (character, or corp wallet division)
+PyRep *MarketDB::GetTransactions(uint32 ownerID, Market::TxData& data, bool isCorp) {
+    std::string filter;
     if (data.typeID) {
-        typeID = "typeID=";
-        typeID += std::to_string(data.typeID);
+        filter += " AND typeID=";
+        filter += std::to_string(data.typeID);
     }
-
-    std::string buy = "";
     if (data.isBuy > -1) {
-        buy = "AND transactionType=";
-        buy += std::to_string(data.isBuy);
+        filter += " AND transactionType=";
+        filter += std::to_string(data.isBuy);
     }
-
-    std::string client = "";
     if (data.clientID) {
-        client = "AND clientID=";
-        client += std::to_string(data.clientID);
+        filter += " AND clientID=";
+        filter += std::to_string(data.clientID);
+    }
+    if (data.maxPrice > 0) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), " AND price<=%.2f", data.maxPrice);
+        filter += buf;
+    }
+    if (isCorp) {
+        filter += " AND keyID=";
+        filter += std::to_string(data.accountKey);
+        if (data.memberID) {
+            filter += " AND characterID=";
+            filter += std::to_string(data.memberID);
+        }
     }
 
     DBQueryResult res;
@@ -382,7 +416,7 @@ PyRep *MarketDB::GetTransactions(uint32 characterID, Market::TxData& data) {
     // NPCs won't exist like a typical player/corp, which causes errors when the
     // server tries to look up identity information about the client. So if a
     // trader NPC is the transaction's client, we instead replace it with the
-    // player's ID as a workaround - this means that the player will see
+    // owner's ID as a workaround - this means that the player will see
     // themselves as the client when looking at their wallet transactions, but
     // the database is still storing the actual value.
     //
@@ -397,19 +431,17 @@ PyRep *MarketDB::GetTransactions(uint32 characterID, Market::TxData& data) {
         " CASE WHEN clientID >= %i AND clientID <= %i THEN %u ELSE clientID END AS clientID,"
         " regionID, stationID, corpTransaction, characterID"
         " FROM mktTransactions "
-        " WHERE quantity>=%u %s AND price>=%.2f AND "
-        " transactionDate>=%lli %s AND keyID=%u AND characterID=%u %s",
+        " WHERE ownerID=%u AND corpTransaction=%u AND quantity>=%u AND price>=%.2f AND transactionDate>=%lli%s"
+        " ORDER BY transactionDate DESC LIMIT 1000",
         minTrader-1, // includes trader joe
         maxTrader,
-        characterID,
+        ownerID,
+        ownerID,
+        isCorp ? 1 : 0,
         data.quantity,
-        typeID.c_str(),
         data.price,
         data.time,
-        buy.c_str(),
-        data.accountKey,
-        data.isCorp ? data.memberID : characterID,
-        client.c_str())
+        filter.c_str())
     ) {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
@@ -425,17 +457,90 @@ bool MarketDB::RecordTransaction(Market::TxData &data) {
         "INSERT INTO"
         " mktTransactions ("
         "    transactionDate, typeID, keyID, quantity, price,"
-        "    transactionType, clientID, regionID, stationID, corpTransaction, characterID"
+        "    transactionType, ownerID, clientID, regionID, stationID, corpTransaction, characterID"
         " ) VALUES ("
-        " %f, %u, %u, %u, %f,"
-        " %u, %u, %u, %u, %u, %u)",
+        " %lli, %u, %u, %u, %.2f,"
+        " %u, %u, %u, %u, %u, %u, %u)",
         GetFileTimeNow(), data.typeID, data.accountKey, data.quantity, data.price,
-        data.isBuy > 0?1:0, data.clientID, data.regionID, data.stationID, data.isCorp ? 1:0, data.memberID)
+        data.isBuy > 0?1:0, data.ownerID, data.clientID, data.regionID, data.stationID, data.isCorp ? 1:0, data.memberID)
     ) {
         codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
         return false;
     }
     return true;
+}
+
+void MarketDB::RollupHistory(int64 dayStart, int64 dayEnd)
+{
+    // one row per trade is the sell side (transactionType 0)
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO mktHistory (regionID, typeID, historyDate, lowPrice, highPrice, avgPrice, volume, orders)"
+        " SELECT regionID, typeID, %lli, MIN(price), MAX(price), SUM(price * quantity) / SUM(quantity), SUM(quantity), COUNT(*)"
+        " FROM mktTransactions"
+        " WHERE transactionType=0 AND transactionDate >= %lli AND transactionDate < %lli"
+        " GROUP BY regionID, typeID"
+        " ON DUPLICATE KEY UPDATE lowPrice=VALUES(lowPrice), highPrice=VALUES(highPrice), avgPrice=VALUES(avgPrice),"
+        "  volume=VALUES(volume), orders=VALUES(orders)",
+        dayStart, dayStart, dayEnd))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
+    }
+}
+
+int64 MarketDB::GetFirstTransactionTime()
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT MIN(transactionDate) FROM mktTransactions")) {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (res.GetRow(row) and !row.IsNull(0))
+        return row.GetInt64(0);
+    return 0;
+}
+
+PyRep* MarketDB::GetHistoryOld(uint32 regionID, uint16 typeID, int64 from, int64 to)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT historyDate, lowPrice, highPrice, avgPrice, CAST(volume AS SIGNED) AS volume, CAST(orders AS SIGNED) AS orders"
+        " FROM mktHistory"
+        " WHERE regionID=%u AND typeID=%u AND historyDate >= %lli AND historyDate < %lli"
+        " ORDER BY historyDate ASC",
+        regionID, typeID, from, to))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+    _log(MARKET__DB_TRACE, "MarketDB::GetHistoryOld() - Fetched %u days for type %u in region %u", res.GetRowCount(), typeID, regionID);
+    return DBResultToCRowset(res);
+}
+
+PyRep* MarketDB::GetHistoryToday(uint32 regionID, uint16 typeID, int64 midnight)
+{
+    // same columns (and types) as GetHistoryOld().  no transactions -> no row
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT CAST(%lli AS SIGNED) AS historyDate, MIN(price) AS lowPrice, MAX(price) AS highPrice,"
+        "  SUM(price * quantity) / SUM(quantity) AS avgPrice,"
+        "  CAST(SUM(quantity) AS SIGNED) AS volume, CAST(COUNT(*) AS SIGNED) AS orders"
+        " FROM mktTransactions"
+        " WHERE regionID=%u AND typeID=%u AND transactionType=0 AND transactionDate >= %lli"
+        " GROUP BY regionID, typeID",
+        midnight, regionID, typeID, midnight))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+    return DBResultToCRowset(res);
+}
+
+void MarketDB::DeleteTransactionsBefore(int64 time)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM mktTransactions WHERE transactionDate < %lli", time);
 }
 
 PyRep *MarketDB::GetMarketGroups() {
@@ -512,28 +617,6 @@ void MarketDB::SetUpdateTime(int64 setTime)
     DBerror err;
     sDatabase.RunQuery(err, "UPDATE mktUpdates SET timeStamp = %lli WHERE server = 1", setTime);
 }
-
-/** @todo this needs work for better logic.   may need to pull data from transactions */
-void MarketDB::UpdateHistory()
-{
-    //  'date'  needs to be an actual column to pull data from....
-    DBerror err;
-    sDatabase.RunQuery(err,
-                   "INSERT INTO"
-                   "    mktHistory"
-                   "     (regionID, typeID, historyDate, lowPrice, highPrice, avgPrice, volume, orders)"
-                   " SELECT"
-                   "    regionID,"
-                   "    typeID,"
-                   "    ((UNIX_TIMESTAMP(date) + 11644473600) * 10000000),"
-                   "    price,"
-                   "    price,"
-                   "    price,"
-                   "    amtEntered,"
-                   "    COUNT(DISTINCT typeID)"
-                   " FROM mktData");
-}
-
 
 /*  data retrieval for updating base pricing */
 

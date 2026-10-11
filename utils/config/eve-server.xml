@@ -129,15 +129,30 @@ boolean can use either 0/1 OR true/false.
     </rates>
 
     <market>
-        <FindBuyOrder>10</FindBuyOrder><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
-        <FindSellOrder>10</FindSellOrder><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
-        <OldPriceLimit>10</OldPriceLimit><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
-        <NewPriceLimit>10</NewPriceLimit><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
-        <HistoryUpdateTime>8</HistoryUpdateTime><!-- integer  - time in hours to update market price histories  default:6 -->
+        <FindBuyOrder>10</FindBuyOrder><!-- unused (immediate orders fill across every matching order) -->
+        <FindSellOrder>10</FindSellOrder><!-- unused (immediate orders fill across every matching order) -->
+        <OldPriceLimit>10</OldPriceLimit><!-- unused (see HistoryDays) -->
+        <NewPriceLimit>10</NewPriceLimit><!-- unused (today's row is built from the day's transactions) -->
+        <HistoryUpdateTime>8</HistoryUpdateTime><!-- unused.  price history is rolled up once a day, right after 00:00 UTC -->
+        <HistoryDays>365</HistoryDays><!-- integer  - days of daily price history served to the client and kept (Crucible showed one year)  default: 365 -->
         <UseOrderRange>true</UseOrderRange><!-- bool  - immediate buy/sell honours the order's range (station/system/jumps/region) when matching.  false = station-only match  default: true  -->
-        <DeleteOldTransactions>false</DeleteOldTransactions><!-- bool  - delete transactions from db older than 3 days  default: false  -->
-        <SalesTax>1.0</SalesTax><!-- float - the sales tax percentage -->
+        <DeleteOldTransactions>false</DeleteOldTransactions><!-- bool  - delete transactions older than HistoryDays once they are in the price history  default: false  -->
+        <SalesTax>1.0</SalesTax><!-- float - the SCC transaction tax percentage (Accounting -10%/level, Tax Evasion -2%/level) -->
         <OrderModificationDelay>300</OrderModificationDelay><!-- integer - seconds between modifications of one market order (Crucible: 300).  0 disables -->
+        <OrderCancelDelay>300</OrderCancelDelay><!-- integer - seconds after placing an order before it can be cancelled (Crucible MktOrderTooNew: five minutes).  0 disables  default: 300 -->
+        <UseMarginTrading>true</UseMarginTrading><!-- bool  - Margin Trading: buy orders put only price*qty*0.75^level into escrow, the rest is paid when they fill (Crucible)  default: true -->
+        <!-- contracts -->
+        <ContractFees>true</ContractFees><!-- bool  - contracts cost a broker's fee and a deposit (refunded when finished or deleted), sales tax on completion (Crucible)  default: true -->
+        <ContractExpiredCleanupDays>0</ContractExpiredCleanupDays><!-- integer - 0 = Crucible: expired contracts stay until the issuer deletes them.  N = removed (items and isk returned) N days after expiry -->
+        <ContractCourierAutoFail>false</ContractCourierAutoFail><!-- bool  - overdue courier contracts fail by themselves one day after they were due.  Crucible: the issuer fails them  default: false -->
+        <!-- insurance -->
+        <InsuranceUseMaterialIndex>true</InsuranceUseMaterialIndex><!-- bool  - insurance value of a ship from market prices of its build materials (Tyrannis).  false = invTypes.basePrice  default: true -->
+        <InsuranceIndexDays>30</InsuranceIndexDays><!-- integer - days of sell transactions used for a material's price  default: 30 -->
+        <InsuranceIndexMinTrades>10</InsuranceIndexMinTrades><!-- integer - trades a material needs in that window before its market price replaces its base price  default: 10 -->
+        <InsuranceDefaultPayout>0.4</InsuranceDefaultPayout><!-- float - payout fraction of the insurance value for uninsured ships (Crucible: 40%) -->
+        <InsuranceMultiplierT1>1.0</InsuranceMultiplierT1><!-- float - insurance value multiplier for tech 1 ships -->
+        <InsuranceMultiplierT2>1.0</InsuranceMultiplierT2><!-- float - insurance value multiplier for tech 2 ships -->
+        <InsuranceMultiplierT3>1.0</InsuranceMultiplierT3><!-- float - insurance value multiplier for strategic cruisers -->
     </market>
 
     <!-- R.A.M. (science and industry).  times/materials are multiplied to db values to get a modified result - < 1.0 = faster/cheaper -->

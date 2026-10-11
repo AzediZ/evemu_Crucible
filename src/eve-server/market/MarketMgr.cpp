@@ -12,12 +12,16 @@
   */
 
 #include "Client.h"
+#include "EVE_Mail.h"
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "StatisticMgr.h"
+#include "account/AccountDB.h"
 #include "account/AccountService.h"
 #include "cache/ObjCacheService.h"
+#include "character/CharacterDB.h"
 #include "inventory/InventoryItem.h"
+#include "map/MapData.h"
 #include "market/MarketMgr.h"
 #include "station/StationDataMgr.h"
 
@@ -31,10 +35,52 @@
  * MARKET__DB_TRACE
  */
 
-MarketMgr::MarketMgr()
-: m_marketGroups(nullptr)
+int32 Market::GetStationDistance(Client* pClient, uint32 stationID)
 {
-    m_timeStamp = 0;
+    if (pClient->GetStationID() == stationID)
+        return Range::Station;
+    if (sDataMgr.GetStationRegion(stationID) != pClient->GetRegionID())
+        return Range::Region;
+    int32 jumps = sMapData.GetJumpCount(pClient->GetSystemID(), sDataMgr.GetStationSystem(stationID));
+    if (jumps < 0)
+        return Range::Region;   // no route (within 50 jumps)
+    return jumps;               // 0 = same system
+}
+
+int32 Market::SkillRangeLimit(uint8 level)
+{
+    static const int32 jumpsPerSkillLevel[6] = {-1, 0, 5, 10, 20, 50};
+    return jumpsPerSkillLevel[(level > 5) ? 5 : level];
+}
+
+bool Market::InSkillRange(int32 distance, uint8 level)
+{
+    if (distance == Range::Region)
+        return false;
+    return (distance <= SkillRangeLimit(level));
+}
+
+bool Market::RangeCovers(int32 orderRange, uint32 orderStationID, uint32 targetStationID)
+{
+    if (orderStationID == targetStationID)
+        return true;
+    if (orderRange == Range::Station)
+        return false;
+    uint32 orderSystemID(sDataMgr.GetStationSystem(orderStationID)), targetSystemID(sDataMgr.GetStationSystem(targetStationID));
+    if (orderSystemID == targetSystemID)
+        return true;
+    if ((orderRange <= Range::System) or (sDataMgr.GetStationRegion(orderStationID) != sDataMgr.GetStationRegion(targetStationID)))
+        return false;
+    if (orderRange >= Range::Region)
+        return true;
+    return (sMapData.GetJumpCount(orderSystemID, targetSystemID, (uint8)EvE::min(orderRange, 255)) >= 0);
+}
+
+MarketMgr::MarketMgr()
+: m_cache(nullptr),
+m_marketGroups(nullptr),
+m_historyDay(0)
+{
 }
 
 MarketMgr::~MarketMgr()
@@ -52,7 +98,7 @@ void MarketMgr::Close()
 int MarketMgr::Initialize(EVEServiceManager& svc)
 {
     m_cache = svc.Lookup <ObjCacheService>("objectCaching");
-    m_timeStamp = MarketDB::GetUpdateTime();
+    m_historyDay = MarketDB::GetUpdateTime();
 
     Populate();
     sLog.Blue("        MarketMgr", "Market Manager Initialized.");
@@ -64,12 +110,9 @@ void MarketMgr::Populate()
     double start = GetTimeMSeconds();
     m_marketGroups = MarketDB::GetMarketGroups();
 
-    Process();
+    // order expiry and the history rollup need the station and map data, which load after this.  the first Process() tic runs them
 
-    // market orders stored as {regionID/typeID}    --do we want to store orders in memory for loaded region??
-    // MarketDB::GetOrders(call.client->GetRegionID(), args.arg);
-
-    sLog.Cyan("        MarketMgr", "Market Manager Updates Price History every %u hours.", sConfig.market.HistoryUpdateTime);
+    sLog.Cyan("        MarketMgr", "Market Manager rolls up price history daily and keeps %u days.", sConfig.market.HistoryDays);
     sLog.Blue("        MarketMgr", "Market Manager loaded in %.3fms.", (GetTimeMSeconds() - start));
 }
 
@@ -80,10 +123,10 @@ void MarketMgr::GetInfo()
 
 void MarketMgr::Process()
 {
-    // make cache timer of xx(time) then invalidate the price history cache
+    ProcessOrderExpiry();
 
-    //if (m_timeStamp > GetFileTimeNow())
-    //    UpdatePriceHistory();
+    if (NeedsUpdate())
+        UpdatePriceHistory();
 }
 
 void MarketMgr::SystemStartup(SolarSystemData& data)
@@ -98,38 +141,34 @@ void MarketMgr::SystemShutdown(SolarSystemData& data)
 
 void MarketMgr::UpdatePriceHistory()
 {
-    m_timeStamp = GetFileTimeNow() + (EvE::Time::Hour * sConfig.market.HistoryUpdateTime);
-    MarketDB::SetUpdateTime(m_timeStamp);
+    double start = GetTimeMSeconds();
+    int64 midnight = GetMidnight();
+    int64 oldest = midnight - (EvE::Time::Day * sConfig.market.HistoryDays);
+    int64 day = m_historyDay;
+    if (day < oldest) {
+        // nothing rolled up yet (or not for longer than we keep).  start at the first day with transactions
+        int64 firstTx = MarketDB::GetFirstTransactionTime();
+        if (firstTx == 0) {
+            day = midnight;
+        } else {
+            day = EvE::max(oldest, firstTx - (firstTx % EvE::Time::Day));
+        }
+    }
 
-    DBerror err;
-    int64 cutoff_time = m_timeStamp;
-    cutoff_time -= cutoff_time % EvE::Time::Day;    //round down to an even day boundary.
-    cutoff_time -= EvE::Time::Day * 2;  //the cutoff between "new" and "old" price history in days
+    uint16 count(0);
+    for (; (day + EvE::Time::Day) <= midnight; day += EvE::Time::Day) {
+        MarketDB::RollupHistory(day, day + EvE::Time::Day);
+        ++count;
+    }
 
-    /** @todo  this doesnt belong here...  */
-    //build the history record from the recent market transactions.
-    sDatabase.RunQuery(err,
-            "INSERT INTO"
-            "    mktHistory"
-            "     (regionID, typeID, historyDate, lowPrice, highPrice, avgPrice, volume, orders)"
-            " SELECT"
-            "    regionID,"
-            "    typeID,"
-            "    transactionDate,"
-            "    MIN(price),"
-            "    MAX(price),"
-            "    AVG(price),"
-            "    SUM(quantity),"
-            "    COUNT(transactionID)"
-            " FROM mktTransactions"
-            " WHERE transactionType=%u AND transactionDate < %lli",
-            //" GROUP BY regionID, typeID, transactionDate",
-            Market::Type::Sell, cutoff_time);
+    m_historyDay = midnight;
+    MarketDB::SetUpdateTime(m_historyDay);
 
-    /** @todo  this doesnt belong here...  */
-    // remove the transactions which have been aged out?
+    // transactions are kept as long as the history is served
     if (sConfig.market.DeleteOldTransactions)
-        sDatabase.RunQuery(err, "DELETE FROM mktTransactions WHERE transactionDate < %lli", (cutoff_time - EvE::Time::Year));
+        MarketDB::DeleteTransactionsBefore(oldest);
+
+    _log(MARKET__MESSAGE, "UpdatePriceHistory - rolled up %u days in %.3fms.", count, (GetTimeMSeconds() - start));
 }
 
     /*DBColumnTypeMap colmap;
@@ -139,46 +178,35 @@ void MarketMgr::UpdatePriceHistory()
      *    colmap["avgPrice"] = DBTYPE_CY;
      *    colmap["volume"] = DBTYPE_I8;
      *    colmap["orders"] = DBTYPE_I4;
-     * SELECT    transactionDate AS historyDate,    MIN(price) AS lowPrice,    MAX(price) AS highPrice,    AVG(price) AS avgPrice,    quantity AS volume,    COUNT(transactionID) AS orders FROM mktTransactions  WHERE regionID=10000030 AND typeID=487    AND transactionType=0     AND historyDate > 20604112 GROUP BY historyDate
      */
 
-// there is a 1 day difference (from 0000UTC) between "Old" and "New" prices
+/* the client (marketsvc.GetPriceHistory) wants 'old' = one row per day before today, oldest first, and 'new' = today's row.
+ *  both are cached method calls.  the client keeps old until utc midnight and new for up to 3 hours */
 PyRep *MarketMgr::GetNewPriceHistory(uint32 regionID, uint32 typeID) {
-    PyRep* result(nullptr);
+    int64 midnight(GetMidnight());
     std::string method_name ("GetNewHistory_");
     method_name += std::to_string(regionID);
     method_name += "_";
     method_name += std::to_string(typeID);
     ObjectCachedMethodID method_id("marketProxy", method_name.c_str());
+    std::map<std::string, int64>::iterator itr = m_historyCacheDay.find(method_name);
+    if ((itr != m_historyCacheDay.end()) and (itr->second != midnight))
+        m_cache->InvalidateCache(method_id);
     //check to see if this method is in the cache already.
-    if (!this->m_cache->IsCacheLoaded(method_id)) {
+    if (!m_cache->IsCacheLoaded(method_id)) {
         //this method is not in cache yet, load up the contents and cache it
-        DBQueryResult res;
-
-        /** @todo  this doesnt belong here...  */
-        if (!sDatabase.RunQuery(res,
-            "SELECT historyDate, lowPrice, highPrice, avgPrice, volume, orders"
-            " FROM mktHistory "
-            " WHERE regionID=%u AND typeID=%u"
-            " AND historyDate > %lli  LIMIT %u",
-            regionID, typeID, (m_timeStamp - EvE::Time::Day), sConfig.market.NewPriceLimit))
-        {
-            _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            return nullptr;
-        }
-        _log(MARKET__DB_TRACE, "MarketMgr::GetNewPriceHistory() - Fetched %u buy orders for type %u in region %u from mktTransactions", res.GetRowCount(), typeID, regionID);
-
-        result = DBResultToCRowset(res);
+        PyRep* result = MarketDB::GetHistoryToday(regionID, typeID, midnight);
         if (result == nullptr) {
             _log(MARKET__DB_ERROR, "Failed to load cache, generating empty contents.");
             result = PyStatic.NewNone();
         }
-        this->m_cache->GiveCache(method_id, &result);
+        m_cache->GiveCache(method_id, &result);
+        m_historyCacheDay[method_name] = midnight;
     }
 
     //now we know its in the cache one way or the other, so build a
     //cached object cached method call result.
-    result = this->m_cache->MakeObjectCachedMethodCallResult(method_id);
+    PyRep* result = m_cache->MakeObjectCachedMethodCallResult(method_id, "utcmidnight_or_3hours");
 
     if (is_log_enabled(MARKET__DB_TRACE))
         result->Dump(MARKET__DB_TRACE, "    ");
@@ -186,44 +214,48 @@ PyRep *MarketMgr::GetNewPriceHistory(uint32 regionID, uint32 typeID) {
 }
 
 PyRep *MarketMgr::GetOldPriceHistory(uint32 regionID, uint32 typeID) {
-    PyRep* result(nullptr);
+    // yesterday has to be in mktHistory before the day's list is built
+    if (NeedsUpdate())
+        UpdatePriceHistory();
+
+    int64 midnight(GetMidnight());
     std::string method_name ("GetOldHistory_");
     method_name += std::to_string(regionID);
     method_name += "_";
     method_name += std::to_string(typeID);
     ObjectCachedMethodID method_id("marketProxy", method_name.c_str());
+    std::map<std::string, int64>::iterator itr = m_historyCacheDay.find(method_name);
+    if ((itr != m_historyCacheDay.end()) and (itr->second != midnight))
+        m_cache->InvalidateCache(method_id);
     //check to see if this method is in the cache already.
-    if (!this->m_cache->IsCacheLoaded(method_id)) {
+    if (!m_cache->IsCacheLoaded(method_id)) {
         //this method is not in cache yet, load up the contents and cache it
-        DBQueryResult res;
-
-        /** @todo  this doesnt belong here...  */
-        if (!sDatabase.RunQuery(res,
-            "SELECT historyDate, lowPrice, highPrice, avgPrice, volume, orders"
-            " FROM mktHistory WHERE regionID=%u AND typeID=%u"
-            " AND historyDate > %lli AND historyDate < %lli LIMIT %u",
-            regionID, typeID, (m_timeStamp - (EvE::Time::Day *3)), (m_timeStamp - EvE::Time::Day), sConfig.market.OldPriceLimit))
-        {
-            _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            return nullptr;
-        }
-        _log(MARKET__DB_TRACE, "MarketMgr::GetOldPriceHistory() - Fetched %u orders for type %u in region %u from mktHistory", res.GetRowCount(), typeID, regionID);
-
-        result = DBResultToCRowset(res);
+        PyRep* result = MarketDB::GetHistoryOld(regionID, typeID, midnight - (EvE::Time::Day * sConfig.market.HistoryDays), midnight);
         if (result == nullptr) {
             _log(MARKET__DB_ERROR, "Failed to load cache, generating empty contents.");
             result = PyStatic.NewNone();
         }
-        this->m_cache->GiveCache(method_id, &result);
+        m_cache->GiveCache(method_id, &result);
+        m_historyCacheDay[method_name] = midnight;
     }
 
     //now we know its in the cache one way or the other, so build a
     //cached object cached method call result.
-    result = this->m_cache->MakeObjectCachedMethodCallResult(method_id);
+    PyRep* result = m_cache->MakeObjectCachedMethodCallResult(method_id, "utcmidnight");
 
     if (is_log_enabled(MARKET__DB_TRACE))
         result->Dump(MARKET__DB_TRACE, "    ");
     return result;
+}
+
+void MarketMgr::InvalidateHistoryCache(uint32 regionID, uint32 typeID)
+{
+    std::string method_name ("GetNewHistory_");
+    method_name += std::to_string(regionID);
+    method_name += "_";
+    method_name += std::to_string(typeID);
+    ObjectCachedMethodID method_id("marketProxy", method_name.c_str());
+    m_cache->InvalidateCache(method_id);
 }
 
 void MarketMgr::SendOnOwnOrderChanged(Client* pClient, uint32 orderID, uint8 action, bool isCorp/*false*/, PyRep* order/*nullptr*/) {
@@ -237,6 +269,8 @@ void MarketMgr::SendOnOwnOrderChanged(Client* pClient, uint32 orderID, uint8 act
         ooc.order = order;
     } else {
         ooc.order = MarketDB::GetOrderRow(orderID);
+        if (ooc.order == nullptr)
+            return;
     }
 
     switch (action) {
@@ -255,12 +289,31 @@ void MarketMgr::SendOnOwnOrderChanged(Client* pClient, uint32 orderID, uint8 act
     PyTuple* tmp = ooc.Encode();
     // send journal blink and call 'self.RefreshOrders()' in client
     if (isCorp) {
-        sEntityList.CorpNotify(pClient->GetCorporationID(), 125 /*MarketOrder*/, "OnOwnOrderChanged", "*corpid&corprole", tmp);
+        sEntityList.CorpNotify(pClient->GetCorporationID(), Notify::Types::MarketOrder, "OnOwnOrderChanged", "*corpid&corprole", tmp);
     } else {
         pClient->SendNotification("OnOwnOrderChanged", "clientID", &tmp);
     }
 }
 
+void MarketMgr::NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, PyRep* order/*nullptr*/)
+{
+    if (oInfo.isCorp and IsPlayerCorp(oInfo.ownerID)) {
+        Notify_OnOwnOrderChanged ooc;
+        ooc.order = ((order != nullptr) ? order : MarketDB::GetOrderRow(oInfo.orderID));
+        if (ooc.order == nullptr)
+            return;
+        ooc.reason = ((action == Market::Action::Add) ? "Add" : ((action == Market::Action::Modify) ? "Modify" : "Expiry"));
+        ooc.isCorp = true;
+        // the corp's traders and accountants
+        sEntityList.CorpNotify(oInfo.ownerID, Notify::Types::MarketOrder, "OnOwnOrderChanged", "*corpid&corprole", ooc.Encode());
+        return;
+    }
+
+    Client* pClient(nullptr);
+    if (IsCharacterID(oInfo.ownerID))
+        pClient = sEntityList.FindClientByCharID(oInfo.ownerID);
+    SendOnOwnOrderChanged(pClient, oInfo.orderID, action, false, order);
+}
 
 void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID) {
     std::string method_name ("GetOrders_");
@@ -280,6 +333,76 @@ bool MarketMgr::CanModifyOrder(uint32 orderID, int64 issued)
     if ((itr != m_orderModified.end()) and (itr->second > last))
         last = itr->second;
     return ((GetFileTimeNow() - last) >= (int64)sConfig.market.OrderModificationDelay * EvE::Time::Second);
+}
+
+void MarketMgr::GetDeliveryLocation(uint32 ownerID, bool isCorp, uint32 memberID, uint32 stationID, uint32& itemOwnerID, uint32& locationID, EVEItemFlags& flag)
+{
+    itemOwnerID = ownerID;
+    locationID = stationID;
+    flag = flagHangar;
+    if (!isCorp)
+        return;
+
+    // corp market items go to the deliveries hangar of the corp's office in that station
+    uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID, ownerID));
+    if (officeID != 0) {
+        locationID = officeID;
+        flag = flagCorpMarket;
+        return;
+    }
+
+    // no office there.  the member that placed the order gets them rather than losing them
+    _log(MARKET__WARNING, "GetDeliveryLocation - corp %u has no office in %u.  Delivering to member %u.", ownerID, stationID, memberID);
+    if (IsCharacterID(memberID))
+        itemOwnerID = memberID;
+}
+
+double MarketMgr::GetWalletBalance(uint32 ownerID, uint16 accountKey)
+{
+    if (IsCharacterID(ownerID)) {
+        Client* pClient(sEntityList.FindClientByCharID(ownerID));
+        if (pClient != nullptr)
+            return pClient->GetBalance();
+        return AccountDB::GetCharBalance(ownerID);
+    }
+    if (IsPlayerCorp(ownerID))
+        return AccountDB::GetCorpBalance(ownerID, accountKey);
+    return 0.0;
+}
+
+void MarketMgr::RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,
+                            uint32 sellerOwnerID, bool sellerIsCorp, uint32 sellerCharID, uint16 sellerKey,
+                            uint32 buyerOwnerID, bool buyerIsCorp, uint32 buyerCharID, uint16 buyerKey)
+{
+    Market::TxData data = Market::TxData();
+    data.price          = price;
+    data.quantity       = qty;
+    data.stationID      = stationID;
+    data.regionID       = sDataMgr.GetStationRegion(stationID);
+    data.typeID         = typeID;
+
+    // seller's side.  this is also the row the price history uses (one per trade)
+    data.isBuy          = Market::Type::Sell;
+    data.ownerID        = sellerOwnerID;
+    data.isCorp         = sellerIsCorp;
+    data.memberID       = sellerCharID;
+    data.accountKey     = sellerKey;
+    data.clientID       = buyerCharID;
+    if (!MarketDB::RecordTransaction(data))
+        _log(MARKET__ERROR, "RecordTrade - Failed to record sell side of transaction.");
+
+    // buyer's side
+    data.isBuy          = Market::Type::Buy;
+    data.ownerID        = buyerOwnerID;
+    data.isCorp         = buyerIsCorp;
+    data.memberID       = buyerCharID;
+    data.accountKey     = buyerKey;
+    data.clientID       = sellerCharID;
+    if (!MarketDB::RecordTransaction(data))
+        _log(MARKET__ERROR, "RecordTrade - Failed to record buy side of transaction.");
+
+    sStatMgr.Add(Stat::iskMarket, price * qty);
+    InvalidateHistoryCache(data.regionID, typeID);
 }
 
 /** @todo take off market overhead fees */
@@ -310,425 +433,403 @@ bool MarketMgr::CanModifyOrder(uint32 orderID, int64 issued)
  *        return tax
  */
 
+uint32 MarketMgr::SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 qty, double minPrice, uint32 stationID, bool useCorp, uint16 accountKey)
+{
+    std::vector<Market::OrderInfo> orders;
+    MarketDB::GetMatchingBuyOrders(sDataMgr.GetStationRegion(stationID), iRef->typeID(), minPrice, orders);
+
+    uint32 remaining(qty);
+    for (auto& cur : orders) {
+        if ((remaining == 0) or (iRef->quantity() < 1))
+            break;
+        // market.UseOrderRange:  a buy order takes items from every station its range reaches
+        if (sConfig.market.UseOrderRange) {
+            if (!Market::RangeCovers(cur.orderRange, cur.stationID, stationID))
+                continue;
+        } else if (cur.stationID != stationID) {
+            continue;
+        }
+
+        uint32 fill(std::min(remaining, cur.quantity));
+        // the buy order's minimum volume, unless it has less than that left
+        if ((fill < cur.minVolume) and (cur.quantity >= cur.minVolume))
+            continue;
+
+        InventoryItemRef part(iRef);
+        if ((uint32)iRef->quantity() > fill) {
+            part = iRef->Split(fill, true);
+            if (part.get() == nullptr) {
+                _log(MARKET__ERROR, "SellToBuyOrders - Failed to split %u from %s(%u).", fill, iRef->name(), iRef->itemID());
+                break;
+            }
+        }
+
+        bool sold(false);
+        try {
+            sold = ExecuteBuyOrder(seller, cur, part, fill, stationID, useCorp, accountKey);
+        } catch (...) {
+            if (part != iRef)
+                iRef->Merge(part);
+            if (remaining == qty)
+                throw;
+            break;
+        }
+
+        if (sold) {
+            remaining -= fill;
+        } else if (part != iRef) {
+            // nothing happened to the split part.  put it back
+            iRef->Merge(part);
+        }
+    }
+
+    return qty - remaining;
+}
+
+uint32 MarketMgr::BuyFromSellOrders(Client* buyer, uint16 typeID, uint32 qty, double maxPrice, uint32 stationID, int32 orderRange, bool useCorp, uint16 accountKey)
+{
+    std::vector<Market::OrderInfo> orders;
+    MarketDB::GetMatchingSellOrders(sDataMgr.GetStationRegion(stationID), typeID, maxPrice, orders);
+
+    uint32 remaining(qty);
+    for (auto& cur : orders) {
+        if (remaining == 0)
+            break;
+        // market.UseOrderRange:  the buyer's range around the chosen station
+        if (sConfig.market.UseOrderRange) {
+            if (!Market::RangeCovers(orderRange, stationID, cur.stationID))
+                continue;
+        } else if (cur.stationID != stationID) {
+            continue;
+        }
+
+        uint32 fill(std::min(remaining, cur.quantity));
+        try {
+            if (ExecuteSellOrder(buyer, cur, fill, useCorp, accountKey))
+                remaining -= fill;
+        } catch (...) {
+            // out of money.  what was bought so far stays bought
+            if (remaining == qty)
+                throw;
+            break;
+        }
+    }
+
+    return qty - remaining;
+}
+
 /*
  * Does not currently handle aurum transactions, but it would be good to do that
  * in the future.
  */
-bool MarketMgr::ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef iRef, uint32 quantity, bool useCorp, uint32 typeID, uint32 stationID, double price, uint16 accountKey/*Account::KeyType::Cash*/) {
-    Market::OrderInfo oInfo = Market::OrderInfo();
-    if (!MarketDB::GetOrderInfo(orderID, oInfo)) {
-        _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to get order info for #%u.", orderID);
-
+bool MarketMgr::ExecuteBuyOrder(Client* seller, const Market::OrderInfo& oInfo, InventoryItemRef iRef, uint32 qty, uint32 stationID, bool useCorp, uint16 accountKey) {
+    if ((qty == 0) or (qty > oInfo.quantity) or (iRef.get() == nullptr) or ((uint32)iRef->quantity() != qty)) {
+        _log(MARKET__ERROR, "ExecuteBuyOrder - invalid fill of %u for order #%u.", qty, oInfo.orderID);
         return false;
     }
 
-    // get buyer id and determine if buyer is player, corp, or npc/bot
-    bool isPlayer(false), isCorp(false), isTraderJoe(false), isTrader(false);
+    // buyer is a character, a player corp, or an npc/market bot (pays from its npc wallet, items vanish)
+    uint32 buyerID(oInfo.ownerID);
+    bool isPlayer(IsCharacterID(buyerID));
+    bool isCorp(oInfo.isCorp and IsPlayerCorp(buyerID));
+    if (buyerID == 1)
+        buyerID = stDataMgr.GetOwnerID(oInfo.stationID);
+    bool npcBuyer(!isPlayer and !isCorp);
+    uint16 buyerKey(isCorp ? oInfo.accountKey : Account::KeyType::Cash);
+    uint32 buyerCharID(isCorp ? oInfo.memberID : buyerID);
+    // the escrow sits with the owner of the order's station
+    uint32 escrowHolderID(stDataMgr.GetOwnerID(oInfo.stationID));
 
-    if (IsPlayerCorp(oInfo.ownerID)) {
-        isCorp = true;
-    } else if (oInfo.ownerID == 1) {
-        oInfo.ownerID = stDataMgr.GetOwnerID(stationID);
-    } else if (IsCharacterID(oInfo.ownerID)) {
-        isPlayer = true;
-    } else if (IsTraderJoe(oInfo.ownerID)) {
-        isTraderJoe = true;
-    } else if (IsTrader(oInfo.ownerID)) {
-        isTrader = true;
-    } else {
-        // none of above conditionals hit....
-        _log(MARKET__WARNING, "ExecuteBuyOrder - ownerID %u not corp, not char, not system, not joe.", oInfo.ownerID);
+    // trades settle at the resting (buy) order's price.  the seller's price is only its limit
+    double money(oInfo.price * qty);
+    double newEscrow(oInfo.escrow);
 
-        // send the player some kind of notification about the market order, some standard market error should suffice
-        seller->SendNotifyMsg("Your order cannot be processed at this time, please try again later.");
-
-        return false;
-    }
-
-    // quantity status of seller's item vs buyer's order
-    uint8 qtyStatus(Market::QtyStatus::Invalid);
-
-    bool shouldDeleteItem(false);
-    uint32 qtySold(0);
-
-    if (iRef->quantity() == oInfo.quantity) {
-        qtyStatus = Market::QtyStatus::Complete;
-        qtySold = oInfo.quantity;
-
-        _log(MARKET__TRACE, "ExecuteBuyOrder - order is Complete");
-
-        if (isPlayer) {
-            _log(MARKET__TRACE, "ExecuteBuyOrder - is player");
-
-            // use the "owner change" packet to alert the buyer of the new item
-            iRef->Donate(oInfo.ownerID, stationID, flagHangar, true);
-        } else if (isCorp) {
-            _log(MARKET__TRACE, "ExecuteBuyOrder - is corp");
-
-            // use the "owner change" packet to alert the buyer of the new item
-            iRef->Donate(oInfo.ownerID, stationID, flagCorpMarket, true);
-        } else if (isTraderJoe || isTrader) {
-            // Trader joe is a placeholder ID that deletes every item sold to
-            // him. Other trader accounts behave similarly to Trader Joe, but we
-            // keep valid journal entries for them
-            _log(MARKET__TRACE, "ExecuteBuyOrder - trader or trader joe encountered");
-
-            shouldDeleteItem = true;
-        } else {
-            _log(MARKET__TRACE, "ExecuteBuyOrder - unhandled edge case");
-        }
-
-    } else if (iRef->quantity() > oInfo.quantity) {
-        // The seller is selling more items than the buy order is bidding for.
-        qtyStatus = Market::QtyStatus::Over;
-        qtySold = oInfo.quantity;
-
-        _log(MARKET__TRACE, "ExecuteBuyOrder - order is Over");
-
-        if (isTraderJoe || isTrader) {
-            // NPC trader joe is a blackhole, just subtract the amount of items
-            // we're selling to him and call it a day. Also applies to other
-            // trader NPCs.
-            iRef->AlterQuantity(-oInfo.quantity, true);
-        } else {
-            _log(MARKET__TRACE, "ExecuteBuyOrder - buyer is something else?");
-
-            InventoryItemRef siRef = iRef->Split(oInfo.quantity);
-            if (siRef.get() == nullptr) {
-                _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to split %u %s.", siRef->itemID(), siRef->name());
-                return false;
-            }
-
-            // use the "owner change" packet to alert the buyer of the new item
-            if (isPlayer) {
-                siRef->Donate(oInfo.ownerID, stationID, flagHangar, true);
-            } else if (isCorp) {
-                siRef->Donate(oInfo.ownerID, stationID, flagCorpMarket, true);
-            }
-        }
-    } else {
-        // The seller is selling fewer items than the buy order is bidding for.
-        qtyStatus = Market::QtyStatus::Under;
-        qtySold = iRef->quantity();
-
-        _log(MARKET__TRACE, "ExecuteBuyOrder - order is Under");
-
-        // use the "owner change" packet to alert the buyer of the new item
-        if (isPlayer) {
-            iRef->Donate(oInfo.ownerID, stationID, flagHangar, true);
-        } else if (isCorp) {
-            iRef->Donate(oInfo.ownerID, stationID, flagCorpMarket, true);
-        } else if (isTraderJoe || isTrader) {
-            shouldDeleteItem = true;
-        }
-    }
-
-    // trades settle at the resting (buy) order's price, which is what its escrow was reserved at.
-    //  'price' is only the seller's limit
-    double money = oInfo.price * qtySold;
     std::string reason = "DESC:  Buying items in ";
     reason += stDataMgr.GetStationName(stationID).c_str();
-    uint32 sellerWalletOwnerID = 0;
-    uint8 level = seller->GetChar ()->GetSkillLevel (EvESkill::Accounting);
-    float tax = EvEMath::Market::SalesTax (sConfig.market.salesTax, level) * money;
 
-    // Note: The original item that was for sale still has not been deleted up
-    // until this point, because we still might need data from it to do some of
-    // the above calculations.
-    if (shouldDeleteItem) {
-        iRef->Delete();
-    }
-
-    // make sure the user has permissions to take money from the corporation account
-    if (useCorp) {
-        if (
-            (accountKey == 1000 && (seller->GetCorpRole () & Corp::Role::AccountCanTake1) == 0) ||
-            (accountKey == 1001 && (seller->GetCorpRole () & Corp::Role::AccountCanTake2) == 0) ||
-            (accountKey == 1002 && (seller->GetCorpRole () & Corp::Role::AccountCanTake3) == 0) ||
-            (accountKey == 1003 && (seller->GetCorpRole () & Corp::Role::AccountCanTake4) == 0) ||
-            (accountKey == 1004 && (seller->GetCorpRole () & Corp::Role::AccountCanTake5) == 0) ||
-            (accountKey == 1005 && (seller->GetCorpRole () & Corp::Role::AccountCanTake6) == 0) ||
-            (accountKey == 1006 && (seller->GetCorpRole () & Corp::Role::AccountCanTake7) == 0)
-        ) {
-            throw UserError("CrpAccessDenied").AddFormatValue ("reason", new PyString ("You do not have access to that wallet"));
+    if (!npcBuyer) {
+        // margin trading:  the escrow is used first, the rest is paid by the buyer now.  a buyer that can't pay loses the order
+        double fromEscrow(EvE::min(oInfo.escrow, money));
+        double rest(money - fromEscrow);
+        if (rest > 0.005) {
+            bool paid(false);
+            if (GetWalletBalance(buyerID, buyerKey) >= rest) {
+                try {
+                    AccountService::TransferFunds(buyerID, escrowHolderID, rest, reason.c_str(), Journal::EntryType::MarketEscrow, oInfo.orderID, buyerKey, Account::KeyType::Escrow);
+                    paid = true;
+                } catch (...) { }
+            }
+            if (!paid) {
+                _log(MARKET__MESSAGE, "ExecuteBuyOrder - owner %u can't cover %.2f ISK for order #%u.  Cancelling it.", buyerID, rest, oInfo.orderID);
+                CancelOrderInternal(oInfo, "DESC:  Market order cancelled.  Not enough ISK for the margin");
+                return false;
+            }
         }
-
-        sellerWalletOwnerID = seller->GetCorporationID();
-
-        _log(MARKET__DEBUG, "ExecuteBuyOrder - Seller is Corp: Price: %.2f, Tax: %.2f", money, tax);
-    } else {
-        sellerWalletOwnerID = seller->GetCharacterID();
-
-        _log(MARKET__DEBUG, "ExecuteBuyOrder - Seller is Player: Price: %.2f, Tax: %.2f", money, tax);
+        newEscrow = oInfo.escrow - fromEscrow;
     }
 
-    AccountService::TransferFunds (
-        sellerWalletOwnerID,
-        corpSCC,
-        tax,
-        reason.c_str (),
-        Journal::EntryType::TransactionTax,
-        orderID,
-        accountKey
-    );
+    // deliver the items in the seller's station
+    if (npcBuyer) {
+        // Trader joe is a placeholder ID that deletes every item sold to
+        // him. Other trader accounts behave similarly to Trader Joe, but we
+        // keep valid journal entries for them
+        iRef->Delete();
+    } else {
+        uint32 itemOwnerID(0), locationID(0);
+        EVEItemFlags flag(flagHangar);
+        GetDeliveryLocation(buyerID, isCorp, oInfo.memberID, stationID, itemOwnerID, locationID, flag);
+        // use the "owner change" packet to alert the buyer of the new item
+        iRef->Donate(itemOwnerID, locationID, flag, true);
+    }
 
-    // send wallet blink event and record the transaction in their journal.
+    // pay the seller (its character, or its corp's division)
+    uint32 sellerID(useCorp ? seller->GetCorporationID() : seller->GetCharacterID());
+    uint16 sellerKey(useCorp ? accountKey : (uint16)Account::KeyType::Cash);
     reason.clear();
     reason += "DESC:  Selling items in ";
     reason += stDataMgr.GetStationName(stationID).c_str();
-
-    // this is fulfilling a buy order.  seller will receive isk from escrow if buyer is player or corp
-    if (isPlayer or isCorp) {
-        // give the money to the seller from the escrow acct at station
-        AccountService::TransferFunds(
-            stDataMgr.GetOwnerID(stationID),
-            seller->GetCharacterID(),
-            money,
-            reason.c_str(),
-            Journal::EntryType::MarketTransaction,
-            orderID,
-            Account::KeyType::Escrow,
-            accountKey
-        );
+    if (npcBuyer) {
+        AccountService::TransferFunds(buyerID, sellerID, money, reason.c_str(), Journal::EntryType::MarketTransaction, oInfo.orderID, Account::KeyType::Cash, sellerKey, seller);
     } else {
-        // npc buyer. direct xfer to seller
-        AccountService::TransferFunds(
-            oInfo.ownerID,
-            seller->GetCharacterID(),
-            money,
-            reason.c_str(),
-            Journal::EntryType::MarketTransaction,
-            orderID,
-            Account::KeyType::Cash,
-            accountKey
-        );
+        AccountService::TransferFunds(escrowHolderID, sellerID, money, reason.c_str(), Journal::EntryType::MarketTransaction, oInfo.orderID, Account::KeyType::Escrow, sellerKey, seller);
     }
 
-    // add data to StatisticMgr
-    sStatMgr.Add(Stat::iskMarket, money);
-
-    // record the sell transaction
-    Market::TxData data = Market::TxData();
-    data.accountKey     = accountKey;
-    data.isBuy          = Market::Type::Sell;
-    data.isCorp         = useCorp;
-    data.memberID       = seller->GetCharacterID(); // TODO: change this to the corp member ID if useCorp is 1?
-    data.clientID       = oInfo.ownerID;
-    data.price          = oInfo.price;
-    data.quantity       = qtySold;
-    data.stationID      = stationID;
-    data.regionID       = sDataMgr.GetStationRegion(stationID);
-    data.typeID         = typeID;
-
-    if (!MarketDB::RecordTransaction(data)) {
-        _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to record sale side of transaction.");
-    }
-
-    // record the other side of the transaction
-    data.isBuy          = Market::Type::Buy;
-    data.clientID       = seller->GetCharacterID();
-    data.memberID       = oInfo.ownerID; // TODO: change this to the corp member ID if useCorp is 1?
-
-    if (!MarketDB::RecordTransaction(data)) {
-        _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to record buy side of transaction.");
-    }
-
-    // update the buyer's original order to reflect the updated amount of items
-    // for purchase
-    if (qtyStatus == Market::QtyStatus::Under) {
-        uint32 newQty(oInfo.quantity - qtySold);
-
-        _log(MARKET__TRACE, "ExecuteBuyOrder - Partially satisfied order #%u, altering quantity to %u.", orderID, newQty);
-
-        if (!MarketDB::AlterOrderQuantity(orderID, newQty)) {
-            _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to alter quantity of order #%u.", orderID);
-            return false;
+    // SCC transaction tax, paid by the seller
+    double tax(EvEMath::Market::SalesTax(sConfig.market.salesTax,
+                                         seller->GetChar()->GetSkillLevel(EvESkill::Accounting),
+                                         seller->GetChar()->GetSkillLevel(EvESkill::TaxEvasion)) * money);
+    tax = std::round(tax * 100.0) / 100.0;
+    if (tax > 0.0) {
+        try {
+            AccountService::TransferFunds(sellerID, corpSCC, tax, reason.c_str(), Journal::EntryType::TransactionTax, oInfo.orderID, sellerKey, Account::KeyType::Cash, seller);
+        } catch (...) {
+            _log(MARKET__WARNING, "ExecuteBuyOrder - %u couldn't pay %.2f ISK transaction tax for order #%u.", sellerID, tax, oInfo.orderID);
         }
+    }
+    _log(MARKET__DEBUG, "ExecuteBuyOrder - %u sold %u of %u to order #%u for %.2f ISK, tax %.2f", sellerID, qty, oInfo.typeID, oInfo.orderID, money, tax);
 
-        InvalidateOrdersCache(oInfo.regionID, typeID);
+    RecordTrade(oInfo.typeID, qty, oInfo.price, stationID,
+                sellerID, useCorp, seller->GetCharacterID(), sellerKey,
+                buyerID, isCorp, buyerCharID, buyerKey);
 
+    if (qty < oInfo.quantity) {
+        // update the buyer's order to reflect the remaining amount
+        _log(MARKET__TRACE, "ExecuteBuyOrder - Partially satisfied order #%u, altering quantity to %u.", oInfo.orderID, oInfo.quantity - qty);
+        MarketDB::AlterOrderQuantity(oInfo.orderID, oInfo.quantity - qty);
+        if (!npcBuyer)
+            MarketDB::AlterOrderEscrow(oInfo.orderID, newEscrow);
+        InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
         // tell the buy order's owner, not the seller
-        if (isPlayer)
-            SendOnOwnOrderChanged(sEntityList.FindClientByCharID(oInfo.ownerID), orderID, Market::Action::Modify, false);
-
+        if (!npcBuyer)
+            NotifyOrderOwner(oInfo, Market::Action::Modify);
         return true;
     }
 
-    _log(MARKET__TRACE, "ExecuteBuyOrder - Satisfied order #%u, deleting.", orderID);
+    _log(MARKET__TRACE, "ExecuteBuyOrder - Satisfied order #%u, deleting.", oInfo.orderID);
+    PyRep* order = MarketDB::GetOrderRow(oInfo.orderID);
+    MarketDB::DeleteOrder(oInfo.orderID);
+    ClearOrderModified(oInfo.orderID);
+    InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
 
-    PyRep* order = MarketDB::GetOrderRow(orderID);
-    if (!MarketDB::DeleteOrder(orderID)) {
-        _log(MARKET__ERROR, "ExecuteBuyOrder - Failed to delete order #%u.", orderID);
-        return false;
+    if (npcBuyer) {
+        PySafeDecRef(order);
+        return true;
     }
-    ClearOrderModified(orderID);
 
-    InvalidateOrdersCache(oInfo.regionID, typeID);
+    // whatever is left in escrow (rounding) goes back
+    if (newEscrow >= 0.01) {
+        try {
+            AccountService::TransferFunds(escrowHolderID, buyerID, newEscrow, "DESC:  Remaining escrow of a completed market order", Journal::EntryType::MarketEscrow, oInfo.orderID, Account::KeyType::Escrow, buyerKey);
+        } catch (...) { }
+    }
 
     // tell the buy order's owner, not the seller
-    if (isPlayer) {
-        SendOnOwnOrderChanged(sEntityList.FindClientByCharID(oInfo.ownerID), orderID, Market::Action::Expiry, false, order);
+    NotifyOrderOwner(oInfo, Market::Action::Expiry, order);
+    return true;
+}
+
+bool MarketMgr::ExecuteSellOrder(Client* buyer, const Market::OrderInfo& oInfo, uint32 qty, bool useCorp, uint16 accountKey) {
+    if ((qty == 0) or (qty > oInfo.quantity)) {
+        _log(MARKET__ERROR, "ExecuteSellOrder - invalid fill of %u for order #%u.", qty, oInfo.orderID);
+        return false;
+    }
+
+    // seller is a character, a player corp, or an npc (seeded orders may be owned by the station itself)
+    uint32 sellerID(oInfo.ownerID);
+    if (sDataMgr.IsStation(sellerID)) {
+        sellerID = stDataMgr.GetOwnerID(sellerID);
+    } else if (sellerID == 1) {
+        sellerID = stDataMgr.GetOwnerID(oInfo.stationID);
+    }
+    bool sellerIsChar(IsCharacterID(sellerID));
+    bool sellerIsCorp(oInfo.isCorp and IsPlayerCorp(sellerID));
+    uint16 sellerKey(sellerIsCorp ? oInfo.accountKey : Account::KeyType::Cash);
+    uint32 sellerCharID(sellerIsCorp ? oInfo.memberID : sellerID);
+
+    uint32 buyerID(useCorp ? buyer->GetCorporationID() : buyer->GetCharacterID());
+    uint16 buyerKey(useCorp ? accountKey : (uint16)Account::KeyType::Cash);
+
+    // trades settle at the resting (sell) order's price.  the buyer's price is only its limit
+    double money(oInfo.price * qty);
+
+    // send wallet blink event and record the transaction in their journal.
+    std::string reason = "DESC:  Buying market items in ";
+    reason += stDataMgr.GetStationName(oInfo.stationID).c_str();
+
+    // this will throw if funds are not available.  nothing has changed yet
+    AccountService::TransferFunds(buyerID, sellerID, money, reason.c_str(), Journal::EntryType::MarketTransaction, oInfo.orderID, buyerKey, sellerKey, buyer);
+
+    // SCC transaction tax, paid by player sellers
+    double tax(0.0);
+    if (sellerIsChar or sellerIsCorp) {
+        uint8 accountingLevel(0), taxEvasionLevel(0);
+        Client* pSeller(sEntityList.FindClientByCharID(sellerCharID));
+        if (pSeller == nullptr) {
+            accountingLevel = CharacterDB::GetSkillLevel(sellerCharID, EvESkill::Accounting);
+            taxEvasionLevel = CharacterDB::GetSkillLevel(sellerCharID, EvESkill::TaxEvasion);
+        } else {
+            accountingLevel = pSeller->GetChar()->GetSkillLevel(EvESkill::Accounting);
+            taxEvasionLevel = pSeller->GetChar()->GetSkillLevel(EvESkill::TaxEvasion);
+        }
+        tax = EvEMath::Market::SalesTax(sConfig.market.salesTax, accountingLevel, taxEvasionLevel) * money;
+        tax = std::round(tax * 100.0) / 100.0;
+        if (tax > 0.0) {
+            try {
+                AccountService::TransferFunds(sellerID, corpSCC, tax, reason.c_str(), Journal::EntryType::TransactionTax, oInfo.orderID, sellerKey);
+            } catch (...) {
+                _log(MARKET__WARNING, "ExecuteSellOrder - %u couldn't pay %.2f ISK transaction tax for order #%u.", sellerID, tax, oInfo.orderID);
+            }
+        }
+    }
+
+    // after money is transferred, create and deliver the items in the order's station
+    ItemData idata(oInfo.typeID, ownerStation, locTemp, flagNone, qty);
+    InventoryItemRef iRef = sItemFactory.SpawnItem(idata);
+    if (iRef.get() == nullptr) {
+        _log(MARKET__ERROR, "ExecuteSellOrder - Failed to spawn %u of %u for %u (order #%u).", qty, oInfo.typeID, buyerID, oInfo.orderID);
     } else {
-        PySafeDecRef(order);
+        uint32 itemOwnerID(0), locationID(0);
+        EVEItemFlags flag(flagHangar);
+        GetDeliveryLocation(buyerID, useCorp, buyer->GetCharacterID(), oInfo.stationID, itemOwnerID, locationID, flag);
+        // use the "owner change" packet to alert the buyer of the new item
+        iRef->Donate(itemOwnerID, locationID, flag, true);
+    }
+    _log(MARKET__DEBUG, "ExecuteSellOrder - %u bought %u of %u from order #%u for %.2f ISK, tax %.2f", buyerID, qty, oInfo.typeID, oInfo.orderID, money, tax);
+
+    RecordTrade(oInfo.typeID, qty, oInfo.price, oInfo.stationID,
+                sellerID, sellerIsCorp, sellerCharID, sellerKey,
+                buyerID, useCorp, buyer->GetCharacterID(), buyerKey);
+
+    bool playerSeller(sellerIsChar or sellerIsCorp);
+    if (qty == oInfo.quantity) {
+        _log(MARKET__TRACE, "ExecuteSellOrder - satisfied order #%u, deleting.", oInfo.orderID);
+        PyRep* order = MarketDB::GetOrderRow(oInfo.orderID);
+        MarketDB::DeleteOrder(oInfo.orderID);
+        ClearOrderModified(oInfo.orderID);
+        InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
+        if (playerSeller) {
+            NotifyOrderOwner(oInfo, Market::Action::Expiry, order);
+        } else {
+            PySafeDecRef(order);
+        }
+    } else {
+        _log(MARKET__TRACE, "ExecuteSellOrder - Partially satisfied order #%u, altering quantity to %u.", oInfo.orderID, oInfo.quantity - qty);
+        MarketDB::AlterOrderQuantity(oInfo.orderID, oInfo.quantity - qty);
+        InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
+        if (playerSeller)
+            NotifyOrderOwner(oInfo, Market::Action::Modify);
     }
 
     return true;
 }
 
-// Executes a sell order.
-void MarketMgr::ExecuteSellOrder(Client* buyer, uint32 orderID, uint32 sellQuantity, float price, uint32 stationID, uint32 typeID, bool useCorp) {
-    // attempt to retrieve information about the sell order, fail if not found
+bool MarketMgr::CancelOrderInternal(const Market::OrderInfo& oInfo, const char* reason)
+{
+    // delete first, so nothing is refunded twice
+    PyRep* order(MarketDB::GetOrderRow(oInfo.orderID));
+    if (order == nullptr)
+        return false;
+    if (!MarketDB::DeleteOrder(oInfo.orderID)) {
+        _log(MARKET__ERROR, "CancelOrderInternal - Failed to delete order #%u.", oInfo.orderID);
+        PyDecRef(order);
+        return false;
+    }
+    ClearOrderModified(oInfo.orderID);
+
+    bool playerOwner(IsCharacterID(oInfo.ownerID) or (oInfo.isCorp and IsPlayerCorp(oInfo.ownerID)));
+    if (oInfo.isBuy) {
+        // a buy order gives back what is still in escrow (with margin trading that's less than price * volRemaining)
+        if (playerOwner and (oInfo.escrow >= 0.01)) {
+            try {
+                AccountService::TransferFunds(
+                    stDataMgr.GetOwnerID(oInfo.stationID),
+                    oInfo.ownerID,
+                    oInfo.escrow,
+                    reason,
+                    Journal::EntryType::MarketEscrow,
+                    oInfo.orderID,
+                    Account::KeyType::Escrow,
+                    (oInfo.isCorp ? oInfo.accountKey : Account::KeyType::Cash));
+            } catch (...) {
+                _log(MARKET__ERROR, "CancelOrderInternal - Failed to refund %.2f ISK escrow of order #%u to %u.", oInfo.escrow, oInfo.orderID, oInfo.ownerID);
+            }
+        }
+    } else if (playerOwner and (oInfo.quantity > 0)) {
+        // remaining items go back to the order's owner in the order's station
+        uint32 itemOwnerID(0), locationID(0);
+        EVEItemFlags flag(flagHangar);
+        GetDeliveryLocation(oInfo.ownerID, oInfo.isCorp, oInfo.memberID, oInfo.stationID, itemOwnerID, locationID, flag);
+        ItemData idata(oInfo.typeID, ownerStation, locTemp, flagNone, oInfo.quantity);
+        InventoryItemRef iRef = sItemFactory.SpawnItem(idata);
+        if (iRef.get() != nullptr) {
+            iRef->Donate(itemOwnerID, locationID, flag, true);
+        } else {
+            _log(MARKET__ERROR, "CancelOrderInternal - Failed to return %u of %u from order #%u to %u.", oInfo.quantity, oInfo.typeID, oInfo.orderID, oInfo.ownerID);
+        }
+    }
+
+    InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
+    if (playerOwner) {
+        NotifyOrderOwner(oInfo, Market::Action::Expiry, order);
+    } else {
+        PyDecRef(order);
+    }
+    return true;
+}
+
+void MarketMgr::ExpireOrder(uint32 orderID)
+{
     Market::OrderInfo oInfo = Market::OrderInfo();
-    if (!MarketDB::GetOrderInfo(orderID, oInfo)) {
-        _log(MARKET__ERROR,
-            "ExecuteSellOrder - Failed to get info about sell order %u.",
-            orderID
-        );
-
+    if (!MarketDB::GetOrderInfo(orderID, oInfo))
         return;
-    }
 
-    bool orderConsumed(false);
+    std::string reason = "DESC:  Expired Market Order #";
+    reason += std::to_string(orderID);
+    if (CancelOrderInternal(oInfo, reason.c_str()))
+        _log(MARKET__TRACE, "ExpireOrder - order #%u of %u expired.", orderID, oInfo.ownerID);
+}
 
-    if (sellQuantity > oInfo.quantity) {
-        sellQuantity = oInfo.quantity;
-    }
-
-    if (sellQuantity == oInfo.quantity) {
-        orderConsumed = true;
-    }
-
-    if (sDataMgr.IsStation(oInfo.ownerID)) {
-        oInfo.ownerID = stDataMgr.GetOwnerID(oInfo.ownerID);
-    }
-
-    /** @todo  get/implement accountKey here.... */
-    // trades settle at the resting (sell) order's price.  'price' is only the buyer's limit
-    double money = oInfo.price * sellQuantity;
-
-    // send wallet blink event and record the transaction in their journal.
-    std::string reason = "DESC:  Buying market items in ";
-    reason += stDataMgr.GetStationName(stationID).c_str();
-
-    // this will throw if funds are not available.
-    AccountService::TransferFunds(
-        buyer->GetCharacterID(),
-        oInfo.ownerID,
-        money,
-        reason.c_str(),
-        Journal::EntryType::MarketTransaction,
-        orderID,
-        oInfo.accountKey
-    );
-
-    uint32 sellerCharacterID = 0;
-
-    if (oInfo.isCorp) {
-        sellerCharacterID = oInfo.memberID;
-    } else {
-        sellerCharacterID = oInfo.ownerID;
-    }
-
-    uint8 accountingLevel(0);
-    uint8 taxEvasionLevel(0);
-
-    Client* pSeller = sEntityList.FindClientByCharID(sellerCharacterID);
-
-    if (pSeller == nullptr) {
-        accountingLevel = CharacterDB::GetSkillLevel(sellerCharacterID, EvESkill::Accounting);
-        taxEvasionLevel = CharacterDB::GetSkillLevel(sellerCharacterID, EvESkill::TaxEvasion);
-    } else {
-        accountingLevel = pSeller->GetChar()->GetSkillLevel(EvESkill::Accounting);
-        taxEvasionLevel = pSeller->GetChar()->GetSkillLevel(EvESkill::TaxEvasion);
-    }
-
-    float tax = EvEMath::Market::SalesTax (
-        sConfig.market.salesTax,
-        accountingLevel,
-        taxEvasionLevel
-    ) * money;
-
-    AccountService::TransferFunds(
-        oInfo.ownerID,
-        corpSCC,
-        tax,
-        reason.c_str(),
-        Journal::EntryType::TransactionTax,
-        orderID,
-        oInfo.accountKey
-    );
-
-    // after money is transferred, create and add item.
-    ItemData idata(typeID, ownerStation, locTemp, flagNone, sellQuantity);
-
-    InventoryItemRef iRef = sItemFactory.SpawnItem(idata);
-    if (iRef.get() == nullptr) {
-        return;
-    }
-
-    // use the "owner change" packet to alert the buyer of the new item
-    iRef->Donate(buyer->GetCharacterID(), stationID, flagHangar, true);
-
-    // add data to StatisticMgr
-    sStatMgr.Add(Stat::iskMarket, money);
-
-    Client* seller(nullptr);
-    if (IsCharacterID(oInfo.ownerID)) {
-        seller = sEntityList.FindClientByCharID(oInfo.ownerID);
-    }
-
-    if (orderConsumed) {
-        _log(MARKET__TRACE, "ExecuteSellOrder - satisfied order #%u, deleting.", orderID);
-
-        PyRep* order = MarketDB::GetOrderRow(orderID);
-        if (!MarketDB::DeleteOrder(orderID)) {
-            _log(MARKET__ERROR, "ExecuteSellOrder - Failed to delete order #%u.", orderID);
-            return;
+void MarketMgr::ProcessOrderExpiry()
+{
+    int64 now(GetFileTimeNow());
+    // in batches, so a long downtime doesn't stall one tic
+    for (uint8 i = 0; i < 10; ++i) {
+        std::vector<uint32> orders;
+        MarketDB::GetExpiredOrders(now, 200, orders);
+        if (orders.empty())
+            break;
+        bool failed(false);
+        for (auto cur : orders) {
+            try {
+                ExpireOrder(cur);
+            } catch (...) {
+                _log(MARKET__ERROR, "ProcessOrderExpiry - expiring order #%u failed.", cur);
+                failed = true;
+            }
         }
-        ClearOrderModified(orderID);
-
-        InvalidateOrdersCache(oInfo.regionID, typeID);
-
-        SendOnOwnOrderChanged(seller, orderID, Market::Action::Expiry, useCorp, order);
-    } else {
-        uint32 newQty(oInfo.quantity - sellQuantity);
-
-        _log(MARKET__TRACE, "ExecuteSellOrder - Partially satisfied order #%u, altering quantity to %u.", orderID, newQty);
-
-        if (!MarketDB::AlterOrderQuantity(orderID, newQty)) {
-            _log(MARKET__ERROR, "ExecuteSellOrder - Failed to alter quantity of order #%u.", orderID);
-            return;
-        }
-        InvalidateOrdersCache(oInfo.regionID, typeID);
-
-        SendOnOwnOrderChanged(seller, orderID, Market::Action::Modify, useCorp);
-    }
-
-    // record the transaction
-    /** @todo for corp, implement accountKey  */
-    Market::TxData data = Market::TxData();
-    data.accountKey     = Account::KeyType::Cash; // args.useCorp?accountKey: Account::KeyType::Cash;
-    data.isBuy          = Market::Type::Buy;
-    data.isCorp         = useCorp;
-    data.memberID       = buyer->GetCharacterID(); // TODO: change this to the corp member ID if useCorp is 1?
-    data.clientID       = oInfo.ownerID;
-    data.price          = oInfo.price;
-    data.quantity       = sellQuantity;
-    data.stationID      = stationID;
-    data.regionID       = sDataMgr.GetStationRegion(stationID);
-    data.typeID         = typeID;
-
-    if (!MarketDB::RecordTransaction(data)) {
-        _log(MARKET__ERROR, "ExecuteSellOrder - Failed to record buy side of transaction.");
-    }
-
-    // record the other side of the transaction
-    data.isBuy          = Market::Type::Sell;
-    data.clientID       = buyer->GetCharacterID();
-    data.memberID       = oInfo.ownerID; // TODO: change this to the corp member ID if useCorp is 1?
-
-    if (!MarketDB::RecordTransaction(data)) {
-        _log(MARKET__ERROR, "ExecuteSellOrder - Failed to record sell side of transaction.");
+        // a failed order would come back in the next batch.  try again next tic
+        if (failed or (orders.size() < 200))
+            break;
     }
 }
 

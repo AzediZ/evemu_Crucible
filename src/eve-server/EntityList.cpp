@@ -276,6 +276,7 @@ void EntityList::Process() {
 
             if (m_minutes % 5 == 0) { // ~5m
                 sWHMgr.Process();
+                sMktMgr.Process();  // market order expiry, daily price history rollup
                 // write something to tic corps vote cases.
                 for (auto cur : m_systems)
                     cur.second->UpdateData();   // update active system timers and dynamic data every 5m
@@ -288,7 +289,6 @@ void EntityList::Process() {
             if (m_minutes % 60 == 0) { // ~1h
                 MapDB::ManipulateTimeData();
                 svDataMgr.Process();    // development index decay
-                sMktMgr.Process();  // not used - does nothing at this time
             }
         }
 
@@ -600,10 +600,9 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
             }
         } break;
         case MarketOrder: {
-            // who else wants/needs this?
-            //  lets start with traders, and may have to add later
+            // corp orders are handled by traders and accountants (quote.py useCorp checkbox)
             while (itr != end) {
-                if ((itr->second & Corp::Role::Trader) == Corp::Role::Trader)
+                if ((itr->second & (Corp::Role::Trader | Corp::Role::Accountant)) != 0)
                     cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 ++itr;
             }

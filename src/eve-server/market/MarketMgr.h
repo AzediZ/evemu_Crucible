@@ -21,6 +21,17 @@
 
 class Client;
 
+namespace Market {
+    // marketsvc.GetStationDistance():  -1 = the client's station, 0 = its system, else stargate jumps from the client's system.
+    //  Range::Region for another region (or no route)
+    int32 GetStationDistance(Client* pClient, uint32 stationID);
+    // marketsvc.jumpsPerSkillLevel {0:-1, 1:0, 2:5, 3:10, 4:20, 5:50} (Marketing, Procurement, Daytrading, Visibility)
+    int32 SkillRangeLimit(uint8 level);
+    bool InSkillRange(int32 distance, uint8 level);
+    // does an order at orderStationID with orderRange (Range or jumps) reach targetStationID
+    bool RangeCovers(int32 orderRange, uint32 orderStationID, uint32 targetStationID);
+}
+
 class MarketMgr
 : public Singleton< MarketMgr >
 {
@@ -32,24 +43,36 @@ public:
 
     void Close();
     void GetInfo();
+    // ~5m.  expires player orders and rolls up the price history once a day
     void Process();
 
     void SystemStartup(SolarSystemData &data);
     void SystemShutdown(SolarSystemData &data);
 
+    // rolls every finished day not yet in mktHistory up from the transactions
     void UpdatePriceHistory();
 
-    // fulfill market order placed by buyer to buy items (usually at reduced
-    // prices).
-    //
-    // Updates qty in args based on order request.
-    //
-    // Returns true if the order is complete; false otherwise.
-    bool ExecuteBuyOrder(Client* seller, uint32 orderID, InventoryItemRef iRef, uint32 quantity, bool useCorp, uint32 typeID, uint32 stationID, double price, uint16 accountKey = Account::KeyType::Cash);
-    // market order placed by seller to sell items (usually at higher prices)
-    void ExecuteSellOrder(Client *buyer, uint32 orderID, uint32 quantity, float price, uint32 stationID, uint32 typeID, bool useCorp);
+    /* immediate orders.  fill the best resting orders first (several orders when needed) and return the quantity filled.
+     *  sells:  iRef holds at least qty and stays with the seller for whatever isn't sold.  the item's station is stationID
+     *  buys:   items are delivered in the sell order's station
+     *  money comes from / goes to the corp wallet division accountKey when useCorp */
+    uint32 SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 qty, double minPrice, uint32 stationID, bool useCorp, uint16 accountKey);
+    uint32 BuyFromSellOrders(Client* buyer, uint16 typeID, uint32 qty, double maxPrice, uint32 stationID, int32 orderRange, bool useCorp, uint16 accountKey);
+
+    // fill qty of a buy order with iRef (exactly qty, in the seller's station 'stationID').  false when nothing happened
+    bool ExecuteBuyOrder(Client* seller, const Market::OrderInfo& oInfo, InventoryItemRef iRef, uint32 qty, uint32 stationID, bool useCorp, uint16 accountKey);
+    // buy qty from a sell order.  throws (NotEnoughMoney) before anything changed when the buyer can't pay
+    bool ExecuteSellOrder(Client* buyer, const Market::OrderInfo& oInfo, uint32 qty, bool useCorp, uint16 accountKey);
+
+    // removes an order and settles it:  a buy order's remaining escrow goes back to its wallet, a sell order's remaining
+    //  items to its owner's hangar (corp: the office's deliveries hangar).  the owner is told with 'Expiry'.  false if the order is gone
+    bool CancelOrderInternal(const Market::OrderInfo& oInfo, const char* reason);
+    void ExpireOrder(uint32 orderID);
+
     //forces a refresh of market data.
     void SendOnOwnOrderChanged(Client* pClient, uint32 orderID, uint8 action, bool isCorp = false, PyRep* order = nullptr);
+    // tells the order's owner (character, or the corp's traders and accountants).  'order' is consumed
+    void NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, PyRep* order = nullptr);
 
     void InvalidateOrdersCache(uint32 regionID, uint32 typeID);
 
@@ -59,12 +82,18 @@ public:
     void SetOrderModified(uint32 orderID)               { m_orderModified[orderID] = GetFileTimeNow(); }
     void ClearOrderModified(uint32 orderID)             { m_orderModified.erase(orderID); }
 
-    bool NeedsUpdate()                                  { return m_timeStamp > GetFileTimeNow()?false:true; }
+    // where market items for an owner end up in a station:  characters -> item hangar,
+    //  corps -> the office's deliveries hangar, or the member's own hangar when the corp has no office there
+    static void GetDeliveryLocation(uint32 ownerID, bool isCorp, uint32 memberID, uint32 stationID, uint32& itemOwnerID, uint32& locationID, EVEItemFlags& flag);
+    // wallet balance of a character (online or not) or a corp division
+    static double GetWalletBalance(uint32 ownerID, uint16 accountKey);
+
+    bool NeedsUpdate()                                  { return m_historyDay + EvE::Time::Day <= GetMidnight(); }
 
     PyRep* GetMarketGroups()                            { PyIncRef(m_marketGroups); return m_marketGroups; }
-    // cached
+    // cached until a trade of the type happens in the region or the day ends
     PyRep* GetNewPriceHistory(uint32 regionID, uint32 typeID);
-    // cached
+    // cached for the day
     PyRep* GetOldPriceHistory(uint32 regionID, uint32 typeID);
 
 
@@ -73,9 +102,16 @@ public:
     void UpdateMineralPrice();
     void GetCruPrices();
 
+    static int64 GetMidnight()                          { int64 now(GetFileTimeNow()); return now - (now % EvE::Time::Day); }
 
 protected:
     void Populate();
+    void ProcessOrderExpiry();
+    void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
+    // records both sides of a trade
+    void RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,
+                     uint32 sellerOwnerID, bool sellerIsCorp, uint32 sellerCharID, uint16 sellerKey,
+                     uint32 buyerOwnerID, bool buyerIsCorp, uint32 buyerCharID, uint16 buyerKey);
 
 private:
     MarketDB m_db;
@@ -83,9 +119,10 @@ private:
 
     PyRep* m_marketGroups;  // static market group data
 
-    int64 m_timeStamp;
+    int64 m_historyDay;     // first day (midnight) not rolled up into mktHistory yet
 
     std::map<uint32, int64> m_orderModified;    // orderID/time of last modification
+    std::map<std::string, int64> m_historyCacheDay; // history cache name/day it was built for
 
     // markets are regional.  there are 66 regions.
     // market orders are stored as {regionID/typeID}

@@ -134,6 +134,19 @@ EVEServerConfig::EVEServerConfig()
     market.DeleteOldTransactions = false;
     market.salesTax = 1.0f;
     market.OrderModificationDelay = 300;
+    market.HistoryDays = 365;
+    market.UseMarginTrading = true;
+    market.OrderCancelDelay = 300;
+    market.ContractFees = true;
+    market.ContractExpiredCleanupDays = 0;
+    market.ContractCourierAutoFail = false;
+    market.InsuranceUseMaterialIndex = true;
+    market.InsuranceIndexDays = 30;
+    market.InsuranceIndexMinTrades = 10;
+    market.InsuranceDefaultPayout = 0.4f;
+    market.InsuranceMultiplierT1 = 1.0f;
+    market.InsuranceMultiplierT2 = 1.0f;
+    market.InsuranceMultiplierT3 = 1.0f;
 
     // ram
     ram.AutoEvent = false;
@@ -606,6 +619,19 @@ bool EVEServerConfig::ProcessMarket(const TiXmlElement* ele)
     AddValueParser( "HistoryUpdateTime",            market.HistoryUpdateTime);
     AddValueParser( "SalesTax",                     market.salesTax);
     AddValueParser( "OrderModificationDelay",       market.OrderModificationDelay);
+    AddValueParser( "HistoryDays",                 market.HistoryDays );
+    AddValueParser( "UseMarginTrading",            market.UseMarginTrading );
+    AddValueParser( "OrderCancelDelay",            market.OrderCancelDelay );
+    AddValueParser( "ContractFees",                market.ContractFees );
+    AddValueParser( "ContractExpiredCleanupDays",  market.ContractExpiredCleanupDays );
+    AddValueParser( "ContractCourierAutoFail",     market.ContractCourierAutoFail );
+    AddValueParser( "InsuranceUseMaterialIndex",   market.InsuranceUseMaterialIndex );
+    AddValueParser( "InsuranceIndexDays",          market.InsuranceIndexDays );
+    AddValueParser( "InsuranceIndexMinTrades",     market.InsuranceIndexMinTrades );
+    AddValueParser( "InsuranceDefaultPayout",      market.InsuranceDefaultPayout );
+    AddValueParser( "InsuranceMultiplierT1",       market.InsuranceMultiplierT1 );
+    AddValueParser( "InsuranceMultiplierT2",       market.InsuranceMultiplierT2 );
+    AddValueParser( "InsuranceMultiplierT3",       market.InsuranceMultiplierT3 );
 
     const bool result = ParseElementChildren( ele );
 
@@ -620,6 +646,20 @@ bool EVEServerConfig::ProcessMarket(const TiXmlElement* ele)
     RemoveParser( "DeleteOldTransactions" );
     RemoveParser( "HistoryUpdateTime" );
     RemoveParser( "SalesTax" );
+    RemoveParser( "OrderModificationDelay" );
+    RemoveParser( "HistoryDays" );
+    RemoveParser( "UseMarginTrading" );
+    RemoveParser( "OrderCancelDelay" );
+    RemoveParser( "ContractFees" );
+    RemoveParser( "ContractExpiredCleanupDays" );
+    RemoveParser( "ContractCourierAutoFail" );
+    RemoveParser( "InsuranceUseMaterialIndex" );
+    RemoveParser( "InsuranceIndexDays" );
+    RemoveParser( "InsuranceIndexMinTrades" );
+    RemoveParser( "InsuranceDefaultPayout" );
+    RemoveParser( "InsuranceMultiplierT1" );
+    RemoveParser( "InsuranceMultiplierT2" );
+    RemoveParser( "InsuranceMultiplierT3" );
 
     return result;
 }

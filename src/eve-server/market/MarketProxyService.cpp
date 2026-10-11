@@ -37,6 +37,7 @@
 #include "station/StationDataMgr.h"
 #include "system/SystemManager.h"
 #include "standing/StandingDB.h"
+#include "corporation/CorporationDB.h"
 
 /*
  * MARKET__ERROR
@@ -87,6 +88,9 @@ PyResult MarketProxyService::GetCharOrders(PyCallArgs &call) {
 }
 
 PyResult MarketProxyService::GetCorporationOrders(PyCallArgs &call) {
+    // the corp's orders are for its accountants, junior accountants and traders (UI/Market/Corporation AccessDenied*)
+    if ((call.client->GetCorpRole() & (Corp::Role::Accountant | Corp::Role::JuniorAccountant | Corp::Role::Trader)) == 0)
+        return MarketDB::GetOrdersForOwner(0);
     return MarketDB::GetOrdersForOwner(call.client->GetCorporationID());
 }
 
@@ -118,27 +122,33 @@ PyResult MarketProxyService::CharGetNewTransactions(PyCallArgs &call, PyRep* sel
 
     data.clientID = clientID->IsNone() ? 0 : PyRep::IntegerValueU32(clientID);
     data.isBuy = sellBuy->IsNone() ? -1 : PyRep::IntegerValueU32(sellBuy);
-    data.price = minPrice->IsNone() ? 0 : PyRep::IntegerValueU32(minPrice);
+    data.price = minPrice->IsNone() ? 0 : PyRep::FloatValue(minPrice);
+    data.maxPrice = maxPrice->IsNone() ? 0 : PyRep::FloatValue(maxPrice);
     data.quantity = quantity->IsNone() ? 0 : PyRep::IntegerValueU32(quantity);
     data.typeID = typeID->IsNone() ? 0 : PyRep::IntegerValueU32(typeID);
     data.time = fromDate->IsNone() ? 0 : PyRep::IntegerValue(fromDate);
     data.accountKey = Account::KeyType::Cash;
 
-    return MarketDB::GetTransactions(call.client->GetCharacterID(), data);
+    return MarketDB::GetTransactions(call.client->GetCharacterID(), data, false);
 }
 
 PyResult MarketProxyService::CorpGetNewTransactions(PyCallArgs& call, PyRep* sellBuy, PyRep* typeID, PyRep* clientID, PyRep* quantity, PyRep* fromDate, PyRep* maxPrice, PyRep* minPrice, PyRep* accountKey, PyRep* memberID)
 {
+    // corp wallet transactions are for accountants and junior accountants
+    if ((call.client->GetCorpRole() & (Corp::Role::Accountant | Corp::Role::JuniorAccountant)) == 0)
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role Accountant or Junior Accountant."));
+
     Market::TxData data = Market::TxData();
-        data.clientID = clientID->IsNone() ? 0 : PyRep::IntegerValueU32(clientID);
-        data.isBuy = sellBuy->IsNone() ? 0 : PyRep::IntegerValueU32(sellBuy);
-        data.price = minPrice->IsNone() ? 0 : PyRep::IntegerValueU32(minPrice);
-        data.quantity = quantity->IsNone() ? 0 : PyRep::IntegerValueU32(quantity);
-        data.typeID = typeID->IsNone() ? 0 : PyRep::IntegerValueU32(typeID);
-        data.time = fromDate->IsNone() ? 0 : PyRep::IntegerValue(fromDate);
-        data.accountKey = accountKey->IsNone() ? 0 : PyRep::IntegerValueU32(accountKey);
-        data.memberID = memberID->IsNone() ? 0 : PyRep::IntegerValueU32(memberID);
-    return MarketDB::GetTransactions(call.client->GetCorporationID(), data);
+    data.clientID = clientID->IsNone() ? 0 : PyRep::IntegerValueU32(clientID);
+    data.isBuy = sellBuy->IsNone() ? -1 : PyRep::IntegerValueU32(sellBuy);
+    data.price = minPrice->IsNone() ? 0 : PyRep::FloatValue(minPrice);
+    data.maxPrice = maxPrice->IsNone() ? 0 : PyRep::FloatValue(maxPrice);
+    data.quantity = quantity->IsNone() ? 0 : PyRep::IntegerValueU32(quantity);
+    data.typeID = typeID->IsNone() ? 0 : PyRep::IntegerValueU32(typeID);
+    data.time = fromDate->IsNone() ? 0 : PyRep::IntegerValue(fromDate);
+    data.accountKey = accountKey->IsNone() ? (uint32)Account::KeyType::Cash : PyRep::IntegerValueU32(accountKey);
+    data.memberID = memberID->IsNone() ? 0 : PyRep::IntegerValueU32(memberID);
+    return MarketDB::GetTransactions(call.client->GetCorporationID(), data, true);
 }
 
 PyResult MarketProxyService::GetOrders(PyCallArgs &call, PyInt* typeID) {
@@ -195,23 +205,13 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     21:47:34 [MktDump]               None
     */
 
-    // not sent from call, but used in transactions
-    uint16 accountKey(Account::KeyType::Cash);
-
     _log(MARKET__DUMP, "Mkt::PlaceCharOrder()");
-
-    //TODO: verify the validity of args.stationID (range vs. skill)
-
-    if (useCorp->value()) {
-        _log(MARKET__MESSAGE, "Denying Corp Market use for %s", call.client->GetName());
-        call.client->SendErrorMsg("Corporation Market transactions are not available at this time.");
-        return nullptr;
-    }
+    Client* pClient(call.client);
 
     // validate everything the client sent before any other logic.  a modified client can send anything here.
     if (quantity->value() < 1) {
         _log(MARKET__WARNING, "PlaceCharOrder - %s(%u) sent quantity %i for type %i.", \
-                call.client->GetName(), call.client->GetCharacterID(), quantity->value(), typeID->value());
+                pClient->GetName(), pClient->GetCharacterID(), quantity->value(), typeID->value());
         if (bid->value())
             throw CustomError("Invalid quantity.");
         throw UserError("RepackageBeforeSelling").AddTypeName("item", typeID->value());
@@ -227,464 +227,272 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     if (!ValidOrderRange(orderRange->value()))
         throw CustomError("Invalid order range.");
 
-    /** @todo  update for corporate use
-     * check corp has office in target station for item delivery
-     * check player can use given corp acct (get current division from char data)
-     * check corp wallet division has funds (get current division from char data)
-     * code to handle 'located' as sent
-     *   ...more?
-     * corp checks coded for ram/reproc.  use as template
-     */
+    bool isBuy(bid->value() != 0);
+    uint32 orderStationID(stationID->value());
+    uint32 qty(quantity->value());
+    uint16 orderTypeID(typeID->value());
 
-    // a bid with an itemID used to fall through to the sell code and created a buy order without escrow
-    if (bid->value()) {  // buy
-        // check for corp usage and get standings with station owners
-        float fStanding(0), cStanding(0);
-        if (useCorp->value()) {
-            // it is. perform checks and set needed variables for corp use
-            if (!IsPlayerCorp(call.client->GetCorporationID())) {
-                // cant buy items for npc corp...
-                call.client->SendErrorMsg("You cannot buy items for an NPC corp.");
-                return nullptr;
-            }
+    // only types with a market group are traded on the market
+    const ItemType* pType(sItemFactory.GetType(orderTypeID));
+    if ((pType == nullptr) or (pType->marketGroupID() == 0))
+        throw UserError(isBuy ? "MktInvalidMarketTypeBid" : "MktInvalidMarketTypeAsk").AddTypeName("itemType", orderTypeID);
 
-            // this is a corp transaction. verify char can buy things for corp...
-            // some corp error msgs in inventory.h, corp.h and market.h
-            //   will need corp methods to determine member access rights for item location and roles....
-            //   these may be written already.  will have to check
+    // orders are entered in the client's region
+    if (sDataMgr.GetStationRegion(orderStationID) != pClient->GetRegionID())
+        throw UserError("MktInvalidRegion");
 
-            accountKey = call.client->GetCorpAccountKey();
+    // the item to sell
+    InventoryItemRef iRef(nullptr);
+    if (!isBuy) {
+        // a bid with an itemID used to fall through to the sell code and created a buy order without escrow
+        if (!itemID.has_value() or (itemID.value()->value() == 0))
+            throw CustomError("Unable to find item to sell.");
+        iRef = sItemFactory.GetItemRef(itemID.value()->value());
+        if (iRef.get() == nullptr) {
+            _log(ITEM__ERROR, "PlaceCharOrder - Failed to find item %i for sell order.", itemID.value()->value());
+            throw CustomError("Unable to find item to sell.");
         }
+        if (iRef->typeID() != orderTypeID) {
+            _log(MARKET__MESSAGE, "PlaceCharOrder - Denying Sell of typeID %u using typeID %u.", iRef->typeID(), orderTypeID);
+            throw CustomError("Invalid sell order item type.");
+        }
+    }
 
-        // is this standing order or immediate?
+    // corp orders.  corp items can only be sold for the corp
+    uint32 corpID(pClient->GetCorporationID());
+    bool corpOrder(useCorp->value());
+    if ((iRef.get() != nullptr) and (iRef->ownerID() == corpID))
+        corpOrder = true;
+    uint16 accountKey(Account::KeyType::Cash);
+    if (corpOrder) {
+        if (!IsPlayerCorp(corpID))
+            throw CustomError("You cannot use the market for an NPC corporation.");
+        // quote.py only offers the corp wallet to accountants and traders
+        if ((pClient->GetCorpRole() & (Corp::Role::Accountant | Corp::Role::Trader)) == 0)
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role Accountant or Trader."));
+        accountKey = pClient->GetCorpAccountKey();
+        if (Corp::AccountTakeRole(accountKey) == 0)
+            accountKey = Account::KeyType::Cash;
+        // fees and escrow come from the session's wallet division
+        if ((pClient->GetCorpRole() & Corp::AccountTakeRole(accountKey)) == 0)
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have access to that wallet division."));
+    }
+    uint32 walletOwnerID(corpOrder ? corpID : pClient->GetCharacterID());
+
+    if (isBuy) {
         if (duration->value() == 0) {
-            // immediate purchases can be made anywhere in the current region
-            if (sDataMgr.GetStationRegion(stationID->value()) != call.client->GetRegionID())
-                throw CustomError("You can only buy items in your current region.");
-
-            // immediate. look for open sell order that matches all reqs (price, qty, distance, etc)
-            // check distance, set order range and make station list.
-            uint32 orderID(MarketDB::FindSellOrder(
-                typeID->value(),
-                stationID->value(),
-                quantity->value(),
-                orderPrice
-            ));
-
-            if (orderID) {
-                // found one.
-                _log(MARKET__TRACE,
-                    "PlaceCharOrder - Found sell order #%u in %s for %s. (type %i, price %.2f, qty %i, range %i)",
-                    orderID,
-                    stDataMgr.GetStationName(stationID->value()).c_str(),
-                    call.client->GetName(),
-                    typeID->value(),
-                    orderPrice,
-                    quantity->value(),
-                    orderRange->value()
-                );
-
-                sMktMgr.ExecuteSellOrder(
-                    call.client,
-                    orderID,
-                    quantity->value(),
-                    orderPrice,
-                    stationID->value(),
-                    typeID->value(),
-                    useCorp->value()
-                );
-
-                return nullptr;
+            // immediate.  fill from the cheapest sell orders the range (around the chosen station) reaches
+            uint32 filled = sMktMgr.BuyFromSellOrders(pClient, orderTypeID, qty, orderPrice, orderStationID, orderRange->value(), corpOrder, accountKey);
+            if (filled == 0) {
+                _log(MARKET__TRACE, "PlaceCharOrder - Failed to satisfy buy order for %u of type %u at %.2f ISK.", qty, orderTypeID, orderPrice);
+                throw UserError("MktOrderDidNotMatch");
             }
-
-            _log(MARKET__TRACE,
-                "PlaceCharOrder - Failed to satisfy buy order for %i of type %i at %.2f ISK.",
-                quantity->value(),
-                typeID->value(),
-                orderPrice
-            );
-
-            call.client->SendErrorMsg("No sell order found.");  // find/implement type name here
-
+            if (filled < qty)
+                pClient->SendNotifyMsg("Only %u of the %u units could be bought at that price.", filled, qty);
             return nullptr;
         }
 
         // standing buy orders can be placed as far away as Procurement allows
-        if (!InTradeRange(call.client, stationID->value(), call.client->GetChar()->GetSkillLevel(EvESkill::Procurement)))
-            throw CustomError("%s is out of range.  Your Procurement skill limits how far away you can place buy orders.", stDataMgr.GetStationName(stationID->value()).c_str());
+        CheckSkillRange(pClient, orderStationID, EvESkill::Procurement);
+        CheckOrderCount(pClient);
 
-        // determine escrow amount
-        double money((double)orderPrice * quantity->value());
+        // Margin Trading:  only part of the order's value goes into escrow
+        double value(orderPrice * qty);
+        double escrow(value);
+        if (sConfig.market.UseMarginTrading)
+            escrow *= std::pow(0.75, pClient->GetChar()->GetSkillLevel(EvESkill::MarginTrading));
+        escrow = std::round(escrow * 100.0) / 100.0;
+
+        // broker fee uses the standings of the order's station owner, on the full value
+        double fee = GetBrokerFee(pClient, orderStationID, value);
+        _log(MARKET__DEBUG, "PlaceCharOrder(buy) - %s: Escrow: %.2f, Fee: %.2f", corpOrder ? "Corp" : "Player", escrow, fee);
+
+        // the fee and escrow are taken after the order is stored (they reference its orderID).  check the wallet first,
+        //  so an unpaid order is never left behind (cancelling it would refund escrow that was never paid)
+        CheckFunds(walletOwnerID, accountKey, fee + escrow);
 
         // set save data
         Market::SaveData data = Market::SaveData();
         data.accountKey         = accountKey;
-        data.minVolume          = 1; // verify this
+        data.minVolume          = std::max(1, std::min(minVolume->value(), quantity->value()));
         data.issued             = GetFileTimeNow();
-        // fill items from sent data
-        data.bid                = bid->value();
-        data.isCorp             = useCorp->value();
-        data.typeID             = typeID->value();
+        data.bid                = true;
+        data.isCorp             = corpOrder;
+        data.typeID             = orderTypeID;
         data.orderRange         = orderRange->value();
-        data.ownerID            = useCorp->value() ?call.client->GetCorporationID():call.client->GetCharacterID();
-        data.solarSystemID      = sDataMgr.GetStationSystem(stationID->value());
-        data.regionID           = sDataMgr.GetStationRegion(stationID->value());
-        data.stationID          = stationID->value();
+        data.ownerID            = walletOwnerID;
+        data.solarSystemID      = sDataMgr.GetStationSystem(orderStationID);
+        data.regionID           = sDataMgr.GetStationRegion(orderStationID);
+        data.stationID          = orderStationID;
         data.price              = orderPrice;
-        data.volEntered         = quantity->value();
-        data.volRemaining       = quantity->value();
+        data.volEntered         = qty;
+        data.volRemaining       = qty;
         data.duration           = duration->value();
-        data.memberID           = useCorp->value() ?call.client->GetCharacterID():0;
-        data.escrow             = money;
-
-        // these need a bit more data
-        data.contraband = false;   // does this need to check region/system?  yes
-        data.jumps = 1;     // not sure if this is used....
-
-        // broker fee uses the standings of the order's station owner
-        double fee = GetBrokerFee(call.client, stationID->value(), money);
-        _log(MARKET__DEBUG, "PlaceCharOrder(buy) - %s: Escrow: %.2f, Fee: %.2f", useCorp->value() ?"Corp":"Player", money, fee);
-
-        // the fee and escrow are taken after the order is stored (they reference its orderID).  check the wallet first,
-        //  so an unpaid order is never left behind (cancelling it would refund escrow that was never paid)
-        if (!useCorp->value() and (call.client->GetBalance() < (fee + money)))
-            throw UserError("NotEnoughMoney")
-                    .AddISK("amount", fee + money)
-                    .AddISK("balance", call.client->GetBalance());
+        data.memberID           = corpOrder ? pClient->GetCharacterID() : 0;
+        data.escrow             = escrow;
+        data.contraband         = false;
+        data.jumps              = 1;
 
         // create buy order
         uint32 orderID(MarketDB::StoreOrder(data));
         if (orderID == 0) {
             _log(MARKET__ERROR, "PlaceCharOrder - Failed to record buy order in the DB.");
-            call.client->SendErrorMsg("Failed to record the order.");
-            return nullptr;
+            throw CustomError("Failed to record the order.");
         }
 
         std::string reason = "DESC:  Setting up buy order in ";
-        reason += stDataMgr.GetStationName(stationID->value()).c_str();
+        reason += stDataMgr.GetStationName(orderStationID).c_str();
 
         // take monies and record actions.  if either transfer fails, the order must go
+        uint32 stationOwnerID(stDataMgr.GetOwnerID(orderStationID));
         try {
-            if (useCorp->value()) {
-                AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey, Account::KeyType::Cash, call.client);
-                AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow, call.client);
-            } else {
-                AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey);
-                AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow);
-            }
+            AccountService::TransferFunds(walletOwnerID, stationOwnerID, fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey, Account::KeyType::Cash, pClient);
+            AccountService::TransferFunds(walletOwnerID, stationOwnerID, escrow, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow, pClient);
         } catch (...) {
             MarketDB::DeleteOrder(orderID);
             throw;
         }
 
         //send notification of new order...
-        sMktMgr.InvalidateOrdersCache(data.regionID, typeID->value());
-        sMktMgr.SendOnOwnOrderChanged(call.client, orderID, Market::Action::Add, useCorp->value());
-    } else {
-        _log(MARKET__DUMP, "Mkt::PlaceCharOrder(): appears to be a sell order");
-        // sell order
-        /*if (!args.located->IsNone()) {
-            //  corp item in corp hangar
-            // located = [officeFolderID, officeID] or None
-            PyTuple* located = args.located->AsTuple();
-        }*/
-
-        if (!itemID.has_value() or (itemID.value()->value() == 0))
-            throw CustomError("Unable to find item to sell.");
-
-        //verify that they actually have the item in the quantity specified...
-        InventoryItemRef iRef = sItemFactory.GetItemRef(itemID.value ()->value());
-        if (iRef.get() == nullptr) {
-            _log(ITEM__ERROR, "PlaceCharOrder - Failed to find item %i for sell order.", itemID.value ()->value());
-
-            call.client->SendErrorMsg("Unable to find item to sell.");
-
-            return nullptr;
-        }
-
-        if (iRef->typeID() != typeID->value()) {
-            _log(MARKET__MESSAGE, "PlaceCharOrder - Denying Sell of typeID %u using typeID %i.", iRef->typeID(), typeID->value());
-
-            call.client->SendErrorMsg("Invalid sell order item type.");
-
-            return nullptr;
-        }
-
-        if (iRef->quantity() < quantity->value()) {
-            // trying to sell more than they have
-            _log(MARKET__MESSAGE,
-                "PlaceCharOrder - Denying inflated qty for %s",
-                call.client->GetName());
-                call.client->SendErrorMsg("You cannot sell %i %s when you only have %i.  If applicable, merge stacks and try again.",
-                quantity->value(),
-                iRef->name(),
-                iRef->quantity()
-            );
-
-            return nullptr;
-        }
-
-        // verify right to sell this thing..
-        if (useCorp->value()) {
-            if (!IsPlayerCorp(call.client->GetCorporationID())) {
-                // cant sell npc corp items...
-                call.client->SendErrorMsg("You cannot sell items for an NPC corp.");
-                return nullptr;
-            }
-
-            // this is a corp transaction.  verify char can sell corp shit...
-            // some corp error msgs in inventory.h, corp.h and market.h
-            //   will need corp methods to determine member access rights for item location and roles....
-            //   these may be written already.  will have to check
-            accountKey = call.client->GetCorpAccountKey();
-        } else {
-            if ( iRef->ownerID() != call.client->GetCharacterID()) {
-                _log(MARKET__WARNING,
-                    "%s(%u) Tried to sell %i %s owned by %u in %s.",
-                    call.client->GetName(),
-                    call.client->GetCharID(),
-                    iRef->quantity(),
-                    iRef->name(),
-                    iRef->ownerID(),
-                    stDataMgr.GetStationName(stationID->value()).c_str()
-                );
-
-                call.client->SendErrorMsg("You cannot sell items you do not own.");
-
-                return nullptr;
-            }
-        }
-
-        if (iRef->itemID() == call.client->GetShipID())
-            throw CustomError("You cannot sell your active ship.");
-        // assembled items (and blueprint copies) cannot be sold on the market
-        if (iRef->isSingleton())
-            throw UserError("RepackageBeforeSelling").AddTypeName("item", iRef->typeID());
-        if ((iRef->categoryID() == EVEDB::invCategories::Blueprint) and BlueprintRef::StaticCast(iRef)->copy())
-            throw CustomError("Blueprint copies cannot be sold on the market.");
-
-        // verify valid location
-        //  (a) personal hangar of the order's station, within Marketing range of the seller
-        //  (b) cargo hold of the active ship, docked in the order's station
-        bool itemInStationHangar((iRef->locationID() == stationID->value()) and (iRef->flag() == flagHangar));
-        bool itemInShip((call.client->GetStationID() == stationID->value())
-                    and (iRef->locationID() == call.client->GetShipID())
-                    and (iRef->flag() == flagCargoHold));
-
-        if (itemInStationHangar and !itemInShip
-        and !InTradeRange(call.client, stationID->value(), call.client->GetChar()->GetSkillLevel(EvESkill::Marketing)))
-            throw CustomError("%s is out of range.  Your Marketing skill limits how far away you can sell items.", stDataMgr.GetStationName(stationID->value()).c_str());
-
-        if (!itemInStationHangar and !itemInShip) {
-            std::string itemLoc;
-            if (sDataMgr.IsStation(iRef->locationID())) {
-                itemLoc = stDataMgr.GetStationName(iRef->locationID());
-            } else if (sDataMgr.IsSolarSystem(iRef->locationID())) {
-                itemLoc = sDataMgr.GetSystemName(iRef->locationID());
-            } else {
-                itemLoc = "an Invalid Location";
-            }
-
-            _log(MARKET__ERROR,
-                "%s Trying to sell %s(%u) in %s through %s while in %s",
-                call.client->GetName(),
-                iRef->name(),
-                iRef->itemID(),
-                itemLoc.c_str(),
-                stDataMgr.GetStationName(stationID->value()).c_str(),
-                stDataMgr.GetStationName(call.client->GetStationID()).c_str()
-            );
-
-            call.client->SendErrorMsg(
-                "You cannot sell %s from %s while you are in %s.  Locations mismatch",
-                iRef->name(),
-                stDataMgr.GetStationName(stationID->value()).c_str(),
-                stDataMgr.GetStationName(call.client->GetStationID()).c_str()
-            );
-
-            return nullptr;
-        }
-
-        //TODO: verify orderRange against their skills. client may do this...verify
-
-        // they are allowed to sell this thing...
-
-        // is this standing order or immediate?
-        if (duration->value() == 0) {
-            bool completedOrder(false);
-
-            uint32 orderID(0), origQty(quantity->value());
-
-            // set an upper bound (this used to be a while loop that spun
-            // forever in some cases)
-            for (int i = 0; i < 1000; i++) {
-                _log(MARKET__DUMP, "Mkt::PlaceCharOrder(): finding buy order: %i, %i, %i, %.2f", typeID->value(), stationID->value(), quantity->value(), orderPrice);
-
-                orderID = MarketDB::FindBuyOrder(typeID->value(), stationID->value(), quantity->value(), orderPrice);
-
-                if (!orderID) {
-                    // nothing changed since the last query, so no point asking again
-                    break;
-                }
-
-                _log(MARKET__TRACE,
-                    "PlaceCharOrder - Found buy order #%u in %s for %s.",
-                    orderID,
-                    stDataMgr.GetStationName(stationID->value()).c_str(),
-                    call.client->GetName()
-                );
-
-                // sell only the requested quantity, not the whole stack
-                if (iRef->quantity() > quantity->value()) {
-                    InventoryItemRef sRef = iRef->Split(quantity->value(), true);
-                    if (sRef.get() == nullptr) {
-                        _log(MARKET__ERROR, "PlaceCharOrder - Failed to split %i from %s(%u).", quantity->value(), iRef->name(), iRef->itemID());
-                        break;
-                    }
-                    iRef = sRef;
-                }
-
-                completedOrder = sMktMgr.ExecuteBuyOrder(
-                    call.client,
-                    orderID,
-                    iRef,
-                    quantity->value(),
-                    useCorp->value(),
-                    typeID->value(),
-                    stationID->value(),
-                    orderPrice
-                );
-
-                // a failed execution may already have moved the item or money, so never retry with the same item
-                if (completedOrder)
-                    _log(MARKET__DUMP, "Mkt::PlaceCharOrder(): order resolved");
-
-                break;
-            }
-
-            if (!completedOrder) {
-                _log(MARKET__TRACE, "PlaceCharOrder - failed to find a matching buy order for %i of type %i at %.2f ISK.", quantity->value(), typeID->value(), orderPrice);
-
-                call.client->SendErrorMsg("No buy order found.");
-
-                return nullptr;
-            }
-
-            return nullptr;
-        }
-
-        // they will be placing a sell order:
-
-        // set save data
-        Market::SaveData data = Market::SaveData();
-        data.accountKey         = accountKey;
-        data.minVolume          = 1; // verify this
-        data.issued             = GetFileTimeNow();
-        // fill items from sent data
-        data.bid                = bid->value();
-        data.isCorp             = useCorp->value();
-        data.typeID             = typeID->value();
-        data.orderRange         = orderRange->value();
-        data.ownerID            = iRef->ownerID();
-        data.solarSystemID      = sDataMgr.GetStationSystem(stationID->value());
-        data.regionID           = sDataMgr.GetStationRegion(stationID->value());
-        data.stationID          = stationID->value();
-        data.price              = orderPrice;
-        data.volEntered         = quantity->value();
-        data.volRemaining       = quantity->value();
-        data.duration           = duration->value();
-        data.memberID           = useCorp->value() ?call.client->GetCharacterID():0;
-
-        // check seller's permissions on the wallet if it's for corp
-        if (data.isCorp) {
-            int64 corpRole = call.client->GetCorpRole ();
-
-            // make sure the user has permissions to take money from the corporation account
-            if (
-                (accountKey == 1000 && (corpRole & Corp::Role::AccountCanTake1) == 0) ||
-                (accountKey == 1001 && (corpRole & Corp::Role::AccountCanTake2) == 0) ||
-                (accountKey == 1002 && (corpRole & Corp::Role::AccountCanTake3) == 0) ||
-                (accountKey == 1003 && (corpRole & Corp::Role::AccountCanTake4) == 0) ||
-                (accountKey == 1004 && (corpRole & Corp::Role::AccountCanTake5) == 0) ||
-                (accountKey == 1005 && (corpRole & Corp::Role::AccountCanTake6) == 0) ||
-                (accountKey == 1006 && (corpRole & Corp::Role::AccountCanTake7) == 0)
-            ) {
-                throw UserError("CrpAccessDenied").AddFormatValue ("reason", new PyString ("You do not have access to that wallet"));
-            }
-        }
-
-
-        // these need a bit more data
-        data.contraband = iRef->contraband();   // does this need to check region/system?
-        data.jumps = 1;     // not sure if this is used....
-
-        // calculate total for broker fees
-        double total = (double)orderPrice * quantity->value();
-        std::string reason = "DESC:  Setting up sell order in ";
-        reason += stDataMgr.GetStationName(stationID->value()).c_str();
-
-        // broker fee uses the standings of the order's station owner
-        double fee = GetBrokerFee(call.client, stationID->value(), total);
-        _log(MARKET__DEBUG, "PlaceCharOrder(sell) - %s: Total: %.2f, Fee: %.2f", useCorp->value() ?"Corp":"Player", total, fee);
-
-        // take monies and record actions (taxes are paid when item sells)
-        if (useCorp->value()) {
-            AccountService::TransferFunds(
-                call.client->GetCorporationID(),
-                stDataMgr.GetOwnerID(stationID->value()),
-                fee,
-                reason.c_str(),
-                Journal::EntryType::Brokerfee,
-                0,
-                accountKey,
-                Account::KeyType::Cash,
-                call.client
-            );
-        } else {
-            AccountService::TransferFunds(
-                call.client->GetCharacterID(),
-                stDataMgr.GetOwnerID(stationID->value()),
-                fee,
-                reason.c_str(),
-                Journal::EntryType::Brokerfee,
-                0,
-                accountKey
-            );
-        }
-
-        // store the order in the DB.
-        uint32 orderID(MarketDB::StoreOrder(data));
-        if (orderID == 0) {
-            _log(MARKET__ERROR, "PlaceCharOrder - Failed to record sell order in the DB.");
-            call.client->SendErrorMsg("Failed to record the order in the DB!");
-            return nullptr;
-        }
-
-        if (iRef->quantity() == quantity->value()) {
-            // take item from seller
-            call.client->SystemMgr()->RemoveItemFromInventory(iRef);
-            iRef->Delete();
-        } else {
-            //update the item.
-            if (!iRef->AlterQuantity(-quantity->value(), true)) {
-                _log(MARKET__ERROR, "PlaceCharOrder - Failed to consume %i units from %s", quantity->value(), iRef->name());
-                // the items stay with the seller, so the order must go
-                MarketDB::DeleteOrder(orderID);
-                return nullptr;
-            }
-        }
-
-        //notify client about new order.
-        sMktMgr.InvalidateOrdersCache(data.regionID, typeID->value());
-        sMktMgr.SendOnOwnOrderChanged(call.client, orderID, Market::Action::Add, useCorp->value());
+        sMktMgr.InvalidateOrdersCache(data.regionID, orderTypeID);
+        sMktMgr.SendOnOwnOrderChanged(pClient, orderID, Market::Action::Add, corpOrder);
+        return nullptr;
     }
+
+    _log(MARKET__DUMP, "Mkt::PlaceCharOrder(): appears to be a sell order");
+
+    if ((uint32)iRef->quantity() < qty)
+        throw CustomError("You cannot sell %u %s when you only have %i.  If applicable, merge stacks and try again.", qty, iRef->name(), iRef->quantity());
+    if (iRef->itemID() == pClient->GetShipID())
+        throw CustomError("You cannot sell your active ship.");
+    // assembled items (and blueprint copies) cannot be sold on the market
+    if (iRef->isSingleton())
+        throw UserError("RepackageBeforeSelling").AddTypeName("item", iRef->typeID());
+    if ((iRef->categoryID() == EVEDB::invCategories::Blueprint) and BlueprintRef::StaticCast(iRef)->copy())
+        throw CustomError("Blueprint copies cannot be sold on the market.");
+
+    // verify the item's location
+    //  (a) own item in the item hangar of the order's station
+    //  (b) own item in the active ship's cargo hold, docked in the order's station
+    //  (c) corp item in an office hangar of the order's station the member can take from (located = [officeFolderID, officeID])
+    bool inStationHangar(false), inShip(false), inOffice(false);
+    if (iRef->ownerID() == pClient->GetCharacterID()) {
+        inStationHangar = ((iRef->locationID() == orderStationID) and (iRef->flag() == flagHangar));
+        inShip = ((pClient->GetStationID() == orderStationID)
+              and (iRef->locationID() == pClient->GetShipID())
+              and (iRef->flag() == flagCargoHold));
+    } else if (iRef->ownerID() == corpID) {
+        uint32 officeID(stDataMgr.GetOfficeIDForCorp(orderStationID, corpID));
+        if ((officeID != 0) and (iRef->locationID() == officeID)) {
+            int64 takeRole(Corp::HangarTakeRole(iRef->flag()));
+            if ((takeRole == 0) or ((pClient->GetCorpRolesAtLocation(orderStationID) & takeRole) == 0))
+                throw UserError("ConNoAccessToCorpHangar");
+            inOffice = true;
+        }
+    } else {
+        _log(MARKET__WARNING, "%s(%u) Tried to sell %i %s owned by %u in %s.", pClient->GetName(), pClient->GetCharacterID(), \
+                iRef->quantity(), iRef->name(), iRef->ownerID(), stDataMgr.GetStationName(orderStationID).c_str());
+        throw CustomError("You cannot sell items you do not own.");
+    }
+
+    if (!inStationHangar and !inShip and !inOffice) {
+        _log(MARKET__ERROR, "%s Trying to sell %s(%u) in %u (flag %u) through %s while in %s", pClient->GetName(), iRef->name(), \
+                iRef->itemID(), iRef->locationID(), iRef->flag(), stDataMgr.GetStationName(orderStationID).c_str(), \
+                stDataMgr.GetStationName(pClient->GetStationID()).c_str());
+        throw CustomError("You cannot sell %s from %s.  It is not in a hangar of that station.", iRef->name(), stDataMgr.GetStationName(orderStationID).c_str());
+    }
+
+    // remote sells are limited by Marketing (the item's station)
+    if (!inShip)
+        CheckSkillRange(pClient, orderStationID, EvESkill::Marketing);
+
+    // is this standing order or immediate?
+    if (duration->value() == 0) {
+        // immediate.  fill the best buy orders whose range reaches this station
+        uint32 sold = sMktMgr.SellToBuyOrders(pClient, iRef, qty, orderPrice, orderStationID, corpOrder, accountKey);
+        if (sold == 0) {
+            _log(MARKET__TRACE, "PlaceCharOrder - failed to find a matching buy order for %u of type %u at %.2f ISK.", qty, orderTypeID, orderPrice);
+            throw UserError("MktOrderDidNotMatch");
+        }
+        if (sold < qty)
+            pClient->SendNotifyMsg("Only %u of the %u units could be sold at that price.", sold, qty);
+        return nullptr;
+    }
+
+    // they will be placing a sell order:
+    CheckOrderCount(pClient);
+
+    // broker fee on the order's value, using the standings of the order's station owner (taxes are paid when it sells)
+    double total = orderPrice * qty;
+    double fee = GetBrokerFee(pClient, orderStationID, total);
+    _log(MARKET__DEBUG, "PlaceCharOrder(sell) - %s: Total: %.2f, Fee: %.2f", corpOrder ? "Corp" : "Player", total, fee);
+    CheckFunds(walletOwnerID, accountKey, fee);
+
+    // set save data
+    Market::SaveData data = Market::SaveData();
+    data.accountKey         = accountKey;
+    data.minVolume          = 1;
+    data.issued             = GetFileTimeNow();
+    data.bid                = false;
+    data.isCorp             = corpOrder;
+    data.typeID             = orderTypeID;
+    data.orderRange         = orderRange->value();
+    data.ownerID            = walletOwnerID;
+    data.solarSystemID      = sDataMgr.GetStationSystem(orderStationID);
+    data.regionID           = sDataMgr.GetStationRegion(orderStationID);
+    data.stationID          = orderStationID;
+    data.price              = orderPrice;
+    data.volEntered         = qty;
+    data.volRemaining       = qty;
+    data.duration           = duration->value();
+    data.memberID           = corpOrder ? pClient->GetCharacterID() : 0;
+    data.contraband         = iRef->contraband();
+    data.jumps              = 1;
+
+    // store the order in the DB.
+    uint32 orderID(MarketDB::StoreOrder(data));
+    if (orderID == 0) {
+        _log(MARKET__ERROR, "PlaceCharOrder - Failed to record sell order in the DB.");
+        throw CustomError("Failed to record the order.");
+    }
+
+    std::string reason = "DESC:  Setting up sell order in ";
+    reason += stDataMgr.GetStationName(orderStationID).c_str();
+    try {
+        AccountService::TransferFunds(walletOwnerID, stDataMgr.GetOwnerID(orderStationID), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey, Account::KeyType::Cash, pClient);
+    } catch (...) {
+        MarketDB::DeleteOrder(orderID);
+        throw;
+    }
+
+    // take the items
+    if ((uint32)iRef->quantity() == qty) {
+        iRef->Delete();
+    } else if (!iRef->AlterQuantity(-((int32)qty), true)) {
+        _log(MARKET__ERROR, "PlaceCharOrder - Failed to consume %u units from %s", qty, iRef->name());
+        // the items stay with the seller, so the order must go.  the fee was the price of trying
+        MarketDB::DeleteOrder(orderID);
+        throw CustomError("Failed to take the items for the order.");
+    }
+
+    //notify client about new order.
+    sMktMgr.InvalidateOrdersCache(data.regionID, orderTypeID);
+    sMktMgr.SendOnOwnOrderChanged(pClient, orderID, Market::Action::Add, corpOrder);
 
     return nullptr;
 }
 
 PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, PyInt* typeID, PyFloat* price, PyInt* quantity, PyInt* bid, PyInt* orderRange, std::optional <PyInt*> itemID, PyInt* minVolume, PyInt* duration, PyInt* useCorp, std::optional<PyRep*> located) {
     // Used when character has a corp wallet, client sends a PyInt instead of a PyBool
-    return PlaceCharOrder(call, stationID, typeID, price, quantity, bid, orderRange, itemID, minVolume, duration, new PyBool(useCorp->value()), located);
+    PyBool* corp(new PyBool(useCorp->value() != 0));
+    try {
+        PyResult res = PlaceCharOrder(call, stationID, typeID, price, quantity, bid, orderRange, itemID, minVolume, duration, corp, located);
+        PyDecRef(corp);
+        return res;
+    } catch (...) {
+        PyDecRef(corp);
+        throw;
+    }
 }
 
 PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, PyFloat* newPrice, PyInt* bid, PyInt* stationID, PyInt* solarSystemID, PyFloat* price, PyInt* range, PyInt* volRemaining, PyLong* issueDate) {
@@ -698,8 +506,8 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
 
     CheckOrderOwner(call.client, oInfo);
 
-    if (!InTradeRange(call.client, oInfo.stationID, call.client->GetChar()->GetSkillLevel(EvESkill::Daytrading)))
-        throw CustomError("%s is out of range.  Your Daytrading skill limits how far away you can modify orders.", stDataMgr.GetStationName(oInfo.stationID).c_str());
+    // remote modifications are limited by Daytrading
+    CheckSkillRange(call.client, oInfo.stationID, EvESkill::Daytrading);
 
     double priceNew = std::round(newPrice->value() * 100.0) / 100.0;
     if (!ValidOrderPrice(priceNew))
@@ -719,26 +527,23 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
     /* pre-Citadel rule: modifying an order costs the broker fee on the change in order value (minimum 100 ISK).
      *  this is taken first and throws if the wallet is short; nothing has changed at that point. */
     double fee = GetBrokerFee(call.client, oInfo.stationID, fabs(priceNew - oInfo.price) * oInfo.quantity);
-    // a raised buy order also needs the extra escrow.  check both, so the fee isn't taken when the escrow can't be
-    double needed(fee);
-    if (oInfo.isBuy and (priceNew > oInfo.price))
-        needed += (priceNew - oInfo.price) * oInfo.quantity;
-    if (!oInfo.isCorp and (call.client->GetBalance() < needed))
-        throw UserError("NotEnoughMoney")
-                .AddISK("amount", needed)
-                .AddISK("balance", call.client->GetBalance());
+    // a buy order's escrow follows the price change (times the Margin Trading fraction).  it never goes below zero
+    double newEscrow(-1.0), delta(0.0);
+    if (oInfo.isBuy) {
+        double margin(1.0);
+        if (sConfig.market.UseMarginTrading)
+            margin = std::pow(0.75, call.client->GetChar()->GetSkillLevel(EvESkill::MarginTrading));
+        newEscrow = std::round(EvE::max(oInfo.escrow + (priceNew - oInfo.price) * oInfo.quantity * margin, 0.0) * 100.0) / 100.0;
+        delta = newEscrow - oInfo.escrow;
+    }
+    // check both, so the fee isn't taken when the escrow can't be
+    CheckFunds(walletOwnerID, accountKey, fee + EvE::max(delta, 0.0));
     AccountService::TransferFunds(walletOwnerID, stationOwnerID, fee, reason.c_str(), Journal::EntryType::Brokerfee, oInfo.orderID, accountKey, Account::KeyType::Cash, call.client);
 
-    // buy orders hold price * volRemaining in escrow.  move the difference
-    double newEscrow(-1.0);
-    if (oInfo.isBuy) {
-        double delta = (priceNew - oInfo.price) * oInfo.quantity;
-        if (delta > 0) {
-            AccountService::TransferFunds(walletOwnerID, stationOwnerID, delta, reason.c_str(), Journal::EntryType::MarketEscrow, oInfo.orderID, accountKey, Account::KeyType::Escrow, call.client);
-        } else if (delta < 0) {
-            AccountService::TransferFunds(stationOwnerID, walletOwnerID, -delta, reason.c_str(), Journal::EntryType::MarketEscrow, oInfo.orderID, Account::KeyType::Escrow, accountKey, call.client);
-        }
-        newEscrow = priceNew * oInfo.quantity;
+    if (delta >= 0.01) {
+        AccountService::TransferFunds(walletOwnerID, stationOwnerID, delta, reason.c_str(), Journal::EntryType::MarketEscrow, oInfo.orderID, accountKey, Account::KeyType::Escrow, call.client);
+    } else if (delta <= -0.01) {
+        AccountService::TransferFunds(stationOwnerID, walletOwnerID, -delta, reason.c_str(), Journal::EntryType::MarketEscrow, oInfo.orderID, Account::KeyType::Escrow, accountKey, call.client);
     }
 
     if (!MarketDB::AlterOrderPrice(oInfo.orderID, priceNew, newEscrow)) {
@@ -748,7 +553,7 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
     sMktMgr.SetOrderModified(oInfo.orderID);
 
     sMktMgr.InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
-    sMktMgr.SendOnOwnOrderChanged(call.client, oInfo.orderID, Market::Action::Modify, oInfo.isCorp);
+    sMktMgr.NotifyOrderOwner(oInfo, Market::Action::Modify);
 
     return nullptr;
 }
@@ -763,51 +568,16 @@ PyResult MarketProxyService::CancelCharOrder(PyCallArgs &call, PyInt* orderID, P
     // orders can be cancelled from anywhere, but only by their owner
     CheckOrderOwner(call.client, oInfo);
 
-    // delete first, so a failure can't refund an order that still exists
-    PyRep* order(MarketDB::GetOrderRow(oInfo.orderID));
-    if (!MarketDB::DeleteOrder(oInfo.orderID)) {
-        _log(MARKET__ERROR, "CancelCharOrder - Failed to delete order #%u.", oInfo.orderID);
-        PySafeDecRef(order);
-        return nullptr;
-    }
-    sMktMgr.ClearOrderModified(oInfo.orderID);
+    // Crucible:  not within five minutes of placing it
+    if ((sConfig.market.OrderCancelDelay > 0)
+    and ((GetFileTimeNow() - oInfo.issued) < (int64)sConfig.market.OrderCancelDelay * EvE::Time::Second))
+        throw UserError("MktOrderTooNew");
 
-    if (oInfo.isBuy) {
-        // buy order only refunds escrow (price * volRemaining)
-        double money = oInfo.price * oInfo.quantity;
-        // send wallet blink event and record the transaction in their journal.
-        std::string reason = "DESC:  Canceling Market Order #";
-        reason += std::to_string(oInfo.orderID);
-
-        AccountService::TransferFunds(
-            stDataMgr.GetOwnerID(oInfo.stationID),
-            oInfo.ownerID,
-            money,
-            reason.c_str(),
-            Journal::EntryType::MarketEscrow,
-            oInfo.orderID,
-            Account::KeyType::Escrow,
-            (oInfo.isCorp ? oInfo.accountKey : Account::KeyType::Cash),
-            call.client
-        );
-    } else {
-        // remaining items go back to the order's owner in the order's station
-        uint32 locationID(oInfo.stationID);
-        EVEItemFlags flag(flagHangar);
-        if (oInfo.isCorp) {
-            locationID = stDataMgr.GetOfficeIDForCorp(oInfo.stationID, oInfo.ownerID);
-            flag = flagCorpMarket;
-            if (locationID == 0)
-                locationID = oInfo.stationID;
-        }
-        ItemData idata(oInfo.typeID, ownerStation, locTemp, flagHangar, oInfo.quantity);
-        InventoryItemRef iRef = sItemFactory.SpawnItem(idata);
-        if (iRef.get() != nullptr)
-            iRef->Donate(oInfo.ownerID, locationID, flag, true);
-    }
-
-    sMktMgr.InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
-    sMktMgr.SendOnOwnOrderChanged(call.client, oInfo.orderID, Market::Action::Expiry, oInfo.isCorp, order);
+    // refunds the escrow left in a buy order (not price * volRemaining, see Margin Trading) or returns a sell order's items
+    std::string reason = "DESC:  Canceling Market Order #";
+    reason += std::to_string(oInfo.orderID);
+    if (!sMktMgr.CancelOrderInternal(oInfo, reason.c_str()))
+        throw CustomError("That order no longer exists.");
 
     return nullptr;
 }
@@ -827,19 +597,52 @@ void MarketProxyService::CheckOrderOwner(Client* pClient, const Market::OrderInf
     throw CustomError("You do not own that market order.");
 }
 
-bool MarketProxyService::InTradeRange(Client* pClient, uint32 stationID, uint8 skillLevel)
+void MarketProxyService::CheckSkillRange(Client* pClient, uint32 stationID, uint16 skillTypeID)
 {
-    if (pClient->GetStationID() == stationID)
-        return true;
-    switch (skillLevel) {
-        case 0:
-            return false;
-        case 1:
-            return (sDataMgr.GetStationSystem(stationID) == pClient->GetSystemID());
-        default:
-            // @todo  levels 2-4 should be 5/10/20 jumps (needs a jump count helper).  level 5 is region
-            return (sDataMgr.GetStationRegion(stationID) == pClient->GetRegionID());
-    }
+    // quote.py CanTradeAtStation and its messages
+    int32 distance(Market::GetStationDistance(pClient, stationID));
+    uint8 level(pClient->GetChar()->GetSkillLevel(skillTypeID));
+    if (Market::InSkillRange(distance, level))
+        return;
+    if (distance == Market::Range::Region)
+        throw UserError("MktInvalidRegion");
+
+    int32 limit(Market::SkillRangeLimit(level));
+    if (limit >= 0)
+        throw UserError("MktCantSellItem2")
+                .AddFormatValue("numJumps", new PyInt(distance))
+                .AddFormatValue("jumpText1", new PyString(distance == 1 ? "jump" : "jumps"))
+                .AddFormatValue("numLimit", new PyInt(limit))
+                .AddFormatValue("jumpText2", new PyString(limit == 1 ? "jump" : "jumps"));
+    throw UserError("MktCantSellItemOutsideStation")
+            .AddFormatValue("numJumps", new PyInt(distance))
+            .AddFormatValue("jumpText", new PyString(distance == 1 ? "jump" : "jumps"));
+}
+
+void MarketProxyService::CheckOrderCount(Client* pClient)
+{
+    // marketsvc.GetSkillLimits.  corp orders count against the member that placed them
+    Character* pChar(pClient->GetChar().get());
+    uint32 limit = 5 + 4 * pChar->GetSkillLevel(EvESkill::Trade) + 8 * pChar->GetSkillLevel(EvESkill::Retail)
+                 + 16 * pChar->GetSkillLevel(EvESkill::Wholesale) + 32 * pChar->GetSkillLevel(EvESkill::Tycoon);
+    if (MarketDB::CountOpenOrders(pClient->GetCharacterID()) >= limit)
+        throw CustomError("You have reached your limit of %u open market orders.  Train Trade, Retail, Wholesale or Tycoon to place more.", limit);
+}
+
+void MarketProxyService::CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount)
+{
+    double balance(MarketMgr::GetWalletBalance(walletOwnerID, accountKey));
+    if (balance >= amount)
+        return;
+    if (IsPlayerCorp(walletOwnerID))
+        throw UserError("NotEnoughMoneyCorp")
+                .AddOwnerName("owner", walletOwnerID)
+                .AddISK("amount", amount)
+                .AddISK("balance", balance)
+                .AddFormatValue("division", new PyString(CorporationDB::GetDivisionName(walletOwnerID, accountKey)));
+    throw UserError("NotEnoughMoney")
+            .AddISK("amount", amount)
+            .AddISK("balance", balance);
 }
 
 bool MarketProxyService::ValidOrderRange(int32 range)

@@ -43,6 +43,7 @@ protected:
     PyResult GetStation(PyCallArgs& call, PyInt* stationID);
     PyResult GetAllianceSystems(PyCallArgs& call);
     PyResult GetSystemsForAlliance(PyCallArgs& call, PyInt* allianceID);
+    PyResult GetStationsByRegion(PyCallArgs& call, PyInt* regionID);
 
 private:
     EVEServiceManager& m_manager;

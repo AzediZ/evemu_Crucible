@@ -66,6 +66,19 @@ double AccountDB::OfflineFundXfer(uint32 charID, double amount, uint8 type)
 }
 
 
+double AccountDB::GetCharBalance(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT balance FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetDouble(0);
+}
+
 double AccountDB::GetCorpBalance(uint32 corpID, uint16 accountKey)
 {
     std::string acctKey = "";

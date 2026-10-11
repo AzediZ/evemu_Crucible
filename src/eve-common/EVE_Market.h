@@ -80,9 +80,11 @@ namespace Market {
         uint32 regionID;
         uint32 quantity;
         uint32 accountKey;   // corp account key (default 1000 (cash))
-        uint32 memberID;     // corp member that placed order (0 for char order)
+        uint32 memberID;     // character that made the trade (the member for corp trades)
+        uint32 ownerID;      // owner of this side of the trade (character, or corp when isCorp)
         int64 time;
-        float price;
+        double price;        // minimum price filter when querying
+        double maxPrice;     // maximum price filter when querying (0 = none)
     };
 
     // used to save order data
@@ -96,7 +98,7 @@ namespace Market {
         bool isCorp :1;
         bool contraband :1;
         uint8 jumps;
-        int16 orderRange;
+        int32 orderRange;
         uint16 typeID;
         uint16 accountKey;
         uint32 orderID;
@@ -110,8 +112,8 @@ namespace Market {
         uint32 duration;
         uint32 memberID;
         int64 issued;
-        float price;
-        float escrow;
+        double price;
+        double escrow;
     };
 
     // used to query sell orders when buy is requested
@@ -128,9 +130,13 @@ namespace Market {
         uint32 quantity;
         uint32 accountKey;   // corp account key (default 1000 (cash))
         uint32 memberID;     // corp member that placed order (0 for char order)
+        int32 orderRange;    // Market::Range or jumps
+        uint32 minVolume;
+        uint32 solarSystemID;
+        uint32 duration;     // days.  0 = immediate
         int64 issued;
         double price;
-        double escrow;
+        double escrow;       // isk still held for a buy order
     };
 
     // POD structure for mineral data used in pricing method

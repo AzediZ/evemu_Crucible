@@ -63,10 +63,13 @@ private:
 
     // throws if pClient may not modify/cancel this order
     void CheckOrderOwner(Client* pClient, const Market::OrderInfo& oInfo);
-    // is stationID within the trade range given by a market skill level (Marketing, Procurement, Daytrading)
-    //  client's jumpsPerSkillLevel = {0: station, 1: system, 2: 5j, 3: 10j, 4: 20j, 5: region}
-    //  @todo  levels 2-4 are approximated as 'same region' until a jump count helper exists (F04 MapData::GetJumpCount)
-    bool InTradeRange(Client* pClient, uint32 stationID, uint8 skillLevel);
+    // throws the client's MktCantSellItem2 / MktCantSellItemOutsideStation / MktInvalidRegion when stationID is out of the
+    //  range a market skill allows (Marketing, Procurement, Daytrading)
+    void CheckSkillRange(Client* pClient, uint32 stationID, uint16 skillTypeID);
+    // open order limit from Trade, Retail, Wholesale and Tycoon
+    void CheckOrderCount(Client* pClient);
+    // throws NotEnoughMoney / NotEnoughMoneyCorp
+    static void CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount);
     // order range values the client can send
     static bool ValidOrderRange(int32 range);
     static bool ValidOrderDuration(int32 duration);
