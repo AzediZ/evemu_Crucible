@@ -36,12 +36,21 @@ public:
     virtual ~AlertService();
 
 protected:
-    PyResult BeanCount(PyCallArgs &call, PyRep* ignored);
+    PyResult BeanCount(PyCallArgs &call, PyRep* stackIDHash);
+    PyResult BeanDelivery(PyCallArgs &call, PyDict* beans);
     PyResult BeanDelivery(PyCallArgs &call, PyList* beans);
-    PyResult GroupBeanDelivery(PyCallArgs &call, PyBuffer* compressedBeans);
-    PyResult SendClientStackTraceAlert(PyCallArgs &call, PyTuple* stackId, PyString* stackTrace, PyString* mode, PyRep* nextErrorKeyHash);
+    PyResult GroupBeanDelivery(PyCallArgs &call, PyRep* compressedBeans);
+    PyResult SendClientStackTraceAlert(PyCallArgs &call, PyTuple* stackId, PyRep* stackTrace, PyRep* mode, std::optional<PyRep*> nextErrorKeyHash);
 
     PyTraceLog* traceLogger;
+
+private:
+    // (errorID, 'B') for a known stack hash, (None, None) to ask the client for the trace
+    PyTuple* LogMode(uint32 errorID);
+
+    std::map<uint32, uint32> m_errorIDs;            // stack hash -> errorID
+    std::map<uint32, std::string> m_errorFirstLine; // errorID -> first line of the trace
+    uint32 m_nextErrorID;
 };
 
 #endif//_ALERT_SERVICE_H

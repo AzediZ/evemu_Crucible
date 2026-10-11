@@ -27,13 +27,16 @@
 
 #include "EVEServerConfig.h"
 #include "admin/AlertService.h"
+#include "Client.h"
 
 AlertService::AlertService() :
     Service("alert"),
-    traceLogger(nullptr)
+    traceLogger(nullptr),
+    m_nextErrorID(1)
 {
     this->Add("BeanCount", &AlertService::BeanCount);
-    this->Add("BeanDelivery", &AlertService::BeanDelivery);
+    this->Add("BeanDelivery", static_cast<PyResult (AlertService::*)(PyCallArgs &, PyDict*)>(&AlertService::BeanDelivery));
+    this->Add("BeanDelivery", static_cast<PyResult (AlertService::*)(PyCallArgs &, PyList*)>(&AlertService::BeanDelivery));
     this->Add("GroupBeanDelivery", &AlertService::GroupBeanDelivery);
     this->Add("SendClientStackTraceAlert", &AlertService::SendClientStackTraceAlert);
 
@@ -46,70 +49,122 @@ AlertService::~AlertService()
     SafeDelete(traceLogger);
 }
 
-/** Basically BeanCount means that a error has occurred in the client python code, and it asks
-  * the server how to handle it.
-  * @Note: in normal operations we should send back a unique mErrorID to the client, it saves it and sends the stack traces
-  *      to us through BeanDelivery every 15 minutes. When we are in developer mode we should send back PyNone asking the
-  *      to send us the stack trace immediately.
-  */
-PyResult AlertService::BeanCount(PyCallArgs &call, PyRep* ignored) {
-    _log(CLIENT__WARNING, "AlertService::Handle_BeanCount(): size=%lli", call.tuple->size());
-    //call.Dump(CLIENT__CALL_DUMP);
-
-    PyTuple *result = new PyTuple(2);
-
-    // what we are sending back is just a static mErrorID and the command not to do anything with it.
-    if (sConfig.debug.BeanCount or sConfig.debug.IsTestServer) {
-        result->items[0] = PyStatic.NewNone();
+PyTuple* AlertService::LogMode(uint32 errorID)
+{
+    PyTuple* result = new PyTuple(2);
+    if (errorID == 0) {
+        result->SetItem(0, PyStatic.NewNone());
+        result->SetItem(1, PyStatic.NewNone());
     } else {
-        result->items[0] = new PyInt(34135);    //ErrorID
+        result->SetItem(0, new PyInt(errorID));
+        result->SetItem(1, new PyString("B"));      // LOGGING_BATCHED:  later repeats only come back as counts
     }
-
-    result->items[1] = new PyInt(0);        //loggingMode, 0=local, 1=DB (Capt: This isn't correct at all as it seems..)
-
-    return (PyRep*)result;
+    return result;
 }
 
-/** The client "stacks" up the python "stack" traces and sends them every 15 minutes.
-  * @Note: this process is only useful when we supply the client with a valid mErrorID.
-  *      meaning that we should code a mErrorID tracker for it. To handle these.
+/** A python error occurred in the client, and it asks how to handle it (alert.py __SendStackTraceAlert).
+  *  returns (errorID, logMode).  errorID None asks the client to send the trace (SendClientStackTraceAlert);
+  *  a known error gets its errorID and 'B' (batched), so repeats are counted and sent with BeanDelivery.
+  *  each distinct error (stack hash) is therefore sent once per server run.
   */
-// note:  this is a rather complicated system....
-PyResult AlertService::BeanDelivery(PyCallArgs& call, PyList* beans)
+PyResult AlertService::BeanCount(PyCallArgs &call, PyRep* stackIDHash) {
+    uint32 hash = (uint32)PyRep::IntegerValue(stackIDHash);
+    std::map<uint32, uint32>::iterator itr = m_errorIDs.find(hash);
+    return LogMode(itr == m_errorIDs.end() ? 0 : itr->second);
+}
+
+/** The client counts repeats of known errors and sends them every BEAN_DELEVERY_TIME minutes:
+  *  {errorID: (count, lastFileTime)}
+  */
+PyResult AlertService::BeanDelivery(PyCallArgs& call, PyDict* beans)
 {
-    _log(CLIENT__WARNING, "AlertService::Handle_BeanDelivery(): size=%lli", call.tuple->size());
-    //call.Dump(CLIENT__CALL_DUMP);
-    /* Unhandled for now as we have no interest in receiving batched python stack traces
-     * nor official style debugging... Just gimme the info dude (see Handle_SendClientStackTraceAlert).
-     */
+    for (PyDict::const_iterator itr = beans->begin(); itr != beans->end(); ++itr) {
+        uint32 errorID = (uint32)PyRep::IntegerValue(itr->first);
+        uint32 count(0);
+        int64 lastTime(0);
+        if (itr->second->IsTuple()) {
+            PyTuple* tuple = itr->second->AsTuple();
+            if (tuple->size() > 0)
+                count = (uint32)PyRep::IntegerValue(tuple->GetItem(0));
+            if (tuple->size() > 1)
+                lastTime = PyRep::IntegerValue(tuple->GetItem(1));
+        } else {
+            count = (uint32)PyRep::IntegerValue(itr->second);
+        }
+        std::map<uint32, std::string>::iterator lItr = m_errorFirstLine.find(errorID);
+        _log(CLIENT__WARNING, "%s: error #%u repeated %u times (last %s): %s", call.client->GetName(), errorID, count,
+                (lastTime > 0 ? Win32TimeToString(lastTime).c_str() : "?"),
+                (lItr == m_errorFirstLine.end() ? "<unknown error>" : lItr->second.c_str()));
+    }
     return PyStatic.NewNone();
 }
 
-PyResult AlertService::GroupBeanDelivery(PyCallArgs& call, PyBuffer* compressedBeans)
+PyResult AlertService::BeanDelivery(PyCallArgs& call, PyList* beans)
 {
-    _log(CLIENT__WARNING, "AlertService::Handle_GroupBeanDelivery(): size=%u", call.tuple->size() );
-    //call.Dump(CLIENT__CALL_DUMP);
+    // not sent by the Crucible client.  kept in case an older form arrives
+    _log(CLIENT__WARNING, "%s: BeanDelivery with %lu entries (list form)", call.client->GetName(), beans->size());
+    return PyStatic.NewNone();
+}
 
+PyResult AlertService::GroupBeanDelivery(PyCallArgs& call, PyRep* compressedBeans)
+{
+    // zlib'd yaml of per-user details for 'D' (details) errors.  we only hand out 'B', so this is normally empty
+    size_t size(0);
+    if (compressedBeans->IsString())
+        size = compressedBeans->AsString()->content().size();
+    else if (compressedBeans->IsBuffer())
+        size = compressedBeans->AsBuffer()->size();
+    else if (compressedBeans->IsDict())
+        size = compressedBeans->AsDict()->size();
+    _log(CLIENT__TRACE, "%s: GroupBeanDelivery %lu bytes", call.client->GetName(), size);
     return PyStatic.NewNone();
 }
 
 /**
- * @brief The client sends us a python stack trace, from which we could make up what we did wrong.
+ * @brief The client sends us a python stack trace, after BeanCount returned no errorID for it.
  *
- * @param[in] call is the python packet that contains the info for this function
- *
- * @note I'm sending PyNone back, this is just a wild guess. I don't know its actually required.
- * function is part of a system that allows us to ask the client to send the trace directly,
- * and skip the BeanDelivery system.
- * @return guess it should have PyNone back.
+ *  stackId = (adler32 hash, text).  the return is stored as stacktraceLogMode[hash] and unpacked as (errorID, logMode)
  */
-PyResult AlertService::SendClientStackTraceAlert(PyCallArgs &call, PyTuple* stackId, PyString* stackTrace, PyString* mode, PyRep* nextErrorKeyHash) {
-    _log(CLIENT__WARNING, "AlertService::Handle_SendClientStackTraceAlert(): size=%lli", call.tuple->size());
-    //call.Dump(CLIENT__CALL_DUMP);
-    //  self.stacktraceLogMode[stackID[0]] = sm.ProxySvc('alert').SendClientStackTraceAlert(stackID, stackTrace, mode, nextErrorKeyHash)
+PyResult AlertService::SendClientStackTraceAlert(PyCallArgs &call, PyTuple* stackId, PyRep* stackTrace, PyRep* mode, std::optional<PyRep*> nextErrorKeyHash) {
+    uint32 hash(0);
+    std::string text;
+    if (stackId->size() > 0)
+        hash = (uint32)PyRep::IntegerValue(stackId->GetItem(0));
+    if (stackId->size() > 1)
+        text = PyRep::StringContent(stackId->GetItem(1));
+    if (text.empty())
+        text = PyRep::StringContent(stackTrace);
 
-  if (sConfig.debug.StackTrace or is_log_enabled(CLIENT__STACK_TRACE))
-    traceLogger->logTrace(*call.tuple);
+    uint32 errorID(0);
+    std::map<uint32, uint32>::iterator itr = m_errorIDs.find(hash);
+    if (itr == m_errorIDs.end()) {
+        errorID = m_nextErrorID++;
+        m_errorIDs[hash] = errorID;
 
-    return PyStatic.NewNone();
+        // first non-empty line identifies the error in the repeat logs
+        std::string line;
+        size_t pos(0);
+        while (pos < text.size()) {
+            size_t end = text.find('\n', pos);
+            if (end == std::string::npos)
+                end = text.size();
+            line = text.substr(pos, end - pos);
+            while (!line.empty() and ((line.back() == '\r') or (line.back() == ' ')))
+                line.pop_back();
+            if (!line.empty())
+                break;
+            pos = end + 1;
+        }
+        m_errorFirstLine[errorID] = line;
+    } else {
+        errorID = itr->second;
+    }
+
+    _log(CLIENT__ERROR, "Client %s(%u) python error #%u: %s", call.client->GetName(), call.client->GetCharacterID(),
+            errorID, m_errorFirstLine[errorID].c_str());
+
+    if (traceLogger != nullptr)
+        traceLogger->logTrace(*call.tuple);
+
+    return LogMode(errorID);
 }
