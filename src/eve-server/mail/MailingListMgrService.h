@@ -36,10 +36,8 @@ public:
     MailingListMgrService();
 
 protected:
-    MailDB m_db;
-
     PyResult GetJoinedLists(PyCallArgs& call);
-    PyResult Create(PyCallArgs& call, PyWString* name, PyInt* defaultAccess, PyInt* defaultMemberAccess, std::optional<PyInt*> mailCost);
+    PyResult Create(PyCallArgs& call, PyRep* name, PyInt* defaultAccess, PyInt* defaultMemberAccess, std::optional<PyInt*> mailCost);
     PyResult Join(PyCallArgs& call, PyRep* listName);
     PyResult Leave(PyCallArgs& call, PyInt* listID);
     PyResult Delete(PyCallArgs& call, PyInt* listID);
@@ -54,9 +52,22 @@ protected:
     PyResult GetInfo(PyCallArgs& call, PyInt* listID);
     PyResult GetSettings(PyCallArgs& call, PyInt* listID);
     PyResult GetWelcomeMail(PyCallArgs& call, PyInt* listID);
-    PyResult SaveWelcomeMail(PyCallArgs& call, PyInt* listID, PyWString* title, PyWString* body);
-    PyResult SendWelcomeMail(PyCallArgs& call, PyInt* listID, PyWString* title, PyWString* body);
+    PyResult SaveWelcomeMail(PyCallArgs& call, PyInt* listID, PyRep* title, PyRep* body);
+    PyResult SendWelcomeMail(PyCallArgs& call, PyInt* listID, PyRep* title, PyRep* body);
     PyResult ClearWelcomeMail(PyCallArgs& call, PyInt* listID);
+
+private:
+    // client util.GetKeyAndNormalize()
+    static void GetKeyAndName(const std::string& input, std::string& key, std::string& displayName);
+    static bool IsGM(Client* pClient);
+    // member role, GMs count as owner.  -1 = not a member
+    static int8 GetRole(Client* pClient, uint32 listID);
+    // throws unless the list exists and the caller is operator, owner or GM
+    static void RequireOperator(Client* pClient, uint32 listID);
+    // OnMailingList*(listID[, charID]) to the online ones of charIDs
+    static void Notify(const std::vector<uint32>& charIDs, const char* notifyType, uint32 listID, int32 charID = 0);
+    static void SetRoles(Client* pClient, uint32 listID, PyList* memberIDs, int8 role, const char* notifyType);
+    static void SendWelcome(uint32 listID, const std::string& title, const std::string& body, const std::vector<uint32>& toIDs);
 };
 
 #endif /* MAILING_LIST_MGR_SERVICE_H */

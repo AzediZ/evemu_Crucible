@@ -132,10 +132,11 @@ PyResult MailMgrService::SendMail(PyCallArgs &call, PyList* toCharacterIDs, PyRe
     }
 
     if (listID > 0) {
-        std::vector<uint32> members;
-        MailDB::GetListMemberIDs(listID, members);
-        if (std::find(members.begin(), members.end(), charID) == members.end())
+        int8 role = MailDB::GetMemberRole(listID, charID);
+        if (role < 0)
             throw UserError("EveMailCanOnlySendToOwnMailinglists");
+        if (role == mailingListMemberMuted)
+            throw CustomError("You are muted on this mailing list.");
     }
 
     if (toChars.empty() and (listID == 0) and (corpOrAllianceID == 0))

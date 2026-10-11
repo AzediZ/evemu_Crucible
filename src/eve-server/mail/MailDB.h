@@ -86,36 +86,41 @@ public:
     // also clears the label from the char's mail
     static void DeleteLabel(uint32 charID, uint32 labelID);
 
-    // Mailing list
-
-    PyDict *GetJoinedMailingLists(uint32 characterID);
-    uint32 CreateMailingList(uint32 creator, std::string name, int32 defaultAccess,
-                           int32 defaultMemberAccess, int32 cost); 
-
-    void JoinMailingList(uint32 characterID, std::string name);
-    void LeaveMailingList(uint32 characterID, int32 listID);
-    void DeleteMailingList(uint32 characterID, int32 listID);
-    // @TODO(groove): KickMembers Figure out converting PyList member info into something usable..
-    PyDict *GetMailingListMembers(int32 listID);
-    void MailingListSetEntityAccess(int32 entity, int32 access, int32 listID);
-    void MailingListClearEntityAccess(int32 entity, int32 listID);
-    // @TODO(groove): SetMailingListMembersMuted
-    // @TODO(groove): SetMailingListMembersOperator
-    // @TODO(groove): SetMailingListMembersClear
-    // @TODO(groove): SetMailingListDefaultAccesss
-    void SetMailingListDefaultAccess(int32 listID, int32 defaultAccess,
-                                     int32 defaultMemberAccess, int32 cost);
-    //              : Make generic method for this shit^^^
-    //
-    // @TODO(groove): MailingListGetInfo
-    PyObject *MailingListGetSettings(int32 listID);
-    // @TODO(groove): MailingListGetWelcomeMail
-    // @TODO(groove): MailingListSaveWelcomeMail
-    // @TODO(groove): MailingListSendWelcomeMail
-    // @TODO(groove): MailingListClearWelcomeMail
-                               
-    
-    
+    // Mailing lists (mailList, mailListUsers (role), mailListAccess (allowed/blocked owners))
+    struct MailListInfo {
+        uint32 id;
+        std::string name;           // lower case key, no whitespace
+        std::string displayName;
+        int8 defaultAccess;         // mailingListAllowed / mailingListBlocked
+        int8 defaultMemberAccess;   // mailingListMember* role for new members
+        uint32 cost;
+        bool hasWelcomeMail;
+        std::string welcomeTitle;
+        std::string welcomeBody;
+    };
+    // dict listID -> KeyVal(name, displayName, isMuted, isOperator, isOwner)
+    static PyDict* GetJoinedLists(uint32 charID);
+    // KeyVal(id, name, displayName, isMuted, isOperator, isOwner) of one list for one member
+    static PyObject* GetJoinedListInfo(uint32 listID, uint32 charID);
+    // returns listID, 0 on failure.  the owner is added as member
+    static uint32 CreateList(uint32 ownerID, const std::string& name, const std::string& displayName, int8 defaultAccess,
+                             int8 defaultMemberAccess, uint32 cost);
+    static uint32 GetListByName(const std::string& name);
+    static bool GetList(uint32 listID, MailListInfo& into);
+    // -1 = not a member
+    static int8 GetMemberRole(uint32 listID, uint32 charID);
+    static uint32 GetMemberCount(uint32 listID);
+    static void AddMember(uint32 listID, uint32 charID, int8 role);
+    static void RemoveMembers(uint32 listID, const std::vector<uint32>& charIDs);
+    static void SetMemberRoles(uint32 listID, const std::vector<uint32>& charIDs, int8 role);
+    static void GetMemberRoles(uint32 listID, std::map<uint32, int8>& into);
+    static void GetEntityAccess(uint32 listID, std::map<uint32, int8>& into);
+    static void SetEntityAccess(uint32 listID, uint32 ownerID, int8 access);
+    static void ClearEntityAccess(uint32 listID, uint32 ownerID);
+    static void SetListDefaults(uint32 listID, int8 defaultAccess, int8 defaultMemberAccess, uint32 cost);
+    // null title/body = clear
+    static void SetWelcomeMail(uint32 listID, const std::string* title, const std::string* body);
+    static void DeleteList(uint32 listID);
 
     // Notifications (chrNotifications)
     // returns notificationID, 0 on failure

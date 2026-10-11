@@ -428,194 +428,256 @@ int MailDB::BitFromLabelID(uint32 id)
     return 0;
 }
 
-PyDict *MailDB::GetJoinedMailingLists(uint32 characterID)
+/*
+ * Mailing lists
+ */
+namespace {
+std::string IDList(const std::vector<uint32>& ids)
 {
-    // @NOTE: May have to util.keyval this
-    DBQueryResult res;
+    std::ostringstream str;
+    for (auto cur : ids)
+        str << "," << cur;
+    return str.str();
+}
 
+PyObject* JoinedListInfo(const std::string& name, const std::string& displayName, int8 role)
+{
+    PyDict* dict = new PyDict();
+        dict->SetItemString("name", new PyWString(name));
+        dict->SetItemString("displayName", new PyWString(displayName));
+        dict->SetItemString("isMuted", new PyBool(role == mailingListMemberMuted));
+        dict->SetItemString("isOperator", new PyBool(role == mailingListMemberOperator));
+        dict->SetItemString("isOwner", new PyBool(role == mailingListMemberOwner));
+    return new PyObject("util.KeyVal", dict);
+}
+}
+
+PyDict* MailDB::GetJoinedLists(uint32 charID)
+{
+    // dict listID -> KeyVal(name, displayName, isMuted, isOperator, isOwner)
+    PyDict* ret = new PyDict();
+
+    DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-                " SELECT l.id, l.displayName, l.defaultAccess, l.defaultMemberAccess, l.cost,"
-                "   u.listID, u.characterID, u.role, u.access"
-                "  FROM mailListUsers AS u "
-                "   LEFT JOIN mailList AS l ON l.id = u.listID "
-                "   WHERE u.characterID = %u" , characterID))
+            "SELECT l.id, l.name, l.displayName, u.role"
+            " FROM mailListUsers AS u"
+            " JOIN mailList AS l ON l.id = u.listID"
+            " WHERE u.characterID = %u", charID))
     {
-        codelog(DATABASE__ERROR, " Failed to get joined mailing lists" );
-        return nullptr;
+        codelog(DATABASE__ERROR, "Failed to get joined mailing lists for %u: %s", charID, res.error.c_str());
+        return ret;
     }
 
     DBResultRow row;
-    PyDict *ret = new PyDict();
     while (res.GetRow(row))
-    {
-        PyDict *dict = new PyDict();
-
-        dict->SetItemString(" displayName" , new PyString(row.GetText(1)));
-
-        int32 role = row.GetInt(7);
-        switch (role)
-        {
-        case mailingListMemberMuted: {
-            dict->SetItemString(" isMuted" , new PyBool(true));
-            dict->SetItemString(" isOwner" , new PyBool(false));
-            dict->SetItemString(" isOperator" , new PyBool(false));
-        } break;
-        case mailingListMemberOperator: {
-            dict->SetItemString(" isMuted" , new PyBool(false));
-            dict->SetItemString(" isOwner" , new PyBool(false));
-            dict->SetItemString(" isOperator" , new PyBool(true));
-        } break;
-        case mailingListMemberOwner: {
-            dict->SetItemString(" isMuted" , new PyBool(false));
-            dict->SetItemString(" isOwner" , new PyBool(true));
-            dict->SetItemString(" isOperator" , new PyBool(false));
-        } break;
-        }
-
-        ret->SetItem(new PyInt(row.GetInt(0)), new PyObject(" util.KeyVal" , dict));
-    }
+        ret->SetItem(new PyInt(row.GetInt(0)), JoinedListInfo(row.GetText(1), row.GetText(2), row.GetInt(3)));
 
     return ret;
 }
 
-
-uint32 MailDB::CreateMailingList(uint32 creator, std::string name, int32 defaultAccess, int32 defaultMemberAccess, int32 cost)
+PyObject* MailDB::GetJoinedListInfo(uint32 listID, uint32 charID)
 {
-    DBerror err;
-    uint32 id = 0;
-    uint32& idr = id;
-
-    if (!sDatabase.RunQueryLID(err, idr,
-                            " INSERT INTO mailList "
-                            " (displayName, defaultAccess, defaultMemberAccess, cost) "
-                            " VALUES( '%s', %u, %u, %u) " , name.c_str(), defaultAccess,
-                               defaultMemberAccess, cost))
-    {
-        codelog(DATABASE__ERROR, " Failed to create mailing list" );
-        return -1;
-    }
-
-    if (!sDatabase.RunQuery(err,
-                            " INSERT INTO mailListUsers "
-                            " (listID, characterID, role, access) "
-                            " VALUES(%u, %u, %u, %u)" , id, creator, mailingListMemberOwner,
-                            mailingListAllowed))
-    {
-        codelog(DATABASE__ERROR, " Failed to insert owner of mailing list" );
-        return -1;
-    }
-
-    return id;
+    MailListInfo info;
+    if (!GetList(listID, info))
+        return nullptr;
+    PyObject* obj = JoinedListInfo(info.name, info.displayName, GetMemberRole(listID, charID));
+    obj->arguments()->AsDict()->SetItemString("id", new PyInt(listID));
+    return obj;
 }
 
-PyDict *MailDB::GetMailingListMembers(int32 listID)
+uint32 MailDB::CreateList(uint32 ownerID, const std::string& name, const std::string& displayName, int8 defaultAccess,
+                          int8 defaultMemberAccess, uint32 cost)
+{
+    std::string nameEsc, displayEsc;
+    sDatabase.DoEscapeString(nameEsc, name);
+    sDatabase.DoEscapeString(displayEsc, displayName);
+
+    DBerror err;
+    uint32 listID(0);
+    if (!sDatabase.RunQueryLID(err, listID,
+            "INSERT INTO mailList (name, displayName, defaultAccess, defaultMemberAccess, cost)"
+            " VALUES ('%s', '%s', %u, %u, %u)",
+            nameEsc.c_str(), displayEsc.c_str(), (uint8)defaultAccess, (uint8)defaultMemberAccess, cost))
+    {
+        codelog(DATABASE__ERROR, "Failed to create mailing list '%s': %s", name.c_str(), err.c_str());
+        return 0;
+    }
+
+    AddMember(listID, ownerID, mailingListMemberOwner);
+    return listID;
+}
+
+uint32 MailDB::GetListByName(const std::string& name)
+{
+    std::string nameEsc;
+    sDatabase.DoEscapeString(nameEsc, name);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT id FROM mailList WHERE name = '%s'", nameEsc.c_str()))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+bool MailDB::GetList(uint32 listID, MailListInfo& into)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        " SELECT listID, characterID, role, access FROM mailListUsers "
-                            " WHERE listID = %u" , listID))
+            "SELECT id, name, displayName, defaultAccess, defaultMemberAccess, cost, welcomeMailTitle, welcomeMailBody"
+            " FROM mailList WHERE id = %u", listID))
     {
-        codelog(DATABASE__ERROR, " Failed to get mailing list members" );
-        return nullptr;
+        codelog(DATABASE__ERROR, "Failed to get mailing list %u: %s", listID, res.error.c_str());
+        return false;
     }
-
     DBResultRow row;
-    PyDict *dict = new PyDict();
+    if (!res.GetRow(row))
+        return false;
 
-    while (res.GetRow(row))
-    {
-        dict->SetItem(new PyInt(row.GetInt(1)), new PyInt(row.GetInt(2)));
-    }
-    return dict;
+    into.id = row.GetUInt(0);
+    into.name = row.GetText(1);
+    into.displayName = row.GetText(2);
+    into.defaultAccess = row.GetInt(3);
+    into.defaultMemberAccess = row.GetInt(4);
+    into.cost = row.GetUInt(5);
+    into.hasWelcomeMail = !row.IsNull(6);
+    into.welcomeTitle = (row.IsNull(6) ? "" : row.GetText(6));
+    into.welcomeBody = (row.IsNull(7) ? "" : row.GetText(7));
+    return true;
 }
 
-
-PyObject *MailDB::MailingListGetSettings(int32 listID)
+int8 MailDB::GetMemberRole(uint32 listID, uint32 charID)
 {
-    PyDict *ret = new PyDict();
-
-    // TODO(groove): Make this a join if possible
-
     DBQueryResult res;
-
     if (!sDatabase.RunQuery(res,
-        " SELECT id, displayName, defaultAccess, defaultMemberAccess, cost FROM mailList "
-                            "  WHERE id = %u" , listID))
-    {
-        codelog(DATABASE__ERROR, " Failed to get mailing list settings" );
-        return nullptr;
-    }
+            "SELECT role FROM mailListUsers WHERE listID = %u AND characterID = %u", listID, charID))
+        return -1;
     DBResultRow row;
-
-    if (!res.GetRow(row)) {
-        codelog(DATABASE__ERROR, " mailList didn't give us a row" );
-        return nullptr;
-    }
-
-
-    ret->SetItemString(" defaultAccess" , new PyInt(row.GetInt(2)));
-    ret->SetItemString(" defaultMemberAccess" , new PyInt(row.GetInt(3)));
-
-    DBQueryResult res2;
-
-    if (!sDatabase.RunQuery(res,
-        " SELECT listID, characterID, role, access FROM mailListUsers "
-                            " WHERE listID = %u" , listID))
-    {
-        codelog(DATABASE__ERROR, " Failed to get mailing list settings" );
-        return nullptr;
-    }
-
-    PyDict *dict = new PyDict();
-
-    ret->SetItemString(" access" , dict);
-
-
-    while (res.GetRow(row)) {
-        dict->SetItem(new PyInt(row.GetInt(1)), new PyInt(row.GetInt(3)));
-    }
-
-    return new PyObject(" util.KeyVal" , ret);
+    if (!res.GetRow(row))
+        return -1;
+    return row.GetInt(0);
 }
 
+uint32 MailDB::GetMemberCount(uint32 listID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM mailListUsers WHERE listID = %u", listID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
 
-void MailDB::SetMailingListDefaultAccess(int32 listID, int32 defaultAccess, int32 defaultMemberAccess, int32 cost)
+void MailDB::AddMember(uint32 listID, uint32 charID, int8 role)
 {
     DBerror err;
-
     if (!sDatabase.RunQuery(err,
-                   " UPDATE mailList "
-                   " SET defaultAccess = %u, defaultMemberAccess = %u, cost = %u "
-                   " WHERE id = %u" , defaultAccess, defaultMemberAccess, cost, listID))
-    {
-        codelog(DATABASE__ERROR, " Failed to update mailing list defaults" );
+            "INSERT INTO mailListUsers (listID, characterID, role, access) VALUES (%u, %u, %i, %u)"
+            " ON DUPLICATE KEY UPDATE role = VALUES(role)",
+            listID, charID, role, mailingListAllowed))
+        codelog(DATABASE__ERROR, "Failed to add %u to mailing list %u: %s", charID, listID, err.c_str());
+}
+
+void MailDB::RemoveMembers(uint32 listID, const std::vector<uint32>& charIDs)
+{
+    if (charIDs.empty())
+        return;
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM mailListUsers WHERE listID = %u AND characterID IN (0%s)",
+            listID, IDList(charIDs).c_str()))
+        codelog(DATABASE__ERROR, "Failed to remove members of mailing list %u: %s", listID, err.c_str());
+}
+
+void MailDB::SetMemberRoles(uint32 listID, const std::vector<uint32>& charIDs, int8 role)
+{
+    if (charIDs.empty())
+        return;
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailListUsers SET role = %i WHERE listID = %u AND characterID IN (0%s)",
+            role, listID, IDList(charIDs).c_str()))
+        codelog(DATABASE__ERROR, "Failed to set member roles of mailing list %u: %s", listID, err.c_str());
+}
+
+void MailDB::GetMemberRoles(uint32 listID, std::map<uint32, int8>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT characterID, role FROM mailListUsers WHERE listID = %u", listID)) {
+        codelog(DATABASE__ERROR, "Failed to get members of mailing list %u: %s", listID, res.error.c_str());
         return;
     }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = row.GetInt(1);
 }
 
-void MailDB::DeleteMailingList(uint32 characterID, int32 listID)
+void MailDB::GetEntityAccess(uint32 listID, std::map<uint32, int8>& into)
 {
-    // not used yet.
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT ownerID, access FROM mailListAccess WHERE listID = %u", listID)) {
+        codelog(DATABASE__ERROR, "Failed to get access of mailing list %u: %s", listID, res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = row.GetInt(1);
 }
 
-void MailDB::JoinMailingList(uint32 characterID, std::string name)
+void MailDB::SetEntityAccess(uint32 listID, uint32 ownerID, int8 access)
 {
-    // not used yet.
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "REPLACE INTO mailListAccess (listID, ownerID, access) VALUES (%u, %u, %i)", listID, ownerID, access))
+        codelog(DATABASE__ERROR, "Failed to set access of mailing list %u: %s", listID, err.c_str());
 }
 
-void MailDB::LeaveMailingList(uint32 characterID, int32 listID)
+void MailDB::ClearEntityAccess(uint32 listID, uint32 ownerID)
 {
-    // not used yet.
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM mailListAccess WHERE listID = %u AND ownerID = %u", listID, ownerID))
+        codelog(DATABASE__ERROR, "Failed to clear access of mailing list %u: %s", listID, err.c_str());
 }
 
-void MailDB::MailingListClearEntityAccess(int32 entity, int32 listID)
+void MailDB::SetListDefaults(uint32 listID, int8 defaultAccess, int8 defaultMemberAccess, uint32 cost)
 {
-    // not used yet.
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailList SET defaultAccess = %u, defaultMemberAccess = %u, cost = %u WHERE id = %u",
+            (uint8)defaultAccess, (uint8)defaultMemberAccess, cost, listID))
+        codelog(DATABASE__ERROR, "Failed to update mailing list %u: %s", listID, err.c_str());
 }
 
-void MailDB::MailingListSetEntityAccess(int32 entity, int32 access, int32 listID)
+void MailDB::SetWelcomeMail(uint32 listID, const std::string* title, const std::string* body)
 {
-    // not used yet.
+    DBerror err;
+    if ((title == nullptr) or (body == nullptr)) {
+        if (!sDatabase.RunQuery(err,
+                "UPDATE mailList SET welcomeMailTitle = NULL, welcomeMailBody = NULL WHERE id = %u", listID))
+            codelog(DATABASE__ERROR, "Failed to clear welcome mail of mailing list %u: %s", listID, err.c_str());
+        return;
+    }
+
+    std::string titleEsc, bodyEsc;
+    sDatabase.DoEscapeString(titleEsc, *title);
+    sDatabase.DoEscapeString(bodyEsc, *body);
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailList SET welcomeMailTitle = '%s', welcomeMailBody = '%s' WHERE id = %u",
+            titleEsc.c_str(), bodyEsc.c_str(), listID))
+        codelog(DATABASE__ERROR, "Failed to save welcome mail of mailing list %u: %s", listID, err.c_str());
+}
+
+void MailDB::DeleteList(uint32 listID)
+{
+    // the mails sent to the list are kept
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM mailListAccess WHERE listID = %u", listID);
+    sDatabase.RunQuery(err, "DELETE FROM mailListUsers WHERE listID = %u", listID);
+    if (!sDatabase.RunQuery(err, "DELETE FROM mailList WHERE id = %u", listID))
+        codelog(DATABASE__ERROR, "Failed to delete mailing list %u: %s", listID, err.c_str());
 }
 
 /*
