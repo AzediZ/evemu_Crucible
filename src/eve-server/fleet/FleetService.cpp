@@ -996,6 +996,55 @@ PyRep* FleetService::GetFleetAdvert(uint32 fleetID)
     return fleetRSP.Encode();
 }
 
+bool FleetService::SetInviteScope(uint32 fleetID, uint8 scope, Client* pBoss)
+{
+    if (pBoss == nullptr)
+        return false;
+    if (scope == Fleet::Invite::Closed) {
+        RemoveFleetAdvert(fleetID);
+        return true;
+    }
+
+    FleetAdvert data = FleetAdvert();
+    std::map<uint32, FleetAdvert>::iterator itr = m_fleetAdvertMap.find(fleetID);
+    if (itr != m_fleetAdvertMap.end()) {
+        data = itr->second;
+    } else {
+        FleetData fData = FleetData();
+        GetFleetData(fleetID, fData);
+        data.fleetID = fleetID;
+        data.hideInfo = false;
+        data.joinNeedsApproval = false;
+        data.fleetName = std::string(pBoss->GetName()) + "'s fleet";
+        data.dateCreated = (fData.dateCreated > 0 ? fData.dateCreated : GetFileTimeNow());
+        data.local_minSecurity = -10;
+        data.local_minStanding = -10;
+        data.public_minSecurity = -10;
+        data.public_minStanding = -10;
+    }
+    data.inviteScope = scope;
+    data.leader = pBoss;
+    data.solarSystemID = pBoss->GetSystemID();
+    data.advertTime = GetFileTimeNow();
+
+    /* the client's register window lists the boss's corp, alliance and militia for the local scopes (fleetregister.py).
+     *  keep any other entities (standings-based lists) and set ours by the scope bits
+     */
+    std::vector<uint32>& local = data.local_allowedEntities;
+    uint32 ours[3] = { pBoss->GetCorporationID(), pBoss->GetAllianceID(), pBoss->GetWarFactionID() };
+    uint8 bits[3] = { Fleet::Invite::Corp, Fleet::Invite::Alliance, Fleet::Invite::Militia };
+    for (int i = 0; i < 3; ++i) {
+        if (ours[i] == 0)
+            continue;
+        local.erase(std::remove(local.begin(), local.end(), ours[i]), local.end());
+        if (scope & bits[i])
+            local.push_back(ours[i]);
+    }
+
+    CreateFleetAdvert(fleetID, data);
+    return true;
+}
+
 void FleetService::RemoveFleetAdvert(uint32 fleetID)
 {
     _log(FLEET__TRACE, "RemoveFleetAdvert for FleetID: %u", fleetID);

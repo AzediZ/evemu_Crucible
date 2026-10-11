@@ -43,11 +43,11 @@
  COMMAND( attrlist, Acct::Role::PROGRAMMER,
           " - show current attributes for itemID given in args." )
  COMMAND( warpto, Acct::Role::GMH,
-          " - warp to an object using its itemID." )
+          "(itemID|bookmarkID|x y z) [distance] - warp to it now, ignoring scramblers" )
  COMMAND( fleetboost, Acct::Role::PLAYER,
           " - note giving you detailed fleet boost information")
  COMMAND( fleetinvite, Acct::Role::PLAYER,
-          " - sets fleet invite scope to <arg> or none")
+          "(none|corp|alliance|public|all) - sets your fleet's Fleet Finder invite scope")
  COMMAND( getposition, Acct::Role::PLAYER,
           " - gets positional data between ship and moon (for pos placement testing)")
  COMMAND( bubbletrack, Acct::Role::PROGRAMMER,
@@ -63,7 +63,7 @@
  COMMAND( runtest, Acct::Role::PROGRAMMER,
           " - run testing::posTest()." )
  COMMAND( bindList, Acct::Role::PROGRAMMER,
-          " - list of current bound objects (with clients)." )
+          "[me|charID|all] - list of current bound objects (with client counts), or those a character holds." )
  COMMAND( dropLoot, Acct::Role::PROGRAMMER,
           " - commands all npcs in bubble to jettison loot." )
  // ---comandlist update; new commands

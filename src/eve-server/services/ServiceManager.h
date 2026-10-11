@@ -105,6 +105,11 @@ public:
      */
     const ServicesMap& GetServices() const;
 
+    /**
+     * @brief Gives access to the bound object list (debug listings)
+     */
+    const BoundServicesMap& GetBoundServices() const { return mBound; }
+
     /** @returns int The nodeID for the server */
     NodeID GetNodeID() { return this->mNodeId; }
 

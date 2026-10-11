@@ -29,6 +29,9 @@
 #include "admin/CommandHelper.h"
 #include "fleet/FleetService.h"
 #include "station/StationDataMgr.h"
+#include "inventory/Inventory.h"
+#include "pos/PosMgrDB.h"
+#include "pos/Tower.h"
 #include "pos/Structure.h"
 #include "tables/invGroups.h"
 #include "tables/invCategories.h"
@@ -1172,17 +1175,149 @@ PyResult Command_sov(Client* pClient, CommandDB* db, EVEServiceManager &services
     return new PyString("Completed.");
 }
 
+namespace {
+    /* /pos fuel [towerID] [hours]
+     *  fills a control tower's fuel bay (online fuel, purpose 1) and strontium bay (reinforce fuel, purpose 4) with what
+     *  invControlTowerResources lists for its type, so it works with either the pre- or post-fuel-block static data.
+     *  charter rows (minSecurityLevel/factionID) only apply where the system needs them.  consumption is not done here
+     */
+    PyResult PosFuel(Client* pClient, const Seperator& args) {
+        if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+            throw CustomError ("You must be in space.");
+
+        // the tower:  an itemID, or the nearest one in your bubble
+        StructureSE* pSE(nullptr);
+        size_t hoursIdx(2);
+        if ((args.argCount() > 2) and args.isNumber(2)
+        and (pClient->SystemMgr()->GetSE(atoi(args.arg(2).c_str())) != nullptr)) {
+            pSE = GetStructure(pClient, args, 2);
+            hoursIdx = 3;
+        } else if (pClient->GetShipSE()->SysBubble() != nullptr) {
+            std::map<uint32, SystemEntity*> entities;
+            pClient->GetShipSE()->SysBubble()->GetEntities(entities);
+            double best(-1);
+            for (auto cur : entities) {
+                if ((cur.second == nullptr) or !cur.second->IsTowerSE())
+                    continue;
+                double dist(pClient->GetShipSE()->GetPosition().distance(cur.second->GetPosition()));
+                if ((best < 0) or (dist < best)) {
+                    best = dist;
+                    pSE = cur.second->GetPOSSE();
+                }
+            }
+        }
+        if ((pSE == nullptr) or !pSE->IsTowerSE())
+            throw CustomError ("Correct Usage: /pos fuel [towerID] [hours]  (no control tower in your bubble)");
+        int64 wantHours(-1);
+        if (args.argCount() > hoursIdx) {
+            if (!args.isNumber(hoursIdx) or (atoi(args.arg(hoursIdx).c_str()) < 1))
+                throw CustomError ("Correct Usage: /pos fuel [towerID] [hours]");
+            wantHours = atoll(args.arg(hoursIdx).c_str());
+        }
+
+        InventoryItemRef tRef(pSE->GetSelf());
+        Inventory* pInv(tRef->GetMyInventory());
+        if (pInv == nullptr)
+            throw CustomError ("%s has no inventory", tRef->name());
+        if (!pInv->ContentsLoaded())
+            pInv->LoadContents();
+
+        SystemManager* pSystem(pSE->SystemMgr());
+        float security(pSystem->GetSystemSecurityRating());
+        SystemData sData = SystemData();
+        sDataMgr.GetSystemData(pSystem->GetID(), sData);
+        uint32 factionID(sData.factionID);
+        if (factionID == 0)
+            factionID = sDataMgr.GetRegionFaction(pSystem->GetRegionID());
+
+        // purpose 1 -> fuel bay (the tower's main inventory), purpose 4 -> strontium bay
+        std::map<uint16, uint32> need[2];
+        DBQueryResult res;
+        PosMgrDB pDB;
+        pDB.GetControlTowerFuelRequirements(res);
+        DBResultRow row;
+        while (res.GetRow(row)) {
+            if (row.GetUInt(0) != tRef->typeID())
+                continue;
+            if (!row.IsNull(4) and (security < row.GetDouble(4)))
+                continue;
+            if (!row.IsNull(5) and (row.GetUInt(5) != factionID))
+                continue;
+            // wormhole-only rows
+            if (!row.IsNull(6) and !IsWSpaceID(pSystem->GetID()))
+                continue;
+            uint8 purpose(row.GetUInt(2));
+            if ((purpose != 1) and (purpose != 4))
+                continue;
+            need[purpose == 1 ? 0 : 1][row.GetUInt(1)] += row.GetUInt(3);
+        }
+        if (need[0].empty() and need[1].empty())
+            throw CustomError ("No fuel requirements for %s (type %u)", tRef->name(), tRef->typeID());
+
+        const EVEItemFlags flags[2] = { flagNone, flagSecondaryStorage };
+        int64 added[2] = { 0, 0 };
+        std::string types;
+        for (int bay = 0; bay < 2; ++bay) {
+            if (need[bay].empty())
+                continue;
+            double perHour(0);
+            for (auto cur : need[bay]) {
+                const ItemType* pType(sItemFactory.GetType(cur.first));
+                if (pType != nullptr)
+                    perHour += cur.second * pType->volume();
+            }
+            int64 hours(0);
+            double space(pInv->GetRemainingCapacity(flags[bay]));
+            if (perHour > 0)
+                hours = static_cast<int64>(floor(space / perHour));
+            if ((wantHours > 0) and (wantHours < hours))
+                hours = wantHours;
+            if (hours < 1)
+                continue;
+            for (auto cur : need[bay]) {
+                int64 qty(cur.second * hours);
+                if (qty > 2147483647)
+                    qty = 2147483647;
+                InventoryItemRef existing(pInv->GetByTypeFlag(cur.first, flags[bay]));
+                if ((existing.get() != nullptr) and (existing->ownerID() == tRef->ownerID()) and !existing->isSingleton()) {
+                    existing->AlterQuantity(static_cast<int32>(qty), true);
+                } else {
+                    ItemData idata(cur.first, tRef->ownerID(), locTemp, flags[bay], static_cast<uint32>(qty));
+                    InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
+                    if (iRef.get() == nullptr)
+                        throw CustomError ("Unable to create fuel of type %u", cur.first);
+                    iRef->Move(tRef->itemID(), flags[bay], true);
+                }
+                if (bay == 0) {
+                    const ItemType* pType(sItemFactory.GetType(cur.first));
+                    if (!types.empty())
+                        types += ", ";
+                    types += (pType != nullptr ? pType->name() : std::to_string(cur.first));
+                }
+            }
+            added[bay] = hours;
+        }
+
+        char reply[512];
+        snprintf(reply, sizeof(reply), "%s: added %lli hours of fuel (%s) and %lli hours of strontium.", tRef->name(),
+                 added[0], (types.empty() ? "none" : types.c_str()), added[1]);
+        return new PyString(reply);
+    }
+}
+
 PyResult Command_pos(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
     /*
      * ' /pos online ' + str(itemID)
      * ' /pos unanchor ' + str(itemID)
      * ' /pos anchor ' + str(itemID)
      * ' /pos offline ' + str(itemID)
-     * ' /pos fuel [itemID]
+     * ' /pos fuel [itemID] [hours]
      *  these skip the anchoring/onlining delays
      */
+    if ((args.argCount() > 1) and (strcasecmp(args.arg(1).c_str(), "fuel") == 0))
+        return PosFuel(pClient, args);
     if (args.argCount() < 3)
-        throw CustomError ("Correct Usage: /pos (online|offline|anchor|unanchor) (itemID)");
+        throw CustomError ("Correct Usage: /pos (online|offline|anchor|unanchor) (itemID) | /pos fuel [towerID] [hours]");
     std::string cmd(args.arg(1));
     StructureSE* pSE(GetStructure(pClient, args, 2));
 

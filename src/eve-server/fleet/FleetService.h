@@ -42,6 +42,8 @@ public:
     PyRep* GetFleetAdvert(uint32 fleetID);
     void CreateFleetAdvert(uint32 fleetID, FleetAdvert data);
     void RemoveFleetAdvert(uint32 fleetID);
+    // sets the Fleet Finder invite scope (Fleet::Invite bits).  0 removes the advert; otherwise the advert is updated, or made with defaults
+    bool SetInviteScope(uint32 fleetID, uint8 scope, Client* pBoss);
 
     void GetWingIDs(uint32 fleetID, std::vector< uint32 >& wingIDs);
     void GetSquadIDs(uint32 wingID, std::vector< uint32 >& squadIDs);

@@ -63,6 +63,8 @@ public:
      * @returns Whether the bound object was destroyed or someone still has a reference to it
      */
     virtual bool Release (Client* client) = 0;
+    /** @returns The number of clients that hold a reference to this bound object */
+    virtual size_t GetClientCount() const = 0;
 protected:
     /**
      * @brief Check performed before dispatching a call to this bound service
@@ -302,6 +304,8 @@ public:
     EVEServiceManager& GetServiceManager() const { return this->mManager; }
     /** @returns The list of clients that requested access to this service */
     const std::map <Client*, bool>& GetBoundClients () const { return this->mClients; }
+    /** @returns The number of clients that requested access to this service */
+    size_t GetClientCount() const override { return this->mClients.size(); }
 private:
     /** @var The service manager this bound service is registered in */
     EVEServiceManager& mManager;

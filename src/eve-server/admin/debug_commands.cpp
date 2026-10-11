@@ -30,6 +30,11 @@
 #include "admin/CommandDispatcher.h" // ---commandlist update
 #include "EVE_Roles.h" // ---commandlist update
 #include "market/MarketBotMgr.h" // ---marketbot update
+#include "admin/CommandHelper.h"
+#include "services/ServiceManager.h"
+#include "system/BookmarkService.h"
+
+#include <typeinfo>
 
 // ---comandlist update; helper function to convert role strings into names
 struct RoleDisplayInfo {
@@ -874,43 +879,106 @@ PyResult Command_bubbletrack(Client* pClient, CommandDB* db, EVEServiceManager &
     return new PyString(reply);
 }
 
+/* /warpto (itemID|bookmarkID|x y z) [distance]
+ *  warps now, to anything in space in your system, a bookmark in it, or a point.  a GM tool:  it ignores warp scramblers.
+ *  the warp drive still reports a destination that's too close, or too little capacitor, itself
+ */
 PyResult Command_warpto(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
+    const char* usage("Correct Usage: /warpto (itemID|bookmarkID|x y z) [distance]");
     if (!pClient->IsInSpace())
         throw CustomError ("You're not in space.");
     if (!pClient->GetShipSE()->SysBubble())
         pClient->EnterSystem(pClient->GetSystemID());
     if (!pClient->GetShipSE()->DestinyMgr())
         pClient->SetDestiny(NULL_ORIGIN);
+    if (args.argCount() < 2)
+        throw CustomError (usage);
 
-    /** @todo  finish this.... */
-    pClient->GetShipSE()->DestinyMgr()->Halt();
+    DestinyManager* pDestiny(pClient->GetShipSE()->DestinyMgr());
+    if (pDestiny->IsWarping())
+        throw CustomError ("You are already warping.");
+    if (pDestiny->IsFrozen())
+        throw CustomError ("Your ship is frozen and cannot move.");
+    if (pDestiny->AbortIfLoginWarping(true))
+        return nullptr;
 
-    char reply[55];
-    snprintf(reply, 55, "Command Unavailible.\nShip Halted.");
+    SystemManager* pSystem(pClient->SystemMgr());
+    GPoint warpToPoint(NULL_ORIGIN);
+    SystemEntity* pSE(nullptr);
+    std::string name;
+    size_t distIdx(2);
 
-    pClient->SendInfoModalMsg(reply);
-    return new PyString(reply);
-}
+    // three coordinates, or an ID
+    auto isCoord = [&](size_t i) {
+        if (args.argCount() <= i)
+            return false;
+        char* end(nullptr);
+        strtod(args.arg(i).c_str(), &end);
+        return (!args.arg(i).empty() and (*end == '\0'));
+    };
+    if (isCoord(1) and isCoord(2) and isCoord(3)) {
+        warpToPoint = GPoint(strtod(args.arg(1).c_str(), nullptr), strtod(args.arg(2).c_str(), nullptr), strtod(args.arg(3).c_str(), nullptr));
+        name = "the point";
+        distIdx = 4;
+    } else if (args.isNumber(1)) {
+        uint32 id(strtoul(args.arg(1).c_str(), nullptr, 10));
+        if (id >= minBookmark) {
+            uint32 itemID(0), locationID(0);
+            uint16 typeID(0);
+            double x(0.0), y(0.0), z(0.0);
+            BookmarkService* pBM(services.Lookup <BookmarkService>("bookmark"));
+            if ((pBM == nullptr) or !pBM->LookupBookmark(id, itemID, typeID, locationID, x, y, z))
+                throw CustomError ("Bookmark %u not found.", id);
+            if (typeID == 5) {
+                // a coordinate bookmark
+                if (locationID != pClient->GetSystemID())
+                    throw CustomError ("Bookmark %u is in another system.", id);
+                warpToPoint = GPoint(x, y, z);
+                name = "bookmark " + std::to_string(id);
+            } else {
+                pSE = pSystem->GetSE(itemID);
+                if (pSE == nullptr)
+                    throw CustomError ("Bookmark %u is for %u, which is not in your system.", id, itemID);
+            }
+        } else {
+            pSE = pSystem->GetSE(id);
+            if (pSE == nullptr)
+                throw CustomError ("%u is not in space in your system.", id);
+        }
+    } else {
+        throw CustomError (usage);
+    }
 
+    if (pSE != nullptr) {
+        if (pSE == pClient->GetShipSE())
+            throw CustomError ("You can't warp to yourself.");
+        // land at the edge of the object, on the side facing us
+        name = pSE->GetName();
+        warpToPoint = pSE->GetPosition();
+        GVector toShip(warpToPoint, pClient->GetShipSE()->GetPosition());
+        if (!toShip.isZero()) {
+            toShip.normalize();
+            warpToPoint += (toShip * pSE->GetRadius());
+        }
+    }
 
-PyResult Command_entityspawn(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
-{
-    if (!pClient->IsInSpace())
-        throw CustomError ("You're not in space.");
-    if (!pClient->GetShipSE()->SysBubble())
-        pClient->EnterSystem(pClient->GetSystemID());
-    if (!pClient->GetShipSE()->DestinyMgr())
-        pClient->SetDestiny(NULL_ORIGIN);
+    double distance(0);
+    if ((args.argCount() > distIdx) and !cmd_parse_distance(args.arg(distIdx), distance))
+        throw CustomError (usage);
+    if ((distance < 0) or (distance > 2147483647))
+        throw CustomError ("Distance must be between 0 and 2147483647m");
 
-//sm.RemoteSvc('slash').SlashCmd('/entityspawn {0} {1} {2} 0 {3}'.format(recipeID, typeID, x, y))
-    /** @todo  finish this.... */
-    pClient->GetShipSE()->DestinyMgr()->Halt();
+    pClient->SetInvul(false);
+    pClient->SetUndock(false);
+    pDestiny->WarpTo(warpToPoint, static_cast<int32>(distance + (pClient->GetShipSE()->GetRadius() * 2)), false, pSE);
 
-    char reply[55];
-    snprintf(reply, 55, "Command Unfinished.\nShip Halted.");
-
-    pClient->SendInfoModalMsg(reply);
+    char reply[128];
+    if (distance >= 1000) {
+        snprintf(reply, sizeof(reply), "Warping to %s at %.0fkm.", name.c_str(), distance / 1000);
+    } else {
+        snprintf(reply, sizeof(reply), "Warping to %s at %.0fm.", name.c_str(), distance);
+    }
     return new PyString(reply);
 }
 
@@ -943,19 +1011,67 @@ PyResult Command_fleetboost(Client* pClient, CommandDB* db, EVEServiceManager &s
 
 PyResult Command_fleetinvite(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
+    /* /fleetinvite (none|corp|alliance|militia|public|all|<bits>)[,...]
+     *  sets the Fleet Finder invite scope of your fleet (the client's fleetcommon INVITE_* bits).  none removes the advert
+     */
+    const char* usage("Correct Usage: /fleetinvite (none|corp|alliance|militia|public|all|0-15)  several words can be joined with commas");
     if (!pClient->InFleet())
         throw CustomError ("You're not in a fleet.");
     if (!pClient->IsFleetBoss())
         throw CustomError ("You're not fleet boss.");
+    if (args.argCount() < 2)
+        throw CustomError (usage);
 
-    if (args.isNumber(1))
-        throw PyException(CustomError("Argument 1 should be one of 'None', 'Corp', 'Alliance', 'Faction', or 'All'"));
+    uint8 scope(0);
+    if (args.isNumber(1)) {
+        int value(atoi(args.arg(1).c_str()));
+        if ((value < Fleet::Invite::Closed) or (value > Fleet::Invite::Any))
+            throw CustomError (usage);
+        scope = value;
+    } else {
+        std::string list(args.arg(1));
+        size_t start(0);
+        while (start <= list.size()) {
+            size_t comma(list.find(',', start));
+            std::string word(list.substr(start, (comma == std::string::npos ? std::string::npos : comma - start)));
+            if (strcasecmp(word.c_str(), "none") == 0) {
+                // nothing to add
+            } else if (strcasecmp(word.c_str(), "corp") == 0) {
+                scope |= Fleet::Invite::Corp;
+            } else if (strcasecmp(word.c_str(), "alliance") == 0) {
+                scope |= Fleet::Invite::Alliance;
+            } else if ((strcasecmp(word.c_str(), "militia") == 0) or (strcasecmp(word.c_str(), "faction") == 0)) {
+                scope |= Fleet::Invite::Militia;
+            } else if (strcasecmp(word.c_str(), "public") == 0) {
+                scope |= Fleet::Invite::Public;
+            } else if (strcasecmp(word.c_str(), "all") == 0) {
+                scope |= Fleet::Invite::Any;
+            } else {
+                throw CustomError (usage);
+            }
+            if (comma == std::string::npos)
+                break;
+            start = comma + 1;
+        }
+    }
 
-    char reply[55];
-    snprintf(reply, 55, "Command Unfinished.");
+    sFltSvc.SetInviteScope(pClient->GetFleetID(), scope, pClient);
 
-    pClient->SendInfoModalMsg(reply);
-    return new PyString(reply);
+    std::string words;
+    if (scope & Fleet::Invite::Corp)
+        words += "corp, ";
+    if (scope & Fleet::Invite::Alliance)
+        words += "alliance, ";
+    if (scope & Fleet::Invite::Militia)
+        words += "militia, ";
+    if (scope & Fleet::Invite::Public)
+        words += "public, ";
+    if (words.empty()) {
+        words = "closed (advert removed)";
+    } else {
+        words.resize(words.size() - 2);
+    }
+    return new PyString("Fleet invite scope: " + words + ".");
 }
 
 PyResult Command_getposition(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
@@ -1236,31 +1352,44 @@ PyResult Command_runtest(Client* pClient, CommandDB* db, EVEServiceManager &serv
 
 PyResult Command_bindList(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    // TODO: properly implement this
-    /*
-    std::ostringstream str;
-    str.clear();
-    str << "Current Bound Object Listing (%u)<br><br>"; //45
-
-
-    std::vector<PyServiceMgr::BoundObj> vec;
-    pClient->services().BoundObjectVec(vec);
-    for (auto cur : vec) {
-        str << cur.client->GetName() << ": " << cur.object->bindID() << " ";    //40
-        str << cur.object->GetName() << "<br>";         //60
+    // /bindList [me|charID|all]   lists bound objects:  every one, or those a character holds
+    Client* pTarget(nullptr);
+    if ((args.argCount() > 1) and (args.arg(1) != "all")) {
+        pTarget = cmd_find_client(args, 1, pClient);
+        if (pTarget == nullptr)
+            throw CustomError ("Character %s is not online", args.arg(1).c_str());
     }
 
-    int count = vec.size();
-    int size = count * 100;
-    size += 45;
-    char* reply = Memory::Allocator::NewArray<char>(&sAllocators.tickAllocator, size);
-    snprintf(reply, size, str.str().c_str(), count);
+    const EVEServiceManager::BoundServicesMap& bound(services.GetBoundServices());
+    std::ostringstream str;
+    uint32 count(0);
+    auto list = [&](BoundID id, BoundDispatcher* pObj) {
+        std::string type(typeid(*pObj).name());
+        if (type.compare(0, 6, "class ") == 0)
+            type = type.substr(6);
+        str << id << ": " << pObj->GetIDString() << " " << type << " (" << pObj->GetClientCount() << " clients)<br>";
+        ++count;
+    };
+    if (pTarget == nullptr) {
+        for (auto cur : bound)
+            if (cur.second != nullptr)
+                list(cur.first, cur.second);
+    } else {
+        for (auto id : pTarget->GetBindIDs()) {
+            auto itr = bound.find(id);
+            if ((itr != bound.end()) and (itr->second != nullptr)) {
+                list(itr->first, itr->second);
+            } else {
+                str << id << ": (released)<br>";
+            }
+        }
+    }
 
-    pClient->SendInfoModalMsg(reply);
-
-    return nullptr;
-    */
-    throw CustomError("Not supported with new ServiceManager yet");
+    std::string header("Bound objects" + (pTarget == nullptr ? std::string() : std::string(" of ") + pTarget->GetName())
+                       + " (" + std::to_string(count) + ")<br><br>");
+    std::string reply(header + str.str());
+    pClient->SendInfoModalMsg("%s", reply.c_str());
+    return new PyString(header);
 }
 
 PyResult Command_dropLoot(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)

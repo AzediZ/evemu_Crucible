@@ -459,6 +459,7 @@ public:
     void CreateChar(bool set)                           { m_charCreation = set; }
 
     void AddBindID(uint32 bindID)                       { m_bindSet.emplace(bindID); }
+    const std::set<uint32>& GetBindIDs() const          { return m_bindSet; }
 
 private:
     bool m_canThrow;

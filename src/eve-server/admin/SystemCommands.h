@@ -39,6 +39,6 @@ COMMAND( cloak, Acct::Role::VIP,
 COMMAND( sov, Acct::Role::CONTENT,
          "complete (itemID) - finishes the sov structure's current anchoring/onlining now")
 COMMAND( pos, Acct::Role::PROGRAMMER,
-         "(online|offline|anchor|unanchor) (itemID) - changes a structure's state immediately")
+         "(online|offline|anchor|unanchor) (itemID) | fuel [towerID] [hours] - changes a structure's state immediately, or fills a control tower's fuel and strontium bays")
 COMMAND( hop, Acct::Role::CONTENT,
          "(distance)[m|km|au] - moves your ship that far along its heading")
