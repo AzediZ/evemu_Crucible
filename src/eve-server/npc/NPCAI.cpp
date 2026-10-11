@@ -1309,7 +1309,7 @@ void NPCAIMgr::SetPrimary(SystemEntity* pSE)
 
 void NPCAIMgr::AlertGroup(SystemEntity* pAggressor)
 {
-    if (!sConfig.npc.GroupAggro or (pAggressor == nullptr) or m_npc->IsLawEnforcer())
+    if (!sConfig.npc.GroupAggro or (pAggressor == nullptr) or m_npc->IsLawEnforcer() or (m_npc->SysBubble() == nullptr))
         return;
     double range(m_assistRange > m_sightRange ? m_assistRange : m_sightRange);
     std::map<uint32, SystemEntity*> entities;

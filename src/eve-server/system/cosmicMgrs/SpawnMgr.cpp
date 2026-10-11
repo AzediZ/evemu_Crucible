@@ -188,6 +188,9 @@ bool SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& wher
         NPC* rNPC(m_system->GetNPCSE(itr->second.itemID));
         if ((rNPC == nullptr) or rNPC->IsDead() or (rNPC->DestinyMgr() == nullptr))
             continue;
+        // the group stays while any of it is busy (fighting, already warping) or pointed
+        if (!rNPC->GetAIMgr()->IsIdle() or rNPC->IsWarpScrambled())
+            return false;
         entries.push_back(itr->second);
         npcs.push_back(rNPC);
     }
