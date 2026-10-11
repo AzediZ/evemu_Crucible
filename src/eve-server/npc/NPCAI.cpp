@@ -148,39 +148,37 @@ NPCAIMgr::NPCAIMgr(NPC* who)
         }
     }
 
-    /** @todo change these next 2 (rep and boost) to boolean to avoid timer creation/checks */
-
-    // this is chance an npc has of delaying it's rep (if applicable)
-    if (m_self->HasAttribute(AttrEntityArmorRepairDelayChance)) {
-        m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChance).get_float();
-    } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceSmall)) {
-        m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceSmall).get_float();
-    } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceMedium)) {
-        m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceMedium).get_float();
-    } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceLarge)) {
-        m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceLarge).get_float();
-    } else {
-        m_armorRepairDuration = 0;
-        m_armorRepairDelayChance = 0;
-    }
-    if (m_armorRepairDelayChance)
+    /* self repair.  an npc reps when its type has a repair amount.  the delay chance is rolled every cycle:
+     *  on success that cycle is skipped.  the timers start when we take damage and stop once we're whole again */
+    m_armorRepairDuration = 0;
+    m_armorRepairDelayChance = 0;
+    if (m_self->GetAttribute(AttrEntityArmorRepairAmount).get_float() > 0) {
         m_armorRepairDuration = m_self->GetAttribute(AttrEntityArmorRepairDuration).get_uint32();
-
-    // this is chance an npc has of delaying it's sebo (if applicable)
-    if (m_self->HasAttribute(AttrEntityShieldBoostDelayChance)) {
-        m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChance).get_float();
-    } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceSmall)) {
-        m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceSmall).get_float();
-    } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceMedium)) {
-        m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceMedium).get_float();
-    } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceLarge)) {
-        m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceLarge).get_float();
-    } else {
-        m_shieldBoosterDuration = 0;
-        m_shieldBoosterDelayChance = 0;
+        if (m_self->HasAttribute(AttrEntityArmorRepairDelayChance)) {
+            m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChance).get_float();
+        } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceSmall)) {
+            m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceSmall).get_float();
+        } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceMedium)) {
+            m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceMedium).get_float();
+        } else if (m_self->HasAttribute(AttrEntityArmorRepairDelayChanceLarge)) {
+            m_armorRepairDelayChance = m_self->GetAttribute(AttrEntityArmorRepairDelayChanceLarge).get_float();
+        }
     }
-    if (m_shieldBoosterDelayChance)
+
+    m_shieldBoosterDuration = 0;
+    m_shieldBoosterDelayChance = 0;
+    if (m_self->GetAttribute(AttrEntityShieldBoostAmount).get_float() > 0) {
         m_shieldBoosterDuration = m_self->GetAttribute(AttrEntityShieldBoostDuration).get_uint32();
+        if (m_self->HasAttribute(AttrEntityShieldBoostDelayChance)) {
+            m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChance).get_float();
+        } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceSmall)) {
+            m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceSmall).get_float();
+        } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceMedium)) {
+            m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceMedium).get_float();
+        } else if (m_self->HasAttribute(AttrEntityShieldBoostDelayChanceLarge)) {
+            m_shieldBoosterDelayChance = m_self->GetAttribute(AttrEntityShieldBoostDelayChanceLarge).get_float();
+        }
+    }
 
     // advanced AI variables  only used by sleepers for now (and on live).  will update advanced npcs to use these also
     if (m_self->HasAttribute(AttrAI_ShouldUseTargetSwitching)) {
@@ -367,13 +365,28 @@ void NPCAIMgr::Process() {
         } break;
     }
 
-    if (m_shieldBoosterTimer.Enabled())
-        if (m_shieldBoosterTimer.Check())
+    ProcessRepairs();
+}
+
+void NPCAIMgr::ProcessRepairs()
+{
+    // each cycle may be skipped on the type's delay chance
+    if (m_shieldBoosterTimer.Check())
+        if (MakeRandomFloat() >= m_shieldBoosterDelayChance)
             m_npc->UseShieldRecharge();
 
-    if (m_armorRepairTimer.Enabled())
-        if (m_armorRepairTimer.Check())
+    if (m_armorRepairTimer.Check())
+        if (MakeRandomFloat() >= m_armorRepairDelayChance)
             m_npc->UseArmorRepairer();
+}
+
+void NPCAIMgr::OnDamaged(SystemEntity* pSE, float amount)
+{
+    // self repair starts on damage (not on being locked) and runs until we're whole again
+    if ((m_shieldBoosterDuration > 0) and !m_shieldBoosterTimer.Enabled())
+        m_shieldBoosterTimer.Start(m_shieldBoosterDuration);
+    if ((m_armorRepairDuration > 0) and !m_armorRepairTimer.Enabled())
+        m_armorRepairTimer.Start(m_armorRepairDuration);
 }
 
 bool NPCAIMgr::IsFighting() {
@@ -462,13 +475,12 @@ void NPCAIMgr::SetIdle() {
     m_destiny->Stop();
     m_destiny->SetMaxVelocity(m_orbitSpeed);
 
+    // repair timers keep running until we're whole (they stop themselves)
     m_missileTimer.Disable();
     m_webifierTimer.Disable();
     m_beginFindTarget.Disable();
     m_mainAttackTimer.Disable();
-    m_armorRepairTimer.Disable();
     m_warpScramblerTimer.Disable();
-    m_shieldBoosterTimer.Disable();
 
     SystemBubble* pBubble = m_npc->SysBubble();
     //disallow warpout if anomaly, incursion or mission rat
@@ -662,12 +674,6 @@ void NPCAIMgr::Targeted(SystemEntity* pSE) {
         case NPCAI::State::Signaling: {
         } break;
     }
-    if (!m_shieldBoosterTimer.Enabled())
-        if (MakeRandomFloat() > m_shieldBoosterDelayChance)
-            m_shieldBoosterTimer.Start(m_shieldBoosterDuration);
-    if (!m_armorRepairTimer.Enabled())
-        if (MakeRandomFloat() > m_armorRepairDelayChance)
-            m_armorRepairTimer.Start(m_armorRepairDuration);
 }
 
 void NPCAIMgr::TargetLost(SystemEntity* pSE) {

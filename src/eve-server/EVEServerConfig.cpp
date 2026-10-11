@@ -154,8 +154,13 @@ EVEServerConfig::EVEServerConfig()
     // npc
     npc.IdleWander = false;
     npc.WarpOut = 600 /*s*/;
-    npc.WarpFollowChance = 0.15;
+    npc.WarpFollowChance = 0.0; // Crucible rats never followed a ship through warp
     npc.ThreatRadius = 1.0;     // npcs only switch to targets within ThreatRadius x maxTargetRange  (F06)
+    npc.UseEwar = true;
+    npc.GroupAggro = true;
+    npc.DroneAggroChance = 0.10;
+    npc.LeashRange = 200000 /*m*/;
+    npc.TargetSwitchTime = 15 /*s*/;
     npc.RoamingSpawns = false;
     npc.StaticSpawns = false;
     npc.RoamingTimer = 900 /*s*/;
@@ -611,6 +616,11 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "UseDamageMultiplier",      npc.UseDamageMultiplier );
     AddValueParser( "LootDropChance",           npc.LootDropChance );
     AddValueParser( "DefenderMissileChance",    npc.DefenderMissileChance );
+    AddValueParser( "UseEwar",                  npc.UseEwar );
+    AddValueParser( "GroupAggro",               npc.GroupAggro );
+    AddValueParser( "DroneAggroChance",         npc.DroneAggroChance );
+    AddValueParser( "LeashRange",               npc.LeashRange );
+    AddValueParser( "TargetSwitchTime",         npc.TargetSwitchTime );
 
     const bool result = ParseElementChildren( ele );
 
@@ -629,6 +639,11 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "UseDamageMultiplier" );
     RemoveParser( "LootDropChance" );
     RemoveParser( "DefenderMissileChance" );
+    RemoveParser( "UseEwar" );
+    RemoveParser( "GroupAggro" );
+    RemoveParser( "DroneAggroChance" );
+    RemoveParser( "LeashRange" );
+    RemoveParser( "TargetSwitchTime" );
 
     return result;
 }

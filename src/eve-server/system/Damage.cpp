@@ -397,6 +397,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         }
 
         SendDamageStateChanged();
+
+        // npcs start repairing, build threat and answer the attack
+        if (IsNPCSE())
+            GetNPCSE()->GetAIMgr()->OnDamaged(d.srcSE, total_damage);
     }
 
     if (sConfig.debug.UseProfiling)

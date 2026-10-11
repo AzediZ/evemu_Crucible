@@ -167,11 +167,16 @@ boolean can use either 0/1 OR true/false.
         <RatFaction>0</RatFaction><!-- force spawn to this faction if !=0 -->
         <LootDropChance>0.85</LootDropChance><!-- % chance for NPC to drop loot.  75% default -->
         <UseDamageMultiplier>true</UseDamageMultiplier><!-- bool  - use the damage multiplier in npc data -->
-        <!-- WarpFollowChance is not implemented yet -->
-        <WarpFollowChance>0.15</WarpFollowChance><!-- chance for npc to follow warping player (15% default) -->
+        <!-- chance for a belt/gate npc to follow its target when that ship warps off.  Crucible rats never did (0.0 default).  >0 enables -->
+        <WarpFollowChance>0.0</WarpFollowChance>
         <TargetPod>false</TargetPod><!-- bool   npc target/attack pod -->
         <TargetPodSec>0</TargetPodSec><!-- npc target/attack pod in truSec lower than this  -->
         <ThreatRadius>1.0</ThreatRadius> <!-- multiplier on an npc's targeting range when it re-evaluates targets.  npcs only switch to targets within ThreatRadius x maxTargetRange -->
+        <UseEwar>true</UseEwar><!-- bool  npcs and non-law sentries use their type's ewar on players (scram, web, jam, damp, tracking disruption, paint, neut).  Crucible default -->
+        <GroupAggro>true</GroupAggro><!-- bool  attacking one npc aggros the rest of its spawn group in the bubble -->
+        <DroneAggroChance>0.10</DroneAggroChance><!-- chance (checked every 30s) that a regular rat switches to a drone that damaged it.  sleepers use threat instead -->
+        <LeashRange>200000</LeashRange><!-- m.  sleepers and deadspace/mission npcs pulled further than this from where they spawned give up and return.  0 = off -->
+        <TargetSwitchTime>15</TargetSwitchTime><!-- s.  how often sleepers re-evaluate their primary target (when the type has no switch timer of its own) -->
     </npc>
 
     <standings><!-- these are in percent. do not modify.  not fully debugged -->

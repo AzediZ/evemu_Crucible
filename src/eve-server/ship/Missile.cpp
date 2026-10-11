@@ -243,7 +243,7 @@ void Missile::HitTarget() {
      * MIN being a function that chooses the lower of the given vaules,
      * ln is natural logarithm.
      */
-    double Sr = m_targetSE->GetSelf()->GetAttribute(AttrSignatureRadius).get_float();    // this is a default number, based on itemtype
+    double Sr = m_targetSE->GetSignatureRadius();    // includes target painters
     double Er = m_self->GetAttribute(AttrAoeCloudSize).get_float(); // Explosion Radius
     double Ev = m_self->GetAttribute(AttrAoeVelocity).get_float(); // Explosion Velocity
     double DRF = m_self->GetAttribute(AttrAoeDamageReductionFactor).get_float(); // Damage Reduction Factor

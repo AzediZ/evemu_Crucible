@@ -167,6 +167,9 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
 
     // Check against max target range
     double maxTargetRange = sRef->GetAttribute(AttrMaxTargetRange).get_double();
+    // sensor dampeners on us
+    if (mySE->GetEwar() != nullptr)
+        maxTargetRange *= mySE->GetEwar()->GetTargetRangeMult();
     GVector rangeToTarget( mySE->GetPosition(), tSE->GetPosition() );
     // adjust for target radius, in case of ice or other large objects..
     double targetDistance = rangeToTarget.length();
@@ -217,7 +220,9 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, float lockTime, uint8 maxL
         mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
         return false;
     }
-    // Check against max target range
+    // Check against max target range (less any sensor dampening on us)
+    if (mySE->GetEwar() != nullptr)
+        maxTargetLockRange *= mySE->GetEwar()->GetTargetRangeMult();
     if (mySE->GetPosition().distance(tSE->GetPosition()) > maxTargetLockRange){
         _log(TARGET__TRACE, " %s(%u): Told to target %s(%u), but they are too far away.  Begin Approaching.", \
         mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
@@ -693,12 +698,17 @@ float TargetManager::TimeToLock ( ShipItemRef sRef, SystemEntity* tSE ) const {
         return 2.0f;
 
     //  fixed lock time  -allan 24Dec14  -updated 26May15   -revisited after new effects system implementation 25Mar17
-    uint32 scanRes = sRef->GetAttribute(AttrScanResolution).get_uint32();
-    uint32 sigRad = 25; // set base as capsule with 25m signature radius
+    float scanRes = sRef->GetAttribute(AttrScanResolution).get_float();
+    // sensor dampeners on us
+    if (mySE->GetEwar() != nullptr)
+        scanRes *= mySE->GetEwar()->GetScanResMult();
+    if (scanRes < 1.0f)
+        scanRes = 1.0f;
+    float sigRad = 25; // set base as capsule with 25m signature radius
 
     if ( tSE->GetSelf().get() != nullptr )
         if ( tSE->GetSelf()->HasAttribute(AttrSignatureRadius) )
-            sigRad = tSE->GetSelf()->GetAttribute(AttrSignatureRadius).get_uint32();
+            sigRad = tSE->GetSignatureRadius();   // includes target painters
 
         //https://wiki.eveonline.com/en/wiki/Targeting_speed
         //locktime = 40000/(scanres * asinh(sigrad)^2)

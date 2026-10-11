@@ -113,10 +113,6 @@ private:
     float m_expDamage;
     float m_kinDamage;
     float m_therDamage;
-    float m_hullDamage;
-    float m_armorDamage;
-    float m_shieldCharge;
-    float m_shieldCapacity;
 };
 
 #endif

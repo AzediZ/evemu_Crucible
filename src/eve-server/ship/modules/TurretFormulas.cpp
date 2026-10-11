@@ -21,6 +21,7 @@
 #include "npc/Sentry.h"
 #include "ship/modules/TurretFormulas.h"
 #include "ship/modules/TurretModule.h"
+#include "system/EwarState.h"
 
 
 float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEntity* pTarget)
@@ -28,9 +29,14 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
     if (pTarget == nullptr)
         return 0;
     uint32 falloff = pMod->GetAttribute(AttrFalloff).get_uint32();
-    uint32 range = pMod->GetAttribute(AttrMaxRange).get_uint32();
+    float range = pMod->GetAttribute(AttrMaxRange).get_float();
+    // tracking disruptors on the shooter
+    SystemEntity* pShooter(shipRef->GetPilot()->GetShipSE());
+    EwarState* pEwar(pShooter->GetEwar());
+    if (pEwar != nullptr)
+        range *= pEwar->GetOptimalMult();
     float distance = shipRef->position().distance(pTarget->DestinyMgr()->GetPosition());
-    _log(DAMAGE__TRACE, "Turret::GetToHit - distance:%.2f, range:%u, falloff:%u", distance, range, falloff);
+    _log(DAMAGE__TRACE, "Turret::GetToHit - distance:%.2f, range:%.0f, falloff:%u", distance, range, falloff);
 
     // calculate transversal from other data
     /* i have had problems finding exact data for transversal velocity
@@ -38,14 +44,16 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
      * The transversal velocity is computed by subtracting the two velocity vectors from one another, and then finding the length of the vector.
      * angular velocity = transversal velocity / distance
      */
-    GVector vector = pTarget->GetVelocity() - shipRef->GetPilot()->GetShipSE()->GetVelocity();
+    GVector vector = pTarget->GetVelocity() - pShooter->GetVelocity();
     float transversalV = vector.length();
     float angularVel = transversalV / distance;
-    float targSig = pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_float();
+    float targSig = pTarget->GetSignatureRadius();
     if (targSig < 0.01f)
         targSig = pTarget->GetSelf()->GetAttribute(AttrRadius).get_uint32() / 10;
     float sigRes = pMod->GetAttribute(AttrOptimalSigRadius).get_float();
     float trackSpeed = pMod->GetAttribute(AttrTrackingSpeed).get_float();
+    if (pEwar != nullptr)
+        trackSpeed *= pEwar->GetTrackingMult();
     _log(DAMAGE__TRACE, "Turret::GetToHit - transversalV:%.3f, angularV:%.3f, tracking:%.3f, targetSig:%.1f, sigRes:%.1f", \
                 transversalV, angularVel, trackSpeed, targSig, sigRes);
     //  calculations for chance to hit  --UD 29May17
@@ -95,12 +103,17 @@ float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget)
     if (pTarget == nullptr)
         return 0;
     uint16 sigRes = pNPC->GetAIMgr()->GetSigRes();
-    uint16 range = pNPC->GetAIMgr()->GetOptimalRange();
+    float range = pNPC->GetAIMgr()->GetOptimalRange();
     uint32 falloff = pNPC->GetAIMgr()->GetFalloff();
     float distance = pNPC->DestinyMgr()->GetPosition().distance(pTarget->DestinyMgr()->GetPosition());
     float trackSpeed = pNPC->GetAIMgr()->GetTrackingSpeed();
-    float targSig = pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_float();
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - distance:%.2f, range:%u, falloff:%u", distance, range, falloff);
+    // tracking disruptors on the npc
+    if (pNPC->GetEwar() != nullptr) {
+        range *= pNPC->GetEwar()->GetOptimalMult();
+        trackSpeed *= pNPC->GetEwar()->GetTrackingMult();
+    }
+    float targSig = pTarget->GetSignatureRadius();
+    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - distance:%.2f, range:%.0f, falloff:%u", distance, range, falloff);
 
     GVector vector = pTarget->GetVelocity() - pNPC->GetVelocity();
     float transversalV = vector.length();
@@ -161,7 +174,7 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
         double angular(transversal.length() / centres);
         double targetSig(25.0);
         if (pTarget->GetSelf()->HasAttribute(AttrSignatureRadius))
-            targetSig = pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_double();
+            targetSig = pTarget->GetSignatureRadius();
         if (targetSig <= 0.0)
             targetSig = 25.0;
         trackingTerm = (angular / stats.tracking) * (stats.sigResolution / targetSig);
@@ -193,7 +206,7 @@ float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
     float sigRes = pSentry->GetSelf()->GetAttribute(AttrOptimalSigRadius).get_float();
     float falloff = pSentry->GetSelf()->GetAttribute(AttrFalloff).get_float();
     float distance = pSentry->GetPosition().distance(pTarget->DestinyMgr()->GetPosition());
-    float targSig = pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_float();
+    float targSig = pTarget->GetSignatureRadius();
     float a = (pTarget->GetVelocity().length() / (distance * pSentry->GetSelf()->GetAttribute(AttrTrackingSpeed).get_float()));
     float b = (sigRes / targSig);
     float modifier = 0.0f;

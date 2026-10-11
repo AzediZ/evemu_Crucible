@@ -101,6 +101,12 @@ PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID
     call.Dump(DUNG__CALL_DUMP);
 
     Client *pClient(call.client);
+    if ((pClient->GetShipSE() == nullptr) or (pClient->GetShipSE()->DestinyMgr() == nullptr))
+        return PyStatic.NewNone();
+
+    // acceleration gates won't fling a scrambled ship
+    if (pClient->GetShipSE()->IsWarpScrambled())
+        throw UserError("WarpScrambled");
 
     // Send gate activation effect
     pClient->GetShipSE()->DestinyMgr()->SendSpecialEffect10(itemID->value(), 0, "effects.WarpGateEffect", 0, 1, 0);

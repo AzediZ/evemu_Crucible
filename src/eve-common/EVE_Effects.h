@@ -98,6 +98,7 @@ enum EVEEffectID {
     siegeModeEffectOld =   1745,     // effects.SiegeMode
     gangArmorRepairSpeedAmplifier =   1746,     // effects.ElectronicAttributeModifyActivate
     gangArmorRepairCapReducer =   1747,     // effects.ElectronicAttributeModifyActivate
+    entityTargetJam =   1871,     // (no guid; the client shows the ecm beam, effects.ElectronicAttributeModifyTarget)
     entityCapacitorDrain =   1872,     // effects.EnergyVampire
     entityTrackingDisruptOld =   1877,     // effects.ElectronicAttributeModifyTarget
     entitySensorDampen =   1878,     // effects.ElectronicAttributeModifyTarget

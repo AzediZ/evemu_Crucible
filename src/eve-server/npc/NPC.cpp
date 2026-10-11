@@ -66,11 +66,7 @@ m_lawRole(Law::None)
     m_emDamage = m_self->GetAttribute(AttrEmDamage).get_float(),
     m_kinDamage = m_self->GetAttribute(AttrKineticDamage).get_float(),
     m_therDamage = m_self->GetAttribute(AttrThermalDamage).get_float(),
-    m_expDamage = m_self->GetAttribute(AttrExplosiveDamage).get_float(),
-    m_hullDamage = m_self->GetAttribute(AttrDamage).get_float();
-    m_armorDamage = m_self->GetAttribute(AttrArmorDamage).get_float();
-    m_shieldCharge = m_self->GetAttribute(AttrShieldCharge).get_float();
-    m_shieldCapacity = m_self->GetAttribute(AttrShieldCapacity).get_float();
+    m_expDamage = m_self->GetAttribute(AttrExplosiveDamage).get_float();
 
     _log(NPC__TRACE, "Created NPC object for %s (%u) - Data: O:%u, C:%u, A:%u, W:%u", \
             m_self.get()->name(), m_self.get()->itemID(), \
@@ -167,51 +163,48 @@ void NPC::EncodeDestiny( Buffer& into )
             GetName(), head.entityID, modeStr.c_str(), head.flags, m_destiny->GetVelocity().x, m_destiny->GetVelocity().y, m_destiny->GetVelocity().z);
 }
 
+/* npc self-repair.  these work on the live attributes (ApplyDamage changes those), show the client's
+ *  booster/repairer effect on the npc and push its new damage state.  the timers stop once we're whole again */
 void NPC::UseShieldRecharge()
 {
-    // We recharge our shield until it's full.
-    if (m_self->GetAttribute(AttrShieldCapacity) > m_shieldCharge) {
-        m_shieldCharge += m_self->GetAttribute(AttrEntityShieldBoostAmount).get_float();
-        if (m_shieldCharge > m_self->GetAttribute(AttrShieldCapacity).get_float())
-            m_shieldCharge = m_self->GetAttribute(AttrShieldCapacity).get_float();
-        m_self->SetAttribute(AttrShieldCharge, m_shieldCharge);
-    } else {
+    float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+    float charge(m_self->GetAttribute(AttrShieldCharge).get_float());
+    if (charge >= capacity) {
         m_AI->DisableRepTimers(true, false);
+        return;
     }
 
-    // TODO: Need to send SpecialFX / amount update
-    UpdateDamage();
+    charge += m_self->GetAttribute(AttrEntityShieldBoostAmount).get_float();
+    if (charge > capacity)
+        charge = capacity;
+    m_self->SetAttribute(AttrShieldCharge, charge);
+    m_destiny->SendSpecialEffect(GetID(), GetID(), m_self->typeID(), GetID(), 0, "effects.ShieldBoosting", false, true, true,
+                                 m_self->GetAttribute(AttrEntityShieldBoostDuration).get_uint32(), 1);
+    SendDamageStateChanged();
 }
 
 void NPC::UseArmorRepairer()
 {
-    if (m_armorDamage > 0) {
-        m_armorDamage -= m_self->GetAttribute(AttrEntityArmorRepairAmount).get_float();
-        if (m_armorDamage < 0.0)
-            m_armorDamage = 0.0;
-        m_self->SetAttribute(AttrArmorDamage, m_armorDamage);
-    } else {
+    float damage(m_self->GetAttribute(AttrArmorDamage).get_float());
+    if (damage <= 0.0f) {
         m_AI->DisableRepTimers(false, true);
+        return;
     }
 
-    // TODO: Need to send SpecialFX / amount update
-    UpdateDamage();
+    damage -= m_self->GetAttribute(AttrEntityArmorRepairAmount).get_float();
+    if (damage < 0.0f)
+        damage = 0.0f;
+    m_self->SetAttribute(AttrArmorDamage, damage);
+    m_destiny->SendSpecialEffect(GetID(), GetID(), m_self->typeID(), GetID(), 0, "effects.ArmorRepair", false, true, true,
+                                 m_self->GetAttribute(AttrEntityArmorRepairDuration).get_uint32(), 1);
+    SendDamageStateChanged();
 }
 
 void NPC::UseHullRepairer()
 {
-    if (m_hullDamage > 0) {
-        //m_hullDamage -= m_self->GetAttribute(AttrEntityhullRepairAmount).get_float();  << NSA - create later
-        if (m_hullDamage < 0.0)
-            m_hullDamage = 0.0;
-        m_self->SetAttribute(AttrDamage, m_hullDamage);
-    } else {
+    // npc types have no hull repair amount, so there is nothing to repair with yet
+    if (m_self->GetAttribute(AttrDamage).get_float() <= 0.0f)
         m_AI->DisableRepTimers(false, false);
-    }
-
-    // TODO: Need to send SpecialFX / amount update
-    // gfxBoosterID
-    UpdateDamage();
 }
 
 void NPC::MissileLaunched(Missile* pMissile)

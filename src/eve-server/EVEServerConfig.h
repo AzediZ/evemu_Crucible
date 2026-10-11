@@ -197,7 +197,11 @@ public:
         bool RoamingSpawns;
         bool StaticSpawns;
         bool TargetPod;
+        bool UseEwar;               // npcs and non-law sentries use their type's ewar (scram, web, jam, damp, td, paint, neut)
+        bool GroupAggro;            // attacking one npc alerts the rest of its spawn group
         uint16 WarpOut;
+        uint16 TargetSwitchTime;    // s.  how often advanced (sleeper) npcs re-evaluate their primary
+        uint32 LeashRange;          // m.  sleepers and deadspace npcs pulled further than this from home give up.  0 = off
         uint16 RoamingTimer;
         uint16 StaticTimer;
         uint16 RespawnTimer;
@@ -207,6 +211,7 @@ public:
         float TargetPodSec;
         float DefenderMissileChance;
         float LootDropChance;
+        float DroneAggroChance;     // chance (per 30s) that a regular rat switches to a drone that damaged it
     } npc;
 
     // From <database>

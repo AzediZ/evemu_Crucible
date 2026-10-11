@@ -66,6 +66,9 @@ public:
 
     void DisableRepTimers(bool shield=true, bool armor=true);
 
+    // called from SystemEntity::ApplyDamage() when we take damage and survive
+    void OnDamaged(SystemEntity* pSE, float amount);
+
     // public methods to enable calls from other classes (namely, TurretFormulas.cpp)
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
     bool IsFighting();
@@ -97,6 +100,7 @@ protected:
     void CheckDistance(SystemEntity* pTargSE);
 
     float GetTargetTime();
+    void ProcessRepairs();
 
     int8 m_state;
 
@@ -125,8 +129,8 @@ private:
     uint16 m_targetRange;   // max targeting range  default: m_maxAttackRange (unused)
     uint16 m_optimalRange;
     uint16 m_boostRange;    // distance for Speed Boost activation   default:2500
-    uint16 m_armorRepairDuration;
-    uint16 m_shieldBoosterDuration;
+    uint32 m_armorRepairDuration;
+    uint32 m_shieldBoosterDuration;
 
     uint32 m_sigRadius;
     uint32 m_falloff;// distance past maximum range at which accuracy has fallen by half
