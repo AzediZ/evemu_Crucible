@@ -609,7 +609,12 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
         return;
     double profileStartTime(GetTimeUSeconds());
 
+    // the quantity attribute carries the loaded charge's stack size to the client (OMAC), keep it
+    EvilNumber quantity(EvilZero);
+    bool hasQuantity(target->HasAttribute(AttrQuantity, quantity));
     target->ResetAttributes();
+    if (hasQuantity)
+        target->SetAttribute(AttrQuantity, quantity, false);
     target->ClearModifiers();
 
     std::vector<std::pair<InventoryItemRef, std::vector<int8>>> sources;
