@@ -42,6 +42,7 @@
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "system/Asteroid.h"
 #include "packets/General.h"
 
 namespace {
@@ -694,13 +695,12 @@ void DroneAIMgr::FinishMiningCycle(ShipSE* pController, SystemEntity* pRoid) {
     oRef->MergeTypesInCargo(shipRef.get(), flagCargoHold);
     sStatMgr.Add(Stat::oreMined, units * oreVolume);
 
-    roidQuantity -= units;
-    if (roidQuantity > 0.0) {
-        roidRef->SetAttribute(AttrQuantity, roidQuantity);
-        // same radius-to-quantity relation the mining lasers use
-        roidRef->SetAttribute(AttrRadius, std::exp((roidQuantity + 112404.8) / 25000));
+    // quantity, mass, radius (broadcast) and the industrial index, as for lasers
+    AsteroidSE* pASE(pRoid->GetAsteroidSE());
+    if (pASE == nullptr)
         return;
-    }
+    if (!pASE->RemoveQuantity(units))
+        return;
 
     // rock is depleted
     pRoid->Delete();

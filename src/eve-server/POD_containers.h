@@ -144,6 +144,7 @@ struct AsteroidData {
     uint32 systemID;
     uint32 beltID;
     double quantity;
+    double originalQuantity;    // spawned quantity, rocks regrow to this
     double radius;
     GPoint position;
     std::string itemName;

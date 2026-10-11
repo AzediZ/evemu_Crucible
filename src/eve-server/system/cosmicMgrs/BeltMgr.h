@@ -12,6 +12,7 @@
 #ifndef EVEMU_SYSTEM_BELTMGR_H_
 #define EVEMU_SYSTEM_BELTMGR_H_
 
+#include <functional>
 #include <unordered_map>
 #include "system/Asteroid.h"
 #include "system/SystemEntity.h"
@@ -52,14 +53,27 @@ public:
     void CheckSpawn(uint16 bubbleID);
 
     void GetList(uint32 beltID, std::vector< AsteroidSE* >& list);
-
     void RemoveAsteroid(uint32 beltID, AsteroidSE* pASE);
 
+    /* spawn an asteroid or gas cloud from a quantity (dungeon objects store the quantity in their 'radius' field:
+     *  the client's dungeonHelper uses ComputeQuantityFromRadius).  beltID groups the rocks (anomaly/dungeon id).
+     *  temp beltIDs give temp items that aren't saved
+     */
+    AsteroidSE* SpawnResource(uint32 beltID, uint16 typeID, double quantity, const GPoint& pos);
+    // called by AsteroidSE::RemoveQuantity
+    void OnMined(AsteroidSE* pASE, double units, bool depleted);
+    // dungeon/anomaly hooks for Mined/RoomMinedOut style triggers.  depleted is true for the last units of a rock
+    typedef std::function<void(AsteroidSE* pASE, double units, bool depleted)> MinedCallback;
+    void SetMinedCallback(uint32 beltID, MinedCallback cb)  { m_minedCb[beltID] = cb; }
+    void ClearMinedCallback(uint32 beltID)                  { m_minedCb.erase(beltID); }
+
 protected:
-    Timer m_respawnTimer;
+    Timer m_respawnTimer;           // checks belt respawn and regrowth
 
     void SpawnBelt(uint16 bubbleID, std::unordered_multimap<float, uint16>& roidTypes, int type = 0, bool anomaly = false);
-    void SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const GPoint& position, bool ice=false);
+    AsteroidSE* SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const GPoint& position, bool ice=false);
+    // creates the item and entity
+    AsteroidSE* AddAsteroid(uint32 beltID, uint16 typeID, double quantity, double radius, const GPoint& position);
     void GetIceDist(uint8 quarter, float secStatus, std::unordered_multimap<float, uint16>& roidDist);
 
     uint32 GetAsteroidType(double p, const std::unordered_multimap<float, uint16>& roids);
@@ -78,6 +92,11 @@ private:
     std::map<uint32, InventoryItemRef> m_belts;
     /*  this map contains beltID, asteroidSE for entire system */
     std::unordered_multimap<uint32, AsteroidSE*> m_asteroids;
+    /* beltID, filetime the belt was mined out (respawns BeltRespawn hours later) */
+    std::map<uint32, int64> m_depletedAt;
+    /* beltID, filetime of the last mining (partially mined belts regrow BeltGrowth hours after it) */
+    std::map<uint32, int64> m_lastMined;
+    std::map<uint32, MinedCallback> m_minedCb;
 
 };
 

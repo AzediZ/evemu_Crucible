@@ -16,6 +16,7 @@
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/SystemBubble.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 
 AsteroidItem::AsteroidItem(const ItemType& type, const ItemData& idata, const AsteroidData& adata)
@@ -73,19 +74,17 @@ AsteroidItemRef AsteroidItem::SpawnTemp(ItemData& idata, AsteroidData& adata) {
 
 AsteroidSE::AsteroidSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system)
 : ObjectSystemEntity(self, services, system),
-m_growTimer(sConfig.cosmic.BeltGrowth *60 *60 *1000)  // hours->ms
+m_beltMgr(nullptr),
+m_beltID(0),
+m_origQuantity(self->GetAttribute(AttrQuantity).get_double())
 {
-    m_growTimer.Disable();
 }
 
 void AsteroidSE::Process() {
     /* called by EntityList::Process on every loop */
     /*  Enable base call to Process Targeting and Movement  */
     SystemEntity::Process();
-
-    if (m_growTimer.Check())
-        if (!m_system->GetBeltMgr()->IsActive(m_bubble->GetID()))
-            Grow();
+    // regrowth is run by BeltMgr for idle belts
 }
 
 void AsteroidSE::EncodeDestiny( Buffer& into )
@@ -129,25 +128,82 @@ void AsteroidSE::SendDamageStateChanged() {  //working 24Apr15
 }
 
 void AsteroidSE::Grow() {
-    /*  not real sure how to implement this
-     * maybe use internal data structure to hold sizes (current, possible) and time interval
-     * use this to check/update current sizes (radius and mass)
-     *
-     * currently sets quantity back to full and disables m_growTimer
-     *   - not gonna work...radius is set to quantity AFTER being mined...
-     */
+    // Crucible regenerated mined rocks at downtime.  BeltMgr calls this for belts nobody mined for a while
+    if (GetQuantity() >= m_origQuantity)
+        return;
+    _log(MINING__TRACE, "AsteroidSE::Grow() - %s(%u) regrows from %.1f to %.1f", m_self->name(), m_self->itemID(), GetQuantity(), m_origQuantity);
+    SetQuantity(m_origQuantity);
+}
 
-    //double quantity = ((25000 * log(GetRadius())) - 112404.8);
-    //m_self->SetAttribute(AttrQuantity,  quantity);   // quantity in m^3
+void AsteroidSE::SetQuantity(double quantity)
+{
+    m_self->SetAttribute(AttrQuantity, quantity, false);
+    m_self->SetAttribute(AttrMass, m_self->type().mass() * quantity, false);
 
-    m_growTimer.Disable();
+    // ice chunks keep their size (their quantity isn't derived from it)
+    if ((quantity <= 0) or (m_self->groupID() == EVEDB::invGroups::Ice))
+        return;
+    double radius(RadiusForQuantity(m_self->categoryID(), m_self->groupID(), m_self->type().radius(), quantity));
+    // skip tiny changes, every cycle would send one
+    if (std::fabs(radius - GetRadius()) < 1.0)
+        return;
+    if (m_destiny != nullptr) {
+        m_destiny->SetRadius(radius, (m_bubble != nullptr));   // SetBallRadius to the bubble
+    } else {
+        SetRadius(radius);
+    }
+}
+
+bool AsteroidSE::RemoveQuantity(double units)
+{
+    if (units <= 0)
+        return (GetQuantity() <= 0);
+    double quantity(GetQuantity() - units);
+    if (quantity < 0) {
+        units += quantity;
+        quantity = 0;
+    }
+
+    // ore and ice raise the system's industrial index.  gas doesn't
+    if (m_self->categoryID() == EVEDB::invCategories::Asteroid)
+        svDataMgr.AddIndustrialActivity(m_system->GetID(), units * m_self->GetAttribute(AttrVolume).get_double());
+
+    SetQuantity(quantity);
+    if (m_beltMgr != nullptr)
+        m_beltMgr->OnMined(this, units, (quantity <= 0));
+
+    return (quantity <= 0);
+}
+
+double AsteroidSE::RadiusForQuantity(uint8 categoryID, uint16 groupID, double typeRadius, double quantity)
+{
+    if (quantity < 0)
+        quantity = 1;
+    if (categoryID == EVEDB::invCategories::Asteroid)
+        return 89.675 * std::exp(4e-05 * std::min(quantity, 130000.0));
+    if (groupID == EVEDB::invGroups::Harvestable_Cloud)
+        return quantity * typeRadius / 10.0;
+    return quantity * typeRadius;
+}
+
+double AsteroidSE::QuantityForRadius(uint8 categoryID, uint16 groupID, double typeRadius, double radius)
+{
+    if (categoryID == EVEDB::invCategories::Asteroid)
+        return std::log(radius / 89.675) * (1.0 / 4e-05);
+    if (typeRadius <= 0)
+        return 0;
+    if (groupID == EVEDB::invGroups::Harvestable_Cloud)
+        return radius * 10.0 / typeRadius;
+    return radius / typeRadius;
 }
 
 void AsteroidSE::Delete()
 {
     _log(SPAWN__DEPOP, "AsteroidSE::Delete() - Removing asteroid %s(%u) from beltID %u", \
             m_self->name(), m_self->itemID(), m_beltID);
-    m_beltMgr->RemoveAsteroid(m_beltID, this);
+    // asteroids built outside a belt (dungeon rocks, gas clouds) have no manager
+    if (m_beltMgr != nullptr)
+        m_beltMgr->RemoveAsteroid(m_beltID, this);
     SystemEntity::Delete();
 }
 

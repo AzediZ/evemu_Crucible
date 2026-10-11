@@ -19,6 +19,7 @@
 #include "ship/modules/MiningLaser.h"
 //#include "system/SystemBubble.h"
 //#include "system/SystemManager.h"
+#include "system/Asteroid.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 
 
@@ -29,22 +30,29 @@ MiningLaser::MiningLaser(ModuleItemRef mRef, ShipItemRef sRef)
     m_rMiner = m_dcMiner = m_iMiner = m_gMiner = false;
     m_crystalDmg = m_crystalRoidGrp = m_crystalDmgAmount = m_crystalDmgChance = 0;
 
-    if (m_modRef->groupID() == EVEDB::invGroups::Mining_Laser) {
-        m_rMiner = true;
-    } else if ((m_modRef->typeID() == 12108) or (m_modRef->typeID() == 18068) or (m_modRef->typeID() == 24305) or (m_modRef->typeID() == 28748)) {
-        m_dcMiner = true;
-    } else if ((m_modRef->typeID() == 16278) or (m_modRef->typeID() == 22229) or (m_modRef->typeID() == 22589) or (m_modRef->typeID() == 22591)
-        or (m_modRef->typeID() == 22597) or (m_modRef->typeID() == 22599) or (m_modRef->typeID() == 28752)) {
-        /* this includes 'dev testing modules'  */
-        m_iMiner = true;
-    } else if (m_modRef->groupID() == EVEDB::invGroups::Gas_Cloud_Harvester) {
+    // the miner's class follows its required skills:  Ice Harvesting mines ice, Deep Core Mining also mines mercoxit
+    bool iceSkill(false), deepCoreSkill(false);
+    for (uint16 attrID : {AttrRequiredSkill1, AttrRequiredSkill2, AttrRequiredSkill3}) {
+        if (!m_modRef->HasAttribute(attrID))
+            continue;
+        uint32 skillID(m_modRef->GetAttribute(attrID).get_uint32());
+        if (skillID == EvESkill::IceHarvesting)
+            iceSkill = true;
+        else if (skillID == EvESkill::DeepCoreMining)
+            deepCoreSkill = true;
+    }
+
+    if (m_modRef->groupID() == EVEDB::invGroups::Gas_Cloud_Harvester) {
         m_gMiner = true;
-    } else if (m_modRef->groupID() == EVEDB::invGroups::Frequency_Mining_Laser) {
-        m_rMiner = true;
-        m_reloadTime = 8000;    // this is not set in ActiveModule c'tor.  easier/cheaper to set here.
-    } else if (m_modRef->groupID() == EVEDB::invGroups::Strip_Miner) {
+    } else if (iceSkill) {
+        m_iMiner = true;
+    } else if (deepCoreSkill) {
+        m_dcMiner = true;
+    } else {
         m_rMiner = true;
     }
+    if (m_modRef->groupID() == EVEDB::invGroups::Frequency_Mining_Laser)
+        m_reloadTime = 8000;    // this is not set in ActiveModule c'tor.  easier/cheaper to set here.
 
     m_holdFlag = flagCargoHold;
     _log(MINING__TRACE, "MiningLaser Created for %s with %ums Duration.", mRef->name(), GetAttribute(AttrDuration).get_uint32());
@@ -95,7 +103,9 @@ bool MiningLaser::CanActivate()
                 m_holdFlag = flagOreHold;
         }
     } else if (m_dcMiner) {
-        if (m_targetSE->GetSelf()->groupID() == EVEDB::invGroups::Mercoxit) {
+        // deep core miners mine every ore, mercoxit included
+        if ((m_targetSE->GetSelf()->categoryID() == EVEDB::invCategories::Asteroid)
+        and (m_targetSE->GetSelf()->groupID() != EVEDB::invGroups::Ice)) {
             canActivate = true;
             if (m_shipRef->HasAttribute(AttrOreHoldCapacity))
                 m_holdFlag = flagOreHold;
@@ -222,19 +232,15 @@ void MiningLaser::ProcessCycle(bool abort/*false*/)
     if (oreAmount <= 0)
         return;
 
-    roidQuantity -= oreAmount;
-    _log(MINING__TRACE, "new roidQuantity %.3f", roidQuantity);
+    AsteroidSE* pRoid(m_targetSE->GetAsteroidSE());
+    if (pRoid == nullptr) {
+        _log(MINING__ERROR, "%s(%u) - %s(%u) is not an asteroid", m_modRef->name(), m_modRef->itemID(), roidRef->name(), m_targetSE->GetID());
+        CancelOnError();
+        return;
+    }
 
-    if (roidQuantity > 0.0f) {
-        roidRef->SetAttribute(AttrQuantity, roidQuantity);
-        // do not reset ice radius (our huge-ass chunks will probably never expire)
-        if (!m_iMiner) {
-            /* reversing the radius-to-quantity formula, we get radius = exp((quantity + 112404.8) /25000)  */
-            double radius = exp((roidQuantity + 112404.8) / 25000);
-            // need to update players in bubble of this change.  not sure how yet
-            roidRef->SetAttribute(AttrRadius, radius);
-        }
-    } else {
+    _log(MINING__TRACE, "new roidQuantity %.3f", roidQuantity - oreAmount);
+    if (oreAmount >= roidQuantity) {
         //rock is depleted.
         // this will get all active miners on depleted rock and set mined amount accordingly for each.
         m_targetSE->TargetMgr()->Depleted(this);
@@ -245,6 +251,8 @@ void MiningLaser::ProcessCycle(bool abort/*false*/)
         SafeDelete(pSE);
         return;
     }
+    // quantity, mass, radius (broadcast) and the industrial index
+    pRoid->RemoveQuantity(oreAmount);
 
     // at this point, there is still plenty of ore in rock
     ItemData idata(roidRef->typeID(), m_shipRef->ownerID(), locTemp, flagNone, oreAmount);
@@ -264,17 +272,20 @@ void MiningLaser::ProcessCycle(bool abort/*false*/)
         float shipVolume = m_shipRef->GetMyInventory()->GetRemainingCapacity(m_holdFlag);
         float newQuantity = shipVolume / unitVolume;
         if (newQuantity > 1) { // Catch situations where less than a whole unit would be added.
+            oreError = false;
             oRef->SetQuantity(newQuantity, false);
             oRef->MergeTypesInCargo(m_shipRef.get(), m_holdFlag);
         }
     }
 
     // add data to StatisticMgr
-    sStatMgr.Add(Stat::oreMined, cycleVol);
+    if (!oreError)
+        sStatMgr.Add(Stat::oreMined, cycleVol);
 
     if (oreError and !abort) {
-        m_shipRef->GetPilot()->SendNotifyMsg("Your %s deactivates as it couldn't add the %s to your %s.", \
-                m_modRef->name(), oRef->name(), sDataMgr.GetFlagName(m_holdFlag));
+        if (m_shipRef->HasPilot())
+            m_shipRef->GetPilot()->SendNotifyMsg("Your %s deactivates as it couldn't add the %s to your %s.", \
+                    m_modRef->name(), oRef->name(), sDataMgr.GetFlagName(m_holdFlag));
         _log(MINING__ERROR, "Could not add ore to hold for %s(%u)", m_shipRef->name(), m_shipRef->itemID() );
         ActiveModule::DeactivateCycle(true);
         return;
@@ -286,8 +297,13 @@ void MiningLaser::ProcessCycle(bool abort/*false*/)
     if (MakeRandomFloat(0,1) < m_crystalDmgChance) {
         m_crystalDmg += m_crystalDmgAmount;
         if (m_crystalDmg > 0.99f) {
-            m_shipRef->GetPilot()->SendNotifyMsg("Your %s deactivates due to the destruction of it's %s.", \
-                    m_modRef->name(), m_chargeRef->name());
+            // '{[item]module.name} deactivates due to the destruction of the {[item]type.name} it was fitted with.'
+            if (m_shipRef->HasPilot()) {
+                PyDict* args = new PyDict();
+                    args->SetItemString("module", new PyInt(m_modRef->typeID()));
+                    args->SetItemString("type", new PyInt(m_chargeRef->typeID()));
+                m_shipRef->GetPilot()->SendRemoteMessage("MiningCrystalDestroyed", args);
+            }
             InventoryItemRef chargeRef(m_chargeRef);   // make a copy of charge's item ref, as m_chargeRef = NULL after next call returns
             m_shipRef->RemoveItem(m_chargeRef);
             chargeRef->Delete();
@@ -308,7 +324,7 @@ void MiningLaser::Depleted(std::multimap<float, MiningLaser*> &mMap) {
     for (auto cur : mMap)
         total += cur.first;
 
-    /** @todo check for mining drones here!!!  */
+    // mining drones leave the last unit of a rock to the lasers on it (DroneAIMgr::FinishMiningCycle)
 
     InventoryItemRef roidRef(m_targetSE->GetSelf());
     float oreVolume(roidRef->GetAttribute(AttrVolume).get_float());
@@ -357,6 +373,10 @@ void MiningLaser::Depleted(std::multimap<float, MiningLaser*> &mMap) {
     percent = GetMiningVolume() / total;
     // create and add ore to cargo for this laser
     AddOreAndDeactivate(roidRef->typeID(), roidQuantity * percent, false);
+
+    // the rest of the rock is gone (industrial index and belt bookkeeping).  the caller deletes it
+    if (m_targetSE->GetAsteroidSE() != nullptr)
+        m_targetSE->GetAsteroidSE()->RemoveQuantity(roidQuantity);
 }
 
 void MiningLaser::AddOreAndDeactivate(uint16 typeID, float amt, bool slave/*true*/) {
@@ -390,6 +410,8 @@ float MiningLaser::GetMiningVolume()
     // fleet involvement enhances mining amount using MiningForeman of highest member (3%/lvl)
     // this should apply to modules/ship when boost activated, but this is easier at this time.
     //  downside is client will have the original, lower cycle amount as this isnt set in module (but should be)
+    if (!m_shipRef->HasPilot())
+        return cycleVol;
     ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
     if (pShip != nullptr)
         if (pShip->IsBoosted())

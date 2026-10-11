@@ -487,9 +487,9 @@ void ManagerDB::CreateRoidItemID(ItemData& idata, AsteroidData& adata)
 {
     DBerror err;
     sDatabase.RunQueryLID(err, adata.itemID,
-        "INSERT INTO sysAsteroids (itemName,typeID,systemID,beltID,quantity,radius,x, y, z)"
-        " VALUES ('%s', %u, %u, %u, %f, %f, %f, %f, %f)",
-                          adata.itemName.c_str(), adata.typeID, adata.systemID, adata.beltID, adata.quantity, adata.radius,
+        "INSERT INTO sysAsteroids (itemName,typeID,systemID,beltID,quantity,originalQuantity,radius,x, y, z)"
+        " VALUES ('%s', %u, %u, %u, %f, %f, %f, %f, %f, %f)",
+                          adata.itemName.c_str(), adata.typeID, adata.systemID, adata.beltID, adata.quantity, adata.originalQuantity, adata.radius,
                           adata.position.x, adata.position.y, adata.position.z );
 }
 
@@ -527,7 +527,7 @@ bool ManagerDB::LoadSystemRoids(uint32 systemID, uint32& beltID, std::vector< As
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        "SELECT itemID, itemName, typeID, systemID, beltID, quantity, radius, x, y, z"
+        "SELECT itemID, itemName, typeID, systemID, beltID, quantity, radius, x, y, z, originalQuantity"
         " FROM sysAsteroids"
         " WHERE systemID = %u"
         "  AND beltID = %u", systemID, beltID)) {
@@ -548,6 +548,7 @@ bool ManagerDB::LoadSystemRoids(uint32 systemID, uint32& beltID, std::vector< As
         entry.radius = row.GetDouble(6);
         GPoint pos(row.GetDouble(7), row.GetDouble(8), row.GetDouble(9));
         entry.position = pos;
+        entry.originalQuantity = row.GetDouble(10);
         into.push_back(entry);
     }
 
@@ -586,7 +587,7 @@ void ManagerDB::SaveSystemRoids(uint32 systemID, std::vector< AsteroidData >& ro
     std::ostringstream Inserts;
     // start the insert into command.
     Inserts << "INSERT INTO sysAsteroids";
-    Inserts << " (itemID,itemName,typeID,systemID,beltID,quantity,radius,x, y, z)";
+    Inserts << " (itemID,itemName,typeID,systemID,beltID,quantity,originalQuantity,radius,x, y, z)";
     bool first = true;
     for (auto cur : roids) {
         if (first) {
@@ -597,7 +598,7 @@ void ManagerDB::SaveSystemRoids(uint32 systemID, std::vector< AsteroidData >& ro
         }
         // itemID and attributeID keys.
         Inserts << "(" << cur.itemID << ", '" << cur.itemName << "', " << cur.typeID << ", " << systemID << ", " << cur.beltID << ", ";
-        Inserts << cur.quantity << ", " << cur.radius << ", " << std::to_string(cur.position.x) << ", " << std::to_string(cur.position.y);
+        Inserts << cur.quantity << ", " << cur.originalQuantity << ", " << cur.radius << ", " << std::to_string(cur.position.x) << ", " << std::to_string(cur.position.y);
         Inserts << ", " << std::to_string(cur.position.z) << ")";
     }
     // did we get at least 1 insert?
@@ -605,6 +606,7 @@ void ManagerDB::SaveSystemRoids(uint32 systemID, std::vector< AsteroidData >& ro
         // finish creating the command.
         Inserts << "ON DUPLICATE KEY UPDATE ";
         Inserts << "quantity=VALUES(quantity), ";
+        Inserts << "originalQuantity=VALUES(originalQuantity), ";
         Inserts << "radius=VALUES(radius)";
         // execute the command.
         DBerror err;

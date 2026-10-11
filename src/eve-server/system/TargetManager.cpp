@@ -687,7 +687,13 @@ void TargetManager::Depleted(MiningLaser* pMod)
     // iterate thru the map of modules and add to map as MiningLasers with their mining volume
     std::map<uint32, ActiveModule*>::iterator itr = m_modules.begin();
     while (itr != m_modules.end()) {
-        mMap.emplace(itr->second->GetMiningModule()->GetMiningVolume(), itr->second->GetMiningModule());
+        // weapons on the rock (world.shootRoids) stay; deleting the rock clears them from targets
+        MiningLaser* pLaser(itr->second->GetMiningModule());
+        if (pLaser == nullptr) {
+            ++itr;
+            continue;
+        }
+        mMap.emplace(pLaser->GetMiningVolume(), pLaser);
         itr = m_modules.erase(itr);     //remove module from map here to avoid segfault on rock delete
     }
 

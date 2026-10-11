@@ -55,7 +55,7 @@ protected:
     // Template loader:
     template<class _Ty>
     static RefPtr<_Ty> _LoadItem( uint32 asteroidID, const ItemType &type, const ItemData &data) {
-        if (type.categoryID() != EVEDB::invCategories::Asteroid) {
+        if ((type.categoryID() != EVEDB::invCategories::Asteroid) and (type.groupID() != EVEDB::invGroups::Harvestable_Cloud)) {
             _log(ITEM__ERROR, "Trying to load %s as Asteroid.", sDataMgr.GetCategoryName(type.categoryID()));
             if (sConfig.debug.StackTrace)
                 EvE::traceStack();
@@ -99,15 +99,31 @@ public:
     virtual void SendDamageStateChanged();  /* this uses targetMgr update to send to all interested parties */
 
     /* specific functions handled in this class. */
+    // regrow to the spawned quantity (BeltMgr, on idle belts)
     void Grow();
     void SetMgr(BeltMgr* beltMgr, uint32 beltID)        { m_beltMgr = beltMgr; m_beltID = beltID; }
+    uint32 GetBeltID()                                  { return m_beltID; }
+
+    double GetQuantity()                                { return m_self->GetAttribute(AttrQuantity).get_double(); }
+    double GetOriginalQuantity()                        { return m_origQuantity; }
+    void SetOriginalQuantity(double quantity)           { m_origQuantity = quantity; }
+    /* the one path that takes ore, ice or gas out of a rock (lasers, harvesters, drones).
+     *  updates quantity, mass and radius (bubblecast), counts toward the industrial index.
+     *  returns true when the rock is depleted (the caller deletes it)
+     */
+    bool RemoveQuantity(double units);
+    // client eveCommonUtils.ComputeRadiusFromQuantity / ComputeQuantityFromRadius
+    static double RadiusForQuantity(uint8 categoryID, uint16 groupID, double typeRadius, double quantity);
+    static double QuantityForRadius(uint8 categoryID, uint16 groupID, double typeRadius, double radius);
 
 protected:
+    // sets quantity/mass and broadcasts a changed radius
+    void SetQuantity(double quantity);
 
 private:
     BeltMgr* m_beltMgr;
-    Timer m_growTimer;
     uint32 m_beltID;
+    double m_origQuantity;
 };
 
 #endif /* !__ASTEROID__H__INCL__ */

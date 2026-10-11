@@ -628,8 +628,11 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
     switch (entity.categoryID) {
         case EVEDB::invCategories::Asteroid: {
             InventoryItemRef asteroid = sItemFactory.GetItemRef( entity.itemID );
-            if (asteroid.get() == nullptr)
-                ; /** @todo make error msg here */
+            if (asteroid.get() == nullptr) {
+                _log(ITEM__ERROR, "DynamicEntityFactory::BuildEntity() - unable to load asteroid %s (%u)", entity.itemName.c_str(), entity.itemID);
+                return nullptr;
+            }
+            // built outside a belt:  no belt manager (AsteroidSE handles that)
             AsteroidSE* aSE = new AsteroidSE(asteroid, sysMgr.GetServiceMgr(), &sysMgr);
             _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making AsteroidSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
             return aSE;
@@ -827,7 +830,6 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 case EVEDB::invGroups::Effect_Beacon:
                 case EVEDB::invGroups::Beacon:
                 case EVEDB::invGroups::Covert_Beacon:
-                case EVEDB::invGroups::Harvestable_Cloud:
                 case EVEDB::invGroups::Planetary_Cloud: {
                     CelestialObjectRef celestial = sItemFactory.GetCelestialRef( entity.itemID );
                     if (celestial.get() == nullptr)
@@ -836,6 +838,19 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                     CelestialSE* cSE = new CelestialSE(celestial, sysMgr.GetServiceMgr(), &sysMgr);
                     _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making CelestialSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
                     return cSE;
+                } break;
+                case EVEDB::invGroups::Harvestable_Cloud: {
+                    // gas clouds are harvested like asteroids (gas cloud harvesters need an AsteroidSE with a quantity)
+                    InventoryItemRef cloud = sItemFactory.GetItemRef( entity.itemID );
+                    if (cloud.get() == nullptr)
+                        return nullptr;
+                    if (cloud->GetAttribute(AttrQuantity).get_double() <= 0) {
+                        double radius(cloud->HasAttribute(AttrRadius) ? cloud->GetAttribute(AttrRadius).get_double() : cloud->type().radius());
+                        cloud->SetAttribute(AttrQuantity, AsteroidSE::QuantityForRadius(cloud->categoryID(), cloud->groupID(), cloud->type().radius(), radius), false);
+                    }
+                    AsteroidSE* aSE = new AsteroidSE(cloud, sysMgr.GetServiceMgr(), &sysMgr);
+                    _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making AsteroidSE (gas cloud) for %s (%u)", entity.itemName.c_str(), entity.itemID);
+                    return aSE;
                 } break;
                 case EVEDB::invGroups::Construction_Platform: {
                     StructureItemRef structure = sItemFactory.GetStructureRef( entity.itemID );

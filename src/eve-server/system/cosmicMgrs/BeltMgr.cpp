@@ -50,7 +50,7 @@ void BeltMgr::Init()
     m_active.clear();
     m_spawned.clear();
 
-    m_respawnTimer.Start(sConfig.cosmic.BeltRespawn *60 *60 *1000);  // hours->ms
+    m_respawnTimer.Start(10 *60 *1000);  // respawn/regrowth checks every 10m
 
     m_initialized = true;
     _log(COSMIC_MGR__INIT, "BeltMgr Initialized for %s(%u)", m_system->GetName(), m_system->GetID());
@@ -128,14 +128,49 @@ void BeltMgr::Process() {
     if (!m_initialized)
         return;
 
-    if (m_respawnTimer.Check()) {
-        for (auto cur : m_spawned)
-            if (!cur.second) {
-                std::unordered_multimap<float, uint16> roidTypes;
-                roidTypes.clear();
-                SpawnBelt(cur.first, roidTypes);
-            }
+    if (!m_respawnTimer.Check())
+        return;
+
+    /* Crucible regenerated belts at downtime.  this server has none:
+     *  mined out belts respawn BeltRespawn hours after the last rock went,
+     *  partially mined rocks regrow when nobody mined the belt for BeltGrowth hours and no player is there
+     */
+    int64 now(GetFileTimeNow());
+    std::vector<uint32> respawn;
+    for (auto cur : m_depletedAt)
+        if ((now - cur.second) >= (sConfig.cosmic.BeltRespawn * Win32Time_Hour))
+            respawn.push_back(cur.first);
+    for (auto beltID : respawn) {
+        m_depletedAt.erase(beltID);
+        SystemEntity* pSE(m_system->GetSE(beltID));
+        if ((pSE == nullptr) or (pSE->SysBubble() == nullptr))
+            continue;
+        std::unordered_multimap<float, uint16> roidTypes;
+        SpawnBelt(pSE->SysBubble()->GetID(), roidTypes);
     }
+
+    std::vector<uint32> regrow;
+    for (auto cur : m_lastMined)
+        if ((now - cur.second) >= (sConfig.cosmic.BeltGrowth * Win32Time_Hour))
+            regrow.push_back(cur.first);
+    for (auto beltID : regrow) {
+        SystemEntity* pSE(m_system->GetSE(beltID));
+        if ((pSE != nullptr) and (pSE->SysBubble() != nullptr) and pSE->SysBubble()->HasPlayers())
+            continue;   // wait until the belt is empty
+        m_lastMined.erase(beltID);
+        auto range = m_asteroids.equal_range(beltID);
+        for (auto itr = range.first; itr != range.second; ++itr)
+            itr->second->Grow();
+    }
+}
+
+void BeltMgr::OnMined(AsteroidSE* pASE, double units, bool depleted)
+{
+    uint32 beltID(pASE->GetBeltID());
+    m_lastMined[beltID] = GetFileTimeNow();
+    std::map<uint32, MinedCallback>::iterator itr = m_minedCb.find(beltID);
+    if (itr != m_minedCb.end())
+        itr->second(pASE, units, depleted);
 }
 
 bool BeltMgr::Load(uint16 bubbleID) {
@@ -154,7 +189,7 @@ bool BeltMgr::Load(uint16 bubbleID) {
             continue;
         }
         // set attribs using loaded values from asteroid table.
-        itemRef->SetAttribute(AttrRadius,    itemRef->type().radius() * entity.radius); // Radius
+        itemRef->SetAttribute(AttrRadius,    entity.radius);                            // Radius
         itemRef->SetAttribute(AttrQuantity,  entity.quantity);                          // Quantity
         itemRef->SetAttribute(AttrVolume,    itemRef->type().volume());                 // Volume
         itemRef->SetAttribute(AttrMass,      itemRef->type().mass() * entity.quantity); // Mass
@@ -168,6 +203,11 @@ bool BeltMgr::Load(uint16 bubbleID) {
         m_system->AddEntity(pASE);
         m_asteroids.emplace(std::pair<uint32, AsteroidSE*>(beltID, pASE));
         pASE->SetMgr(this, beltID);
+        // rocks saved before the original quantity was kept regrow to what they have
+        pASE->SetOriginalQuantity(entity.originalQuantity > 0 ? entity.originalQuantity : entity.quantity);
+        // partially mined rocks regrow BeltGrowth hours after this boot
+        if (entity.quantity < pASE->GetOriginalQuantity())
+            m_lastMined[beltID] = GetFileTimeNow();
     }
     std::map<uint32, bool>::iterator itr = m_spawned.find(beltID);
     if (itr == m_spawned.end()) {
@@ -197,8 +237,8 @@ void BeltMgr::Save() {
     roids.clear();
     uint16 save(0), skip(0);
     for (auto cur : m_asteroids) {
-        // we are not saving anomaly belts (yet.  small belts in anomalies will become their own grav sites (wip))
-        if (IsTempItem(cur.first)) {
+        // temp rocks (anomaly belts, dungeon resources) aren't saved
+        if (IsTempItem(cur.first) or IsTempItem(cur.second->GetID())) {
             ++skip;
             continue;
         }
@@ -209,7 +249,8 @@ void BeltMgr::Save() {
         entry.systemID = m_system->GetID();
         entry.beltID = cur.first;
         entry.radius = cur.second->GetRadius();
-        entry.quantity = ((25000 * log(entry.radius)) - 112404.8);   // quantity in m^3
+        entry.quantity = cur.second->GetQuantity();     // ice and gas quantities don't follow their radius
+        entry.originalQuantity = cur.second->GetOriginalQuantity();
         entry.position = cur.second->GetPosition();
         roids.push_back(entry);
         ++save;
@@ -374,18 +415,18 @@ uint32 BeltMgr::GetAsteroidType(double p, const std::unordered_multimap<float, u
     return 0;
 }
 
-void BeltMgr::SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const GPoint& position, bool ice/*false*/) {
+AsteroidSE* BeltMgr::SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const GPoint& position, bool ice/*false*/) {
     if (typeID == 0) {
         _log(COSMIC_MGR__WARNING, "BeltMgr::SpawnAsteroid - typeID is 0");
-        return;
+        return nullptr;
     }
     if (IsNaN(radius)) {
         _log(COSMIC_MGR__WARNING, "BeltMgr::SpawnAsteroid - radius is NaN");
-        return;
+        return nullptr;
     }
     if (radius <= 0) {
         _log(COSMIC_MGR__WARNING, "BeltMgr::SpawnAsteroid - radius < 0");
-        return;
+        return nullptr;
     }
 
     double quantity = 0;
@@ -397,11 +438,28 @@ void BeltMgr::SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const G
         quantity = ((25000 * log(radius)) - 112404.8);
     }
 
+    return AddAsteroid(beltID, typeID, quantity, radius, position);
+}
+
+AsteroidSE* BeltMgr::SpawnResource(uint32 beltID, uint16 typeID, double quantity, const GPoint& pos)
+{
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if ((pType == nullptr) or (quantity <= 0) or IsNaN(quantity)) {
+        _log(COSMIC_MGR__WARNING, "BeltMgr::SpawnResource - invalid type %u or quantity %.2f", typeID, quantity);
+        return nullptr;
+    }
+    double radius(AsteroidSE::RadiusForQuantity(pType->categoryID(), pType->groupID(), pType->radius(), quantity));
+    return AddAsteroid(beltID, typeID, quantity, radius, pos);
+}
+
+AsteroidSE* BeltMgr::AddAsteroid(uint32 beltID, uint16 typeID, double quantity, double radius, const GPoint& position)
+{
     AsteroidData adata = AsteroidData();
         adata.beltID = beltID;
         adata.systemID = m_system->GetID();
         adata.typeID = typeID;
         adata.quantity = quantity;
+        adata.originalQuantity = quantity;
         adata.radius = radius;
         adata.position = position;
     ItemData idata(typeID, ownerSystem, m_system->GetID(), flagNone, "", position);
@@ -412,37 +470,49 @@ void BeltMgr::SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const G
         iRef = sItemFactory.SpawnAsteroid(idata, adata);
     }
     if (iRef.get() == nullptr)
-        return;
+        return nullptr;
 
     AsteroidSE* pASE = new AsteroidSE( iRef, m_system->GetServiceMgr(), m_system );
     if (pASE == nullptr)
-        return;
+        return nullptr;
 
     m_asteroids.emplace(std::pair<uint32, AsteroidSE*>(beltID, pASE));
     pASE->SetMgr(this, beltID);
+    pASE->SetOriginalQuantity(quantity);
     m_system->AddEntity(pASE, false);   // we're not adding roids to signal list
+    return pASE;
 }
 
 void BeltMgr::RemoveAsteroid(uint32 beltID, AsteroidSE* pASE)
 {
-    ManagerDB::RemoveAsteroid(pASE->GetID());
-    // this doesnt work right.  not sure why yet.
+    if (!IsTempItem(pASE->GetID()))
+        ManagerDB::RemoveAsteroid(pASE->GetID());
+
+    bool found(false);
     auto range = m_asteroids.equal_range(beltID);
     for (auto itr = range.first; itr != range.second; ++itr) {
         if (itr->second == pASE) {
             m_asteroids.erase(itr);
-            return;
+            found = true;
+            break;
         }
     }
-/*
-    if (m_asteroids.count(beltID)) {
-        std::map<uint32, bool>::iterator itr =  m_spawned.find(beltID);
-        if (itr != m_spawned.end())
-            itr->second = false;
-        else
-            m_spawned.insert(std::pair<uint32, bool>(beltID, false));
+    // the rock may be filed under another belt.  never keep a deleted rock (Save() would read it)
+    if (!found)
+        for (auto itr = m_asteroids.begin(); itr != m_asteroids.end(); ++itr)
+            if (itr->second == pASE) {
+                beltID = itr->first;
+                m_asteroids.erase(itr);
+                break;
+            }
+
+    // a mined out belt respawns later
+    if ((m_asteroids.count(beltID) == 0) and IsCelestialID(beltID)) {
+        m_spawned[beltID] = false;
+        m_depletedAt[beltID] = GetFileTimeNow();
+        m_lastMined.erase(beltID);
+        _log(COSMIC_MGR__TRACE, "BeltMgr::RemoveAsteroid - belt %u in %s(%u) is mined out", beltID, m_system->GetName(), m_system->GetID());
     }
-*/
 }
 
 void BeltMgr::GetIceDist(uint8 quarter, float secStatus, std::unordered_multimap<float, uint16>& roidDist)
