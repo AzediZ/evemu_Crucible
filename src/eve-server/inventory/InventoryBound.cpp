@@ -47,6 +47,7 @@
 #include "station/Outpost.h"
 #include "station/StationDataMgr.h"
 #include "manufacturing/FactoryDB.h"
+#include "contract/ContractUtils.h"
 
 InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<InventoryBound>& parent, InventoryItemRef item, EVEItemFlags flag, uint32 ownerID, bool passive) :
     EVEBoundObject(mgr, parent),
@@ -73,6 +74,7 @@ InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<Invent
     EVEBoundObject::Add("SetPassword", &InventoryBound::SetPassword);
     EVEBoundObject::Add("RunRefiningProcess", &InventoryBound::RunRefiningProcess);
     EVEBoundObject::Add("TakeOutTrash", &InventoryBound::TakeOutTrash);
+    EVEBoundObject::Add("BreakPlasticWrap", &InventoryBound::BreakPlasticWrap);
     EVEBoundObject::Add("Build", &InventoryBound::Build);
 
     _log(INV__BIND, "Created InventoryBound object %p for %s(%u) and ownerID %u with flag %s  (passive: %s)", \
@@ -1024,6 +1026,59 @@ void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, u
         and !Inventory::CanTakeFromCorpHangar(pClient, officeRef->locationID(), srcRef->flag(), true))
             throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from containers in that hangar division."));
     }
+}
+
+PyResult InventoryBound::BreakPlasticWrap(PyCallArgs &call) {
+    /* invCache.GetInventoryFromId(wrapID).BreakPlasticWrap(), after ConfirmBreakCourierPackage
+     *  the contents go where the package is, to its owner, and the package goes - which fails the courier contract
+     *  (ContractUtils::OnCrateDeleted from InventoryItem::Delete) */
+    if (m_self->typeID() != EVEDB::invTypes::PlasticWrap)
+        throw CustomError("That isn't a courier package.");
+
+    Client* pClient(call.client);
+    if (!pClient->IsDocked())
+        throw UserError("CanOnlyDoInStations");
+    uint32 stationID(pClient->GetStationID()), corpID(pClient->GetCorporationID());
+    uint32 officeID(IsPlayerCorp(corpID) ? stDataMgr.GetOfficeIDForCorp(stationID, corpID) : 0);
+
+    if (m_self->ownerID() == pClient->GetCharacterID()) {
+        // our item hangar here
+        if ((m_self->locationID() != stationID) or (m_self->flag() != flagHangar))
+            throw UserError("CanOnlyDoInStations");
+    } else if (IsPlayerCorp(corpID) and (m_self->ownerID() == corpID)) {
+        // our corp's office or deliveries here
+        if (!(((officeID != 0) and (m_self->locationID() == officeID) and IsHangarFlag(m_self->flag()))
+            or ((m_self->locationID() == stationID) and (m_self->flag() == flagCorpMarket))))
+            throw UserError("CanOnlyDoInStations");
+        if (!Inventory::CanTakeFromCorpHangar(pClient, stationID, m_self->flag()))
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from that hangar division."));
+    } else {
+        throw UserError("CantDoThatWithSomeoneElsesStuff");
+    }
+
+    uint32 wrapID(m_itemID), locationID(m_self->locationID()), ownerID(m_self->ownerID());
+    EVEItemFlags flag(m_self->flag());
+
+    sItemFactory.SetUsingClient(pClient);
+    std::vector<InventoryItemRef> items;
+    if (pInventory != nullptr) {
+        pInventory->LoadContents();
+        pInventory->GetInventoryVec(items);
+    }
+    for (auto cur : items) {
+        // the goods were held by the system while in transit
+        if (cur->ownerID() != ownerID)
+            ContractUtils::ChangeOwnerRecursive(cur, ownerID);
+        // the package deletes itself when the last item comes out
+        cur->Move(locationID, flag, true);
+    }
+    // an empty package
+    if (sItemFactory.GetItemRefFromID(wrapID, false).get() != nullptr)
+        m_self->Delete();
+    sItemFactory.UnsetUsingClient();
+
+    _log(INV__MESSAGE, "IB::BreakPlasticWrap() - %s broke courier package %u (%lu items)", pClient->GetName(), wrapID, items.size());
+    return nullptr;
 }
 
 EVEItemFlags InventoryBound::ResolveAddFlag(uint16 toFlag) const

@@ -105,7 +105,6 @@ InvBrokerBound::InvBrokerBound(EVEServiceManager& mgr, InvBrokerService& parent,
     this->Add("SetLabel", &InvBrokerBound::SetLabel);
     this->Add("TrashItems", &InvBrokerBound::TrashItems);
     this->Add("AssembleCargoContainer", &InvBrokerBound::AssembleCargoContainer);
-    this->Add("BreakPlasticWrap", &InvBrokerBound::BreakPlasticWrap);
     this->Add("TakeOutTrash", &InvBrokerBound::TakeOutTrash);
     this->Add("SplitStack", &InvBrokerBound::SplitStack);
     this->Add("DeliverToCorpHangar", &InvBrokerBound::DeliverToCorpHangar);
@@ -579,14 +578,6 @@ PyResult InvBrokerBound::AssembleCargoContainer(PyCallArgs &call, PyInt* itemID,
     sItemFactory.UnsetUsingClient();
 
     _log(INV__MESSAGE, "IBB::AssembleCargoContainer() - %s assembled %s(%u)", pClient->GetName(), iRef->name(), iRef->itemID());
-    return nullptr;
-}
-
-PyResult InvBrokerBound::BreakPlasticWrap(PyCallArgs &call) {
-    // ConfirmBreakCourierPackage   - this is for courier contracts
-    sLog.Warning( "InvBrokerBound::Handle_BreakPlasticWrap()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
-
     return nullptr;
 }
 

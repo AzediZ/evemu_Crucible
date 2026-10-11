@@ -52,6 +52,7 @@ protected:
     PyResult List(PyCallArgs& call, std::optional <PyInt*> listFlag);
     PyResult CreateBookmarkVouchers(PyCallArgs& call, PyList* bookmarkIDs, PyInt* flag, PyBool* isMove);
     PyResult TakeOutTrash(PyCallArgs& call, PyList* itemIDs);
+    PyResult BreakPlasticWrap(PyCallArgs& call);
     PyResult SetPassword(PyCallArgs& call, PyInt* which, PyString* newPassword, PyString* oldPassword);
     PyResult ListDroneBay(PyCallArgs& call);
     PyResult RunRefiningProcess(PyCallArgs& call);

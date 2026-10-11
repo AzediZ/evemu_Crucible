@@ -65,7 +65,6 @@ protected:
     PyResult SetLabel(PyCallArgs& call, PyInt* itemID, PyRep* itemName);
     PyResult TrashItems(PyCallArgs& call, PyList* itemIDs, PyInt* locationID);
     PyResult AssembleCargoContainer(PyCallArgs& call, PyInt* itemID, PyNone* none, PyFloat* zero);
-    PyResult BreakPlasticWrap(PyCallArgs& call);
     PyResult TakeOutTrash(PyCallArgs& call, PyList* itemIDs);
     PyResult SplitStack(PyCallArgs& call, PyInt* stationID, PyInt* itemID, PyInt* quantity, PyInt* ownerID);
     PyResult DeliverToCorpHangar(PyCallArgs& call, PyInt* fromID, PyInt* stationID, PyList* itemIDs, std::optional <PyInt*> quantity, PyInt* ownerID, PyInt* destinationFlag);
