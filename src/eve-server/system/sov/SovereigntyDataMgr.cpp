@@ -249,6 +249,21 @@ PyRep *SovereigntyDataMgr::GetAllianceSystems() //Get all systems associated wit
     return list;
 }
 
+PyRep *SovereigntyDataMgr::GetSystemsForAlliance(uint32 allianceID)
+{
+    PyList* list = new PyList();
+    for (SovereigntyData const &sData : boost::make_iterator_range(
+                 m_sovData.get<SovDataByAlliance>().equal_range(allianceID)))
+    {
+        PyDict *dict = new PyDict();
+        dict->SetItemString("solarSystemID", new PyInt(sData.solarSystemID));
+        dict->SetItemString("allianceID", new PyInt(sData.allianceID));
+        dict->SetItemString("claimID", new PyInt(sData.claimID));
+        list->AddItem(new PyObject("util.KeyVal", dict));
+    }
+    return list;
+}
+
 PyRep *SovereigntyDataMgr::GetAllianceBeacons(uint32 allianceID) //Get all beacons associated with current alliance
 {
     PyList* list = new PyList();

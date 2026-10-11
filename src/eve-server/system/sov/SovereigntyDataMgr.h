@@ -103,6 +103,8 @@ public:
 
     PyRep *GetSystemSovereignty(uint32 systemID);
     PyRep *GetAllianceSystems();
+    // KeyVals (solarSystemID, allianceID, claimID) of the systems an alliance holds (alliance window 'settled systems')
+    PyRep *GetSystemsForAlliance(uint32 allianceID);
     // rows of locationID, allianceID, stationCount, militaryPoints, industrialPoints, claimedFor (days) for the
     //  systems of a constellation, the constellations of a region, the regions of the world (0) or a single system
     PyRep *GetCurrentSovData(uint32 locationID);

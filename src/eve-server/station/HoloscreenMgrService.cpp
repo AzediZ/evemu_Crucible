@@ -38,15 +38,28 @@ HoloscreenMgrService::HoloscreenMgrService() :
 //those objects should be cached
 
 PyResult HoloscreenMgrService::GetRecentEpicArcCompletions(PyCallArgs& call)
-{       //  this is cached object!!!
-    sLog.Debug("HoloscreenMgrService", "Called GetRecentEpicArcCompletions stub.");
+{
+    // holoscreenSvc.GetNPEEpicArcTemplateData shows one of these (or the viewer when there are none).
+    //  rows of chrEpicArcCompletions (F12 creates the table; epic arcs themselves are not in yet) from the last 30 days
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT characterID, completionDate FROM chrEpicArcCompletions"
+        " WHERE completionDate > %lli ORDER BY completionDate DESC LIMIT 50",
+        GetFileTimeNow() - (EvE::Time::Day * 30)))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return new PyList();
+    }
 
-    /*
-     *        characterID
-     *        completionDate
-     */
-
-    return nullptr;
+    PyList* list = new PyList();
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("characterID", new PyInt(row.GetInt(0)));
+            dict->SetItemString("completionDate", new PyLong(row.GetInt64(1)));
+        list->AddItem(new PyObject("util.KeyVal", dict));
+    }
+    return list;
 }
 
 PyResult HoloscreenMgrService::GetTwoHourCache(PyCallArgs& call)

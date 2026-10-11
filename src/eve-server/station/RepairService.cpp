@@ -284,8 +284,39 @@ PyResult RepairServiceBound::DamageModules(PyCallArgs &call, PyList* itemIDAndAm
      *    self.repairSvc.DamageModules(itemIDAndAmountOfDamageList)
      */
 
-    _log(PHYSICS__INFO, "RepairSvcBound::Handle_DamageModules() size=%lli", call.tuple->size());
-    call.Dump(PHYSICS__INFO);
+    // a GM tool in the client (base_repairshop.py, ROLE_WORLDMOD):  [(itemID, damage to add in HP), ...]
+    Client* pClient(call.client);
+    if ((pClient->GetAccountRole() & (Acct::Role::WORLDMOD | Acct::Role::GMH | Acct::Role::ADMIN)) == 0)
+        throw CustomError("Access denied.");
+
+    for (auto cur : *itemIDAndAmountOfDamage) {
+        if (!cur->IsTuple() and !cur->IsList())
+            continue;
+        PyRep* idRep(cur->IsTuple() ? cur->AsTuple()->GetItem(0) : cur->AsList()->GetItem(0));
+        PyRep* amtRep(cur->IsTuple() ? cur->AsTuple()->GetItem(1) : cur->AsList()->GetItem(1));
+        InventoryItemRef iRef(sItemFactory.GetItemRef((uint32)PyRep::IntegerValue(idRep)));
+        if ((iRef.get() == nullptr) or !RepairService::IsRepairableHere(pClient, iRef, m_locationID))
+            continue;
+        double amount(PyRep::FloatValue(amtRep));
+        if (!(amount > 0))
+            continue;
+
+        if (iRef->IsShipItem() or (iRef->categoryID() == EVEDB::invCategories::Drone)) {
+            // armor first, then structure (never destroyed by this)
+            double armor(iRef->GetAttribute(AttrArmorDamage).get_double()), armorHP(iRef->GetAttribute(AttrArmorHP).get_double());
+            double toArmor(std::min(amount, std::max(armorHP - armor, 0.0)));
+            iRef->SetAttribute(AttrArmorDamage, armor + toArmor, true);
+            amount -= toArmor;
+            if (amount > 0) {
+                double hull(iRef->GetAttribute(AttrDamage).get_double()), hullHP(iRef->GetAttribute(AttrHP).get_double());
+                iRef->SetAttribute(AttrDamage, std::min(hull + amount, std::max(hullHP - 1, 0.0)), true);
+            }
+        } else {
+            double hull(iRef->GetAttribute(AttrDamage).get_double()), hullHP(iRef->GetAttribute(AttrHP).get_double());
+            iRef->SetAttribute(AttrDamage, std::min(hull + amount, hullHP), true);
+        }
+        iRef->SaveItem();
+    }
 
     return PyStatic.NewNone();
 }
