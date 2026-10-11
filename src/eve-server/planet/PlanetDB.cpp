@@ -551,6 +551,67 @@ void PlanetDB::DeleteLaunch(uint32 contID)
     sDatabase.RunQuery(err, "DELETE FROM piLaunches WHERE itemID = %u", contID);
 }
 
+int64 PlanetDB::GetLaunchTime(uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT launchTime FROM piLaunches WHERE itemID = %u", itemID)) {
+        _log(DATABASE__ERROR, "Error in GetLaunchTime query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetInt64(0);
+}
+
+uint32 PlanetDB::OnLaunchContainerGone(uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT charID, status FROM piLaunches WHERE itemID = %u", itemID)) {
+        _log(DATABASE__ERROR, "Error in OnLaunchContainerGone query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    uint32 charID = row.GetUInt(0);
+    // a container that burned up stays in the journal (the client shows it burned up) until its owner removes it
+    if (row.GetInt(1) != PI::Cargo::Deleted) {
+        DBerror err;
+        sDatabase.RunQuery(err, "DELETE FROM piLaunches WHERE itemID = %u", itemID);
+    }
+    return charID;
+}
+
+void PlanetDB::MarkCustomsOfficeSpawned(uint32 planetID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "INSERT IGNORE INTO piCustomsOfficeSpawn (planetID, spawnTime) VALUES (%u, %lli)", planetID, GetFileTimeNow());
+}
+
+void PlanetDB::GetSpawnedCustomsOffices(const std::vector<uint32>& planetIDs, std::set<uint32>& into)
+{
+    if (planetIDs.empty())
+        return;
+    std::string list;
+    for (auto cur : planetIDs) {
+        if (!list.empty())
+            list += ",";
+        list += std::to_string(cur);
+    }
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT planetID FROM piCustomsOfficeSpawn WHERE planetID IN (%s)", list.c_str())) {
+        _log(DATABASE__ERROR, "Error in GetSpawnedCustomsOffices query: %s", res.error.c_str());
+        // don't spawn anything on a db error
+        for (auto cur : planetIDs)
+            into.insert(cur);
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.insert(row.GetUInt(0));
+}
+
 void PlanetDB::DeleteColony(uint32 ccPinID, uint32 planetID, uint32 charID)
 {
     DBerror err;

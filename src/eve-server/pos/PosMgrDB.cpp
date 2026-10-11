@@ -504,12 +504,18 @@ void PosMgrDB::SaveCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& 
         "INSERT INTO posCustomsOfficeData (itemID, ownerID, allowAlly, allowStandings, selectedHour, standingValue,"
         " corpTax, allyTax, horribleTax, badTax, neutTax, goodTax, highTax, timestamp,"
         " rotX, rotY, rotZ, orbitalHackerProgress, orbitalHackerID, state, status, level)"
-        " VALUES (%u, %u, %u, %u, %u, %u, %f, %f, %f, %f, %f, %f, %f, %lli, %f, %f, %f, %f, %u, %i, %i, %i)",
+        " VALUES (%u, %u, %u, %u, %u, %i, %f, %f, %f, %f, %f, %f, %f, %lli, %f, %f, %f, %f, %u, %i, %i, %i)",
         cData.itemID, cData.ownerID, cData.allowAlliance, cData.allowStandings, cData.selectedHour, cData.standingValue,
         cData.taxRateValues[TaxValues::Corp], cData.taxRateValues[TaxValues::Alliance], cData.taxRateValues[TaxValues::StandingHorrible],
         cData.taxRateValues[TaxValues::StandingBad], cData.taxRateValues[TaxValues::StandingNeutral], cData.taxRateValues[TaxValues::StandingGood],
         cData.taxRateValues[TaxValues::StandingHigh], cData.timestamp, oData.rotation.x, oData.rotation.y, oData.rotation.z,
         oData.orbitalHackerProgress, oData.orbitalHackerID, cData.state, cData.status, oData.level);
+}
+
+void PosMgrDB::DeleteCustomsData(uint32 itemID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM posCustomsOfficeData WHERE itemID = %u", itemID);
 }
 
 void PosMgrDB::UpdateCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData)
@@ -518,11 +524,11 @@ void PosMgrDB::UpdateCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData
     DBerror err;
     sDatabase.RunQuery(err,
         "UPDATE posCustomsOfficeData"
-        " SET allowAlly=%u, allowStandings=%u, selectedHour=%u, standingValue=%u,"
+        " SET ownerID=%u, allowAlly=%u, allowStandings=%u, selectedHour=%u, standingValue=%i,"
         " corpTax=%f, allyTax=%f, horribleTax=%f, badTax=%f, neutTax=%f, goodTax=%f, highTax=%f, timestamp=%lli,"
         " orbitalHackerProgress=%f, orbitalHackerID=%u, state=%i, status=%i"
         " WHERE itemID=%i",
-        cData.allowAlliance, cData.allowStandings, cData.selectedHour, cData.standingValue,
+        cData.ownerID, cData.allowAlliance, cData.allowStandings, cData.selectedHour, cData.standingValue,
         cData.taxRateValues[TaxValues::Corp], cData.taxRateValues[TaxValues::Alliance], cData.taxRateValues[TaxValues::StandingHorrible],
         cData.taxRateValues[TaxValues::StandingBad], cData.taxRateValues[TaxValues::StandingNeutral], cData.taxRateValues[TaxValues::StandingGood],
         cData.taxRateValues[TaxValues::StandingHigh], cData.timestamp, oData.orbitalHackerProgress, oData.orbitalHackerID,

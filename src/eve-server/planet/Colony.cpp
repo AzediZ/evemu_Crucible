@@ -42,6 +42,7 @@
 
 
 #include "Client.h"
+#include "ship/Ship.h"
 #include "inventory/ItemDB.h"
 #include "inventory/ItemType.h"
 #include "planet/Colony.h"
@@ -510,6 +511,16 @@ void Colony::PlanetXfer(Client* pClient, CustomsSE* pCO, uint32 spaceportID, std
     //  import is from the office to the planet.  export is from the planet to the office.
     if (!HasColony())
         throw UserError("CannotImportEndpointNotFound");
+    if (pCO->IsReinforced())
+        throw CustomError ("The customs office is reinforced.  Nothing can be moved through it until it comes out of reinforcement.");
+    // the client offers the office within transfer range (menusvc checkTransferDist)
+    ShipSE* pShip(pClient->GetShipSE());
+    if (!pClient->IsInSpace() or (pShip == nullptr) or (pShip->SystemMgr() != pCO->SystemMgr()))
+        throw CustomError ("You are too far away from the customs office.");
+    double maxDistance = std::max(2500.0, (double)pCO->GetSelf()->GetAttribute(AttrMaxOperationalDistance).get_float());
+    double distance = GVector(pShip->GetPosition(), pCO->GetPosition()).length() - pShip->GetRadius() - pCO->GetRadius();
+    if (distance > maxDistance)
+        throw CustomError ("You are too far away from the customs office.");
     SimulateToNow();
 
     ColonySim sim(m_colony, GetPlanetRadius(), GetPlanetTypeID());

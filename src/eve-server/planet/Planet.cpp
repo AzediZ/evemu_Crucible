@@ -34,6 +34,7 @@
 #include "packets/Planet.h"
 #include "pos/Structure.h"
 #include "system/Celestial.h"
+#include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
 
 
@@ -287,18 +288,24 @@ void PlanetSE::AbandonColony(Client* pClient, Colony* pColony)
     SafeDelete(pColony);
 }
 
+GPoint PlanetSE::GetCustomsOfficePosition()
+{
+    // the office's slot:  700km off the planet's surface, the same spot every time
+    GPoint pos(GetPosition());
+    uint32 radius = GetRadius();
+    float rad = EvE::Trig::Deg2Rad(25);
+    pos.x += radius + 700000 * std::sin(rad);
+    pos.z += radius + 700000 * std::cos(rad);
+    pos.y += ((m_self->itemID() % 2001) - 1000);   // a little height, per planet
+    return pos;
+}
+
 void PlanetSE::CreateCustomsOffice()
 {
-    /** @todo  will need to write this code and make it play nice with everything else.
-     * a CO will be a special container as a CustomsSE, linked to the planet it orbits, and any colony on that planet.
-     * there is only one CO per planet, but ALL chars with a colony on that planet can access their items on the same CO
-     * the CO will load all items when it loads, but will need checks on "view items" or "open container" to ONLY send
-     * items owned by calling char, or NONE for chars that dont have a colony on that planet.
-     * i dont know where/how to do that yet...will need testing
-     * CO can go into reinforced mode, like towers (hint: use same code)
+    /* Crucible:  every planet has a customs office.  in high security it belongs to CONCORD ("Customs Office"),
+     *  elsewhere (low, null and wormhole space) to Interbus.  a planet gets its npc office once:  a destroyed Interbus
+     *  office is replaced by players' offices, never respawned (piCustomsOfficeSpawn)
      */
-
-    //ItemData( uint32 _typeID, uint32 _ownerID, uint32 _locationID, EVEItemFlags _flag, uint32 _quantity, const char *_customInfo = "", bool _contraband = false);
     FactionData data = FactionData();
         data.ownerID = corpInterbus;
         data.factionID = factionInterBus;
@@ -306,51 +313,26 @@ void PlanetSE::CreateCustomsOffice()
         data.corporationID = corpInterbus;
     uint16 typeID = EVEDB::invTypes::InterbusCustomsOffice;
 
-    if (m_system->GetSystemSecurityRating() > 0.49) {
+    if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::High) {
         typeID = EVEDB::invTypes::PlanetaryCustomsOffice;
         data.ownerID = corpCONCORD;
-        data.factionID = factionCONCORD; //sDataMgr.GetRegionFaction(m_system->GetRegionID());
+        data.factionID = factionCONCORD;
         data.allianceID = 0;
         data.corporationID = corpCONCORD;
     }
 
-    /*  this puts CO in warp-in bubble
-    // calculate warp-in point
-    GPoint pos = GetPosition();
-    uint32 radius = m_self->radius();
-    srandom(m_self->itemID());
-    int64 rand = random();
-    double j = (((rand / RAND_MAX) -1.0) / 3.0);
-    double s = 20 * pow(0.025 * (10 * log10(radius/1000000) -39), 20) +0.5;
-    s = EvE::max(0.5, EvE::min(s, 10.5));
-    double t = asin((pos.x/fabs(pos.x)) * (pos.z / sqrt(pow(pos.x, 2) + pow(pos.z, 2)))) +j;
-    uint32 d = radius * (s +1) +10000;
-    pos.x += d * sin(t);
-    pos.y += 0.5 * radius * sin(j);
-    pos.z -= d * cos(t);
-    // put CO 50km closer to planet than warpIn point.
-    GVector dir(pos, m_self->position());
-    dir.normalize();
-    pos -= (dir * 50000);
-    */
-    // this puts CO in random 700km orbit around planet
-    GPoint pos(GetPosition());
-    //pos.MakeRandomPointOnSphere(GetRadius() + 700000);
-
-    //uint32 dist = BUBBLE_RADIUS_METERS + 10000/*m_self->GetAttribute(AttrMoonAnchorDistance).get_int()*/;
-    uint32 radius = GetRadius();
-    float rad = EvE::Trig::Deg2Rad(25);
-
-    pos.x += radius + 700000 * std::sin(rad);
-    pos.z += radius + 700000 * std::cos(rad);
-    pos.y += MakeRandomInt(-1000, 1000);
-
+    GPoint pos(GetCustomsOfficePosition());
     ItemData idata(typeID, data.ownerID, m_system->GetID(), flagNone, 1, itoa(m_self->itemID()), false);
     StructureItemRef iRef = sItemFactory.SpawnStructure(idata);
+    if (iRef.get() == nullptr) {
+        _log(PLANET__ERROR, "PlanetSE::CreateCustomsOffice() - unable to spawn the customs office for %s(%u)", GetName(), GetID());
+        return;
+    }
     iRef->SetPosition(pos);
     iRef->ChangeSingleton(true, false);
     iRef->SaveItem();
     pCO = new CustomsSE(iRef, m_services, m_system, data);
     pCO->Init();
     m_system->AddEntity(pCO);
+    PlanetDB::MarkCustomsOfficeSpawned(m_self->itemID());
 }

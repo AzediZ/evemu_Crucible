@@ -29,6 +29,7 @@
 #include "packets/Planet.h"
 #include "planet/CustomsOffice.h"
 #include "planet/Planet.h"
+#include "planet/PlanetDataMgr.h"
 #include "pos/Structure.h"
 #include "system/Container.h"
 #include "system/Damage.h"
@@ -224,16 +225,106 @@ void CustomsSE::UpdateSettings(int8 selectedHour, int8 standingValue, bool ally,
 
 float CustomsSE::GetTaxRate(Client* pClient)
 {
-    // get current tax rate based on set values by owning corp
+    /* the rate this character pays here, -1 when they may not use the office.
+     *  Crucible:  CONCORD's high security offices charge the doubled npc rate (defaultCustomsOfficeTaxRate, 10%),
+     *   Interbus' offices a little more (npcCustomsOfficeTaxRate of the Interbus office, 17%).
+     *   player offices charge what their owner set for the corporation, the alliance or the character's standing with
+     *   the owner, and only let in those (Player Owned Customs Office dev blog, 18 Oct 2011)
+     */
+    if (m_ownerID == corpCONCORD)
+        return sPIDataMgr.GetTypeAttribute(EVEDB::invTypes::PlanetaryCustomsOffice, AttrdefaultCustomsOfficeTaxRate) * sConfig.cosmic.PICONCORDTaxMultiplier;
+    if (m_ownerID == corpInterbus)
+        return sPIDataMgr.GetTypeAttribute(EVEDB::invTypes::InterbusCustomsOffice, AttrnpcCustomsOfficeTaxRate) * sConfig.cosmic.PIInterbusTaxMultiplier;
+    if (!IsPlayerCorp(m_ownerID))
+        return sPIDataMgr.GetTypeAttribute(m_self->typeID(), AttrdefaultCustomsOfficeTaxRate);
 
-    return m_cData.taxRateValues[EVEPOS::TaxValues::Corp];
+    using namespace EVEPOS;
+    if (pClient->GetCorporationID() == m_ownerID)
+        return m_cData.taxRateValues[TaxValues::Corp];
+    if (m_cData.allowAlliance and IsAlliance(m_allyID) and (pClient->GetAllianceID() == m_allyID))
+        return m_cData.taxRateValues[TaxValues::Alliance];
+    if (m_cData.allowStandings) {
+        int8 tier = GetStandingTier(pClient);
+        if (tier < m_cData.standingValue)
+            return -1;
+        switch (tier) {
+            case StandingValues::StandingHigh:      return m_cData.taxRateValues[TaxValues::StandingHigh];
+            case StandingValues::StandingGood:      return m_cData.taxRateValues[TaxValues::StandingGood];
+            case StandingValues::StandingNeutral:   return m_cData.taxRateValues[TaxValues::StandingNeutral];
+            case StandingValues::StandingBad:       return m_cData.taxRateValues[TaxValues::StandingBad];
+            default:                                return m_cData.taxRateValues[TaxValues::StandingHorrible];
+        }
+    }
+    return -1;
+}
+
+int8 CustomsSE::GetStandingTier(Client* pClient)
+{
+    // the owner's contact standing towards the character, their corporation or their alliance (first found), then the owner
+    //  alliance's.  no contact is neutral.  contact standings are the client's -10, -5, 0, 5, 10
+    float standing = 0;
+    bool found = false;
+    std::vector<uint32> owners;
+    owners.push_back(m_ownerID);
+    if (IsAlliance(m_allyID))
+        owners.push_back(m_allyID);
+    for (auto owner : owners) {
+        if (PosMgrDB::GetContactStanding(owner, pClient->GetCharacterID(), standing)
+        or  PosMgrDB::GetContactStanding(owner, pClient->GetCorporationID(), standing)
+        or  (IsAlliance(pClient->GetAllianceID()) and PosMgrDB::GetContactStanding(owner, pClient->GetAllianceID(), standing))) {
+            found = true;
+            break;
+        }
+    }
+    using namespace EVEPOS::StandingValues;
+    if (!found)
+        return StandingNeutral;
+    if (standing >= 10)
+        return StandingHigh;
+    if (standing >= 5)
+        return StandingGood;
+    if (standing > -5)
+        return StandingNeutral;
+    if (standing > -10)
+        return StandingBad;
+    return StandingHorrible;
+}
+
+bool CustomsSE::CanStore(uint16 typeID)
+{
+    // planetCommon.CanPutTypeInCustomsOffice
+    uint8 categoryID = sPIDataMgr.GetCategoryID(typeID);
+    if ((categoryID != EVEDB::invCategories::Commodity)
+    and (categoryID != EVEDB::invCategories::PlanetaryResources)
+    and (categoryID != EVEDB::invCategories::PlanetaryCommodities))
+        return false;
+    if ((categoryID == EVEDB::invCategories::Commodity) and (sPIDataMgr.GetGroupID(typeID) != EVEDB::invGroups::General))
+        return false;
+    return true;
+}
+
+void CustomsSE::ValidateAddItem(InventoryItemRef iRef)
+{
+    // a character's items going into the office's hangar:  planetary commodities only, 35000 m3 per character
+    if (!CanStore(iRef->typeID())) {
+        if (iRef->categoryID() == EVEDB::invCategories::Commodity)
+            throw UserError("CannotPutMissionItemInCargolink").AddTypeName("typeName", iRef->typeID());
+        throw CustomError ("You cannot put %s in a %s", iRef->name(), m_self->name());
+    }
+    double volume = iRef->type().volume() * iRef->quantity();
+    double available = GetAvailableSpace(iRef->ownerID());
+    if (iRef->locationID() == m_self->itemID())
+        available += volume;    // moving within the office
+    if (volume - available > 1e-5)
+        throw UserError("NotEnoughSpace")
+                .AddFormatValue("volume", new PyString(std::to_string(volume)))
+                .AddFormatValue("available", new PyString(std::to_string(std::max(0.0, available))));
 }
 
 void CustomsSE::VerifyAddItem(InventoryItemRef iRef)
 {
-    // test for planetary resources here
-    if ((iRef->categoryID() != EVEDB::invCategories::PlanetaryResources)
-    and (iRef->categoryID() != EVEDB::invCategories::PlanetaryCommodities))
+    // gantry material bays take the upgrade materials (planetary commodities too)
+    if (!CanStore(iRef->typeID()))
         throw CustomError ("You cannot put %s in a %s", iRef->name(), m_self->name());
 }
 
@@ -307,6 +398,7 @@ void CustomsSE::SendEffectUpdate(int16 effectID, bool active)
 void CustomsSE::ChangeOwner(uint32 corpID, int32 allianceID)
 {
     m_self->ChangeOwner(corpID, true);
+    m_warID = 0;
     m_ownerID = corpID;
     m_corpID = corpID;
     m_allyID = allianceID;

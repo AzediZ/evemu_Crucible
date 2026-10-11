@@ -119,8 +119,15 @@ uint32 CargoContainer::CreateItemID( ItemData &data)
 
 void CargoContainer::Delete()
 {
-    if (typeID() == EVEDB::invTypes::PlanetaryLaunchContainer)
-        PlanetDB::DeleteLaunch(m_itemID);
+    if (typeID() == EVEDB::invTypes::PlanetaryLaunchContainer) {
+        // the owner's journal lists launches (OnPILaunchesChange makes it reload them)
+        uint32 charID = PlanetDB::OnLaunchContainerGone(m_itemID);
+        Client* pClient(charID ? sEntityList.FindClientByCharID(charID) : nullptr);
+        if (pClient != nullptr) {
+            PyTuple* tuple = new PyTuple(0);
+            pClient->SendNotification("OnPILaunchesChange", "charid", &tuple);
+        }
+    }
 
     // if SE exists, remove from system before deleting item
     if (mySE != nullptr)
@@ -285,7 +292,10 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
         ;
     } else if (!sDataMgr.IsStation(m_self->locationID())) { // should NEVER be true (SE object in station???)
         if (m_self->typeID() == EVEDB::invTypes::PlanetaryLaunchContainer) {
-            m_deleteTimer.Start(5 *24 *60 *60 *1000);  //5d timer for PI launch.  should probably get this saved value from planet launches
+            // launches burn up five days after their launch (const.piLaunchOrbitDecayTime), also across restarts
+            int64 launchTime = PlanetDB::GetLaunchTime(m_self->itemID());
+            int64 left = (launchTime ? launchTime + 5 * EvE::Time::Day - GetFileTimeNow() : 5 * EvE::Time::Day);
+            m_deleteTimer.Start((uint32)std::max((int64)60000, left / 10000));     // FILETIME to ms
         } else {
             m_deleteTimer.Start(sConfig.rates.WorldDecay *60 *1000);
         }
@@ -319,6 +329,9 @@ void ContainerSE::Process() {
     if (m_deleteTimer.Check(false)) {
         m_deleteTimer.Disable();
         sLog.Magenta( "ContainerSE::Process()", "Garbage Collection is removing Cargo Container %u.", m_contRef->itemID() );
+        // a launch burned up:  it stays in its owner's journal until they remove it
+        if (m_contRef->typeID() == EVEDB::invTypes::PlanetaryLaunchContainer)
+            PlanetDB::UpdateLaunchStatus(m_contRef->itemID(), PI::Cargo::Deleted);
         m_contRef->Delete();
         delete this;
     }

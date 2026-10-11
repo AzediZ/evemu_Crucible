@@ -71,6 +71,8 @@ public:
 
     bool                        HasCOSE()               { return pCO != nullptr; }
     void                        CreateCustomsOffice();
+    // the spot of this planet's customs office
+    GPoint                      GetCustomsOfficePosition();
     void                        SetCustomsOffice(CustomsSE* pSE){ pCO = pSE; }
     CustomsSE*                  GetCustomsOffice()      { return pCO; }
 

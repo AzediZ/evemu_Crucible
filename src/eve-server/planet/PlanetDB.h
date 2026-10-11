@@ -70,6 +70,14 @@ public:
 
     void SaveLaunch(uint32 contID, uint32 charID, uint32 systemID, uint32 planetID, GPoint& pos);
     static void DeleteLaunch(uint32 contID);
+    // 0 when the container is no launch
+    static int64 GetLaunchTime(uint32 itemID);
+    // a launch container left space:  its journal entry goes unless it burned up.  returns the owner
+    static uint32 OnLaunchContainerGone(uint32 itemID);
+
+    /* customs office spawns:  a planet gets its npc office once */
+    static void MarkCustomsOfficeSpawned(uint32 planetID);
+    static void GetSpawnedCustomsOffices(const std::vector<uint32>& planetIDs, std::set<uint32>& into);
 };
 
 #endif  // EVEMU_PLANET_PLANETDB_H_

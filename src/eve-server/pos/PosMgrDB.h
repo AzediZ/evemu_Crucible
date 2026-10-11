@@ -74,6 +74,7 @@ public:
     bool GetCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData);
     void SaveCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData);
     void UpdateCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData);
+    static void DeleteCustomsData(uint32 itemID);
 
     void UpdateAccess(int32 itemID, EVEPOS::TowerData& data);
     void UpdateNotify(int32 itemID, EVEPOS::TowerData& data);

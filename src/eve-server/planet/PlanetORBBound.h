@@ -52,7 +52,7 @@ public:
 protected:
     PyResult GetTaxRate(PyCallArgs& call, PyInt* itemID);
     PyResult GetSettingsInfo(PyCallArgs& call, PyInt* orbitalID);
-    PyResult UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyInt* reinforceValue, PyObject* taxRateValues, PyFloat* standingValue, PyBool* allowAllianceValue, PyBool* allowStandingsValue);
+    PyResult UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyRep* reinforceValue, PyObject* taxRateValues, PyRep* standingValue, PyRep* allowAllianceValue, PyRep* allowStandingsValue);
     PyResult GMChangeSpaceObjectOwner(PyCallArgs& call, PyInt* itemID, PyInt* corpID);
 
 private:

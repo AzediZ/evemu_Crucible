@@ -85,12 +85,12 @@ PyResult PlanetORBBound::GetTaxRate(PyCallArgs& call, PyInt* itemID)
     // NOTE:  "return PyNone()" = access denied to customs office.
     CustomsSE* pCOSE(GetCustomsOffice(m_systemID, itemID->value()));
 
-    /** @todo  there's more to this...check for standings, alliance  */
-    if (IsPlayerCorp(pCOSE->GetOwnerID()))
-        if (call.client->GetCorporationID() != pCOSE->GetOwnerID())
-            return PyStatic.NewNone();
+    // corporation, alliance or standing rate.  None when the owner doesn't let this character in (PortStandingCheckFail)
+    float rate = pCOSE->GetTaxRate(call.client);
+    if (rate < 0)
+        return PyStatic.NewNone();
 
-    return new PyFloat(pCOSE->GetTaxRate(call.client));
+    return new PyFloat(rate);
 }
 
 PyResult PlanetORBBound::GetSettingsInfo(PyCallArgs& call, PyInt* orbitalID)
@@ -99,14 +99,21 @@ PyResult PlanetORBBound::GetSettingsInfo(PyCallArgs& call, PyInt* orbitalID)
      *   self.selectedHour, self.taxRateValues, self.standingLevel, self.allowAlliance, self.allowStandings = self.orbitalData
      */
     CustomsSE* pCOSE(GetCustomsOffice(m_systemID, orbitalID->value()));
+    if (call.client->GetCorporationID() != pCOSE->GetOwnerID())
+        throw CustomError ("Only members of the owning corporation can view this customs office's settings.");
     return pCOSE->GetSettingsInfo();
 }
 
-PyResult PlanetORBBound::UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyInt* reinforceValue, PyObject* taxRateValues, PyFloat* standingValue, PyBool* allowAllianceValue, PyBool* allowStandingsValue)
+PyResult PlanetORBBound::UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyRep* reinforceValue, PyObject* taxRateValues, PyRep* standingValue, PyRep* allowAllianceValue, PyRep* allowStandingsValue)
 {
     //remoteOrbitalRegistry.UpdateSettings(self.orbitalID, reinforceValue, taxRateValues, standingValue, allowAllianceValue, allowStandingsValue)
     _log(INV__MESSAGE, "Calling PlanetORBBound::UpdateSettings()");
     call.Dump(PLANET__DUMP);
+
+    CustomsSE* pCOSE(GetCustomsOffice(m_systemID, orbitalID->value()));
+    // the owner's station managers configure the office (orbitalConfiguration)
+    if ((call.client->GetCorporationID() != pCOSE->GetOwnerID()) or ((call.client->GetCorpRole() & Corp::Role::StationManager) == 0))
+        throw CustomError ("You need to be a Station Manager of the owning corporation to configure this customs office.");
 
     PyDict* input = taxRateValues->arguments()->AsDict();
     Call_TaxRateValuesDict dict;
@@ -115,8 +122,31 @@ PyResult PlanetORBBound::UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyIn
         return nullptr;
     }
 
-    CustomsSE* pCOSE(GetCustomsOffice(m_systemID, orbitalID->value()));
-    pCOSE->UpdateSettings(reinforceValue->value(), standingValue->value(), allowAllianceValue->value(), allowStandingsValue->value(), dict);
+    // tax rates are fractions.  the reinforcement hour is a UTC hour, the standing one of the contact levels
+    auto clamp = [](double value) { return (float)std::min(1.0, std::max(0.0, value)); };
+    dict.corporation = clamp(dict.corporation);
+    dict.alliance = clamp(dict.alliance);
+    dict.standingHorrible = clamp(dict.standingHorrible);
+    dict.standingBad = clamp(dict.standingBad);
+    dict.standingNeutral = clamp(dict.standingNeutral);
+    dict.standingGood = clamp(dict.standingGood);
+    dict.standingHigh = clamp(dict.standingHigh);
+    int64 hour = std::min((int64)23, std::max((int64)0, PyRep::IntegerValue(reinforceValue)));
+    double standing = (standingValue->IsFloat() ? standingValue->AsFloat()->value() : (double)PyRep::IntegerValue(standingValue));
+    int8 standingLevel = EVEPOS::StandingValues::StandingHorrible;
+    if (standing >= 10) {
+        standingLevel = EVEPOS::StandingValues::StandingHigh;
+    } else if (standing >= 5) {
+        standingLevel = EVEPOS::StandingValues::StandingGood;
+    } else if (standing > -5) {
+        standingLevel = EVEPOS::StandingValues::StandingNeutral;
+    } else if (standing > -10) {
+        standingLevel = EVEPOS::StandingValues::StandingBad;
+    }
+    bool allowAlliance = (allowAllianceValue->IsBool() ? allowAllianceValue->AsBool()->value() : (PyRep::IntegerValue(allowAllianceValue) != 0));
+    bool allowStandings = (allowStandingsValue->IsBool() ? allowStandingsValue->AsBool()->value() : (PyRep::IntegerValue(allowStandingsValue) != 0));
+
+    pCOSE->UpdateSettings((int8)hour, standingLevel, allowAlliance, allowStandings, dict);
 
     return nullptr;
 }

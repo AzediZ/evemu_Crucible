@@ -40,6 +40,7 @@
 #include "planet/Planet.h"
 #include "planet/Moon.h"
 #include "planet/CustomsOffice.h"
+#include "planet/PlanetDB.h"
 #include "pos/Array.h"
 #include "pos/Battery.h"
 #include "pos/Module.h"
@@ -182,13 +183,19 @@ bool SystemManager::BootSystem() {
         if (cur.second->IsPOSSE())
             cur.second->GetPOSSE()->Init();
 
-    // check planets for colony/customs office
-    /* does not work as intended
-    for (auto cur : m_planetMap)
-        if (cur.second->GetPlanetSE()->HasColony())
+    // Crucible:  every planet has a customs office.  the npc office is spawned once per planet; one that was destroyed
+    //  stays gone (players anchor their own)
+    if (sConfig.cosmic.PIEnabled and sConfig.cosmic.PISpawnAllCustomsOffices and !m_planetMap.empty()) {
+        std::vector<uint32> planetIDs;
+        for (auto cur : m_planetMap)
             if (!cur.second->GetPlanetSE()->HasCOSE())
-                cur.second->GetPlanetSE()->CreateCustomsOffice();
-            */
+                planetIDs.push_back(cur.first);
+        std::set<uint32> spawned;
+        PlanetDB::GetSpawnedCustomsOffices(planetIDs, spawned);
+        for (auto cur : planetIDs)
+            if (spawned.find(cur) == spawned.end())
+                m_planetMap[cur]->GetPlanetSE()->CreateCustomsOffice();
+    }
 
     if (sConfig.server.BountyPayoutDelayed)
         m_bountyTimer.Start(sConfig.server.BountyPayoutTimer * 60 * 1000);
@@ -2150,11 +2157,10 @@ bool SystemManager::SafeToUnload()
                 return false;
             }
         }
-        if (cur.second->IsPlanetSE()) {
-            if (cur.second->GetPlanetSE()->HasColony()) { // Need to prevent unloading of any Planet SE where colonies exist so that they continue to be processed.
-                return false;
-            }
-        }
+        // colonies don't keep a system loaded:  they are simulated when they are looked at (Colony::SimulateToNow)
+        //  customs office state changes do (an anchoring gantry, a reinforced office)
+        if (cur.second->IsCOSE() and cur.second->GetCOSE()->IsInTimedState())
+            return false;
     }
     return true; //by default, its always safe to unload
 }

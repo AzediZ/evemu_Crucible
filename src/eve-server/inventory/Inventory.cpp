@@ -33,6 +33,7 @@
 
 #include "character/Character.h"
 #include "inventory/Inventory.h"
+#include "planet/CustomsOffice.h"
 #include "inventory/ItemDB.h"
 #include "inventory/ItemFactory.h"
 #include "pos/Structure.h"
@@ -964,6 +965,16 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
     // i dont think we need to check shit in stations...yet
     if (m_self->categoryID() == EVEDB::invCategories::Station)
         return true;
+
+    // customs offices take planetary commodities only, and their room is per character
+    if ((m_self->groupID() == EVEDB::invGroups::Orbital_Infrastructure) and (flag == flagHangar)) {
+        StructureItemRef sRef = StructureItemRef::StaticCast(m_self);
+        SystemEntity* pSE(sRef->GetMySE());
+        if ((pSE != nullptr) and pSE->IsCOSE()) {
+            pSE->GetCOSE()->ValidateAddItem(iRef);
+            return true;
+        }
+    }
 
     Client* pClient(sItemFactory.GetUsingClient());
 

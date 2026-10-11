@@ -59,6 +59,9 @@ public:
     uint8                       GetState() const        { return m_cData.state; }
     float                       GetStatus()             { return m_cData.status; }
     bool                        IsReinforced()          { return false; }   /** @todo  finish this...not sure how yet. */
+    // anchoring, upgrading, unanchoring or reinforced:  a timer is running on this orbital
+    bool                        IsInTimedState()        { return (m_cData.state == EVEPOS::EntityState::Anchoring) or (m_cData.state == EVEPOS::EntityState::Onlining)
+                                                              or (m_cData.state == EVEPOS::EntityState::Unanchoring) or (m_cData.state == EVEPOS::EntityState::ShieldReinforce); }
 
     // for orbital infrastructure
     void                     SetPlanet(uint32 planetID) { m_oData.planetID = planetID; }
@@ -71,6 +74,12 @@ public:
     void    UpdateSettings(int8 selectedHour, int8 standingValue, bool ally, bool standings, Call_TaxRateValuesDict& taxRateValues);
 
     void    VerifyAddItem(InventoryItemRef iRef);   // this must throw on failure
+    // before an item is moved into the office's hangar (Inventory::ValidateAddItem).  throws
+    void    ValidateAddItem(InventoryItemRef iRef);
+    // planetCommon.CanPutTypeInCustomsOffice
+    static bool CanStore(uint16 typeID);
+    // the owner's standing towards the character as one of EVEPOS::StandingValues
+    int8    GetStandingTier(Client* pClient);
 
     // the office's storage is per character (type capacity each)
     double  GetUsedSpace(uint32 ownerID);
