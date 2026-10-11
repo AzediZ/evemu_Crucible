@@ -177,6 +177,8 @@ public:
     MoonSE*                     GetMoonSE()             { return m_moonSE; }
     PlanetSE*                   GetPlanetSE()           { return m_planetSE; } //Planets are required for sovereignty structures
     StargateSE*                 GetGateSE()             { return m_gateSE; }
+    // control tower of a starbase module (nullptr for towers and sov structures)
+    TowerSE*                    GetControlTower()       { return m_towerSE; }
 
     inline void                 SetPOSState(int8 state) { m_data.state = state; }
     inline void                 SetTimer(uint32 time)   { m_procTimer.SetTimer(time); }

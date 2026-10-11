@@ -37,6 +37,8 @@
 #include "system/SystemDB.h"
 #include "planet/Moon.h"
 #include "pos/Structure.h"
+#include "pos/JumpBridge.h"
+#include "pos/Tower.h"
 #include "ship/BeyonceService.h"
 #include "ship/modules/CloakModule.h"
 #include "ship/modules/JumpPortalModule.h"
@@ -1205,71 +1207,99 @@ PyResult BeyonceBound::CmdJumpThroughAlliance(PyCallArgs &call, PyInt* otherShip
 
 PyResult BeyonceBound::CmdJumpThroughCorporationStructure(PyCallArgs &call, PyInt* itemID, PyInt* remoteStructureID, PyInt* remoteSystemID) {
     //sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughCorporationStructure, itemID, remoteStructureID, remoteSystemID)
-    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughCorporationStructure");
-    call.Dump(SHIP__WARNING);
-
-    _log(AUTOPILOT__MESSAGE, "%s called bridge jump.", call.client->GetName());
-    if (call.client->IsSessionChange()) {
-        call.client->SendNotifyMsg("Session Change currently active.");
+    Client* pClient(call.client);
+    _log(AUTOPILOT__MESSAGE, "%s called bridge jump.", pClient->GetName());
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
         return PyStatic.NewNone();
     }
 
-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pShipSE == nullptr) or !pClient->IsInSpace() or (pClient->SystemMgr() == nullptr))
+        throw CustomError("You are not in space.");
+    DestinyManager* pDestiny = pShipSE->DestinyMgr();
     if (pDestiny == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
         return PyStatic.NewNone();
     } else if (pDestiny->IsWarping()) {
-        call.client->SendNotifyMsg( "You can't do this while warping");
+        pClient->SendNotifyMsg( "You can't do this while warping");
         return PyStatic.NewNone();
     }  else if (pDestiny->AbortIfLoginWarping(true)) {
         return PyStatic.NewNone();
+    } else if (pDestiny->IsFrozen()) {
+        pClient->SendNotifyMsg( "Your ship is frozen and cannot move");
+        return PyStatic.NewNone();
     }
 
-    InventoryItemRef beacon = sItemFactory.GetItemRefFromID(remoteStructureID->value());
+    // weapons timer and criminal lockdown, as for stargates
+    sCrimeWatch.CheckDockOrJump(pClient, true);
 
-    //Check for jump fuel and make sure there is enough fuel available
-    InventoryItemRef bridge = sItemFactory.GetItemRefFromID(itemID->value());
-    ShipItemRef ship = call.client->GetShip();
+    ShipItemRef ship(pClient->GetShip());
+    // the client offers the jump only outside capsules
+    if (ship->groupID() == EVEDB::invGroups::Capsule)
+        throw CustomError("You cannot use a jump bridge in a capsule.");
 
-    std::vector<InventoryItemRef> fuelBayItems;
-    std::vector<InventoryItemRef> requiredItems;
-    uint32 fuelType = EVEDB::invTypes::LiquidOzone;
-    uint32 fuelQuantity = 500; // Bridges use static fuel quantity
+    SystemEntity* pSE(pClient->SystemMgr()->GetSE(itemID->value()));
+    JumpBridgeSE* pBridge(pSE == nullptr ? nullptr : pSE->GetJumpBridgeSE());
+    if (pBridge == nullptr)
+        throw UserError("JumpDestinationInvalid");
 
-    bridge->GetMyInventory()->GetItemsByFlag(flagHangar, fuelBayItems);
-    uint32 quantity = 0;
-    for (auto cur : fuelBayItems) {
-        if (cur->type().id() == fuelType) {
-            quantity += cur->quantity();
-            requiredItems.push_back(cur);
-            if (quantity >= fuelQuantity) {
-                break;
-            }
-        }
-    }
-    if (quantity < fuelQuantity) {
-        ship->GetPilot()->SendNotifyMsg("This jump requires %u units of %s in the Jump Bridge fuel hold.", fuelQuantity, sItemFactory.GetType(fuelType)->name().c_str());
-        return nullptr;
-    }
+    double distance(pShipSE->DistanceTo2(pBridge) - pShipSE->GetRadius() - pBridge->GetRadius());
+    if (distance > maxStargateJumpingDistance)
+        throw CustomError("You must be within %u m of the %s to jump.", (uint32)maxStargateJumpingDistance, pBridge->GetName());
 
-    // refuse before any fuel is taken
-    call.client->CheckMovePending();
-    uint32 quantityLeft = fuelQuantity;
-    for (auto cur : requiredItems) {
-        if (cur->quantity() >= quantityLeft) {
-            //If we have all the quantity we need in the current stack, decrement the amount we need and break
-            cur->AlterQuantity(-quantityLeft, true);
-            break;
-        } else {
-            //If the stack doesn't have the full amount, decrement the quantity from what we need and zero out the stack
-            quantityLeft -= cur->quantity();
-            // Delete item after we zero it's quantity
-            cur->SetQuantity(0, true, true);
-        }
-    }
-    GPoint position = beacon->position();
-    position.MakeRandomPointOnSphere(2500.0);
-    call.client->CynoJump(beacon);
+    // both ends online, and the link the client asks for is this bridge's
+    TowerSE* pTower(pBridge->GetControlTower());
+    if (!pBridge->IsOnline() or (pTower == nullptr) or !pTower->IsOnline())
+        throw UserError("CantJumpJumpPortalOffline")
+                .AddFormatValue("structure", new PyString(pBridge->GetName()))
+                .AddFormatValue("system", new PyString(sDataMgr.GetSystemName(pClient->GetSystemID())));
+    const EVEPOS::JumpBridgeData& link(pBridge->GetBridgeData());
+    if ((link.toItemID == 0) or ((uint32)link.toItemID != (uint32)remoteStructureID->value())
+    or  ((uint32)link.toSystemID != (uint32)remoteSystemID->value()))
+        throw UserError("JumpDestinationInvalid");
+
+    // access:  the owner corp, the alliance if the tower allows it, or the force field password
+    bool access((uint32)pClient->GetCorporationID() == pBridge->GetCorporationID());
+    if (!access and pTower->GetAllyAccess() and IsAlliance(pBridge->GetAllianceID()))
+        access = (pClient->GetAllianceID() == pBridge->GetAllianceID());
+    if (!access and !pTower->GetPassword().empty())
+        access = (pShipSE->GetPassword() == pTower->GetPassword());
+    if (!access)
+        throw UserError("CantJumpJumpPortalAccessRestricted");
+    if (pTower->ConsidersHostile(pClient))
+        throw UserError("CantJumpJumpPortalObservesTowerSettings");
+
+    // remote end (boots its system, like a gate jump would)
+    SystemManager* pRemoteSys(sEntityList.FindOrBootSystem(link.toSystemID));
+    SystemEntity* pRemoteSE(pRemoteSys == nullptr ? nullptr : pRemoteSys->GetSE(link.toItemID));
+    JumpBridgeSE* pRemote(pRemoteSE == nullptr ? nullptr : pRemoteSE->GetJumpBridgeSE());
+    if (pRemote == nullptr)
+        throw UserError("JumpDestinationInvalid");
+    TowerSE* pRemoteTower(pRemote->GetControlTower());
+    if (!pRemote->IsOnline() or (pRemoteTower == nullptr) or !pRemoteTower->IsOnline())
+        throw UserError("CantJumpJumpPortalOffline")
+                .AddFormatValue("structure", new PyString(pRemote->GetName()))
+                .AddFormatValue("system", new PyString(sDataMgr.GetSystemName(link.toSystemID)));
+    if ((uint32)pRemote->GetBridgeData().toItemID != pBridge->GetID())
+        throw UserError("JumpDestinationInvalid");
+
+    // fuel from the departure bridge:  ly x jumpDriveConsumptionAmount x ship mass x jumpPortalConsumptionMassFactor
+    double ly(JumpDrive::LightYears(pClient->GetSystemID(), link.toSystemID));
+    uint32 need(pBridge->FuelNeeded(ly, ship->GetAttribute(AttrMass).get_double()));
+    uint32 have(pBridge->CountFuel());
+    if (have < need)
+        throw UserError("JumpNotEnoughCharge3")
+                .AddFormatValue("required", new PyInt(need))
+                .AddTypeName("typeName", pBridge->GetFuelType())
+                .AddFormatValue("available", new PyInt(have));
+
+    // throws when a move is already pending, before any fuel is taken
+    pClient->CynoJump(link.toSystemID, pRemote->GetPosition());
+    pBridge->ConsumeFuel(need);
+
+    _log(SHIP__MESSAGE, "%s bridges %.2f ly from %u to %u in %u for %u fuel", pClient->GetName(), ly, pBridge->GetID(),
+            pRemote->GetID(), link.toSystemID, need);
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */
     // returns nodeID and timestamp

@@ -70,7 +70,7 @@ protected:
     PyResult GetTowerNotificationSettings(PyCallArgs& call, PyInt* itemID);
     PyResult SetTowerNotifications(PyCallArgs& call, PyInt* itemID, PyBool* showInCalendar, PyBool* sendFuelNotifications);
     PyResult GetTowerSentrySettings(PyCallArgs& call, PyInt* itemID);
-    PyResult SetTowerSentrySettings(PyCallArgs& call, PyInt* itemID, PyFloat* standing, PyFloat* status, PyBool* statusDrop, PyBool* corpWar, PyBool* useAllianceStandings);
+    PyResult SetTowerSentrySettings(PyCallArgs& call, PyInt* itemID, PyRep* standing, PyRep* status, PyRep* statusDrop, PyRep* corpWar, PyRep* useAllianceStandings);
     PyResult InstallJumpBridgeLink(PyCallArgs& call, PyInt* localItemID, PyInt* remoteSolarSystemID, PyInt* remoteItemID);
     PyResult UninstallJumpBridgeLink(PyCallArgs& call, PyInt* itemID);
 

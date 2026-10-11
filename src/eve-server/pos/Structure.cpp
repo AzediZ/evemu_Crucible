@@ -800,6 +800,9 @@ void StructureSE::Activate(int32 effectID)
 
     // sovereignty and infrastructure upgrade requirements
     CheckSovRequirements(true);
+    // jump bridges need a link
+    if (m_bridge and (GetJumpBridgeSE() != nullptr))
+        GetJumpBridgeSE()->CheckOnline();
 
     if (m_tower)
     {

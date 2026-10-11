@@ -134,9 +134,10 @@ PyResult MapService::GetHistory(PyCallArgs &call, PyInt* int1, PyInt* int2) {
 }
 
 PyResult MapService::GetLinkableJumpArrays(PyCallArgs &call)
-{   // working
+{
+    // [(solarSystemID, structureID)] of the alliance's unlinked, anchored bridges (the client skips its own system)
     DBQueryResult res;
-    PosMgrDB::GetLinkableJumpArrays(call.client->GetCorporationID(), res);
+    PosMgrDB::GetLinkableJumpArrays(call.client->GetAllianceID(), call.client->GetCorporationID(), res);
     PyList* list = new PyList();
     DBResultRow row;
     while (res.GetRow(row)) {
@@ -150,25 +151,23 @@ PyResult MapService::GetLinkableJumpArrays(PyCallArgs &call)
     return list;
 }
 
-/** not handled */
-
 PyResult MapService::GetAllianceJumpBridges(PyCallArgs &call)
 {
     /**     bridgesByLocation = m.GetAllianceJumpBridges()
-     *      for toLocID, fromLocID in bridgesByLocation:
+     *      for toLocID, fromLocID in bridgesByLocation:     (starMapSvc.DrawAllianceJumpLines, one line per link)
      */
-    sLog.Warning( "MapService::Handle_GetAllianceJumpBridges()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
+    PyList* list = new PyList();
+    if (!IsAlliance(call.client->GetAllianceID()))
+        return list;
 
     DBQueryResult res;
-    PosMgrDB::GetAllianceJumpArrays(call.client->GetAllianceID(), res);
-    PyList* list = new PyList();
+    PosMgrDB::GetAllianceJumpBridges(call.client->GetAllianceID(), res);
     DBResultRow row;
     while (res.GetRow(row)) {
-        // SELECT systemID, itemID
+        // SELECT systemID, toSystemID
         PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyInt(row.GetInt(0)));
-        tuple->SetItem(1, new PyInt(row.GetInt(1)));
+        tuple->SetItem(0, new PyInt(row.GetInt(1)));
+        tuple->SetItem(1, new PyInt(row.GetInt(0)));
         list->AddItem(tuple);
     }
 

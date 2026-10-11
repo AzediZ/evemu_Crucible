@@ -63,14 +63,73 @@ void PosMgrDB::GetControlTowerFuelRequirements(DBQueryResult& res) {
     }
 }
 
-void PosMgrDB::GetLinkableJumpArrays(uint32 corpID, DBQueryResult& res)
+void PosMgrDB::GetLinkableJumpArrays(uint32 allianceID, uint32 corpID, DBQueryResult& res)
 {
+    // current alliance from the corp, not the stale allyID saved with the bridge
     if (!sDatabase.RunQuery(res,
-            "SELECT systemID, itemID"
-            " FROM posJumpBridgeData WHERE corpID = %u AND toItemID = 0", corpID))
+            "SELECT b.systemID, b.itemID"
+            " FROM posJumpBridgeData AS b"
+            " JOIN posStructureData AS s ON s.itemID = b.itemID"
+            " LEFT JOIN crpCorporation AS c ON c.corporationID = b.corpID"
+            " WHERE b.toItemID = 0 AND s.state = %i AND (b.corpID = %u OR (%u > 0 AND c.allianceID = %u))",
+            EVEPOS::StructureState::Anchored, corpID, allianceID, allianceID))
     {
         codelog(DATABASE__ERROR, "Error in GetLinkableJumpArrays query: %s", res.error.c_str());
     }
+}
+
+void PosMgrDB::GetAllianceJumpBridges(uint32 allianceID, DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+            "SELECT b.systemID, b.toSystemID"
+            " FROM posJumpBridgeData AS b"
+            " JOIN crpCorporation AS c ON c.corporationID = b.corpID"
+            " WHERE b.toItemID <> 0 AND b.systemID < b.toSystemID AND c.allianceID = %u", allianceID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetAllianceJumpBridges query: %s", res.error.c_str());
+    }
+}
+
+int8 PosMgrDB::GetStructureState(uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT state FROM posStructureData WHERE itemID = %u", itemID)) {
+        codelog(DATABASE__ERROR, "Error in GetStructureState query: %s", res.error.c_str());
+        return -2;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return -2;
+    return row.GetInt(0);
+}
+
+uint32 PosMgrDB::GetCorpAllianceID(uint32 corpID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT allianceID FROM crpCorporation WHERE corporationID = %u", corpID)) {
+        codelog(DATABASE__ERROR, "Error in GetCorpAllianceID query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return 0;
+    return row.GetUInt(0);
+}
+
+bool PosMgrDB::GetContactStanding(uint32 ownerID, uint32 contactID, float& standing)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT relationshipID FROM %s WHERE ownerID = %u AND contactID = %u",
+            (IsAlliance(ownerID) ? "alnContacts" : "crpContacts"), ownerID, contactID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetContactStanding query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    standing = row.GetFloat(0);
+    return true;
 }
 
 bool PosMgrDB::HasBridge(uint32 systemID)
@@ -260,14 +319,14 @@ void PosMgrDB::UpdateBridgeData(EVEPOS::JumpBridgeData& data)
         data.allyID, data.toItemID, data.toTypeID, data.toSystemID, escPass.c_str(), data.allowCorp, data.allowAlliance, data.itemID);
 }
 
-void PosMgrDB::InstallBridgeLink(uint32 itemID, uint32 toSystemID, uint32 toItemID)
+void PosMgrDB::InstallBridgeLink(uint32 itemID, uint32 toSystemID, uint32 toItemID, uint16 toTypeID)
 {
     DBerror err;
     sDatabase.RunQuery(err,
         "UPDATE posJumpBridgeData SET "
-        " toItemID=%i, toTypeID=27897, toSystemID=%i "
-        " WHERE itemID=%i",
-        toItemID, toSystemID, itemID);
+        " toItemID=%u, toTypeID=%u, toSystemID=%u "
+        " WHERE itemID=%u",
+        toItemID, toTypeID, toSystemID, itemID);
 }
 
 void PosMgrDB::UninstallBridgeLink(uint32 itemID)
@@ -286,7 +345,7 @@ void PosMgrDB::UninstallRemoteBridgeLink(uint32 itemID) //Removes a link from th
     sDatabase.RunQuery(err,
         "UPDATE posJumpBridgeData SET "
         " toItemID=0, toTypeID=0, toSystemID=0 "
-        " WHERE itemID=(SELECT toItemID FROM posJumpBridgeData WHERE itemID=%i)",
+        " WHERE toItemID=%u",   // mysql can't select from the table it updates; the remote is whichever bridge points here
         itemID);
 }
 

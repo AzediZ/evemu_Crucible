@@ -411,6 +411,8 @@ public:
     // stops an active cloaking device at once (proximity, smart bombs, police).  msgKey is sent to the pilot.  gm and session cloaks are left alone
     void Decloak(const char* msgKey = nullptr);
     void SetPassword(std::string pass)                  { m_towerPass = pass; }
+    // the starbase force field password this ship entered
+    const std::string& GetPassword()                    { return m_towerPass; }
     // fleet
     void ClearBoostData();
     bool IsBoosted()                                    { return m_boosted; }

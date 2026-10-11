@@ -73,7 +73,21 @@ public:
     void SetStandingOwnerID(uint32 id)                  { m_tdata.standingOwnerID = id; }    // whose standings the sentries use
     void SetPassword(std::string pass)                  { m_tdata.password = pass; }
 
+    // sentry 'attack if standing/security status lower than' settings that are switched off (the client sends None)
+    static constexpr float SentrySettingOff = -11.0f;
+    static bool IsSentrySettingOff(float value)         { return (value < -10.5f); }
+
     bool HasForceField()                                { return (m_hasShield? true : false); }
+    bool GetCorpAccess()                                { return m_tdata.allowCorp; }
+    bool GetAllyAccess()                                { return m_tdata.allowAlliance; }
+    // sentry security status limit (m_data.status is the structure's own status)
+    float GetSentryStatus()                             { return m_tdata.status; }
+    /* would the tower's guns shoot this pilot (sentry settings)?  never its own corp or alliance.
+     *  standing: the pilot's (or corp's or alliance's, most specific first) standing from standingOwnerID below the limit
+     *  status:   security status below the limit.   statusDrop is not used.   corpWar:  @todo F22 wars
+     *  F18's tower guns use this too
+     */
+    bool ConsidersHostile(Client* pClient);
     bool GetStatusDrop()                                { return m_tdata.statusDrop; }
     bool GetCorpWar()                                   { return m_tdata.corpWar; }
     float GetStanding()                                 { return m_tdata.standing; }

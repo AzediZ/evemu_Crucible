@@ -8,6 +8,10 @@
  */
 
 #include "pos/JumpBridge.h"
+#include "EntityList.h"
+#include "EVEServerConfig.h"
+#include "inventory/Inventory.h"
+#include "ship/JumpDrive.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/SystemManager.h"
 #include "planet/Moon.h"
@@ -54,20 +58,9 @@ void JumpBridgeSE::SetOnline()
 {
     _log(SOV__DEBUG, "Onlining Jump Bridge...");
 
-    // Checks to see if bridge can be brought online
-
-    // Make sure the system is not being jammed
-    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_self->locationID());
-    if (sovData.jammerID != 0) {
-        throw CustomError("This system is currently being jammed.");
-    }
-
-    // Make sure player is not in high-sec (configurable)
-    if (!sConfig.world.highSecCyno) {
-        if (m_system->GetSecValue() >= 0.5f) {
-            throw CustomError("This module may not be used in high security space.");
-        }
-    }
+    /* the onlining checks are in CheckOnline(), called when onlining starts.
+     * cyno jammers don't affect jump bridges.
+     */
 
     // Reload data from DB changes
     m_db.GetBridgeData(m_bridgeData);
@@ -80,8 +73,105 @@ void JumpBridgeSE::SetOnline()
 
 void JumpBridgeSE::SetOffline()
 {
-    _log(SOV__DEBUG, "Offlining TCU... Resetting claim's hubID.");
+    _log(SOV__DEBUG, "Offlining Jump Bridge...");
     StructureSE::SetOffline();
+}
+
+void JumpBridgeSE::CheckOnline()
+{
+    // 'You cannot online the {structure} as it needs to be bridged first.'
+    if (!IsLinked())
+        throw UserError("CantOnlineNotLinked")
+                .AddFormatValue("structure", new PyString(m_self->itemName()));
+
+    // Make sure player is not in high-sec (configurable)
+    if (!sConfig.world.highSecCyno)
+        if (m_system->GetSecValue() >= 0.5f)
+            throw CustomError("The %s may not be used in high security space.", m_self->name());
+}
+
+void JumpBridgeSE::SetLink(uint32 toSystemID, uint32 toItemID, uint16 toTypeID)
+{
+    m_bridgeData.toSystemID = toSystemID;
+    m_bridgeData.toItemID = toItemID;
+    m_bridgeData.toTypeID = toTypeID;
+    m_bridgeData.corpID = m_corpID;
+    m_bridgeData.allyID = m_allyID;
+    m_db.UpdateBridgeData(m_bridgeData);
+    // the client's 'Unbridge' menu and jump entries come from the slim item
+    SendSlimUpdate();
+}
+
+void JumpBridgeSE::ClearLink()
+{
+    SetLink(0, 0, 0);
+}
+
+void JumpBridgeSE::OnRemovedFromSpace(bool killed)
+{
+    if (IsLinked()) {
+        m_db.UninstallRemoteBridgeLink(m_data.itemID);
+        // a loaded remote bridge loses its link and can't stay online without one
+        SystemManager* pRemoteSys(sEntityList.FindSystem(m_bridgeData.toSystemID));
+        if (pRemoteSys != nullptr) {
+            SystemEntity* pSE(pRemoteSys->GetSE(m_bridgeData.toItemID));
+            if ((pSE != nullptr) and (pSE->GetJumpBridgeSE() != nullptr)) {
+                JumpBridgeSE* pRemote(pSE->GetJumpBridgeSE());
+                pRemote->ClearLink();
+                if (pRemote->IsOnline() or (pRemote->GetProcState() == EVEPOS::ProcState::Onlining))
+                    pRemote->Deactivate(0);
+            }
+        }
+        m_bridgeData.toSystemID = 0;
+        m_bridgeData.toItemID = 0;
+        m_bridgeData.toTypeID = 0;
+    }
+
+    StructureSE::OnRemovedFromSpace(killed);
+}
+
+uint16 JumpBridgeSE::GetFuelType()
+{
+    return m_self->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
+}
+
+uint32 JumpBridgeSE::CountFuel()
+{
+    // the client opens the bridge's resources without a flag, older code used the hangar.  count both
+    uint16 fuelType(GetFuelType());
+    std::map<uint32, InventoryItemRef> contents;
+    m_self->GetMyInventory()->GetInventoryMap(contents);
+    uint32 count(0);
+    for (auto& cur : contents)
+        if (cur.second->typeID() == fuelType)
+            count += cur.second->quantity();
+    return count;
+}
+
+void JumpBridgeSE::ConsumeFuel(uint32 qty)
+{
+    uint16 fuelType(GetFuelType());
+    std::map<uint32, InventoryItemRef> contents;
+    m_self->GetMyInventory()->GetInventoryMap(contents);
+    for (auto& cur : contents) {
+        if (qty == 0)
+            break;
+        if (cur.second->typeID() != fuelType)
+            continue;
+        if ((uint32)cur.second->quantity() > qty) {
+            cur.second->AlterQuantity(-(int32)qty, true);
+            qty = 0;
+        } else {
+            qty -= cur.second->quantity();
+            cur.second->SetQuantity(0, true, true);
+        }
+    }
+}
+
+uint32 JumpBridgeSE::FuelNeeded(double ly, double shipMass)
+{
+    return JumpDrive::FuelNeeded(ly, m_self->GetAttribute(AttrJumpDriveConsumptionAmount).get_double(),
+            shipMass * m_self->GetAttribute(AttrJumpPortalConsumptionMassFactor).get_double());
 }
 
 PyDict* JumpBridgeSE::MakeSlimItem()

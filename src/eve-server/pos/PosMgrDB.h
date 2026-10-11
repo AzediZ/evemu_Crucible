@@ -26,9 +26,18 @@ public:
     PyRep *GetSiloCapacityForType(uint16 typeID);
     PyRep* GetCorpControlTowers(uint32 corpID);
 
-    static void GetLinkableJumpArrays(uint32 corpID, DBQueryResult& res);
+    // systemID, itemID of the unlinked, anchored bridges of the alliance's corps (or the corp's, without an alliance)
+    static void GetLinkableJumpArrays(uint32 allianceID, uint32 corpID, DBQueryResult& res);
     static void GetCorpJumpArrays(uint32 corpID, DBQueryResult& res);
     static void GetAllianceJumpArrays(uint32 allyID, DBQueryResult& res);
+    // systemID, toSystemID, one row per linked pair of the alliance's corps' bridges
+    static void GetAllianceJumpBridges(uint32 allianceID, DBQueryResult& res);
+    // posStructureData state, -2 if the structure has no data
+    static int8 GetStructureState(uint32 itemID);
+    // the corp's current alliance, 0 for none
+    static uint32 GetCorpAllianceID(uint32 corpID);
+    // relationship (contact standing) ownerID (corp or alliance) set for contactID.  false if none
+    static bool GetContactStanding(uint32 ownerID, uint32 contactID, float& standing);
 
     void GetControlTowerFuelRequirements(DBQueryResult& res);
 
@@ -45,7 +54,7 @@ public:
     bool GetBridgeData(EVEPOS::JumpBridgeData& data);
     void SaveBridgeData(EVEPOS::JumpBridgeData& data);
     void UpdateBridgeData(EVEPOS::JumpBridgeData& data);
-    void InstallBridgeLink(uint32 itemID, uint32 toSystemID, uint32 toItemID);
+    void InstallBridgeLink(uint32 itemID, uint32 toSystemID, uint32 toItemID, uint16 toTypeID);
     bool HasBridge(uint32 systemID);
     void UninstallBridgeLink(uint32 itemID);
     void UninstallRemoteBridgeLink(uint32 itemID);

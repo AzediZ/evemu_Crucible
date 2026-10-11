@@ -182,6 +182,34 @@ void TowerSE::InitData() {
     m_db.SaveTowerData(m_tdata, m_data);
 }
 
+bool TowerSE::ConsidersHostile(Client* pClient)
+{
+    if (pClient == nullptr)
+        return false;
+    if ((uint32)pClient->GetCorporationID() == m_corpID)
+        return false;
+    if (IsAlliance(m_allyID) and (pClient->GetAllianceID() == m_allyID))
+        return false;
+
+    if (!IsSentrySettingOff(m_tdata.standing)) {
+        uint32 ownerID(m_tdata.standingOwnerID > 0 ? m_tdata.standingOwnerID : m_corpID);
+        float standing(0.0f);
+        if (!PosMgrDB::GetContactStanding(ownerID, pClient->GetCharacterID(), standing))
+            if (!PosMgrDB::GetContactStanding(ownerID, pClient->GetCorporationID(), standing))
+                if (IsAlliance(pClient->GetAllianceID()))
+                    PosMgrDB::GetContactStanding(ownerID, pClient->GetAllianceID(), standing);
+        if (standing < m_tdata.standing)
+            return true;
+    }
+
+    if (!IsSentrySettingOff(m_tdata.status))
+        if (pClient->GetSecurityRating() < m_tdata.status)
+            return true;
+
+    /** @todo F22: corpWar (shoot those at war with the owner) */
+    return false;
+}
+
 void TowerSE::Scoop() {
     StructureSE::Scoop();
     m_moonSE->SetTower(nullptr);

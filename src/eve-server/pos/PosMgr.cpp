@@ -30,6 +30,10 @@
 #include "pos/Structure.h"
 #include "pos/Tower.h"
 #include "pos/Weapon.h"
+#include "pos/JumpBridge.h"
+#include "EntityList.h"
+#include "inventory/ItemFactory.h"
+#include "ship/JumpDrive.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
 
@@ -196,27 +200,108 @@ PosMgrBound::PosMgrBound(EVEServiceManager& mgr, PosMgr& parent, uint32 systemID
     this->Add("UninstallJumpBridgeLink", &PosMgrBound::UninstallJumpBridgeLink);
 }
 
+namespace {
+    // '{structure} in {system}' parameters of the bridge messages
+    [[noreturn]] void ThrowBridgeError(const char* msgKey, const char* structure, uint32 systemID)
+    {
+        throw UserError(msgKey)
+                .AddFormatValue("structure", new PyString(structure))
+                .AddFormatValue("system", new PyString(sDataMgr.GetSystemName(systemID)));
+    }
+
+    // the local bridge the caller configures:  owned by the caller's corp, Config Starbase Equipment role
+    JumpBridgeSE* GetConfigurableBridge(Client* pClient, uint32 itemID)
+    {
+        SystemManager* pSystem(pClient->SystemMgr());
+        SystemEntity* pSE(pSystem == nullptr ? nullptr : pSystem->GetSE(itemID));
+        if ((pSE == nullptr) or (pSE->GetJumpBridgeSE() == nullptr))
+            ThrowBridgeError("CantBridgeInvalidJumpPortal", (pSE == nullptr ? "structure" : pSE->GetName()), pClient->GetSystemID());
+        if (pSE->GetCorporationID() != (uint32)pClient->GetCorporationID())
+            throw UserError("CantConfigureNotInRightCorp");
+        if ((pClient->GetCorpRole() & Corp::Role::StarbaseConfig) != Corp::Role::StarbaseConfig)
+            throw UserError("CantConfigureCorpSovereigntyRoleLacking");
+        return pSE->GetJumpBridgeSE();
+    }
+
+    // a loaded remote bridge, nullptr when its system isn't loaded (never boots one)
+    JumpBridgeSE* GetLoadedBridge(uint32 systemID, uint32 itemID)
+    {
+        SystemManager* pSystem(sEntityList.FindSystem(systemID));
+        if (pSystem == nullptr)
+            return nullptr;
+        SystemEntity* pSE(pSystem->GetSE(itemID));
+        return (pSE == nullptr ? nullptr : pSE->GetJumpBridgeSE());
+    }
+}
+
 PyResult PosMgrBound::InstallJumpBridgeLink(PyCallArgs &call, PyInt* localItemID, PyInt* remoteSolarSystemID, PyInt* remoteItemID) {
     /**
      *    def BridgePortals(self, localItemID, remoteSolarSystemID, remoteItemID):
      *        posLocation = util.Moniker('posMgr', session.solarsystemid)
      *        posLocation.InstallJumpBridgeLink(localItemID, remoteSolarSystemID, remoteItemID)
-     *
-     * 01:15:52 W PosMgrBound::Handle_InstallJumpBridgeLink(): size=3
-     * 01:15:52 [POS:Dump]   Call Arguments:
-     * 01:15:52 [POS:Dump]      Tuple: 3 elements
-     * 01:15:52 [POS:Dump]       [ 0]    Integer: 140000332     <-- itemID
-     * 01:15:52 [POS:Dump]       [ 1]    Integer: 30000053      <-- toSystemID
-     * 01:15:52 [POS:Dump]       [ 2]    Integer: 140000064     <-- toItemID
-     *
+     *  the remote end is picked from map.GetLinkableJumpArrays()
      */
     _log(POS__TRACE,  "PosMgrBound::Handle_InstallJumpBridgeLink()");
     call.Dump(POS__DUMP);
 
-    // Install jump bridge link both ways
-    m_db.InstallBridgeLink(localItemID->value(), remoteSolarSystemID->value(), remoteItemID->value());
-    m_db.InstallBridgeLink(remoteItemID->value(), call.client->GetSystemID(), localItemID->value());
+    Client* pClient(call.client);
+    JumpBridgeSE* pLocal(GetConfigurableBridge(pClient, localItemID->value()));
+    uint32 localSystemID(pClient->GetSystemID());
+    uint32 remoteID(remoteItemID->value()), remoteSysID(remoteSolarSystemID->value());
 
+    // remote bridge, from the db (its system may not be loaded)
+    EVEPOS::JumpBridgeData remote = EVEPOS::JumpBridgeData();
+        remote.itemID = remoteID;
+    InventoryItemRef remoteRef(sItemFactory.GetItemRef(remoteID));
+    std::string name(remoteRef.get() == nullptr ? "Jump Bridge" : remoteRef->itemName());
+    const char* remoteName(name.c_str());
+    if (!m_db.GetBridgeData(remote) or (remoteRef.get() == nullptr) or ((uint32)remote.systemID != remoteSysID))
+        ThrowBridgeError("CantBridgeJumpPortalGone", remoteName, remoteSysID);
+    if (remoteRef->groupID() != EVEDB::invGroups::Jump_Portal_Array)
+        ThrowBridgeError("CantBridgeInvalidJumpPortal", remoteName, remoteSysID);
+    // the network is the alliance's (or the corp's own without one)
+    uint32 allianceID(pClient->GetAllianceID());
+    if ((uint32)remote.corpID != (uint32)pClient->GetCorporationID())
+        if ((allianceID == 0) or (PosMgrDB::GetCorpAllianceID(remote.corpID) != allianceID))
+            ThrowBridgeError("CantBridgeInvalidJumpPortal", remoteName, remoteSysID);
+    if (remoteSysID == localSystemID)
+        ThrowBridgeError("CantBridgeInvalidJumpPortal", remoteName, remoteSysID);
+
+    if (remoteRef->typeID() != pLocal->GetTypeID())
+        throw UserError("CantBridgeDifferentTypes")
+                .AddTypeName("sourceType", pLocal->GetTypeID())
+                .AddTypeName("destType", remoteRef->typeID());
+
+    // both anchored and offline
+    if (pLocal->GetState() != EVEPOS::StructureState::Anchored)
+        ThrowBridgeError("CantBridgeJumpPortalNotAnchored", pLocal->GetName(), localSystemID);
+    JumpBridgeSE* pRemote(GetLoadedBridge(remoteSysID, remoteID));
+    int8 remoteState(pRemote == nullptr ? PosMgrDB::GetStructureState(remoteID) : pRemote->GetState());
+    if (remoteState != EVEPOS::StructureState::Anchored)
+        ThrowBridgeError("CantBridgeJumpPortalNotAnchored", remoteName, remoteSysID);
+
+    if (pLocal->IsLinked())
+        ThrowBridgeError("CantBridgeJumpPortalLinked", pLocal->GetName(), localSystemID);
+    if ((pRemote == nullptr ? remote.toItemID : pRemote->GetBridgeData().toItemID) != 0)
+        ThrowBridgeError("CantBridgeJumpPortalLinked", remoteName, remoteSysID);
+
+    double ly(JumpDrive::LightYears(localSystemID, remoteSysID));
+    double range(pLocal->GetSelf()->GetAttribute(AttrJumpDriveRange).get_double());
+    if (ly > range)
+        throw UserError("CantBridgeTooFar")
+                .AddFormatValue("dist", new PyFloat(ly))
+                .AddFormatValue("structure", new PyString(pLocal->GetName()))
+                .AddFormatValue("range", new PyFloat(range));
+
+    // Install jump bridge link both ways
+    m_db.InstallBridgeLink(pLocal->GetID(), remoteSysID, remoteID, remoteRef->typeID());
+    m_db.InstallBridgeLink(remoteID, localSystemID, pLocal->GetID(), pLocal->GetTypeID());
+    pLocal->SetLink(remoteSysID, remoteID, remoteRef->typeID());
+    if (pRemote != nullptr)
+        pRemote->SetLink(localSystemID, pLocal->GetID(), pLocal->GetTypeID());
+
+    _log(POS__MESSAGE, "%s linked %s(%u) in %u to %u in %u (%.2f ly)", pClient->GetName(), pLocal->GetName(), pLocal->GetID(),
+            localSystemID, remoteID, remoteSysID, ly);
     return PyStatic.NewNone();
 }
 
@@ -230,8 +315,21 @@ PyResult PosMgrBound::UninstallJumpBridgeLink(PyCallArgs &call, PyInt* itemID) {
     _log(POS__TRACE,  "PosMgrBound::Handle_UninstallJumpBridgeLink()");
     call.Dump(POS__DUMP);
 
+    JumpBridgeSE* pLocal(GetConfigurableBridge(call.client, itemID->value()));
+    if (pLocal->GetState() != EVEPOS::StructureState::Anchored)
+        ThrowBridgeError("CantUnbridgeJumpPortalNotAnchored", pLocal->GetName(), call.client->GetSystemID());
+
+    EVEPOS::JumpBridgeData data(pLocal->GetBridgeData());
     m_db.UninstallRemoteBridgeLink(itemID->value());
     m_db.UninstallBridgeLink(itemID->value());
+    pLocal->ClearLink();
+    if (data.toItemID != 0)
+        if (JumpBridgeSE* pRemote = GetLoadedBridge(data.toSystemID, data.toItemID)) {
+            pRemote->ClearLink();
+            // can't stay online without a link
+            if (pRemote->IsOnline() or (pRemote->GetProcState() == EVEPOS::ProcState::Onlining))
+                pRemote->Deactivate(0);
+        }
 
     return PyStatic.NewNone();
 }
@@ -319,9 +417,10 @@ PyResult PosMgrBound::GetTowerSentrySettings(PyCallArgs &call, PyInt* itemID) {
     if (pTSE == nullptr)
         return new PyObject("util.Row", data);
 
+    // limits that are switched off go back as None (unchecked boxes)
     PyList* line = new PyList(5);
-        line->SetItem(0, new PyFloat(pTSE->GetStanding()));
-        line->SetItem(1, new PyFloat(pTSE->GetStatus()));
+        line->SetItem(0, TowerSE::IsSentrySettingOff(pTSE->GetStanding()) ? PyStatic.NewNone() : new PyFloat(pTSE->GetStanding()));
+        line->SetItem(1, TowerSE::IsSentrySettingOff(pTSE->GetSentryStatus()) ? PyStatic.NewNone() : new PyFloat(pTSE->GetSentryStatus()));
         line->SetItem(2, new PyBool(pTSE->GetStatusDrop()));
         line->SetItem(3, new PyBool(pTSE->GetCorpWar()));
         line->SetItem(4, new PyInt(pTSE->GetStandingOwnerID()));
@@ -330,7 +429,27 @@ PyResult PosMgrBound::GetTowerSentrySettings(PyCallArgs &call, PyInt* itemID) {
     return new PyObject("util.Row", data);
 }
 
-PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, PyFloat* standing, PyFloat* status, PyBool* statusDrop, PyBool* corpWar, PyBool* useAllianceStandings) {
+namespace {
+    // the client sends floats or ints, and None for unchecked limits
+    float SentryValue(PyRep* rep)
+    {
+        if (rep->IsFloat())
+            return rep->AsFloat()->value();
+        if (rep->IsInt())
+            return rep->AsInt()->value();
+        return TowerSE::SentrySettingOff;
+    }
+    bool SentryFlag(PyRep* rep)
+    {
+        if (rep->IsBool())
+            return rep->AsBool()->value();
+        if (rep->IsInt())
+            return (rep->AsInt()->value() != 0);
+        return false;
+    }
+}
+
+PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, PyRep* standing, PyRep* status, PyRep* statusDrop, PyRep* corpWar, PyRep* useAllianceStandings) {
     //  self.posMgr.SetTowerSentrySettings(self.slimItem.itemID, standing, status, statusDrop, war, useAllianceStandings)
     SystemManager* pSystem = call.client->SystemMgr();
     if (pSystem == nullptr) {
@@ -342,13 +461,13 @@ PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, Py
     if (pTSE == nullptr)
         return PyStatic.NewNone();
 
-    pTSE->SetStanding(standing->value());
-    pTSE->SetStatus(status->value());
-    pTSE->SetStatusDrop(statusDrop->value());
-    pTSE->SetCorpWar(corpWar->value());
-    pTSE->SetUseAllyStandings(useAllianceStandings->value());
+    pTSE->SetStanding(SentryValue(standing));
+    pTSE->SetStatus(SentryValue(status));
+    pTSE->SetStatusDrop(SentryFlag(statusDrop));
+    pTSE->SetCorpWar(SentryFlag(corpWar));
+    pTSE->SetUseAllyStandings(SentryFlag(useAllianceStandings));
     // the client ticks 'use alliance standings' when standingOwnerID is the viewer's alliance
-    if (useAllianceStandings->value() and IsAlliance(call.client->GetAllianceID())) {
+    if (SentryFlag(useAllianceStandings) and IsAlliance(call.client->GetAllianceID())) {
         pTSE->SetStandingOwnerID(call.client->GetAllianceID());
     } else {
         pTSE->SetStandingOwnerID(call.client->GetCorporationID());

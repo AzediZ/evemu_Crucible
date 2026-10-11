@@ -33,10 +33,28 @@ public:
     virtual PyDict*             MakeSlimItem();
     virtual void                SetOnline();
     virtual void                SetOffline();
+    // unlinks the remote bridge
+    virtual void                OnRemovedFromSpace(bool killed);
 
     /* virtual functions default to base class and overridden as needed */
     virtual void Init();
     virtual void InitData();
+
+    /* bridge link */
+    const EVEPOS::JumpBridgeData& GetBridgeData()       { return m_bridgeData; }
+    bool                        IsLinked()              { return (m_bridgeData.toItemID != 0); }
+    // set/clear the link (db and slim item)
+    void                        SetLink(uint32 toSystemID, uint32 toItemID, uint16 toTypeID);
+    void                        ClearLink();
+    // throws the client's errors when the bridge can't be onlined (not linked, high security space)
+    void                        CheckOnline();
+
+    /* fuel (jumpDriveConsumptionType in the bridge's own hold) */
+    uint16                      GetFuelType();
+    uint32                      CountFuel();
+    void                        ConsumeFuel(uint32 qty);
+    // fuel for a ship of shipMass to jump ly (client posConst.GetJumpFuelConsumption)
+    uint32                      FuelNeeded(double ly, double shipMass);
 
 protected:
     void SendSlimUpdate();
