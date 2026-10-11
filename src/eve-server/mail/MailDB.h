@@ -30,6 +30,7 @@
 
 class PyObject;
 class PyString;
+class CRowSet;
 
 class MailDB : public ServiceDB
 {
@@ -110,6 +111,19 @@ public:
     int SendMail(int sender, std::vector<int>& toCharacterIDs, int toListID, int toCorpOrAllianceID, const std::string& title, const std::string& body, int isReplyTo, int isForwardedFrom);
     PyRep* GetNewMail(int charId);
     PyRep* GetMailStatus(int charId);
+
+    // Notifications (chrNotifications)
+    // returns notificationID, 0 on failure
+    static uint32 StoreNotification(uint32 receiverID, uint16 typeID, uint32 senderID, int64 created, const std::string& yaml);
+    // dbutil.CRowset of the char's notifications, newest first.  empty `types` = all types
+    static CRowSet* GetNotifications(uint32 charID, const std::vector<uint16>& types, bool unprocessedOnly);
+    // ids and types both null = all of the char's notifications
+    static void MarkNotificationsProcessed(uint32 charID, const std::vector<int32>* ids, const std::vector<uint16>* types);
+    static void DeleteNotifications(uint32 charID, const std::vector<int32>* ids, const std::vector<uint16>* types, bool unprocessedOnly = false);
+    static uint32 GetUnprocessedNotificationCount(uint32 charID);
+    // members of a corp / alliance whose corpRole|rolesAtAll intersects roleMask (0 = everyone; directors always match)
+    static void GetCorpMembersWithRoles(uint32 corpID, int64 roleMask, std::vector<uint32>& into);
+    static void GetAllianceMembersWithRoles(uint32 allianceID, int64 roleMask, std::vector<uint32>& into);
 
 protected:
     static int BitFromLabelID(int id);

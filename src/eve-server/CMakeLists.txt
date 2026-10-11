@@ -326,11 +326,13 @@ SET( mail_INCLUDE
      "${TARGET_INCLUDE_DIR}/mail/MailDB.h"
      "${TARGET_INCLUDE_DIR}/mail/MailingListMgrService.h"
      "${TARGET_INCLUDE_DIR}/mail/MailMgrService.h"
+     "${TARGET_INCLUDE_DIR}/mail/NotificationMgr.h"
      "${TARGET_INCLUDE_DIR}/mail/NotificationMgrService.h" )
 SET( mail_SOURCE
      "${TARGET_SOURCE_DIR}/mail/MailDB.cpp"
      "${TARGET_SOURCE_DIR}/mail/MailingListMgrService.cpp"
      "${TARGET_SOURCE_DIR}/mail/MailMgrService.cpp"
+     "${TARGET_SOURCE_DIR}/mail/NotificationMgr.cpp"
      "${TARGET_SOURCE_DIR}/mail/NotificationMgrService.cpp" )
 
 SET( manufacturing_INCLUDE

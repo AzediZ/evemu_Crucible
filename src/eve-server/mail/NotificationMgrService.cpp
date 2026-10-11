@@ -25,10 +25,19 @@
 
 #include "eve-server.h"
 
-
+#include "EVE_Mail.h"
+#include "Client.h"
+#include "mail/MailDB.h"
+#include "mail/NotificationMgr.h"
 #include "mail/NotificationMgrService.h"
 
-// this service is part of mail and used with the 'notifications' tab of mail window
+// this service is part of mail and used with the 'notifications' tab of mail window.
+// notifications are written by NotificationMgr::Send*() and stored in chrNotifications.
+//  rows are a dbutil.CRowset: notificationID I4, typeID I4, senderID I4, receiverID I4, processed BOOL,
+//  created FILETIME, data WSTR (yaml), deleted BOOL
+
+// client const.notificationsMaxUpdated
+static const size_t notificationsMaxUpdated = 100;
 
 NotificationMgrService::NotificationMgrService() :
     Service("notificationMgr", eAccessLevel_Character)
@@ -43,90 +52,89 @@ NotificationMgrService::NotificationMgrService() :
     this->Add("DeleteNotifications", &NotificationMgrService::DeleteNotifications);
 }
 
+// reads a list of notificationIDs, max notificationsMaxUpdated (the client enforces the same limit)
+static void GetNotificationIDs(PyList* list, std::vector<int32>& into)
+{
+    if (list->size() > notificationsMaxUpdated)
+        throw CustomError("You can only update %u notifications at a time.", (uint32)notificationsMaxUpdated);
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        into.push_back(PyRep::IntegerValue(*itr));
+}
+
 PyResult NotificationMgrService::GetByGroupID(PyCallArgs &call, PyInt* groupID)
 {
+    std::vector<uint16> types;
+    if (groupID->value() == Notify::Groups::Unread)
+        return MailDB::GetNotifications(call.client->GetCharacterID(), types, true);
 
-    sLog.White("NotificationMgrService", "Handle_GetByGroupID() size=%lli", call.tuple->size());
-    call.Dump(MAIL__DUMP);
-    /*
-            [PyString "GetByGroupID"]
-            [PyTuple 1 items]
-              [PyInt 9]
-        {returns}
-        [PyObjectEx Type2]
-          [PyTuple 2 items]
-            [PyTuple 1 items]
-              [PyToken dbutil.CRowset]
-            [PyDict 1 kvp]
-              [PyString "header"]
-              [PyObjectEx Normal]
-                [PyTuple 2 items]
-                  [PyToken blue.DBRowDescriptor]
-                  [PyTuple 1 items]
-                    [PyTuple 8 items]
-                      [PyTuple 2 items]
-                        [PyString "notificationID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "typeID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "senderID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "receiverID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "processed"]
-                        [PyInt 11]
-                      [PyTuple 2 items]
-                        [PyString "created"]
-                        [PyInt 64]
-                      [PyTuple 2 items]
-                        [PyString "data"]
-                        [PyInt 130]
-                      [PyTuple 2 items]
-                        [PyString "deleted"]
-                        [PyInt 11]
-              */
-              // yes, i have the packet, but wtf is this?
-    return new PyTuple(0);
+    NotificationMgr::GetGroupTypes(groupID->value(), types);
+    if (types.empty())
+        types.push_back(0);     // unknown group -> no rows
+    return MailDB::GetNotifications(call.client->GetCharacterID(), types, false);
 }
 
 PyResult NotificationMgrService::GetUnprocessed(PyCallArgs &call)
 {
-    // called when mail window's notifications tab opened
-    // see /journal/GetUnprocessed for info..
-
-    return new PyTuple(0);
+    // called when mail window's notifications tab opened, and for the neocom blink/unread counts
+    std::vector<uint16> types;
+    return MailDB::GetNotifications(call.client->GetCharacterID(), types, true);
 }
 
 PyResult NotificationMgrService::MarkGroupAsProcessed(PyCallArgs &call, PyInt* groupID)
 {
-    return nullptr;
+    if (groupID->value() == Notify::Groups::Unread) {
+        MailDB::MarkNotificationsProcessed(call.client->GetCharacterID(), nullptr, nullptr);
+        return PyStatic.NewNone();
+    }
+
+    std::vector<uint16> types;
+    NotificationMgr::GetGroupTypes(groupID->value(), types);
+    if (!types.empty())
+        MailDB::MarkNotificationsProcessed(call.client->GetCharacterID(), nullptr, &types);
+    return PyStatic.NewNone();
 }
 
 PyResult NotificationMgrService::MarkAllAsProcessed(PyCallArgs &call)
 {
-    return nullptr;
+    MailDB::MarkNotificationsProcessed(call.client->GetCharacterID(), nullptr, nullptr);
+    return PyStatic.NewNone();
 }
 
 PyResult NotificationMgrService::MarkAsProcessed(PyCallArgs &call, PyList* notificationIDsToMarkAsRead)
 {
-    return nullptr;
+    std::vector<int32> ids;
+    GetNotificationIDs(notificationIDsToMarkAsRead, ids);
+    if (!ids.empty())
+        MailDB::MarkNotificationsProcessed(call.client->GetCharacterID(), &ids, nullptr);
+    return PyStatic.NewNone();
 }
 
 PyResult NotificationMgrService::DeleteGroupNotifications(PyCallArgs &call, PyInt* groupID)
 {
-    return nullptr;
+    if (groupID->value() == Notify::Groups::Unread) {
+        // the unread "group" is every unprocessed notification
+        MailDB::DeleteNotifications(call.client->GetCharacterID(), nullptr, nullptr, true);
+        return PyStatic.NewNone();
+    }
+
+    std::vector<uint16> types;
+    NotificationMgr::GetGroupTypes(groupID->value(), types);
+    if (!types.empty())
+        MailDB::DeleteNotifications(call.client->GetCharacterID(), nullptr, &types);
+    return PyStatic.NewNone();
 }
 
 PyResult NotificationMgrService::DeleteAllNotifications(PyCallArgs &call)
 {
-    return nullptr;
+    MailDB::DeleteNotifications(call.client->GetCharacterID(), nullptr, nullptr);
+    return PyStatic.NewNone();
 }
 
 PyResult NotificationMgrService::DeleteNotifications(PyCallArgs &call, PyList* notificatinIDs)
 {
-    return nullptr;
+    std::vector<int32> ids;
+    GetNotificationIDs(notificatinIDs, ids);
+    if (!ids.empty())
+        MailDB::DeleteNotifications(call.client->GetCharacterID(), &ids, nullptr);
+    return PyStatic.NewNone();
 }

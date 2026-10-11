@@ -785,3 +785,162 @@ void MailDB::MoveFromTrash(int32 messageID)
 {
     // not used yet.
 }
+
+/*
+ * Notifications
+ */
+namespace {
+// "AND notificationID IN (..)" / "AND typeID IN (..)" for the optional id and type filters.  integers only
+std::string NotificationFilter(const std::vector<int32>* ids, const std::vector<uint16>* types)
+{
+    std::ostringstream str;
+    if (ids != nullptr) {
+        str << " AND notificationID IN (0";
+        for (auto cur : *ids)
+            str << "," << cur;
+        str << ")";
+    }
+    if (types != nullptr) {
+        str << " AND typeID IN (0";
+        for (auto cur : *types)
+            str << "," << cur;
+        str << ")";
+    }
+    return str.str();
+}
+}
+
+uint32 MailDB::StoreNotification(uint32 receiverID, uint16 typeID, uint32 senderID, int64 created, const std::string& yaml)
+{
+    std::string yamlEsc;
+    sDatabase.DoEscapeString(yamlEsc, yaml);
+
+    DBerror err;
+    uint32 notificationID(0);
+    if (!sDatabase.RunQueryLID(err, notificationID,
+            "INSERT INTO chrNotifications (typeID, senderID, receiverID, processed, created, data)"
+            " VALUES (%u, %u, %u, 0, %lli, '%s')",
+            typeID, senderID, receiverID, created, yamlEsc.c_str()))
+    {
+        codelog(DATABASE__ERROR, "Failed to store notification type %u for %u: %s", typeID, receiverID, err.c_str());
+        return 0;
+    }
+    return notificationID;
+}
+
+CRowSet* MailDB::GetNotifications(uint32 charID, const std::vector<uint16>& types, bool unprocessedOnly)
+{
+    // header matches the live server's dbutil.CRowset for notificationMgr.GetByGroupID/GetUnprocessed
+    DBRowDescriptor* header = new DBRowDescriptor();
+        header->AddColumn("notificationID", DBTYPE_I4);
+        header->AddColumn("typeID",         DBTYPE_I4);
+        header->AddColumn("senderID",       DBTYPE_I4);
+        header->AddColumn("receiverID",     DBTYPE_I4);
+        header->AddColumn("processed",      DBTYPE_BOOL);
+        header->AddColumn("created",        DBTYPE_FILETIME);
+        header->AddColumn("data",           DBTYPE_WSTR);
+        header->AddColumn("deleted",        DBTYPE_BOOL);
+    CRowSet* rowset = new CRowSet(&header);
+
+    std::string filter;
+    if (!types.empty())
+        filter = NotificationFilter(nullptr, &types);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT notificationID, typeID, senderID, receiverID, processed, created, data"
+            " FROM chrNotifications"
+            " WHERE receiverID = %u%s%s"
+            " ORDER BY notificationID DESC LIMIT 1000",
+            charID, filter.c_str(), (unprocessedOnly ? " AND processed = 0" : "")))
+    {
+        codelog(DATABASE__ERROR, "Failed to get notifications for %u: %s", charID, res.error.c_str());
+        return rowset;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PyPackedRow* into = rowset->NewRow();
+        into->SetField((uint32)0, new PyInt(row.GetInt(0)));
+        into->SetField(1, new PyInt(row.GetInt(1)));
+        into->SetField(2, new PyInt(row.GetInt(2)));
+        into->SetField(3, new PyInt(row.GetInt(3)));
+        into->SetField(4, new PyBool(row.GetInt(4) != 0));
+        into->SetField(5, new PyLong(row.GetInt64(5)));
+        into->SetField(6, new PyWString(row.IsNull(6) ? std::string() : std::string(row.GetText(6), row.ColumnLength(6))));
+        into->SetField(7, new PyBool(false));
+    }
+
+    return rowset;
+}
+
+void MailDB::MarkNotificationsProcessed(uint32 charID, const std::vector<int32>* ids, const std::vector<uint16>* types)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE chrNotifications SET processed = 1 WHERE receiverID = %u AND processed = 0%s",
+            charID, NotificationFilter(ids, types).c_str()))
+        codelog(DATABASE__ERROR, "Failed to mark notifications processed for %u: %s", charID, err.c_str());
+}
+
+void MailDB::DeleteNotifications(uint32 charID, const std::vector<int32>* ids, const std::vector<uint16>* types, bool unprocessedOnly/*false*/)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM chrNotifications WHERE receiverID = %u%s%s",
+            charID, NotificationFilter(ids, types).c_str(), (unprocessedOnly ? " AND processed = 0" : "")))
+        codelog(DATABASE__ERROR, "Failed to delete notifications for %u: %s", charID, err.c_str());
+}
+
+uint32 MailDB::GetUnprocessedNotificationCount(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT COUNT(*) FROM chrNotifications WHERE receiverID = %u AND processed = 0", charID))
+    {
+        codelog(DATABASE__ERROR, "Failed to count notifications for %u: %s", charID, res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void MailDB::GetCorpMembersWithRoles(uint32 corpID, int64 roleMask, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT characterID FROM chrCharacters"
+            " WHERE corporationID = %u"
+            " AND (%lli = 0 OR ((corpRole | rolesAtAll) & %lli) <> 0 OR (corpRole & %lli) <> 0)",
+            corpID, roleMask, roleMask, (int64)Corp::Role::Director))
+    {
+        codelog(DATABASE__ERROR, "Failed to get members of corp %u: %s", corpID, res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void MailDB::GetAllianceMembersWithRoles(uint32 allianceID, int64 roleMask, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT c.characterID FROM chrCharacters AS c"
+            " JOIN crpCorporation AS p ON p.corporationID = c.corporationID"
+            " WHERE p.allianceID = %u"
+            " AND (%lli = 0 OR ((c.corpRole | c.rolesAtAll) & %lli) <> 0 OR (c.corpRole & %lli) <> 0)",
+            allianceID, roleMask, roleMask, (int64)Corp::Role::Director))
+    {
+        codelog(DATABASE__ERROR, "Failed to get members of alliance %u: %s", allianceID, res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
