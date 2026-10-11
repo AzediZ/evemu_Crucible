@@ -427,17 +427,18 @@ bool SpawnMgr::AddClassTypes(uint32 factionID, uint8 sClass, const RatSpawnClass
     add(5 + shipClass, entry.ac);
     add(6 + shipClass, entry.bc);
     add(7 + shipClass, entry.bs);
-    // end of possible non-roid rat types.  following are for belt/gate only (and commander/officer overseers)
+    // end of possible non-roid rat types.  haulers and officers are for belt/gate only
     if (sClass < Spawn::Class::BeltSpawn) {
         add(8, entry.h);
         if (factionID != factionRogueDrones)    //drones do NOT have officers (internal type 9).
             add(9, entry.o);
-        add(10, entry.cf);
-        add(11, entry.cd);
-        add(12, entry.cc);
-        add(13, entry.cbc);
-        add(14, entry.cbs);
     }
+    // commanders (the last waves of combat anomalies have one)
+    add(10, entry.cf);
+    add(11, entry.cd);
+    add(12, entry.cc);
+    add(13, entry.cbc);
+    add(14, entry.cbs);
 
     if (factionID == factionRogueDrones) {
         uint8 swarmClass = ((sClass > Spawn::Class::BeltSpawn) ? 22 : 9);
