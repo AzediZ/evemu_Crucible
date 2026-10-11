@@ -33,6 +33,9 @@
 #include "pos/JumpBridge.h"
 #include "EntityList.h"
 #include "inventory/ItemFactory.h"
+#include "inventory/Inventory.h"
+#include "pos/POS_AI.h"
+#include "packets/Inventory.h"
 #include "ship/JumpDrive.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
@@ -714,6 +717,77 @@ PyResult PosMgrBound::AssumeStructureControl(PyCallArgs &call, PyInt* itemID) {
     _log(POS__TRACE,  "PosMgrBound::Handle_AssumeStructureControl()");
     call.Dump(POS__DUMP);
 
+    Client* pClient(call.client);
+    SystemManager* pSystem(pClient->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+        throw CustomError ("That structure can't be found.");
+    StructureSE* pStruct(pSE->GetPOSSE());
+    uint16 typeID(pStruct->GetTypeID());
+    POS_AI* pAI(pStruct->IsWeaponSE() ? pStruct->GetWeaponSE()->GetAI() : (pStruct->IsBatterySE() ? pStruct->GetBatterySE()->GetAI() : nullptr));
+    if ((pAI == nullptr) or !pStruct->IsControllable())
+        throw UserError("StructureNotControllable").AddTypeName("item", typeID);
+    if (pStruct->GetControllerID() == pClient->GetCharacterID())
+        throw UserError("StructureControlled").AddTypeName("item", typeID);
+    if (pStruct->GetState() == EVEPOS::StructureState::Onlining)
+        throw UserError("StructureNotControllableUntilOnline").AddTypeName("item", typeID);
+    if (!pStruct->IsOnline())
+        throw UserError("StructureNotControllableOffline").AddTypeName("item", typeID);
+    // the owner corp's defense operators
+    if ((uint32)pClient->GetCorporationID() != pStruct->GetCorporationID())
+        throw UserError("CantConfigureNotInRightCorp");
+    if (!pStruct->HasRole(pClient, Corp::Role::InfrastructureTacticalOfficer))
+        throw UserError("CantConfigureCorpInfrastructureRoleLacking");
+    if (pClient->InPod() or (pClient->GetShipSE() == nullptr))
+        throw UserError("CantDoThatInCapsule");
+    TowerSE* pTower(pStruct->GetControlTower());
+    if ((pTower == nullptr) or !pTower->IsPowered())
+        throw UserError("StructureNotControllableOffline").AddTypeName("item", typeID);
+    double distance(pClient->GetShipSE()->GetPosition().distance(pTower->GetPosition()));
+    if (distance > EVEPOS::ControlDistance)
+        throw UserError("StructureNotControllableDistant")
+                .AddTypeName("item", typeID)
+                .AddFormatValue("limit", new PyInt(EVEPOS::ControlDistance))
+                .AddFormatValue("actual", new PyInt((int32)distance));
+    if (pStruct->GetControllerID() != 0)
+        throw UserError("StructureControlled").AddTypeName("item", typeID);
+    // as many as Starbase Defense Management allows
+    uint32 controlled(0);
+    for (auto cur : pSystem->GetEntities())
+        if (cur.second->IsPOSSE() and (cur.second->GetPOSSE()->GetControllerID() == pClient->GetCharacterID()))
+            ++controlled;
+    int8 limit(pClient->GetChar()->GetSkillLevel(EvESkill::StarbaseDefenseManagement));
+    if (controlled >= (uint32)(limit > 0 ? limit : 0))
+        throw UserError("NoStructureManagementAbilitiesLeft")
+                .AddTypeName("item", typeID)
+                .AddFormatValue("limit", new PyInt(limit > 0 ? limit : 0));
+
+    pAI->AssumeControl(pClient);
+
+    // the client's godma needs the structure (and its charge) for the defense buttons
+    PyDict* data = new PyDict();
+    Rsp_CommonGetInfo_Entry entry;
+    if (pStruct->GetSelf()->Populate(entry))
+        data->SetItem(new PyInt(pStruct->GetID()), new PyObject("util.KeyVal", entry.Encode()));
+    std::vector<InventoryItemRef> charges;
+    pStruct->GetSelf()->GetMyInventory()->GetItemsByFlag(flagHiSlot0, charges);
+    for (auto cur : charges) {
+        Rsp_CommonGetInfo_Entry chargeEntry;
+        if (!cur->Populate(chargeEntry))
+            continue;
+        PyTuple* key = new PyTuple(3);
+            key->SetItem(0, new PyInt(pStruct->GetID()));
+            key->SetItem(1, new PyInt(flagHiSlot0));
+            key->SetItem(2, new PyInt(cur->typeID()));
+        data->SetItem(key, new PyObject("util.KeyVal", chargeEntry.Encode()));
+        break;
+    }
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(pStruct->GetID()));
+        tuple->SetItem(1, data);
+    pClient->SendNotification("ProcessGodmaPrimeLocation", "clientID", &tuple);
+
+    _log(POS__MESSAGE, "%s assumed control of %s(%u).", pClient->GetName(), pStruct->GetName(), pStruct->GetID());
     return PyStatic.NewNone();
 }
 
@@ -724,6 +798,20 @@ PyResult PosMgrBound::RelinquishStructureControl(PyCallArgs &call, PyInt* itemID
     */
     _log(POS__TRACE,  "PosMgrBound::Handle_RelinquishStructureControl()");
     call.Dump(POS__DUMP);
+
+    SystemManager* pSystem(call.client->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+        return PyStatic.NewNone();
+    StructureSE* pStruct(pSE->GetPOSSE());
+    POS_AI* pAI(pStruct->IsWeaponSE() ? pStruct->GetWeaponSE()->GetAI() : (pStruct->IsBatterySE() ? pStruct->GetBatterySE()->GetAI() : nullptr));
+    if (pAI == nullptr)
+        return PyStatic.NewNone();
+    // the controller (or a GM)
+    if ((pStruct->GetControllerID() != call.client->GetCharacterID())
+    and ((call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH)) == 0))
+        throw UserError("NotCurrentlyControllingStructure").AddTypeName("item", pStruct->GetTypeID());
+    pAI->Release();
 
     return PyStatic.NewNone();
 }

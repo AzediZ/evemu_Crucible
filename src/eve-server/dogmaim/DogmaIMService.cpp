@@ -30,6 +30,10 @@
 #include "cache/ObjCacheService.h"
 #include "dogmaim/DogmaIMService.h"
 #include "pos/Tower.h"
+#include "pos/Weapon.h"
+#include "pos/Battery.h"
+#include "pos/POS_AI.h"
+#include "effects/EffectsDataMgr.h"
 #include "ship/modules/GenericModule.h"
 #include "npc/LawEnforcement.h"
 #include "system/Container.h"
@@ -99,7 +103,9 @@ DogmaIMBound::DogmaIMBound(EVEServiceManager& mgr, DogmaIMService& parent, uint3
     this->Add("LoadAmmoToModules", &DogmaIMBound::LoadAmmoToModules);
     this->Add("GetTargets", &DogmaIMBound::GetTargets);
     this->Add("GetTargeters", &DogmaIMBound::GetTargeters);
-    this->Add("AddTarget", &DogmaIMBound::AddTarget);       //AddTargetOBO
+    this->Add("AddTarget", &DogmaIMBound::AddTarget);
+    this->Add("AddTargetOBO", &DogmaIMBound::AddTargetOBO);
+    this->Add("RemoveTargetOBO", &DogmaIMBound::RemoveTargetOBO);
     this->Add("RemoveTarget", &DogmaIMBound::RemoveTarget);
     this->Add("ClearTargets", &DogmaIMBound::ClearTargets);
     this->Add("InitiateModuleRepair", &DogmaIMBound::InitiateModuleRepair);
@@ -849,6 +855,56 @@ PyResult DogmaIMBound::Activate(PyCallArgs& call, PyInt* itemID, PyInt* effectID
     return PyStatic.NewOne();
 }
 
+namespace {
+    // the starbase weapon this pilot controls, nullptr if itemID isn't one
+    POS_AI* GetControlledAI(Client* pClient, uint32 itemID, StructureSE** ppStruct = nullptr)
+    {
+        SystemManager* pSystem(pClient->SystemMgr());
+        SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID));
+        if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+            return nullptr;
+        StructureSE* pStruct(pSE->GetPOSSE());
+        POS_AI* pAI(pStruct->IsWeaponSE() ? pStruct->GetWeaponSE()->GetAI() : (pStruct->IsBatterySE() ? pStruct->GetBatterySE()->GetAI() : nullptr));
+        if (pAI == nullptr)
+            return nullptr;
+        if (pStruct->GetControllerID() != pClient->GetCharacterID())
+            throw UserError("NotCurrentlyControllingStructure").AddTypeName("item", pStruct->GetTypeID());
+        if (ppStruct != nullptr)
+            *ppStruct = pStruct;
+        return pAI;
+    }
+}
+
+PyResult DogmaIMBound::AddTargetOBO(PyCallArgs& call, PyInt* structureID, PyInt* targetID)
+{
+    // flag, targetList = AddTargetOBO(sid, tid).  flag True:  the lock takes time, OnTargetOBO('add') follows
+    Client* pClient(call.client);
+    if (!pClient->IsInSpace())
+        throw UserError("DeniedTargetingAttemptFailed").AddFormatValue("target", new PyInt(targetID->value()));
+    POS_AI* pAI(GetControlledAI(pClient, structureID->value()));
+    if (pAI == nullptr)
+        throw CustomError ("That structure can't be found.");
+    SystemEntity* pTarget(pClient->SystemMgr()->GetSE(targetID->value()));
+    if (pTarget == nullptr)
+        throw UserError("DeniedTargetingAttemptFailed").AddFormatValue("target", new PyInt(targetID->value()));
+    pAI->LockManualTarget(pClient, pTarget);
+
+    PyList* list = new PyList();
+        list->AddItem(new PyInt(targetID->value()));
+    PyTuple* rsp = new PyTuple(2);
+        rsp->SetItem(0, PyStatic.NewTrue());
+        rsp->SetItem(1, list);
+    return rsp;
+}
+
+PyResult DogmaIMBound::RemoveTargetOBO(PyCallArgs& call, PyInt* structureID, PyInt* targetID)
+{
+    POS_AI* pAI(GetControlledAI(call.client, structureID->value()));
+    if (pAI != nullptr)
+        pAI->UnlockManualTarget(targetID->value());
+    return PyStatic.NewNone();
+}
+
 PyResult DogmaIMBound::Activate(PyCallArgs& call, PyInt* itemID, PyWString* effectName, std::optional <PyInt*> target, PyInt* repeat)
 {
     // ret = self.GetDogmaLM().Activate(itemID, effectName, target, repeat)  - i cant find where this return is used but is "1" in packet logs
@@ -857,6 +913,19 @@ PyResult DogmaIMBound::Activate(PyCallArgs& call, PyInt* itemID, PyWString* effe
     if (!pClient->IsInSpace()) {
         pClient->SendNotifyMsg("You can't do this while docked.");
         return PyStatic.NewZero();
+    }
+
+    // a starbase weapon the pilot controls:  it fires at its locked target until deactivated
+    StructureSE* pStruct(nullptr);
+    POS_AI* pAI(GetControlledAI(pClient, itemID->value(), &pStruct));
+    if (pAI != nullptr) {
+        if (pAI->GetManualTargetID() == 0)
+            throw UserError("DeniedTargetingAttemptFailed").AddFormatValue("target", new PyInt(target.has_value() ? target.value()->value() : 0));
+        pAI->SetManualFire(true);
+        uint16 effectID(sFxDataMgr.GetEffectID(effectName->content()));
+        if (effectID != 0)
+            pStruct->SendEffectUpdate(effectID, true);
+        return PyStatic.NewOne();
     }
     /*
     * {'FullPath': u'UI/Messages', 'messageID': 260384, 'label': u'AnchorLocationUnsuitableBody'}(u'You cannot safely anchor {[item]typeID.nameWithArticle} within {[numeric]distance.distance} of large objects in space.', None, {u'{[numeric]distance.distance}': {'conditionalValues': [], 'variableType': 9, 'propertyName': 'distance', 'args': 256, 'kwargs': {}, 'variableName': 'distance'}, u'{[item]typeID.nameWithArticle}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'nameWithArticle', 'args': 0, 'kwargs': {}, 'variableName': 'typeID'}})
@@ -922,6 +991,17 @@ PyResult DogmaIMBound::Deactivate(PyCallArgs& call, PyInt* itemID, PyWString* ef
 
     if (!pClient->IsInSpace()) {
         pClient->SendNotifyMsg("You can't do this while docked");
+        return PyStatic.NewNone();
+    }
+
+    // a controlled starbase weapon stops firing
+    StructureSE* pStruct(nullptr);
+    POS_AI* pAI(GetControlledAI(pClient, itemID->value(), &pStruct));
+    if (pAI != nullptr) {
+        pAI->SetManualFire(false);
+        uint16 effectID(sFxDataMgr.GetEffectID(effectName->content()));
+        if (effectID != 0)
+            pStruct->SendEffectUpdate(effectID, false);
         return PyStatic.NewNone();
     }
 

@@ -95,6 +95,9 @@ protected:
     PyResult StopModuleRepair(PyCallArgs& call, PyInt* itemID);
     PyResult MergeModuleGroups(PyCallArgs& call, PyInt* shipID, PyInt* masterID, PyInt* slaveID);
     PyResult PeelAndLink(PyCallArgs& call, PyInt* shipID, PyInt* masterID, PyInt* slaveID);
+    // starbase weapons a pilot controls:  targets 'on behalf of' the structure
+    PyResult AddTargetOBO(PyCallArgs& call, PyInt* structureID, PyInt* targetID);
+    PyResult RemoveTargetOBO(PyCallArgs& call, PyInt* structureID, PyInt* targetID);
 
     /*  OBO == ??  (pos targeting)
      * flag, targetList = self.GetDogmaLM().AddTargetOBO(sid, tid) (structureID, targetID)

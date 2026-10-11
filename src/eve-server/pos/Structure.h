@@ -265,8 +265,12 @@ public:
      */
     void                        CheckSovRequirements(bool online);
 
-protected:
+    // OnGodmaShipEffect for the structure, to its bubble
     void                        SendEffectUpdate(int16 effectID, bool active);
+    // a starbase weapon a pilot may man (posPlayerControlStructure)
+    bool                        IsControllable();
+
+protected:
     // the Crucible anchoring rules.  modules return the control tower they anchor at
     TowerSE*                    CheckAnchorRules(Client* pClient, const GPoint& pos);
     void                        CheckOnlineRules(Client* pClient);

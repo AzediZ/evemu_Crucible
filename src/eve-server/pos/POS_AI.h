@@ -12,6 +12,7 @@
 
 #include "inventory/InventoryItem.h"
 
+class Client;
 class StructureSE;
 class SystemEntity;
 class TowerSE;
@@ -32,12 +33,20 @@ public:
     // drops the target and ends any ewar (offline, destroyed, control changes)
     void Stop();
 
-    /* manual control */
-    // the controller's target (nullptr = none).  the battery fires at it while it is locked and the controller wants it to
-    void SetManualTarget(uint32 targetID)               { m_manualTargetID = targetID; }
+    /* manual control (a pilot with the Starbase Defense Operator role 'assumes control') */
+    // the controller takes over:  automatic targets go
+    void AssumeControl(Client* pClient);
+    // back to automatic.  the controller hears OnTargetOBO('clear')
+    void Release();
+    // the controller's target lock (OnTargetOBO 'add' when it completes).  throws the client's errors
+    void LockManualTarget(Client* pClient, SystemEntity* pTarget);
+    void UnlockManualTarget(uint32 targetID);
+    // the controller's fire button
     void SetManualFire(bool fire)                       { m_manualFire = fire; }
     bool IsManualFire()                                 { return m_manualFire; }
     uint32 GetManualTargetID()                          { return m_manualTargetID; }
+    // the battery's default effect (what the defense button activates)
+    uint16 GetEffectID();
 
     // range of the battery against a target (turret optimal + falloff, missile flight, ewar range)
     double GetRange();
@@ -67,6 +76,10 @@ private:
     float TowerBonus(uint16 attrID);
     // rate of fire (ms) with the tower's bonus
     uint32 GetCycleTime();
+    // the controller is still there:  online, in this system, in a ship (not a pod), within command distance of the tower
+    bool ControllerValid(TowerSE* pTower);
+    // OnTargetOBO(what, structureID, targetID[, reason]) to the controller
+    void SendTargetOBO(const char* what, uint32 targetID, const char* reason = nullptr);
 
     StructureSE* m_self;            // we do not own this
     InventoryItemRef m_selfRef;
@@ -82,6 +95,8 @@ private:
     uint32 m_ewarTargetID;          // target of the running ewar session
     uint32 m_manualTargetID;        // manual control
     bool m_manualFire;
+    bool m_lockNotified;            // OnTargetOBO 'add' sent for the manual target
+    Timer m_controlTimer;           // checks the controller
 };
 
 #endif  // EVEMU_POS_POS_AI_H_

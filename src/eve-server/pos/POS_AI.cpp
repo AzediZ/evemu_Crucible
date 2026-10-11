@@ -34,6 +34,8 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/TargetManager.h"
+#include "system/CrimeWatch.h"
+#include "EntityList.h"
 
 /* notes for this ai class...
  *
@@ -59,7 +61,9 @@ m_fireTimer(0),
 m_targetID(0),
 m_ewarTargetID(0),
 m_manualTargetID(0),
-m_manualFire(false)
+m_manualFire(false),
+m_lockNotified(false),
+m_controlTimer(5000)
 {
     m_fireTimer.Disable();
 
@@ -274,6 +278,9 @@ void POS_AI::Process()
     // an online battery of a working tower.  a controlled battery fights for its controller only
     if ((pTower == nullptr) or !m_self->IsOnline() or !pTower->IsPowered()
     or (!controlled and !sConfig.pos.GunsEnabled) or (m_self->SysBubble() == nullptr)) {
+        // nothing to control any more
+        if (controlled and ((pTower == nullptr) or !m_self->IsOnline() or !pTower->IsPowered()))
+            Release();
         if (m_targetID != 0)
             Stop();
         return;
@@ -281,10 +288,28 @@ void POS_AI::Process()
 
     SystemEntity* pTarget(nullptr);
     if (controlled) {
+        // the controller left (docked, jumped, logged off, lost the ship, went too far)
+        if (m_controlTimer.Check() and !ControllerValid(pTower)) {
+            Release();
+            return;
+        }
+        if (m_manualTargetID != 0) {
+            SystemEntity* pManual(m_self->SystemMgr()->GetSE(m_manualTargetID));
+            if ((pManual == nullptr) or !IsEngageable(pManual)
+            or ((m_self->TargetMgr()->GetTarget(m_manualTargetID, false) == nullptr))) {
+                // gone, out of reach or the lock broke
+                if (pManual != nullptr)
+                    m_self->TargetMgr()->ClearTarget(pManual);
+                SendTargetOBO("lost", m_manualTargetID, "TargetLost");
+                m_manualTargetID = 0;
+                m_lockNotified = false;
+            } else if (!m_lockNotified and (m_self->TargetMgr()->GetTarget(m_manualTargetID, true) != nullptr)) {
+                m_lockNotified = true;
+                SendTargetOBO("add", m_manualTargetID);
+            }
+        }
         // the controller's locked target, while they want it fired at
         pTarget = (m_manualTargetID == 0 ? nullptr : m_self->TargetMgr()->GetTarget(m_manualTargetID, true));
-        if ((pTarget != nullptr) and !IsEngageable(pTarget))
-            pTarget = nullptr;
         if ((pTarget == nullptr) or !m_manualFire) {
             if (m_ewarTargetID != 0)
                 EndEwar();
@@ -338,6 +363,12 @@ void POS_AI::Process()
 
 void POS_AI::Fire(SystemEntity* pTarget)
 {
+    // manual fire is the controller's aggression
+    if (m_self->GetControllerID() != 0) {
+        Client* pController(sEntityList.FindClientByCharID(m_self->GetControllerID()));
+        if (pController != nullptr)
+            sCrimeWatch.OffensiveAct(pController, pTarget);
+    }
     switch (m_kind) {
         case Kind::Turret:      FireTurret(pTarget);    break;
         case Kind::Launcher:    FireMissile(pTarget);   break;
@@ -392,7 +423,14 @@ void POS_AI::FireTurret(SystemEntity* pTarget)
     if (pType == nullptr)
         return;
     float mult(m_selfRef->GetAttribute(AttrDamageMultiplier).get_float() * damageBonus);
-    Damage d(m_self, m_selfRef,
+    // a controlled battery's hits are its controller's (damage messages, kill credit)
+    SystemEntity* pSource(m_self);
+    if (m_self->GetControllerID() != 0) {
+        Client* pController(sEntityList.FindClientByCharID(m_self->GetControllerID()));
+        if ((pController != nullptr) and (pController->GetShipSE() != nullptr) and (pController->SystemMgr() == m_self->SystemMgr()))
+            pSource = pController->GetShipSE();
+    }
+    Damage d(pSource, m_selfRef,
              pType->GetAttribute(AttrKineticDamage).get_float(),
              pType->GetAttribute(AttrThermalDamage).get_float(),
              pType->GetAttribute(AttrEmDamage).get_float(),
@@ -487,6 +525,116 @@ void POS_AI::EndEwar()
                 pTarget->GetEwar()->Remove(m_self->GetID(), m_ewarKind);
         } break;
     }
+}
+
+uint16 POS_AI::GetEffectID()
+{
+    // the type's default (activated) effect
+    uint16 effectID(m_selfRef->type().GetDefaultEffect());
+    if (effectID != 0)
+        return effectID;
+    switch (m_kind) {
+        case Kind::Launcher:    return EVEEffectID::missileLaunchingForEntity;
+        case Kind::Turret: {
+            if (m_selfRef->groupID() == EVEDB::invGroups::Mobile_Projectile_Sentry)
+                return EVEEffectID::projectileFiredForEntities;
+            return EVEEffectID::targetAttackForStructures;
+        }
+        case Kind::Ewar:        break;
+    }
+    return 0;
+}
+
+bool POS_AI::ControllerValid(TowerSE* pTower)
+{
+    Client* pClient(sEntityList.FindClientByCharID(m_self->GetControllerID()));
+    if ((pClient == nullptr) or !pClient->IsInSpace() or pClient->InPod() or (pClient->GetShipSE() == nullptr))
+        return false;
+    if (pClient->SystemMgr() != m_self->SystemMgr())
+        return false;
+    return (pClient->GetShipSE()->GetPosition().distance(pTower->GetPosition()) <= EVEPOS::ControlDistance);
+}
+
+void POS_AI::SendTargetOBO(const char* what, uint32 targetID, const char* reason/*nullptr*/)
+{
+    Client* pClient(sEntityList.FindClientByCharID(m_self->GetControllerID()));
+    if (pClient == nullptr)
+        return;
+    PyTuple* tuple(nullptr);
+    if (reason != nullptr) {
+        tuple = new PyTuple(4);
+        tuple->SetItem(3, new PyString(reason));
+    } else if (targetID != 0) {
+        tuple = new PyTuple(3);
+    } else {
+        tuple = new PyTuple(2);
+    }
+    tuple->SetItem(0, new PyString(what));
+    tuple->SetItem(1, new PyInt(m_self->GetID()));
+    if (tuple->size() > 2)
+        tuple->SetItem(2, new PyInt(targetID));
+    pClient->SendNotification("OnTargetOBO", "clientID", &tuple);
+}
+
+void POS_AI::AssumeControl(Client* pClient)
+{
+    // the automatic target goes, the controller picks one
+    Stop();
+    m_manualTargetID = 0;
+    m_manualFire = false;
+    m_lockNotified = false;
+    m_self->SetControllerID(pClient->GetCharacterID());
+    m_self->SendSlimUpdate();
+}
+
+void POS_AI::Release()
+{
+    if (m_self->GetControllerID() == 0)
+        return;
+    if (m_manualFire and (GetEffectID() != 0))
+        m_self->SendEffectUpdate(GetEffectID(), false);
+    SendTargetOBO("clear", 0);
+    Stop();
+    m_manualTargetID = 0;
+    m_manualFire = false;
+    m_lockNotified = false;
+    m_self->SetControllerID(0);
+    m_self->SendSlimUpdate();
+}
+
+void POS_AI::LockManualTarget(Client* pClient, SystemEntity* pTarget)
+{
+    if (!IsEngageable(pTarget))
+        throw UserError("DeniedTargetingAttemptFailed").AddFormatValue("target", new PyInt(pTarget->GetID()));
+    // CONCORD space:  only targets the tower's defenses would shoot anyway
+    TowerSE* pTower(m_self->GetControlTower());
+    if ((CrimeWatch::SecurityClass(m_self->SystemMgr()->GetSystemSecurityRating()) == Crime::SecClass::High)
+    and ((pTower == nullptr) or !pTower->IsHostile(pTarget)))
+        throw UserError("POSAggressionInSecureSpaceNotAllowed")
+                .AddFormatValue("systemname", new PyString(m_self->SystemMgr()->GetName()));
+
+    // one target at a time
+    if ((m_manualTargetID != 0) and (m_manualTargetID != pTarget->GetID()))
+        UnlockManualTarget(m_manualTargetID);
+    bool chase(false);
+    if (!m_self->TargetMgr()->StartTargeting(pTarget, GetLockTime(pTarget), 1, GetRange() + pTarget->GetRadius(), chase))
+        throw UserError("DeniedTargetingAttemptFailed").AddFormatValue("target", new PyInt(pTarget->GetID()));
+    m_manualTargetID = pTarget->GetID();
+    m_lockNotified = false;
+}
+
+void POS_AI::UnlockManualTarget(uint32 targetID)
+{
+    if ((targetID == 0) or (targetID != m_manualTargetID))
+        return;
+    SystemEntity* pTarget(m_self->SystemMgr()->GetSE(targetID));
+    if (pTarget != nullptr)
+        m_self->TargetMgr()->ClearTarget(pTarget);
+    if (m_ewarTargetID != 0)
+        EndEwar();
+    m_manualTargetID = 0;
+    m_lockNotified = false;
+    m_fireTimer.Disable();
 }
 
 void POS_AI::Stop()

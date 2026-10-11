@@ -1067,6 +1067,12 @@ void StructureSE::ValidateRemoveItem(Client* pClient, InventoryItemRef iRef)
                 .AddFormatValue("type", new PyInt(GetTypeID()));
 }
 
+bool StructureSE::IsControllable()
+{
+    EvilNumber value(EvilZero);
+    return ((IsWeaponSE() or IsBatterySE()) and m_self->HasAttribute(AttrPosPlayerControlStructure, value) and (value.get_int() != 0));
+}
+
 bool StructureSE::HasRole(Client* pClient, int64 role)
 {
     if (pClient == nullptr)
