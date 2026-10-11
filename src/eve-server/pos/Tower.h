@@ -70,7 +70,7 @@ public:
     void SetCorpAccess(bool set)                        { m_tdata.allowCorp = set; }
     void SetAllyAccess(bool set)                        { m_tdata.allowAlliance = set; }
     void SetUseAllyStandings(bool set)                  { m_tdata.allyStandings = set; }    // use alliance standings
-    void SetStandingOwnerID(bool set)                   { m_tdata.standingOwnerID = set; }
+    void SetStandingOwnerID(uint32 id)                  { m_tdata.standingOwnerID = id; }    // whose standings the sentries use
     void SetPassword(std::string pass)                  { m_tdata.password = pass; }
 
     bool HasForceField()                                { return (m_hasShield? true : false); }

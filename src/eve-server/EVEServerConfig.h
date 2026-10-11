@@ -361,6 +361,13 @@ public:
         uint32 SentryRange;             // m
     } crime;
 
+    // From <sov>
+    struct {
+        float MilitaryPointsPerBountyISK;   // military index points per isk of npc bounty killed in the system
+        float IndustrialPointsPerM3;        // industrial index points per m3 of ore and ice mined in the system
+        uint32 DevIndexDecayPerHour;        // points (client devIndexUtil.devIndexDecayRate; other values desync the client's level bars)
+    } sov;
+
     // From <testing>
     struct {
         bool EnableDrones;
@@ -399,6 +406,7 @@ protected:
     bool ProcessStandings( const TiXmlElement* ele );
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );
+    bool ProcessSov( const TiXmlElement* ele );
     bool ProcessBPTimes( const TiXmlElement* ele );
     bool ProcessTesting( const TiXmlElement* ele );
     bool ProcessDebug( const TiXmlElement* ele );

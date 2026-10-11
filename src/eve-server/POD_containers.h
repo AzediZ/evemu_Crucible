@@ -356,9 +356,19 @@ struct SovereigntyData {
     uint32 beaconID;
     uint32 jammerID;
     uint8 contested;
-    uint8 stationCount;
-    uint8 militaryPoints;
-    uint8 industrialPoints;
+};
+
+/* development index state for a solar system  (sovereignty military/industrial indices, points)  -F14 */
+struct DevIndexData {
+    uint32 systemID;
+    int64 military;
+    int64 industrial;
+    int64 militaryGain;             // points gained since the last hourly decay
+    int64 industrialGain;
+    bool militaryIncreasing;
+    bool industrialIncreasing;
+    int64 lastDecay;                // filetime
+    bool dirty;
 };
 
 /* Tags for sov multi-index container */

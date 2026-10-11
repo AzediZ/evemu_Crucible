@@ -1105,6 +1105,16 @@ uint8 StaticDataMgr::GetStationCount(uint32 systemID)
     return 0;
 }
 
+void StaticDataMgr::GetSystemsInLocation(uint32 locationID, std::vector<uint32>& systems)
+{
+    for (auto& cur : m_systemData) {
+        if ((locationID == 0)
+        or (cur.second.constellationID == locationID)
+        or (cur.second.regionID == locationID))
+            systems.push_back(cur.first);
+    }
+}
+
 bool StaticDataMgr::GetStationList(uint32 systemID, std::vector< uint32 >& data)
 {
     std::map<uint32, std::vector<uint32>>::iterator itr = m_stationList.find(systemID);

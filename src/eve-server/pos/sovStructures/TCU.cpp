@@ -29,6 +29,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "StaticDataMgr.h"
 
 TCUSE::TCUSE(StructureItemRef structure, EVEServiceManager&services, SystemManager *system, const FactionData &fData)
     : StructureSE(structure, services, system, fData)
@@ -64,6 +65,11 @@ void TCUSE::SetOnline()
         sovData.claimStructureID = m_data.itemID;
         sovData.claimTime = GetFileTimeNow();
     svDataMgr.AddSovClaim(sovData);
+    // AddSovClaim re-reads the claim from the db (claimID and hub)
+    sovData = svDataMgr.GetSovereigntyData(sovData.solarSystemID);
+
+    // recent sov activity (map.GetRecentSovActivity)
+    SovereigntyDB::LogSovChange(sovData.solarSystemID, 0, m_allyID, 0);
 
     //Send ProcessSovStatusChanged Notification
     PyDict *args = new PyDict;
@@ -91,12 +97,32 @@ void TCUSE::SetOnline()
             _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
         }
     }
+
+    // '{owner} has claimed sovereignty in {system} on behalf of {alliance}'
+    PyDict* params = new PyDict();
+        params->SetItemString("owner", new PyString(sDataMgr.GetOwnerName(m_corpID)));
+        params->SetItemString("system", new PyString(sDataMgr.GetSystemName(sovData.solarSystemID)));
+        params->SetItemString("alliance", new PyString(sDataMgr.GetOwnerName(m_allyID)));
+    svDataMgr.SendAudioEvent(m_allyID, Sov::AudioEvent::FlagClaimed, params);
 }
 
 void TCUSE::SetOffline()
 {
     _log(SOV__DEBUG, "Offlining TCU... Removing claim.");
+    DropClaim();
+
+    StructureSE::SetOffline();
+}
+
+void TCUSE::DropClaim()
+{
+    // only the claiming TCU holds the system
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+    if ((sovData.claimID == 0) or (sovData.claimStructureID != m_data.itemID))
+        return;
+
     svDataMgr.RemoveSovClaim(m_system->GetID());
+    SovereigntyDB::LogSovChange(m_system->GetID(), 0, 0, sovData.allianceID);
 
     //Send ProcessSovStatusChanged Notification
     _log(SOV__DEBUG, "Sending ProcessSovStatusChanged (removing sov claim) %u", m_system->GetID());
@@ -115,8 +141,6 @@ void TCUSE::SetOffline()
             _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s(%u)", cur->GetName(), cur->GetCharID());
         }
     }
-
-    StructureSE::SetOffline();
 }
 
 void TCUSE::Process()

@@ -25,16 +25,12 @@
 
 #include "system/sov/SovereigntyDB.h"
 
-    //TODO: For now, we return 0 as stationCount since such system is not implemented
-    //TODO: Handle militaryPoints and industrialPoints, but for now they are 5 by default since we don't have a mechanism for determining them
-
 void SovereigntyDB::GetSovereigntyData(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,
                             "SELECT mapSystemSovInfo.solarSystemID, mapSolarSystems.constellationID, mapSolarSystems.regionID, corporationID, "
                             " allianceID, claimStructureID, claimTime, "
-                            " hubID, contested, 0 as stationCount, "
-                            " 5 as militaryPoints, 5 as industrialPoints, claimID, beaconID, jammerID"
+                            " hubID, contested, claimID, beaconID, jammerID"
                             " FROM mapSystemSovInfo "
                             " INNER JOIN mapSolarSystems ON mapSolarSystems.solarSystemID=mapSystemSovInfo.solarSystemID"))
     {
@@ -47,8 +43,7 @@ void SovereigntyDB::GetSovereigntyDataForSystem(DBQueryResult& res, uint32 syste
     if (!sDatabase.RunQuery(res,
                             "SELECT mapSystemSovInfo.solarSystemID, mapSolarSystems.constellationID, mapSolarSystems.regionID, corporationID, "
                             " allianceID, claimStructureID, claimTime, "
-                            " hubID, contested, 0 as stationCount, "
-                            " 5 as militaryPoints, 5 as industrialPoints, claimID, beaconID, jammerID"
+                            " hubID, contested, claimID, beaconID, jammerID"
                             " FROM mapSystemSovInfo "
                             " INNER JOIN mapSolarSystems ON mapSolarSystems.solarSystemID=mapSystemSovInfo.solarSystemID"
                             " WHERE mapSystemSovInfo.solarSystemID=%u ", systemID))
@@ -142,5 +137,27 @@ void SovereigntyDB::GetRecentSovChanges(DBQueryResult& res, int64 since)
             since))
     {
         codelog(SOV__ERROR, "Error in GetRecentSovChanges query: %s", res.error.c_str());
+    }
+}
+
+void SovereigntyDB::LoadDevIndices(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+            "SELECT solarSystemID, militaryPoints, industrialPoints, militaryIncreasing, industrialIncreasing, lastDecayTime"
+            " FROM sovDevIndices"))
+    {
+        codelog(SOV__ERROR, "Error in LoadDevIndices query: %s", res.error.c_str());
+    }
+}
+
+void SovereigntyDB::SaveDevIndex(const DevIndexData& data)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "REPLACE INTO sovDevIndices (solarSystemID, militaryPoints, industrialPoints, militaryIncreasing, industrialIncreasing, lastDecayTime)"
+            " VALUES (%u, %lli, %lli, %u, %u, %lli)",
+            data.systemID, data.military, data.industrial, (data.militaryIncreasing ? 1 : 0), (data.industrialIncreasing ? 1 : 0), data.lastDecay))
+    {
+        codelog(SOV__ERROR, "Error saving dev index for %u: %s", data.systemID, err.c_str());
     }
 }

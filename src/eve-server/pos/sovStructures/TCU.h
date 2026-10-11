@@ -35,6 +35,9 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
+
+    // removes this TCU's claim on the system (offline or gone)
+    void                        DropClaim();
 };
 
 #endif  // EVEMU_POS_TCU_H_

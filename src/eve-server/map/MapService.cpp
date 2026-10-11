@@ -164,16 +164,19 @@ PyResult MapService::GetAllianceBeacons(PyCallArgs &call)
     return svDataMgr.GetAllianceBeacons(call.client->GetAllianceID());
 }
 
-PyResult MapService::GetCurrentSovData(PyCallArgs &call, PyInt* locationID)
-{/**
-    data = sm.RemoteSvc('map').GetCurrentSovData(constellationID)
-    returns locationID, ?
-    return sm.RemoteSvc('map').GetCurrentSovData(locationID)
-    */
-    sLog.Warning( "MapService::Handle_GetCurrentSovData()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
+PyResult MapService::GetCurrentSovData(PyCallArgs &call, PyRep* locationID)
+{
+    /*  sovSvc.GetCurrentData():
+     *    a solar system asks for its constellation:  data = sm.RemoteSvc('map').GetCurrentSovData(constellationID)
+     *    anything else asks for itself (None for the world):  return sm.RemoteSvc('map').GetCurrentSovData(locationID)
+     */
+    uint32 locID(0);
+    if (locationID->IsInt())
+        locID = locationID->AsInt()->value();
+    else if (locationID->IsLong())
+        locID = (uint32)locationID->AsLong()->value();
 
-    return svDataMgr.GetCurrentSovData(locationID->value());
+    return svDataMgr.GetCurrentSovData(locID);
 }
 PyResult MapService::GetRecentSovActivity(PyCallArgs &call)
 {

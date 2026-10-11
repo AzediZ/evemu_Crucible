@@ -291,6 +291,12 @@ boolean can use either 0/1 OR true/false.
         <SentryRange>150000</SentryRange><!-- meters -->
     </crime>
 
+    <sov><!-- sovereignty development indices (Dominion/Crucible rules: one level is 9.6M points, indices decay about a level every 4 days) -->
+        <MilitaryPointsPerBountyISK>0.1</MilitaryPointsPerBountyISK><!-- military index points per isk of bounty of npcs killed in the system (before the gain modifier of the current level) -->
+        <IndustrialPointsPerM3>1.0</IndustrialPointsPerM3><!-- industrial index points per m3 of ore and ice mined in the system (before the gain modifier) -->
+        <DevIndexDecayPerHour>100000</DevIndexDecayPerHour><!-- points per hour; the client draws its level bars with 100000, so change with care -->
+    </sov>
+
     <threads><!-- ignored.  the server main loop is single-threaded by design; these are parsed for compatibility only -->
         <NetworkThreads>2</NetworkThreads>
         <DatabaseThreads>2</DatabaseThreads>

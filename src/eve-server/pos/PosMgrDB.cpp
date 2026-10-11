@@ -449,8 +449,8 @@ void PosMgrDB::UpdateSentry(int32 itemID, EVEPOS::TowerData& data)
     DBerror err;
     sDatabase.RunQuery(err,
         "UPDATE posTowerData"
-        " SET standing=%f, statusDrop=%i, corpWar=%i, allyStandings=%i WHERE itemID = %u",
-        data.standing, data.statusDrop, data.corpWar, data.allyStandings, itemID);
+        " SET standing=%f, status=%f, statusDrop=%i, corpWar=%i, allyStandings=%i, standingOwnerID=%i WHERE itemID = %u",
+        data.standing, data.status, data.statusDrop, data.corpWar, data.allyStandings, data.standingOwnerID, itemID);
 }
 
 void PosMgrDB::UpdateHarmonicAndPassword(int32 itemID, EVEPOS::TowerData& data)

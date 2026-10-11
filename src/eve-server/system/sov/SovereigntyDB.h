@@ -43,10 +43,11 @@ public:
     static void SetHubID(uint32 systemID, uint32 hubID);
     static void SetJammerID(uint32 systemID, uint32 jammerID);
     static void SetBeaconID(uint32 systemID, uint32 beaconID);
-    static void GetUpgradeData(DBQueryResult& res);
-    static void GetUpgradesForSystem(DBQueryResult& res, uint32 systemID);
-    static void AddSystemUpgrade(uint32 systemID, uint32 upgradeID);
-    static void RemoveSystemUpgrade(uint32 systemID, uint32 upgradeID);
+
+    // development indices  (sovDevIndices)
+    // solarSystemID, militaryPoints, industrialPoints, militaryIncreasing, industrialIncreasing, lastDecayTime
+    static void LoadDevIndices(DBQueryResult& res);
+    static void SaveDevIndex(const DevIndexData& data);
 
     /* recent sovereignty activity (map.GetRecentSovActivity).  stationID 0 = system sov; 0 owners are stored as NULL
      *  gain:  oldOwnerID 0.  loss:  ownerID 0.  outpost capture:  both set

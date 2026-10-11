@@ -347,6 +347,12 @@ PyResult PosMgrBound::SetTowerSentrySettings(PyCallArgs &call, PyInt* itemID, Py
     pTSE->SetStatusDrop(statusDrop->value());
     pTSE->SetCorpWar(corpWar->value());
     pTSE->SetUseAllyStandings(useAllianceStandings->value());
+    // the client ticks 'use alliance standings' when standingOwnerID is the viewer's alliance
+    if (useAllianceStandings->value() and IsAlliance(call.client->GetAllianceID())) {
+        pTSE->SetStandingOwnerID(call.client->GetAllianceID());
+    } else {
+        pTSE->SetStandingOwnerID(call.client->GetCorporationID());
+    }
     pTSE->UpdateSentry();
 
     return PyStatic.NewNone();

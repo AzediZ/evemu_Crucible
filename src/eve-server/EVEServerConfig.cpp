@@ -260,6 +260,11 @@ EVEServerConfig::EVEServerConfig()
     crime.SentriesPerStation = 2;
     crime.SentryRange = 150000 /*m*/;
 
+    // sov
+    sov.MilitaryPointsPerBountyISK = 0.1f;
+    sov.IndustrialPointsPerM3 = 1.0f;
+    sov.DevIndexDecayPerHour = 100000;
+
     // testing
     testing.EnableDrones = false;
 
@@ -323,6 +328,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "cosmic",      &EVEServerConfig::ProcessCosmic );
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
+    AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
     AddMemberParser( "chat",        &EVEServerConfig::ProcessChat );
     AddMemberParser( "debug",       &EVEServerConfig::ProcessDebug );
@@ -347,6 +353,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "cosmic" );
     RemoveParser( "exploring" );
     RemoveParser( "crime" );
+    RemoveParser( "sov" );
     RemoveParser( "standings" );
     RemoveParser( "chat" );
     RemoveParser( "debug" );
@@ -908,6 +915,21 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
             "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
             "SentriesPerStation", "SentryRange"})
         RemoveParser( name );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessSov( const TiXmlElement* ele )
+{
+    AddValueParser( "MilitaryPointsPerBountyISK",   sov.MilitaryPointsPerBountyISK );
+    AddValueParser( "IndustrialPointsPerM3",        sov.IndustrialPointsPerM3 );
+    AddValueParser( "DevIndexDecayPerHour",         sov.DevIndexDecayPerHour );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "MilitaryPointsPerBountyISK" );
+    RemoveParser( "IndustrialPointsPerM3" );
+    RemoveParser( "DevIndexDecayPerHour" );
 
     return result;
 }

@@ -141,6 +141,9 @@ void TowerSE::Init()
         // invalid data....init to 0 as this will only hit for currently-launching items (or errors)
         InitData();
     }
+    // towers saved before standingOwnerID was kept
+    if (m_tdata.standingOwnerID == 0)
+        m_tdata.standingOwnerID = m_corpID;
 
     // if password is already set and tower online, then we can online (create) the forcefield
     m_harmonic = m_tdata.harmonic;
@@ -174,7 +177,7 @@ void TowerSE::InitData() {
     // init base data first
     StructureSE::InitData();
     m_tdata.harmonic = m_harmonic;     // set during base SE creation
-    m_tdata.standingOwnerID = 0;    /** @todo  get sov holder here. */
+    m_tdata.standingOwnerID = m_corpID;     // sentries use the owner corp's standings until alliance standings are chosen
 
     m_db.SaveTowerData(m_tdata, m_data);
 }

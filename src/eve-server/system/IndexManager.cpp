@@ -38,51 +38,18 @@ IndexManager::IndexManager() :
 }
 
 PyResult IndexManager::GetAllDevelopmentIndices(PyCallArgs& call) {
-
     /*
-22:49:13 L IndexManager::Handle_GetAllDevelopmentIndices(): size= 0
         for indexInfo in sm.RemoteSvc('devIndexManager').GetAllDevelopmentIndices():
             systemToIndexMap[indexInfo.solarSystemID] = {const.attributeDevIndexMilitary: indexInfo.militaryPoints,
              const.attributeDevIndexIndustrial: indexInfo.industrialPoints,
              const.attributeDevIndexSovereignty: indexInfo.claimedFor * CLAIM_DAYS_TO_SECONDS}
-  */
-    return nullptr;
+     */
+    return svDataMgr.GetAllDevIndices();
 }
 
 PyResult IndexManager::GetDevelopmentIndicesForSystem(PyCallArgs& call, PyInt* solarSystemID) {
-    DBRowDescriptor *header = new DBRowDescriptor();
-    header->AddColumn("attributeID", DBTYPE_I4);
-    header->AddColumn("points", DBTYPE_I2);
-    header->AddColumn("increasing", DBTYPE_BOOL);
-    //CRowSet *rowset = new CRowSet(&header);
-
-    SovereigntyData sovData = svDataMgr.GetSovereigntyData(solarSystemID->value());
-    PyPackedRow *row1 = new PyPackedRow(header);
-    PyPackedRow *row2 = new PyPackedRow(header);
-    PyPackedRow *row3 = new PyPackedRow(header);
-    
-    // Strategic
-    row1->SetField("attributeID", new PyInt(EveAttrEnum::AttrdevIndexSovereignty));
-    double daysSinceClaim = (GetFileTimeNow() - sovData.claimTime) / Win32Time_Day;
-    row1->SetField("points", new PyInt(uint32(daysSinceClaim)));
-    row1->SetField("increasing", new PyBool(false));
-
-    // Military
-    row2->SetField("attributeID", new PyInt(EveAttrEnum::AttrdevIndexMilitary));
-    row2->SetField("points", new PyInt(sovData.militaryPoints));
-    row2->SetField("increasing", new PyBool(false));
-
-    // Industrial
-    row3->SetField("attributeID", new PyInt(EveAttrEnum::AttrdevIndexIndustrial));
-    row3->SetField("points", new PyInt(sovData.industrialPoints));
-    row3->SetField("increasing", new PyBool(false));
-
-    PyDict* dict = new PyDict();
-    dict->SetItem(new PyInt(EveAttrEnum::AttrdevIndexSovereignty), row1);
-    dict->SetItem(new PyInt(EveAttrEnum::AttrdevIndexMilitary), row2);
-    dict->SetItem(new PyInt(EveAttrEnum::AttrdevIndexIndustrial), row3);
-
-    return dict;
+    // {attributeID: KeyVal(points, increasing)} for the military and industrial indices only (see sovSvc.CanInstallUpgrade)
+    return svDataMgr.GetDevIndicesForSystem(solarSystemID->value());
 }
 
 /*

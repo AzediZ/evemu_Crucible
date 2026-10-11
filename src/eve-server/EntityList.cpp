@@ -46,6 +46,7 @@
 #include "system/cosmicMgrs/CivilianMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
+#include "system/sov/SovereigntyDataMgr.h"
 #include "corporation/CorporationDB.h"
 
 #include <random>
@@ -280,9 +281,11 @@ void EntityList::Process() {
             if (m_minutes % 15 == 0) { // ~15m
                 sMktBotMgr.Process();  // 15m to 30m ---marketbot update; enabled this for timer checks in process
                 sConsole.UpdateStatus();
+                svDataMgr.SaveDevIndices();
             }
             if (m_minutes % 60 == 0) { // ~1h
                 MapDB::ManipulateTimeData();
+                svDataMgr.Process();    // development index decay
                 sMktMgr.Process();  // not used - does nothing at this time
             }
         }

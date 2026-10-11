@@ -52,7 +52,7 @@ protected:
     PyResult GetLinkableJumpArrays(PyCallArgs& call);
     PyResult GetAllianceJumpBridges(PyCallArgs& call);
     PyResult GetAllianceBeacons(PyCallArgs& call);
-    PyResult GetCurrentSovData(PyCallArgs& call, PyInt* locationID);
+    PyResult GetCurrentSovData(PyCallArgs& call, PyRep* locationID);
     PyResult GetRecentSovActivity(PyCallArgs& call);
     PyResult GetDeadspaceAgentsMap(PyCallArgs& call, PyRep* languageID);
     PyResult GetDeadspaceComplexMap(PyCallArgs& call, PyRep* languageID);

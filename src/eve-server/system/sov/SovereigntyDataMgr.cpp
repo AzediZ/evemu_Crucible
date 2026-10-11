@@ -12,8 +12,34 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "database/EVEDBUtils.h"
 #include "packets/Sovereignty.h"
+#include "EntityList.h"
+#include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "Client.h"
+
+uint8 DevIndex::LevelForPoints(int64 points)
+{
+    uint8 level(0);
+    while ((level < 5) and (LevelSize * (level + 1) < points))
+        ++level;
+    return level;
+}
+
+uint8 DevIndex::BandForPoints(int64 points)
+{
+    if (points <= 0)
+        return 0;
+    int64 band(points / LevelSize);
+    return (band > 5 ? 5 : (uint8)band);
+}
+
+uint8 DevIndex::LevelForClaimDays(int64 days)
+{
+    for (uint8 level = 5; level > 0; --level)
+        if (days >= TimeLevelDays[level])
+            return level;
+    return 0;
+}
 
 SovereigntyDataMgr::SovereigntyDataMgr()
 {
@@ -28,25 +54,40 @@ SovereigntyDataMgr::~SovereigntyDataMgr()
 int SovereigntyDataMgr::Initialize()
 {
     Populate();
+    LoadDevIndices();
     sLog.Blue("       SovDataMgr", "Sovereignty Data Manager Initialized.");
     return 1;
 }
 
 void SovereigntyDataMgr::Close()
 {
-    /** @todo put a save method here which will save anything changed before shutdown */
-    //for (auto cur : m_sovPyData)
-    //    PySafeDecRef(cur.second);
+    // claims are written as they change.  only the development indices are kept in memory
+    SaveDevIndices();
 
     sLog.Warning("       SovDataMgr", "Sovereignty Data Manager has been closed.");
 }
 
 void SovereigntyDataMgr::Clear()
 {
-    //for (auto cur : m_sovPyData)
-    //    PySafeDecRef(cur.second);
     m_sovData.clear();
-    //m_sovPyData.clear();
+    m_devIndex.clear();
+}
+
+void SovereigntyDataMgr::ReadRow(DBResultRow& row, SovereigntyData& sData)
+{
+    // solarSystemID, constellationID, regionID, corporationID, allianceID, claimStructureID, claimTime, hubID, contested, claimID, beaconID, jammerID
+    sData.solarSystemID = row.GetUInt(0);
+    sData.constellationID = row.GetUInt(1);
+    sData.regionID = row.GetUInt(2);
+    sData.corporationID = row.GetUInt(3);
+    sData.allianceID = row.GetUInt(4);
+    sData.claimStructureID = row.GetUInt(5);
+    sData.claimTime = row.GetInt64(6);
+    sData.hubID = row.GetUInt(7);
+    sData.contested = row.GetUInt(8);
+    sData.claimID = row.GetUInt(9);
+    sData.beaconID = row.GetUInt(10);
+    sData.jammerID = row.GetUInt(11);
 }
 
 void SovereigntyDataMgr::Populate()
@@ -55,8 +96,6 @@ void SovereigntyDataMgr::Populate()
     DBQueryResult *res = new DBQueryResult();
     DBResultRow row;
 
-    std::map<int8, int32>::iterator itr;
-
     //This data is added by solar system, so we need to use that tag here
     auto &bySolar = m_sovData.get<SovDataBySolarSystem>();
 
@@ -64,21 +103,7 @@ void SovereigntyDataMgr::Populate()
     while (res->GetRow(row))
     {
         SovereigntyData sData = SovereigntyData();
-        sData.solarSystemID = row.GetUInt(0);
-        sData.constellationID = row.GetUInt(1);
-        sData.regionID = row.GetUInt(2);
-        sData.corporationID = row.GetUInt(3);
-        sData.allianceID = row.GetUInt(4);
-        sData.claimStructureID = row.GetUInt(5);
-        sData.claimTime = row.GetInt64(6);
-        sData.hubID = row.GetUInt(7);
-        sData.contested = row.GetUInt(8);
-        sData.stationCount = row.GetUInt(9);
-        sData.militaryPoints = row.GetUInt(10);
-        sData.industrialPoints = row.GetUInt(11);
-        sData.claimID = row.GetUInt(12);
-        sData.beaconID = row.GetUInt(13);
-        sData.jammerID = row.GetUInt(14);
+        ReadRow(row, sData);
         bySolar.insert(sData);
     }
 
@@ -87,6 +112,31 @@ void SovereigntyDataMgr::Populate()
 
     //cleanup
     SafeDelete(res);
+}
+
+void SovereigntyDataMgr::LoadDevIndices()
+{
+    double start = GetTimeMSeconds();
+    int64 now = GetFileTimeNow();
+    DBQueryResult res;
+    DBResultRow row;
+    SovereigntyDB::LoadDevIndices(res);
+    while (res.GetRow(row)) {
+        // solarSystemID, militaryPoints, industrialPoints, militaryIncreasing, industrialIncreasing, lastDecayTime
+        DevIndexData data = DevIndexData();
+        data.systemID = row.GetUInt(0);
+        data.military = row.GetInt64(1);
+        data.industrial = row.GetInt64(2);
+        data.militaryIncreasing = row.GetBool(3);
+        data.industrialIncreasing = row.GetBool(4);
+        data.lastDecay = row.GetInt64(5);
+        // catch up on the decay missed while the server was down
+        Decay(data, now, false);
+        m_devIndex[data.systemID] = data;
+    }
+
+    sLog.Cyan("       SovDataMgr", "%lu Development index sets loaded in %.3fms.",
+              m_devIndex.size(), (GetTimeMSeconds() - start));
 }
 
 void SovereigntyDataMgr::GetInfo()
@@ -119,7 +169,7 @@ SovereigntyData SovereigntyDataMgr::GetSovereigntyData(uint32 systemID)
     } else
     {
         //Return empty object in case we don't find anything
-        SovereigntyData sData;
+        SovereigntyData sData = SovereigntyData();
         return sData;
     }
 }
@@ -136,6 +186,7 @@ PyRep *SovereigntyDataMgr::GetSystemSovereignty(uint32 systemID)
     {   // If we have a factionID, the system is not claimable.
         // We dont need to worry about FacWar Sov here, that is handled separately by Handle_GetSystemOccupier
         _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): Faction system %u found, Sending no SovData.", systemID);
+        PyDecRef(args);
         return new PyNone();
     }
     else
@@ -165,6 +216,7 @@ PyRep *SovereigntyDataMgr::GetSystemSovereignty(uint32 systemID)
         {
             // No data means no claim, so we give 'None'
             _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): No data for solarSystemID %u. Sending blank SovereigntyData object.", systemID);
+            PyDecRef(args);
             return new PyNone();
         }
     }
@@ -216,62 +268,81 @@ PyRep *SovereigntyDataMgr::GetAllianceBeacons(uint32 allianceID) //Get all beaco
 
 PyRep *SovereigntyDataMgr::GetCurrentSovData(uint32 locationID)
 {
+    /*  sovSvc.GetCurrentData():  a solar system asks for its constellation and indexes the result by locationID,
+     *  so every system of a constellation needs a row, claimed or not.
+     *  the sovereignty dashboard lists systems (constellation scope), constellations (region scope) or regions (world scope)
+     */
     DBRowDescriptor *header = new DBRowDescriptor();
     header->AddColumn("locationID", DBTYPE_I4);
     header->AddColumn("allianceID", DBTYPE_I4);
     header->AddColumn("stationCount", DBTYPE_I2);
-    header->AddColumn("militaryPoints", DBTYPE_I2);
-    header->AddColumn("industrialPoints", DBTYPE_I2);
+    header->AddColumn("militaryPoints", DBTYPE_I4);
+    header->AddColumn("industrialPoints", DBTYPE_I4);
     header->AddColumn("claimedFor", DBTYPE_I4);
     CRowSet *rowset = new CRowSet(&header);
 
-    if (IsConstellationID(locationID))
-    {
-        for (SovereigntyData const &sData : boost::make_iterator_range(
-                 m_sovData.get<SovDataByConstellation>().equal_range(locationID)))
-        {
-            PyPackedRow *row = rowset->NewRow();
-            row->SetField("locationID", new PyInt(sData.solarSystemID));
-            row->SetField("allianceID", new PyInt(sData.allianceID));
-            row->SetField("stationCount", new PyInt(sData.stationCount));
-            row->SetField("militaryPoints", new PyInt(sData.militaryPoints));
-            row->SetField("industrialPoints", new PyInt(sData.industrialPoints));
-            row->SetField("claimedFor", new PyInt(sData.allianceID));
-        }
+    struct SovRow {
+        std::map<uint32, uint16> alliances;     // allianceID/systems held
+        uint32 stationCount = 0;
+        int64 military = 0;
+        int64 industrial = 0;
+        uint32 claimedFor = 0;
+    };
+
+    // systems to report and the location each one is reported under
+    std::vector<uint32> systems;
+    bool bySystem(false), byRegion(false);
+    if (sDataMgr.IsSolarSystem(locationID)) {
+        systems.push_back(locationID);
+        bySystem = true;
+    } else if (IsConstellationID(locationID)) {
+        sDataMgr.GetSystemsInLocation(locationID, systems);
+        bySystem = true;
+    } else if (IsRegionID(locationID)) {
+        sDataMgr.GetSystemsInLocation(locationID, systems);
+    } else if (locationID == 0) {
+        sDataMgr.GetSystemsInLocation(0, systems);
+        byRegion = true;
     }
-    //Get all unique alliances in the region who hold sovereignty
-    else if (IsRegionID(locationID))
-    {
-        std::vector<uint32> cv;
-        for (SovereigntyData const &sData : boost::make_iterator_range(
-                 m_sovData.get<SovDataByRegion>().equal_range(locationID)))
-        {
-            if (!(std::find(cv.begin(), cv.end(), sData.constellationID) != cv.end()))
-            {
-                PyPackedRow *row = rowset->NewRow();
-                row->SetField("locationID", new PyInt(sData.constellationID));
-                row->SetField("allianceID", new PyInt(sData.allianceID));
-                row->SetField("stationCount", new PyInt(sData.stationCount));
-                row->SetField("militaryPoints", new PyInt(sData.militaryPoints));
-                row->SetField("industrialPoints", new PyInt(sData.industrialPoints));
-                row->SetField("claimedFor", new PyInt(sData.allianceID));
-                cv.push_back(sData.constellationID);
+
+    std::map<uint32, SovRow> rows;  // locationID/data
+    SystemData sysData = SystemData();
+    for (auto cur : systems) {
+        if (!sDataMgr.GetSystemData(cur, sysData))
+            continue;
+        uint32 rowID(cur);
+        if (!bySystem) {
+            if (IsWSpaceID(cur))
+                continue;
+            rowID = (byRegion ? sysData.regionID : sysData.constellationID);
+        }
+        SovRow& row = rows[rowID];
+        uint32 allianceID = GetSystemAllianceID(cur);
+        if (allianceID > 0)
+            ++row.alliances[allianceID];
+        row.stationCount += sDataMgr.GetStationCount(cur);
+        row.military = std::max(row.military, GetMilitaryPoints(cur));
+        row.industrial = std::max(row.industrial, GetIndustrialPoints(cur));
+        row.claimedFor = std::max(row.claimedFor, GetClaimDays(cur));
+    }
+
+    for (auto& cur : rows) {
+        // the alliance holding the most systems speaks for the group
+        uint32 allianceID(0);
+        uint16 held(0);
+        for (auto& ally : cur.second.alliances)
+            if (ally.second > held) {
+                allianceID = ally.first;
+                held = ally.second;
             }
-        }
-    }
-    else if (sDataMgr.IsSolarSystem(locationID))
-    {
-        for (SovereigntyData const &sData : boost::make_iterator_range(
-                 m_sovData.get<SovDataByRegion>().equal_range(locationID)))
-        {
-            PyPackedRow *row = rowset->NewRow();
-            row->SetField("locationID", new PyInt(sData.solarSystemID));
-            row->SetField("allianceID", new PyInt(sData.allianceID));
-            row->SetField("stationCount", new PyInt(sData.stationCount));
-            row->SetField("militaryPoints", new PyInt(sData.militaryPoints));
-            row->SetField("industrialPoints", new PyInt(sData.industrialPoints));
-            row->SetField("claimedFor", new PyInt(sData.allianceID));
-        }
+
+        PyPackedRow *row = rowset->NewRow();
+        row->SetField("locationID", new PyInt(cur.first));
+        row->SetField("allianceID", (allianceID > 0 ? (PyRep*)new PyInt(allianceID) : PyStatic.NewNone()));
+        row->SetField("stationCount", new PyInt(cur.second.stationCount));
+        row->SetField("militaryPoints", new PyInt((int32)cur.second.military));
+        row->SetField("industrialPoints", new PyInt((int32)cur.second.industrial));
+        row->SetField("claimedFor", new PyInt(cur.second.claimedFor));
     }
 
     return rowset;
@@ -373,22 +444,198 @@ void SovereigntyDataMgr::UpdateClaim(uint32 systemID)
     while (res->GetRow(row))
     {
         SovereigntyData sData = SovereigntyData();
-        sData.solarSystemID = row.GetUInt(0);
-        sData.constellationID = row.GetUInt(1);
-        sData.regionID = row.GetUInt(2);
-        sData.corporationID = row.GetUInt(3);
-        sData.allianceID = row.GetUInt(4);
-        sData.claimStructureID = row.GetUInt(5);
-        sData.claimTime = row.GetInt64(6);
-        sData.hubID = row.GetUInt(7);
-        sData.contested = row.GetUInt(8);
-        sData.stationCount = row.GetUInt(9);
-        sData.militaryPoints = row.GetUInt(10);
-        sData.industrialPoints = row.GetUInt(11);
-        sData.claimID = row.GetUInt(12);
-        sData.beaconID = row.GetUInt(13);
-        sData.jammerID = row.GetUInt(14);
+        ReadRow(row, sData);
         bySolar.insert(sData);
     }
     SafeDelete(res);
+}
+
+/* development indices */
+bool SovereigntyDataMgr::IsClaimable(uint32 systemID)
+{
+    if (IsWSpaceID(systemID))
+        return false;
+    SystemData sysData = SystemData();
+    if (!sDataMgr.GetSystemData(systemID, sysData))
+        return false;
+    return (sysData.factionID == 0);
+}
+
+DevIndexData& SovereigntyDataMgr::GetDevIndex(uint32 systemID)
+{
+    std::unordered_map<uint32, DevIndexData>::iterator itr = m_devIndex.find(systemID);
+    if (itr != m_devIndex.end())
+        return itr->second;
+
+    DevIndexData data = DevIndexData();
+        data.systemID = systemID;
+        data.lastDecay = GetFileTimeNow();
+    return m_devIndex.emplace(systemID, data).first->second;
+}
+
+void SovereigntyDataMgr::AddMilitaryActivity(uint32 systemID, double bountyISK)
+{
+    if ((bountyISK <= 0) or !IsClaimable(systemID))
+        return;
+
+    DevIndexData& data = GetDevIndex(systemID);
+    int64 points = (int64)(bountyISK * sConfig.sov.MilitaryPointsPerBountyISK * DevIndex::MilitaryMod[DevIndex::BandForPoints(data.military)]);
+    if (points < 1)
+        return;
+    data.military = std::min(DevIndex::MaxPoints, data.military + points);
+    data.militaryGain += points;
+    data.dirty = true;
+    _log(SOV__DEBUG, "AddMilitaryActivity() - %lli points in %u (now %lli)", points, systemID, data.military);
+}
+
+void SovereigntyDataMgr::AddIndustrialActivity(uint32 systemID, double m3)
+{
+    if ((m3 <= 0) or !IsClaimable(systemID))
+        return;
+
+    DevIndexData& data = GetDevIndex(systemID);
+    int64 points = (int64)(m3 * sConfig.sov.IndustrialPointsPerM3 * DevIndex::IndustrialMod[DevIndex::BandForPoints(data.industrial)]);
+    if (points < 1)
+        return;
+    data.industrial = std::min(DevIndex::MaxPoints, data.industrial + points);
+    data.industrialGain += points;
+    data.dirty = true;
+    _log(SOV__DEBUG, "AddIndustrialActivity() - %lli points in %u (now %lli)", points, systemID, data.industrial);
+}
+
+void SovereigntyDataMgr::Decay(DevIndexData& data, int64 now, bool hourly)
+{
+    if (now <= data.lastDecay)
+        return;
+
+    int64 decay = (int64)(sConfig.sov.DevIndexDecayPerHour * ((double)(now - data.lastDecay) / Win32Time_Hour));
+    if (hourly) {
+        // an index is rising while its activity outpaces the decay
+        data.militaryIncreasing = (data.militaryGain > decay);
+        data.industrialIncreasing = (data.industrialGain > decay);
+        data.militaryGain = 0;
+        data.industrialGain = 0;
+    }
+    data.military = std::max<int64>(0, data.military - decay);
+    data.industrial = std::max<int64>(0, data.industrial - decay);
+    data.lastDecay = now;
+    data.dirty = true;
+}
+
+void SovereigntyDataMgr::Process()
+{
+    // hourly decay (called from EntityList's hour tic)
+    int64 now = GetFileTimeNow();
+    for (auto& cur : m_devIndex)
+        Decay(cur.second, now, true);
+}
+
+void SovereigntyDataMgr::SaveDevIndices()
+{
+    uint32 count(0);
+    for (auto& cur : m_devIndex) {
+        if (!cur.second.dirty)
+            continue;
+        SovereigntyDB::SaveDevIndex(cur.second);
+        cur.second.dirty = false;
+        ++count;
+    }
+    if (count > 0)
+        _log(SOV__INFO, "SaveDevIndices() - saved %u development index sets", count);
+}
+
+int64 SovereigntyDataMgr::GetMilitaryPoints(uint32 systemID)
+{
+    std::unordered_map<uint32, DevIndexData>::iterator itr = m_devIndex.find(systemID);
+    if (itr == m_devIndex.end())
+        return 0;
+    return itr->second.military;
+}
+
+int64 SovereigntyDataMgr::GetIndustrialPoints(uint32 systemID)
+{
+    std::unordered_map<uint32, DevIndexData>::iterator itr = m_devIndex.find(systemID);
+    if (itr == m_devIndex.end())
+        return 0;
+    return itr->second.industrial;
+}
+
+uint32 SovereigntyDataMgr::GetClaimDays(uint32 systemID)
+{
+    auto it = m_sovData.get<SovDataBySolarSystem>().find(systemID);
+    if (it == m_sovData.get<SovDataBySolarSystem>().end())
+        return 0;
+    int64 held = (int64)GetFileTimeNow() - it->claimTime;
+    if (held <= 0)
+        return 0;
+    return (uint32)(held / Win32Time_Day);
+}
+
+PyRep* SovereigntyDataMgr::GetDevIndicesForSystem(uint32 systemID)
+{
+    /* sovSvc.CanInstallUpgrade() runs every entry through GetDevIndexLevel(points), so only the military and industrial
+     * indices belong here.  the strategic index is worked out by the client from the claim time.
+     */
+    bool milInc(false), indInc(false);
+    std::unordered_map<uint32, DevIndexData>::iterator itr = m_devIndex.find(systemID);
+    if (itr != m_devIndex.end()) {
+        milInc = itr->second.militaryIncreasing;
+        indInc = itr->second.industrialIncreasing;
+    }
+
+    PyDict* military = new PyDict();
+        military->SetItemString("points", new PyInt((int32)GetMilitaryPoints(systemID)));
+        military->SetItemString("increasing", new PyBool(milInc));
+    PyDict* industrial = new PyDict();
+        industrial->SetItemString("points", new PyInt((int32)GetIndustrialPoints(systemID)));
+        industrial->SetItemString("increasing", new PyBool(indInc));
+
+    PyDict* dict = new PyDict();
+        dict->SetItem(new PyInt(EveAttrEnum::AttrdevIndexMilitary), new PyObject("util.KeyVal", military));
+        dict->SetItem(new PyInt(EveAttrEnum::AttrdevIndexIndustrial), new PyObject("util.KeyVal", industrial));
+    return dict;
+}
+
+PyRep* SovereigntyDataMgr::GetAllDevIndices()
+{
+    // every system with indices or a claim
+    std::set<uint32> systems;
+    for (auto& cur : m_devIndex)
+        systems.insert(cur.first);
+    for (auto& cur : m_sovData.get<SovDataBySolarSystem>())
+        systems.insert(cur.solarSystemID);
+
+    PyList* list = new PyList();
+    for (auto cur : systems) {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("solarSystemID", new PyInt(cur));
+            dict->SetItemString("militaryPoints", new PyInt((int32)GetMilitaryPoints(cur)));
+            dict->SetItemString("industrialPoints", new PyInt((int32)GetIndustrialPoints(cur)));
+            dict->SetItemString("claimedFor", new PyInt(GetClaimDays(cur)));
+        list->AddItem(new PyObject("util.KeyVal", dict));
+    }
+    return list;
+}
+
+void SovereigntyDataMgr::SendAudioEvent(uint32 allianceID, uint8 eventID, PyDict* textParams)
+{
+    EntityList::character_set cset;
+    if (allianceID > 0) {
+        std::vector<Client*> list;
+        sEntityList.GetClients(list);
+        for (auto cur : list)
+            if ((cur != nullptr) and (cur->GetAllianceID() == allianceID))
+                cset.insert(cur->GetCharID());
+    }
+
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(eventID));
+        tuple->SetItem(1, textParams);
+    if (cset.empty()) {
+        PyDecRef(tuple);
+        return;
+    }
+
+    _log(SOV__DEBUG, "SendAudioEvent() - event %u to %lu members of alliance %u", eventID, cset.size(), allianceID);
+    sEntityList.Multicast(cset, "OnSovereigntyAudioEvent", "clientID", &tuple);
 }

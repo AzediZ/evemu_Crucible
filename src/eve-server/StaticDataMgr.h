@@ -106,6 +106,8 @@ public:
     bool                GetSolarSystemData(uint32 sysID, SolarSystemData &into);
 
     uint8               GetStationCount(uint32 systemID);
+    // solar systems in a constellation or region, or every solar system for locationID 0
+    void                GetSystemsInLocation(uint32 locationID, std::vector<uint32>& systems);
     bool                GetStationList(uint32 systemID, std::vector< uint32 >& data);
 
     bool                GetRoidDist(const char* secClass, std::unordered_multimap<float, uint16>& roids);

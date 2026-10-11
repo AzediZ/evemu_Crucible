@@ -35,6 +35,7 @@
 #include "system/Container.h"
 #include "system/Damage.h"
 #include "system/SystemManager.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 
 NPC::NPC(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, SpawnMgr* spawnMgr)
@@ -281,6 +282,8 @@ void NPC::Killed(Damage &damage) {
     MapDB::AddFactionKill(locationID);
 
     if (pClient != nullptr) {
+        // military development index grows with the (unmodified) bounty of npcs killed by players
+        svDataMgr.AddMilitaryActivity(locationID, m_self->GetAttribute(AttrEntityKillBounty).get_double());
         //award kill bounty.
         AwardBounty( pClient );
         if (m_system->GetSystemSecurityRating() > 0)
