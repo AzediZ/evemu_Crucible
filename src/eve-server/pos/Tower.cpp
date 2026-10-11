@@ -172,8 +172,8 @@ void TowerSE::Init()
     if ((m_data.state > EVEPOS::StructureState::Unanchored) and (m_moonSE != nullptr))
         m_moonSE->SetTower(this);
 
-    // set tower in bubble
-    if (m_bubble != nullptr)
+    // set tower in bubble (a tower launched next to an anchored one doesn't take its place)
+    if ((m_bubble != nullptr) and ((m_data.state > EVEPOS::StructureState::Unanchored) or !m_bubble->HasTower()))
         m_bubble->SetTowerSE(this);
 
     /** @todo
@@ -285,6 +285,20 @@ StructureSE* TowerSE::GetAnchoredModule()
         if ((cur.second->GetState() > EVEPOS::StructureState::Unanchored) or cur.second->IsStateChangePending())
             return cur.second;
     return nullptr;
+}
+
+void TowerSE::RemoveModule(StructureSE* pSE)
+{
+    m_structs.erase(pSE->GetID());
+    // links to or from a structure that is gone would make every later LinkResourceForTower fail
+    std::vector<EVEPOS::ProcessLink> kept;
+    for (auto cur : m_links)
+        if ((cur.sourceID != pSE->GetID()) and (cur.destID != pSE->GetID()))
+            kept.push_back(cur);
+    if (kept.size() != m_links.size()) {
+        m_links = kept;
+        PosMgrDB::ReplaceProcessLinks(m_data.itemID, m_links);
+    }
 }
 
 void TowerSE::OrphanModules()
@@ -437,6 +451,10 @@ bool TowerSE::IsHostile(SystemEntity* pTarget)
 }
 
 void TowerSE::Scoop() {
+    // structures launched near it (all unanchored by now) belong to no tower; the bubble forgets it
+    OrphanModules();
+    if ((m_bubble != nullptr) and (m_bubble->GetTowerSE() == this))
+        m_bubble->SetTowerSE(nullptr);
     StructureSE::Scoop();
     if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
         m_moonSE->SetTower(nullptr);
@@ -1365,6 +1383,8 @@ bool TowerSE::SetProcessLinks(PyList* links)
     std::vector<EVEPOS::ProcessLink> newLinks;
     for (PyList::const_iterator itr = links->begin(); itr != links->end(); ++itr) {
         if (!(*itr)->IsTuple() and !(*itr)->IsList())
+            return false;
+        if (((*itr)->IsTuple() ? (*itr)->AsTuple()->size() : (*itr)->AsList()->size()) < 3)
             return false;
         PyRep* sRep((*itr)->IsTuple() ? (*itr)->AsTuple()->GetItem(0) : (*itr)->AsList()->GetItem(0));
         PyRep* dRep((*itr)->IsTuple() ? (*itr)->AsTuple()->GetItem(1) : (*itr)->AsList()->GetItem(1));

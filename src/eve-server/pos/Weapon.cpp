@@ -57,9 +57,9 @@ void WeaponSE::ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFl
     StructureSE::ValidateAddItem(pClient, iRef, toFlag);
     if (pClient == nullptr)
         return;
-    // only the battery's charges, into its charge slot
+    // only the battery's charges, into its charge slot (or a laser battery's crystal storage, flagNone)
     bool fits(false);
-    if ((toFlag == flagHiSlot0) and (iRef->categoryID() == EVEDB::invCategories::Charge)) {
+    if (((toFlag == flagHiSlot0) or (toFlag == flagNone)) and (iRef->categoryID() == EVEDB::invCategories::Charge)) {
         const uint16 groupAttrs[5] = { AttrChargeGroup1, AttrChargeGroup2, AttrChargeGroup3, AttrChargeGroup4, AttrChargeGroup5 };
         for (int i = 0; i < 5; ++i) {
             EvilNumber group(EvilZero);

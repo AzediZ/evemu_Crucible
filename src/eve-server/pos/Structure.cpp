@@ -517,6 +517,9 @@ void StructureSE::Init()
 
 void StructureSE::Scoop()
 {
+    // a module launched near a tower is listed with it until it anchors elsewhere
+    if (m_module)
+        SetControlTower(nullptr);
     OnRemovedFromSpace(false);
     m_db.DeleteData(m_data.itemID);
     m_data = EVEPOS::StructureData();

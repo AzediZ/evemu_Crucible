@@ -321,7 +321,9 @@ void POS_AI::Process()
         // the target we have, while it stays a valid one
         if (m_targetID != 0) {
             pTarget = m_self->SystemMgr()->GetSE(m_targetID);
-            if ((pTarget == nullptr) or !IsEngageable(pTarget) or !pTower->IsHostile(pTarget)) {
+            // the lock may also have been broken (jammed, target cloaked or warped):  look again
+            if ((pTarget == nullptr) or !IsEngageable(pTarget) or !pTower->IsHostile(pTarget)
+            or (m_self->TargetMgr()->GetTarget(m_targetID, false) == nullptr)) {
                 if (pTarget != nullptr)
                     m_self->TargetMgr()->ClearTarget(pTarget);
                 if (m_ewarTargetID != 0)
@@ -641,8 +643,9 @@ void POS_AI::Stop()
 {
     if (m_ewarTargetID != 0)
         EndEwar();
+    // only our own locks:  ships that have the battery locked keep their locks
     if (m_self->TargetMgr() != nullptr)
-        m_self->TargetMgr()->ClearAllTargets();
+        m_self->TargetMgr()->ClearTargets();
     m_targetID = 0;
     m_fireTimer.Disable();
 }

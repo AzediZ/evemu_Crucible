@@ -165,7 +165,8 @@ public:
     void CheckOnlineFuel();
 
     inline void AddModule(StructureSE* pSE)             { m_structs.emplace(pSE->GetID(), pSE); }
-    inline void RemoveModule(StructureSE* pSE)          { m_structs.erase(pSE->GetID()); }
+    // the structure leaves this tower, with its moon process links
+    void RemoveModule(StructureSE* pSE);
 
     // structure update methods
     // saves corp/alliance access and the password, and retunes the force field
