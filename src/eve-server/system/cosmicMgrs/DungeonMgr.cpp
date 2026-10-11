@@ -843,7 +843,7 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
             gate.def = sDunDataMgr.GetGate(objectID);
             gate.open = ((gate.def == nullptr) or !gate.def->locked);
             gate.openUntil = (gate.open ? Win32TimeNow() : 0);
-            gate.shownOpen = gate.open;
+            gate.shownOpen = (gate.open and ((gate.def == nullptr) or !gate.def->requireClear));
         m_gates[itemID] = gate;
     }
     return itemID;
@@ -1084,6 +1084,17 @@ bool DungeonMgr::IsDeadspace(const GPoint& pos)
             if ((i > 0) or (cur.second.kind != Dungeon::Kind::Anomaly))
                 return true;
         }
+    return false;
+}
+
+bool DungeonMgr::RedirectWarp(const GPoint& dest, GPoint& into)
+{
+    for (auto& cur : m_instances)
+        for (uint8 i = 1; i < cur.second.rooms.size(); ++i)
+            if (cur.second.rooms[i].origin.distance(dest) < BUBBLE_RADIUS_METERS) {
+                into = cur.second.rooms[0].origin;
+                return true;
+            }
     return false;
 }
 
@@ -2129,7 +2140,7 @@ uint8 DungeonMgr::GetGateDestination(Instance& inst, const LiveGate& gate)
 void DungeonMgr::SendGateSlimUpdate(uint32 gateItemID)
 {
     SystemEntity* pSE(m_system->GetSE(gateItemID));
-    if ((pSE == nullptr) or (pSE->DestinyMgr() == nullptr))
+    if ((pSE == nullptr) or (pSE->SysBubble() == nullptr))
         return;
     PyTuple* shipData = new PyTuple(2);
         shipData->SetItem(0, new PyLong(gateItemID));
@@ -2137,7 +2148,105 @@ void DungeonMgr::SendGateSlimUpdate(uint32 gateItemID)
     PyTuple* sItem = new PyTuple(2);
         sItem->SetItem(0, new PyString("OnSlimItemChange"));
         sItem->SetItem(1, shipData);
-    pSE->DestinyMgr()->SendSingleDestinyUpdate(&sItem);   // consumed
+    pSE->SysBubble()->BubblecastDestinyUpdate(&sItem, "dungeon");   // consumed
+}
+
+void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
+{
+    ShipSE* pShip(pClient->GetShipSE());
+    if ((pShip == nullptr) or (pShip->DestinyMgr() == nullptr) or !pClient->IsInSpace())
+        return;
+    auto gItr = m_gates.find(gateItemID);
+    SystemEntity* pGate(m_system->GetSE(gateItemID));
+    if ((gItr == m_gates.end()) or (pGate == nullptr))
+        throw CustomError("This acceleration gate is not active.");
+    LiveGate& gate = gItr->second;
+    auto iItr = m_instances.find(gate.instanceID);
+    if ((iItr == m_instances.end()) or (gate.roomIdx >= iItr->second.rooms.size()))
+        throw CustomError("This acceleration gate is not active.");
+    Instance& inst = iItr->second;
+    const Dungeon::GateDef* pDef(gate.def);
+
+    // the client approaches to 2500m (surface distance) before asking
+    double distance(pShip->GetPosition().distance(pGate->GetPosition()) - pShip->GetRadius() - pGate->GetRadius());
+    if (distance > maxStargateJumpingDistance + 500)
+        throw UserError("DunGateTooFarAway").AddFormatValue("maxdist", new PyInt(static_cast<int32>(maxStargateJumpingDistance)));
+
+    // ship rules:  no pods, no capitals, the gate's group lists
+    uint32 shipTypeID(pShip->GetTypeID());
+    uint32 shipGroupID(pShip->GetSelf()->groupID());
+    if (shipGroupID == EVEDB::invGroups::Capsule)
+        throw UserError("DunPodsCannotWarp");
+    auto groupNames = [](const std::vector<uint32>& groups) -> std::string {
+        std::string names;
+        for (auto groupID : groups) {
+            if (!names.empty())
+                names += "<br>";
+            names += sDataMgr.GetGroupName(groupID);
+        }
+        return names;
+    };
+    if (DungeonDataMgr::IsCapitalGroup(shipGroupID) or ((pDef != nullptr) and
+        (std::find(pDef->deniedGroups.begin(), pDef->deniedGroups.end(), shipGroupID) != pDef->deniedGroups.end())))
+    {
+        std::vector<uint32> denied, allowed;
+        sDunDataMgr.GetShipRestrictions(inst.dungeon->dungeonID, allowed, denied);
+        throw UserError("DunBlacklistCannotWarp")
+                .AddFormatValue("ship", new PyInt(shipTypeID))
+                .AddFormatValue("list", new PyString(groupNames(denied)));
+    }
+    if ((pDef != nullptr) and !pDef->allowedGroups.empty()
+    and (std::find(pDef->allowedGroups.begin(), pDef->allowedGroups.end(), shipGroupID) == pDef->allowedGroups.end()))
+        throw UserError("DunShipCannotWarp")
+                .AddFormatValue("ship", new PyInt(shipTypeID))
+                .AddFormatValue("whitelist", new PyString(groupNames(pDef->allowedGroups)));
+
+    // locked by a trigger, or by the hostiles still in the room
+    if (!IsGateOpen(gate))
+        throw UserError("DunGateNPCsAround");
+
+    // acceleration gates won't fling a scrambled ship
+    if (pShip->IsWarpScrambled())
+        throw UserError("WarpScrambled");
+
+    if ((pDef != nullptr) and (pDef->skillTypeID != 0) and (pClient->GetChar()->GetSkillLevel(pDef->skillTypeID) < pDef->skillLevel))
+        throw UserError("DunGateNoSkill").AddFormatValue("skill", new PyInt(pDef->skillTypeID));
+
+    // keys in the cargo hold
+    if ((pDef != nullptr) and (pDef->keyTypeID != 0) and sConfig.dungeon.GateKeysRequired) {
+        uint32 charID(pClient->GetCharacterID());
+        Inventory* pInv(pClient->GetShip()->GetMyInventory());
+        uint32 have((pInv != nullptr) ? pInv->GetTypeQtyForOwner(pDef->keyTypeID, flagCargoHold, charID) : 0);
+        if (have < pDef->keyQuantity) {
+            if (pDef->keyQuantity > 1)
+                throw UserError("DunGateLocked_ManyKeys")
+                        .AddFormatValue("quantity", new PyInt(pDef->keyQuantity))
+                        .AddFormatValue("key", new PyInt(pDef->keyTypeID));
+            if (pDef->keyConsumed)
+                throw UserError("DunGateLocked_OneKey").AddFormatValue("key", new PyInt(pDef->keyTypeID));
+            throw UserError("DunGateLocked_ZeroKey").AddFormatValue("key", new PyInt(pDef->keyTypeID));
+        }
+        if (pDef->keyConsumed) {
+            std::vector<InventoryItemRef> keys;
+            if (pInv->TakeTypeQtyForOwner(pDef->keyTypeID, flagCargoHold, charID, pDef->keyQuantity, keys))
+                for (auto& cur : keys)
+                    cur->Delete();
+        }
+    }
+
+    // the destination room, populated now if nobody has been there yet
+    uint8 dest(GetGateDestination(inst, gate));
+    LiveRoom& room = inst.rooms[dest];
+    PopulateRoom(inst, dest);
+
+    // everyone near the gate sees it fire;  the activating ship hears the gate's music
+    pShip->DestinyMgr()->SendSpecialEffect10(gateItemID, pShip->GetID(), "effects.WarpGateEffect", false, true, false);
+
+    GPoint into(room.origin + room.def->arrival);
+    into.MakeRandomPointOnSphere(MakeRandomFloat(0.0, maxStargateJumpingDistance));
+    _log(DUNG__MESSAGE, "DungeonMgr::ActivateGate() - %s takes gate %u of %s from room %u to room %u", pClient->GetName(),
+            gateItemID, inst.name.c_str(), inst.rooms[gate.roomIdx].roomID, room.roomID);
+    pShip->DestinyMgr()->WarpTo(into, 0, false, nullptr, 0, true);
 }
 
 /* escalations */

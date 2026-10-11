@@ -458,8 +458,7 @@ PyDict* StargateSE::MakeSlimItem() {
 
 /* Non-Static / Non-Mobile / Non-Destructable / Celestial Objects - Containers, DeadSpace, ForceFields, ScanProbes */
 ItemSystemEntity::ItemSystemEntity(InventoryItemRef self, EVEServiceManager &services, SystemManager* system)
-: SystemEntity(self, services, system),
-m_keyType(0)
+: SystemEntity(self, services, system)
 {
 }
 
@@ -477,37 +476,7 @@ PyDict* ItemSystemEntity::MakeSlimItem() {
         slim->SetItemString("itemID",       new PyLong(m_self->itemID()));
         slim->SetItemString("typeID",       new PyInt(m_self->typeID()));
         slim->SetItemString("ownerID",      new PyInt(m_ownerID));
-        if (m_self->groupID() == EVEDB::invGroups::Warp_Gate) {
-            // this is incomplete........
-            slim->SetItemString("dunSkillLevel", PyStatic.NewNone());   //?
-            slim->SetItemString("dunSkillTypeID", PyStatic.NewNone());   //?
-            slim->SetItemString("dunObjectID", new PyInt(160449));  //?   902139
-            slim->SetItemString("dunToGateID", new PyInt(160484));  //?   902140
-            slim->SetItemString("dunCloaked", new PyBool(0));   //?
-            slim->SetItemString("dunScenarioID", new PyInt(23));    //?  3347
-            slim->SetItemString("dunSpawnID", new PyInt(1572));  //?
-            slim->SetItemString("dunAmount", new PyFloat(0.0));  //?
-            PyList* classList = new PyList();
-                classList->AddItem( new PyInt(324));
-                classList->AddItem( new PyInt(420));
-                classList->AddItem( new PyInt(541));
-                classList->AddItem( new PyInt(834));
-                classList->AddItem( new PyInt(25));
-                classList->AddItem( new PyInt(830));
-            slim->SetItemString("dunShipClasses", classList);   //?
-            PyList* dirList = new PyList();
-                dirList->AddItem(new PyInt(5));     //234
-                dirList->AddItem(new PyInt(-1));
-                dirList->AddItem(PyStatic.NewZero());
-            slim->SetItemString("dunDirection", dirList);
-            slim->SetItemString("dunKeyLock", PyStatic.NewNone());   //?
-            slim->SetItemString("dunWipeNPC", new PyBool(0));   //?
-            slim->SetItemString("dunKeyQuantity", PyStatic.NewOne());   //?
-            slim->SetItemString("dunKeyTypeID", new PyInt(m_keyType));   //Training Complex Passkey   group Acceleration_Gate_Keys
-            slim->SetItemString("dunOpenUntil", new PyInt(Win32TimeNow()+EvE::Time::Hour));   //?
-            slim->SetItemString("dunRoomName", new PyString("Lobby"));   //?
-            slim->SetItemString("dunMusicUrl", new PyString("res:/Sound/Music/Ambient031combat.ogg"));
-        }
+        // acceleration gates add their dungeon data (AccelGateSE)
     /** @todo  finish rotation data
     Large_Collidable_Structure
     Large_Collidable_Ship

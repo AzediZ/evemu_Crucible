@@ -887,9 +887,9 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                     if (iRef.get() == nullptr)
                         return nullptr;
                     /** @todo make error msg here */
-                    ItemSystemEntity* iSE = new ItemSystemEntity(iRef, sysMgr.GetServiceMgr(), &sysMgr);
-                    _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making ISE for %s (%u)", entity.itemName.c_str(), entity.itemID);
-                    return iSE;
+                    AccelGateSE* gSE = new AccelGateSE(iRef, sysMgr.GetServiceMgr(), &sysMgr);
+                    _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making AccelGateSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
+                    return gSE;
                 } break;
             } break;
         } break;

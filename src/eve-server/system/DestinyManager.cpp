@@ -119,6 +119,7 @@ m_frozen(false)
 
     m_radius = mySE->GetRadius();
     m_capNeeded = 0.0;
+    m_freeWarp = false;
     m_warpCapacitorNeed = 0.00001;
     m_shipAgility = 1.0;
     m_shipInertia = 1.0;
@@ -670,9 +671,10 @@ void DestinyManager::OnWarpActivated() {
                 mySE->GetName(), mySE->GetID(), m_effectStamp, m_warpDistance / DST_AU,
                 m_targetPoint.x, m_targetPoint.y, m_targetPoint.z, static_cast<double>(m_warpFactor) * 0.1);
 
-    //drain cap
+    //drain cap (acceleration gate warps are free)
     if (mySE->HasPilot()) {
-        mySE->GetSelf()->SetAttribute(AttrCapacitorCharge, m_capNeeded);
+        if (!m_freeWarp)
+            mySE->GetSelf()->SetAttribute(AttrCapacitorCharge, m_capNeeded);
         mySE->GetShipSE()->Warp();
         m_capNeeded = 0;
     }
@@ -1045,7 +1047,7 @@ void DestinyManager::GotoPoint(const GPoint& point) {
     SendSingleDestinyUpdate(&up);   // consumed
 }
 
-void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/) {
+void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/, bool gateWarp/*false*/) {
     /* warp order..
      * pick destination -> align/accel -> aura "warp drive active" -> cap drain -> accel
      *      -> enter warp -> warp -> decel -> leave warp -> coast -> stop
@@ -1062,9 +1064,10 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     double warpDistance(toDestination.length() - minRange);
 
     // warp disruption fields (bubbles).  only player ships and pods are affected (see InterdictionMgr)
+    //  acceleration gates fling the ship regardless
     InterdictionMgr* pInterdict((mySE->SystemMgr() != nullptr) ? mySE->SystemMgr()->GetInterdictionMgr() : nullptr);
     bool dragged(false);
-    if ((pInterdict != nullptr) and pInterdict->HasFields() and mySE->IsShipSE()) {
+    if ((pInterdict != nullptr) and pInterdict->HasFields() and mySE->IsShipSE() and !gateWarp) {
         // inside a field: no warp at all
         if (pInterdict->IsWarpDisrupted(mySE)) {
             double escape(0);
@@ -1107,7 +1110,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
         }
     }
 
-    if (mySE->HasPilot()) {
+    // acceleration gates need no capacitor
+    if (mySE->HasPilot() and !gateWarp) {
         if (warpDistance < static_cast<double>(minWarpDistance)) {
             mySE->GetPilot()->SendErrorMsg("That is too close for your Warp Drive.");
             // warp distance too close.  cancel warp and return
@@ -1151,6 +1155,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
             m_capNeeded = currentShipCap - capNeeded;
         }
     }
+
+    m_freeWarp = gateWarp;
 
     // warping stops a running self-destruct
     if (mySE->IsShipSE() and mySE->HasPilot() and (mySE->SystemMgr() != nullptr))

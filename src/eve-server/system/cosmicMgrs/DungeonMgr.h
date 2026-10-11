@@ -167,6 +167,8 @@ public:
     bool IsInDungeon(const GPoint& pos);
     // point is in deadspace:  any room past the first, or any room of a signature/escalation/mission site
     bool IsDeadspace(const GPoint& pos);
+    // a warp to dest inside a room past a dungeon's first ends at the dungeon's entrance (into).  false = no change
+    bool RedirectWarp(const GPoint& dest, GPoint& into);
     // warp-in point of an escalation site (CmdWarpToStuff 'epinstance').  false if it isn't here or isn't charID's
     bool GetInstanceWarpIn(uint32 escalationInstanceID, uint32 charID, GPoint& into);
 

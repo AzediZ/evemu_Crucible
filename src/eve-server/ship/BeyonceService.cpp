@@ -468,6 +468,15 @@ bool BeyonceBound::ResolveWarpTarget(Client* pClient, const std::string& type, P
         pClient->SendErrorMsg("WarpTo: Item location not found.");
         return false;
     }
+
+    // the rooms of a deadspace complex past its first are only reached through its acceleration gates:
+    //  a warp to anything in there ends at the complex's entrance
+    GPoint entrance;
+    if (pSystem->GetDungMgr()->RedirectWarp((pSE != nullptr) ? pSE->GetPosition() : point, entrance)) {
+        pSE = nullptr;
+        toID = 0;
+        point = entrance;
+    }
     return true;
 }
 

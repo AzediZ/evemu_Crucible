@@ -122,6 +122,16 @@ public:
     virtual PyDict*             MakeSlimItem();
 };
 
+/* acceleration gate of a dungeon room.  its state (open, keys, ship rules, destination) is DungeonMgr's */
+class AccelGateSE : public ItemSystemEntity {
+public:
+    AccelGateSE(InventoryItemRef self, EVEServiceManager &services, SystemManager* system);
+    virtual ~AccelGateSE()                              { /* Do nothing here */ }
+
+    /* SystemEntity interface */
+    virtual PyDict*             MakeSlimItem();
+};
+
 class WormholeSE : public CelestialSE {
 public:
     WormholeSE(CelestialObjectRef self, EVEServiceManager& services, SystemManager* system);

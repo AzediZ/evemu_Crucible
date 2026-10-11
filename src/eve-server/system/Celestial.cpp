@@ -29,6 +29,7 @@
 #include "StaticDataMgr.h"
 #include "system/Celestial.h"
 #include "system/SystemManager.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 
 /*
  * CelestialObject
@@ -146,6 +147,20 @@ PyDict* AnomalySE::MakeSlimItem()
         slim->SetItemString("typeID",           new PyInt(m_self->typeID()));
         slim->SetItemString("dungeonDataID",    new PyInt(0)); //?  seen 2990651
         slim->SetItemString("ownerID",          new PyInt(m_ownerID));
+    return slim;
+}
+
+AccelGateSE::AccelGateSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system)
+: ItemSystemEntity(self, services, system)
+{
+}
+
+PyDict* AccelGateSE::MakeSlimItem()
+{
+    _log(SE__SLIMITEM, "MakeSlimItem for AccelGateSE %s(%u)", GetName(), m_self->itemID());
+    PyDict* slim(ItemSystemEntity::MakeSlimItem());
+    if (m_system != nullptr)
+        m_system->GetDungMgr()->MakeGateSlim(m_self->itemID(), slim);
     return slim;
 }
 

@@ -513,9 +513,6 @@ public:
     virtual void                MakeDamageState(DoDestinyDamageState &into);
 
     virtual PyDict*             MakeSlimItem();
-
-private:
-    uint16 m_keyType;           //Training Complex Passkey   (group - Acceleration_Gate_Keys)
 };
 
 /* POS ForceField */

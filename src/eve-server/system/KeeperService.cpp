@@ -97,34 +97,17 @@ PyResult KeeperService::CanWarpToPathPlex(PyCallArgs &call, PyInt* instanceID) {
 }
 
 PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID) {
+    // sessionMgr.PerformSessionChange('...', keeper.ActivateAccelerationGate, itemID, violateSafetyTimer=1)  return value unused
     _log(DUNG__CALL,  "KeeperService::Handle_ActivateAccelerationGate  size: %lli", call.tuple->size());
     call.Dump(DUNG__CALL_DUMP);
 
     Client *pClient(call.client);
-    if ((pClient->GetShipSE() == nullptr) or (pClient->GetShipSE()->DestinyMgr() == nullptr))
+    if ((pClient->SystemMgr() == nullptr) or (pClient->GetShipSE() == nullptr))
         return PyStatic.NewNone();
 
-    // acceleration gates won't fling a scrambled ship
-    if (pClient->GetShipSE()->IsWarpScrambled())
-        throw UserError("WarpScrambled");
-
-    // Send gate activation effect
-    pClient->GetShipSE()->DestinyMgr()->SendSpecialEffect10(itemID->value(), 0, "effects.WarpGateEffect", 0, 1, 0);
-
-    // Currently, next rooms are at a fixed distance from previous room (on x axis), so we can just warp the ship in that direction
-    GPoint currentPosition(pClient->GetShipSE()->GetPosition());
-    GPoint deltaPosition;
-    deltaPosition.x = NEXT_DUNGEON_ROOM_DIST;
-    deltaPosition.y = 0;
-    deltaPosition.z = 0;
-
-    GPoint warpToPoint(currentPosition+deltaPosition);
-    GVector vectorToDestination(currentPosition, warpToPoint);
-    double distanceToDestination = vectorToDestination.length();
-    pClient->GetShipSE()->DestinyMgr()->WarpTo(warpToPoint, distanceToDestination);
-
-    /* return error msg from this call, if applicable, else nodeid and timestamp */
-    return new PyLong(Win32TimeNow());
+    // range, ship, lock, skill and key rules, then the warp to the gate's room (throws the client's errors)
+    pClient->SystemMgr()->GetDungMgr()->ActivateGate(pClient, itemID->value());
+    return PyStatic.NewNone();
 }
 
 KeeperBound::KeeperBound(EVEServiceManager& mgr, KeeperService& parent, SystemDB* db) :
