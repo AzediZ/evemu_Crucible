@@ -366,6 +366,85 @@ void MapData::GetPlanets(uint32 systemID, std::vector<DBGPointEntity>& into) {
     MapDB::GetPlanets(systemID, into, total);
 }
 
+bool MapData::GetMissionDungeonLocation(Agent* pAgent, uint8 level, MissionOffer& offer)
+{
+    // farthest a mission pocket is from its agent (jumps) by level
+    uint8 maxJumps(1);
+    switch (level) {
+        case 1: maxJumps = 1; break;
+        case 2:
+        case 3: maxJumps = 2; break;
+        case 4: maxJumps = 3; break;
+        case 5: maxJumps = 2; break;
+    }
+
+    uint32 originSys(pAgent->GetSystemID());
+    SystemData origin = SystemData();
+    sDataMgr.GetSystemData(originSys, origin);
+    bool highSec(origin.securityRating >= 0.45f);
+
+    std::vector<std::pair<uint32, uint8>> systems;
+    GetSystemsWithinJumps(originSys, maxJumps, systems);
+    // the agent's own system counts twice
+    std::vector<uint32> candidates;
+    for (auto cur : systems) {
+        SystemData data = SystemData();
+        if (!sDataMgr.GetSystemData(cur.first, data))
+            continue;
+        // level 5 agents sit in low sec and send pilots anywhere outside high sec
+        if (level == 5) {
+            if (data.securityRating >= 0.45f)
+                continue;
+        } else if ((data.securityRating >= 0.45f) != highSec) {
+            continue;
+        }
+        candidates.push_back(cur.first);
+        if (cur.second == 0)
+            candidates.push_back(cur.first);
+    }
+    if (candidates.empty())
+        candidates.push_back(originSys);
+
+    uint32 systemID(candidates[MakeRandomInt(0, candidates.size() - 1)]);
+    SystemData sysData = SystemData();
+    sDataMgr.GetSystemData(systemID, sysData);
+    double maxDist(sysData.radius * 0.9);
+
+    std::vector<DBGPointEntity> bodies;
+    GetPlanets(systemID, bodies);
+    GetMoons(systemID, bodies);
+
+    // 1/3 to 4 AU from a random planet, inside the system, more than 1,000 km off any planet or moon
+    GPoint pos(NULL_ORIGIN);
+    for (uint8 tries = 0; tries < 5; ++tries) {
+        pos = GetAnomalyPoint(systemID);
+        if ((maxDist > 0) and (pos.length() > maxDist)) {
+            GVector dir(pos);
+            dir.normalize();
+            pos = dir * (maxDist * MakeRandomFloat(0.33, 1.0));
+        }
+        bool clear(true);
+        for (auto& cur : bodies)
+            if (cur.position.distance(pos) < (cur.radius + 1000000))
+                clear = false;
+        if (clear)
+            break;
+    }
+    if (pos.isZero()) {
+        _log(AGENT__ERROR, "MapData::GetMissionDungeonLocation() - no position in system %u for agent %u.", systemID, pAgent->GetID());
+        return false;
+    }
+
+    offer.destinationID         = systemID;
+    offer.destinationSystemID   = systemID;
+    offer.destinationTypeID     = EVEDB::invTypes::SolarSystem;
+    offer.destinationOwnerID    = pAgent->GetCorpID();
+    offer.dungeonLocationID     = systemID;
+    offer.dungeonSolarSystemID  = systemID;
+    offer.dungeonPos            = pos;
+    return true;
+}
+
 void MapData::GetMoons(uint32 systemID, std::vector<DBGPointEntity>& into) {
     uint8 total = 0;
     MapDB::GetMoons(systemID, into, total);

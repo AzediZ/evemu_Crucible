@@ -39,25 +39,43 @@ void MissionDB::LoadMiningData(DBQueryResult& res)
         codelog(DATABASE__ERROR, "Error in LoadMiningData query: %s", res.error.c_str());
 }
 
+void MissionDB::LoadMissionContent(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+        "SELECT contentID, name, nameID, briefingID, briefingText, level, typeID, important, storyline, enemyFactionID,"   // 0-9
+        " agentRaceMask, objectiveType, objectiveTypeID, objectiveQty, dungeonID, spaceType, restrictLevel, rewardISK,"    // 10-17
+        " bonusISK, bonusTime, rewardLP, rewardScale, rewardItemTypeID, rewardItemQty, collateral, remoteOfferable,"       // 18-25
+        " remoteCompletable, pageKey"                                                                                     // 26-27
+        " FROM msnMissions WHERE enabled = 1"))
+        codelog(DATABASE__ERROR, "Error in LoadMissionContent query: %s", res.error.c_str());
+}
+
 void MissionDB::CreateOfferID(MissionOffer& data)
 {
+    std::string name, briefing;
+    sDatabase.DoEscapeString(name, data.name);
+    sDatabase.DoEscapeString(briefing, data.briefingText);
+
     DBerror err;
     uint32 uid = 0;
     if (!sDatabase.RunQueryLID(err, uid,
         "INSERT INTO agtOffers(acceptFee, agentID, characterID, courierAmount, courierTypeID, courierVolume, dateAccepted, dateIssued, destinationID, destinationTypeID, "
-        " destinationOwnerID, destinationSystemID, expiryTime, important, storyline, missionID, briefingID, name, offerID, originID, originOwnerID, originSystemID,"
-        " remoteCompletable, remoteOfferable, rewardISK, rewardItemID, rewardItemQty, rewardLP, bonusISK, bonusTime, stateID, typeID, dungeonLocationID, dungeonSolarSystemID)"
+        " destinationOwnerID, destinationSystemID, expiryTime, important, storyline, missionID, briefingID, name, originID, originOwnerID, originSystemID,"
+        " remoteCompletable, remoteOfferable, rewardISK, rewardItemID, rewardItemQty, rewardLP, bonusISK, bonusTime, stateID, typeID, dungeonLocationID, dungeonSolarSystemID,"
+        " contentID, nameID, objectiveType, objectiveTypeID, objectiveQty, objectiveCompleted, enemyFactionID, dungeonID, dungeonX, dungeonY, dungeonZ, briefingText)"
         " VALUES ("
-        " %u, %u, %u, %u, %u, %f, %f, %f, %u,"
-        " %u, %u, %u, %f, %i, %u,"
-        " %u, %u, '%s', %u, %u, %u, %u, %i,"
-        " %i, %u, %u, %u, %u, %u, %u, %u,"
-        " %u, %u, %u)",
+        " %u, %u, %u, %u, %u, %f, %.0f, %.0f, %u,"
+        " %u, %u, %u, %.0f, %u, %u,"
+        " %u, %u, '%s', %u, %u, %u, %u,"
+        " %u, %u, %u, %u, %u, %u, %u, %u, %u, %u, %u,"
+        " %u, %u, %u, %u, %u, %u, %u, %u, %f, %f, %f, '%s')",
             data.acceptFee, data.agentID, data.characterID, data.courierAmount, data.courierTypeID, data.courierItemVolume, data.dateAccepted, data.dateIssued, data.destinationID,
-            data.destinationTypeID, data.destinationOwnerID, data.destinationSystemID, data.expiryTime, (data.important?1:0), data.storyline,
-            data.missionID, data.briefingID, data.name.c_str(), data.offerID, data.originID, data.originOwnerID, data.originSystemID,
-            (data.remoteCompletable?1:0), (data.remoteOfferable?1:0), data.rewardISK, data.rewardItemID, data.rewardItemQty,data.rewardLP, data.bonusISK, data.bonusTime,
-            data.stateID, data.typeID, data.dungeonLocationID, data.dungeonSolarSystemID))
+            data.destinationTypeID, data.destinationOwnerID, data.destinationSystemID, data.expiryTime, (data.important?1:0), (data.storyline?1:0),
+            data.missionID, data.briefingID, name.c_str(), data.originID, data.originOwnerID, data.originSystemID, (data.remoteCompletable?1:0),
+            (data.remoteOfferable?1:0), data.rewardISK, data.rewardItemID, data.rewardItemQty, data.rewardLP, data.bonusISK, data.bonusTime, data.stateID, data.typeID,
+            data.dungeonLocationID, data.dungeonSolarSystemID,
+            data.contentID, data.nameID, data.objectiveType, data.objectiveTypeID, data.objectiveQty, (data.objectiveCompleted?1:0), data.enemyFactionID,
+            data.dungeonID, data.dungeonPos.x, data.dungeonPos.y, data.dungeonPos.z, briefing.c_str()))
     {
         codelog(DATABASE__ERROR, "Failed to insert new MissionOffer: %s", err.c_str());
         return;
@@ -76,8 +94,10 @@ void MissionDB::DeleteOffer(MissionOffer& data)
 void MissionDB::UpdateMissionOffer(MissionOffer& data)
 {
     DBerror err;
-    if (!sDatabase.RunQuery(err, "UPDATE agtOffers SET stateID = %u, dateAccepted = %f, dateCompleted = %f, expiryTime = %f WHERE offerID = %u",
-        data.stateID, data.dateAccepted, data.dateCompleted, data.expiryTime, data.offerID))
+    if (!sDatabase.RunQuery(err, "UPDATE agtOffers SET stateID = %u, dateAccepted = %.0f, dateCompleted = %.0f, expiryTime = %.0f, objectiveCompleted = %u,"
+        " rewardISK = %u, bonusISK = %u, rewardLP = %u WHERE offerID = %u",
+        data.stateID, data.dateAccepted, data.dateCompleted, data.expiryTime, (data.objectiveCompleted?1:0),
+        data.rewardISK, data.bonusISK, data.rewardLP, data.offerID))
     {
         codelog(DATABASE__ERROR, "Failed to update MissionOffer: %s", err.c_str());
     }
@@ -86,11 +106,53 @@ void MissionDB::UpdateMissionOffer(MissionOffer& data)
 void MissionDB::LoadOpenOffers(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,
-        "SELECT acceptFee, agentID, characterID, courierAmount, courierTypeID, courierVolume, dateAccepted, dateIssued, destinationID, destinationTypeID, destinationOwnerID, destinationSystemID,"
-        " expiryTime, important, storyline, missionID, briefingID, name, offerID, originID, originOwnerID, originSystemID, remoteCompletable, remoteOfferable, "
-        " rewardISK, rewardItemID, rewardItemQty, rewardLP, bonusISK, bonusTime, stateID, typeID, dungeonLocationID, dungeonSolarSystemID "
+        "SELECT acceptFee, agentID, characterID, courierAmount, courierTypeID, courierVolume, dateAccepted, dateIssued, destinationID, destinationTypeID, destinationOwnerID, destinationSystemID,"   // 0-11
+        " expiryTime, important, storyline, missionID, briefingID, name, offerID, originID, originOwnerID, originSystemID, remoteCompletable, remoteOfferable, "  // 12-23
+        " rewardISK, rewardItemID, rewardItemQty, rewardLP, bonusISK, bonusTime, stateID, typeID, dungeonLocationID, dungeonSolarSystemID,"   // 24-33
+        " contentID, nameID, objectiveType, objectiveTypeID, objectiveQty, objectiveCompleted, enemyFactionID, dungeonID, dungeonX, dungeonY, dungeonZ, briefingText"   // 34-45
         " FROM agtOffers WHERE dateCompleted = 0 AND stateID < 3"))
         codelog(DATABASE__ERROR, "Error in LoadOpenOffers query: %s", res.error.c_str());
+}
+
+int64 MissionDB::GetLastDecline(uint32 charID, uint32 agentID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT MAX(dateCompleted) FROM agtOffers WHERE characterID = %u AND agentID = %u AND stateID = %u",
+        charID, agentID, Mission::State::Rejected))
+    {
+        codelog(DATABASE__ERROR, "Error in GetLastDecline query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return 0;
+    return row.GetInt64(0);
+}
+
+uint32 MissionDB::IncrementCounter(uint32 charID, uint32 factionID, uint8 level)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "INSERT INTO chrMissionCounters (characterID, factionID, level, completed) VALUES (%u, %u, %u, 1)"
+        " ON DUPLICATE KEY UPDATE completed = completed + 1", charID, factionID, level);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT completed FROM chrMissionCounters WHERE characterID = %u AND factionID = %u AND level = %u",
+        charID, factionID, level))
+    {
+        codelog(DATABASE__ERROR, "Error in IncrementCounter query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void MissionDB::SetCounter(uint32 charID, uint32 factionID, uint8 level, uint32 count)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrMissionCounters SET completed = %u WHERE characterID = %u AND factionID = %u AND level = %u",
+        count, charID, factionID, level);
 }
 
 

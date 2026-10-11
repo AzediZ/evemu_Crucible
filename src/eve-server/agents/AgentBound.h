@@ -42,12 +42,28 @@ protected:
     PyResult RemoveOfferFromJournal(PyCallArgs& call);
     PyResult GetOfferJournalInfo(PyCallArgs& call);
     PyResult GetEntryPoint(PyCallArgs& call);
-    PyResult GotoLocation(PyCallArgs& call, PyInt* locationType, PyInt* locationNumber, PyInt* referringAgentID);
-    PyResult WarpToLocation(PyCallArgs& call, PyInt* locationType, PyInt* locationNumber, PyFloat* warpRange, PyBool* fleet, PyInt* referringAgentID);
+    // the client sends locationType as a string ('dungeon', 'agenthomebase', 'objective', 'objective.source', 'objective.destination')
+    PyResult GotoLocation(PyCallArgs& call, PyRep* locationType, PyInt* locationNumber, std::optional<PyRep*> referringAgentID);
+    PyResult WarpToLocation(PyCallArgs& call, PyRep* locationType, PyInt* locationNumber, PyRep* warpRange, PyRep* fleet, std::optional<PyRep*> referringAgentID);
 
 private:
-    PyTuple* GetMissionObjectives(Client* pClient, MissionOffer& offer);
+    PyList* GetMissionObjectives(Client* pClient, MissionOffer& offer);
     PyDict* GetMissionObjectiveInfo(Client* pClient, MissionOffer& offer);
+    PyDict* BuildMissionKeywords(MissionOffer& offer);
+    // GetMissionBriefingInfo's dict (also the dialogue's inline offer info)
+    PyDict* GetBriefingInfo(Client* pClient, MissionOffer& offer);
+    // the dialogue buttons for the pilot's offer or mission with this agent
+    void AddMissionButtons(Client* pClient, MissionOffer& offer, PyList* dialog);
+    // Dialog::Button::Complete, CompleteRemotely, or 0 when the mission can't be completed from here
+    uint8 GetCompleteButton(Client* pClient, MissionOffer& offer);
+    // docked in the agent's station
+    bool IsAtAgent(Client* pClient);
+    // FILETIME left before declining again is free of penalties (0 = free now)
+    int64 GetDeclineWait(uint32 charID);
+    // a station location dict (LocationWrapper) for the objectives
+    PyDict* GetStationLocation(uint32 stationID);
+    /* the point (or entity) of a mission bookmark in the pilot's system.  throws when there is none */
+    void ResolveLocation(Client* pClient, MissionOffer& offer, const std::string& locationType, GPoint& point, SystemEntity*& pSE, uint32& toID);
 };
 
 #endif  // _EVE_SERVER_AGENTBOUND_H

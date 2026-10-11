@@ -319,6 +319,26 @@ public:
         bool TriggerMessages;           // dungeon trigger messages are sent to players
     } dungeon;
 
+    // From <missions>  (F12: agent missions)
+    struct {
+        uint16 OfferExpiryHours;        // h a mission offer stays in the journal (Crucible ~7 days)
+        uint16 AcceptedExpiryHours;     // h to complete an accepted mission before it fails (Crucible 7 days)
+        uint16 DeclinePenaltyHours;     // a second decline within this many hours costs standings (Crucible 4)
+        bool UseDivisionTypes;          // Security agents offer encounters, Distribution courier, Mining mining.  false = courier only
+        bool FallbackToCourier;         // an agent without content for its mission type offers a courier mission
+        uint32 BaseISK[5];              // default reward per level before security and Negotiation
+        uint32 BonusISK[5];             // default time bonus per level
+        uint16 BonusMinutes[5];         // default bonus window per level
+        uint32 BaseLP[5];               // default base LP per level before x(1.6288 - security) x Connections
+        bool IskSecurityScaling;        // ISK rewards are scaled by (1.6288 - security) like LP
+        bool FleetShare;                // a pilot in a fleet is asked whether to share the rewards
+        uint16 FleetShareMax;           // max pilots sharing, completer included (Crucible 10)
+        bool FleetShareSameSystem;      // only fleet members in the completer's system share
+        uint16 DungeonDespawnMinutes;   // a mission pocket stays this long after completion, quit or failure (salvage)
+        uint16 StorylineEvery;          // missions of one level for one faction before a storyline offer (Crucible 16)
+        bool GateRestrictions;          // mission acceleration gates enforce the level's ship restrictions
+    } missions;
+
     // From <standings>
     struct {
         float MissionBonus;
@@ -423,6 +443,7 @@ protected:
     bool ProcessCosmic( const TiXmlElement* ele );
     bool ProcessExploring( const TiXmlElement* ele );
     bool ProcessDungeon( const TiXmlElement* ele );
+    bool ProcessMissions( const TiXmlElement* ele );
     bool ProcessStandings( const TiXmlElement* ele );
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );

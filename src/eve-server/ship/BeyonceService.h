@@ -54,24 +54,25 @@ class BeyonceBound : public EVEBoundObject <BeyonceBound>
 public:
     BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Client* client);
 
-protected:
+    /* warp helpers, also used by the agents' WarpToLocation (mission bookmarks) */
     // throws CantWarpWhileCloaked unless the active cloak is a covert ops cloak
-    void CheckCloakedWarp(Client* pClient);
+    static void CheckCloakedWarp(Client* pClient);
     // false when a cloaking device that isn't warp safe is running
     static bool CanWarpCloaked(Client* pClient);
     // true (after telling the pilot) during the doomsday's warp lockout
-    bool CheckWarpLockout(Client* pClient);
-
-    /* CmdWarpToStuff helpers */
-    // finds what to warp to: a fixed point (bookmarks) or an entity.  false (after telling the client when needed) when there's nothing to warp to
-    bool ResolveWarpTarget(Client* pClient, const std::string& type, PyRep* id, GPoint& point, SystemEntity*& pSE, uint32& toID);
+    static bool CheckWarpLockout(Client* pClient);
     /* the warp-in point of pSE (or point when pSE is null) for a ship at shipPos.
      *  distance is the requested range on entry and the range to use on return (some objects add to it) */
     static GPoint GetWarpInPoint(SystemEntity* pSE, uint32 toID, const GPoint& point, const GPoint& shipPos, int32& distance);
     /* commander warp: the commander's subordinates in the system (or on grid, world.fleetWarpOnGridOnly) that can warp now
      *  (excludeCharID is never warped).  speed is the warp speed for the whole group (0 = each ship's own speed) */
-    void GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed);
-    void FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed);
+    static void GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed);
+    static void FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed);
+
+protected:
+    /* CmdWarpToStuff helpers */
+    // finds what to warp to: a fixed point (bookmarks) or an entity.  false (after telling the client when needed) when there's nothing to warp to
+    bool ResolveWarpTarget(Client* pClient, const std::string& type, PyRep* id, GPoint& point, SystemEntity*& pSE, uint32& toID);
     // capital jump drive to a fleet member's cyno or an alliance cynosural generator array (CmdBeaconJumpFleet/Alliance)
     PyResult DoBeaconJump(Client* pClient, bool alliance, uint32 charID, uint32 beaconID, uint32 systemID);
     // opens the fitted jump portal generator to a fleet member's cyno or an alliance generator array (CmdBridgeToMember/Structure)

@@ -219,6 +219,32 @@ EVEServerConfig::EVEServerConfig()
     dungeon.GateKeysRequired = true;
     dungeon.TriggerMessages = true;
 
+    // missions
+    missions.OfferExpiryHours = 168;
+    missions.AcceptedExpiryHours = 168;
+    missions.DeclinePenaltyHours = 4;
+    missions.UseDivisionTypes = true;
+    missions.FallbackToCourier = true;
+    {
+        const uint32 isk[5] = { 40000, 160000, 450000, 900000, 6000000 };
+        const uint32 bonus[5] = { 30000, 120000, 350000, 750000, 4000000 };
+        const uint16 minutes[5] = { 60, 90, 120, 180, 240 };
+        const uint32 lp[5] = { 200, 600, 1500, 3500, 12000 };
+        for (uint8 i = 0; i < 5; ++i) {
+            missions.BaseISK[i] = isk[i];
+            missions.BonusISK[i] = bonus[i];
+            missions.BonusMinutes[i] = minutes[i];
+            missions.BaseLP[i] = lp[i];
+        }
+    }
+    missions.IskSecurityScaling = true;
+    missions.FleetShare = true;
+    missions.FleetShareMax = 10;
+    missions.FleetShareSameSystem = true;
+    missions.DungeonDespawnMinutes = 120;
+    missions.StorylineEvery = 16;
+    missions.GateRestrictions = true;
+
     // standings
     //  - mission
     standings.MissionBonus = 1.0;
@@ -345,6 +371,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "cosmic",      &EVEServerConfig::ProcessCosmic );
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
     AddMemberParser( "dungeon",     &EVEServerConfig::ProcessDungeon );
+    AddMemberParser( "missions",    &EVEServerConfig::ProcessMissions );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
@@ -371,6 +398,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "cosmic" );
     RemoveParser( "exploring" );
     RemoveParser( "dungeon" );
+    RemoveParser( "missions" );
     RemoveParser( "crime" );
     RemoveParser( "sov" );
     RemoveParser( "standings" );
@@ -840,6 +868,54 @@ bool EVEServerConfig::ProcessDungeon( const TiXmlElement* ele )
     RemoveParser( "EscalationShareFleet" );
     RemoveParser( "GateKeysRequired" );
     RemoveParser( "TriggerMessages" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessMissions( const TiXmlElement* ele )
+{
+    AddValueParser( "OfferExpiryHours",     missions.OfferExpiryHours );
+    AddValueParser( "AcceptedExpiryHours",  missions.AcceptedExpiryHours );
+    AddValueParser( "DeclinePenaltyHours",  missions.DeclinePenaltyHours );
+    AddValueParser( "UseDivisionTypes",     missions.UseDivisionTypes );
+    AddValueParser( "FallbackToCourier",    missions.FallbackToCourier );
+    AddValueParser( "BaseISK1",             missions.BaseISK[0] );
+    AddValueParser( "BaseISK2",             missions.BaseISK[1] );
+    AddValueParser( "BaseISK3",             missions.BaseISK[2] );
+    AddValueParser( "BaseISK4",             missions.BaseISK[3] );
+    AddValueParser( "BaseISK5",             missions.BaseISK[4] );
+    AddValueParser( "BonusISK1",            missions.BonusISK[0] );
+    AddValueParser( "BonusISK2",            missions.BonusISK[1] );
+    AddValueParser( "BonusISK3",            missions.BonusISK[2] );
+    AddValueParser( "BonusISK4",            missions.BonusISK[3] );
+    AddValueParser( "BonusISK5",            missions.BonusISK[4] );
+    AddValueParser( "BonusMinutes1",        missions.BonusMinutes[0] );
+    AddValueParser( "BonusMinutes2",        missions.BonusMinutes[1] );
+    AddValueParser( "BonusMinutes3",        missions.BonusMinutes[2] );
+    AddValueParser( "BonusMinutes4",        missions.BonusMinutes[3] );
+    AddValueParser( "BonusMinutes5",        missions.BonusMinutes[4] );
+    AddValueParser( "BaseLP1",              missions.BaseLP[0] );
+    AddValueParser( "BaseLP2",              missions.BaseLP[1] );
+    AddValueParser( "BaseLP3",              missions.BaseLP[2] );
+    AddValueParser( "BaseLP4",              missions.BaseLP[3] );
+    AddValueParser( "BaseLP5",              missions.BaseLP[4] );
+    AddValueParser( "IskSecurityScaling",   missions.IskSecurityScaling );
+    AddValueParser( "FleetShare",           missions.FleetShare );
+    AddValueParser( "FleetShareMax",        missions.FleetShareMax );
+    AddValueParser( "FleetShareSameSystem", missions.FleetShareSameSystem );
+    AddValueParser( "DungeonDespawnMinutes", missions.DungeonDespawnMinutes );
+    AddValueParser( "StorylineEvery",       missions.StorylineEvery );
+    AddValueParser( "GateRestrictions",     missions.GateRestrictions );
+
+    const bool result = ParseElementChildren( ele );
+
+    const char* names[] = { "OfferExpiryHours", "AcceptedExpiryHours", "DeclinePenaltyHours", "UseDivisionTypes", "FallbackToCourier",
+        "BaseISK1", "BaseISK2", "BaseISK3", "BaseISK4", "BaseISK5", "BonusISK1", "BonusISK2", "BonusISK3", "BonusISK4", "BonusISK5",
+        "BonusMinutes1", "BonusMinutes2", "BonusMinutes3", "BonusMinutes4", "BonusMinutes5", "BaseLP1", "BaseLP2", "BaseLP3", "BaseLP4",
+        "BaseLP5", "IskSecurityScaling", "FleetShare", "FleetShareMax", "FleetShareSameSystem", "DungeonDespawnMinutes", "StorylineEvery",
+        "GateRestrictions" };
+    for (auto cur : names)
+        RemoveParser( cur );
 
     return result;
 }

@@ -26,11 +26,17 @@ public:
     static void LoadMissionData(DBQueryResult& res);
     static void LoadCourierData(DBQueryResult& res);
     static void LoadClosedOffers(DBQueryResult& res);
+    static void LoadMissionContent(DBQueryResult& res);
     static void LoadMissionBookMark(DBQueryResult& res, std::vector<int32>& bmIDs);
 
     static void UpdateMissionOffer(MissionOffer& data);
 
     static void DeleteOffer(MissionOffer& data);
+    // FILETIME of the char's last declined offer from this agent (0 = none)
+    static int64 GetLastDecline(uint32 charID, uint32 agentID);
+    // counts a completed mission for the storyline counter of (faction, level).  returns the new count
+    static uint32 IncrementCounter(uint32 charID, uint32 factionID, uint8 level);
+    static void SetCounter(uint32 charID, uint32 factionID, uint8 level, uint32 count);
     static void RemoveMissionItem(uint32 charID, uint16 typeID, uint32 qty);   // this is for removing mission items from offline clients.
 
 protected:

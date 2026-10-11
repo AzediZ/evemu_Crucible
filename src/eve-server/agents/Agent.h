@@ -33,6 +33,9 @@ public:
 
     uint8 GetLevel()                                    { return m_agentData.level; }
     int8 GetQuality()                                   { return m_agentData.quality; }
+    uint8 GetDivisionID()                               { return m_agentData.divisionID; }
+    uint16 GetTypeID()                                  { return m_agentData.typeID; }
+    const std::string& GetName()                        { return m_agentData.name; }
 
     uint32 GetID()                                      { return m_agentID; }
     uint32 GetCorpID()                                  { return m_agentData.corporationID; }
@@ -45,10 +48,15 @@ public:
     bool HasMission(uint32 charID);
     bool HasMission(uint32 charID, MissionOffer& offer);
 
-    void MakeOffer(uint32 charID, MissionOffer& offer);
+    /* the mission type this agent gives (Incursion 1.5:  Security -> Encounter, Distribution -> Courier, Mining -> Mining).
+     *  0 = none (storyline agents only have the storyline offers made for a pilot, event/arc/tutorial/FW agents are not served) */
+    uint8 GetMissionType();
+    // makes, saves and keeps a new offer for charID.  false (nothing saved) when the agent has nothing to offer
+    bool MakeOffer(uint32 charID, MissionOffer& offer);
     void GetOffer(uint32 charID, MissionOffer& offer);
     void UpdateOffer(uint32 charID, MissionOffer& offer);
-    void DeleteOffer(uint32 charID);    // completely deletes offer from agent data, missionMgr data, and db
+    // closes the offer (declined = Rejected, quit = Failed, removed = Expired):  saved with that state and dropped from agent and missionMgr data
+    void DeleteOffer(uint32 charID, uint8 stateID = Mission::State::Rejected);
     void RemoveOffer(uint32 charID);    // removes offer from agent data
 
     uint32 GetQuitRsp(uint32 charID);
@@ -56,6 +64,11 @@ public:
     uint32 GetDeclineRsp(uint32 charID);
     uint32 GetCompleteRsp(uint32 charID);
     uint32 GetStandingsRsp(uint32 charID);
+    std::string GetNoMissionRsp(uint32 charID);
+
+    // the fleet share question (Complete -> Yes/No)
+    void SetPendingCompletion(uint32 charID)            { m_pendingShare.insert(charID); }
+    bool TakePendingCompletion(uint32 charID)           { return (m_pendingShare.erase(charID) > 0); }
 
     void SendMissionUpdate(Client* pClient, std::string action);
 
@@ -66,12 +79,15 @@ public:
 
 protected:
     std::string GetMinReqStanding(uint8 level);
+    // destination, expiry and agent data of a new offer, then saved.  false if it can't be placed
+    bool FinishOffer(uint32 charID, MissionOffer& offer);
     const uint32 m_agentID;
     AgentData m_agentData;
 
     std::map<uint16, uint8>             m_skills;       // skillID/level
     std::map<uint32, MissionOffer>      m_offers;       // charID/data      -- shouldnt this be in mission data??
     std::map<uint16, AgentActions>      m_actions;      // buttonID/data
+    std::set<uint32>                    m_pendingShare; // charIDs asked whether to share the rewards with their fleet
 
 private:
     bool m_important;

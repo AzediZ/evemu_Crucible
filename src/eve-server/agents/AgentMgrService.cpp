@@ -139,18 +139,11 @@ PyResult AgentMgrService::GetMyJournalDetails(PyCallArgs &call) {
     PyList* missions = new PyList();
     std::vector<MissionOffer> data;
     sMissionDataMgr.LoadMissionOffers(call.client->GetCharacterID(), data);
-    for (auto cur : data) {
-        PyTuple* mData = new PyTuple(9);
-        mData->SetItem(0, new PyInt(cur.stateID)); //missionState  .. these may be wrong also.
-        mData->SetItem(1, new PyInt(cur.important?1:0)); //importantMission  -- integer boolean
-        mData->SetItem(2, new PyString(sMissionDataMgr.GetTypeLabel(cur.typeID))); //missionTypeLabel
-        mData->SetItem(3, new PyString(cur.name)); //missionName
-        mData->SetItem(4, new PyInt(cur.agentID)); //agentID
-        mData->SetItem(5, new PyLong(cur.expiryTime)); //expirationTime
-        mData->SetItem(6, cur.bookmarks->Clone()); //bookmarks -- if populated, this is PyList of PyDicts as defined below...
-        mData->SetItem(7, new PyBool(cur.remoteOfferable)); //remoteOfferable
-        mData->SetItem(8, new PyBool(cur.remoteCompletable)); //remoteCompletable
-        missions->AddItem(mData);
+    for (auto& cur : data) {
+        // completed and declined offers aren't journal entries (the client knows states 0-3 only)
+        if ((cur.stateID == Mission::State::Completed) or (cur.stateID == Mission::State::Rejected))
+            continue;
+        missions->AddItem(sMissionDataMgr.GetJournalEntry(cur));
     }
     tuple->SetItem(0, missions);
 

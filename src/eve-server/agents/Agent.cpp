@@ -36,6 +36,7 @@
 #include "../system/SystemManager.h"
 #include "../standing/StandingMgr.h"
 #include "corporation/LPService.h"
+#include "../EVEServerConfig.h"
 
 
 Agent::Agent(uint32 id)
@@ -63,32 +64,65 @@ bool Agent::Load() {
     return true;
 }
 
-void Agent::MakeOffer(uint32 charID, MissionOffer& offer)
+uint8 Agent::GetMissionType()
 {
-    // this will be based on agent type eventually
-    uint8 misionType = Mission::Type::Courier;
+    using namespace Agents::Type;
+    switch (m_agentData.typeID) {
+        case GenericStoryLine:
+        case StoryLine:
+            // only the storyline offers made for a pilot (MissionDataMgr::OnMissionCompleted)
+            return 0;
+        case Event:
+        case Agents::Type::FacWar:
+        case EpicArc:
+        case Tutorial:
+        case Aura:
+        case None:
+            // not served (see F12 plan:  deferred / out of scope)
+            return 0;
+        case Research:
+            // R&D missions are not done.  research agents keep giving courier missions
+            return Mission::Type::Courier;
+    }
 
-    sMissionDataMgr.CreateMissionOffer(misionType, m_agentData.level, m_agentData.raceID, m_important, offer);
+    if (!sConfig.missions.UseDivisionTypes)
+        return Mission::Type::Courier;
 
-    /*  static mission data from db
-    offer.name               = cData.name;
-    offer.typeID             = cData.typeID;
-    offer.bonusISK           = cData.bonusISK;
-    offer.rewardISK          = cData.rewardISK;
-    offer.bonusTime          = cData.bonusTime;
-    offer.important          = cData.important;
-    offer.storyline          = cData.storyline;
-    offer.missionID          = cData.missionID;
-    offer.briefingID         = cData.briefingID;
-    offer.rewardItemID       = cData.rewardItemID;
-    offer.rewardItemQty      = cData.rewardItemQty;
-    offer.courierTypeID      = cData.itemTypeID;
-    offer.courierAmount      = cData.itemQty;
+    // Incursion 1.5 divisions (and the old ones they replaced, in case the F12 migration hasn't been run)
+    switch (m_agentData.divisionID) {
+        case 22: case 1: case 3: case 4: case 7: case 8: case 13: case 15: case 17: case 20:
+            return Mission::Type::Courier;
+        case 23: case 5: case 12: case 14: case 16:
+            return Mission::Type::Mining;
+        case 24: case 2: case 6: case 9: case 10: case 11: case 19: case 21:
+            return Mission::Type::Encounter;
+    }
+    return Mission::Type::Courier;
+}
 
-    offer.stateID            = Mission::State::Allocated;
-    offer.dateIssued         = GetFileTimeNow();
-    */
+bool Agent::MakeOffer(uint32 charID, MissionOffer& offer)
+{
+    uint8 typeID(GetMissionType());
+    if (typeID == 0)
+        return false;
 
+    if (!sMissionDataMgr.CreateMissionOffer(typeID, m_agentData.level, this, m_important, false, offer)) {
+        // no content for this agent's mission type (yet):  a courier mission, if allowed
+        if ((typeID == Mission::Type::Courier) or !sConfig.missions.FallbackToCourier) {
+            _log(AGENT__WARNING, "Agent::MakeOffer() - agent %u has no level %u %s missions.", m_agentID, m_agentData.level, sMissionDataMgr.GetTypeName(typeID).c_str());
+            return false;
+        }
+        if (!sMissionDataMgr.CreateMissionOffer(Mission::Type::Courier, m_agentData.level, this, m_important, false, offer)) {
+            _log(AGENT__WARNING, "Agent::MakeOffer() - agent %u has no level %u missions.", m_agentID, m_agentData.level);
+            return false;
+        }
+    }
+
+    return FinishOffer(charID, offer);
+}
+
+bool Agent::FinishOffer(uint32 charID, MissionOffer& offer)
+{
     offer.characterID        = charID;
 
     // variable mission data based on agent
@@ -96,36 +130,32 @@ void Agent::MakeOffer(uint32 charID, MissionOffer& offer)
     offer.originID           = m_agentData.stationID;
     offer.originOwnerID      = m_agentData.corporationID;
     offer.originSystemID     = m_agentData.solarSystemID;
-    offer.expiryTime         = GetFileTimeNow() + EvE::Time::Day;
+    offer.expiryTime         = GetFileTimeNow() + (sConfig.missions.OfferExpiryHours * EvE::Time::Hour);
 
-    // make function to determine destination based on mission type, agent level, agent location, and some other shit.
-    //offer.destinationID      = 0;
-    //offer.destinationOwnerID      = 0;
-    //offer.destinationSystemID = 0;
-    //offer.destinationTypeID = 0;
-    //offer.dungeonLocationID      = 0;
-    //offer.dungeonSolarSystemID   = 0;
-    sMapData.GetMissionDestination(this, misionType, offer);
-    if (offer.destinationID == 0) {
-        // make error here and reset
-        sEntityList.FindClientByCharID(charID)->SendErrorMsg("Internal Server Error. Ref: ServerError 07208.");
-        //return;
+    switch (offer.typeID) {
+        case Mission::Type::Encounter:
+        case Mission::Type::Mining: {
+            // a pocket in space near the agent
+            if (!sMapData.GetMissionDungeonLocation(this, m_agentData.level, offer))
+                return false;
+        } break;
+        case Mission::Type::Trade: {
+            // the goods are brought to the agent
+            offer.destinationID         = m_agentData.stationID;
+            offer.destinationOwnerID    = m_agentData.corporationID;
+            offer.destinationSystemID   = m_agentData.solarSystemID;
+            offer.destinationTypeID     = m_agentData.locationTypeID;
+        } break;
+        default: {
+            sMapData.GetMissionDestination(this, offer.typeID, offer);
+            if (offer.destinationID == 0) {
+                _log(AGENT__ERROR, "Agent::MakeOffer() - no destination for agent %u's %s mission.", m_agentID, offer.name.c_str());
+                return false;
+            }
+        } break;
     }
 
-    // not sure how this is checked/set
-    offer.remoteOfferable    = false;
-    offer.remoteCompletable  = false;
-    // LP Reward
-    offer.rewardLP           = LPService::GetLPReward(offer.missionID, m_agentData.solarSystemID, m_agentData.level);   // LP reward = (1.6288 - System security) × Base LP
-    // same with these
     offer.acceptFee          = 0;
-
-    // create and save bookmarks for this offer.... not sure how yet.
-    offer.bookmarks          = new PyList();
-
-    //offer.dateAccepted       = 0;     //not set here
-    //offer.dateCompleted      = 0;     //not set here
-
     offer.stateID            = Mission::State::Offered;
     //offer.offerID            = 0;     //created when saving offer in db
 
@@ -144,10 +174,13 @@ void Agent::MakeOffer(uint32 charID, MissionOffer& offer)
     }
 
     MissionDB::CreateOfferID(offer);
+    if (offer.offerID == 0)
+        return false;
 
     // keep local copy and also add to mission data mgr
-    m_offers.emplace(charID, offer);
+    m_offers[charID] = offer;
     sMissionDataMgr.AddMissionOffer(charID, offer);
+    return true;
 }
 
 bool Agent::HasMission(uint32 charID)
@@ -218,11 +251,13 @@ void Agent::RemoveOffer(uint32 charID)
     }
 }
 
-void Agent::DeleteOffer(uint32 charID)
+void Agent::DeleteOffer(uint32 charID, uint8 stateID/*Mission::State::Rejected*/)
 {
     std::map<uint32, MissionOffer>::iterator itr = m_offers.find(charID);
     if (itr != m_offers.end()) {
-        itr->second.stateID = Mission::State::Rejected;
+        itr->second.stateID = stateID;
+        // the decline time is what the 4 hour decline rule looks at (MissionDB::GetLastDecline)
+        itr->second.dateCompleted = GetFileTimeNow();
         MissionDB::UpdateMissionOffer(itr->second);
         sMissionDataMgr.RemoveMissionOffer(charID, itr->second);
         m_offers.erase(itr);
@@ -540,6 +575,11 @@ uint32 Agent::GetCompleteRsp(uint32 charID)
     return 236758; // `I'm grateful for your assistance.`)
 }
 
+std::string Agent::GetNoMissionRsp(uint32 charID)
+{
+    return "I'm afraid I have nothing for you right now.  Check back with me later.";
+}
+
 //(235999, `You have failed the mission I gave you. I am disappointed in you. I was hoping for a little more competence.`)
 
 uint32 Agent::GetQuitRsp(uint32 charID)
@@ -619,8 +659,8 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
         } break;
         case Standings::MissionDeclined: {
             msg += "decline ";
-            // test for mission declined in last 4 hours
-            //newStanding *= sConfig.standings.MissionDeclined;
+            // only called for penalized declines (a second decline within missions.DeclinePenaltyHours, or an important mission)
+            newStanding *= sConfig.standings.MissionDeclined;
         } break;
         case Standings::MissionFailure: {
             msg += "failure ";

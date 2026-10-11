@@ -21,27 +21,33 @@ struct MissionData {
         std::string name;
 };
 
-class PyList;
 struct MissionOffer {
     bool important;
     bool storyline;
     bool remoteOfferable;
     bool remoteCompletable;
+    bool objectiveCompleted;    // kill/destroy/talk objectives: set by MissionInstanceMgr (or a GM)
     uint8 stateID;
     uint8 typeID;
     uint8 range;
+    uint8 objectiveType;        // Mission::ObjType::*
     uint16 bonusTime;           // time in minutes
-    uint16 missionID;           // this is mission title messageID for locale
-    uint16 rewardLP;
+    uint16 missionID;           // this is mission title messageID for locale (legacy qstCourier/qstMining rows)
     uint16 rewardItemID;
     uint16 rewardItemQty;
     uint16 courierTypeID;
-    uint16 courierAmount;
     uint16 destinationTypeID;
+    uint32 rewardLP;
+    uint32 courierAmount;       // mining quantities go past 65535 units
     uint32 offerID;
     uint32 agentID;
-    uint32 briefingID;          // this is mission briefing messageID for locale
-    //uint32 contentID;           // on live, this is specific char data for mission keywords.  we're not using it
+    uint32 briefingID;          // this is mission briefing messageID for locale.  0 = send briefingText
+    uint32 contentID;           // msnMissions.contentID (0 = legacy courier/mining row).  the client's contentID is the charID
+    uint32 nameID;              // client title messageID (msnMissions.nameID).  0 = send name
+    uint32 objectiveTypeID;     // item to fetch/mine/buy, or the npc/structure type to destroy
+    uint32 objectiveQty;
+    uint32 enemyFactionID;
+    uint32 dungeonID;           // dunDungeons.dungeonID of the mission pocket (0 = none)
     uint32 characterID;
     uint32 rewardISK;
     uint32 bonusISK;
@@ -59,8 +65,41 @@ struct MissionOffer {
     double dateIssued;
     double dateAccepted;
     double dateCompleted;
+    GPoint dungeonPos;          // the pocket's warp-in point in dungeonSolarSystemID
     std::string name;
-    PyList* bookmarks;
+    std::string briefingText;   // used when briefingID is 0
+};
+
+// one msnMissions row (mission content from utils/missiondata)
+struct MissionContent {
+    bool important;
+    bool storyline;
+    bool remoteOfferable;
+    bool remoteCompletable;
+    uint8 level;
+    uint8 typeID;               // Mission::Type::*
+    uint8 objectiveType;        // Mission::ObjType::*
+    uint8 spaceType;            // 0 normal space, 1 deadspace, 2 deadspace with gates
+    uint8 agentRaceMask;        // 0 = any agent, else Char::Race bits of the agents that may offer it
+    uint8 restrictLevel;        // 0 = mission level, 255 = none
+    uint16 bonusTime;           // minutes, 0 = config default
+    uint32 contentID;
+    uint32 nameID;
+    uint32 briefingID;
+    uint32 enemyFactionID;
+    uint32 objectiveTypeID;
+    uint32 objectiveQty;
+    uint32 dungeonID;
+    uint32 rewardISK;           // 0 = config default
+    uint32 bonusISK;
+    uint32 rewardLP;            // base LP, 0 = config default
+    uint32 rewardItemTypeID;
+    uint32 rewardItemQty;
+    uint32 collateral;
+    float rewardScale;
+    std::string name;
+    std::string briefingText;
+    std::string pageKey;
 };
 
 struct CourierData {
@@ -115,6 +154,21 @@ namespace Mission {
             MissingItems    = 3,
             NotAccepted     = 4,
             Unsupported     = 5
+        };
+    }
+
+    namespace ObjType {
+        // what an offer's objective is (msnMissions.objectiveType)
+        enum {
+            None             = 0,
+            KillAll          = 1,   // the pocket is cleared (dungeon completion)
+            KillTrigger      = 2,   // objectiveTypeID is destroyed (MissionCompletion event)
+            DestroyStructure = 3,   // as KillTrigger, a structure
+            Fetch            = 4,   // bring objectiveQty x objectiveTypeID (dropped in the pocket) to the agent
+            Deliver          = 5,   // courier
+            Mine             = 6,   // bring objectiveQty x objectiveTypeID (ore mined in the pocket) to the agent
+            Trade            = 7,   // bring objectiveQty x objectiveTypeID (from anywhere) to the agent
+            TalkToAgent      = 8    // set by an AgentTalkTo event
         };
     }
 

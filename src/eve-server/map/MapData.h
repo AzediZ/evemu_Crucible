@@ -37,6 +37,9 @@ public:
     PyObject*           GetPseudoSecurities()           { PyIncRef(m_pseudoSecurities); return m_pseudoSecurities; }
 
     void                GetMissionDestination(Agent* pAgent, uint8 misionType, MissionOffer& offer);
+    /* encounter/mining missions:  a system 0-3 jumps from the agent (by level) of the agent's security class (L5 lowsec/nullsec),
+     *  and a point in it away from planets and moons for the mission pocket.  sets the offer's destination and dungeon location */
+    bool                GetMissionDungeonLocation(Agent* pAgent, uint8 level, MissionOffer& offer);
 
 
     void                GetMoons(uint32 systemID, std::vector<DBGPointEntity>& into);

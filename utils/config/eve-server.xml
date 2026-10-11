@@ -266,6 +266,41 @@ boolean can use either 0/1 OR true/false.
         <TriggerMessages>true</TriggerMessages><!-- bool  send dungeon trigger messages (wave warnings, story text) to local.  default true -->
     </dungeon>
 
+    <missions><!-- agent missions (F12).  reward numbers approximate Crucible payouts (no period source has the base tables) -->
+        <OfferExpiryHours>168</OfferExpiryHours><!-- hours a mission offer stays in the journal.  default 168 (Crucible ~7 days) -->
+        <AcceptedExpiryHours>168</AcceptedExpiryHours><!-- hours to complete an accepted mission before it fails (standings loss).  default 168 -->
+        <DeclinePenaltyHours>4</DeclinePenaltyHours><!-- a second decline with the same agent within this many hours costs standings.  default 4 -->
+        <UseDivisionTypes>true</UseDivisionTypes><!-- bool  Security agents give encounters, Distribution courier, Mining mining missions (Incursion 1.5).  false = courier only.  default true -->
+        <FallbackToCourier>true</FallbackToCourier><!-- bool  an agent with no content for its mission type offers a courier mission instead of none.  default true -->
+        <BaseISK1>40000</BaseISK1><!-- default level 1 reward before security and Negotiation (content rows may set their own) -->
+        <BaseISK2>160000</BaseISK2>
+        <BaseISK3>450000</BaseISK3>
+        <BaseISK4>900000</BaseISK4>
+        <BaseISK5>6000000</BaseISK5>
+        <BonusISK1>30000</BonusISK1><!-- default level 1 time bonus -->
+        <BonusISK2>120000</BonusISK2>
+        <BonusISK3>350000</BonusISK3>
+        <BonusISK4>750000</BonusISK4>
+        <BonusISK5>4000000</BonusISK5>
+        <BonusMinutes1>60</BonusMinutes1><!-- default level 1 bonus window in minutes after accepting -->
+        <BonusMinutes2>90</BonusMinutes2>
+        <BonusMinutes3>120</BonusMinutes3>
+        <BonusMinutes4>180</BonusMinutes4>
+        <BonusMinutes5>240</BonusMinutes5>
+        <BaseLP1>200</BaseLP1><!-- default level 1 base LP.  LP = base x (1.6288 - agent system security) x (1 + 10% per division Connections level) -->
+        <BaseLP2>600</BaseLP2>
+        <BaseLP3>1500</BaseLP3>
+        <BaseLP4>3500</BaseLP4>
+        <BaseLP5>12000</BaseLP5>
+        <IskSecurityScaling>true</IskSecurityScaling><!-- bool  ISK rewards are also scaled by (1.6288 - security).  default true -->
+        <FleetShare>true</FleetShare><!-- bool  a pilot in a fleet is asked whether to share ISK, LP and agent/corp standings.  default true -->
+        <FleetShareMax>10</FleetShareMax><!-- max pilots sharing, the completer included.  default 10 (Crucible) -->
+        <FleetShareSameSystem>true</FleetShareSameSystem><!-- bool  only fleet members in the completer's system share.  default true -->
+        <DungeonDespawnMinutes>120</DungeonDespawnMinutes><!-- minutes a mission pocket stays after completion, quit or failure (salvaging).  default 120 -->
+        <StorylineEvery>16</StorylineEvery><!-- missions of one level for one faction before a storyline mission is offered.  default 16 (Crucible) -->
+        <GateRestrictions>true</GateRestrictions><!-- bool  mission acceleration gates enforce the mission level's ship restrictions.  default true -->
+    </missions>
+
     <testing><!-- switches for various incomplete/testing code sections -->
         <EnableDrones>true</EnableDrones><!-- bool -->
     </testing>
