@@ -120,3 +120,27 @@ void SovereigntyDB::SetBeaconID(uint32 systemID, uint32 beaconID)
         codelog(SOV__ERROR, "Error in changing Beacon ID: %s", err.c_str());
     }
 }
+
+void SovereigntyDB::LogSovChange(uint32 systemID, uint32 stationID, uint32 ownerID, uint32 oldOwnerID)
+{
+    std::string station(stationID > 0 ? std::to_string(stationID) : "NULL");
+    std::string owner(ownerID > 0 ? std::to_string(ownerID) : "NULL");
+    std::string oldOwner(oldOwnerID > 0 ? std::to_string(oldOwnerID) : "NULL");
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "INSERT INTO sovChangeLog (solarSystemID, stationID, ownerID, oldOwnerID, changeTime) VALUES (%u, %s, %s, %s, %lli)",
+            systemID, station.c_str(), owner.c_str(), oldOwner.c_str(), (int64)GetFileTimeNow()))
+    {
+        codelog(SOV__ERROR, "Error logging sov change: %s", err.c_str());
+    }
+}
+
+void SovereigntyDB::GetRecentSovChanges(DBQueryResult& res, int64 since)
+{
+    if (!sDatabase.RunQuery(res,
+            "SELECT solarSystemID, stationID, ownerID, oldOwnerID FROM sovChangeLog WHERE changeTime >= %lli ORDER BY changeTime",
+            since))
+    {
+        codelog(SOV__ERROR, "Error in GetRecentSovChanges query: %s", res.error.c_str());
+    }
+}

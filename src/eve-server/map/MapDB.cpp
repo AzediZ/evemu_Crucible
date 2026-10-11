@@ -27,6 +27,7 @@
 #include "eve-server.h"
 
 #include "map/MapDB.h"
+#include "../../eve-common/EVE_Dungeon.h"
 
 
 void MapDB::GetPlanets(uint32 systemID, std::vector<DBGPointEntity> &planetIDs, uint8 &total) {
@@ -358,4 +359,20 @@ void MapDB::AddPodKill(uint32 sysID) {
 void MapDB::ManipulateTimeData()
 {
 
+}
+
+void MapDB::GetSolarSystemLocations(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT solarSystemID, constellationID, regionID FROM mapSolarSystems"))
+        codelog(DATABASE__ERROR, "Error in GetSolarSystemLocations query: %s", res.error.c_str());
+}
+
+void MapDB::GetDeadspaceComplexes(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+        "SELECT systemID, sigItemID, dungeonType, sigName FROM sysSignatures WHERE dungeonType IN (%u, %u, %u, %u)",
+        Dungeon::Type::Anomaly, Dungeon::Type::Unrated, Dungeon::Type::Escalation, Dungeon::Type::Rated))
+    {
+        codelog(DATABASE__ERROR, "Error in GetDeadspaceComplexes query: %s", res.error.c_str());
+    }
 }

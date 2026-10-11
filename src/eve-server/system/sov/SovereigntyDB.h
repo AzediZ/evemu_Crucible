@@ -47,6 +47,13 @@ public:
     static void GetUpgradesForSystem(DBQueryResult& res, uint32 systemID);
     static void AddSystemUpgrade(uint32 systemID, uint32 upgradeID);
     static void RemoveSystemUpgrade(uint32 systemID, uint32 upgradeID);
+
+    /* recent sovereignty activity (map.GetRecentSovActivity).  stationID 0 = system sov; 0 owners are stored as NULL
+     *  gain:  oldOwnerID 0.  loss:  ownerID 0.  outpost capture:  both set
+     */
+    static void LogSovChange(uint32 systemID, uint32 stationID, uint32 ownerID, uint32 oldOwnerID);
+    // solarSystemID, stationID, ownerID, oldOwnerID  of changes at or after 'since' (filetime)
+    static void GetRecentSovChanges(DBQueryResult& res, int64 since);
 };
 
 #endif

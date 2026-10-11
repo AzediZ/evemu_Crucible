@@ -23,9 +23,8 @@
     Author:        Zhur
 */
 
-/** @todo this needs to be fixed.
- * is currently unused, but intended to be a BulkData data service.  the "config*" and "char*" files are *intended* to be sent in BulkData
- * the rest of this file isnt fully understood (by me) or implemented.
+/** objectCaching service:  serves cached objects (GetCachableObject) and builds the cache hints for cached method calls.
+ * the "config.BulkData.*" objects are the client's static data tables (bulkdata files come from bulkMgr).
  */
 
 #include "eve-server.h"
@@ -464,11 +463,9 @@ ObjectCachedSessionMethodID::ObjectCachedSessionMethodID(const char *service, co
     SessionMethodCallID c;
     c.service = service;
     c.method = method;
-    /*
-     HACK:
-     charID but can also be corpID or other values need to make dynamic
-     and also need to be able to update the "sessionInfo" kvp so that it knows what the field is.
-    */
+    /* sessionValue is the value of the session attribute the result depends on (charid, corpid, ...).
+     *  MakeObjectCachedSessionMethodCallResult's sessionInfoName must name that same attribute.  (no callers yet)
+     */
     c.sessionValue = sessionValue;
     objectID = c.Encode();
 }

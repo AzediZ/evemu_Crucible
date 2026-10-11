@@ -54,8 +54,8 @@ protected:
     PyResult GetAllianceBeacons(PyCallArgs& call);
     PyResult GetCurrentSovData(PyCallArgs& call, PyInt* locationID);
     PyResult GetRecentSovActivity(PyCallArgs& call);
-    PyResult GetDeadspaceAgentsMap(PyCallArgs& call, PyInt* languageID);
-    PyResult GetDeadspaceComplexMap(PyCallArgs& call, PyInt* languageID);
+    PyResult GetDeadspaceAgentsMap(PyCallArgs& call, PyRep* languageID);
+    PyResult GetDeadspaceComplexMap(PyCallArgs& call, PyRep* languageID);
     PyResult GetSystemsInIncursions(PyCallArgs& call);
     PyResult GetSystemsInIncursionsGM(PyCallArgs& call);
     PyResult GetIncursionGlobalReport(PyCallArgs& call);

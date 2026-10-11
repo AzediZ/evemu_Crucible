@@ -32,6 +32,8 @@
 #include "map/MapService.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/sov/SovereigntyDB.h"
+#include "map/MapDB.h"
 
 MapService::MapService() :
     Service("map", eAccessLevel_Character)
@@ -199,37 +201,64 @@ PyResult MapService::GetRecentSovActivity(PyCallArgs &call)
      *
      */
 
-    PyDict* result = new PyDict();
-
-    return result;
+    // live:  changes of the last 24 hours.  F14 logs them with SovereigntyDB::LogSovChange
+    DBQueryResult res;
+    SovereigntyDB::GetRecentSovChanges(res, (int64)GetFileTimeNow() - EvE::Time::Day);
+    PyList* list = new PyList();
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("solarSystemID",    new PyInt(row.GetInt(0)));
+            dict->SetItemString("stationID",        (row.IsNull(1) ? PyStatic.NewNone() : new PyInt(row.GetInt(1))));
+            dict->SetItemString("ownerID",          (row.IsNull(2) ? PyStatic.NewNone() : new PyInt(row.GetInt(2))));
+            dict->SetItemString("oldOwnerID",       (row.IsNull(3) ? PyStatic.NewNone() : new PyInt(row.GetInt(3))));
+        list->AddItem(new PyObject("util.KeyVal", dict));
+    }
+    return list;
 }
 
 //   DED Agent Site Report
-PyResult MapService::GetDeadspaceAgentsMap(PyCallArgs &call, PyInt* languageID)
-{/* no packet data
+PyResult MapService::GetDeadspaceAgentsMap(PyCallArgs &call, PyRep* languageID)
+{/*
         dungeons = sm.RemoteSvc('map').GetDeadspaceAgentsMap(eve.session.languageID)
-        solarSystemID, dungeonID, difficulty, dungeonName = dungeons
+        for solarSystemID, dungeonID, difficulty, dungeonName in dungeons:
+    agent mission sites are not tracked by system yet (F12 may provide them).  an empty list is a valid answer
 */
-    PyRep *result = new PyDict();
-
-    return result;
+    return new PyList();
 }
 
 //  DED Deadspace Report
-//22:37:54 L MapService::Handle_GetDeadspaceComplexMap(): size= 1
-PyResult MapService::GetDeadspaceComplexMap(PyCallArgs &call, PyInt* languageID)
-{/* no packet data
+PyResult MapService::GetDeadspaceComplexMap(PyCallArgs &call, PyRep* languageID)
+{/*
         dungeons = sm.RemoteSvc('map').GetDeadspaceComplexMap(eve.session.languageID)
-        solarSystemID, dungeonID, difficulty, dungeonName = dungeons
-
-        get this data from managerDB.GetAnomalyList(DBQueryResult& res)
-        res =  sysSignatures (sigID,sigItemID,dungeonType,sigName,systemID,sigTypeID,sigGroupID,scanGroupID,scanAttributeID,x,y,z)
+        for solarSystemID, dungeonID, difficulty, dungeonName in dungeons:
+    live complexes from sysSignatures.  difficulty is the DED level when the name ends in "N/10", else 0
 */
-    sLog.Warning( "MapService::Handle_GetDeadspaceComplexMap()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-    PyRep *result = new PyDict();
-
-    return result;
+    DBQueryResult res;
+    MapDB::GetDeadspaceComplexes(res);
+    PyList* list = new PyList();
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        std::string name(row.GetText(3));
+        int32 difficulty(0);
+        size_t pos = name.rfind("/10");
+        if ((pos != std::string::npos) and (pos > 0) and (pos + 3 == name.size())) {
+            size_t start = pos;
+            while ((start > 0) and isdigit(static_cast<unsigned char>(name[start - 1])))
+                --start;
+            if (start < pos)
+                difficulty = atoi(name.substr(start, pos - start).c_str());
+            if ((difficulty < 0) or (difficulty > 10))
+                difficulty = 0;
+        }
+        PyTuple* tuple = new PyTuple(4);
+            tuple->SetItem(0, new PyInt(row.GetInt(0)));    // solarSystemID
+            tuple->SetItem(1, new PyInt(row.GetInt(1)));    // dungeonID (the site's item)
+            tuple->SetItem(2, new PyInt(difficulty));
+            tuple->SetItem(3, new PyWString(name));
+        list->AddItem(tuple);
+    }
+    return list;
 }
 
 PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
@@ -239,20 +268,8 @@ PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
      *            -- (sceneType = staging, vanguard)
      */
 
-    // copy format from GetLinkableJumpArrays()
-    DBQueryResult res;
-    //PosMgrDB::GetAllianceBeacons(call.client->GetCorporationID(), res);
-    PyList* list = new PyList();
-    DBResultRow row;
-    while (res.GetRow(row)) {
-        // SELECT systemID, sceneType
-        PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyInt(row.GetInt(0)));   //solarSystemID
-        tuple->SetItem(1, new PyInt(row.GetInt(1)));   //sceneType
-        list->AddItem(tuple);
-    }
-
-    return list;
+    // no incursions yet:  F25 replaces this with incursion manager data (list of (solarSystemID, sceneType))
+    return new PyList();
 }
 
 PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
@@ -260,22 +277,12 @@ PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
      *        participatingSystems = ms.GetSystemsInIncursionsGM()
      *        for solarSystemID, sceneType in participatingSystems:
      *            -- (sceneType = staging, vanguard, assault, headquarters)
+     *  F25 replaces this with incursion manager data (keep the role check and the shape)
      */
+    if (!(call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::ADMIN)))
+        throw CustomError("Access denied.");
 
-    // copy format from GetLinkableJumpArrays()
-    DBQueryResult res;
-    //PosMgrDB::GetAllianceBeacons(call.client->GetCorporationID(), res);
-    PyList* list = new PyList();
-    DBResultRow row;
-    while (res.GetRow(row)) {
-        // SELECT systemID, sceneType
-        PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyInt(row.GetInt(0)));    //solarSystemID
-        tuple->SetItem(1, new PyInt(row.GetInt(1)));    //sceneType
-        list->AddItem(tuple);
-    }
-
-    return list;
+    return new PyList();
 }
 
 //05:52:07 L MapService::Handle_GetIncursionGlobalReport(): size= 0
@@ -336,39 +343,30 @@ PyResult MapService::GetIncursionGlobalReport(PyCallArgs &call) {
               [PyIntegerVar 129493861959830226]
               [PyInt -950263469]
               */
-    sLog.Warning( "MapService::Handle_GetIncursionGlobalReport()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    return PyStatic.NewNone();
+    // list of KeyVals (above).  no incursions yet:  F25 replaces this with incursion manager data
+    return new PyList();
 }
 
 //   factional warfare shit
 //https://wiki.eveonline.com/en/wiki/Victory_Points_and_Command_Bunker
 PyResult MapService::GetVictoryPoints(PyCallArgs &call)
-{/**           factionID, viewmode, solarsystemid, threshold, current in oldhistory.iteritems():
-                 */
-    sLog.Warning( "MapService::Handle_GetVictoryPoints()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    return PyStatic.NewNone();
+{/**  {factionID: {'attacking'|'defending': [(solarSystemID, threshold, current), ...]}}
+   *  faction warfare is out of scope:  the four empire factions with no contested systems
+   */
+    PyDict* result = new PyDict();
+    for (uint32 factionID = 500001; factionID <= 500004; ++factionID) {
+        PyDict* modes = new PyDict();
+            modes->SetItemString("attacking", new PyList());
+            modes->SetItemString("defending", new PyList());
+        result->SetItem(new PyInt(factionID), modes);
+    }
+    return result;
 }
 
 
 PyResult MapService::GetStuckSystems(PyCallArgs &call)
 {
-    // cant find a call to this in client (possible old call)
-    sLog.Warning( "MapService::Handle_GetStuckSystems()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    uint8 none = 0;
-
-    PyTuple* res = NULL;
-    PyTuple* tuple0 = new PyTuple( 1 );
-
-    tuple0->items[ 0 ] = new PyInt( none );
-
-    res = tuple0;
-
-    return res;
+    // no caller in the Crucible client (old call).  an empty list
+    return new PyList();
 }
 

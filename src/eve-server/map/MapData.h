@@ -39,17 +39,28 @@ public:
     void                GetMissionDestination(Agent* pAgent, uint8 misionType, MissionOffer& offer);
 
 
-    void                GetMoons(uint32 systemID);   // incomplete
-    void                GetPlanets(uint32 systemID); // incomplete
+    void                GetMoons(uint32 systemID, std::vector<DBGPointEntity>& into);
+    void                GetPlanets(uint32 systemID, std::vector<DBGPointEntity>& into);
     uint32              GetRandMoon(uint32 systemID);
     uint32              GetRandPlanet(uint32 systemID);
     const GPoint        GetAnomalyPoint(SystemManager* pSys);
     const GPoint        GetAnomalyPoint(uint32 systemID);
-    const GPoint        Get2RandPlanets(uint32 systemID);// incomplete
-    const GPoint        Get3RandPlanets(uint32 systemID);// incomplete
+    // midpoint of two different random planets (a random planet point when there are fewer)
+    const GPoint        Get2RandPlanets(uint32 systemID);
+    // centroid of three different random planets (a random planet point when there are fewer)
+    const GPoint        Get3RandPlanets(uint32 systemID);
+    // random points just outside a random moon/planet
     const GPoint        GetRandPointOnMoon(uint32 systemID);
     const GPoint        GetRandPointOnPlanet(uint32 systemID);
-    const GPoint        GetRandPointInSystem(uint32 systemID, int64 distance);// incomplete
+    // random point 'distance' from the sun, kept inside the system radius
+    const GPoint        GetRandPointInSystem(uint32 systemID, int64 distance);
+
+    /* stargate routing (mapConnections, both directions).  shortest jump count, -1 when farther than maxJumps */
+    int32               GetJumpCount(uint32 fromSys, uint32 toSys, uint8 maxJumps = 50);
+    // every system within maxJumps of 'from' (including 'from' at 0), with its jump count
+    void                GetSystemsWithinJumps(uint32 from, uint8 maxJumps, std::vector<std::pair<uint32, uint8>>& out);
+    // systems matching an agent destination range (Agents::Range, EVE_Agent.h).  neighbouring = one jump away
+    void                GetSystemsInAgentRange(uint32 originSys, uint8 range, std::vector<uint32>& out);
 
 protected:
     void                Populate();
@@ -61,6 +72,16 @@ private:
     std::multimap<uint32, uint32>        m_regionJumps;  //fromSys/toSys
     std::multimap<uint32, uint32>        m_constJumps;   //fromSys/toSys
     std::multimap<uint32, uint32>        m_systemJumps;  //fromSys/toSys
+
+    std::map<uint32, std::vector<uint32>>   m_neighbors;    //system/systems one jump away (all jump types, both directions)
+    std::map<uint32, uint32>                m_sysConst;     //system/constellation
+    std::map<uint32, uint32>                m_sysRegion;    //system/region
+    std::multimap<uint32, uint32>           m_constSystems; //constellation/system
+    std::map<uint32, std::set<uint32>>      m_constAdj;     //constellation/adjacent constellations
+
+    void                AddNeighbor(uint32 fromSys, uint32 toSys);
+    // systems of these constellations
+    void                AddConstellationSystems(const std::set<uint32>& consts, std::vector<uint32>& out);
 };
 
 

@@ -44,6 +44,10 @@ public:
 
     /* for MapData class */
     static void GetSystemJumps(DBQueryResult& res);
+    // solarSystemID, constellationID, regionID
+    static void GetSolarSystemLocations(DBQueryResult& res);
+    // live deadspace complexes (anomalies, unrated, escalations, DED rated):  systemID, sigItemID, dungeonType, sigName
+    static void GetDeadspaceComplexes(DBQueryResult& res);
     static void GetGates(uint32 systemID, std::vector<DBGPointEntity>& gateIDs, uint8& total);
     static void GetBelts(uint32 systemID, std::vector<DBGPointEntity>& beltIDs, uint8& total);
     static void GetMoons(uint32 systemID, std::vector<DBGPointEntity>& moonIDs, uint8& total);
