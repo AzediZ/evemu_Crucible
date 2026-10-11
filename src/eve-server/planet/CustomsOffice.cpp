@@ -30,6 +30,7 @@
 #include "planet/CustomsOffice.h"
 #include "planet/Planet.h"
 #include "planet/PlanetDataMgr.h"
+#include "planet/PlanetDB.h"
 #include "pos/Structure.h"
 #include "system/Container.h"
 #include "system/Damage.h"
@@ -40,7 +41,8 @@
 
 CustomsSE::CustomsSE(StructureItemRef sRef, EVEServiceManager &services, SystemManager* system, const FactionData& data)
 : ObjectSystemEntity(sRef, services, system),
-m_system(system)
+m_system(system),
+m_reinforceArmed(true)
 {
     m_warID = data.factionID;
     m_allyID = data.allianceID;
@@ -81,7 +83,9 @@ void CustomsSE::Init()
 void CustomsSE::InitData()
 {
     // init all data.
-    m_cData.state = EVEPOS::EntityState::Anchored;  // allow corp settings menu
+    //  a launched gantry is unanchored until it is anchored at a planet.  customs offices are anchored (the client's
+    //  configure and transfer menus need that state)
+    m_cData.state = (IsGantry() ? EVEPOS::EntityState::Unanchored : EVEPOS::EntityState::Anchored);
     m_cData.timestamp = 0;
     m_cData.status = EVEPOS::StructureState::Online;
     m_cData.allowAlliance = false;
@@ -92,30 +96,26 @@ void CustomsSE::InitData()
     m_oData.level = 1;   //{1-CUSTOMSOFFICE_SPACEPORT, 2-CUSTOMSOFFICE_SPACEELEVATOR}   this is for display model
     m_oData.standingOwnerID = m_cData.ownerID;
 
+    // Crucible 1.0.1:  a new office charges 5% to everyone it lets in (only its corporation until configured)
     std::map<uint8, float> taxRateValues;
         taxRateValues[EVEPOS::TaxValues::Corp]              = 0.05f;
-        taxRateValues[EVEPOS::TaxValues::Alliance]          = 0.07f;
-        taxRateValues[EVEPOS::TaxValues::StandingHorrible]  = 0.20f;
-        taxRateValues[EVEPOS::TaxValues::StandingBad]       = 0.10f;
-        taxRateValues[EVEPOS::TaxValues::StandingNeutral]   = 0.08f;
+        taxRateValues[EVEPOS::TaxValues::Alliance]          = 0.05f;
+        taxRateValues[EVEPOS::TaxValues::StandingHorrible]  = 0.05f;
+        taxRateValues[EVEPOS::TaxValues::StandingBad]       = 0.05f;
+        taxRateValues[EVEPOS::TaxValues::StandingNeutral]   = 0.05f;
         taxRateValues[EVEPOS::TaxValues::StandingGood]      = 0.05f;
-        taxRateValues[EVEPOS::TaxValues::StandingHigh]      = 0.02f;
+        taxRateValues[EVEPOS::TaxValues::StandingHigh]      = 0.05f;
     m_cData.taxRateValues = taxRateValues;
-/*positionRowHeader = blue.DBRowDescriptor((('itemID', const.DBTYPE_I8),
-         ('x', const.DBTYPE_R5),
-         ('y', const.DBTYPE_R5),
-         ('z', const.DBTYPE_R5),
-         ('yaw', const.DBTYPE_R4),
-         ('pitch', const.DBTYPE_R4),
-         ('roll', const.DBTYPE_R4)))
-         */
-    // yaw, pitch, roll = dunRotation
-    /*  yaw is rotation on y axis [-180/180]
-     *   +yaw is counterclockwise (+x starting at z 0)
-     * pitch is rotation on x axis [-90/90]
-     *   +pitch is downward (-y from 0)
-     * roll is rotation on z axis  [-180/180]
-     *  +roll is counterclockwise from y 0
+
+    UpdateRotation();
+}
+
+void CustomsSE::UpdateRotation()
+{
+    /* dunRotation = yaw, pitch, roll:  the office faces its planet
+     *   yaw is rotation on y axis [-180/180]  (+yaw is counterclockwise, +x starting at z 0)
+     *   pitch is rotation on x axis [-90/90]  (+pitch is downward, -y from 0)
+     *   roll is rotation on z axis [-180/180]
      */
     GPoint pos(m_self->position());
     GPoint targ(m_planetSE == nullptr ? pos : m_planetSE->GetPosition());
@@ -125,54 +125,288 @@ void CustomsSE::InitData()
     float yaw = atan2(x, z);  // rad from position to target on xz plane
     float hyp = sqrt(pow(z, 2) + pow(x, 2));   // run on y plane
     float pitch = atan2(y, hyp);  // rad from position to target on hy plane
-
-    // verify quadrant and set rotation accordingly
-    /*  quadrant signs and corrections
-     *      I =  -x,+z      x-90
-     *      II =  +x,+z     90-x
-     *      III = +x,-z     x+90
-     *      IV = -x,-z      x+180
-     */
-/*
-    if (z < 0) {
-        if (x < 0)
-            yaw += EvE::Trig::Deg2Rad(180);
-        else
-            yaw += EvE::Trig::Deg2Rad(90);
-    } else {
-        if (x < 0)
-            yaw -= EvE::Trig::Deg2Rad(90);
-        else
-            yaw = EvE::Trig::Deg2Rad(90) - yaw;
-    }
-*/
     if (y > 0)
         pitch *= -1;
-
-    /*
-     *
-     *   Real: 15.280822
-     *
-     *
-     *
-     *
-     *
-     */
 
     // convert from radians to degrees
     m_oData.rotation.x = EvE::Trig::Rad2Deg(yaw);
     m_oData.rotation.y = EvE::Trig::Rad2Deg(pitch);
     m_oData.rotation.z = 0;
-    //m_oData.rotation = m_self->position().rotationTo(m_planetSE->GetPosition());
+}
 
-    _log(POS__MESSAGE, "CustomsSE::InitData() - Yaw: rise: %0.5f, run: %0.5f, angle: %0.5f (%0.3f)", z, x, yaw, m_oData.rotation.x);
-    _log(POS__MESSAGE, "CustomsSE::InitData() - Pitch: rise: %0.5f, run: %0.5f, angle: %0.5f (%0.3f)", y, hyp, pitch, m_oData.rotation.y);
+void CustomsSE::SetPlanet(uint32 planetID)
+{
+    m_oData.planetID = planetID;
+    SystemEntity* pPlanet(planetID ? m_system->GetPlanet(planetID) : nullptr);
+    m_planetSE = (pPlanet == nullptr ? nullptr : pPlanet->GetPlanetSE());
+}
+
+void CustomsSE::SaveState()
+{
+    m_cData.ownerID = m_ownerID;
+    m_db.UpdateCustomsData(m_cData, m_oData);
 }
 
 void CustomsSE::Process() {
     /* called by EntityList::Process on every loop */
     /*  Enable base call to Process Targeting and Movement  */
     SystemEntity::Process();
+}
+
+/* ----------------------------------------------------------------------------------------------------------------
+ *  orbital states
+ */
+
+void CustomsSE::CheckCorpAccess(Client* pClient, int64 role)
+{
+    // the client offers these to the owning corporation (menusvc checkIsMyCorps).  the starbase equipment role, as for starbases
+    if (pClient->GetCorporationID() != m_ownerID)
+        throw CustomError ("Your corporation does not own this %s.", m_self->name());
+    if (role and ((pClient->GetCorpRole() & role) == 0))
+        throw CustomError ("You need the Config Starbase Equipment role to do that.");
+    SystemManager* pSystem(pClient->SystemMgr());
+    if (!pClient->IsInSpace() or (pSystem != m_system))
+        throw CustomError ("You need to be in space in the same system as the %s.", m_self->name());
+}
+
+void CustomsSE::AnchorOrbital(Client* pClient)
+{
+    if (!IsGantry())
+        throw CustomError ("Only a Customs Office Gantry can be anchored.");
+    if (m_cData.state != EVEPOS::EntityState::Unanchored)
+        throw CustomError ("The %s is already anchored.", m_self->name());
+    CheckCorpAccess(pClient, Corp::Role::EquipmentConfig);
+
+    // the planet closest to the gantry, no further than PIGantryMaxDistanceKm from its surface, without an office
+    uint32 planetID(m_system->GetClosestPlanetID(GetPosition()));
+    SystemEntity* pPlanet(planetID ? m_system->GetPlanet(planetID) : nullptr);
+    if ((pPlanet == nullptr) or (pPlanet->GetPlanetSE() == nullptr))
+        throw CustomError ("There is no planet near enough to anchor the %s.", m_self->name());
+    double distance(GVector(GetPosition(), pPlanet->GetPosition()).length() - pPlanet->GetRadius());
+    if (distance > sConfig.cosmic.PIGantryMaxDistanceKm * 1000.0)
+        throw CustomError ("The %s must be within %.0f km of a planet to anchor.", m_self->name(), sConfig.cosmic.PIGantryMaxDistanceKm);
+    if (pPlanet->GetPlanetSE()->GetCustomsOffice() != nullptr)
+        throw CustomError ("%s already has a customs office.", pPlanet->GetName());
+
+    SetPlanet(planetID);
+    m_self->SetCustomInfo(itoa(planetID));
+    m_self->SaveItem();
+    m_planetSE->SetCustomsOffice(this);
+    UpdateRotation();
+
+    m_cData.state = EVEPOS::EntityState::Anchoring;
+    m_cData.timestamp = GetFileTimeNow() + (int64)m_self->GetAttribute(AttrAnchoringDelay).get_float() * EvE::Time::Second / 1000;
+    SaveState();
+    SendSlimUpdate();
+    m_destiny->SendSpecialEffect(m_self->itemID(), m_self->itemID(), m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 1, 1, -1, 0);
+    _log(POS__MESSAGE, "CustomsSE::AnchorOrbital() - %s anchoring %s(%u) at %s", pClient->GetName(), GetName(), GetID(), pPlanet->GetName());
+}
+
+void CustomsSE::UnanchorOrbital(Client* pClient)
+{
+    if (!IsGantry())
+        throw CustomError ("Only a Customs Office Gantry can be unanchored.");
+    if (m_cData.state != EVEPOS::EntityState::Anchored)
+        throw CustomError ("The %s is not anchored.", m_self->name());
+    CheckCorpAccess(pClient, Corp::Role::EquipmentConfig);
+
+    m_cData.state = EVEPOS::EntityState::Unanchoring;
+    m_cData.timestamp = GetFileTimeNow() + (int64)m_self->GetAttribute(AttrUnanchoringDelay).get_float() * EvE::Time::Second / 1000;
+    SaveState();
+    SendSlimUpdate();
+    m_destiny->SendSpecialEffect(m_self->itemID(), m_self->itemID(), m_self->typeID(), 0, 0, "effects.AnchorLift", 0, 1, 1, -1, 0);
+}
+
+void CustomsSE::OnlineOrbital(Client* pClient)
+{
+    // "start upgrade" of the orbital material window:  the upgrade materials (invTypeMaterials of the construction type) go
+    if (!IsGantry())
+        throw CustomError ("Only a Customs Office Gantry can be upgraded.");
+    if (m_cData.state != EVEPOS::EntityState::Anchored)
+        throw CustomError ("The %s must be anchored to be upgraded.", m_self->name());
+    CheckCorpAccess(pClient, Corp::Role::EquipmentConfig);
+    uint16 constructionType = (uint16)m_self->GetAttribute(AttrconstructionType).get_int();
+    std::vector<EvERam::RamMaterials> materials;
+    sDataMgr.GetRamMaterials(constructionType, materials);
+    if ((constructionType == 0) or materials.empty())
+        throw CustomError ("The %s can't be upgraded.", m_self->name());
+
+    Inventory* pInv(m_self->GetMyInventory());
+    for (auto cur : materials)
+        if (!pInv->ContainsTypeQtyByFlag(cur.materialTypeID, flagMaterialBay, cur.quantity))
+            throw CustomError ("The upgrade hold needs %u %s.", cur.quantity, sPIDataMgr.GetProductName(cur.materialTypeID));
+    for (auto cur : materials) {
+        uint32 left = cur.quantity;
+        std::vector<InventoryItemRef> items;
+        pInv->GetItemsByFlag(flagMaterialBay, items);
+        for (auto item : items) {
+            if ((left == 0) or (item->typeID() != cur.materialTypeID))
+                continue;
+            if (item->quantity() > left) {
+                item->AlterQuantity(-(int32)left, true);
+                left = 0;
+            } else {
+                left -= item->quantity();
+                item->SetQuantity(0, true);
+            }
+        }
+    }
+
+    m_cData.state = EVEPOS::EntityState::Onlining;
+    m_cData.timestamp = GetFileTimeNow() + (int64)m_self->GetAttribute(AttrOnliningDelay).get_float() * EvE::Time::Second / 1000;
+    SaveState();
+    SendSlimUpdate();
+    _log(POS__MESSAGE, "CustomsSE::OnlineOrbital() - %s started upgrading %s(%u)", pClient->GetName(), GetName(), GetID());
+}
+
+void CustomsSE::ProcessState()
+{
+    if (!IsInTimedState() or (m_cData.timestamp > GetFileTimeNow()))
+        return;
+    CompleteStateChange();
+}
+
+void CustomsSE::CompleteStateChange()
+{
+    using namespace EVEPOS::EntityState;
+    switch (m_cData.state) {
+        case Anchoring: {
+            m_cData.state = Anchored;
+        } break;
+        case Onlining: {
+            Upgrade();
+            return;     // this entity is gone
+        }
+        case Unanchoring: {
+            // free to scoop again, and the planet's office slot is free
+            if (m_planetSE != nullptr)
+                m_planetSE->SetCustomsOffice(nullptr);
+            SetPlanet(0);
+            m_self->SetCustomInfo("");
+            m_self->SaveItem();
+            m_cData.state = Unanchored;
+        } break;
+        case ShieldReinforce: {
+            // vulnerable again (the client's bracket counts down to "Anchored")
+            m_cData.state = Anchored;
+            m_reinforceArmed = false;
+        } break;
+        default:
+            return;
+    }
+    m_cData.timestamp = 0;
+    SaveState();
+    SendSlimUpdate();
+}
+
+void CustomsSE::Upgrade()
+{
+    if (!IsGantry() or (m_planetSE == nullptr))
+        return;
+    uint16 constructionType = (uint16)m_self->GetAttribute(AttrconstructionType).get_int();
+    if (constructionType == 0)
+        constructionType = EVEDB::invTypes::PlanetaryCustomsOffice;
+    PlanetSE* pPlanet(m_planetSE);
+    uint32 planetID(m_oData.planetID);
+    GPoint pos(GetPosition());
+
+    ItemData idata(constructionType, m_ownerID, m_system->GetID(), flagNone, 1, itoa(planetID), false);
+    StructureItemRef iRef = sItemFactory.SpawnStructure(idata);
+    if (iRef.get() == nullptr) {
+        _log(POS__ERROR, "CustomsSE::Upgrade() - unable to spawn the customs office for gantry %u", GetID());
+        return;
+    }
+    iRef->SetPosition(pos);
+    iRef->ChangeSingleton(true, false);
+    iRef->SaveItem();
+
+    FactionData data = FactionData();
+        data.ownerID = m_ownerID;
+        data.corporationID = m_corpID;
+        data.allianceID = m_allyID;
+        data.factionID = 0;
+    CustomsSE* pCO = new CustomsSE(iRef, m_services, m_system, data);
+    pCO->Init();
+    pPlanet->SetCustomsOffice(pCO);
+    PlanetDB::MarkCustomsOfficeSpawned(planetID);
+
+    // the gantry goes
+    _log(POS__MESSAGE, "CustomsSE::Upgrade() - gantry %u became customs office %u at %s", GetID(), iRef->itemID(), pPlanet->GetName());
+    PosMgrDB::DeleteCustomsData(GetID());
+    Delete();
+
+    m_system->AddEntity(pCO);
+    pCO->NotifyColonists();
+    delete this;
+}
+
+void CustomsSE::NotifyColonists()
+{
+    if (m_oData.planetID == 0)
+        return;
+    DBQueryResult res;
+    PlanetDB::GetCommandPinsForPlanet(m_oData.planetID, res);
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Client* pClient(sEntityList.FindClientByCharID(row.GetUInt(2)));
+        if (pClient == nullptr)
+            continue;
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, new PyInt(m_oData.planetID));
+            tuple->SetItem(1, PyStatic.NewFalse());
+        pClient->SendNotification("OnMajorPlanetStateUpdate", "clientID", &tuple);
+    }
+}
+
+bool CustomsSE::CanBeAttacked()
+{
+    // Crucible:  CONCORD's high security offices are invulnerable, Interbus' and players' can be shot.  gantries only once anchored
+    if (m_ownerID == corpCONCORD)
+        return false;
+    if (IsGantry() and ((m_cData.state == EVEPOS::EntityState::Unanchored) or (m_oData.planetID == 0)))
+        return false;
+    return !IsReinforced();
+}
+
+void CustomsSE::OnShieldDamaged()
+{
+    /* dev blog "Player-owned Customs Office" (18 Oct 2011):  reinforced at 25% shields, out "somewhere within the time of
+     *  day specified by the owner, at least 24 hours after".  reinforcementDuration and reinforcementVariance of the type
+     *  (86400 s, 3600 s on the Customs Office; Interbus offices have none and don't reinforce).  the reinforcement hour is UTC.
+     */
+    float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+    if (capacity <= 0)
+        return;
+    float fraction(m_self->GetAttribute(AttrShieldCharge).get_float() / capacity);
+    if (fraction > 0.25f) {
+        m_reinforceArmed = true;
+        return;
+    }
+    if (!m_reinforceArmed or IsGantry() or (m_cData.state != EVEPOS::EntityState::Anchored))
+        return;
+    if (!m_self->type().HasAttribute(AttrreinforcementDuration))
+        return;
+    int64 duration = (int64)m_self->GetAttribute(AttrreinforcementDuration).get_float();
+    if (duration <= 0)
+        return;
+    int64 variance = (int64)m_self->GetAttribute(AttrreinforcementVariance).get_float();
+
+    // the first time on the selected hour at least the reinforcement duration from now, give or take the variance
+    int64 now = GetFileTimeNow();
+    int64 earliest = now + duration * EvE::Time::Second;
+    int64 dayStart = earliest - (earliest % EvE::Time::Day);
+    int64 exit = dayStart + m_cData.selectedHour * EvE::Time::Hour;
+    while (exit < earliest)
+        exit += EvE::Time::Day;
+    if (variance > 0)
+        exit += MakeRandomInt(-variance, variance) * EvE::Time::Second;
+
+    m_cData.state = EVEPOS::EntityState::ShieldReinforce;
+    m_cData.timestamp = exit;
+    m_reinforceArmed = false;
+    SaveState();
+    SendSlimUpdate();
+    _log(POS__MESSAGE, "CustomsSE::OnShieldDamaged() - %s(%u) reinforced until %lli", GetName(), GetID(), exit);
 }
 
 PyRep* CustomsSE::GetSettingsInfo()
@@ -404,89 +638,24 @@ void CustomsSE::ChangeOwner(uint32 corpID, int32 allianceID)
     m_allyID = allianceID;
     m_cData.ownerID = corpID;
     m_oData.standingOwnerID = corpID;
-    m_db.UpdateCustomsData(m_cData, m_oData);
+    SaveState();
     SendSlimUpdate();
+    NotifyColonists();
 }
 
 void CustomsSE::SendSlimUpdate()
 {
-    PyDict *slim = new PyDict();
-        slim->SetItemString("name",                     new PyString(m_self->itemName()));
-        slim->SetItemString("itemID",                   new PyLong(m_cData.itemID));
-        slim->SetItemString("typeID",                   new PyInt(m_self->typeID()));
-        slim->SetItemString("ownerID",                  new PyInt(m_ownerID));
-        slim->SetItemString("corpID",                   IsCorp(m_corpID) ? new PyInt(m_corpID) : PyStatic.NewNone());
-        slim->SetItemString("allianceID",               IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone());
-        slim->SetItemString("warFactionID",             IsFaction(m_warID) ? new PyInt(m_warID) : PyStatic.NewNone());
-        slim->SetItemString("posTimestamp",             new PyLong(m_cData.timestamp));
-        slim->SetItemString("posState",                 new PyInt(m_cData.state));
-        slim->SetItemString("incapacitated",            PyStatic.NewZero());
-        slim->SetItemString("posDelayTime",             PyStatic.NewZero()); // fix this
+    if (m_destiny == nullptr)
+        return;
     PyTuple* shipData = new PyTuple(2);
-        shipData->SetItem(0,                            new PyLong(m_cData.itemID));
-        shipData->SetItem(1,                            new PyObject("foo.SlimItem", slim));
+        shipData->SetItem(0,                            new PyLong(m_self->itemID()));
+        shipData->SetItem(1,                            new PyObject("foo.SlimItem", MakeSlimItem()));
     PyTuple* sItem = new PyTuple(2);
         sItem->SetItem(0,                               new PyString("OnSlimItemChange"));
         sItem->SetItem(1,                               shipData);
     m_destiny->SendSingleDestinyUpdate(&sItem);   // consumed
 }
 
-
-void CustomsSE::SetAnchor(Client* pClient, GPoint& pos)
-{
-    if (m_cData.status > EVEPOS::StructureState::Unanchored) {
-        pClient->SendErrorMsg("The %s is already anchored", m_self->name());
-        return;  // make error here?
-    }
-
-    m_destiny->SetPosition(pos);
-    sBubbleMgr.Add(this);
-
-    if (is_log_enabled(POS__TRACE))
-        _log(POS__TRACE, "CustomsSE::Anchor() - TowerSE %s(%u) new position %.2f, %.2f, %.2f", GetName(), m_cData.itemID, pos.x, pos.y, pos.z);
-
-    m_destiny->SetPosition(pos);
-    m_self->SaveItem();
-
-    m_cData.state = EVEPOS::EntityState::Anchoring;
-    m_cData.status = EVEPOS::StructureState::Anchored;
-    //m_delayTime = m_self->GetAttribute(AttrAnchoringDelay).get_int();
-    //m_procTimer.SetTimer(m_delayTime);
-    m_cData.timestamp = GetFileTimeNow();
-
-    SendSlimUpdate();
-
-    std::vector<PyTuple*> updates;
-    SetBallFree sbf;
-        sbf.entityID = m_self->itemID();
-        sbf.is_free = false;
-    updates.push_back(sbf.Encode());
-    SetBallRadius sbr;
-        sbr.entityID = m_self->itemID();
-        sbr.radius = m_self->radius();
-    updates.push_back(sbr.Encode());
-    m_destiny->SendDestinyUpdate(updates); //consumed
-
-    //SendEffectUpdate(anchorDropForOrbitals, true);
-    m_destiny->SendSpecialEffect(m_cData.itemID, m_cData.itemID, m_self->typeID(),0,0,"effects.AnchorDrop",0,1,1,-1,0);
-}
-
-void CustomsSE::PullAnchor()
-{
-    if (m_cData.status > EVEPOS::StructureState::Anchored)
-        return;  // make error here?
-
-    m_cData.state = EVEPOS::EntityState::Unanchoring;
-    m_cData.status = EVEPOS::StructureState::Unanchored;
-    //m_delayTime = m_self->GetAttribute(AttrUnanchoringDelay).get_int();
-    //m_procTimer.SetTimer(m_delayTime);
-    m_cData.timestamp = GetFileTimeNow();
-
-    SendSlimUpdate();
-
-    //SendEffectUpdate(anchorLiftForOrbitals, true);
-    m_destiny->SendSpecialEffect(m_cData.itemID, m_cData.itemID, m_self->typeID(),0,0,"effects.AnchorLift",0,1,1,-1,0);
-}
 
 void CustomsSE::EncodeDestiny( Buffer& into )
 {
@@ -570,20 +739,20 @@ PyDict *CustomsSE::MakeSlimItem() {
 
 bool CustomsSE::IsInvul()
 {
-    /* Crucible ("Player Owned Customs Offices - an update", Nov 2011): the Interbus offices in lowsec, nullsec and
-     *  wormholes can be shot down.  highsec offices stayed Interbus and invulnerable until Rubicon (2013).
-     *  reinforcement timers are F19's (IsReinforced)
-     */
     if (ObjectSystemEntity::IsInvul())
         return true;
-    if ((m_system != nullptr) and (m_system->GetSystemSecurityRating() >= 0.45f))
-        return true;
-    return IsReinforced();
+    return !CanBeAttacked();
 }
 
 void CustomsSE::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
+
+    // the planet's office slot is free (an Interbus office never comes back, players anchor their own)
+    if ((m_planetSE != nullptr) and (m_planetSE->GetCustomsOffice() == this))
+        m_planetSE->SetCustomsOffice(nullptr);
+    PosMgrDB::DeleteCustomsData(m_self->itemID());
+    NotifyColonists();
 
     uint32 killerID = 0;
     Client* pClient(nullptr);
@@ -682,10 +851,13 @@ void CustomsSE::Killed(Damage &damage) {
     GPoint wreckPosition = m_destiny->GetPosition();
     std::string wreck_name = m_self->itemName();
     wreck_name += " Wreck";
-    ItemData wreckItemData(3962/*CO gantry*/, killerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
+    uint32 wreckTypeID = sDataMgr.GetWreckID(m_self->typeID());
+    if (!IsWreckTypeID(wreckTypeID))
+        wreckTypeID = 26468;    // Wreck
+    ItemData wreckItemData(wreckTypeID, killerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
     WreckContainerRef wreckItemRef = sItemFactory.SpawnWreckContainer( wreckItemData );
     if (wreckItemRef.get() == nullptr) {
-        sLog.Error("CustomsSE::Killed()", "Creating Wreck Item Failed for %s of type %u", wreck_name.c_str(), 3962);
+        sLog.Error("CustomsSE::Killed()", "Creating Wreck Item Failed for %s of type %u", wreck_name.c_str(), wreckTypeID);
         return;
     }
 
@@ -707,11 +879,11 @@ void CustomsSE::Killed(Damage &damage) {
         wreckEntity.itemID = wreckItemRef->itemID();
         wreckEntity.itemName = wreck_name;
         wreckEntity.ownerID = killerID;
-        wreckEntity.typeID = 3962;
+        wreckEntity.typeID = wreckTypeID;
         wreckEntity.position = wreckPosition;
 
     if (!m_system->BuildDynamicEntity(wreckEntity, m_self->itemID())) {
-        sLog.Error("CustomsSE::Killed()", "Spawning Wreck Failed: typeID or typeName not supported: '%u'", 3962);
+        sLog.Error("CustomsSE::Killed()", "Spawning Wreck Failed: typeID or typeName not supported: '%u'", wreckTypeID);
         wreckItemRef->Delete();
         return;
     }

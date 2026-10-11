@@ -16,6 +16,7 @@
 
 class PosMgrBound;
 class TowerSE;
+class CustomsSE;
 
 class PosMgr : public BindableService <PosMgr, PosMgrBound>
 {
@@ -80,6 +81,8 @@ private:
      *  setters are refused while the tower is reinforced.  throws the client's errors
      */
     TowerSE* GetTower(Client* pClient, PyInt* itemID, int64 roles, bool setter);
+    // a customs office or gantry in this system.  throws
+    CustomsSE* GetOrbital(Client* pClient, PyInt* itemID);
 
     PosMgrDB m_db;
     uint32 m_systemID;

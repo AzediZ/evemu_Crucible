@@ -36,6 +36,8 @@
 #include "planet/PlanetDB.h"
 #include "system/SystemDB.h"
 #include "planet/Moon.h"
+#include "planet/CustomsOffice.h"
+#include "pos/PosMgrDB.h"
 #include "pos/Structure.h"
 #include "pos/JumpBridge.h"
 #include "pos/Tower.h"
@@ -115,6 +117,7 @@ BeyonceBound::BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Clien
     this->Add("UpdateStateRequest", &BeyonceBound::UpdateStateRequest);
     this->Add("CmdWarpToStuffAutopilot", &BeyonceBound::CmdWarpToStuffAutopilot); //*
     this->Add("CmdAbandonLoot", &BeyonceBound::CmdAbandonLoot);
+    this->Add("CmdChangeStructureOwner", &BeyonceBound::CmdChangeStructureOwner);
 
     this->Add("CmdFleetRegroup", &BeyonceBound::CmdFleetRegroup);
     this->Add("CmdFleetTagTarget", &BeyonceBound::CmdFleetTagTarget);
@@ -887,6 +890,34 @@ PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, 
     // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
     //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
     return this->GetOID();
+}
+
+PyResult BeyonceBound::CmdChangeStructureOwner(PyCallArgs &call, PyInt* itemID, PyInt* oldOwnerID, PyInt* newOwnerID) {
+    /* the client offers "Transfer Ownership" for anchored player customs offices to the owner corp's Directors.
+     *  the new owner is any player corporation.  the office keeps its settings
+     */
+    Client* pClient(call.client);
+    SystemManager* pSystem(pClient->SystemMgr());
+    SystemEntity* pSE(pSystem == nullptr ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetCOSE() == nullptr))
+        throw CustomError ("Only customs offices can be transferred this way.");
+    CustomsSE* pCO(pSE->GetCOSE());
+    uint32 ownerID(pCO->GetOwnerID());
+    if (!IsPlayerCorp(ownerID) or pCO->IsGantry())
+        throw CustomError ("This %s can't be transferred.", pCO->GetName());
+    if ((ownerID != (uint32)oldOwnerID->value()) or (ownerID != pClient->GetCorporationID()))
+        throw CustomError ("Your corporation does not own this customs office.");
+    if ((pClient->GetCorpRole() & Corp::Role::Director) == 0)
+        throw CustomError ("Only Directors can transfer the ownership of a customs office.");
+    uint32 newOwner(newOwnerID->value());
+    if (!IsPlayerCorp(newOwner) or (newOwner == ownerID))
+        throw CustomError ("Customs offices can only be transferred to another player corporation.");
+    if (pCO->IsInTimedState())
+        throw CustomError ("The customs office can't change hands while it is reinforced.");
+
+    pCO->ChangeOwner(newOwner, PosMgrDB::GetCorpAllianceID(newOwner));
+    _log(POS__MESSAGE, "%s transferred customs office %u from %u to %u", pClient->GetName(), pCO->GetID(), ownerID, newOwner);
+    return PyStatic.NewNone();
 }
 
 PyResult BeyonceBound::CmdAbandonLoot(PyCallArgs &call, PyList* wreckIDs) {

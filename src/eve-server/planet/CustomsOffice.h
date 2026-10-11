@@ -42,7 +42,7 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Killed(Damage &damage);
-    // empire (highsec) offices belong to Interbus and can't be shot in Crucible.  reinforced offices take no damage
+    // CONCORD's offices, unanchored gantries and reinforced offices can't be shot (CanBeAttacked)
     virtual bool                IsInvul();
     virtual void                InitData();
     virtual void                Init();
@@ -51,20 +51,39 @@ public:
     virtual void     MissileLaunched(Missile* pMissile) { /* Do nothing here */ }
 
     /* specific functions handled in this class. */
-    void                        SetAnchor(Client* pClient, GPoint& pos);
-    void                        PullAnchor();
     PlanetSE*                   GetPlanetSE()           { return m_planetSE; }
-    void                        Reinforced()            { /* do nothing here yet */ }
     void                        GetEffectState(PyList& into);
-    uint8                       GetState() const        { return m_cData.state; }
+    int8                        GetState() const        { return m_cData.state; }
     float                       GetStatus()             { return m_cData.status; }
-    bool                        IsReinforced()          { return false; }   /** @todo  finish this...not sure how yet. */
+    bool                        IsReinforced()          { return (m_cData.state == EVEPOS::EntityState::ShieldReinforce); }
+    bool                        IsGantry()              { return (m_self->groupID() == EVEDB::invGroups::Orbital_Construction_Platform); }
     // anchoring, upgrading, unanchoring or reinforced:  a timer is running on this orbital
     bool                        IsInTimedState()        { return (m_cData.state == EVEPOS::EntityState::Anchoring) or (m_cData.state == EVEPOS::EntityState::Onlining)
                                                               or (m_cData.state == EVEPOS::EntityState::Unanchoring) or (m_cData.state == EVEPOS::EntityState::ShieldReinforce); }
 
+    /* orbital states (entityConst):  a gantry is launched Unanchored, anchors at a planet (Anchoring -> Anchored), is
+     *  upgraded with its materials (Onlining) into a customs office, or unanchored again (Unanchoring -> Unanchored).
+     *  customs offices are Anchored (the client's menus need that state) and go ShieldReinforce at 25% shield.
+     *  orbitalTimestamp is the end of the running state.
+     */
+    // posMgr.AnchorOrbital / UnanchorOrbital / OnlineOrbital ("start upgrade").  these throw
+    void                        AnchorOrbital(Client* pClient);
+    void                        UnanchorOrbital(Client* pClient);
+    void                        OnlineOrbital(Client* pClient);
+    // ends the timed state when its time is up (SystemManager::ProcessTic, through the planet)
+    void                        ProcessState();
+    // GM:  ends the running state now
+    void                        CompleteStateChange();
+    // the gantry becomes the customs office it builds.  deletes this entity
+    void                        Upgrade();
+    bool                        CanBeAttacked();
+    // after damage:  25% shield or less puts a player office into reinforcement
+    void                        OnShieldDamaged();
+    // posMgr callers:  the gantry or office, owned by the client's corp, and the role to change it
+    void                        CheckCorpAccess(Client* pClient, int64 role);
+
     // for orbital infrastructure
-    void                     SetPlanet(uint32 planetID) { m_oData.planetID = planetID; }
+    void                        SetPlanet(uint32 planetID);
     uint32                      GetPlanetID()           { return m_oData.planetID; }
     float                       GetTaxRate(Client* pClient);
 
@@ -87,12 +106,17 @@ public:
     // an exported commodity:  onto the owner's stack of that type in the hangar, or a new stack
     void    AddCommodity(uint32 ownerID, uint16 typeID, uint32 quantity);
 
-    // GM: Take Control
+    // GM: Take Control, and Directors' ownership transfers
     void    ChangeOwner(uint32 corpID, int32 allianceID);
 
 protected:
     void                        SendSlimUpdate();
     void                        SendEffectUpdate(int16 effectID, bool active);
+    // dunRotation:  the office faces its planet
+    void                        UpdateRotation();
+    void                        SaveState();
+    // OnMajorPlanetStateUpdate to the planet's colonists online (their customs office changed)
+    void                        NotifyColonists();
 
 private:
     PosMgrDB                    m_db;
@@ -102,6 +126,9 @@ private:
 
     SystemManager*              m_system;
     PlanetSE*                   m_planetSE;
+
+    // an office that came out of reinforcement goes again only once its shield was above 25%
+    bool                        m_reinforceArmed;
 };
 
 #endif  // EVEMU_POS_CUSTOMS_OFFICE_H_

@@ -663,8 +663,10 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                     shipDrop = true;
             } break;
             case EVEDB::invCategories::Orbitals: {
-                // customs office gantry placement rules (planet distance, one per planet...) are F19's
-                if (LaunchToSpace(pClient, iRef, ownerID, location, list, pSystem->GetClosestPlanetID(location)))
+                // the gantry floats until it is anchored at a planet (CustomsSE::AnchorOrbital)
+                if (iRef->groupID() != EVEDB::invGroups::Orbital_Construction_Platform)
+                    break;
+                if (LaunchToSpace(pClient, iRef, ownerID, location, list))
                     shipDrop = true;
             } break;
             case EVEDB::invCategories::Celestial: {
@@ -752,6 +754,16 @@ PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID, std::optional<PyRep*>
             throw CustomError ("You do not own the %s.  Cannot scoop.", pSE->GetName());
     }
 
+    // orbitals:  only an unanchored gantry of ours comes back aboard (customs offices never)
+    if (pSE->IsCOSE()) {
+        CustomsSE* pCO(pSE->GetCOSE());
+        if (!pCO->IsGantry() or (pCO->GetState() != EVEPOS::EntityState::Unanchored) or (pCO->GetPlanetID() != 0))
+            throw CustomError ("%s is anchored.  Cannot scoop.", pSE->GetName());
+        uint32 ownerID(pSE->GetOwnerID());
+        if ((ownerID != pClient->GetCharacterID()) and (ownerID != (uint32)pClient->GetCorporationID()))
+            throw CustomError ("You do not own the %s.  Cannot scoop.", pSE->GetName());
+    }
+
     // drones: ours, or abandoned
     if (pSE->IsDroneSE()) {
         DroneSE* pDrone(pSE->GetDroneSE());
@@ -786,6 +798,8 @@ PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID, std::optional<PyRep*>
         // perform data cleanup for structures
         if (pSE->IsPOSSE())
             pSE->GetPOSSE()->Scoop();
+        if (pSE->IsCOSE())
+            PosMgrDB::DeleteCustomsData(iRef->itemID());
         // move it into the cargo bay:
         pClient->MoveItem(iRef->itemID(), pClient->GetShipID(), flagCargoHold);
         pSysMgr->RemoveEntity(pSE);

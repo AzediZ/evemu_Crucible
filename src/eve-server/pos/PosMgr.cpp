@@ -24,6 +24,7 @@
 
 
 #include "planet/Moon.h"
+#include "planet/CustomsOffice.h"
 #include "pos/PosMgr.h"
 #include "pos/Array.h"
 #include "pos/Battery.h"
@@ -823,9 +824,10 @@ PyResult PosMgrBound::AnchorOrbital(PyCallArgs &call, PyInt* itemID) {
      *      posMgr.AnchorOrbital(itemID)
      */
 
-    _log(POS__TRACE,  "PosMgrBound::Handle_()");
+    _log(POS__TRACE,  "PosMgrBound::Handle_AnchorOrbital()");
     call.Dump(POS__DUMP);
 
+    GetOrbital(call.client, itemID)->AnchorOrbital(call.client);
     return PyStatic.NewNone();
 }
 
@@ -838,14 +840,26 @@ PyResult PosMgrBound::UnanchorOrbital(PyCallArgs &call, PyInt* itemID) {
     _log(POS__TRACE,  "PosMgrBound::Handle_UnanchorOrbital()");
     call.Dump(POS__DUMP);
 
+    GetOrbital(call.client, itemID)->UnanchorOrbital(call.client);
     return PyStatic.NewNone();
 }
 
 PyResult PosMgrBound::OnlineOrbital(PyCallArgs &call, PyInt* itemID) {
+    // orbitalMaterialUI "start upgrade":  posMgr.OnlineOrbital(itemID)
     _log(POS__TRACE,  "PosMgrBound::Handle_OnlineOrbital()");
     call.Dump(POS__DUMP);
 
+    GetOrbital(call.client, itemID)->OnlineOrbital(call.client);
     return PyStatic.NewNone();
+}
+
+CustomsSE* PosMgrBound::GetOrbital(Client* pClient, PyInt* itemID)
+{
+    SystemManager* pSystem(sEntityList.FindOrBootSystem(m_systemID));
+    SystemEntity* pSE(pSystem == nullptr ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetCOSE() == nullptr))
+        throw CustomError ("That orbital can't be found.");
+    return pSE->GetCOSE();
 }
 
 PyResult PosMgrBound::ChangeStructureProvisionType(PyCallArgs &call, PyInt* towerID, PyInt* itemID, PyRep* typeID) {
@@ -912,6 +926,12 @@ PyResult PosMgrBound::GMUpgradeOrbital(PyCallArgs &call, PyInt* itemID) {
     _log(POS__TRACE,  "PosMgrBound::Handle_GMUpgradeOrbital()");
     call.Dump(POS__DUMP);
 
+    if ((call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::WORLDMOD)) == 0)
+        throw CustomError ("Not allowed");
+    CustomsSE* pCO(GetOrbital(call.client, itemID));
+    if (!pCO->IsGantry() or (pCO->GetPlanetID() == 0))
+        throw CustomError ("Only an anchored gantry can be upgraded.");
+    pCO->Upgrade();
     return PyStatic.NewNone();
 }
 
@@ -928,6 +948,11 @@ PyResult PosMgrBound::CompleteOrbitalStateChange(PyCallArgs &call, PyInt* itemID
         throw CustomError ("Not allowed");
     SystemManager* pSystem(sEntityList.FindOrBootSystem(m_systemID));
     SystemEntity* pSE(pSystem == nullptr ? nullptr : pSystem->GetSE(itemID->value()));
+    // orbitals (customs offices and gantries)
+    if ((pSE != nullptr) and (pSE->GetCOSE() != nullptr)) {
+        pSE->GetCOSE()->CompleteStateChange();
+        return PyStatic.NewNone();
+    }
     if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
         throw CustomError ("%u has no state change to complete", itemID->value());
     pSE->GetPOSSE()->CompleteStateChange();

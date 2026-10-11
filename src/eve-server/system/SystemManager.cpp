@@ -288,6 +288,13 @@ bool SystemManager::ProcessTic() {
     m_spawnMgr->Process();
     m_law->Process();
 
+    // customs office and gantry timers (anchoring, upgrading, unanchoring, reinforcement)
+    for (auto cur : m_planetMap) {
+        CustomsSE* pCO(cur.second->GetPlanetSE()->GetCustomsOffice());
+        if ((pCO != nullptr) and pCO->IsInTimedState())
+            pCO->ProcessState();
+    }
+
     // drones that reached their ship during this tick
     ProcessDroneReturns();
     // self-destruct timers (outside the entity loop, as a ship may explode here)

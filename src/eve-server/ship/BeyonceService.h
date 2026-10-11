@@ -93,6 +93,8 @@ protected:
     PyResult CmdTurboDock(PyCallArgs& call, PyInt* stationID, std::optional<PyRep*> paymentRequired);
     PyResult CmdStargateJump(PyCallArgs& call, PyInt* fromStargateID, PyInt* toStargateID, PyInt* shipID);
     PyResult CmdAbandonLoot(PyCallArgs& call, PyList* wreckIDs);
+    // menusvc.TransferCorporationOwnership:  remotePark.CmdChangeStructureOwner(itemID, oldOwnerID, newOwnerID)
+    PyResult CmdChangeStructureOwner(PyCallArgs& call, PyInt* itemID, PyInt* oldOwnerID, PyInt* newOwnerID);
     PyResult UpdateStateRequest(PyCallArgs& call);
     PyResult CmdJumpThroughFleet(PyCallArgs& call, PyInt* otherCharID, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID);
     PyResult CmdJumpThroughAlliance(PyCallArgs& call, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID);

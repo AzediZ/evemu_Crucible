@@ -26,6 +26,7 @@
 
 
 #include "system/Damage.h"
+#include "planet/CustomsOffice.h"
 
 #include "../../eve-common/EVE_Damage.h"
 
@@ -449,6 +450,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // starbases:  reinforcement, attack alerts, the guns' aggressor list
         if (IsPOSSE())
             GetPOSSE()->OnDamaged(d.srcSE);
+        // player customs offices go reinforced at 25% shield
+        if (IsCOSE())
+            GetCOSE()->OnShieldDamaged();
     }
 
     if (sConfig.debug.UseProfiling)

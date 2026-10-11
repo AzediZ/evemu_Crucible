@@ -820,6 +820,8 @@ float Inventory::GetCapacity(EVEItemFlags flag) const {
         case flagIndustrialShipHold:            return m_self->GetAttribute(AttrIndustrialShipHoldCapacity).get_float();
         // for PI
         case flagCommandCenterHold:             return m_self->GetAttribute(AttrCommandCenterHoldCapacity).get_float();
+        // customs office gantry upgrade hold
+        case flagMaterialBay:                   return m_self->GetAttribute(AttrMaterialBayCapacity).get_float();
         case flagPlanetaryCommoditiesHold:      return m_self->GetAttribute(AttrPlanetaryCommoditiesHoldCapacity).get_float();
         // for pos battery/array
         case flagHiSlot0:                       return m_self->GetAttribute(AttrAmmoCapacity).get_float();
@@ -966,6 +968,11 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
     if (m_self->categoryID() == EVEDB::invCategories::Station)
         return true;
 
+    // a gantry's upgrade hold is for its owner corporation's members
+    Client* pUser(sItemFactory.GetUsingClient());
+    if ((m_self->groupID() == EVEDB::invGroups::Orbital_Construction_Platform) and (flag == flagMaterialBay) and (pUser != nullptr)
+    and (pUser->GetCorporationID() != m_self->ownerID()) and (pUser->GetCharacterID() != m_self->ownerID()))
+        throw CustomError ("Only members of the gantry's corporation can put materials in its upgrade hold.");
     // customs offices take planetary commodities only, and their room is per character
     if ((m_self->groupID() == EVEDB::invGroups::Orbital_Infrastructure) and (flag == flagHangar)) {
         StructureItemRef sRef = StructureItemRef::StaticCast(m_self);
