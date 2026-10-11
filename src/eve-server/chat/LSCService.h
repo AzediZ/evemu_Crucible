@@ -76,6 +76,8 @@ public:
     void CreateSystemChannel(int32 channelID);
     // evacuates and deletes a server-created channel (fleet/wing/squad) if it exists
     void DeleteSystemChannel(int32 channelID);
+    // sets the stored motd of a server-created channel (fleet), if it exists
+    void SetSystemChannelMOTD(int32 channelID, const std::string& motd);
     void SystemUnload(uint32 systemID, uint32 constID, uint32 regionID);
 
     void SendMail(uint32 sender, uint32 recipient, const std::string &subject, const std::string &content) {

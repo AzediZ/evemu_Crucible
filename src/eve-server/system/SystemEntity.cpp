@@ -201,22 +201,30 @@ double SystemEntity::DistanceTo2(const SystemEntity* other) {
     return GetPosition().distance(other->GetPosition());
 }
 
-void SystemEntity::SendDamageStateChanged() {  //working 24Apr15
+PyRep* SystemEntity::MakeDamageDetails() {
      DamageDetails dmgState;
         dmgState.shield = m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double();
         dmgState.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
         dmgState.timestamp = GetFileTimeNow();
         dmgState.armor = (1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double()));
         dmgState.structure = (1.0 - (m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double()));
+    _log(DAMAGE__MESSAGE, "%s(%u): DamageUpdate - S:%f A:%f H:%f.", \
+            m_self->name(), m_self->itemID(), dmgState.shield, dmgState.armor, dmgState.structure);
+    return dmgState.Encode();
+}
+
+void SystemEntity::SendDamageStateChanged() {  //working 24Apr15
      OnDamageStateChange dmgChange;
         dmgChange.entityID = m_self->itemID();
-        dmgChange.state = dmgState.Encode();
+        dmgChange.state = MakeDamageDetails();
     PyTuple *up = dmgChange.Encode();
     if (m_targMgr != nullptr)
         m_targMgr->QueueUpdate(&up);
     PySafeDecRef(up);
-    _log(DAMAGE__MESSAGE, "%s(%u): DamageUpdate - S:%f A:%f H:%f.", \
-            m_self->name(), m_self->itemID(), dmgState.shield, dmgState.armor, dmgState.structure);
+
+    // fleet members watching this pilot (fleet window watch list)
+    if (IsShipSE() and HasPilot() and GetPilot()->InFleet())
+        sFltSvc.SendWatchlistDamage(GetPilot());
 }
 
 void SystemEntity::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner) {

@@ -37,7 +37,7 @@ FLEET__DUMP
 FLEET__BIND_DUMP
 */
 PyResult FleetProxy::GetAvailableFleets(PyCallArgs &call) {
-    return sFltSvc.GetAvailableFleets();
+    return sFltSvc.GetAvailableFleets(call.client);
 }
 
 PyResult FleetProxy::ApplyToJoinFleet(PyCallArgs &call, PyInt* fleetID) {
@@ -45,7 +45,9 @@ PyResult FleetProxy::ApplyToJoinFleet(PyCallArgs &call, PyInt* fleetID) {
    // sLog.White("FleetProxy", "Handle_ApplyToJoinFleet() size=%lli", call.tuple->size());
    // call.Dump(FLEET__DUMP);
 
-    // returns boolean
+    // returns boolean.  only adverts the applicant can see may be joined
+    if (!sFltSvc.CanSeeAdvert(fleetID->value(), call.client))
+        return new PyBool(false);
     return new PyBool(sFltSvc.AddJoinRequest(fleetID->value(), call.client));
 }
 
@@ -55,15 +57,19 @@ PyResult FleetProxy::AddFleetFinderAdvert(PyCallArgs &call, PyObject* info) {
     //sLog.White("FleetProxy", "Handle_AddFleetFinderAdvert() size=%lli", call.tuple->size());
     //call.Dump(FLEET__DUMP);
 
-    /** @todo  this needs to be updated....check standings and verifly scope */
-
     FleetAdvertCall args;
     if (!args.Decode(&call.tuple)) {
         codelog(SERVICE__ERROR, "%s: Failed to decode args.", call.client->GetChar()->name());
         return nullptr;
     }
 
+    // only the fleet boss registers the fleet
     int32 fleetID = call.client->GetChar()->fleetID();
+    if ((fleetID == 0) or !sFltSvc.IsBoss(call.client->GetChar().get()))
+        throw UserError("FleetNotCreator");
+    // "You cannot set your fleet to 'Self-Invite' if you are in an NPC corporation."
+    if ((args.inviteScope & Fleet::Invite::Corp) and IsNPCCorp(call.client->GetCorporationID()))
+        throw UserError("FleetNotNPCCorp");
 
     FleetData fData = FleetData();
     sFltSvc.GetFleetData(fleetID, fData);
@@ -101,9 +107,13 @@ PyResult FleetProxy::RemoveFleetFinderAdvert(PyCallArgs &call) {
    // sLog.White("FleetProxy", "Handle_RemoveFleetFinderAdvert() size=%lli", call.tuple->size());
     //call.Dump(FLEET__DUMP);
 
+    if ((call.client->GetChar()->fleetID() == 0) or !sFltSvc.IsBoss(call.client->GetChar().get()))
+        throw UserError("FleetNotCreator");
+    // returns the removed advert:  fleetSvc.RemoveAndUpdateFleetFinderAdvert reopens the register window with it
+    PyRep* old(sFltSvc.GetFleetAdvert(call.client->GetChar()->fleetID()));
     sFltSvc.RemoveFleetAdvert(call.client->GetChar()->fleetID());
 
-    return nullptr;
+    return (old == nullptr ? PyStatic.NewNone() : old);
 }
 
 PyResult FleetProxy::GetMyFleetFinderAdvert(PyCallArgs &call) {

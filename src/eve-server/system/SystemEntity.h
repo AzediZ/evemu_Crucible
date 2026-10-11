@@ -274,6 +274,8 @@ public:
     static bool                 IsUnkillable(uint32 itemID);
     double                      DistanceTo2(const SystemEntity* other);
     PyTuple*                    MakeDamageState();
+    // the DamageDetails list sent in OnDamageStateChange/OnFleetDamageStateChange
+    PyRep*                      MakeDamageDetails();
 
     /* public specific functions handled in base class. */
     virtual void                Abandon();

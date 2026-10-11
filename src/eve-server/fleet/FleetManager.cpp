@@ -23,8 +23,6 @@ FleetManager::FleetManager() :
     this->Add("ForceLeaveFleet", &FleetManager::ForceLeaveFleet);
     this->Add("BroadcastToBubble", &FleetManager::BroadcastToBubble);
     this->Add("BroadcastToSystem", &FleetManager::BroadcastToSystem);
-
-    // stubs
     this->Add("AddToWatchlist", &FleetManager::AddToWatchlist);
     this->Add("RemoveFromWatchlist", &FleetManager::RemoveFromWatchlist);
     this->Add("RegisterForDamageUpdates", &FleetManager::RegisterForDamageUpdates);
@@ -145,21 +143,19 @@ PyResult FleetManager::BroadcastToSystem(PyCallArgs &call, PyString* name, PyInt
 PyResult FleetManager::AddToWatchlist(PyCallArgs &call, PyInt* characterID, PyRep* fav) {
     /**
      *        sm.RemoteSvc('fleetMgr').AddToWatchlist(charID, fav)
+     *  fav is the whole new watch list (None when damage updates are off)
      */
-    sLog.Warning("FleetManager", "Handle_AddToWatchlist() size=%lli", call.tuple->size());
-    call.Dump(FLEET__DUMP);
-
-    return nullptr;
+    sFltSvc.SetWatchlist(call.client, fav);
+    return PyStatic.NewNone();
 }
 
 PyResult FleetManager::RemoveFromWatchlist(PyCallArgs &call, PyInt* characterID, PyRep* fav) {
     /**
      *        sm.RemoteSvc('fleetMgr').RemoveFromWatchlist(charID, fav)
+     *  fav is the whole new watch list (None when damage updates are off)
      */
-    sLog.Warning("FleetManager", "Handle_RemoveFromWatchlist() size=%lli", call.tuple->size());
-    call.Dump(FLEET__DUMP);
-
-    return nullptr;
+    sFltSvc.SetWatchlist(call.client, fav);
+    return PyStatic.NewNone();
 }
 
 PyResult FleetManager::RegisterForDamageUpdates(PyCallArgs &call, PyRep* fav) {
@@ -172,9 +168,8 @@ PyResult FleetManager::RegisterForDamageUpdates(PyCallArgs &call, PyRep* fav) {
      *        17:38:00 [SvcCall]       Tuple: 1 elements
      *        17:38:00 [SvcCall]         [ 0] List: Empty
      */
-    sLog.Warning("FleetManager", "Handle_RegisterForDamageUpdates() size=%lli", call.tuple->size());
-    call.Dump(FLEET__DUMP);
+    sFltSvc.SetWatchlist(call.client, fav);
 
     // returns nothing
-    return nullptr;
+    return PyStatic.NewNone();
 }

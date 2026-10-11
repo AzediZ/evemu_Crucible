@@ -52,7 +52,9 @@ namespace Fleet {
             MaxWings            = 5,
             MaxSquadsPerWing    = 5,
             MaxSquadMembers     = 10,
-            MaxMembers          = 256
+            MaxMembers          = 256,
+            MaxDamageSenders    = 15,   // MAX_DAMAGE_SENDERS (watch list)
+            ReconnectTimeout    = 2     // RECONNECT_TIMEOUT, minutes
         };
     }
     namespace BCast {
@@ -140,6 +142,17 @@ struct SquadData {
     Client* booster;
     std::string name;
     std::map<uint32, Client*> members;
+};
+
+// a member's fleet position, kept for FleetBound::Reconnect when the client disconnects
+struct ReconnectData {
+    uint32 fleetID;
+    int32 wingID;
+    int32 squadID;
+    int8 job;
+    int8 role;
+    int8 booster;
+    int64 time;
 };
 
 struct InviteData {

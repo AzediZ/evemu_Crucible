@@ -1468,6 +1468,13 @@ void LSCService::CreateSystemChannel(int32 channelID)
     }
 }
 
+void LSCService::SetSystemChannelMOTD(int32 channelID, const std::string& motd)
+{
+    LSCChannel* pChan(GetChannelByID(channelID));
+    if (pChan != nullptr)
+        pChan->SetMOTD(motd);
+}
+
 void LSCService::DeleteSystemChannel(int32 channelID)
 {
     std::map<int32, LSCChannel*>::iterator itr = m_channels.find(channelID);

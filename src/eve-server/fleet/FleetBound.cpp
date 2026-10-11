@@ -708,8 +708,8 @@ PyResult FleetBound::UpdateMemberInfo(PyCallArgs &call, std::optional <PyInt*> s
      * 13:26:54 [FleetDump]       Tuple: 1 elements
      * 13:26:54 [FleetDump]         [ 0] (None)
      */
-    sLog.Warning("FleetBound", "Handle_UpdateMemberInfo() size=%lli", call.tuple->size());
-    //call.Dump(FLEET__DUMP);
+    // ship type and system are read live from the client (GetInitState, GetFleetComposition), so there is nothing to store
+    _log(FLEET__TRACE, "FleetBound::UpdateMemberInfo() - %s", call.client->GetName());
 
     CheckMember(call);
 
@@ -1101,9 +1101,12 @@ PyResult FleetBound::ExcludeFromVoiceMute(PyCallArgs &call, PyInt* characterID, 
 }
 
 PyResult FleetBound::Reconnect(PyCallArgs &call) {
-    // no args
-    sLog.Warning("FleetBound", "Handle_Reconnect()) size=%lli", call.tuple->size());
+    /* no args.  the client calls this (on its own fleet's moniker) when it logs back in within RECONNECT_TIMEOUT of losing its
+     *  connection (fleetSvc.AttemptReconnectLazy).  the caller is not a member yet.  the client ignores errors
+     */
+    if (!sFltSvc.Reconnect(call.client, m_fleetID))
+        _log(FLEET__TRACE, "FleetBound::Reconnect() - %s could not rejoin fleet %u", call.client->GetName(), m_fleetID);
 
     // returns nothing
-    return nullptr;
+    return PyStatic.NewNone();
 }

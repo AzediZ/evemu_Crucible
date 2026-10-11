@@ -36,7 +36,8 @@ public:
     void DeleteWing(uint32 wingID);
     void DeleteSquad(uint32 squadID);
 
-    PyRep* GetAvailableFleets();
+    // adverts pViewer may see
+    PyRep* GetAvailableFleets(Client* pViewer);
     PyRep* GetWings(uint32 fleetID);
 
     PyRep* GetFleetAdvert(uint32 fleetID);
@@ -122,6 +123,22 @@ public:
     // util.KeyVal(targetTags={itemID: tag}) for OnFleetStateChange
     PyRep* MakeFleetState(uint32 fleetID);
 
+    /* watch list damage updates (fleetMgr.AddToWatchlist/RemoveFromWatchlist/RegisterForDamageUpdates).
+     *  fav is None (damage updates off) or the list of watched charIDs (max MAX_DAMAGE_SENDERS).  throws FleetTooManyFavorites */
+    void SetWatchlist(Client* pClient, PyRep* fav);
+    // pWatched's ship damage changed: OnFleetDamageStateChange to the members watching it in the same system
+    void SendWatchlistDamage(Client* pWatched);
+
+    /* reconnect (fleetSvc.AttemptReconnectLazy -> fleet.Reconnect() within RECONNECT_TIMEOUT of a disconnect) */
+    // remembers the client's fleet position.  called by ClientLogout() before the client leaves its fleet
+    void SaveReconnectData(Client* pClient);
+    // puts the client back into fleetID at its old position where possible.  false when that isn't possible
+    bool Reconnect(Client* pClient, uint32 fleetID);
+
+    /* fleet finder */
+    // the advert is visible to pViewer (scope bits, allowed entities, security status; members always see their fleet)
+    bool CanSeeAdvert(uint32 fleetID, Client* pViewer);
+
     void FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8 group, std::string msg);
 
     void SendActiveStatus(uint32 fleetID, int32 wingID, int32 squadID);
@@ -177,6 +194,8 @@ private:
     Client* m_departing;    // client being removed by ClientLogout(); SendFleetUpdate() skips it
 
     std::map<uint32, InviteData>        m_inviteData;       // charID/data
+    std::map<uint32, ReconnectData>     m_reconnect;        // charID/fleet position at disconnect
+    std::map<uint32, std::set<uint32>>  m_watchlists;       // watcher charID/watched charIDs
 
     std::map<uint32, FleetAdvert>       m_fleetAdvertMap;   // fleetID/data
 

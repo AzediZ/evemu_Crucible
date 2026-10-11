@@ -54,6 +54,8 @@ void FleetService::Initialize(EVEServiceManager& svc)
     m_fleetDataMap.clear();
     m_squadDataMap.clear();
     m_fleetAdvertMap.clear();
+    m_reconnect.clear();
+    m_watchlists.clear();
 
     //  these will have to be incremented individually, then stored according to fleet
     m_fleetID = FLEET_ID;  //950000000
@@ -84,7 +86,7 @@ uint32 FleetService::CreateFleet(Client *pClient)
         fData.booster = pClient;
         fData.name = pChar->itemName();
         fData.name += "'s Fleet";
-        fData.motd = "default motd";
+        fData.motd = "";
         fData.isMutedByLeader.clear();
         fData.isExcludedFromMuting.clear();
         fData.squads = 1;
@@ -979,14 +981,11 @@ void FleetService::UpdateOptions(uint32 fleetID, bool isFreeMove, bool isRegiste
 
 PyRep* FleetService::GetMOTD(uint32 fleetID)
 {
-    PyTuple* tuple = new PyTuple(1);
+    // the client uses this as the motd string (fleetSvc.GetMotd, lscchannel)
     std::map<uint32, FleetData>::iterator itr = m_fleetDataMap.find(fleetID);
-    if (itr != m_fleetDataMap.end()) {
-        tuple->SetItem(0, new PyString(itr->second.motd));
-    } else {
-        tuple->SetItem(0, PyStatic.NewNone());
-    }
-    return tuple;
+    if (itr == m_fleetDataMap.end())
+        return new PyString("");
+    return new PyString(itr->second.motd);
 }
 
 void FleetService::SetMOTD(uint32 fleetID, std::string motd)
@@ -999,7 +998,9 @@ void FleetService::SetMOTD(uint32 fleetID, std::string motd)
         tuple->SetItem(0, new PyString(motd));
     SendFleetUpdate(fleetID, "OnFleetMotdChanged", tuple);
 
-    /** @todo  update motd in fleet chat window (which is not coded yet in LSC system) */
+    // the client draws the fleet channel's motd from fleet.GetMotd(); keep the channel's own copy in step
+    if (m_lsc != nullptr)
+        m_lsc->SetSystemChannelMOTD(fleetID, motd);
 }
 
 void FleetService::RenameWing(uint32 wingID, std::string name)
@@ -1446,6 +1447,18 @@ void FleetService::LeaveFleet(Client* pClient)
 
     RemoveMember(pClient);
 
+    // the leaver's watch list goes, and nobody watches the leaver any more
+    uint32 charID(pChar->itemID());
+    m_watchlists.erase(charID);
+    for (auto itr = m_watchlists.begin(); itr != m_watchlists.end(); ) {
+        itr->second.erase(charID);
+        if (itr->second.empty()) {
+            itr = m_watchlists.erase(itr);
+        } else {
+            ++itr;
+        }
+    }
+
     // links stop for the leaver, and for anyone the leaver was boosting
     if (pClient->GetShipSE() != nullptr)
         pClient->GetShipSE()->RemoveLinkBonuses();
@@ -1496,6 +1509,8 @@ void FleetService::ClientLogout(Client* pClient)
 
     Character* pChar = pClient->GetChar().get();
     if ((pChar != nullptr) and (pChar->fleetID() != 0)) {
+        // the client asks to rejoin (fleet.Reconnect()) when it logs back in within RECONNECT_TIMEOUT
+        SaveReconnectData(pClient);
         m_departing = pClient;
         LeaveFleet(pClient);
         m_departing = nullptr;
@@ -1769,6 +1784,244 @@ PyRep* FleetService::MakeFleetState(uint32 fleetID)
     return new PyObject("util.KeyVal", dict);
 }
 
+// ("OnFleetDamageStateChange", (shipID, damageState)) ballpark event to pWatcher about pWatched's ship (same system, in space)
+static void SendFleetDamageState(Client* pWatcher, Client* pWatched)
+{
+    if ((pWatcher == nullptr) or (pWatched == nullptr) or (pWatcher == pWatched))
+        return;
+    if (!pWatcher->IsInSpace() or !pWatched->IsInSpace() or (pWatcher->GetSystemID() != pWatched->GetSystemID()))
+        return;
+    ShipSE* pShip(pWatched->GetShipSE());
+    if (pShip == nullptr)
+        return;
+    PyTuple* args = new PyTuple(2);
+        args->SetItem(0, new PyInt(pShip->GetID()));
+        args->SetItem(1, pShip->MakeDamageDetails());
+    PyTuple* up = new PyTuple(2);
+        up->SetItem(0, new PyString("OnFleetDamageStateChange"));
+        up->SetItem(1, args);
+    pWatcher->QueueDestinyUpdate(&up);   // consumed
+}
+
+void FleetService::SetWatchlist(Client* pClient, PyRep* fav)
+{
+    if (pClient == nullptr)
+        return;
+    uint32 charID(pClient->GetCharacterID());
+    m_watchlists.erase(charID);
+    // None means damage updates are off
+    if (!pClient->InFleet() or (fav == nullptr) or fav->IsNone())
+        return;
+
+    std::vector<uint32> ids;
+    if (fav->IsList()) {
+        for (PyList::const_iterator itr = fav->AsList()->begin(); itr != fav->AsList()->end(); ++itr)
+            ids.push_back(PyRep::IntegerValueU32(*itr));
+    } else if (fav->IsTuple()) {
+        for (PyTuple::const_iterator itr = fav->AsTuple()->begin(); itr != fav->AsTuple()->end(); ++itr)
+            ids.push_back(PyRep::IntegerValueU32(*itr));
+    } else {
+        _log(FLEET__WARNING, "SetWatchlist() - %s sent a %s watch list", pClient->GetName(), fav->TypeString());
+        return;
+    }
+    if (ids.size() > Fleet::Limits::MaxDamageSenders)
+        throw UserError("FleetTooManyFavorites").AddFormatValue("num", new PyInt(Fleet::Limits::MaxDamageSenders));
+
+    std::set<uint32> watched;
+    for (auto id : ids)
+        if ((id != charID) and (GetMember(pClient->GetFleetID(), id) != nullptr))
+            watched.insert(id);
+    if (watched.empty())
+        return;
+    m_watchlists[charID] = watched;
+
+    // the current state of the watched ships nearby
+    for (auto id : watched)
+        SendFleetDamageState(pClient, GetMember(pClient->GetFleetID(), id));
+}
+
+void FleetService::SendWatchlistDamage(Client* pWatched)
+{
+    if ((pWatched == nullptr) or !pWatched->InFleet() or m_watchlists.empty())
+        return;
+    uint32 charID(pWatched->GetCharacterID());
+    for (auto& cur : m_watchlists) {
+        if (cur.second.find(charID) == cur.second.end())
+            continue;
+        SendFleetDamageState(GetMember(pWatched->GetFleetID(), cur.first), pWatched);
+    }
+}
+
+void FleetService::SaveReconnectData(Client* pClient)
+{
+    if (pClient == nullptr)
+        return;
+    Character* pChar = pClient->GetChar().get();
+    if ((pChar == nullptr) or (pChar->fleetID() == 0))
+        return;
+
+    // forget stale records
+    int64 now(GetFileTimeNow());
+    int64 limit((Fleet::Limits::ReconnectTimeout * EvE::Time::Minute) + (30 * EvE::Time::Second));
+    for (auto itr = m_reconnect.begin(); itr != m_reconnect.end(); )
+        if ((now - itr->second.time) > limit) {
+            itr = m_reconnect.erase(itr);
+        } else {
+            ++itr;
+        }
+
+    ReconnectData data = ReconnectData();
+        data.fleetID = pChar->fleetID();
+        data.wingID = pChar->wingID();
+        data.squadID = pChar->squadID();
+        data.job = pChar->fleetJob();
+        data.role = pChar->fleetRole();
+        data.booster = pChar->fleetBooster();
+        data.time = now;
+    m_reconnect[pChar->itemID()] = data;
+}
+
+bool FleetService::Reconnect(Client* pClient, uint32 fleetID)
+{
+    if (pClient == nullptr)
+        return false;
+    Character* pChar = pClient->GetChar().get();
+    if ((pChar == nullptr) or (pChar->fleetID() != 0))
+        return false;
+
+    std::map<uint32, ReconnectData>::iterator itr = m_reconnect.find(pChar->itemID());
+    if (itr == m_reconnect.end())
+        return false;
+    ReconnectData data(itr->second);
+    m_reconnect.erase(itr);
+
+    // 2 minutes (RECONNECT_TIMEOUT), and 30s of grace for the client's 10s reconnect delay and login time
+    int64 limit((Fleet::Limits::ReconnectTimeout * EvE::Time::Minute) + (30 * EvE::Time::Second));
+    if ((data.fleetID != fleetID) or ((GetFileTimeNow() - data.time) > limit))
+        return false;
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if (fItr == m_fleetDataMap.end())
+        return false;
+    if (GetFleetMemberCount(fleetID) >= Fleet::Limits::MaxMembers)
+        return false;
+
+    // the old command position, if nobody took it meanwhile
+    int8 role(data.role);
+    int32 wingID(data.wingID), squadID(data.squadID);
+    switch (role) {
+        case Fleet::Role::FleetLeader: {
+            if (fItr->second.leader != nullptr)
+                role = Fleet::Role::Member;
+        } break;
+        case Fleet::Role::WingLeader: {
+            if (!IsWingInFleet(wingID, fleetID) or (GetWingLeader(wingID) != nullptr))
+                role = Fleet::Role::Member;
+        } break;
+        case Fleet::Role::SquadLeader: {
+            if (!IsSquadInFleet(squadID, fleetID) or (GetSquadLeader(squadID) != nullptr)
+            or (GetSquadMemberCount(squadID) >= Fleet::Limits::MaxSquadMembers))
+                role = Fleet::Role::Member;
+        } break;
+        default:
+            role = Fleet::Role::Member;
+    }
+
+    int8 booster(Fleet::Booster::No);
+    switch (role) {
+        case Fleet::Role::FleetLeader: {
+            wingID = -1;
+            squadID = -1;
+            if (fItr->second.booster == nullptr)
+                booster = Fleet::Booster::Fleet;
+        } break;
+        case Fleet::Role::WingLeader: {
+            squadID = -1;
+            std::map<uint32, WingData>::iterator wItr = m_wingDataMap.find(wingID);
+            if ((wItr != m_wingDataMap.end()) and (wItr->second.booster == nullptr))
+                booster = Fleet::Booster::Wing;
+        } break;
+        case Fleet::Role::SquadLeader: {
+            std::map<uint32, SquadData>::iterator sItr = m_squadDataMap.find(squadID);
+            if ((sItr != m_squadDataMap.end()) and (sItr->second.booster == nullptr))
+                booster = Fleet::Booster::Squad;
+        } break;
+        case Fleet::Role::Member: {
+            // the old squad, else the first squad with room
+            if ((squadID <= 0) or !IsSquadInFleet(squadID, fleetID) or (GetSquadMemberCount(squadID) >= Fleet::Limits::MaxSquadMembers))
+                if (!GetRandUnitIDs(fleetID, wingID, squadID))
+                    return false;
+            // a squad booster keeps the job when it's still free
+            if ((data.booster == Fleet::Booster::Squad) and (squadID == data.squadID)) {
+                std::map<uint32, SquadData>::iterator sItr = m_squadDataMap.find(squadID);
+                if ((sItr != m_squadDataMap.end()) and (sItr->second.booster == nullptr))
+                    booster = Fleet::Booster::Squad;
+            }
+        } break;
+    }
+
+    _log(FLEET__INFO, "FleetService::Reconnect() - %s rejoins fleet %u (wing %i, squad %i, role %s)",
+            pClient->GetName(), fleetID, wingID, squadID, GetRoleName(role).c_str());
+
+    if (!AddMember(pClient, fleetID, wingID, squadID, Fleet::Job::None, role, booster))
+        return false;
+    // the boss job comes back only when nobody holds it
+    if ((data.job & Fleet::Job::Creator) and (fItr->second.creator == nullptr))
+        SetBoss(fleetID, pClient);
+    return true;
+}
+
+bool FleetService::CanSeeAdvert(uint32 fleetID, Client* pViewer)
+{
+    if (pViewer == nullptr)
+        return false;
+    std::map<uint32, FleetAdvert>::iterator itr = m_fleetAdvertMap.find(fleetID);
+    if (itr == m_fleetAdvertMap.end())
+        return false;
+    // members (and the boss) always see their own fleet
+    if (pViewer->GetFleetID() == fleetID)
+        return true;
+
+    const FleetAdvert& ad(itr->second);
+    uint32 charID(pViewer->GetCharacterID());
+    uint32 corpID(pViewer->GetCorporationID());
+    uint32 allianceID(pViewer->GetAllianceID());
+    uint32 factionID(pViewer->GetWarFactionID());
+    float sec(pViewer->GetSecurityRating());
+    auto listed = [](const std::vector<uint32>& list, uint32 id) {
+        return ((id != 0) and (std::find(list.begin(), list.end(), id) != list.end()));
+    };
+
+    /* local access (corp, alliance, militia scopes):  the viewer belongs to a chosen group of the boss and is listed in
+     *  local_allowedEntities (the client puts the corp/alliance/militia IDs there, or the boss's contacts at the chosen standing).
+     *  a min security of 0 means none (the packet's none marker)
+     */
+    if (ad.inviteScope & (Fleet::Invite::Corp | Fleet::Invite::Alliance | Fleet::Invite::Militia)) {
+        bool member(true);
+        Client* pBoss(ad.leader);
+        if (pBoss != nullptr) {
+            member = (((ad.inviteScope & Fleet::Invite::Corp) and (corpID == (uint32)pBoss->GetCorporationID()))
+                   or ((ad.inviteScope & Fleet::Invite::Alliance) and (allianceID != 0) and (allianceID == (uint32)pBoss->GetAllianceID()))
+                   or ((ad.inviteScope & Fleet::Invite::Militia) and (factionID != 0) and (factionID == (uint32)pBoss->GetWarFactionID())));
+        }
+        if (member
+        and (listed(ad.local_allowedEntities, charID) or listed(ad.local_allowedEntities, corpID)
+            or listed(ad.local_allowedEntities, allianceID) or listed(ad.local_allowedEntities, factionID))
+        and ((ad.local_minSecurity == 0) or (sec >= ad.local_minSecurity)))
+            return true;
+    }
+
+    // public access:  listed in public_allowedEntities (contacts at the chosen standing).  no standing given = everyone
+    if (ad.inviteScope & Fleet::Invite::Public) {
+        if (((ad.public_minStanding == 0)
+            or listed(ad.public_allowedEntities, charID) or listed(ad.public_allowedEntities, corpID)
+            or listed(ad.public_allowedEntities, allianceID))
+        and ((ad.public_minSecurity == 0) or (sec >= ad.public_minSecurity)))
+            return true;
+    }
+
+    return false;
+}
+
 void FleetService::RemoveMember(Client* pClient)
 {
     Character* pChar = pClient->GetChar().get();
@@ -1856,13 +2109,15 @@ PyRep* FleetService::GetWings(uint32 fleetID)
     return dict;
 }
 
-PyRep* FleetService::GetAvailableFleets() {
+PyRep* FleetService::GetAvailableFleets(Client* pViewer) {
     Client* pClient(nullptr);
 
     PyDict* fleetDict = new PyDict();
     for (auto cur : m_fleetAdvertMap) {
         pClient = cur.second.leader;
         if (pClient == nullptr)
+            continue;
+        if (!CanSeeAdvert(cur.first, pViewer))
             continue;
         AvalibleFleetsRSP fleetRSP;
             fleetRSP.fleetID = cur.first;
