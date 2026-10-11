@@ -167,6 +167,35 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
         trackingTerm = (angular / stats.tracking) * (stats.sigResolution / targetSig);
     }
 
+    /* fighter bombers: their missile always hits a target within range, never one outside it.  the damage is scaled
+     *  like a missile's:  min(1, S/E, ((S/E) * (Ve/Vt)) ^ (ln(drf) / ln(drs)))
+     *  S = target signature, E = explosion radius, Ve = explosion velocity, Vt = target speed
+     */
+    if (stats.bomber) {
+        if (range > stats.optimalRange) {
+            _log(DAMAGE__TRACE, "Drone::GetToHit - bomber out of range: %.0f > %.0f", range, stats.optimalRange);
+            return 0;
+        }
+        double sig(25.0);
+        if (pTarget->GetSelf()->HasAttribute(AttrSignatureRadius))
+            sig = pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_double();
+        if (sig <= 0.0)
+            sig = 25.0;
+        double factor(1.0);
+        if (stats.aoeCloudSize > 0.0) {
+            double sigTerm(sig / stats.aoeCloudSize);
+            factor = std::min(factor, sigTerm);
+            double speed(pTarget->GetVelocity().length());
+            if ((speed > 0.0) and (stats.aoeVelocity > 0.0))
+                factor = std::min(factor, std::pow(sigTerm * stats.aoeVelocity / speed, stats.aoeExponent));
+        }
+        if (factor < 0.01)
+            factor = 0.01;      // a hit always does something
+        _log(DAMAGE__TRACE, "Drone::GetToHit - bomber hit at %.0f m: sig %.0f, explosion %.0f, speed %.0f, damage x%.3f",
+             range, sig, stats.aoeCloudSize, pTarget->GetVelocity().length(), factor);
+        return static_cast<float>(factor);
+    }
+
     double rangeTerm(0.0);
     double outside(range - stats.optimalRange);
     if (outside > 0.0) {

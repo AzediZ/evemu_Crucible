@@ -210,6 +210,22 @@ void DroneSE::UpdateStats(Client* pController) {
         s.orbitRange = base(AttrOrbitRange, 0.0);
     if (s.orbitRange <= 0.0)
         s.orbitRange = 500.0;
+    /* fighter bombers have no turret stats (no optimal, falloff or tracking).  they launch a missile that reaches
+     *  anything within entityAttackRange, so they always hit inside it and never outside it.  their damage scales
+     *  with the target's signature radius and speed like a missile's (see TurretFormulas::GetDroneToHit())
+     */
+    s.bomber = (m_self->groupID() == EVEDB::invGroups::Fighter_Bomber);
+    if (s.bomber) {
+        s.optimalRange = base(AttrEntityAttackRange, 20000.0);
+        s.falloff = 0.0;
+        s.tracking = 0.0;
+        s.effectRange = s.optimalRange;
+        s.aoeCloudSize = base(AttrAoeCloudSize, 0.0);
+        s.aoeVelocity = base(AttrAoeVelocity, 0.0);
+        double drf(base(AttrAoeDamageReductionFactor, 0.0)), drs(base(AttrAoeDamageReductionSensitivity, 0.0));
+        s.aoeExponent = (((drf > 1.0) and (drs > 1.0)) ? std::log(drf) / std::log(drs) : 1.0);
+    }
+
     if (s.orbitRange > s.effectRange)
         s.orbitRange = s.effectRange * 0.8;
     s.idleOrbitRange = s.orbitRange;
@@ -251,6 +267,33 @@ void DroneSE::UpdateStats(Client* pController) {
     _log(DRONE__TRACE, "Drone %s(%u) stats: action %u (%s), speed %.0f/%.0f, orbit %.0f, range %.0f+%.0f (use %.0f), cycle %.0fms, dmg x%.3f, mine %.1f, rep %.1f",
          GetName(), GetID(), s.action, effect.effectName.c_str(), s.maxVelocity, s.orbitVelocity, s.orbitRange, s.optimalRange,
          s.falloff, s.effectRange, s.cycleTime, s.damageMultiplier, s.miningAmount, s.repairAmount);
+}
+
+bool DroneSE::CanAttack(SystemEntity* pTarget) const {
+    if (!m_stats.bomber)
+        return true;
+    if ((pTarget == nullptr) or (pTarget->GetSelf().get() == nullptr))
+        return false;
+    InventoryItemRef tRef(pTarget->GetSelf());
+    switch (tRef->categoryID()) {
+        case EVEDB::invCategories::Station:
+        case EVEDB::invCategories::Structure:
+        case EVEDB::invCategories::SovereigntyStructure:
+            return true;
+    }
+    // carriers, dreadnoughts, supercarriers, titans, freighters and the Rorqual
+    if (tRef->type().HasAttribute(AttrIsCapitalSize) and (tRef->type().GetAttribute(AttrIsCapitalSize).get_int() != 0))
+        return true;
+    // NPC capitals
+    switch (tRef->groupID()) {
+        case 865:   // Mission Amarr Empire Carrier
+        case 866:   // Mission Caldari State Carrier
+        case 867:   // Mission Gallente Federation Carrier
+        case 868:   // Mission Minmatar Republic Carrier
+        case 1052:  // Incursion Sansha's Nation Capital
+            return true;
+    }
+    return false;
 }
 
 /* ======================================================================================

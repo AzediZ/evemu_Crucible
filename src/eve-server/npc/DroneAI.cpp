@@ -285,6 +285,8 @@ void DroneAIMgr::ProcessReturn(ShipSE* pController, bool toBay) {
 void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
     bool usable((pTarget != nullptr) and !pTarget->IsDead() and (pTarget->SysBubble() == m_pDrone->SysBubble()));
+    if (usable and !m_pDrone->CanAttack(pTarget))
+        usable = false;
     if (usable and (pTarget->DestinyMgr() != nullptr))
         if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
             usable = false;
@@ -410,8 +412,9 @@ void DroneAIMgr::ProcessGuard(ShipSE* pController) {
             for (auto cur : m_pDrone->SystemMgr()->GetDrones())
                 if ((cur.second->GetControllerOwnerID() == m_activityCharID) and (cur.second->GetAI()->GetOrder() == DroneAI::Order::Engage)) {
                     pTarget = m_pDrone->SystemMgr()->GetSE(cur.second->GetAI()->GetTargetID());
-                    if (pTarget != nullptr)
+                    if ((pTarget != nullptr) and m_pDrone->CanAttack(pTarget))
                         break;
+                    pTarget = nullptr;
                 }
         } else {
             pTarget = PickAggressor();
@@ -444,6 +447,8 @@ SystemEntity* DroneAIMgr::PickAggressor() {
 
     auto usable = [&](SystemEntity* pSE) -> bool {
         if ((pSE == nullptr) or pSE->IsDead() or (pSE->SysBubble() != m_pDrone->SysBubble()))
+            return false;
+        if (!m_pDrone->CanAttack(pSE))
             return false;
         if ((pSE->DestinyMgr() != nullptr) and (pSE->DestinyMgr()->IsCloaked() or pSE->DestinyMgr()->IsWarping()))
             return false;
