@@ -318,7 +318,9 @@ void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     double gap(Gap(m_pDrone, pTarget));
     // close in at full speed, then settle into orbit at orbit velocity.  the effect is used whenever in range
     bool approaching(m_pDrone->DestinyMgr()->IsFollowing());
-    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : DRONE_APPROACH_MARGIN * 2.0));
+    // fast drones swing wide of their orbit, so they only break orbit to chase once well outside it
+    double leaveOrbit(std::max(DRONE_APPROACH_MARGIN * 2.0, stats.orbitVelocity * 2.0));
+    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : leaveOrbit));
     if (gap > approachUntil) {
         ApproachTarget(pTarget, stats.orbitRange, stats.maxVelocity);
     } else {
@@ -486,7 +488,20 @@ void DroneAIMgr::OrbitTarget(SystemEntity* pTarget, double range, double speed) 
     pDestiny->Orbit(pTarget, static_cast<uint32>(range));
 }
 
+/* the client slows a ball down once its goal is within one second's travel (the 'homing' range in GotoThrust), and
+ *  slows it hard: at half that range it has 1/16 of its thrust.  a light drone at 5 km/s therefore crawls the last
+ *  few km at a few m/s, so it never reaches its orbit or the drone bay.  approach at full speed while far away, then
+ *  halve the speed (not below cruise speed) until the goal is outside the homing range.  the steps keep the client
+ *  from being sent a new speed every second.
+ */
 void DroneAIMgr::ApproachTarget(SystemEntity* pTarget, double range, double speed) {
+    double toGo(Gap(m_pDrone, pTarget) - range);
+    double cruise(m_pDrone->Stats().orbitVelocity);
+    while ((speed > cruise) and (toGo < speed))
+        speed *= 0.5;
+    if (speed < cruise)
+        speed = cruise;
+
     DestinyManager* pDestiny(m_pDrone->DestinyMgr());
     pDestiny->SetMaxVelocity(static_cast<float>(speed));
     pDestiny->SetSpeedFraction(1.0f);
