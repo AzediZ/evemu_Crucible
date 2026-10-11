@@ -104,10 +104,11 @@ InventoryItemRef cmd_find_item(Client* self, const std::string& arg) {
         return InventoryItemRef(nullptr);
     uint32 id(strtoul(arg.c_str(), nullptr, 10));
     if (IsCharacterID(id)) {
+        // online characters only.  loading an offline character as a plain item would bypass the character code
         Client* pClient(sEntityList.FindClientByCharID(id));
         if (pClient != nullptr)
             return pClient->GetChar();
-        return sItemFactory.GetItemRef(id);
+        return InventoryItemRef(nullptr);
     }
     if (IsPlayerItem(id))
         return sItemFactory.GetItemRef(id);
