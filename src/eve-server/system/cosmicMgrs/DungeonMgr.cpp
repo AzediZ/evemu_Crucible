@@ -30,14 +30,16 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 
-/*
-Dungeon flow:
-1. load dungeons from db on init
-2. when signature/anomaly is created, spawn first room of dungeon at ship position (how to handle multi-room dungeons?)
-
-Multi-room dungeons have each room with acceleration gate pointing to next room (accel gate is not implemented????)
-
-*/
+/* Dungeon flow:
+ *  DungeonDataMgr loads the static dungeons (dunDungeons, rooms, objects, spawn groups, triggers/events, gates, loot,
+ *   escalation rules) at server start.
+ *  AnomalyMgr (combat anomalies, signature sites), missions, incursions and escalations ask their system's DungeonMgr
+ *   for an instance:  room 0 at the site, further rooms 1/3 AU away reached through acceleration gates.  objects and
+ *   the room-created npc groups spawn right away, other rooms' groups when first reached.
+ *  kills, damage, mining and object events queue triggers;  Process() runs them (waves, gates, messages, loot,
+ *   counters, completion), watches presence, conditions and expiry, and despawns finished instances.
+ *  a completed site may escalate (dunEscalations) into a private site a few jumps away (chrEscalations, journal).
+ */
 
 
 DungeonDataMgr::DungeonDataMgr()
@@ -856,6 +858,17 @@ uint32 DungeonMgr::SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32
     NPC* pNPC(m_spawnMgr->SpawnDungeonNPC(sBubbleMgr.GetBubble(m_system, pos), typeID, factionID, pos, warpIn, (liveGroupID != 0 ? liveGroupID : inst.instanceID)));
     if (pNPC == nullptr)
         return 0;
+    // its bubble may be new (the room's empty bubble was dropped meanwhile).  npc ai keys off these flags
+    SystemBubble* pBubble(pNPC->SysBubble());
+    if (pBubble != nullptr) {
+        if (inst.kind == Dungeon::Kind::Mission) {
+            pBubble->SetMission();
+        } else if (inst.kind == Dungeon::Kind::Incursion) {
+            pBubble->SetIncursion();
+        } else {
+            pBubble->SetAnomaly();
+        }
+    }
     Index(pNPC->GetID(), inst.instanceID, roomIdx);
     return pNPC->GetID();
 }
@@ -1467,7 +1480,7 @@ void DungeonMgr::RunEvent(Instance& inst, uint8 roomIdx, const Dungeon::EventDef
             }
         } break;
         case Dungeon::Event::Trigger::Msg: {
-            SendMessage(inst, roomIdx, event);
+            SendTriggerMessage(inst, roomIdx, event);
         } break;
         case Dungeon::Event::Trigger::DungeonCompletion: {
             CompleteInstance(inst, (ctx.charID != 0 ? ctx.charID : inst.lastCharID));
@@ -1599,7 +1612,7 @@ void DungeonMgr::WarpAway(uint32 itemID, bool comeBack, Instance& inst, uint8 ro
     m_warpedAway[itemID] = Win32TimeNow() + (20 * EvE::Time::Second);
 }
 
-void DungeonMgr::SendMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event)
+void DungeonMgr::SendTriggerMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event)
 {
     if (!sConfig.dungeon.TriggerMessages)
         return;

@@ -132,6 +132,18 @@ namespace Dungeon {
 /*  this class is in charge of creating/destroying and maintaining
  * dungeons in a system.
  *
+ *  for other systems (missions, incursions, exploration):
+ *   - spawn:  SpawnParams{dungeonID (or archetype + factionID for a random pick), kind, position, ownerID, listener}
+ *      -> SpawnInstance() returns the instanceID.  Kind::Mission bubbles are flagged mission, Kind::Incursion incursion.
+ *      dungeons only for missions/incursions/escalations get spawnWeight 0 so AnomalyMgr never picks them.
+ *   - events:  the listener gets Engine::Completed/Despawned/EntityKilled/RoomEntered and the data's MissionCompletion,
+ *      MissionFailure, AgentTalkTo, AgentMsg, GrantGroupReward*, AdjustSystemInfluence events (from Process()).
+ *      call ClearListener() or DespawnInstance() before the listener is destroyed.
+ *   - object triggers:  OnObjectEvent(itemID, Dungeon::Trigger::HackingSuccess..ArchaeologyFailure,
+ *      ItemPlacedInMissionContainer, ItemRemovedFromSpawnContainer, ItemInCargo, charID, typeID)
+ *   - ship restrictions for briefings:  sDunDataMgr.GetShipRestrictions(dungeonID, allowed, denied)  (invGroups)
+ *   - deadspace rules:  IsDeadspace(pos) (UserError DunCantAnchor / DunCantUseMWD are the client's messages)
+ *
  *  a new iteration of this class is created for each system as that system is booted.
  *
  *  an instance is one spawned dungeon:  its rooms (room 0 at the site, the others 1/3 AU apart, reached through
@@ -309,7 +321,7 @@ private:
     void FlushNotices();
     void CheckImplicitCompletion(Instance& inst);
     void CompleteInstance(Instance& inst, uint32 charID);
-    void SendMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event);
+    void SendTriggerMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event);
     void Notify(Instance& inst, uint16 type, uint32 roomID, const Ctx& ctx, const Dungeon::EventDef* pEvent = nullptr);
     void DropLoot(uint32 lootGroupID, uint32 wreckID, const GPoint& pos, uint32 ownerID);
     uint32 FindWreck(uint32 deadItemID, const GPoint& pos);
