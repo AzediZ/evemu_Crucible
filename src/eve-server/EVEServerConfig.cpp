@@ -86,6 +86,8 @@ EVEServerConfig::EVEServerConfig()
     world.SelfDestructDelay = 120 /*s*/;    // (F09)
     world.SelfDestructRetryDelay = 30 /*s*/;
     world.StoreShipWithCargo = false;       // Crucible: a stored ship may only carry charges  (F09)
+    world.TrashRetentionDays = 30;          // trashed items restorable by a GM for 30 days  (F20)
+    world.SecureContainerOwnerBypass = true;    // (F20)
     world.highSecCyno = false;
     world.empireInterdiction = false;
     world.fleetWarpOnGridOnly = false;      // Crucible fleet warp is system-wide (on-grid only came in 2015)  (F08)
@@ -512,6 +514,8 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     AddValueParser( "SelfDestructDelay", world.SelfDestructDelay );
     AddValueParser( "SelfDestructRetryDelay", world.SelfDestructRetryDelay );
     AddValueParser( "StoreShipWithCargo", world.StoreShipWithCargo );
+    AddValueParser( "TrashRetentionDays", world.TrashRetentionDays );
+    AddValueParser( "SecureContainerOwnerBypass", world.SecureContainerOwnerBypass );
 
     const bool result = ParseElementChildren( ele );
 
@@ -536,6 +540,8 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     RemoveParser( "SelfDestructDelay" );
     RemoveParser( "SelfDestructRetryDelay" );
     RemoveParser( "StoreShipWithCargo" );
+    RemoveParser( "TrashRetentionDays" );
+    RemoveParser( "SecureContainerOwnerBypass" );
 
     return result;
 }

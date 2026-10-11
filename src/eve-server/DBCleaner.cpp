@@ -7,7 +7,9 @@
   */
 
 #include "DBCleaner.h"
+#include "EVEServerConfig.h"
 #include "database/EVEDBUtils.h"
+#include "inventory/InventoryDB.h"
 
 // This module exists to clean up the database from stuff which could persist in the DB due to crashes.
 
@@ -21,6 +23,7 @@ void DBCleaner::Initialize() {
     CleanGroupFromSpace(EVEDB::invGroups::Survey_Probe); //Clean survey probes floating in space
     CleanOrphanedWormholes(); //Clean up orphaned wormhole entities
     CleanDungeonEntities();
+    PurgeTrashedItems();
 
     // Don't add anything below this line
     sLog.Blue("        DBCleaner", "Cleaning complete.");
@@ -60,6 +63,19 @@ void DBCleaner::CleanOrphanedWormholes() {
     "INNER JOIN invTypes USING (typeID) "
     "WHERE itemID NOT IN (SELECT sigItemID FROM sysSignatures) "
     "AND locationID >= 30000000 AND locationID <= 32000000 AND groupID = %u", EVEDB::invGroups::Wormhole); 
+}
+
+void DBCleaner::PurgeTrashedItems() {
+    // trashed items wait in the junkyard for a GM restore (/untrash) this long
+    InventoryDB::PurgeTrash(GetFileTimeNow() - (Win32Time_Day * sConfig.world.TrashRetentionDays));
+
+    DBerror err;
+    // container passwords and corp item locks of items that are gone
+    sDatabase.RunQuery(err, "DELETE FROM invContainerSecurity WHERE itemID NOT IN (SELECT itemID FROM entity)");
+    sDatabase.RunQuery(err, "DELETE FROM crpLockedItems WHERE itemID NOT IN (SELECT itemID FROM entity)");
+    // audit logs of containers that are gone, after a year
+    sDatabase.RunQuery(err, "DELETE FROM invAuditLog WHERE logDate < %lli AND containerID NOT IN (SELECT itemID FROM entity)",
+            GetFileTimeNow() - (Win32Time_Day * 365));
 }
 
 void DBCleaner::CleanDungeonEntities() {

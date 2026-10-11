@@ -142,3 +142,114 @@ void InventoryDB::DeleteTrackingCans()
     sDatabase.RunQuery(err, "DELETE FROM entity WHERE customInfo LIKE '%Position Test%'");  // 90.63s on main, 0.037s on dev
     //sDatabase.RunQuery(err, "DELETE FROM entity WHERE itemName LIKE '%Bubble%'");         // 66.75s on main, 0.036s on dev
 }
+
+void InventoryDB::AddTrashLog(uint32 itemID, uint32 ownerID, uint32 locationID, uint16 flag, uint32 byID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "REPLACE INTO invTrashLog (itemID, ownerID, locationID, flag, trashedBy, trashTime)"
+        " VALUES (%u, %u, %u, %u, %u, %lli)", itemID, ownerID, locationID, flag, byID, GetFileTimeNow()))
+        codelog(DATABASE__ERROR, "Error in AddTrashLog query for item %u: %s", itemID, err.c_str());
+}
+
+bool InventoryDB::GetTrashLog(uint32 itemID, uint32& ownerID, uint32& locationID, uint16& flag)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT ownerID, locationID, flag FROM invTrashLog WHERE itemID = %u", itemID)) {
+        codelog(DATABASE__ERROR, "Error in GetTrashLog query for item %u: %s", itemID, res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    ownerID = row.GetUInt(0);
+    locationID = row.GetUInt(1);
+    flag = row.GetUInt(2);
+    return true;
+}
+
+void InventoryDB::DeleteTrashLog(uint32 itemID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM invTrashLog WHERE itemID = %u", itemID);
+}
+
+void InventoryDB::ListTrash(uint32 ownerID, DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+        "SELECT t.itemID, e.typeID, e.quantity, t.trashTime, t.locationID"
+        " FROM invTrashLog AS t"
+        "  JOIN entity AS e ON e.itemID = t.itemID"
+        " WHERE t.ownerID = %u"
+        " ORDER BY t.trashTime DESC LIMIT 50", ownerID))
+        codelog(DATABASE__ERROR, "Error in ListTrash query for owner %u: %s", ownerID, res.error.c_str());
+}
+
+void InventoryDB::PurgeTrash(int64 cutoff)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID FROM invTrashLog WHERE trashTime < %lli", cutoff)) {
+        codelog(DATABASE__ERROR, "Error in PurgeTrash query: %s", res.error.c_str());
+        return;
+    }
+
+    std::vector<uint32> roots;
+    DBResultRow row;
+    while (res.GetRow(row))
+        roots.push_back(row.GetUInt(0));
+
+    if (!roots.empty()) {
+        DeleteItemsRecursive(roots);
+        sLog.Cyan("        DBCleaner", "%lu trashed items purged.", roots.size());
+    }
+
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM invTrashLog WHERE trashTime < %lli", cutoff);
+}
+
+void InventoryDB::DeleteItemsRecursive(std::vector<uint32>& itemIDs)
+{
+    // the items, and breadth first everything inside them
+    std::set<uint32> all;
+    std::vector<uint32> level(itemIDs);
+    DBQueryResult res;
+    DBResultRow row;
+    while (!level.empty()) {
+        std::vector<uint32> next;
+        for (size_t i = 0; i < level.size(); i += 500) {
+            std::string ids;
+            for (size_t j = i; (j < level.size()) and (j < i + 500); ++j) {
+                if (!ids.empty())
+                    ids += ",";
+                ids += std::to_string(level[j]);
+                all.insert(level[j]);
+            }
+            if (!sDatabase.RunQuery(res, "SELECT itemID FROM entity WHERE locationID IN (%s)", ids.c_str())) {
+                codelog(DATABASE__ERROR, "Error in DeleteItemsRecursive query: %s", res.error.c_str());
+                continue;
+            }
+            while (res.GetRow(row))
+                if (all.find(row.GetUInt(0)) == all.end())
+                    next.push_back(row.GetUInt(0));
+        }
+        level.swap(next);
+    }
+
+    std::vector<uint32> vec(all.begin(), all.end());
+    DBerror err;
+    for (size_t i = 0; i < vec.size(); i += 500) {
+        std::string ids;
+        for (size_t j = i; (j < vec.size()) and (j < i + 500); ++j) {
+            if (!ids.empty())
+                ids += ",";
+            ids += std::to_string(vec[j]);
+        }
+        sDatabase.RunQuery(err, "DELETE FROM entity_attributes WHERE itemID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM invBlueprints WHERE itemID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM invContainerSecurity WHERE itemID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM invAuditLog WHERE containerID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM crpLockedItems WHERE itemID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM shipInsurance WHERE shipID IN (%s)", ids.c_str());
+        sDatabase.RunQuery(err, "DELETE FROM entity WHERE itemID IN (%s)", ids.c_str());
+    }
+}

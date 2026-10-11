@@ -40,6 +40,26 @@
 #include "system/Container.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
+#include "inventory/ItemDB.h"
+#include "ship/Ship.h"
+#include "ship/ShipDB.h"
+#include "EVEServerConfig.h"
+
+static void GetIntList(PyList* list, std::vector<uint32>& into);
+
+// locked items can't be trashed:  locked audit log container contents, or an audit log container holding any
+static bool IsTrashLocked(InventoryItemRef iRef)
+{
+    if (iRef->flag() == flagLocked)
+        return true;
+    if ((iRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container) and (iRef->GetMyInventory() != nullptr)) {
+        iRef->GetMyInventory()->LoadContents();
+        std::vector<InventoryItemRef> locked;
+        if (iRef->GetMyInventory()->GetItemsByFlag(flagLocked, locked) > 0)
+            return true;
+    }
+    return false;
+}
 
 InvBrokerService::InvBrokerService(EVEServiceManager &mgr) :
     BindableService("invbroker", mgr)
@@ -412,39 +432,92 @@ PyResult InvBrokerBound::SetLabel(PyCallArgs &call, PyInt* itemID, PyRep* itemNa
 }
 
 PyResult InvBrokerBound::TrashItems(PyCallArgs &call, PyList* itemIDs, PyInt* locationID) {
+    /* errors = invMgr.TrashItems([item.itemID for item in invItems], stationID if stationID else invItems[0].locationID)
+     *  the client shows each returned message label (no arguments).  an empty list is success.
+     *  own items on a station hangar floor;  corp items in office divisions or impounded, Directors only
+     */
+    uint32 stationID(locationID->value());
+    if (!sDataMgr.IsStation(stationID))
+        throw UserError("CanOnlyDoInStations");
 
-    std::vector <int32> items;
+    Client* pClient(call.client);
+    uint32 charID(pClient->GetCharacterID()), corpID(pClient->GetCorporationID());
+    uint32 officeID(IsPlayerCorp(corpID) ? stDataMgr.GetOfficeIDForCorp(stationID, corpID) : 0);
+    bool director((pClient->GetCorpRole() & Corp::Role::Director) == Corp::Role::Director);
 
-    PyList::const_iterator list_2_cur = itemIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != itemIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_TrashItems failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
+    std::vector<uint32> ids;
+    GetIntList(itemIDs, ids);
+
+    std::set<std::string> errors;
+    sItemFactory.SetUsingClient(pClient);
+    for (auto cur : ids) {
+        InventoryItemRef iRef = sItemFactory.GetItemRef(cur);
+        if (iRef.get() == nullptr) {
+            _log(INV__ERROR, "%s: Unable to load item %u to trash it. Skipping.", pClient->GetName(), cur);
+            continue;
         }
 
-        const PyInt* t = (*list_2_cur)->AsInt();
-        items.push_back(t->value());
-    }
-
-    std::vector<int32>::const_iterator cur = items.begin(), end = items.end();
-    for(; cur != end; ++cur) {
-        InventoryItemRef item = sItemFactory.GetItemRef( *cur );
-        if (item.get() == nullptr) {
-            _log(INV__ERROR, "%s: Unable to load item %u to delete it. Skipping.", call.client->GetName(), *cur);
-        } else if (call.client->GetCharacterID() != item->ownerID()) {
-            _log(INV__ERROR, "%s: Tried to trash item %u which is not yours. Skipping.", call.client->GetName(), *cur);
-        } else if (item->locationID() != locationID->value()) {
-            _log(INV__ERROR, "%s: Item %u is not in location %u. Skipping.", call.client->GetName(), *cur, locationID->value());
-        } else {
-            item->Delete();
-            // these below dont work...
-            //item->SetFlag(flagJunkyardTrashed);
-            //item->ChangeOwner(call.client->GetStationID(), false);
-            //item->Move(call.client->GetStationID(), flagJunkyardTrashed);
+        bool personal((iRef->ownerID() == charID) and (iRef->locationID() == stationID) and (iRef->flag() == flagHangar));
+        bool corp(IsPlayerCorp(corpID) and (iRef->ownerID() == corpID)
+                and (((officeID != 0) and (iRef->locationID() == officeID) and IsHangarFlag(iRef->flag()))
+                    or ((iRef->locationID() == stationID) and (iRef->flag() == flagImpounded))));
+        if (!personal and !corp) {
+            errors.insert("CantDoThatWithSomeoneElsesStuff");
+            continue;
         }
+        if (corp and !director) {
+            errors.insert("PermissionDenied");
+            continue;
+        }
+        // not the ship we're in, nor one someone else is in
+        if ((iRef->itemID() == pClient->GetShipID())
+        or (iRef->IsShipItem() and ShipItemRef::StaticCast(iRef)->HasPilot())) {
+            errors.insert("PermissionDenied");
+            continue;
+        }
+        // a courier package is opened (BreakPlasticWrap), not trashed
+        if (iRef->typeID() == EVEDB::invTypes::PlasticWrap) {
+            errors.insert("PermissionDenied");
+            continue;
+        }
+        if (IsTrashLocked(iRef)) {
+            errors.insert("CannotTrashLockedItem");
+            continue;
+        }
+
+        _log(INV__MESSAGE, "IBB::TrashItems() - %s trashed %s(%u) owned by %u in %u", pClient->GetName(), iRef->name(), iRef->itemID(), iRef->ownerID(), iRef->locationID());
+        TrashItem(pClient, iRef);
+    }
+    sItemFactory.UnsetUsingClient();
+
+    PyList* list = new PyList();
+    for (auto cur : errors)
+        list->AddItem(new PyString(cur));
+    return list;
+}
+
+void InvBrokerBound::TrashItem(Client* pClient, InventoryItemRef iRef)
+{
+    if (sConfig.world.TrashRetentionDays == 0) {
+        iRef->Delete();
+        return;
     }
 
-    return nullptr;
+    uint32 itemID(iRef->itemID());
+    InventoryDB::AddTrashLog(itemID, iRef->ownerID(), iRef->locationID(), iRef->flag(), (pClient != nullptr ? pClient->GetCharacterID() : 0));
+
+    // the contents go with it.  save and drop them from the cache (as a ship's logout does)
+    if (iRef->IsShipItem()) {
+        ShipDB::DeleteInsuranceByShipID(itemID);
+        ShipItemRef::StaticCast(iRef)->SaveShip();
+    }
+    if (iRef->GetMyInventory() != nullptr)
+        iRef->GetMyInventory()->Unload();
+
+    // out of its hangar (and out of the owner's sight).  the junkyard isn't a loadable location, so save it here
+    iRef->Move(locJunkyard, flagJunkyardTrashed, true);
+    ItemDB::UpdateLocation(itemID, locJunkyard, flagJunkyardTrashed);
+    sItemFactory.RemoveItem(itemID);
 }
 
 /**     ***********************************************************************

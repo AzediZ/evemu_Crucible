@@ -88,6 +88,7 @@ public:
         bool shootRoids;
         bool shootWrecks;
         bool StoreShipWithCargo;        // ships stored in a maintenance bay/array may carry cargo (Odyssey+).  Crucible: charges only  (F09)
+        bool SecureContainerOwnerBypass;    // owners open their own password-protected containers in their station hangar or ship without the password  (F20)
         uint8 mailDelay;
         uint8 StationDockDelay;
         uint16 shipBoardDistance;       // surface distance (client maxBoardingDistance)
@@ -95,6 +96,7 @@ public:
         uint16 SelfDestructRetryDelay;  // s after an abort before self-destruct may be started again  (F09)
         uint16 gridUnloadTime;
         uint16 apWarptoDistance;
+        uint16 TrashRetentionDays;      // days a trashed item is kept for GM restore before it's purged at startup.  0 = deleted at once  (F20)
     } world;
 
     // From <rates>

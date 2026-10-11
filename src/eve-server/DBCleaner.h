@@ -25,6 +25,7 @@ class DBCleaner
     void CleanGroupFromSpace(uint32 groupID); // Clean entities by groupID in space only
     void CleanOrphanedWormholes();
     void CleanDungeonEntities();
+    void PurgeTrashedItems();   // trashed items past world.TrashRetentionDays, and orphaned per-item security/lock rows  (F20)
 };
 
 //Singleton

@@ -54,6 +54,10 @@ class InvBrokerBound : public EVEBoundObject <InvBrokerBound>
 public:
     InvBrokerBound(EVEServiceManager& mgr, InvBrokerService& parent, uint32 locationID, uint32 groupID);
 
+    /* trashes an item:  with world.TrashRetentionDays it goes to the junkyard (with its contents) for a GM to restore,
+     *  else it's deleted.  no checks here */
+    static void TrashItem(Client* pClient, InventoryItemRef iRef);
+
 protected:
     PyResult GetContainerContents(PyCallArgs& call, PyInt* containerID, PyInt* locationID);
     PyResult GetInventoryFromId(PyCallArgs& call, PyInt* inventoryID, PyInt* passive);

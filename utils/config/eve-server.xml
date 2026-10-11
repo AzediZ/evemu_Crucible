@@ -88,6 +88,8 @@ boolean can use either 0/1 OR true/false.
         <highSecCyno>false</highSecCyno><!-- bool - allow Cynosural fields to be created in high security space -->
         <empireInterdiction>false</empireInterdiction><!-- bool - allow items flagged 'disallowInEmpireSpace' (warp disruption bubbles, HIC fields, bombs, doomsday) in high and low security space.  Crucible: false -->
         <fleetWarpOnGridOnly>false</fleetWarpOnGridOnly><!-- bool - fleet/wing/squad warp only takes members on the commander's grid (the 2015 rule).  Crucible: false (every member in the system warps) -->
+        <TrashRetentionDays>30</TrashRetentionDays><!-- days a trashed item is kept for GM restore (/untrash) before it is purged at server startup.  0 = trashed items are deleted at once -->
+        <SecureContainerOwnerBypass>true</SecureContainerOwnerBypass><!-- bool - owners open their own password-protected containers in their station hangar or ship without the password.  corp containers, containers in space and other people's always ask -->
         <fleetWarpSlowestSpeed>true</fleetWarpSlowestSpeed><!-- bool - every ship in a fleet warp uses the slowest warp speed among them.  Crucible: true -->
     </world>
 

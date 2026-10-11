@@ -32,6 +32,7 @@
  *  /heat               testing: shows or sets rack heat
  *  /crime              testing: commits a crime, to bring CONCORD
  *  /missioncomplete    testing: completes a mission's kill objective (MissionObjectives::ForceComplete)
+ *  /untrash           restores a trashed item from the junkyard, or lists an owner's trashed items  (F20)
  */
 
 #include "eve-server.h"
@@ -52,6 +53,8 @@
 #include "system/SystemManager.h"
 #include "EVEServerConfig.h"
 #include "services/ServiceManager.h"
+#include "inventory/InventoryDB.h"
+#include "inventory/ItemDB.h"
 
 namespace {
     // a character by ID, ship or name.  only online characters
@@ -354,4 +357,54 @@ PyResult Command_missioncomplete(Client* pClient, CommandDB* db, EVEServiceManag
     if (!MissionObjectives::ForceComplete(charID, agentID))
         throw CustomError ("No accepted kill mission of %u with agent %u.", charID, agentID);
     return new PyString("Mission objective completed.");
+}
+
+PyResult Command_untrash(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (args.argCount() < 2)
+        throw CustomError ("Correct Usage: /untrash (itemID) | list (me|charID|corpID)");
+
+    if (args.arg(1) == "list") {
+        uint32 ownerID(pClient->GetCharacterID());
+        if (args.isNumber(2))
+            ownerID = atoi(args.arg(2).c_str());
+        DBQueryResult res;
+        InventoryDB::ListTrash(ownerID, res);
+        std::string reply("Trashed items of ");
+        reply += std::to_string(ownerID);
+        reply += " (newest first):<br>";
+        DBResultRow row;
+        uint16 count(0);
+        while (res.GetRow(row)) {
+            const ItemType* pType(sItemFactory.GetType(row.GetUInt(1)));
+            reply += std::to_string(row.GetUInt(0)) + "  " + (pType == nullptr ? "Unknown" : pType->name())
+                   + "  x" + std::to_string(row.GetInt(2) < 1 ? 1 : row.GetInt(2))
+                   + "  " + Win32TimeToString(row.GetInt64(3)) + "<br>";
+            ++count;
+        }
+        if (count == 0)
+            reply += "nothing";
+        return new PyString(reply);
+    }
+
+    if (!args.isNumber(1))
+        throw CustomError ("Correct Usage: /untrash (itemID) | list (me|charID|corpID)");
+    uint32 itemID(atoi(args.arg(1).c_str()));
+    uint32 ownerID(0), locationID(0);
+    uint16 flag(0);
+    if (!InventoryDB::GetTrashLog(itemID, ownerID, locationID, flag))
+        throw CustomError ("%u is not in the trash.", itemID);
+
+    InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+    if (iRef.get() == nullptr)
+        throw CustomError ("Trashed item %u can't be loaded.", itemID);
+    if (iRef->locationID() != locJunkyard) {
+        InventoryDB::DeleteTrashLog(itemID);
+        throw CustomError ("%s (%u) isn't in the junkyard any more.", iRef->name(), itemID);
+    }
+
+    // back where it was.  this saves it and tells the owner
+    iRef->Move(locationID, (EVEItemFlags)flag, true);
+    InventoryDB::DeleteTrashLog(itemID);
+    return new PyString("Restored.");
 }

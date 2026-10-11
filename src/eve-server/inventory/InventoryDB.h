@@ -39,6 +39,17 @@ public:
     bool GetItemContents(uint32 itemID, EVEItemFlags flag, uint32 ownerID, std::vector<uint32> &into);
 
     static void DeleteTrackingCans();
+
+    /* trash (junkyard) log:  trashed items wait at locJunkyard for a GM restore until they're purged */
+    static void AddTrashLog(uint32 itemID, uint32 ownerID, uint32 locationID, uint16 flag, uint32 byID);
+    static bool GetTrashLog(uint32 itemID, uint32& ownerID, uint32& locationID, uint16& flag);
+    static void DeleteTrashLog(uint32 itemID);
+    // newest 50 trashed items of an owner:  itemID, typeID, quantity, trashTime, locationID
+    static void ListTrash(uint32 ownerID, DBQueryResult& res);
+    // deletes items trashed before cutoff (Win32 time), their contents and their per-item rows
+    static void PurgeTrash(int64 cutoff);
+    // deletes items and all they contain, with their per-item rows
+    static void DeleteItemsRecursive(std::vector<uint32>& itemIDs);
 };
 
 #endif

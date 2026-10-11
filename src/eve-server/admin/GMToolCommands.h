@@ -21,3 +21,5 @@ COMMAND( missioncomplete, Acct::Role::GML,
          "(agentID) [charID] - completes the kill objective of your (or charID's) accepted mission with the agent" )
 COMMAND( heat, Acct::Role::VIP,
          "[hi|med|low|all] [percent] [me|charID] - shows or sets a ship's rack heat.  no arguments shows yours, (me|charID) shows theirs" )
+COMMAND( untrash, Acct::Role::GML,
+         "(itemID) | list (me|charID|corpID) - restores a trashed item to where it was trashed from, or lists the newest 50 trashed items of an owner" )
