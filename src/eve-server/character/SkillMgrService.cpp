@@ -28,6 +28,8 @@
 
 
 #include "character/SkillMgrService.h"
+#include "character/Character.h"
+#include "inventory/AttributeEnum.h"
 
 SkillMgrService::SkillMgrService(EVEServiceManager& mgr)
 : BindableService("skillMgr", mgr, eAccessLevel_Character)
@@ -223,11 +225,12 @@ PyResult SkillMgrBound::RespecCharacter(PyCallArgs &call, PyInt* charisma, PyInt
     if (!m_db.ReportRespec(call.client->GetCharacterID()))
         return nullptr;
     uint8 multiplier(sConfig.character.statMultiplier);
-    cRef->SetAttribute(AttrCharisma, charisma->value() * multiplier);
-    cRef->SetAttribute(AttrIntelligence, intelligence->value() * multiplier);
-    cRef->SetAttribute(AttrMemory, memory->value() * multiplier);
-    cRef->SetAttribute(AttrPerception, perception->value() * multiplier);
-    cRef->SetAttribute(AttrWillpower, willpower->value() * multiplier);
+    // these are the base values.  implant and booster bonuses stay on top
+    cRef->SetBaseAttribute(AttrCharisma, charisma->value() * multiplier);
+    cRef->SetBaseAttribute(AttrIntelligence, intelligence->value() * multiplier);
+    cRef->SetBaseAttribute(AttrMemory, memory->value() * multiplier);
+    cRef->SetBaseAttribute(AttrPerception, perception->value() * multiplier);
+    cRef->SetBaseAttribute(AttrWillpower, willpower->value() * multiplier);
     cRef->SaveAttributes();
 
     // no return value
@@ -253,13 +256,25 @@ PyResult SkillMgrBound::GetCharacterAttributeModifiers(PyCallArgs &call, PyInt* 
      */
     CharacterRef cRef(call.client->GetChar());
     PyList* list = new PyList();
-    // for each implant, make tuple and put into list
-    PyTuple* tuple = new PyTuple(4);
-        tuple->SetItem(0, PyStatic.NewZero());   //implantID
-        tuple->SetItem(1, PyStatic.NewZero());   //implantTypeID
-        tuple->SetItem(2, PyStatic.NewZero());   //operation
-        tuple->SetItem(3, PyStatic.NewZero());   //value
+    uint16 bonusAttr(Character::AbilityBonusAttr(attr->value()));
+    if (bonusAttr == 0)
+        return list;
+
+    // for each implant and booster adding to this attribute, make tuple and put into list.  (the client sums the implants)
+    std::vector<InventoryItemRef> augs;
+    cRef->GetImplants(augs);
+    cRef->GetBoosters(augs);
+    for (auto cur : augs) {
+        EvilNumber value(cur->GetAttribute(bonusAttr));
+        if (value == EvilZero)
+            continue;
+        PyTuple* tuple = new PyTuple(4);
+            tuple->SetItem(0, new PyInt(cur->itemID()));    //implantID
+            tuple->SetItem(1, new PyInt(cur->typeID()));    //implantTypeID
+            tuple->SetItem(2, new PyInt(2));                //operation  (client dgmAssModAdd)
+            tuple->SetItem(3, new PyFloat(value.get_float()));  //value
         list->AddItem(tuple);
+    }
 
     return list;
 }

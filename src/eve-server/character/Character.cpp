@@ -299,6 +299,9 @@ bool Character::_Load() {
             sLog.Warning("Character::_Load","LoadCertificates returned false for char %u", m_itemID);
             return (m_loaded = false);
         }
+        // implant and booster ability bonuses are never saved; add them to the loaded attribs
+        m_abilityBonus.clear();
+        ApplyAbilityBonuses(false);
     }
 
     // load char personal bookmarks and folders ... corp shit will be done ???
@@ -477,6 +480,9 @@ void Character::ResetModifiers()
         curSkill->ClearModifiers();
         curSkill->ResetAttributes();
     }
+    // the reset loaded the saved (base) ability attribs.  put the implant and booster bonuses back
+    m_abilityBonus.clear();
+    ApplyAbilityBonuses(false);
 }
 
 void Character::ProcessEffects(ShipItem* pShip)
@@ -503,6 +509,115 @@ void Character::ProcessEffects(ShipItem* pShip)
     }
     // apply processed char effects
     sFxProc.ApplyEffects(this, this, pShip);
+}
+
+/*
+ * implants and boosters  (F15)
+ *  both are items located in the character (flagImplant / flagBooster).  their ability bonuses (charismaBonus..willpowerBonus)
+ *  are added to the live ability attribs and never saved; the character saves and respecs its base values.
+ */
+static const uint16 abilityAttrs[5] = { AttrCharisma, AttrIntelligence, AttrMemory, AttrPerception, AttrWillpower };
+
+uint16 Character::AbilityBonusAttr(uint16 attrID)
+{
+    switch (attrID) {
+        case AttrCharisma:      return AttrCharismaBonus;
+        case AttrIntelligence:  return AttrIntelligenceBonus;
+        case AttrMemory:        return AttrMemoryBonus;
+        case AttrPerception:    return AttrPerceptionBonus;
+        case AttrWillpower:     return AttrWillpowerBonus;
+    }
+    return 0;
+}
+
+void Character::GetImplants(std::vector<InventoryItemRef>& into) const
+{
+    pInventory->GetItemsByFlag(flagImplant, into);
+}
+
+void Character::GetBoosters(std::vector<InventoryItemRef>& into) const
+{
+    pInventory->GetItemsByFlag(flagBooster, into);
+}
+
+InventoryItemRef Character::GetImplantInSlot(uint8 slot) const
+{
+    std::vector<InventoryItemRef> implants;
+    GetImplants(implants);
+    for (auto cur : implants)
+        if (cur->GetAttribute(AttrImplantness).get_uint32() == slot)
+            return cur;
+    return InventoryItemRef(nullptr);
+}
+
+InventoryItemRef Character::GetBoosterInSlot(uint8 slot) const
+{
+    std::vector<InventoryItemRef> boosters;
+    GetBoosters(boosters);
+    for (auto cur : boosters)
+        if (cur->GetAttribute(AttrBoosterness).get_uint32() == slot)
+            return cur;
+    return InventoryItemRef(nullptr);
+}
+
+void Character::ApplyAbilityBonuses(bool notify)
+{
+    std::vector<InventoryItemRef> augs;
+    GetImplants(augs);
+    GetBoosters(augs);
+    for (auto attrID : abilityAttrs) {
+        uint16 bonusAttr(AbilityBonusAttr(attrID));
+        int32 bonus(0);
+        for (auto cur : augs)
+            bonus += cur->GetAttribute(bonusAttr).get_int();
+        int32 old(0);
+        std::map<uint16, int32>::iterator itr = m_abilityBonus.find(attrID);
+        if (itr != m_abilityBonus.end())
+            old = itr->second;
+        if (bonus == old)
+            continue;
+        EvilNumber base(GetAttribute(attrID) - EvilNumber(old));
+        SetAttribute(attrID, base + EvilNumber(bonus), notify);
+        m_abilityBonus[attrID] = bonus;
+        _log(CHARACTER__INFO, "%s(%u): %s bonus %i -> %i.", name(), m_itemID, sDataMgr.GetAttrName(attrID), old, bonus);
+    }
+}
+
+EvilNumber Character::GetBaseAttribute(uint16 attrID)
+{
+    return GetPersistentAttribute(attrID, GetAttribute(attrID));
+}
+
+void Character::SetBaseAttribute(uint16 attrID, EvilNumber value)
+{
+    int32 bonus(0);
+    std::map<uint16, int32>::iterator itr = m_abilityBonus.find(attrID);
+    if (itr != m_abilityBonus.end())
+        bonus = itr->second;
+    SetAttribute(attrID, value + EvilNumber(bonus), true);
+}
+
+EvilNumber Character::GetPersistentAttribute(uint16 attrID, const EvilNumber& live) const
+{
+    std::map<uint16, int32>::const_iterator itr = m_abilityBonus.find(attrID);
+    if ((itr == m_abilityBonus.end()) or (itr->second == 0))
+        return live;
+    return live - EvilNumber(itr->second);
+}
+
+void Character::RefreshSkillQueueTimes()
+{
+    if ((m_inTraining == nullptr) or m_skillQueue.empty())
+        return;
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    if ((m_pClient == nullptr) or (sEntityList.FindClientByCharID(m_itemID) != m_pClient))
+        return;
+    // pausing saves the trained SP at the old rate; the restart works out the end times at the new rate
+    uint16 typeID(m_skillQueue.front().typeID);
+    PauseSkillQueue();
+    LoadPausedSkillQueue(typeID);
+    PyTuple* tmp = new PyTuple(0);
+    m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
 }
 
 /*
@@ -1251,8 +1366,9 @@ PyDict *Character::GetCharInfo() {
     //find all the skills contained within ourself.
     pInventory->GetItemsByFlag(flagSkill, skills );
     pInventory->GetItemsByFlag(flagSkillInTraining, skills );
-
-    /** @todo  get implants and boosters here once implemented */
+    // godma builds char.implants and char.boosters from these
+    GetImplants(skills);
+    GetBoosters(skills);
 
     //encode an entry for each one.
     for (auto cur : skills) {
@@ -1263,8 +1379,6 @@ PyDict *Character::GetCharInfo() {
             codelog(CHARACTER__ERROR, "%s (%u): Failed to load character item %u for GetCharInfo", name(), m_itemID, cur->itemID());
         }
     }
-
-    /** @todo i dont know how boosters and implants work yet, so may have to set item different for them.  */
 
     return result;
 }

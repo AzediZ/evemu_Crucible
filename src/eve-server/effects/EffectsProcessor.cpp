@@ -294,7 +294,22 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
         sProfiler.AddTime(Profile::parseFX, GetTimeUSeconds() - profileStartTime);
 }
 
-void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update/*false*/)
+bool FxProc::IsCharItemModifier(const fxData& data)
+{
+    using namespace FX;
+    if (data.targLoc == Target::Self)
+        return true;
+    if (data.targLoc != Target::Char)
+        return false;
+    // implant/booster groups on the character, and skills that modify other skills
+    if (data.fxSrc == Source::Group)
+        return true;
+    if ((data.fxSrc == Source::Skill) and (data.typeID != 0))
+        return true;
+    return false;
+}
+
+void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update/*false*/, int8 pass/*FX::Pass::All*/)
 {
     double profileStartTime(GetTimeUSeconds());
     using namespace FX;
@@ -306,11 +321,30 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
             continue;
         } */
         //InventoryItemRef srcItemRef = cur.second.srcRef;
+        if (pass != Pass::All)
+            if (IsCharItemModifier(cur.second) != (pass == Pass::CharItems))
+                continue;
 
         std::vector<InventoryItemRef> itemRefVec;
         // affected target depends on source.  get source and target(s) here.
         switch (cur.second.fxSrc) {
             case Source::Group: {     // not a source per se, but defines effect's target selection requirements
+                if (cur.second.targLoc == Target::Char) {
+                    // implants and boosters of groupID defined in 'grpID' (implant set bonuses, booster skills)
+                    if (pChar == nullptr)
+                        continue;
+                    std::vector<InventoryItemRef> augs;
+                    pChar->GetImplants(augs);
+                    pChar->GetBoosters(augs);
+                    for (auto aug : augs)
+                        if (aug->groupID() == cur.second.grpID)
+                            itemRefVec.push_back(aug);
+                    if (itemRefVec.empty())
+                        continue;   // no implant or booster of that group.  nbd
+                    break;
+                }
+                if (pShip == nullptr)
+                    continue;
                 // this is to apply modifiers to ship's modules of groupID defined in 'grpID'
                 std::vector<InventoryItemRef> moduleList;
                 pShip->GetModuleManager()->GetModuleListOfRefsAsc(moduleList);

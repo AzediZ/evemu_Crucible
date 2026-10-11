@@ -377,9 +377,47 @@ public:
     void                    VisitSystem(uint32 solarSystemID);
 
     // character skill, implant and booster effects.  parsed and applied on undock and ship init in space (with all other ship-related effects)
-    // NOTE:  implants and boosters not implemented yet
+    //  implant and booster ability bonuses (charisma..willpower) are applied separately and always (ApplyAbilityBonuses)
     void                    ProcessEffects(ShipItem* pShip);
     void                    ResetModifiers();   // this will reset ALL char and skill attribs and modifier maps to default
+
+    /* implants and boosters (F15).  both are items in the character: flagImplant / flagBooster */
+    void                    GetImplants(std::vector<InventoryItemRef>& into) const;
+    void                    GetBoosters(std::vector<InventoryItemRef>& into) const;
+    InventoryItemRef        GetImplantInSlot(uint8 slot) const;
+    InventoryItemRef        GetBoosterInSlot(uint8 slot) const;
+    bool                    IsTraining() const                  { return m_inTraining != nullptr; }
+    // restarts training with the current attribs (training times change with the ability attribs)
+    void                    RefreshSkillQueueTimes();
+    // ability attrib (AttrCharisma..AttrWillpower) -> the implant/booster attrib that adds to it.  0 for others
+    static uint16           AbilityBonusAttr(uint16 attrID);
+    // the five ability attribs = base + sum of the implant/booster bonuses
+    void                    ApplyAbilityBonuses(bool notify);
+    // ability attribs without implant/booster bonuses (what is saved, respecs and the attribute window use)
+    EvilNumber              GetBaseAttribute(uint16 attrID);
+    void                    SetBaseAttribute(uint16 attrID, EvilNumber value);
+    EvilNumber              GetPersistentAttribute(uint16 attrID, const EvilNumber& live) const override;
+    // plug in an implant / consume a booster.  throws the client's errors
+    void                    PlugInImplant(InventoryItemRef iRef);
+    void                    UnplugImplant(InventoryItemRef iRef);
+    void                    ConsumeBooster(InventoryItemRef iRef);
+    // throws ImplantHasSkillPrerequisites for missing required skills of iRef's type
+    void                    CheckRequiredSkills(InventoryItemRef iRef) const;
+    // 0 = no booster
+    int64                   GetNextBoosterExpiry() const;
+    // removes expired boosters, called by the client's booster timer
+    void                    ProcessBoosterExpiry();
+    void                    RemoveBooster(uint32 itemID);
+    void                    RemoveAllBoosters();
+    // active booster effects for godma (boosters only)
+    void                    PopulateBoosterEffects(InventoryItem* pBooster, Rsp_CommonGetInfo_Entry& result);
+    // clone body swaps (jump clones) and pod death
+    void                    StoreImplants(std::vector<uint16>& typeIDs);
+    void                    InstallImplants(const std::vector<uint16>& typeIDs);
+    void                    DestroyImplants();
+    /* pod death with a clone that saves less than the character's SP: takes cloneSkillLossPercent of the total SP from the
+     *  skill with the most SP (at most cloneSkillLossCap of that skill).  returns the skill and SP lost (0 = none) */
+    void                    ApplyClonePenalty(uint16& skillTypeID, uint32& spLost);
 
 protected:
     Character(
@@ -453,7 +491,17 @@ private:
 
     uint32 m_loginTime;
 
-    std::map<uint8, InventoryItemRef>  m_implantMap;    // slotID/itemRef
+    // implants and boosters  (F15)
+    struct BoosterState {
+        int64 expiryTime;
+        uint8 sideEffectMask;   // bit n = side effect using boosterEffectChance(n+1) fired
+    };
+    std::map<uint32, BoosterState> m_boosters;      // booster itemID -> state
+    std::map<uint16, int32> m_abilityBonus;         // AttrCharisma..AttrWillpower -> bonus currently in the live value
+
+    void LoadBoosters();
+    // fills the booster's expiryTime attrib and reapplies ship/char effects after implant or booster changes
+    void OnAugmentationsChanged();
 };
 
 #endif /* !__CHARACTER__H__INCL__ */

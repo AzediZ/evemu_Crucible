@@ -139,6 +139,16 @@ namespace FX {
         };
     }
 
+    /* FxProc::ApplyEffects passes.  the character applies the modifiers that change its own items (skill self multipliers,
+     *  implant set bonuses, booster skill reductions) before the ones that read those items' attribs  (F15) */
+    namespace Pass {
+        enum {
+            All             = 0,
+            CharItems       = 1,
+            Rest            = 2
+        };
+    }
+
     namespace Action {  // this are coded and are applied on the fly as needed.
         enum {
             Invalid                  = 0,

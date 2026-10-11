@@ -130,11 +130,11 @@ PyResult DogmaIMBound::GetCharacterBaseAttributes(PyCallArgs& call)
 {
     CharacterRef cref = call.client->GetChar();
     PyDict* result = new PyDict();
-        result->SetItem(new PyInt(AttrIntelligence), cref->GetAttribute(AttrIntelligence).GetPyObject());
-        result->SetItem(new PyInt(AttrPerception), cref->GetAttribute(AttrPerception).GetPyObject());
-        result->SetItem(new PyInt(AttrCharisma), cref->GetAttribute(AttrCharisma).GetPyObject());
-        result->SetItem(new PyInt(AttrWillpower), cref->GetAttribute(AttrWillpower).GetPyObject());
-        result->SetItem(new PyInt(AttrMemory), cref->GetAttribute(AttrMemory).GetPyObject());
+        result->SetItem(new PyInt(AttrIntelligence), cref->GetBaseAttribute(AttrIntelligence).GetPyObject());
+        result->SetItem(new PyInt(AttrPerception), cref->GetBaseAttribute(AttrPerception).GetPyObject());
+        result->SetItem(new PyInt(AttrCharisma), cref->GetBaseAttribute(AttrCharisma).GetPyObject());
+        result->SetItem(new PyInt(AttrWillpower), cref->GetBaseAttribute(AttrWillpower).GetPyObject());
+        result->SetItem(new PyInt(AttrMemory), cref->GetBaseAttribute(AttrMemory).GetPyObject());
     return result;
 }
 

@@ -27,8 +27,10 @@ public:
     FxProc()        { /* do nothing here */ }
     ~FxProc()       { /* do nothing here */ }
 
-    // pItem is modifier container
-    void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false);
+    // pItem is modifier container.  pass = FX::Pass  (CharItems/Rest split the character's modifiers, see IsCharItemModifier)
+    void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false, int8 pass=0);
+    // modifiers whose targets are the character's own items (skills, implants, boosters)
+    static bool     IsCharItemModifier(const fxData& data);
     /* applies the owner-required-skill modifiers (missile/probe/drone bonuses from skills, implants, boosters, the hull and
      *  fitted modules) to an item that wasn't there when the ship's effects were processed: a charge loaded in space,
      *  a launched probe or bomb.  resets the target's attributes first */
