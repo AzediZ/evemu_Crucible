@@ -166,6 +166,7 @@ struct BridgeData {
     uint32 fromSystemID;
     uint32 toSystemID;
     uint32 beaconID;
+    uint32 beaconCharID;    // fleet bridge: the pilot whose cyno the portal leads to
     uint32 moduleID;
     int8 harmonics;     // the generator's jumpHarmonics (0 titan, 5 covert/black ops)
     bool alliance;

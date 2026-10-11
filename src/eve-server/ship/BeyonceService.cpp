@@ -1155,6 +1155,7 @@ PyResult BeyonceBound::DoOpenBridge(Client* pClient, bool alliance, uint32 charI
         data.fromSystemID = pClient->GetSystemID();
         data.toSystemID = beacon.systemID;
         data.beaconID = beacon.beaconID;
+        data.beaconCharID = (alliance ? 0 : charID);
         data.moduleID = pMod->itemID();
         data.harmonics = pPortal->GetHarmonics();
         data.alliance = alliance;
@@ -1226,6 +1227,9 @@ PyResult BeyonceBound::DoBridgeJump(Client* pClient, bool alliance, uint32 other
     if (JumpDrive::Harmonics(ship.get()) < bridge.harmonics)
         throw UserError("JumpHarmonicsDoNotMatch");
     JumpDrive::CheckDestination(pClient->GetSystemID(), bridge.toSystemID);
+    // the portal leads nowhere once its cyno (or the alliance's generator array) is gone
+    BeaconData beacon = BeaconData();
+    JumpDrive::ResolveBeacon(pClient, alliance, bridge.beaconCharID, bridge.beaconID, bridge.toSystemID, beacon);
 
     /* the bridging ship pays:  ly x its jumpDriveConsumptionAmount x our mass x its jumpPortalConsumptionMassFactor
      *  of its jumpDriveConsumptionType (menusvc / posConst.GetJumpFuelConsumption) */
