@@ -497,8 +497,9 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
 
     SetModuleState(Module::State::Activated);
 
-    // overview/tactical ewar icons on the target's client.  ecm sends its own (EcmModule)
-    if ((m_targetSE != nullptr) and (groupID() != EVEDB::invGroups::ECM))
+    // overview/tactical ewar icons on the target's client.
+    //  modules that keep their effect off dogma (ecm, target ewar) send their own, through the target's EwarState
+    if ((m_targetSE != nullptr) and ApplyTargetEffects())
         Ewar::SendEwarNotify(true, m_shipRef->itemID(), itemID(), m_targetSE, Ewar::GetEwarType(groupID()));
 
     switch (groupID()) {
@@ -858,7 +859,7 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
     and (m_targetSE != nullptr)
     and ApplyTargetEffects())
         ApplyEffect(FX::State::Target, false);
-    if ((m_targetSE != nullptr) and (groupID() != EVEDB::invGroups::ECM))
+    if ((m_targetSE != nullptr) and ApplyTargetEffects())
         Ewar::SendEwarNotify(false, m_shipRef->itemID(), itemID(), m_targetSE, Ewar::GetEwarType(groupID()));
         /*
     else if (m_needsTarget) {
@@ -1154,9 +1155,15 @@ void ActiveModule::ConsumeCharge() {
 
 void ActiveModule::ApplyEffect(int8 state, bool active/*false*/)
 {
+    // target effects (remote sensor boosters, tracking links, projected eccm) go on this module's target, also when they are
+    //  removed after the pilot has activated something on another target.  the undo snapshots make them reversible
+    if (state == FX::State::Target)
+        m_shipRef->SetTargetRef((m_targetSE != nullptr) ? m_targetSE->GetSelf() : InventoryItemRef(nullptr));
     // process and apply module's active effects
     ProcessEffects(state, active);
     sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), true);
+    if (state == FX::State::Target)
+        m_shipRef->ClearTargetRef();
 }
 
 void ActiveModule::UpdateCharge(uint16 attrID, uint16 testAttrID, uint16 srcAttrID, InventoryItemRef iRef)

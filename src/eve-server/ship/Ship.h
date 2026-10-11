@@ -159,6 +159,7 @@ public:
     void SetUndocking(bool set=false)                   { m_isUndocking = set; }
     InventoryItemRef GetTargetRef()                     { return m_targetRef; }
     void ClearTargetRef()                               { m_targetRef = InventoryItemRef(); }
+    void SetTargetRef(InventoryItemRef ref)             { m_targetRef = ref; }
     // this is for repairing modules with nanite paste
     PyRep* ModuleRepair(uint32 modID)                   { return m_ModuleManager->ModuleRepair(modID); }
     void StopModuleRepair(uint32 modID)                 { m_ModuleManager->StopModuleRepair(modID); }

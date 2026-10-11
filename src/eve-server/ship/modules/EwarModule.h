@@ -80,4 +80,25 @@ private:
     void                Burst(const GPoint& center, double centerRadius, SystemEntity* pCenterSE);
 };
 
+/* Target Painter, Remote Sensor Damper and Tracking Disruptor
+ *  their effect lives in the target's EwarState (stacking penalized there, read by targeting, turret and missile formulas,
+ *  ends when we stop, die, dock or leave, and sends the overview icon), never in dogma: the target modifiers would change the
+ *  target's attributes and stack with the ewar state
+ */
+class RemoteEwarModule : public ActiveModule
+{
+public:
+    RemoteEwarModule(ModuleItemRef mRef, ShipItemRef sRef);
+    virtual ~RemoteEwarModule()                         { /* do nothing here */ }
+
+    /* ActiveModule overrides */
+    virtual bool        ApplyTargetEffects()            { return false; }
+    virtual void        DeactivateCycle(bool abort=false);
+    virtual uint32      DoCycle();
+
+private:
+    // the EwarState kind for this module's group
+    uint8               GetKind();
+};
+
 #endif  // _EVE_SHIP_MODULES_EWAR_MODULE_H_

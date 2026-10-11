@@ -423,3 +423,66 @@ void EcmModule::Burst(const GPoint& center, double centerRadius, SystemEntity* p
         pPilot->SendRemoteMessage("TargetJammingPartialSuccess", args);
     }
 }
+
+
+RemoteEwarModule::RemoteEwarModule(ModuleItemRef mRef, ShipItemRef sRef)
+: ActiveModule(mRef, sRef)
+{
+}
+
+uint8 RemoteEwarModule::GetKind()
+{
+    switch (groupID()) {
+        case EVEDB::invGroups::Target_Painter:          return Ewar::Paint;
+        case EVEDB::invGroups::Remote_Sensor_Damper:    return Ewar::Damp;
+        case EVEDB::invGroups::Tracking_Disruptor:      return Ewar::TrackDisrupt;
+    }
+    return Ewar::None;
+}
+
+uint32 RemoteEwarModule::DoCycle()
+{
+    uint32 cycleTime(ActiveModule::DoCycle());
+    if ((cycleTime == 0) or (m_targetSE == nullptr) or !m_shipRef->HasPilot())
+        return cycleTime;
+    // a target that went into siege/triage since we started is immune
+    if (m_targetSE->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+        return cycleTime;
+
+    /* the module's attributes already carry the pilot's skills and its script (charge effects).  bonuses are percentages:
+     *  TP signatureRadiusBonus (+), damp maxTargetRangeBonus/scanResolutionBonus (-), TD trackingSpeedBonus/maxRangeBonus (-).
+     *  Crucible TDs also had falloffBonus, which the ewar state has no multiplier for (optimal and tracking only)
+     *  the entry lasts a cycle and a second, and is refreshed every cycle
+     */
+    float v1(1.0f), v2(0.0f);
+    uint8 kind(GetKind());
+    switch (kind) {
+        case Ewar::Paint: {
+            v1 = 1.0f + (GetAttribute(AttrSignatureRadiusBonus).get_float() / 100.0f);
+        } break;
+        case Ewar::Damp: {
+            v1 = 1.0f + (GetAttribute(AttrMaxTargetRangeBonus).get_float() / 100.0f);
+            v2 = 1.0f + (GetAttribute(AttrScanResolutionBonus).get_float() / 100.0f);
+        } break;
+        case Ewar::TrackDisrupt: {
+            v1 = 1.0f + (GetAttribute(AttrTrackingSpeedBonus).get_float() / 100.0f);
+            v2 = 1.0f + (GetAttribute(AttrMaxRangeBonus).get_float() / 100.0f);
+        } break;
+        default:
+            return cycleTime;
+    }
+    m_targetSE->GetEwar(true)->Apply(m_shipRef->GetPilot()->GetShipSE()->GetID(), kind, cycleTime + 1000, v1, v2,
+            InventoryItemRef(nullptr), itemID());
+    return cycleTime;
+}
+
+void RemoteEwarModule::DeactivateCycle(bool abort/*false*/)
+{
+    if (m_ModuleState < Module::State::Deactivating)
+        return;
+
+    if ((m_targetSE != nullptr) and (m_targetSE->GetEwar() != nullptr))
+        m_targetSE->GetEwar()->Remove(m_shipRef->itemID(), GetKind(), itemID());
+
+    ActiveModule::DeactivateCycle(abort);
+}

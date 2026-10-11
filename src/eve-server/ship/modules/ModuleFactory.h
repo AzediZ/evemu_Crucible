@@ -110,7 +110,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
 
             // Electronics Modules:
             case EVEDB::invGroups::Cloaking_Device:                         return (new CloakModule(mRef, sRef));     // Active  -  SELF
-            case EVEDB::invGroups::Target_Painter:                          return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Target_Painter:                          return (new RemoteEwarModule(mRef, sRef)); // Active - external
             case EVEDB::invGroups::Drone_Control_Unit:                      return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Scan_Probe_Launcher:                     return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Drone_Navigation_Computer:               return (new PassiveModule(mRef, sRef));
@@ -143,7 +143,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::ECM:                                     return (new EcmModule(mRef, sRef));       // Active - external
             case EVEDB::invGroups::ECCM:                                    return (new ActiveModule(mRef, sRef));    // Active  -  SELF
             case EVEDB::invGroups::Sensor_Backup_Array:                     return (new PassiveModule(mRef, sRef));
-            case EVEDB::invGroups::Remote_Sensor_Damper:                    return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Remote_Sensor_Damper:                    return (new RemoteEwarModule(mRef, sRef)); // Active - external
             case EVEDB::invGroups::Tracking_Link:                           return (new ActiveModule(mRef, sRef));    // Active  -  SELF
             case EVEDB::invGroups::Signal_Amplifier:                        return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Tracking_Enhancer:                       return (new PassiveModule(mRef, sRef));
@@ -152,7 +152,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::CPU_Enhancer:                            return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Projected_ECCM:                          return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Remote_Sensor_Booster:                   return (new ActiveModule(mRef, sRef));    // Active - external
-            case EVEDB::invGroups::Tracking_Disruptor:                      return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Tracking_Disruptor:                      return (new RemoteEwarModule(mRef, sRef)); // Active - external
             case EVEDB::invGroups::ECM_Stabilizer:                          return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Remote_ECM_Burst:                        return (new EcmModule(mRef, sRef));       // Active - external
 
