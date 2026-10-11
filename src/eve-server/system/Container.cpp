@@ -33,6 +33,7 @@
 #include "planet/PlanetDB.h"
 #include "system/DestinyManager.h"
 #include "system/Container.h"
+#include "system/Damage.h"
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
@@ -204,15 +205,7 @@ void CargoContainer::RemoveItem(InventoryItemRef iRef)
     }
 }
 
-void CargoContainer::MakeDamageState(DoDestinyDamageState &into) const
-{
-    //FIXME  container attributes here are NOT saved in the db....
-    into.shield = 1.0;//(m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double());
-    into.recharge = 10000;
-    into.timestamp = GetFileTimeNow();
-    into.armor = 1.0;//1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double());
-    into.structure = 1.0;
-}
+
 
 /*
  *    def HaveLootRight(self, objectID):
@@ -311,27 +304,17 @@ void ContainerSE::AnchorContainer()
 }
 
 
-void ContainerSE::MakeDamageState(DoDestinyDamageState &into)
+/* wrecks and containers have structure hp only (500 for jetcans and wrecks).  shooting one to pieces is the usual way
+ *  to deny loot: the contents go with it.  no wreck, no drop, no killmail.  no crime either (CrimeWatch::GetOwner)
+ */
+void ContainerSE::Killed(Damage &damage)
 {
-    //FIXME  container attributes are NOT saved in the db....
-    into.shield = 1;
-    into.recharge = 2000000;
-    into.timestamp = GetFileTimeNow();
-    into.armor = 1;
-    into.structure = 1;
-}
-
-
-void ContainerSE::SendDamageStateChanged() {  //working 24Apr15
-    DoDestinyDamageState dmgState;
-    MakeDamageState(dmgState);
-    OnDamageStateChange dmgChange;
-    dmgChange.entityID = m_self->itemID();
-    dmgChange.state = dmgState.Encode();
-    PyTuple *up = dmgChange.Encode();
-    if (m_targMgr != nullptr)
-        m_targMgr->QueueUpdate(&up);
-    PySafeDecRef(up);
+    _log(LOOT__INFO, "ContainerSE::Killed() - %s(%u) destroyed by %s.  Its contents are lost.", \
+            GetName(), GetID(), (damage.srcSE != nullptr ? damage.srcSE->GetName() : "unknown"));
+    // SystemEntity::Killed() takes us out of the system after this.  StructureSE::Killed() would leave a structure wreck
+    m_deleteTimer.Disable();
+    m_contRef->SetMySE(nullptr);
+    m_contRef->Delete();
 }
 
 
@@ -465,7 +448,6 @@ void WreckContainer::MakeSlimItemChange()
     mySE->SysBubble()->BubblecastDestinyUpdate(&updates, "destiny" );
 }
 
-// wrecks are invul. but shouldnt be.  see todo notes
 WreckSE::WreckSE(WreckContainerRef self, EVEServiceManager &services, SystemManager* system, const FactionData &data)
 : DynamicSystemEntity(self, services, system),
 m_deleteTimer(sConfig.rates.WorldDecay *60 *1000),
@@ -585,14 +567,10 @@ PyDict *WreckSE::MakeSlimItem() {
     return slim;
 }
 
-void WreckSE::SendDamageStateChanged() {  //working 24Apr15
-    DoDestinyDamageState dmgState;
-    MakeDamageState(dmgState);
-    OnDamageStateChange dmgChange;
-    dmgChange.entityID = m_self->itemID();
-    dmgChange.state = dmgState.Encode();
-    PyTuple *up = dmgChange.Encode();
-    if (m_targMgr != nullptr)
-        m_targMgr->QueueUpdate(&up);
-    PySafeDecRef(up);
+void WreckSE::Killed(Damage &damage)
+{
+    // SystemEntity::Killed() then removes us from the system and deletes the wreck item with its contents
+    _log(LOOT__INFO, "WreckSE::Killed() - %s(%u) destroyed by %s.  Its contents are lost.", \
+            GetName(), GetID(), (damage.srcSE != nullptr ? damage.srcSE->GetName() : "unknown"));
+    m_deleteTimer.Disable();
 }

@@ -64,6 +64,9 @@ EVEServerConfig::EVEServerConfig()
     server.LoadOldMissions = false;
     server.AsteroidsOnDScan = false;
     server.CargoMassAdditive = false;
+    server.ShieldBleedThrough = true;
+    server.ArmorBleedThrough = false;
+    server.T3SkillLoss = true;
 
     // world
     world.chatLogs = false;     // append every chat channel message to <logDir>/chat_YYYY-MM-DD.log  (F23)
@@ -379,6 +382,9 @@ bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
     AddValueParser( "LoadOldMissions",      server.LoadOldMissions );
     AddValueParser( "AsteroidsOnDScan",     server.AsteroidsOnDScan );
     AddValueParser( "CargoMassAdditive",    server.CargoMassAdditive );
+    AddValueParser( "ShieldBleedThrough",   server.ShieldBleedThrough );
+    AddValueParser( "ArmorBleedThrough",    server.ArmorBleedThrough );
+    AddValueParser( "T3SkillLoss",          server.T3SkillLoss );
 
     const bool result = ParseElementChildren( ele );
 
@@ -401,6 +407,9 @@ bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
     RemoveParser( "LoadOldMissions" );
     RemoveParser( "AsteroidsOnDScan" );
     RemoveParser( "CargoMassAdditive" );
+    RemoveParser( "ShieldBleedThrough" );
+    RemoveParser( "ArmorBleedThrough" );
+    RemoveParser( "T3SkillLoss" );
 
     return result;
 }

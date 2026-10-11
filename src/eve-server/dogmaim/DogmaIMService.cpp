@@ -405,15 +405,14 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
         throw UserError ("DeniedTargetingAttemptFailed")
                 .AddFormatValue ("target", new PyInt (targetID->value()));
     }
-    if ((tSE->IsStaticEntity())
+    // outposts can be locked (they just take no damage outside sov sieges)
+    if ((tSE->IsStaticEntity() and !tSE->IsOutpostSE())
     or (tSE->IsLogin())/** @todo SE->IsLogin() incomplete */
     or (tSE->GetSelf()->HasAttribute(AttrUntargetable)))
         throw UserError ("DeniedTargetEvadesSensors")
                 .AddFormatValue ("targetName", new PyString (tSE->GetName ()));
-    /** @todo SE->IsInvul() incomplete */
-    if (tSE->IsInvul())
-        throw CustomError ("Cannot Engage %s as they are invulnerable.", tSE->GetName());
-        //throw UserError ("DeniedTargetInvulnerable");
+    if (tSE->IsInvul() and !tSE->IsOutpostSE())
+        throw UserError ("DeniedTargetInvulnerable");
     // ecm.  jammed ships can't lock anything (locking the jammer came with the 2018 balance pass)
     if (mySE->TargetMgr()->IsJammed())
         throw UserError ("TargetingSystemsBeingJammed")
@@ -424,10 +423,8 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
                 .AddFormatValue ("targetName", new PyString (tSE->GetName ()));
 
     if (tSE->HasPilot()) {
-        /** @todo SE->IsInvul() incomplete */
         if ( tSE->GetPilot()->IsInvul())
-            throw CustomError ("Cannot Engage %s as they are invulnerable.", tSE->GetName());
-        //throw UserError ("DeniedTargetInvulnerable");
+            throw UserError ("DeniedTargetInvulnerable");
         if ( tSE->GetPilot()->IsSessionChange())
             throw UserError ("DeniedTargetEvadesSensors")
                     .AddFormatValue ("targetName", new PyString (tSE->GetName ()));

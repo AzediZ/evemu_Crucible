@@ -53,7 +53,10 @@ boolean can use either 0/1 OR true/false.
         <BulkDataAutoVersion>true</BulkDataAutoVersion><!-- bool  -derive the bulk data version from table checksums, so clients refetch dogma data after a db change.  false uses the compiled-in version -->
         <ModuleAutoOff>true</ModuleAutoOff><!-- bool  - automatically deactivate rr-type module when target is full -->
         <ModuleDamageChance>0.1</ModuleDamageChance>  <!-- chance to apply damage to random modules when shields are depleted -->
-        <UnloadOnLinkAll>true</UnloadOnLinkAll>  <!-- bool - unload weapons and link when LinkAll button pressed -->
+        <UnloadOnLinkAll>true</UnloadOnLinkAll>  <!-- bool - grouping loaded weapons unloads them (Group All, drag to group, merge).  false refuses with "You cannot group modules loaded with charges" (Crucible) -->
+        <ShieldBleedThrough>true</ShieldBleedThrough><!-- bool - below (1 - shieldUniformity) of its shield (25% for most ships, 0 with Tactical Shield Manipulation V), part of a hit leaks to armor: none at the threshold, all of it at 0 shield -->
+        <ArmorBleedThrough>false</ArmorBleedThrough><!-- bool - the same leak from armor to structure below (1 - armorUniformity).  not confirmed for Crucible -->
+        <T3SkillLoss>true</T3SkillLoss><!-- bool - a strategic cruiser destroyed with its pilot aboard costs one level of one random subsystem skill (Crucible).  not on self-destruct -->
         <AllowNonPublished>true</AllowNonPublished>
         <BountyPayoutDelayed>false</BountyPayoutDelayed><!-- bool - (en/dis)able system bounty payouts on timer (vs immediate) -->
         <FleetShareDelayed>true</FleetShareDelayed><!-- bool - switch to put fleet bounty shares in system bounty timer (vs immediate), if enabled -->

@@ -172,7 +172,8 @@ bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
         into.sentry = true;
         into.corpID = pSE->GetSelf()->ownerID();
         return true;
-    } else if (pSE->IsPOSSE()) {
+    } else if (pSE->IsPOSSE() or pSE->IsCOSE()) {
+        // npc owned (Interbus customs offices) can be shot without penalty.  player structures belong to their corp
         uint32 corpID(pSE->GetCorporationID());
         if (IsNPCCorp(corpID) or (corpID == 0))
             return false;

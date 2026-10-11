@@ -60,6 +60,9 @@ public:
         bool LoadOldMissions;
         bool AsteroidsOnDScan;
         bool CargoMassAdditive;
+        bool ShieldBleedThrough;        // damage leaks through shields below (1 - shieldUniformity)  (F10)
+        bool ArmorBleedThrough;         // same for armor to structure (not confirmed for Crucible)  (F10)
+        bool T3SkillLoss;               // a destroyed strategic cruiser costs its pilot one subsystem skill level  (F10)
         uint8 ServerSleepTime;
         uint8 MaxThreadReport;
         uint8 BountyPayoutTimer;

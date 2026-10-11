@@ -124,12 +124,30 @@ float SystemEntity::GetSignatureRadius()
     return sig;
 }
 
+double SystemEntity::LayerFraction(double used, double max)
+{
+    if (max <= 0)
+        return 1.0;
+    double fraction(1.0 - (used / max));
+    if (fraction < 0)
+        return 0.0;
+    if (fraction > 1)
+        return 1.0;
+    return fraction;
+}
+
 PyTuple* SystemEntity::MakeDamageState() {
-    if (IsWreckSE()) {
+    /* wrecks, containers, missiles and other things with structure only send (shield, armor, structure).
+     *  the client shows no shield for a non-tuple shield entry (michelle.GetDamageState)
+     */
+    if (!IsStaticEntity()
+    and (m_self->GetAttribute(AttrShieldCapacity) <= 0)
+    and (m_self->GetAttribute(AttrArmorHP) <= 0)
+    and (m_self->GetAttribute(AttrHP) > 0)) {
         DoDestinyDamageState3 ddds;
             ddds.shield = 0;
             ddds.armor = 0;
-            ddds.structure = 1.0;
+            ddds.structure = LayerFraction(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double());
         return ddds.Encode();
     }
     DoDestinyDamageState ddds;
@@ -143,6 +161,17 @@ void SystemEntity::MakeDamageState(DoDestinyDamageState &into) {
     into.armor = 1;
     into.structure = 1;
     into.timestamp = GetFileTimeNow();
+}
+
+void SystemEntity::FillDamageState(DoDestinyDamageState &into) {
+    // real fractions from the item's attributes.  a layer it doesn't have shows full
+    into.shield = 1.0;
+    if (m_self->GetAttribute(AttrShieldCapacity) > 0)
+        into.shield = 1.0 - LayerFraction(m_self->GetAttribute(AttrShieldCharge).get_double(), m_self->GetAttribute(AttrShieldCapacity).get_double());
+    into.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
+    into.timestamp = GetFileTimeNow();
+    into.armor = LayerFraction(m_self->GetAttribute(AttrArmorDamage).get_double(), m_self->GetAttribute(AttrArmorHP).get_double());
+    into.structure = LayerFraction(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double());
 }
 
 PyDict* SystemEntity::MakeSlimItem() {
@@ -203,11 +232,13 @@ double SystemEntity::DistanceTo2(const SystemEntity* other) {
 
 PyRep* SystemEntity::MakeDamageDetails() {
      DamageDetails dmgState;
-        dmgState.shield = m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double();
+        dmgState.shield = 1.0;
+        if (m_self->GetAttribute(AttrShieldCapacity) > 0)
+            dmgState.shield = 1.0 - LayerFraction(m_self->GetAttribute(AttrShieldCharge).get_double(), m_self->GetAttribute(AttrShieldCapacity).get_double());
         dmgState.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
         dmgState.timestamp = GetFileTimeNow();
-        dmgState.armor = (1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double()));
-        dmgState.structure = (1.0 - (m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double()));
+        dmgState.armor = LayerFraction(m_self->GetAttribute(AttrArmorDamage).get_double(), m_self->GetAttribute(AttrArmorHP).get_double());
+        dmgState.structure = LayerFraction(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double());
     _log(DAMAGE__MESSAGE, "%s(%u): DamageUpdate - S:%f A:%f H:%f.", \
             m_self->name(), m_self->itemID(), dmgState.shield, dmgState.armor, dmgState.structure);
     return dmgState.Encode();
@@ -216,7 +247,7 @@ PyRep* SystemEntity::MakeDamageDetails() {
 void SystemEntity::SendDamageStateChanged() {  //working 24Apr15
      OnDamageStateChange dmgChange;
         dmgChange.entityID = m_self->itemID();
-        dmgChange.state = MakeDamageDetails();
+        dmgChange.state = MakeDamageState();
     PyTuple *up = dmgChange.Encode();
     if (m_targMgr != nullptr)
         m_targMgr->QueueUpdate(&up);
@@ -513,11 +544,7 @@ void ItemSystemEntity::MakeDamageState(DoDestinyDamageState &into) {
     if (m_self->groupID() == EVEDB::invGroups::Force_Field) {
         SystemEntity::MakeDamageState(into);
     } else {
-        into.shield = (m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double());
-        into.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
-        into.timestamp = GetFileTimeNow();
-        into.armor = 1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double());
-        into.structure = 1.0 - (m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double());
+        FillDamageState(into);
     }
 }
 
@@ -644,29 +671,12 @@ PyDict* ObjectSystemEntity::MakeSlimItem() {
 }
 
 void ObjectSystemEntity::MakeDamageState(DoDestinyDamageState &into) {
-    into.shield = (m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double());
-    into.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
-    into.timestamp = GetFileTimeNow();
-    into.armor = 1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double());
-    into.structure = 1.0 - (m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double());
+    FillDamageState(into);
 }
 
 void ObjectSystemEntity::UpdateDamage()
 {
-    /** @todo (Allan) needs more work */
-    SystemEntity::UpdateDamage();
-     DamageDetails dmgState;
-        dmgState.shield = m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double();
-        dmgState.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
-        dmgState.timestamp = GetFileTimeNow();
-        dmgState.armor = 1.0 - m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double();
-        dmgState.structure = 1.0 - m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double();
-     OnDamageStateChange dmgChange;
-        dmgChange.entityID = m_self->itemID();
-        dmgChange.state = dmgState.Encode();
-    PyTuple *up = dmgChange.Encode();
-    //source->QueueDestinyUpdate(&up);
-    PySafeDecRef(up);
+    SendDamageStateChanged();
 }
 
 void ObjectSystemEntity::Killed(Damage& damage)
@@ -926,29 +936,12 @@ void DynamicSystemEntity::EncodeDestiny( Buffer& into )
 }
 
 void DynamicSystemEntity::MakeDamageState(DoDestinyDamageState &into) {
-    into.shield = (m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double());
-    into.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
-    into.timestamp = GetFileTimeNow();
-    into.armor = 1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double());
-    into.structure = 1.0 - (m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double());
+    FillDamageState(into);
 }
 
 void DynamicSystemEntity::UpdateDamage()
 {
-    /** @todo (Allan) needs more work */
-    SystemEntity::UpdateDamage();
-     DamageDetails dmgState;
-        dmgState.shield = m_self->GetAttribute(AttrShieldCharge).get_double() / m_self->GetAttribute(AttrShieldCapacity).get_double();
-        dmgState.recharge = m_self->GetAttribute(AttrShieldRechargeRate).get_double();
-        dmgState.timestamp = GetFileTimeNow();
-        dmgState.armor = 1.0 - m_self->GetAttribute(AttrArmorDamage).get_double() / m_self->GetAttribute(AttrArmorHP).get_double();
-        dmgState.structure = 1.0 - m_self->GetAttribute(AttrDamage).get_double() / m_self->GetAttribute(AttrHP).get_double();
-     OnDamageStateChange dmgChange;
-        dmgChange.entityID = m_self->itemID();
-        dmgChange.state = dmgState.Encode();
-    PyTuple *up = dmgChange.Encode();
-    //source->QueueDestinyUpdate(&up);
-    PySafeDecRef(up);
+    SendDamageStateChanged();
 }
 
 void DynamicSystemEntity::AwardBounty(Client* pClient)

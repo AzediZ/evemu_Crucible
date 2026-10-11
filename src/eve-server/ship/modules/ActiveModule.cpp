@@ -422,13 +422,19 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
          * AttrDisallowOffensiveModifierBonus
          */
 
-        // if target is non-combatant deny attack
-        if (sFxDataMgr.isOffensive(effectID))
-            if (m_targetSE->IsItemEntity() or m_targetSE->IsStaticEntity() or m_targetSE->IsWreckSE())
-                // or (m_targetSE->IsLogin()))       // this is incomplete, so always returns false
-            {
-                throw CustomError ("You cannot attack the %s.", m_targetSE->GetName());
+        if (sFxDataMgr.isOffensive(effectID)) {
+            // celestials, stations, beacons and the like can't be attacked.  wrecks and containers can (structure only)
+            if (m_targetSE->IsItemEntity() or (m_targetSE->IsStaticEntity() and !m_targetSE->IsOutpostSE())) {
+                Clear();
+                throw UserError ("DeniedTargetInvulnerable");
             }
+            // highsec customs offices, outposts (no sov sieges yet), reinforced structures
+            if (m_targetSE->IsInvul()) {
+                Clear();
+                /** @todo F14: outposts in sov space take DeniedStationInvulnerableSovereign {module, targetname} instead */
+                throw UserError ("DeniedTargetInvulnerable");
+            }
+        }
 
         CheckTargetRules(effectID);
         if (sFxDataMgr.isAssistance(effectID)) {
@@ -437,10 +443,6 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
                 if (m_targetSE->GetPilot()->IsCriminal())
                     throw UserError ("ModuleActivationDeniedCriminalAssistance");
              */
-        }
-        if (m_targetSE->IsCOSE()) {
-            Clear();
-            throw CustomError ("Attacking Customs Offices isn't implemented at this time.");
         }
         if (m_targetSE->TargetMgr() != nullptr)
             m_targetSE->TargetMgr()->AddTargetModule(this);

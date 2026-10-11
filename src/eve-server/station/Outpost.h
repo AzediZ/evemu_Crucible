@@ -45,6 +45,9 @@ public:
     virtual OutpostSE* GetOutpostSE()                   { return this; }
     /* Static */
     virtual bool IsOutpostSE()                          { return true; }
+    // outposts can be locked, but take no damage
+    /** @todo F14: sovereignty sieges (shield/armor reinforcement, services, capture) make outposts vulnerable */
+    virtual bool IsInvul()                              { return true; }
 
     virtual void SpawnStationService(Client* pClient, StationData stData, uint32 serviceType);
 };

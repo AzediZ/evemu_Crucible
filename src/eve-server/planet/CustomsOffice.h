@@ -42,6 +42,8 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Killed(Damage &damage);
+    // empire (highsec) offices belong to Interbus and can't be shot in Crucible.  reinforced offices take no damage
+    virtual bool                IsInvul();
     virtual void                InitData();
     virtual void                Init();
 

@@ -50,7 +50,6 @@ public:
     virtual void Delete();
     virtual void Process();
     virtual void EncodeDestiny( Buffer& into );
-    virtual void MakeDamageState(DoDestinyDamageState &into);
     virtual PyDict *MakeSlimItem();
 
     /* specific functions handled here. */

@@ -90,8 +90,6 @@ public:
      */
     PyObject *CargoContainerGetInfo();
 
-    virtual void MakeDamageState(DoDestinyDamageState &into) const;
-
     bool IsEmpty()                                      { return GetMyInventory()->IsEmpty(); }
     void SetMySE(SystemEntity* pSE)                     { mySE = pSE;}
 
@@ -155,9 +153,8 @@ public:
 
     /* SystemEntity interface */
     virtual void Process();
-    virtual void MakeDamageState(DoDestinyDamageState &into);
-    // this uses targetMgr update to send to all interested parties
-    virtual void SendDamageStateChanged();
+    // a container shot to pieces takes its contents with it.  no wreck, no drop
+    virtual void Killed(Damage &damage);
 
     /* specific functions handled in this class. */
     void Init();
@@ -256,11 +253,11 @@ public:
     virtual void                Process();
     virtual void                EncodeDestiny(Buffer& into);
     virtual PyDict*             MakeSlimItem();
-    // this uses targetMgr update to send to all interested parties
-    virtual void                SendDamageStateChanged();
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Abandon();
+    // a wreck shot to pieces takes its contents with it
+    virtual void                Killed(Damage &damage);
 
     /* specific functions handled in this class. */
     void Salvaged()                                     { m_contRef->Salvaged(); }

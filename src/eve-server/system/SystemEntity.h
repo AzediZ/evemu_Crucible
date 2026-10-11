@@ -273,8 +273,10 @@ public:
     static void                 SetUnkillable(uint32 itemID, bool set);
     static bool                 IsUnkillable(uint32 itemID);
     double                      DistanceTo2(const SystemEntity* other);
+    /* the damage state sent in AddBalls/SetState and OnDamageStateChange.  things with structure only (wrecks, containers,
+     *  missiles) send a flat (shield, armor, structure) tuple, everything else the full state from MakeDamageState(into) */
     PyTuple*                    MakeDamageState();
-    // the DamageDetails list sent in OnDamageStateChange/OnFleetDamageStateChange
+    // the DamageDetails list sent in OnFleetDamageStateChange
     PyRep*                      MakeDamageDetails();
 
     /* public specific functions handled in base class. */
@@ -293,7 +295,7 @@ public:
 
     /* virtual functions to be overridden in derived classes */
     virtual void     MissileLaunched(Missile* pMissile) { /* Do nothing here */ }
-    virtual void                UpdateDamage()          { /* Do nothing here */ }
+    virtual void                UpdateDamage()          { SendDamageStateChanged(); }
     virtual bool                LoadExtras()            { return true; }
     // this will remove SE* from system and call Delete() on it's itemRef for non-containers.
     //caller MUST call SafeDelete() on SE after this returns.
@@ -318,6 +320,16 @@ protected:
     bool                        m_killed;
 
     static std::set<uint32>     s_unkillable;
+
+    /* damage layers (Damage.cpp) */
+    // resonance attribute, 1.0 (no resistance) when the entity doesn't have it
+    float                       Resonance(uint16 attrID);
+    // share of a hit that leaks past a layer at this level (0..1)
+    float                       LeakFraction(float available, float capacity, uint16 uniformityAttrID);
+    // 1 - used/max, 1 if max is 0
+    static double               LayerFraction(double used, double max);
+    // DoDestinyDamageState from the item's shield/armor/structure attributes
+    void                        FillDamageState(DoDestinyDamageState &into);
 
     double                      m_radius;
 

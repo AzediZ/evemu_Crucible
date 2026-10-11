@@ -441,6 +441,19 @@ PyDict *CustomsSE::MakeSlimItem() {
     return slim;
 }
 
+bool CustomsSE::IsInvul()
+{
+    /* Crucible ("Player Owned Customs Offices - an update", Nov 2011): the Interbus offices in lowsec, nullsec and
+     *  wormholes can be shot down.  highsec offices stayed Interbus and invulnerable until Rubicon (2013).
+     *  reinforcement timers are F19's (IsReinforced)
+     */
+    if (ObjectSystemEntity::IsInvul())
+        return true;
+    if ((m_system != nullptr) and (m_system->GetSystemSecurityRating() >= 0.45f))
+        return true;
+    return IsReinforced();
+}
+
 void CustomsSE::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?

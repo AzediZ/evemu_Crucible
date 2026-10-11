@@ -100,6 +100,31 @@ chargeRef(InventoryItemRef(nullptr))
     assert(fatal_blow and "Damage() fatal_blow called without 2nd param being true!");
 }
 
+float SystemEntity::Resonance(uint16 attrID)
+{
+    // a missing resonance means no resistance (not 100%)
+    if (m_self->HasAttribute(attrID))
+        return m_self->GetAttribute(attrID).get_float();
+    return 1.0f;
+}
+
+float SystemEntity::LeakFraction(float available, float capacity, uint16 uniformityAttrID)
+{
+    // below (1 - uniformity) of the layer, the leaked share of a hit grows linearly from 0 at the threshold to 1 at empty
+    if (capacity <= 0.0f)
+        return 0.0f;
+    float uniformity(1.0f);
+    if (m_self->HasAttribute(uniformityAttrID))
+        uniformity = m_self->GetAttribute(uniformityAttrID).get_float();
+    float threshold(1.0f - uniformity);
+    if (threshold <= 0.0f)
+        return 0.0f;
+    float fraction(available / capacity);
+    if (fraction >= threshold)
+        return 0.0f;
+    return EvE::min(1.0, 1.0 - (fraction / threshold));
+}
+
 std::set<uint32> SystemEntity::s_unkillable;
 
 void SystemEntity::SetUnkillable(uint32 itemID, bool set)
@@ -131,6 +156,10 @@ void SystemEntity::Destroy(Damage &d)
 
 bool SystemEntity::ApplyDamage(Damage &d) {
     double profileStartTime(GetTimeUSeconds());
+
+    // invulnerable things (highsec customs offices, outposts, reinforced structures, gm invul) take nothing.  shots may still be in flight
+    if (IsInvul())
+        return false;
 
     // aggressive drones and drones guarding us respond to this
     DroneSE::OnAggression(this, d.srcSE);
@@ -207,122 +236,132 @@ bool SystemEntity::ApplyDamage(Damage &d) {
     // apply damage modifier from config
     d *= sConfig.rates.damageRate;
 
-    // this is calculated and created on every call...
-    Damage DamageToShield = d.MultiplyDup(
-        m_self->GetAttribute(AttrShieldKineticDamageResonance).get_float(),
-        m_self->GetAttribute(AttrShieldThermalDamageResonance).get_float(),
-        m_self->GetAttribute(AttrShieldEmDamageResonance).get_float(),
-        m_self->GetAttribute(AttrShieldExplosiveDamageResonance).get_float() );
-
-    bool killed(false);
+    /* damage goes through shield, armor and structure in turn.  a layer the entity doesn't have (no capacity) is skipped,
+     *  so wrecks and containers (hp only) take it all on structure.  missing resonances mean no resistance.
+     * shield leakage (Crucible): below (1 - shieldUniformity) of its shield, part of each hit goes past the shield to armor.
+     *  none at the threshold, all of it at 0 shield (linear.  CCP never published the formula).  ships have 0.75 uniformity
+     *  (leaks below 25%), Tactical Shield Manipulation adds 5% per level (no leak at V).  armor to structure works the same
+     *  way when server.ArmorBleedThrough is set (not confirmed for Crucible)
+     */
+    bool killed(false), armorDepleted(false);
     float total_damage(0.0f);
-    float shield_damage(DamageToShield.GetTotal());
-    float available_shield(m_self->GetAttribute(AttrShieldCharge).get_float());
-    if (shield_damage <= available_shield) {
-        /** @todo  this works, but still needs work....
-        if (HasPilot())
-            if (damageID > 2) {
-                float uniformity = m_self->GetAttribute(AttrShieldUniformity).get_float();
-                uniformity += (0.05 * GetPilot()->GetChar()->GetSkillLevel(EvESkill::TacticalShieldManipulation));
-                if ((available_shield /m_self->GetAttribute(AttrShieldCapacity).get_float()) < uniformity) {
-                    float bleedthru = (d.GetTotal() * 0.01f);
-                    m_self->SetAttribute(AttrArmorDamage, (bleedthru + m_self->GetAttribute(AttrArmorDamage).get_float()));
-                    shield_damage -= bleedthru;
-                }
+
+    // Shield:
+    float shieldCapacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+    if (shieldCapacity > 0.0f) {
+        float available_shield(EvE::max(m_self->GetAttribute(AttrShieldCharge).get_float()));
+        float leak(0.0f);
+        if (sConfig.server.ShieldBleedThrough and (damageID > 0))
+            leak = LeakFraction(available_shield, shieldCapacity, AttrShieldUniformity);
+        // the leaked part skips the shield
+        Damage toShield(d);
+        toShield *= (1.0f - leak);
+        Damage DamageToShield = toShield.MultiplyDup(
+            Resonance(AttrShieldKineticDamageResonance),
+            Resonance(AttrShieldThermalDamageResonance),
+            Resonance(AttrShieldEmDamageResonance),
+            Resonance(AttrShieldExplosiveDamageResonance) );
+
+        float shield_damage(DamageToShield.GetTotal());
+        if (shield_damage <= available_shield) {
+            total_damage += shield_damage;
+            float new_charge = available_shield - shield_damage;
+            m_self->SetAttribute(AttrShieldCharge, new_charge);
+            // only the leaked part goes on
+            d *= leak;
+            _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to shields (%.1f%% leaks through). New charge: %.2f.",
+                 GetName(), GetID(), shield_damage, leak * 100, new_charge);
+        } else {
+            // the shield absorbs its share of the part that hit it.  the rest of that, and the leaked part, go on
+            float absorbed(available_shield / shield_damage);
+            d *= (leak + ((1.0f - leak) * (1.0f - absorbed)));
+            total_damage += available_shield;
+
+            if (available_shield > 0.0f) {
+                _log(DAMAGE__INFO, "%s(%u): Shield depleted with %.2f damage. %.2f damage remains.",
+                     GetName(), GetID(), available_shield, d.GetTotal());
+                m_self->SetAttribute(AttrShieldCharge, EvilZero);
             }
-        */
-        total_damage += shield_damage;
-        float new_charge = available_shield - shield_damage;
-        m_self->SetAttribute(AttrShieldCharge, new_charge);
-
-        _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to shields. New charge: %.2f.",
-             GetName(), GetID(), shield_damage, new_charge);
-    } else {
-        // get fraction of damage partial shield absorbs, and lower total damage by that fraction
-        d *= (1 - (available_shield /shield_damage));
-        total_damage += available_shield;
-
-        if (available_shield > 0.0f) {
-            _log(DAMAGE__INFO, "%s(%u): Shield depleted with %.2f damage. %.2f damage remains.",
-                 GetName(), GetID(), available_shield, d.GetTotal());
-            m_self->SetAttribute(AttrShieldCharge, EvilZero);
         }
+    }
 
-        //Armor:
-        float available_armor = m_self->GetAttribute(AttrArmorHP).get_float() - m_self->GetAttribute(AttrArmorDamage).get_float();
-        Damage DamageToArmor = d.MultiplyDup(
-            m_self->GetAttribute(AttrArmorKineticDamageResonance).get_float(),
-            m_self->GetAttribute(AttrArmorThermalDamageResonance).get_float(),
-            m_self->GetAttribute(AttrArmorEmDamageResonance).get_float(),
-            m_self->GetAttribute(AttrArmorExplosiveDamageResonance).get_float() );
+    //Armor:
+    float armorHP(m_self->GetAttribute(AttrArmorHP).get_float());
+    if ((d.GetTotal() > 0.0f) and (armorHP > 0.0f)) {
+        float available_armor(EvE::max(armorHP - m_self->GetAttribute(AttrArmorDamage).get_float()));
+        float leak(0.0f);
+        if (sConfig.server.ArmorBleedThrough and (damageID > 0))
+            leak = LeakFraction(available_armor, armorHP, AttrArmorUniformity);
+        Damage toArmor(d);
+        toArmor *= (1.0f - leak);
+        Damage DamageToArmor = toArmor.MultiplyDup(
+            Resonance(AttrArmorKineticDamageResonance),
+            Resonance(AttrArmorThermalDamageResonance),
+            Resonance(AttrArmorEmDamageResonance),
+            Resonance(AttrArmorExplosiveDamageResonance) );
 
-        float armor_damage = DamageToArmor.GetTotal();
+        float armor_damage(DamageToArmor.GetTotal());
         if (armor_damage <= available_armor) {
-            if (HasPilot()) {
-                if ((available_armor /m_self->GetAttribute(AttrArmorHP).get_float()) < m_self->GetAttribute(AttrArmorUniformity).get_float()) {
-                    float new_damage = d.GetTotal() * 0.01;
-                    float hull_damage = m_self->GetAttribute(AttrDamage).get_float() + new_damage;
-                    _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f leakthru damage to structure. New structure damage: %.2f",
-                         GetName(), GetID(), new_damage, hull_damage);
-                    m_self->SetAttribute(AttrDamage, hull_damage);
-                    // remove this leakthru damage from armor damage
-                    armor_damage -= new_damage;
-                }
-            }
             total_damage += armor_damage;
             float new_damage = m_self->GetAttribute(AttrArmorDamage).get_float() + armor_damage;
             m_self->SetAttribute(AttrArmorDamage, new_damage);
-            _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to armor. New armor damage: %.2f",
-                 GetName(), GetID(), armor_damage, new_damage);
+            d *= leak;
+            _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to armor (%.1f%% leaks through). New armor damage: %.2f",
+                 GetName(), GetID(), armor_damage, leak * 100, new_damage);
         } else {
-            d *= (1 - (available_armor /armor_damage));
+            float absorbed(available_armor / armor_damage);
+            d *= (leak + ((1.0f - leak) * (1.0f - absorbed)));
             total_damage += available_armor;
+            armorDepleted = true;
 
             if (available_armor > 0) {
                 _log(DAMAGE__INFO, "%s(%u): Armor depleted with %.2f damage. %.2f damage remains.",
                      GetName(), GetID(), available_armor, d.GetTotal());
                 m_self->SetAttribute(AttrArmorDamage, m_self->GetAttribute(AttrArmorHP));
             }
-
-            //Hull/Structure:
-            //The base hp and damage attributes represent structure.
-            float available_hull = m_self->GetAttribute(AttrHP).get_float() - m_self->GetAttribute(AttrDamage).get_float();
-            Damage DamageToHull = d.MultiplyDup(
-                m_self->GetAttribute(AttrKineticDamageResonance).get_float(),
-                m_self->GetAttribute(AttrThermalDamageResonance).get_float(),
-                m_self->GetAttribute(AttrEmDamageResonance).get_float(),
-                m_self->GetAttribute(AttrExplosiveDamageResonance).get_float() );
-
-            float hull_damage = DamageToHull.GetTotal();
-            if (hull_damage < available_hull) {
-                total_damage += hull_damage;
-                float new_damage = m_self->GetAttribute(AttrDamage).get_float() + hull_damage;
-                m_self->SetAttribute(AttrDamage, new_damage);
-                _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to structure. New structure damage: %.2f",
-                     GetName(), GetID(), hull_damage, new_damage);
-            } else if (IsUnkillable(GetID())) {
-                // GM: hold at 1hp
-                float max_damage = m_self->GetAttribute(AttrHP).get_float() - 1.0f;
-                float old_damage = m_self->GetAttribute(AttrDamage).get_float();
-                if (max_damage > old_damage) {
-                    total_damage += (max_damage - old_damage);
-                    m_self->SetAttribute(AttrDamage, max_damage);
-                }
-                _log(DAMAGE__INFO, "%s(%u): %.2f damage would have destroyed us, but we're unkillable.",
-                     GetName(), GetID(), hull_damage);
-            } else {
-                total_damage += available_hull;
-                //dead....
-                _log(DAMAGE__INFO, "%s(%u): %.2f damage has depleted our structure. Time to explode.",
-                     GetName(), GetID(), hull_damage);
-                killed = true;
-            }
-
-            // module damage.
-            //  after armor is gone, make damage to random module.
-            if (HasPilot())
-                GetShipSE()->DamageRandModule(sConfig.server.ModuleDamageChance);    // config option for random module damage chance
         }
+    }
+
+    //Hull/Structure:
+    //The base hp and damage attributes represent structure.
+    float hp(m_self->GetAttribute(AttrHP).get_float());
+    if ((d.GetTotal() > 0.0f) and (hp > 0.0f)) {
+        float available_hull = hp - m_self->GetAttribute(AttrDamage).get_float();
+        Damage DamageToHull = d.MultiplyDup(
+            Resonance(AttrKineticDamageResonance),
+            Resonance(AttrThermalDamageResonance),
+            Resonance(AttrEmDamageResonance),
+            Resonance(AttrExplosiveDamageResonance) );
+
+        float hull_damage = DamageToHull.GetTotal();
+        if (hull_damage < available_hull) {
+            total_damage += hull_damage;
+            float new_damage = m_self->GetAttribute(AttrDamage).get_float() + hull_damage;
+            m_self->SetAttribute(AttrDamage, new_damage);
+            _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to structure. New structure damage: %.2f",
+                 GetName(), GetID(), hull_damage, new_damage);
+        } else if (IsUnkillable(GetID())) {
+            // GM: hold at 1hp
+            float max_damage = hp - 1.0f;
+            float old_damage = m_self->GetAttribute(AttrDamage).get_float();
+            if (max_damage > old_damage) {
+                total_damage += (max_damage - old_damage);
+                m_self->SetAttribute(AttrDamage, max_damage);
+            }
+            _log(DAMAGE__INFO, "%s(%u): %.2f damage would have destroyed us, but we're unkillable.",
+                 GetName(), GetID(), hull_damage);
+        } else {
+            total_damage += available_hull;
+            //dead....
+            _log(DAMAGE__INFO, "%s(%u): %.2f damage has depleted our structure. Time to explode.",
+                 GetName(), GetID(), hull_damage);
+            killed = true;
+        }
+
+        // module damage.
+        //  after armor is gone, make damage to random module.
+        if (armorDepleted and HasPilot())
+            GetShipSE()->DamageRandModule(sConfig.server.ModuleDamageChance);    // config option for random module damage chance
     }
 
     if (killed) {
@@ -573,8 +612,7 @@ void ShipSE::Killed(Damage &fatal_blow) {
 
                 blob << "<i t=" << cur.second->typeID() << " f=" << cur.second->flag() << " s=" << s ;
                 // all contained items have 50% chance of drop, except rigs, which do not survive
-                // todo:  add damage to item, if applicable, from ship explosion
-                //cur.second->SetAttribute(AttrDamage, 5);
+                //  dropped items keep the damage they had.  the explosion doesn't add any (Crucible)
                 if (IsRigSlot(cur.second->flag())) {
                     /* just avoiding survive check */;
                 } else if (IsEven(MakeRandomInt(0, 100))) {
