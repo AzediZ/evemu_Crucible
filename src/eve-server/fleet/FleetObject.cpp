@@ -60,6 +60,10 @@ void FleetObject::BoundReleased (FleetBound* bound) {
 // FOH::CreateFleet, FOH::
 PyResult FleetObject::CreateFleet(PyCallArgs &call) {
     //self.fleet = sm.RemoteSvc('fleetObjectHandler').CreateFleet()
+    // a member of another fleet would stay in that fleet's member list (dangling after logoff)
+    if ((call.client->GetChar().get() != nullptr) and (call.client->GetChar()->fleetID() != 0))
+        throw UserError("FleetYouAreAlreadyInFleet");
+
     FleetBindRSP fbr;
         fbr.nodeID = this->GetServiceManager().GetNodeID();    // may have to update this later, or use dedicated fleet node
         fbr.fleetID = sFltSvc.CreateFleet(call.client);

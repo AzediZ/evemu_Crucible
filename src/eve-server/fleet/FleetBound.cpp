@@ -256,7 +256,7 @@ PyResult FleetBound::GetInitState(PyCallArgs &call) {
     return rsp.Encode();
 }
 
-PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<PyInt*> wingID, std::optional <PyInt*> squadID, std::optional <PyLong*> role) {
+PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<PyInt*> wingID, std::optional <PyInt*> squadID, std::optional <PyInt*> role) {
     sLog.Warning("FleetBound", "Handle_Invite() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
@@ -471,7 +471,7 @@ PyResult FleetBound::AcceptInvite(PyCallArgs &call, std::optional <PyInt*> shipT
     return this->GetOID();
 }
 
-PyResult FleetBound::RejectInvite(PyCallArgs &call) {
+PyResult FleetBound::RejectInvite(PyCallArgs &call, std::optional <PyBool*> inFleet) {
     sLog.Warning("FleetBound", "Handle_RejectInvite() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
@@ -480,9 +480,7 @@ PyResult FleetBound::RejectInvite(PyCallArgs &call) {
         return new PyLong(GetFileTimeNow());
 
     // fleetSvc.OnFleetInvite: RejectInvite(True) when already in a fleet, (False) on auto-reject, () on a manual 'no'
-    bool alreadyInFleet = false;
-    if ((call.tuple->size() > 0) and call.tuple->GetItem(0)->IsBool())
-        alreadyInFleet = call.tuple->GetItem(0)->AsBool()->value();
+    bool alreadyInFleet = inFleet.has_value() ? inFleet.value()->value() : false;
 
     // the client calls this unprompted (auto-reject), so a missing invite is not an error
     InviteData data = InviteData();

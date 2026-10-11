@@ -150,11 +150,11 @@ public:
     #define MATH_OPERATOR(a, b) \
         b operator a ( b val) \
         { \
-            if (this->mType == evil_number_int) \
+            if (this->mType == evil_number_int) { \
                 if (std::is_floating_point<std::remove_cv_t<b>>::value) \
                     return static_cast<double>(this->iVal) a static_cast<double>(val); \
                 return this->iVal a static_cast<int64>(val); \
-            else \
+            } else \
                 return this->fVal a static_cast<double>(val); \
         }
 */

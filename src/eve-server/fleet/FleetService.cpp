@@ -1290,12 +1290,19 @@ void FleetService::ClientLogout(Client* pClient)
         }
 
     Character* pChar = pClient->GetChar().get();
-    if ((pChar == nullptr) or (pChar->fleetID() == 0))
-        return;
+    if ((pChar != nullptr) and (pChar->fleetID() != 0)) {
+        m_departing = pClient;
+        LeaveFleet(pClient);
+        m_departing = nullptr;
+    }
 
-    m_departing = pClient;
-    LeaveFleet(pClient);
-    m_departing = nullptr;
+    // drop fleet adverts still pointing to this client (LeaveFleet hands its own fleet's advert to the boss)
+    for (auto itr = m_fleetAdvertMap.begin(); itr != m_fleetAdvertMap.end(); )
+        if (itr->second.leader == pClient) {
+            itr = m_fleetAdvertMap.erase(itr);
+        } else {
+            ++itr;
+        }
 }
 
 void FleetService::PassBoss(uint32 fleetID, Client* pLeaving)
