@@ -119,7 +119,9 @@ public:
 
     /* Global Actions */
     void Stop();
-    void Halt();     // puts entity at 0 velocity
+    // puts entity at 0 velocity.  notify=false stops it without sending a Stop to the client: the client's
+    //  autopilot takes a Stop for its own ship as the pilot taking over, and switches itself off
+    void Halt(bool notify = true);
     void Eject();   // avoid numerous other redirect calls
 
     /* TractorBeam */
