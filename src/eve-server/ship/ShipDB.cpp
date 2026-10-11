@@ -70,6 +70,20 @@ void ShipDB::DeleteInsuranceByShipID(uint32 shipID) {
 	sDatabase.RunQuery(err, "DELETE FROM shipInsurance WHERE shipID=%u", shipID);
 }
 
+int8 ShipDB::GetInsuranceKind(uint32 shipID)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res, "SELECT isCorpItem FROM shipInsurance WHERE shipID = %u", shipID) or !res.GetRow(row))
+        return -1;
+    return (row.GetInt(0) != 0) ? 1 : 0;
+}
+
+void ShipDB::VoidInsurance(uint32 shipID)
+{
+    DeleteInsuranceByShipID(shipID);
+}
+
 double ShipDB::GetShipInsurancePayout(uint32 shipID, uint16 typeID, bool& isDefault) {
     isDefault = false;
     DBQueryResult res;

@@ -309,7 +309,7 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
 
         // the fee and escrow are taken after the order is stored (they reference its orderID).  check the wallet first,
         //  so an unpaid order is never left behind (cancelling it would refund escrow that was never paid)
-        CheckFunds(walletOwnerID, accountKey, fee + escrow);
+        MarketMgr::CheckFunds(walletOwnerID, accountKey, fee + escrow);
 
         // set save data
         Market::SaveData data = Market::SaveData();
@@ -426,7 +426,7 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     double total = orderPrice * qty;
     double fee = GetBrokerFee(pClient, orderStationID, total);
     _log(MARKET__DEBUG, "PlaceCharOrder(sell) - %s: Total: %.2f, Fee: %.2f", corpOrder ? "Corp" : "Player", total, fee);
-    CheckFunds(walletOwnerID, accountKey, fee);
+    MarketMgr::CheckFunds(walletOwnerID, accountKey, fee);
 
     // set save data
     Market::SaveData data = Market::SaveData();
@@ -537,7 +537,7 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
         delta = newEscrow - oInfo.escrow;
     }
     // check both, so the fee isn't taken when the escrow can't be
-    CheckFunds(walletOwnerID, accountKey, fee + EvE::max(delta, 0.0));
+    MarketMgr::CheckFunds(walletOwnerID, accountKey, fee + EvE::max(delta, 0.0));
     AccountService::TransferFunds(walletOwnerID, stationOwnerID, fee, reason.c_str(), Journal::EntryType::Brokerfee, oInfo.orderID, accountKey, Account::KeyType::Cash, call.client);
 
     if (delta >= 0.01) {
@@ -627,22 +627,6 @@ void MarketProxyService::CheckOrderCount(Client* pClient)
                  + 16 * pChar->GetSkillLevel(EvESkill::Wholesale) + 32 * pChar->GetSkillLevel(EvESkill::Tycoon);
     if (MarketDB::CountOpenOrders(pClient->GetCharacterID()) >= limit)
         throw CustomError("You have reached your limit of %u open market orders.  Train Trade, Retail, Wholesale or Tycoon to place more.", limit);
-}
-
-void MarketProxyService::CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount)
-{
-    double balance(MarketMgr::GetWalletBalance(walletOwnerID, accountKey));
-    if (balance >= amount)
-        return;
-    if (IsPlayerCorp(walletOwnerID))
-        throw UserError("NotEnoughMoneyCorp")
-                .AddOwnerName("owner", walletOwnerID)
-                .AddISK("amount", amount)
-                .AddISK("balance", balance)
-                .AddFormatValue("division", new PyString(CorporationDB::GetDivisionName(walletOwnerID, accountKey)));
-    throw UserError("NotEnoughMoney")
-            .AddISK("amount", amount)
-            .AddISK("balance", balance);
 }
 
 bool MarketProxyService::ValidOrderRange(int32 range)

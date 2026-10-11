@@ -87,6 +87,8 @@ public:
     static void GetDeliveryLocation(uint32 ownerID, bool isCorp, uint32 memberID, uint32 stationID, uint32& itemOwnerID, uint32& locationID, EVEItemFlags& flag);
     // wallet balance of a character (online or not) or a corp division
     static double GetWalletBalance(uint32 ownerID, uint16 accountKey);
+    // throws NotEnoughMoney / NotEnoughMoneyCorp when the wallet holds less than amount
+    static void CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount);
 
     bool NeedsUpdate()                                  { return m_historyDay + EvE::Time::Day <= GetMidnight(); }
 

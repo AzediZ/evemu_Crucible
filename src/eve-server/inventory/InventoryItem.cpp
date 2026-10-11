@@ -32,6 +32,7 @@
 #include "ConsoleCommands.h"
 #include "EntityList.h"
 #include "character/Skill.h"
+#include "contract/ContractUtils.h"
 #include "effects/EffectsProcessor.h"
 #include "exploration/Probes.h"
 #include "manufacturing/Blueprint.h"
@@ -573,6 +574,10 @@ void InventoryItem::RemoveItem(InventoryItemRef iRef)
 
 void InventoryItem::Delete()
 {
+    // a courier package destroyed or opened fails its contract
+    if (m_type.id() == itemPlasticWrap)
+        ContractUtils::OnCrateDeleted(m_itemID);
+
     m_delete = true;
 
     // get out of client's sight.

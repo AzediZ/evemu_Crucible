@@ -35,23 +35,44 @@ public:
     ContractProxy();
 
 protected:
-    PyResult CreateContract(PyCallArgs &call, PyInt* contractType, PyBool* isPrivate, std::optional <PyNone*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyNone*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyString* title, PyString* description);
-    PyResult CreateContract(PyCallArgs &call, PyInt* contractType, PyBool* isPrivate, std::optional <PyInt*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyNone*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyString* title, PyString* description);
-    PyResult CreateContract(PyCallArgs &call, PyInt* contractType, PyBool* isPrivate, std::optional <PyInt*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyNone*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyWString* title, PyString* description);
-    PyResult CreateContract(PyCallArgs &call, PyInt* contractType, PyBool* isPrivate, std::optional <PyNone*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyInt*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyString* title, PyString* description);
-    PyResult CreateContract(PyCallArgs &call, PyInt* contractType, PyBool* isPrivate, std::optional <PyNone*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyNone*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyWString* title, PyString* description);
-    PyResult CreateContract(PyCallArgs& call, PyInt* contractType, PyInt* isPrivate, std::optional <PyInt*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyInt*> endStationID, PyInt* price, PyInt* reward, PyInt* collateral, PyWString* title, PyWString* description);
+    // client:  CreateContract(type, avail, assigneeID, expiretime, duration, startStationID, endStationID, price, reward, collateral,
+    //  title, description, itemList=, flag=, requestItemTypeList=, forCorp=, confirm=)
+    PyResult CreateContract(PyCallArgs& call, PyInt* contractType, PyRep* isPrivate, std::optional<PyRep*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyRep*> endStationID, PyRep* price, PyRep* reward, PyRep* collateral, PyRep* title, PyRep* description);
     PyResult GetContract(PyCallArgs& call, PyInt* contractID);
     PyResult AcceptContract(PyCallArgs& call, PyInt* contractID, std::optional<PyRep*> forCorp);
     PyResult CompleteContract(PyCallArgs& call, PyInt* contractID, PyInt* completionStatus);
     PyResult DeleteContract(PyCallArgs& call, PyInt* contractID);
     PyResult NumOutstandingContracts(PyCallArgs& call);
-    PyResult GetItemsInStation(PyCallArgs& call, PyInt* stationID, std::optional<PyInt*> forCorp);
+    PyResult GetItemsInStation(PyCallArgs& call, PyInt* stationID, std::optional<PyRep*> forCorp);
+    PyResult GetItemsInContainer(PyCallArgs& call, PyInt* stationID, PyInt* containerID, PyRep* forCorp, std::optional<PyInt*> flag);
+    PyResult SplitStack(PyCallArgs& call, PyInt* stationID, PyInt* itemID, PyInt* qty, PyRep* forCorp, std::optional<PyInt*> flag);
+    PyResult GetCourierContractFromItemID(PyCallArgs& call, PyInt* itemID);
     PyResult GetLoginInfo(PyCallArgs& call);
     PyResult SearchContracts(PyCallArgs& call);
     PyResult CollectMyPageInfo(PyCallArgs& call);
-    PyResult GetMyExpiredContractList(PyCallArgs& call);
+    PyResult GetMyExpiredContractList(PyCallArgs& call, std::optional<PyRep*> forCorp);
+    PyResult GetMyBids(PyCallArgs& call, std::optional<PyRep*> forCorp);
+    PyResult GetMyCurrentContractList(PyCallArgs& call, PyRep* isAccepted, std::optional<PyRep*> forCorp);
+    PyResult DeleteNotification(PyCallArgs& call, PyInt* contractID, std::optional<PyRep*> forCorp);
+    PyResult PlaceBid(PyCallArgs& call, PyInt* contractID, PyRep* bid, std::optional<PyRep*> forCorp);
+    PyResult FinishAuction(PyCallArgs& call, PyInt* contractID, PyRep* isIssuer);
     PyResult GetContractListForOwner(PyCallArgs& call, PyInt* ownerID, PyInt* contractStatus, std::optional <PyInt*> contractType, std::optional <PyBool*> issuedToBy);
+
+private:
+    // the client's own (forCorp: its corp's) outstanding contract counts (NumOutstandingContracts)
+    struct OutstandingCounts {
+        uint32 myCharTotal;
+        uint32 nonCorpForMyChar;
+        uint32 myCorpTotal;
+        uint32 nonCorpForMyCorp;
+    };
+    static void CountOutstanding(Client* pClient, OutstandingCounts& into);
+    // " WHERE ..." of the journal's "requires attention" list
+    static std::string AttentionWhere(Client* pClient, bool forCorp);
+    // corp contract work needs the Contract Manager role (directors have it)
+    static void CheckContractManager(Client* pClient);
+    // the corp wallet division of the session, if the member can take from it
+    static uint16 GetCorpWalletKey(Client* pClient);
 };
 
 #endif /* !__CONTRACT_PROXY_H__INCL__ */

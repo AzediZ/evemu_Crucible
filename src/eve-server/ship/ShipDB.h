@@ -43,6 +43,10 @@ public:
     PyRep *GetInsuranceByOwnerID(uint32 ownerID);
     bool InsertInsuranceByShipID(uint32 shipID, std::string name, uint32 ownerID, float level, double payOut, bool isCorpItem = false, uint8 numWeeks = 12);
 	static void DeleteInsuranceByShipID(uint32 shipID);
+    // -1 not insured, 0 personal insurance, 1 corp insurance
+    static int8 GetInsuranceKind(uint32 shipID);
+    // ends a ship's insurance (contract, trade, corp transfer...)
+    static void VoidInsurance(uint32 shipID);
 
     // the insurance contract's payout, or the default payout for an uninsured ship (isDefault set)
     double GetShipInsurancePayout(uint32 shipID, uint16 typeID, bool& isDefault);

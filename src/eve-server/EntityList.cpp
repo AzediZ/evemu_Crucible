@@ -30,6 +30,7 @@
 
 #include "Client.h"
 #include "ConsoleCommands.h"
+#include "contract/ContractUtils.h"
 #include "EntityList.h"
 #include "EVEServerConfig.h"
 #include "ServiceDB.h"
@@ -277,6 +278,7 @@ void EntityList::Process() {
             if (m_minutes % 5 == 0) { // ~5m
                 sWHMgr.Process();
                 sMktMgr.Process();  // market order expiry, daily price history rollup
+                ContractUtils::ProcessExpiry();  // optional contract cleanup and courier failure
                 // write something to tic corps vote cases.
                 for (auto cur : m_systems)
                     cur.second->UpdateData();   // update active system timers and dynamic data every 5m

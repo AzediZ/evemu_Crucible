@@ -20,6 +20,7 @@
 #include "account/AccountService.h"
 #include "cache/ObjCacheService.h"
 #include "character/CharacterDB.h"
+#include "corporation/CorporationDB.h"
 #include "inventory/InventoryItem.h"
 #include "map/MapData.h"
 #include "market/MarketMgr.h"
@@ -368,6 +369,22 @@ double MarketMgr::GetWalletBalance(uint32 ownerID, uint16 accountKey)
     if (IsPlayerCorp(ownerID))
         return AccountDB::GetCorpBalance(ownerID, accountKey);
     return 0.0;
+}
+
+void MarketMgr::CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount)
+{
+    double balance(GetWalletBalance(walletOwnerID, accountKey));
+    if (balance >= amount)
+        return;
+    if (IsPlayerCorp(walletOwnerID))
+        throw UserError("NotEnoughMoneyCorp")
+                .AddOwnerName("owner", walletOwnerID)
+                .AddISK("amount", amount)
+                .AddISK("balance", balance)
+                .AddFormatValue("division", new PyString(CorporationDB::GetDivisionName(walletOwnerID, accountKey)));
+    throw UserError("NotEnoughMoney")
+            .AddISK("amount", amount)
+            .AddISK("balance", balance);
 }
 
 void MarketMgr::RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,

@@ -68,8 +68,6 @@ private:
     void CheckSkillRange(Client* pClient, uint32 stationID, uint16 skillTypeID);
     // open order limit from Trade, Retail, Wholesale and Tycoon
     void CheckOrderCount(Client* pClient);
-    // throws NotEnoughMoney / NotEnoughMoneyCorp
-    static void CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount);
     // order range values the client can send
     static bool ValidOrderRange(int32 range);
     static bool ValidOrderDuration(int32 duration);
