@@ -2278,17 +2278,26 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
             );
         }
 
-        //Get all clients in the system which the SE is in
-        /** @todo  this isnt right....will segfault.  needs to be fixed */
+        // queue the update once for every client in space in this system (docked clients are skipped by the queue anyway)
         std::vector<Client*> cv;
-
         mySE->SystemMgr()->GetClientList(cv);
 
-        for(auto const& value: cv) {
-             if (value->GetShipSE() != nullptr) {
-                value->GetShipSE()->SysBubble()->BubblecastDestiny(updates, events, "destiny");
+        for (auto pClient : cv) {
+            if ((pClient == nullptr) or !pClient->IsInSpace())
+                continue;
+            for (auto up : updates) {
+                PyIncRef(up);
+                pClient->QueueDestinyUpdate(&up);
+            }
+            for (auto ev : events) {
+                PyIncRef(ev);
+                pClient->QueueDestinyEvent(&ev);
             }
         }
+
+        // match BubblecastDestiny() semantics
+        updates.clear();
+        events.clear();
     } else if (mySE->SysBubble() != nullptr) {
         if (is_log_enabled(DESTINY__UPDATES)) {
             _log(

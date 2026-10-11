@@ -28,18 +28,29 @@
 #include "EntityList.h"
 #include "EVEServerConfig.h"
 
+#include <set>
+
 /**
- * Map of variables that should never be sent through the wire on the session data
- * These variables will be ignored. In reality we should have a whitelist
+ * Whitelist of session variables that are sent through the wire to the client.
+ * Every other key is server-internal (corpRole, cloneStationID, fleetjob, editor_*, ...) and is
+ * still readable by the server through GetCurrent*() but never leaves it.
  *
- * TODO: COME UP WITH A REAL WHITELIST OF THINGS THAT HAVE TO BE SENT TO THE CLIENT
+ * Taken from the Crucible client's session classes:
+ *   base.CoreSession.__persistvars__  (carbon/common/script/sys/sessions.py)
+ *   base.Session.__persistvars__ and the 'locationid'/'corprole' nonpersistvars (script/common/script/sys/eveSessions.py)
  *
- * @author Almamu
+ * @author Almamu (original blacklist)
  */
-static std::map<std::string, bool> NONPERSISTVARS = {
-    {"clientID", true},
-    {"sessionID", true},
-    {"sid", true}
+static const std::set<std::string> CLIENTVARS = {
+    // CoreSession
+    "userid", "languageID", "role", "charid", "address", "userType", "maxSessionTime", "sessionType",
+    // Session
+    "regionid", "constellationid", "allianceid", "warfactionid", "corpid", "fleetid", "fleetrole", "fleetbooster",
+    "wingid", "squadid", "shipid", "stationid", "stationid2", "worldspaceid", "solarsystemid", "solarsystemid2",
+    "hqID", "baseID", "rolesAtAll", "rolesAtHQ", "rolesAtBase", "rolesAtOther", "genderID", "bloodlineID", "raceID",
+    "corpAccountKey", "inDetention", "battleID",
+    // client nonpersistvars the client accepts from the server
+    "locationid", "corprole"
 };
 
 
@@ -56,8 +67,7 @@ m_sessionID(0)
     /*  session id is unique to each session.
      * is not saved or shared between chars
      */
-    //random.getrandbits(63)
-    m_sessionID = GetTimeUSeconds() *15;
+    // random.getrandbits(63), unique among live sessions (assigned by RegisterSID)
     sEntityList.RegisterSID(m_sessionID);
 }
 
@@ -149,8 +159,8 @@ void ClientSession::EncodeChanges(PyDict* into)
         // mark the value as not new
         valueTuple->SetItem (2, PyStatic.NewFalse());
 
-        // add the value to the list if it should be persisted
-        if (NONPERSISTVARS.find (cur.first->AsString ()->content ()) == NONPERSISTVARS.end ())
+        // add the value to the list if the client knows it
+        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
             into->SetItem (cur.first, new_tuple (valueTuple->GetItem (0), valueTuple->GetItem(1)));
     }
 
@@ -165,8 +175,8 @@ void ClientSession::EncodeInitialState (PyDict* into)
 
         valueTuple->SetItem(2, PyStatic.NewFalse());
 
-        // add the value to the initial state only if required
-        if (NONPERSISTVARS.find (cur.first->AsString ()->content ()) == NONPERSISTVARS.end ())
+        // add the value to the initial state only if the client knows it
+        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
             into->SetItem (cur.first, cur.second->AsTuple ()->GetItem (1));
     }
 

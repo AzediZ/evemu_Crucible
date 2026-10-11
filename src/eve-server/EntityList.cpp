@@ -48,6 +48,8 @@
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "corporation/CorporationDB.h"
 
+#include <random>
+
 EntityList::EntityList()
 : m_services(nullptr),
 m_targTimer(0, true),
@@ -781,14 +783,13 @@ Client* EntityList::FindClientByName(const char* name) const {
 
 /** @todo  this needs more work.  hacked for now...  */
 void EntityList::RegisterSID(int64 &sessionID) {
-    /*  this whole method is just made up...eventually it will return a unique long long */
-    /* max for int64 = 9223372036854775807 */
-    std::set<int64>::iterator itr = m_sessions.find(sessionID);
-    std::pair<std::set<int64>::iterator, bool > test;
-    if (itr == m_sessions.end())
-        test = m_sessions.insert(sessionID);
-    if (test.second)
-        return;
+    /* the client uses random.getrandbits(63); draw random 63-bit non-zero ids until one is unused */
+    static std::mt19937_64 sidGen(std::random_device{}());
+    int64 sid(0);
+    do {
+        sid = static_cast<int64>(sidGen() & 0x7FFFFFFFFFFFFFFFULL);
+    } while ((sid == 0) or !m_sessions.insert(sid).second);
+    sessionID = sid;
 }
 
 void EntityList::RemoveSID ( int64 sessionID ) {
