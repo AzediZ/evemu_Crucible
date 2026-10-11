@@ -59,7 +59,10 @@ PyResult Search::Query(PyCallArgs& call, PyWString* filter, PyList* data) {
         ids.push_back(t->value());
     }
 
-    return m_db->Query( str, &ids, call.client->GetCharacterID() );
+    std::string esc;
+    sDatabase.DoEscapeString(esc, str);
+    esc = esc.c_str();      // DoEscapeString leaves a trailing NUL in the string
+    return m_db->Query( esc, &ids, call.client->GetCharacterID() );
 }
 
 
@@ -69,7 +72,8 @@ PyResult Search::QuickQuery(PyCallArgs& call, PyWString* filter, PyList* data)  
     std::string str = filter->content();
 	Replace(str);
 
-    bool hideNPC = true, onlyAltName = false;
+    // searchUtil always sends both keywords
+    bool hideNPC = false, onlyAltName = false;
     if (call.byname.find("hideNPC") != call.byname.end())
         hideNPC = (PyRep::IntegerValue(call.byname.find("hideNPC")->second) != 0);
 
@@ -97,7 +101,10 @@ PyResult Search::QuickQuery(PyCallArgs& call, PyWString* filter, PyList* data)  
         ids.push_back(t->value());
     }
 
-    return m_db->QuickQuery( str, &ids, call.client->GetCharacterID(), hideNPC, onlyAltName);
+    std::string esc;
+    sDatabase.DoEscapeString(esc, str);
+    esc = esc.c_str();      // DoEscapeString leaves a trailing NUL in the string
+    return m_db->QuickQuery( esc, &ids, call.client->GetCharacterID(), hideNPC, onlyAltName);
 }
 
 void Search::Replace(std::string &str) {

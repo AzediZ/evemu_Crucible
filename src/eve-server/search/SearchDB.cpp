@@ -44,194 +44,130 @@ searchMaxResults = 500
 searchMinWildcardLength = 3
 */
 
-PyRep *SearchDB::Query(std::string string, std::vector<int> *searchID, uint32 charID) {
-    std::string id = "";
-
-    PyDict *dict = new PyDict();
+void SearchDB::BuildIDs(const std::string& str, int type, uint32 charID, bool hideNPC, bool onlyAltName, std::vector<uint32>& out)
+{
+    const char* s = str.c_str();
+    uint32 limit = searchMaxResults;
     DBQueryResult res;
+    bool ok(false);
+    switch (type) {
+        case searchResultAgent:
+            ok = sDatabase.RunQuery(res,
+                "SELECT characterID FROM chrNPCCharacters"
+                " WHERE characterName LIKE '%s' ORDER BY characterName LIMIT %u", s, limit);
+            break;
+        case searchResultCharacter:
+            ok = sDatabase.RunQuery(res,
+                "SELECT characterID FROM chrCharacters"
+                " WHERE characterName LIKE '%s' ORDER BY characterName LIMIT %u", s, limit);
+            break;
+        case searchResultCorporation:
+            if (onlyAltName) {
+                ok = sDatabase.RunQuery(res,
+                    "SELECT corporationID FROM crpCorporation"
+                    " WHERE tickerName LIKE '%s' AND corporationID >= %u ORDER BY corporationName LIMIT %u",
+                    s, (hideNPC ? minPCCorporation : 0), limit);
+            } else {
+                ok = sDatabase.RunQuery(res,
+                    "SELECT corporationID FROM crpCorporation"
+                    " WHERE (corporationName LIKE '%s' OR tickerName LIKE '%s') AND corporationID >= %u"
+                    " ORDER BY corporationName LIMIT %u",
+                    s, s, (hideNPC ? minPCCorporation : 0), limit);
+            }
+            break;
+        case searchResultAlliance:
+            if (onlyAltName) {
+                ok = sDatabase.RunQuery(res,
+                    "SELECT allianceID FROM alnAlliance"
+                    " WHERE shortName LIKE '%s' ORDER BY allianceName LIMIT %u", s, limit);
+            } else {
+                ok = sDatabase.RunQuery(res,
+                    "SELECT allianceID FROM alnAlliance"
+                    " WHERE (allianceName LIKE '%s' OR shortName LIKE '%s') ORDER BY allianceName LIMIT %u",
+                    s, s, limit);
+            }
+            break;
+        case searchResultFaction:
+            ok = sDatabase.RunQuery(res,
+                "SELECT factionID FROM facFactions"
+                " WHERE factionName LIKE '%s' ORDER BY factionName LIMIT %u", s, limit);
+            break;
+        case searchResultConstellation:
+            ok = sDatabase.RunQuery(res,
+                "SELECT constellationID FROM mapConstellations"
+                " WHERE constellationName LIKE '%s' ORDER BY constellationName LIMIT %u", s, limit);
+            break;
+        case searchResultSolarSystem:
+            ok = sDatabase.RunQuery(res,
+                "SELECT solarSystemID FROM mapSolarSystems"
+                " WHERE solarSystemName LIKE '%s' ORDER BY solarSystemName LIMIT %u", s, limit);
+            break;
+        case searchResultRegion:
+            ok = sDatabase.RunQuery(res,
+                "SELECT regionID FROM mapRegions"
+                " WHERE regionName LIKE '%s' ORDER BY regionName LIMIT %u", s, limit);
+            break;
+        case searchResultStation:
+            ok = sDatabase.RunQuery(res,
+                "SELECT stationID FROM staStations"
+                " WHERE stationName LIKE '%s' ORDER BY stationName LIMIT %u", s, limit);
+            break;
+        case searchResultInventoryType:
+            // cfg.invtypes:  published types
+            ok = sDatabase.RunQuery(res,
+                "SELECT typeID FROM invTypes"
+                " WHERE typeName LIKE '%s' AND published = 1 ORDER BY typeName LIMIT %u", s, limit);
+            break;
+        default:
+            _log(SERVICE__WARNING, "SearchDB::BuildIDs() - unknown search type %i", type);
+            return;
+    }
 
-    for (uint8 i=0; i < searchID->size(); i++) {
-        switch(searchID->at(i)) {
-            case 1: //searchResultAgent = 1
-                sDatabase.RunQuery(res,
-                    "SELECT"
-                    "   characterID AS agentID"
-                    " FROM chrNPCCharacters"
-                    " WHERE characterName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "agentID";
-                break;
-            case 2: //searchResultCharacter = 2
-                sDatabase.RunQuery(res,
-                    "SELECT"
-                    "   characterID AS ownerID"
-                    " FROM chrCharacters"
-                    " WHERE characterName LIKE '%s' ", string.c_str() );
-                id = "ownerID";
-                break;
-            case 3: //searchResultCorporation = 3
-                sDatabase.RunQuery(res,
-                    "SELECT"
-                    "   corporationID AS ownerID"
-                    " FROM crpCorporation"
-                    " WHERE corporationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "ownerID";
-                break;
-            case 4: //searchResultAlliance = 4
-                sDatabase.RunQuery(res,
-                    "SELECT allianceID AS ownerID"
-                    " FROM alnAlliance"
-                    " WHERE shortName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "ownerID";
-                break;
-            case 5: //searchResultFaction = 5
-                sDatabase.RunQuery(res,
-                    "SELECT factionID AS ownerID"
-                    " FROM facFactions"
-                    " WHERE factionName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "ownerID";
-                break;
-            case 6: //searchResultConstellation = 6
-                sDatabase.RunQuery(res,
-                    "SELECT"
-                    "   constellationID AS itemID"
-                    " FROM mapConstellations"
-                    " WHERE constellationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "itemID";
-                break;
-            case 7: //searchResultSolarSystem = 7
-                sDatabase.RunQuery(res,
-                    "SELECT "
-                    "   solarSystemID AS itemID"
-                    " FROM mapSolarSystems "
-                    " WHERE solarSystemName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "itemID";
-                break;
-            case 8: //searchResultRegion = 8
-                sDatabase.RunQuery(res,
-                    "SELECT "
-                    "   regionID AS itemID"
-                    " FROM mapRegions"
-                    " WHERE regionName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "itemID";
-                break;
-            case 9: //searchResultStation = 9
-                sDatabase.RunQuery(res,
-                    "SELECT "
-                    "   stationID AS itemID"
-                    " FROM staStations "
-                    " WHERE stationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                id = "itemID";
-                break;
-            case 10:    //searchResultInventoryType = 10
-                sDatabase.RunQuery(res,
-                    "SELECT"
-                    "   typeID"
-                    " FROM entity"
-                    " WHERE itemName LIKE '%s'"
-                    " AND ownerID = %u", string.c_str(), charID );
-                id = "typeID";
-                break;
-        }
-        if (res.GetRowCount())
-            dict->SetItem(new PyInt(searchID->at(i)),DBResultToIntIntDict(res));
+    if (!ok) {
+        codelog(DATABASE__ERROR, "Error in search query (type %i): %s", type, res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        out.push_back(row.GetUInt(0));
+}
+
+PyRep *SearchDB::Query(std::string string, std::vector<int> *searchID, uint32 charID) {
+    // {resultType: [ids]}, empty types left out
+    PyDict *dict = new PyDict();
+    std::set<int> done;
+    for (auto type : *searchID) {
+        if (!done.insert(type).second)
+            continue;
+        std::vector<uint32> ids;
+        BuildIDs(string, type, charID, false, false, ids);
+        if (ids.empty())
+            continue;
+        PyList* list = new PyList();
+        for (auto cur : ids)
+            list->AddItem(new PyInt(cur));
+        dict->SetItem(new PyInt(type), list);
     }
 
     return dict;
 }
 
 PyRep *SearchDB::QuickQuery(std::string string, std::vector<int> *searchID, uint32 charID, bool hideNPC, bool onlyAltName) {
-    uint8 size(searchID->size());
-
-    if (((size == 1) and (searchID->at(0) == 2))
-    or  (hideNPC)) {
-        /** @todo i dont remember what this was for, but need to finish it anyway */
-    }
-
+    // flat list of ids over all requested types, without duplicates
     PyList *result = new PyList();
-    DBQueryResult res;
-    DBResultRow row;
-
-    for (uint8 i=0; i < searchID->size(); i++) {
-        switch(searchID->at(i)) {
-            case 1: //searchResultAgent = 1
-                sDatabase.RunQuery(res,
-                    "SELECT characterID"
-                    " FROM chrNPCCharacters"
-                    " WHERE characterName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 2: //searchResultCharacter = 2
-                sDatabase.RunQuery(res,
-                    "SELECT characterID"
-                    " FROM chrCharacters"
-                    " WHERE characterName LIKE '%s' ", string.c_str() );
-                break;
-            case 3: //searchResultCorporation = 3
-                sDatabase.RunQuery(res,
-                    "SELECT corporationID"
-                    " FROM crpCorporation"
-                    " WHERE corporationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 4: //searchResultAlliance = 4
-                sDatabase.RunQuery(res,
-                    "SELECT allianceID"
-                    " FROM alnAlliance"
-                    " WHERE shortName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 5: //searchResultFaction = 5
-                sDatabase.RunQuery(res,
-                    "SELECT factionID"
-                    " FROM facFactions"
-                    " WHERE factionName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 6: //searchResultConstellation = 6
-                sDatabase.RunQuery(res,
-                    "SELECT constellationID"
-                    " FROM mapConstellations"
-                    " WHERE constellationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 7: //searchResultSolarSystem = 7
-                sDatabase.RunQuery(res,
-                    "SELECT solarSystemID"
-                    " FROM mapSolarSystems "
-                    " WHERE solarSystemName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 8: //searchResultRegion = 8
-                sDatabase.RunQuery(res,
-                    "SELECT regionID"
-                    " FROM mapRegions"
-                    " WHERE regionName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 9: //searchResultStation = 9
-                sDatabase.RunQuery(res,
-                    "SELECT stationID"
-                    " FROM staStations "
-                    " WHERE stationName LIKE '%s' "
-                    " LIMIT 0, 10", string.c_str() );
-                break;
-            case 10:    //searchResultInventoryType = 10
-                sDatabase.RunQuery(res,
-                    "SELECT typeID"
-                    " FROM invTypes"
-                    " WHERE typeName LIKE '%s'", string.c_str() );
-                break;
-        }
-        while (res.GetRow(row)) {
-            result->AddItem( new PyInt(row.GetUInt(0) ));
+    std::set<uint32> seen;
+    std::set<int> done;
+    for (auto type : *searchID) {
+        if (!done.insert(type).second)
+            continue;
+        std::vector<uint32> ids;
+        BuildIDs(string, type, charID, hideNPC, onlyAltName, ids);
+        for (auto cur : ids) {
+            if (seen.size() >= searchMaxResults)
+                return result;
+            if (seen.insert(cur).second)
+                result->AddItem(new PyInt(cur));
         }
     }
 

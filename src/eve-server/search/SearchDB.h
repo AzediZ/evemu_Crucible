@@ -51,8 +51,15 @@ class SearchDB
 : public ServiceDB {
 public:
 
+    // 'string' must already be sql-escaped, with the client's '*' wildcards turned into '%'
     PyRep* Query(std::string string, std::vector<int> *searchID, uint32 charID);
     PyRep* QuickQuery(std::string string, std::vector<int> *searchID, uint32 charID, bool hideNPC = false, bool onlyAltName = false);
+
+    /* ids of one result type matching 'str' (at most searchMaxResults).
+     *  hideNPC:  no npc corporations.  onlyAltName:  corporations/alliances by ticker/short name only
+     *  (otherwise the full name or the ticker/short name)
+     */
+    static void BuildIDs(const std::string& str, int type, uint32 charID, bool hideNPC, bool onlyAltName, std::vector<uint32>& out);
 
 };
 
