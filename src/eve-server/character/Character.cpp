@@ -490,9 +490,18 @@ void Character::ProcessEffects(ShipItem* pShip)
     _log(EFFECTS__TRACE, "Character::ProcessEffects()");
     //ResetModifiers();
 
+    // implant and booster attribs are worked out again every time (set bonuses multiply and must not compound)
+    std::vector<InventoryItemRef> augs;
+    GetImplants(augs);
+    GetBoosters(augs);
+    for (auto cur : augs)
+        ResetAugmentation(cur);
+
     //  427 total skills.  this should be fairly fast...it is.
     std::vector<InventoryItemRef> allSkills;
     pInventory->GetItemsByFlag(flagSkill, allSkills);
+    // the skill in training has its trained levels too
+    pInventory->GetItemsByFlag(flagSkillInTraining, allSkills);
 
     Effect curEffect = Effect();
     std::vector<TypeEffects> typeFx;
@@ -507,8 +516,14 @@ void Character::ProcessEffects(ShipItem* pShip)
             sFxProc.ParseExpression(this, sFxDataMgr.GetExpression(curEffect.preExpression), data);
         }
     }
-    // apply processed char effects
-    sFxProc.ApplyEffects(this, this, pShip);
+    // implant and booster effects, parsed like skills
+    for (auto cur : augs)
+        ParseAugmentation(this, cur, true);
+
+    /* apply processed char effects.  the modifiers on the char's own items (skill self multipliers, implant set bonuses,
+     *  booster skill reductions) go first, so the ones reading those items' attribs get the final values */
+    sFxProc.ApplyEffects(this, this, pShip, false, FX::Pass::CharItems);
+    sFxProc.ApplyEffects(this, this, pShip, false, FX::Pass::Rest);
 }
 
 /*
@@ -618,6 +633,244 @@ void Character::RefreshSkillQueueTimes()
     LoadPausedSkillQueue(typeID);
     PyTuple* tmp = new PyTuple(0);
     m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
+}
+
+// the five ability bonus effects (charismaBonus..willpowerBonus ModAdd on the char) are ApplyAbilityBonuses()' job
+static bool IsAbilityBonusEffect(uint16 effectID)
+{
+    switch (effectID) {
+        case 302:   // empathyCharismaBonusModAddCharismaLocationChar
+        case 304:   // instantRecallMemoryBonusModAddMemoryLocationChar
+        case 306:   // analyticalMindIntelligenceBonusModAddIntelligenceLocationChar
+        case 308:   // ironWillWillpowerBonusModAddWillpowerLocationChar
+        case 310:   // spatialAwarenessPerceptionBonusModAddPerceptionLocationChar
+            return true;
+    }
+    return false;
+}
+
+bool Character::IsAugmentationEffectActive(InventoryItem* pItem, const Effect& effect) const
+{
+    if (pItem == nullptr)
+        return false;
+    bool booster(pItem->flag() == flagBooster);
+    if (!booster and (pItem->flag() != flagImplant))
+        return true;
+    if (IsAbilityBonusEffect(effect.effectID))
+        return false;
+    // booster side effects use boosterEffectChance1..5 and only work when they fired at consumption
+    if ((effect.fittingUsageChanceAttributeID < AttrBoosterEffectChance1) or (effect.fittingUsageChanceAttributeID > AttrBoosterEffectChance5))
+        return true;
+    if (!booster)
+        return false;
+    std::map<uint32, BoosterState>::const_iterator itr = m_boosters.find(pItem->itemID());
+    if (itr == m_boosters.end())
+        return false;
+    return ((itr->second.sideEffectMask & (1 << (effect.fittingUsageChanceAttributeID - AttrBoosterEffectChance1))) != 0);
+}
+
+void Character::ResetAugmentation(InventoryItemRef iRef)
+{
+    iRef->ClearModifiers();
+    iRef->ResetAttributes();
+    std::map<uint32, BoosterState>::iterator itr = m_boosters.find(iRef->itemID());
+    if (itr != m_boosters.end())
+        iRef->SetAttribute(AttrExpiryTime, itr->second.expiryTime, false);
+}
+
+void Character::ParseAugmentation(InventoryItem* pContainer, InventoryItemRef iRef, bool add)
+{
+    std::vector<TypeEffects> typeFx;
+    sFxDataMgr.GetTypeEffect(iRef->typeID(), typeFx);
+    for (auto curFx : typeFx) {
+        Effect effect(sFxDataMgr.GetEffect(curFx.effectID));
+        if (!IsAugmentationEffectActive(iRef.get(), effect))
+            continue;
+        uint16 expressionID(add ? effect.preExpression : effect.postExpression);
+        if (expressionID == 0)
+            continue;
+        fxData data = fxData();
+        data.action = FX::Action::Invalid;
+        data.srcRef = iRef;
+        sFxProc.ParseExpression(pContainer, sFxDataMgr.GetExpression(expressionID), data);
+    }
+}
+
+void Character::ApplyAugmentationEffects(InventoryItemRef iRef, bool add)
+{
+    /* docked, the ship gets the pilot's effects again on undock (ShipItem::ResetEffects).  in space, the effects of this one
+     *  item are put on or taken off the ship without touching module states.
+     *  @note  a set implant plugged in or out in space changes the set bonus of the other set implants only at the next
+     *   full effects run (dock, undock, ship change)
+     */
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    if ((m_pClient == nullptr) or (sEntityList.FindClientByCharID(m_itemID) != m_pClient))
+        return;
+    if (!m_pClient->IsInSpace() or (m_pClient->GetShipSE() == nullptr))
+        return;
+    ShipItemRef sRef(m_pClient->GetShip());
+    if ((sRef.get() == nullptr) or (sRef->GetPilot() != m_pClient))
+        return;
+
+    if (add) {
+        /* the new item gets what the character's other items do to its group: skills (Biology, Neurotoxin Recovery,
+         *  Nanite Control) and implant set bonuses.  parsed into the item's scratch map, only those entries are used
+         */
+        ResetAugmentation(iRef);
+        std::vector<InventoryItemRef> sources;
+        pInventory->GetItemsByFlag(flagSkill, sources);
+        pInventory->GetItemsByFlag(flagSkillInTraining, sources);
+        GetImplants(sources);
+        GetBoosters(sources);
+        std::vector<TypeEffects> typeFx;
+        for (auto src : sources) {
+            typeFx.clear();
+            sFxDataMgr.GetTypeEffect(src->typeID(), typeFx);
+            for (auto curFx : typeFx) {
+                Effect effect(sFxDataMgr.GetEffect(curFx.effectID));
+                if (!IsAugmentationEffectActive(src.get(), effect))
+                    continue;
+                fxData data = fxData();
+                data.action = FX::Action::Invalid;
+                data.srcRef = src;
+                sFxProc.ParseExpression(iRef.get(), sFxDataMgr.GetExpression(effect.preExpression), data);
+            }
+        }
+        for (auto cur : iRef->GetModifiers()) {
+            if ((cur.second.fxSrc != FX::Source::Group) or (cur.second.targLoc != FX::Target::Char))
+                continue;
+            if ((cur.second.grpID != iRef->groupID()) or (cur.second.srcRef.get() == nullptr))
+                continue;
+            EvilNumber targValue(iRef->GetAttribute(cur.second.targAttr));
+            switch (cur.first) {
+                case FX::Math::PreMul:
+                case FX::Math::PostMul:
+                case FX::Math::PreDiv:
+                case FX::Math::PostDiv: {
+                    if (targValue == EvilZero)
+                        targValue = EvilOne;
+                } break;
+            }
+            iRef->SetAttribute(cur.second.targAttr, sFxProc.CalculateAttributeValue(targValue, cur.second.srcRef->GetAttribute(cur.second.srcAttr), cur.first), false);
+        }
+        iRef->ClearModifiers();
+    }
+
+    ParseAugmentation(iRef.get(), iRef, add);
+    if (add) {
+        sFxProc.ApplyEffects(iRef.get(), this, sRef.get(), true, FX::Pass::CharItems);
+        sFxProc.ApplyEffects(iRef.get(), this, sRef.get(), true, FX::Pass::Rest);
+    } else {
+        // take the ship's modifiers off before the ones on the char's items they were worked out from
+        std::multimap<int8, fxData> mods(iRef->GetModifiers());
+        iRef->ClearModifiers();
+        for (auto cur : mods)
+            if (!FxProc::IsCharItemModifier(cur.second))
+                iRef->GetModifiers().emplace(cur.first, cur.second);
+        sFxProc.ApplyEffects(iRef.get(), this, sRef.get(), true);
+        for (auto cur : mods)
+            if (FxProc::IsCharItemModifier(cur.second))
+                iRef->GetModifiers().emplace(cur.first, cur.second);
+        sFxProc.ApplyEffects(iRef.get(), this, sRef.get(), true);
+    }
+    iRef->ClearModifiers();
+
+    // capacities may have changed (booster penalties), and speed or mass
+    sRef->ClampDamageState();
+    sRef->UpdateDestinyMass();
+}
+
+void Character::AugmentationAdded(InventoryItemRef iRef)
+{
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
+    ApplyAbilityBonuses(true);
+    ApplyAugmentationEffects(iRef, true);
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+}
+
+void Character::DestroyAugmentation(InventoryItemRef iRef, bool update)
+{
+    if (update)
+        ApplyAugmentationEffects(iRef, false);
+    if (m_boosters.erase(iRef->itemID()) > 0)
+        CharacterDB::DeleteBooster(iRef->itemID());
+    _log(CHARACTER__INFO, "%s(%u): %s(%u) destroyed.", name(), m_itemID, iRef->name(), iRef->itemID());
+    iRef->Delete();
+    if (!update)
+        return;
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
+    ApplyAbilityBonuses(true);
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+}
+
+void Character::CheckRequiredSkills(InventoryItemRef iRef) const
+{
+    PyList* missing = new PyList();
+    for (auto cur : iRef->type().GetRequiredSkills())
+        if (!HasSkillTrainedToLevel(cur.first, cur.second))
+            missing->AddItem(new PyInt(cur.first));
+    if (missing->empty()) {
+        PyDecRef(missing);
+        return;
+    }
+    int count(missing->size());
+    throw UserError("ImplantHasSkillPrerequisites")
+            .AddFormatValue("item", new PyInt(iRef->typeID()))
+            .AddAmount("skillCount", count)
+            .AddTypeList("requiredSkills", missing);
+}
+
+void Character::PlugInImplant(InventoryItemRef iRef)
+{
+    if ((iRef->categoryID() != EVEDB::invCategories::Implant) or (iRef->groupID() == EVEDB::invGroups::Booster))
+        throw CustomError("%s is not an implant.", iRef->name());
+    uint8 slot(iRef->GetAttribute(AttrImplantness).get_uint32());
+    if (slot == 0)
+        throw CustomError("%s can't be plugged in.", iRef->name());
+    // Crucible: no implants while a skill trains
+    if (sConfig.character.requirePausedTraining and IsTraining())
+        throw UserError("FailedPlugInImplant");
+    if (GetImplantInSlot(slot).get() != nullptr)
+        throw UserError("OnlyOneImplantActive")
+                .AddTypeName("typeName", iRef->typeID());
+    CheckRequiredSkills(iRef);
+    uint16 prereqTypeID(iRef->GetAttribute(AttrPrereqimplant).get_uint32());
+    if (prereqTypeID > 0) {
+        bool found(false);
+        std::vector<InventoryItemRef> implants;
+        GetImplants(implants);
+        for (auto cur : implants)
+            if (cur->typeID() == prereqTypeID)
+                found = true;
+        if (!found)
+            throw UserError("PrereqImplantMissing")
+                    .AddTypeName("typeName", prereqTypeID);
+    }
+
+    // implants come off a stack one at a time
+    if (iRef->quantity() > 1) {
+        iRef = iRef->Split(1);
+        if (iRef.get() == nullptr)
+            throw CustomError("Unable to split the stack of implants.");
+    }
+    iRef->ChangeSingleton(true);
+    iRef->Move(m_itemID, flagImplant, true);
+    _log(CHARACTER__INFO, "%s(%u) plugged in %s(%u) in slot %u.", name(), m_itemID, iRef->name(), iRef->itemID(), slot);
+
+    AugmentationAdded(iRef);
+}
+
+void Character::UnplugImplant(InventoryItemRef iRef)
+{
+    if ((iRef->ownerID() != m_itemID) or (iRef->locationID() != m_itemID) or (iRef->flag() != flagImplant))
+        throw CustomError("That implant isn't plugged in.");
+    // the same Crucible rule as plugging in
+    if (sConfig.character.requirePausedTraining and IsTraining())
+        throw UserError("FailedPlugInImplant");
+    // unplugged implants are destroyed (ConfirmUnPlugInImplant)
+    DestroyAugmentation(iRef, true);
 }
 
 /*

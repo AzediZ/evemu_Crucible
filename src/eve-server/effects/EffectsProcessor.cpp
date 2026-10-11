@@ -625,7 +625,9 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
         sFxAct.DoAction(action, pShip->GetPilot()->GetShipSE());   // this MUST be called AFTER all active effects are applied, as it uses those modified values
      */
 
-    pItem->ClearModifiers();
+    // the CharItems pass leaves the map for the Rest pass
+    if (pass != Pass::CharItems)
+        pItem->ClearModifiers();
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);
@@ -678,6 +680,9 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
             std::map<uint16, Effect> effectMap;
             src.first->type().GetEffectMap(state, effectMap);
             for (auto& fx : effectMap) {
+                // boosters' side effects that didn't fire  (F15)
+                if (!pChar->IsAugmentationEffectActive(src.first.get(), fx.second))
+                    continue;
                 fxData data = fxData();
                 data.action = FX::Action::Invalid;
                 data.srcRef = src.first;

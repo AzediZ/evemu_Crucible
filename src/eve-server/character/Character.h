@@ -403,6 +403,9 @@ public:
     void                    ConsumeBooster(InventoryItemRef iRef);
     // throws ImplantHasSkillPrerequisites for missing required skills of iRef's type
     void                    CheckRequiredSkills(InventoryItemRef iRef) const;
+    /* false for an implant's or booster's ability bonus effects (ApplyAbilityBonuses does those) and a booster's side effects
+     *  that didn't fire.  true for anything else */
+    bool                    IsAugmentationEffectActive(InventoryItem* pItem, const Effect& effect) const;
     // 0 = no booster
     int64                   GetNextBoosterExpiry() const;
     // removes expired boosters, called by the client's booster timer
@@ -500,8 +503,17 @@ private:
     std::map<uint16, int32> m_abilityBonus;         // AttrCharisma..AttrWillpower -> bonus currently in the live value
 
     void LoadBoosters();
-    // fills the booster's expiryTime attrib and reapplies ship/char effects after implant or booster changes
-    void OnAugmentationsChanged();
+    // resets an implant's or booster's attribs (a booster gets its expiryTime back)
+    void ResetAugmentation(InventoryItemRef iRef);
+    // parses iRef's dogma effects (pre: add, post: remove) into pContainer.  ability bonus effects and boosters' side effects that didn't fire are skipped
+    void ParseAugmentation(InventoryItem* pContainer, InventoryItemRef iRef, bool add);
+    // applies (add) or removes the effects of one implant or booster on the ship in space
+    void ApplyAugmentationEffects(InventoryItemRef iRef, bool add);
+    // ability bonuses, training times and ship effects after an implant or booster was put in the character
+    void AugmentationAdded(InventoryItemRef iRef);
+    /* destroys an implant or booster.  update: take its effects off the ship in space, then update ability bonuses and training
+     *  (false for batches, the caller calls ApplyAbilityBonuses) */
+    void DestroyAugmentation(InventoryItemRef iRef, bool update);
 };
 
 #endif /* !__CHARACTER__H__INCL__ */

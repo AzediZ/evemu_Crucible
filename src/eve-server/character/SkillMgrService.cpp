@@ -279,17 +279,35 @@ PyResult SkillMgrBound::GetCharacterAttributeModifiers(PyCallArgs &call, PyInt* 
     return list;
 }
 
+/* an implant or booster to plug in or consume: the character's own, in the station hangar where it is docked or in its
+ *  active ship's cargo hold  (F15) */
+static InventoryItemRef GetUsableItem(Client* pClient, uint32 itemID)
+{
+    InventoryItemRef iRef(sItemFactory.GetItemRef(itemID));
+    if (iRef.get() == nullptr)
+        throw CustomError("That item could not be found.");
+    if (iRef->ownerID() != (uint32)pClient->GetCharacterID())
+        throw CustomError("You don't own the %s.", iRef->name());
+    if ((iRef->locationID() == pClient->GetShipID()) and (iRef->flag() == flagCargoHold))
+        return iRef;
+    if (pClient->IsDocked() and (iRef->locationID() == (uint32)pClient->GetStationID()) and (iRef->flag() == flagHangar))
+        return iRef;
+    throw CustomError("The %s must be in your hangar or your ship's cargo hold.", iRef->name());
+}
+
 PyResult SkillMgrBound::CharAddImplant(PyCallArgs& call, PyInt* itemID)
 {
-    //sends itemid
-    //{'FullPath': u'UI/Messages', 'messageID': 259242, 'label': u'OnlyOneBoosterActiveBody'}(u'You cannot consume the {typeName} as you are already using another similar booster {typeName2}.', None, {u'{typeName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName'}, u'{typeName2}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName2'}})
-    //{'FullPath': u'UI/Messages', 'messageID': 259243, 'label': u'OnlyOneImplantActiveBody'}(u'You cannot install the {typeName} as there is already an implant installed in the slot it needs to occupy.', None, {u'{typeName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName'}})
-
+    // menusvc PlugInImplant, after ConfirmPlugInImplant
+    call.client->GetChar()->PlugInImplant(GetUsableItem(call.client, itemID->value()));
     return nullptr;
 }
 
 PyResult SkillMgrBound::RemoveImplantFromCharacter(PyCallArgs& call, PyInt* itemID)
 {
-    //sends itemid
+    // entries.py ImplantEntry, after ConfirmUnPlugInImplant ("implants are lost when unplugged")
+    InventoryItemRef iRef(sItemFactory.GetItemRef(itemID->value()));
+    if (iRef.get() == nullptr)
+        throw CustomError("That implant could not be found.");
+    call.client->GetChar()->UnplugImplant(iRef);
     return nullptr;
 }
