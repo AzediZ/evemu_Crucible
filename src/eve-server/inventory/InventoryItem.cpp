@@ -897,8 +897,18 @@ bool InventoryItem::Merge(InventoryItemRef to_merge, int32 qty/*0*/, bool notify
 
 void InventoryItem::MergeTypesInCargo(ShipItem* pShip, EVEItemFlags flag/*flagNone*/)
 {
-    // get existing type in cargo
-    InventoryItemRef iRef = pShip->GetMyInventory()->GetByTypeFlag(m_type.id(), flag);
+    // get an existing stack of this type in cargo.  skip this item itself: callers may have moved it into the hold
+    //  already (a drone scooped to its bay is), and merging an item into itself deletes it
+    InventoryItemRef iRef;
+    std::vector<InventoryItemRef> items;
+    pShip->GetMyInventory()->GetItemsByFlag(flag, items);
+    for (auto cur : items) {
+        if ((cur.get() == this) or (cur->typeID() != m_type.id()))
+            continue;
+        iRef = cur;
+        if (!cur->isSingleton())
+            break;  // prefer a stack we can merge with
+    }
     if (iRef.get() == nullptr) {
         Move(pShip->itemID(), flag, true);
         return;
