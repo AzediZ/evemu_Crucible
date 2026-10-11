@@ -75,7 +75,8 @@ public:
     bool CanUseAgent(Client* pClient);
 
     // standing/quality/level/reward methods...
-    void UpdateStandings(Client* pClient, uint8 eventID, bool important=false);
+    // sharers:  the pilots sharing a completed mission (MissionRewards::GetSharers), the completer included
+    void UpdateStandings(Client* pClient, uint8 eventID, bool important=false, const std::vector<Client*>* sharers=nullptr);
 
 protected:
     std::string GetMinReqStanding(uint8 level);

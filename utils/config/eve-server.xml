@@ -200,7 +200,7 @@ boolean can use either 0/1 OR true/false.
         <MissionOfferExpired>-0.1</MissionOfferExpired><!-- -0.1 default -->
         <ImportantMissionBonus>3.0</ImportantMissionBonus><!-- 3.0 default -->
         <MissionFailedRollback>-0.5</MissionFailedRollback><!-- -0.5 default -->
-        <FleetMissionMultiplier>0.5</FleetMissionMultiplier><!-- 0.5 default  -->
+        <FleetMissionMultiplier>0.5</FleetMissionMultiplier><!-- unused since F12:  fleets share mission rewards and standings as <missions> FleetShare says -->
         <!-- agent to char modifiers -->
         <BaseMissionMultiplier>1.0</BaseMissionMultiplier><!-- 1.0 default  -->
         <Agent2CharMissionMultiplier>1.0</Agent2CharMissionMultiplier><!-- 1.0 default  -->

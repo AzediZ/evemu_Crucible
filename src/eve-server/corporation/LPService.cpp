@@ -61,17 +61,6 @@ void LPService::AddLP(uint32 characterID, uint32 corporationID, int amount)
   pClient->SendNotification("OnLPChange", "cash", &answer, false);
 }
 
-int LPService::GetLPReward(uint16 missionID, uint32 solarsystemID, uint8 agentLevel)
-{
-  SystemData m_data;
-  sDataMgr.GetSystemData(solarsystemID, m_data); // Is there a better way to pull the system security from a systemID?
-  int baseLP =  25000; // BaseLP supposedly calculated dynamically based on average mission time and potentially other factors as well.
-  for (int i = 5; i > agentLevel; i--) { // This is just a hacky way to create a psudo-realistic BaseLP value.
-    baseLP /= i;
-  }
-  return (1.6288 - m_data.securityRating ) * baseLP;   // LP reward = (1.6288 - System security) × Base LP
-}
-
 PyResult LPService::TakeOffer(PyCallArgs& call, PyInt* corpID, PyInt* storeID) {
   // the client always opens the store of the current station's owner (eveCommands OpenLpstore -> eve.stationItem.ownerID)
   uint32 stationID = call.client->GetStationID();

@@ -349,7 +349,7 @@ public:
         float ImportantMissionBonus;
         float MissionFailedRollback;
         float BaseMissionMultiplier;
-        float FleetMissionMultiplier;
+        float FleetMissionMultiplier;       // unused since F12 (missions.FleetShare)
         float Agent2CharMissionMultiplier;
         float ACorp2CharMissionMultiplier;
         float Agent2PCorpMissionMultiplier;

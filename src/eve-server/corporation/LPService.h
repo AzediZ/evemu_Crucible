@@ -45,8 +45,6 @@ public:
 
     // Adds LP to Characters LP Wallet
     static void AddLP(uint32 characterID, uint32 corporationID, int amount);
-    // Calculate LP reward for missions
-    static int GetLPReward(uint16 missionID, uint32 solarsystemID, uint8 agentLevel);
     // Return specific LP balance
     static int GetLPBalanceForCorp(int32 characterID, int32 corporationID);
 

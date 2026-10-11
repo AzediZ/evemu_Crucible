@@ -35,7 +35,9 @@
 #include "agents/AgentBound.h"
 #include "agents/AgentMgrService.h"
 #include "fleet/FleetService.h"
+#include "inventory/Inventory.h"
 #include "missions/MissionInstance.h"
+#include "missions/MissionRewards.h"
 #include "missions/MissionObjectives.h"
 #include "ship/BeyonceService.h"
 #include "station/Station.h"
@@ -261,72 +263,10 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 AddMissionButtons(call.client, offer, dialog);
             } break;
             case Complete:              //6
-            case CompleteRemotely: {    //7
-                //  need to verify all requirements have been met.
-                MissionOffer offer = MissionOffer();
-                if (!m_agent->HasMission(charID, offer) or (offer.stateID != Mission::State::Accepted)) {
-                    errorKey = "MisNoSuchMission";
-                    break;
-                }
-                // MissionDataMgr::Process() fails these, but only once a minute
-                if (offer.expiryTime < GetFileTimeNow()) {
-                    errorKey = "MisMissionExpired";
-                    break;
-                }
-                switch (MissionObjectives::Check(call.client, offer)) {
-                    case Mission::Objective::Complete:
-                        break;
-                    case Mission::Objective::WrongLocation:
-                    case Mission::Objective::MissingItems:
-                        if (offer.typeID == Mission::Type::Courier) {
-                            errorKey = "MisPackageNotHere";
-                        } else {
-                            errorText = "You have not completed the mission objectives yet.";
-                        }
-                        break;
-                    default:
-                        errorText = "You have not completed the mission objectives yet.";
-                        break;
-                }
-                if ((errorKey != nullptr) or !errorText.empty())
-                    break;
-                // away from the agent and the drop-off, only missions that can be completed remotely
-                if (GetCompleteButton(call.client, offer) == 0) {
-                    errorText = "This mission cannot be completed remotely; go to " + m_agent->GetName() + "'s location.";
-                    break;
-                }
-                // take the delivered items (all or nothing) before any reward is given
-                if (!MissionObjectives::Consume(call.client, offer)) {
-                    errorText = "You have not completed the mission objectives yet.";
-                    break;
-                }
-                missionCompleted = true;
-                offer.stateID = Mission::State::Completed;
-                offer.dateCompleted = GetFileTimeNow();
-                m_agent->UpdateOffer(charID, offer);
-                m_agent->SendMissionUpdate(call.client, "completed");
-                agentSays->SetItem(0, new PyInt(m_agent->GetCompleteRsp(charID)));
-                agentSays->SetItem(1, new PyInt(charID));
-                if (offer.rewardItemID) {
-                    // add reward item to players hangar
-                    sItemFactory.SetUsingClient(call.client);
-                    ItemData data(offer.rewardItemID, charID, locTemp, flagNone, offer.rewardItemQty);
-                    InventoryItemRef iRef = sItemFactory.SpawnItem(data);
-                    if (iRef.get() != nullptr)
-                        iRef->Move(m_agent->GetStationID(), flagHangar, true);
-                    sItemFactory.UnsetUsingClient();
-                }
-                if (offer.rewardISK)
-                    AccountService::TransferFunds(m_agent->GetID(), charID, offer.rewardISK, "Mission Reward", Journal::EntryType::AgentMissionReward, m_agent->GetID());
-                // bonusTime is in minutes from acceptance
-                if ((offer.bonusISK > 0) and (offer.bonusTime > 0)
-                and ((GetFileTimeNow() - offer.dateAccepted) <= ((double)offer.bonusTime * EvE::Time::Minute)))
-                    AccountService::TransferFunds(m_agent->GetID(), charID, offer.bonusISK, "Mission Bonus Reward", Journal::EntryType::AgentMissionTimeBonusReward, m_agent->GetID());
-                if (offer.rewardLP)
-                    LPService::AddLP(charID, m_agent->GetCorpID(), offer.rewardLP);
-                m_agent->UpdateStandings(call.client, Standings::MissionCompleted, offer.important);
-                m_agent->RemoveOffer(charID);
-                sMissionInstanceMgr.Release(offer.offerID);
+            case CompleteRemotely:      //7
+            case Yes:                   //18  (share the rewards with the fleet)
+            case No: {                  //19  (keep them)
+                CompleteMission(call.client, actionID.value()->value(), agentSays, dialog, missionCompleted, errorKey, errorText);
             } break;
             case Defer: {   //10
                 // the offer stays in the journal until it expires
@@ -400,12 +340,6 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             case LocateReject: {    //17
                 // not sure what to do here.
             } break;
-            case Yes: {             //18
-                // not sure what to do here.
-            } break;
-            case No: {              //19
-                // not sure what to do here.
-            } break;
             case AcceptChoice:{     //4
                 // i think this is for options
             } break;
@@ -460,6 +394,110 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
     PySafeDecRef(agentSays);
 
     return outer;
+}
+
+void AgentBound::CompleteMission(Client* pClient, uint8 action, PyTuple* agentSays, PyList* dialog, bool& missionCompleted,
+                                 const char*& errorKey, std::string& errorText)
+{
+    using namespace Dialog::Button;
+    uint32 charID(pClient->GetCharacterID());
+    // the answer to the fleet share question
+    bool answer((action == Yes) or (action == No));
+    if (answer and !m_agent->TakePendingCompletion(charID)) {
+        errorKey = "MisNoSuchMission";
+        return;
+    }
+
+    //  need to verify all requirements have been met (again after the share question)
+    MissionOffer offer = MissionOffer();
+    if (!m_agent->HasMission(charID, offer) or (offer.stateID != Mission::State::Accepted)) {
+        errorKey = "MisNoSuchMission";
+        return;
+    }
+    // MissionDataMgr::Process() fails these, but only once a minute
+    if (offer.expiryTime < GetFileTimeNow()) {
+        errorKey = "MisMissionExpired";
+        return;
+    }
+    switch (MissionObjectives::Check(pClient, offer)) {
+        case Mission::Objective::Complete:
+            break;
+        case Mission::Objective::WrongLocation:
+        case Mission::Objective::MissingItems:
+            if (offer.typeID == Mission::Type::Courier) {
+                errorKey = "MisPackageNotHere";
+            } else {
+                errorText = "You have not completed the mission objectives yet.";
+            }
+            return;
+        default:
+            errorText = "You have not completed the mission objectives yet.";
+            return;
+    }
+    // away from the agent and the drop-off, only missions that can be completed remotely
+    if (GetCompleteButton(pClient, offer) == 0) {
+        errorText = "This mission cannot be completed remotely; go to " + m_agent->GetName() + "'s location.";
+        return;
+    }
+
+    // in space the item reward goes to the cargo hold:  there must be room before anything is paid
+    float required(MissionRewards::GetItemVolume(offer));
+    if ((required > 0) and !pClient->IsDocked() and (pClient->GetShip().get() != nullptr)) {
+        float available(pClient->GetShip()->GetMyInventory()->GetRemainingCapacity(flagCargoHold));
+        if (available < required) {
+            PyDict* args = new PyDict();
+                args->SetItemString("requiredSpace", new PyFloat(required));
+                args->SetItemString("availableSpace", new PyFloat(available));
+            PyTuple* msg = new PyTuple(2);
+                msg->SetItem(0, new PyString("UI/Agents/StandardMission/CompleteRewardBadCapacity"));
+                msg->SetItem(1, args);
+            agentSays->SetItem(0, msg);
+            agentSays->SetItem(1, PyStatic.NewNone());
+            AddMissionButtons(pClient, offer, dialog);
+            return;
+        }
+    }
+
+    // in a fleet the pilot is asked whether to share the rewards
+    std::vector<Client*> sharers;
+    if (!answer and sConfig.missions.FleetShare and pClient->InFleet()) {
+        MissionRewards::GetSharers(pClient, sharers);
+        if (sharers.size() > 1) {
+            m_agent->SetPendingCompletion(charID);
+            PyTuple* msg = new PyTuple(2);
+                msg->SetItem(0, new PyString("UI/Agents/StandardMission/CompleteShareWithFleetMessage"));
+                msg->SetItem(1, new PyDict());
+            agentSays->SetItem(0, msg);
+            agentSays->SetItem(1, PyStatic.NewNone());
+            AddButton(dialog, Yes);
+            AddButton(dialog, No);
+            return;
+        }
+    }
+    sharers.clear();
+    if ((action == Yes) and sConfig.missions.FleetShare) {
+        MissionRewards::GetSharers(pClient, sharers);
+    } else {
+        sharers.push_back(pClient);
+    }
+
+    // take the delivered items (all or nothing) before any reward is given
+    if (!MissionObjectives::Consume(pClient, offer)) {
+        errorText = "You have not completed the mission objectives yet.";
+        return;
+    }
+    missionCompleted = true;
+    offer.stateID = Mission::State::Completed;
+    offer.dateCompleted = GetFileTimeNow();
+    m_agent->UpdateOffer(charID, offer);
+    m_agent->SendMissionUpdate(pClient, "completed");
+    agentSays->SetItem(0, new PyInt(m_agent->GetCompleteRsp(charID)));
+    agentSays->SetItem(1, new PyInt(charID));
+
+    MissionRewards::Pay(m_agent, pClient, offer, sharers);
+    m_agent->UpdateStandings(pClient, Standings::MissionCompleted, offer.important, &sharers);
+    m_agent->RemoveOffer(charID);
+    sMissionInstanceMgr.Release(offer.offerID);
 }
 
 PyDict* AgentBound::BuildMissionKeywords(MissionOffer& offer)

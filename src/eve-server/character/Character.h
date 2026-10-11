@@ -372,8 +372,6 @@ public:
     //  fromID = char|agent|corp|faction|alliance   toID = me|myCorp|myAlliance.
     float                   GetNPCCorpStanding(uint32 fromID, uint32 toID=0);
     void                    SetStanding(uint32 fromID, uint32 toID, float standing);
-    void                    FleetShareMissionRewards();
-    void                    FleetShareMissionStandings(float newStanding);
 
     //  Dynamic Data
     void                    VisitSystem(uint32 solarSystemID);

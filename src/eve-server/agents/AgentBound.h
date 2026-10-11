@@ -56,6 +56,10 @@ private:
     void AddMissionButtons(Client* pClient, MissionOffer& offer, PyList* dialog);
     // Dialog::Button::Complete, CompleteRemotely, or 0 when the mission can't be completed from here
     uint8 GetCompleteButton(Client* pClient, MissionOffer& offer);
+    /* Complete/CompleteRemotely (and Yes/No, the answer to the fleet share question):  checks, pays and closes the mission,
+     *  or fills agentSays/dialog with the cargo space or share question, or sets the error */
+    void CompleteMission(Client* pClient, uint8 action, PyTuple* agentSays, PyList* dialog, bool& missionCompleted,
+                         const char*& errorKey, std::string& errorText);
     // docked in the agent's station
     bool IsAtAgent(Client* pClient);
     // FILETIME left before declining again is free of penalties (0 = free now)

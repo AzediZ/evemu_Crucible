@@ -37,6 +37,7 @@
 #include "../standing/StandingMgr.h"
 #include "corporation/LPService.h"
 #include "../EVEServerConfig.h"
+#include "missions/MissionRewards.h"
 
 
 Agent::Agent(uint32 id)
@@ -172,6 +173,10 @@ bool Agent::FinishOffer(uint32 charID, MissionOffer& offer)
             offer.destinationSystemID = m_agentData.solarSystemID;
         }
     }
+
+    // the rewards for this pilot (skills, the agent's system), so the journal shows what will be paid
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    MissionRewards::Compute(this, (pClient != nullptr ? pClient->GetChar().get() : nullptr), offer);
 
     MissionDB::CreateOfferID(offer);
     if (offer.offerID == 0)
@@ -603,7 +608,7 @@ uint32 Agent::GetStandingsRsp(uint32 charID)
 }
 
 
-void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*false*/)
+void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*false*/, const std::vector<Client*>* sharers/*nullptr*/)
 {
     /*
         [PyAddress Broadcast: broadcastType='charid', idType='OnStandingsModified']
@@ -671,70 +676,65 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
     msg += "from ";
     msg += m_agentData.name;
 
-    if (pClient->InFleet() and (newStanding > 0)) {
-        float fleetStanding = newStanding * sConfig.standings.FleetMissionMultiplier;
-        newStanding -= (fleetStanding /2);  // live does half,  but mission acceptor will get more here.
-        // shared mission standings are from agent to character only.
-        std::vector<Client*> clientVec;
-        sFltSvc.GetFleetClientsInSystem(pClient, clientVec);
-        for (auto cur : clientVec) {
-            sStandingMgr.UpdateStandings(m_agentID, cur->GetCharacterID(), eventID, fleetStanding, msg);
-            PyTuple* agent = new PyTuple(5);
-                agent->SetItem(0, new PyInt(m_agentID));
-                agent->SetItem(1, new PyInt(cur->GetCharacterID()));
-                agent->SetItem(2, new PyFloat(fleetStanding));
-                agent->SetItem(3, new PyInt(-1));
-                agent->SetItem(4, PyStatic.NewOne());
-            PyList* list = new PyList();
-                list->AddItem(agent);
-            PyTuple* payload = new PyTuple(1);
-                payload->SetItem(0, list);
-            cur->SendNotification("OnStandingsModified", "charid", payload, false);
-            // fleet will share corp standings on some missions.  fix later.
-        }
+    /* a shared completion (missions.FleetShare):  the agent and agent corp standings are split between the sharers,
+     *  the faction standing and the player corp's standings go to the completer alone */
+    std::vector<Client*> payees;
+    if ((sharers != nullptr) and !sharers->empty()) {
+        payees = *sharers;
+    } else {
+        payees.push_back(pClient);
     }
+    double agentDelta(newStanding / payees.size());
+    double corpDelta(newStanding * sConfig.standings.ACorp2CharMissionMultiplier / payees.size());
+    double factionDelta(newStanding * sConfig.standings.AFaction2CharMissionMultiplier);
 
-    sStandingMgr.UpdateStandings(m_agentID, charID, eventID, newStanding, msg);
-    sStandingMgr.UpdateStandings(m_agentData.corporationID, charID, eventID, newStanding * sConfig.standings.ACorp2CharMissionMultiplier, msg);
-    sStandingMgr.UpdateStandings(m_agentData.factionID, charID, eventID, newStanding * sConfig.standings.AFaction2CharMissionMultiplier, msg);
+    for (auto cur : payees) {
+        uint32 curID(cur->GetCharacterID());
+        sStandingMgr.UpdateStandings(m_agentID, curID, eventID, agentDelta, msg);
+        sStandingMgr.UpdateStandings(m_agentData.corporationID, curID, eventID, corpDelta, msg);
+        if (cur == pClient)
+            sStandingMgr.UpdateStandings(m_agentData.factionID, curID, eventID, factionDelta, msg);
+
+        PyTuple* agent = new PyTuple(5);
+            agent->SetItem(0, new PyInt(m_agentID));
+            agent->SetItem(1, new PyInt(curID));
+            agent->SetItem(2, new PyFloat(agentDelta));
+            agent->SetItem(3, new PyInt(-1));
+            agent->SetItem(4, PyStatic.NewOne());
+        PyTuple* corp = new PyTuple(5);
+            corp->SetItem(0, new PyInt(m_agentData.corporationID));
+            corp->SetItem(1, new PyInt(curID));
+            corp->SetItem(2, new PyFloat(corpDelta));
+            corp->SetItem(3, new PyInt(-1));
+            corp->SetItem(4, PyStatic.NewOne());
+        PyList* list = new PyList();
+            list->AddItem(agent);
+            list->AddItem(corp);
+        if (cur == pClient) {
+            PyTuple* faction = new PyTuple(5);
+                faction->SetItem(0, new PyInt(m_agentData.factionID));
+                faction->SetItem(1, new PyInt(curID));
+                faction->SetItem(2, new PyFloat(factionDelta));
+                faction->SetItem(3, new PyInt(-1));
+                faction->SetItem(4, PyStatic.NewOne());
+            list->AddItem(faction);
+        }
+        PyTuple* payload = new PyTuple(1);
+            payload->SetItem(0, list);
+
+        if (is_log_enabled(STANDING__RSPDUMP)) {
+            _log(STANDING__RSPDUMP, "Agent::UpdateStandings RSP:" );
+            payload->Dump(STANDING__RSPDUMP, "    ");
+        }
+
+        cur->SendNotification("OnStandingsModified", "charid", payload, false);    // i *think* this is unsequenced
+    }
 
     if (IsPlayerCorp(pClient->GetCorporationID())) {
         sStandingMgr.UpdateStandings(m_agentID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.Agent2PCorpMissionMultiplier, msg);
         sStandingMgr.UpdateStandings(m_agentData.corporationID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.ACorp2PCorpMissionMultiplier, msg);
         sStandingMgr.UpdateStandings(m_agentData.factionID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.AFaction2PCorpMissionMultiplier, msg);
     }
-
-    PyTuple* agent = new PyTuple(5);
-        agent->SetItem(0, new PyInt(m_agentID));
-        agent->SetItem(1, new PyInt(charID));
-        agent->SetItem(2, new PyFloat(newStanding));
-        agent->SetItem(3, new PyInt(-1));
-        agent->SetItem(4, PyStatic.NewOne());
-    PyTuple* corp = new PyTuple(5);
-        corp->SetItem(0, new PyInt(m_agentData.corporationID));
-        corp->SetItem(1, new PyInt(charID));
-        corp->SetItem(2, new PyFloat(newStanding /4));
-        corp->SetItem(3, new PyInt(-1));
-        corp->SetItem(4, PyStatic.NewOne());
-    PyTuple* faction = new PyTuple(5);
-        faction->SetItem(0, new PyInt(m_agentData.factionID));
-        faction->SetItem(1, new PyInt(charID));
-        faction->SetItem(2, new PyFloat(newStanding /8));
-        faction->SetItem(3, new PyInt(-1));
-        faction->SetItem(4, PyStatic.NewOne());
-    PyList* list = new PyList();
-        list->AddItem(agent);
-        list->AddItem(corp);
-        list->AddItem(faction);
-    PyTuple* payload = new PyTuple(1);
-        payload->SetItem(0, list);
-
-    if (is_log_enabled(STANDING__RSPDUMP)) {
-        _log(STANDING__RSPDUMP, "Agent::UpdateStandings RSP:" );
-        payload->Dump(STANDING__RSPDUMP, "    ");
-    }
-
-    pClient->SendNotification("OnStandingsModified", "charid", payload, false);    // i *think* this is unsequenced
 }
 
 void Agent::SendMissionUpdate(Client* pClient, std::string action)
