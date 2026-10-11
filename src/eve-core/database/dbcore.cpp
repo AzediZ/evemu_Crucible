@@ -225,22 +225,27 @@ void DBcore::ping()
 bool DBcore::RunQuery(DBQueryResult &into, const char *query_fmt, ...) {
     MutexLock lock(MDatabase);
 
-    char query[4096];
+    // no fixed buffer:  long IN (...) lists (contract lists, searches) would be cut off or read past its end
     va_list vlist;
     va_start(vlist, query_fmt);
-    int querylen = std::vsnprintf(query, 4096, query_fmt, vlist);
+    char* query(nullptr);
+    int querylen = vasprintf(&query, query_fmt, vlist);
     va_end(vlist);
 
-    if (!DoQuery_locked(into.error, query, querylen))
+    if (!DoQuery_locked(into.error, query, querylen)) {
+        free(query);
         return false;
+    }
 
     uint col_count = mysql_field_count(mysql);
     if (col_count == 0) {
         into.error.SetError(0xFFFF, "DBcore::RunQuery: No Result");
         codelog(DATABASE__ERROR, "DBCore::RunQuery: %s failed because it did not return a result", query);
         EvE::traceStack();
+        free(query);
         return false;
     }
+    free(query);
 
     into.SetResult(mysql_store_result(mysql), col_count);
 

@@ -232,6 +232,7 @@ void TradeBound::AddItem(Client* pClient, std::shared_ptr<TradeSession> pSession
 
     TradeSession::TradeItem data = TradeSession::TradeItem();
         data.ownerID = iRef->ownerID();
+        data.traderID = charID;
         data.locationID = iRef->locationID();
         data.flag = iRef->flag();
     pSession->items[iRef->itemID()] = data;
@@ -412,7 +413,7 @@ void TradeBound::ExchangeItems(std::shared_ptr<TradeSession> pSession) {
         InventoryItemRef iRef(sItemFactory.GetItemRef(cur.first));
         if (iRef.get() == nullptr)
             continue;
-        bool fromMe(cur.second.ownerID == myWallet);
+        bool fromMe(cur.second.traderID == pSession->myID);
         uint32 newOwnerID(fromMe ? herWallet : myWallet);
         uint32 receiverCharID(fromMe ? pSession->herID : pSession->myID);
         uint32 itemOwnerID(newOwnerID), locationID(pSession->stationID);
@@ -538,7 +539,7 @@ void TradeService::CancelTrade(std::shared_ptr<TradeSession> pSession)
         }
         iRef->Move(locationID, flag, true);
 
-        Client* pOther(sEntityList.FindClientByCharID(pSession->Other(cur.second.ownerID)));
+        Client* pOther(sEntityList.FindClientByCharID(pSession->Other(cur.second.traderID)));
         if (pOther != nullptr) {
             PyDict* changes = new PyDict();
                 changes->SetItem(new PyInt(Inv::Update::Location), new PyInt(pSession->containerID));
@@ -635,6 +636,9 @@ PyResult TradeService::InitiateTrade(PyCallArgs &call, PyInt* characterID, std::
         pSession->fileTime = GetFileTimeNow();
     m_sessions[pSession->containerID] = pSession;
     m_byBind[std::make_tuple(pSession->myID, pSession->herID, pSession->fileTime)] = pSession->containerID;
+    // both sides now, so either one logging out or undocking (before binding) cancels it
+    pClient->AddTradeSession(pSession->containerID);
+    target->AddTradeSession(pSession->containerID);
 
     InitiateTradeRsp_NoCash rsp_nc;
         rsp_nc.nodeID    = pClient->services().GetNodeID();

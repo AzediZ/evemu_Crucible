@@ -290,7 +290,7 @@ PyResult RepairServiceBound::DamageModules(PyCallArgs &call, PyList* itemIDAndAm
         throw CustomError("Access denied.");
 
     for (auto cur : *itemIDAndAmountOfDamage) {
-        if (!cur->IsTuple() and !cur->IsList())
+        if (!(cur->IsTuple() and (cur->AsTuple()->size() >= 2)) and !(cur->IsList() and (cur->AsList()->size() >= 2)))
             continue;
         PyRep* idRep(cur->IsTuple() ? cur->AsTuple()->GetItem(0) : cur->AsList()->GetItem(0));
         PyRep* amtRep(cur->IsTuple() ? cur->AsTuple()->GetItem(1) : cur->AsList()->GetItem(1));

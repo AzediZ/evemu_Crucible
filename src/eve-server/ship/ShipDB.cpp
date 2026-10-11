@@ -84,7 +84,7 @@ static void FillInsuranceRow(DBResultRow& row, ShipDB::InsuranceRow& into)
     into.shipID     = row.GetUInt(0);
     into.ownerID    = row.GetUInt(1);
     into.typeID     = row.GetUInt(2);
-    into.isCorp     = (row.GetInt(3) != 0);
+    into.isCorp     = row.GetBool(3);   // bit column
     into.fraction   = row.GetFloat(4);
     into.startDate  = row.GetInt64(5);
     into.endDate    = row.GetInt64(6);
@@ -143,7 +143,7 @@ int8 ShipDB::GetInsuranceKind(uint32 shipID)
     DBResultRow row;
     if (!sDatabase.RunQuery(res, "SELECT isCorpItem FROM shipInsurance WHERE shipID = %u", shipID) or !res.GetRow(row))
         return -1;
-    return (row.GetInt(0) != 0) ? 1 : 0;
+    return row.GetBool(0) ? 1 : 0;   // bit column
 }
 
 void ShipDB::VoidInsurance(uint32 shipID)

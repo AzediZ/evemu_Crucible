@@ -43,6 +43,7 @@ class TradeSession
 public:
     struct TradeItem {
         uint32 ownerID;
+        uint32 traderID;        // the trader that offered it (CEO trades offer corp items)
         uint32 locationID;      // where it came from, for a cancelled trade
         EVEItemFlags flag;
     };

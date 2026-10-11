@@ -459,11 +459,12 @@ PyResult ContractProxy::SearchContracts(PyCallArgs &call) {
     uint32 numFound(0);
     DBQueryResult res;
     DBResultRow row;
-    if (sDatabase.RunQuery(res, ("SELECT COUNT(*)" + from + where).c_str()) and res.GetRow(row))
+    // the type name filter holds '%' (LIKE), so the built queries are passed as an argument, not as the format
+    if (sDatabase.RunQuery(res, "%s", ("SELECT COUNT(*)" + from + where).c_str()) and res.GetRow(row))
         numFound = std::min(row.GetUInt(0), (uint32)1000);
 
     std::vector<int> contractIDs;
-    if (!sDatabase.RunQuery(res, ("SELECT cC.contractId" + from + where + " ORDER BY " + order + " LIMIT " + std::to_string(startNum) + ", 100").c_str())) {
+    if (!sDatabase.RunQuery(res, "%s", ("SELECT cC.contractId" + from + where + " ORDER BY " + order + " LIMIT " + std::to_string(startNum) + ", 100").c_str())) {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
