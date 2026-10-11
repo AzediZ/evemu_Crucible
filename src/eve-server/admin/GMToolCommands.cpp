@@ -57,9 +57,9 @@ namespace {
         return cmd_find_client(args, index, nullptr);
     }
 
-    void GagCharacter(Client* pTarget, int64 minutes, const std::string& reason) {
+    void GagCharacter(Client* pGM, Client* pTarget, int64 minutes, const std::string& reason) {
         int64 until(GetFileTimeNow() + minutes * Win32Time_Minute);
-        LSCService::Gag(pTarget->GetCharacterID(), until, reason);
+        LSCService::Gag(pTarget->GetCharacterID(), until, reason, pGM->GetCharacterID());
         pTarget->SendNotifyMsg("You have been gagged for %lli minutes: %s", minutes, reason.c_str());
     }
 }
@@ -116,21 +116,16 @@ PyResult Command_gag(Client* pClient, CommandDB* db, EVEServiceManager &services
     }
     if (minutes < 1)
         minutes = 1;
-    GagCharacter(pTarget, minutes, reason);
+    GagCharacter(pClient, pTarget, minutes, reason);
     return new PyString("Gagged.");
 }
 
 PyResult Command_ungag(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    if ((args.argCount() < 2) or !args.isNumber(1)) {
-        Client* pTarget(FindCharacter(args, 1));
-        if (pTarget == nullptr)
-            throw CustomError ("Correct Usage: /ungag (charID|name)");
-        LSCService::Ungag(pTarget->GetCharacterID());
-        pTarget->SendNotifyMsg("You are no longer gagged.");
-        return new PyString("Ungagged.");
-    }
-    uint32 charID(atoi(args.arg(1).c_str()));
+    // online or offline, by ID or name
+    uint32 charID(cmd_find_char_id(db, args, 1, nullptr));
+    if (charID == 0)
+        throw CustomError ("Correct Usage: /ungag (charID|name)");
     LSCService::Ungag(charID);
     Client* pTarget(sEntityList.FindClientByCharID(charID));
     if (pTarget != nullptr)
@@ -143,7 +138,7 @@ PyResult Command_gagiskspammer(Client* pClient, CommandDB* db, EVEServiceManager
     Client* pTarget(FindCharacter(args, 1));
     if (pTarget == nullptr)
         throw CustomError ("Correct Usage: /gagiskspammer (online charID)");
-    GagCharacter(pTarget, 30 * 24 * 60, "ISK spamming");
+    GagCharacter(pClient, pTarget, 30 * 24 * 60, "ISK spamming");
     return new PyString("Gagged for 30 days.");
 }
 
@@ -152,7 +147,7 @@ PyResult Command_baniskspammer(Client* pClient, CommandDB* db, EVEServiceManager
     Client* pTarget(FindCharacter(args, 1));
     if (pTarget == nullptr)
         throw CustomError ("Correct Usage: /baniskspammer (online charID)");
-    LSCService::Gag(pTarget->GetCharacterID(), GetFileTimeNow() + 365 * Win32Time_Day, "ISK spamming");
+    LSCService::Gag(pTarget->GetCharacterID(), GetFileTimeNow() + 365 * Win32Time_Day, "ISK spamming", pClient->GetCharacterID());
     pTarget->BanClient();
     pTarget->DisconnectClient();
     return new PyString("Banned.");

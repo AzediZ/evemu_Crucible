@@ -78,6 +78,12 @@ public:
     void DeleteChannel(int32 channelID);
     void DeleteSubscription(int32 channelID, uint32 charID);
 
+    /* chat gags (chrChatGags) */
+    static void SaveGag(uint32 charID, int64 until, const std::string& reason, uint32 gmID);
+    static void DeleteGag(uint32 charID);
+    // drops expired gags, then loads the rest.  charID -> (until, reason)
+    static void LoadGags(std::map<uint32, std::pair<int64, std::string>>& into);
+
 
 protected:
     std::string GetChannelName(uint32 id, const char * table, const char * column, const char * key);

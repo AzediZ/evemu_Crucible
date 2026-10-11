@@ -93,6 +93,10 @@ LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
 
     CreateStaticChannels();
 
+    // gags outlive restarts
+    s_gags.clear();
+    LSCDB::LoadGags(s_gags);
+
     // make startup msg with # of static channels created
 }
 
@@ -454,12 +458,14 @@ PyResult LSCService::SendMessage(PyCallArgs& call, PyRep* channelInfo, PyWString
 
 std::map<uint32, std::pair<int64, std::string>> LSCService::s_gags;
 
-void LSCService::Gag(uint32 charID, int64 until, const std::string& reason) {
+void LSCService::Gag(uint32 charID, int64 until, const std::string& reason, uint32 gmID/*0*/) {
     s_gags[charID] = std::make_pair(until, reason);
+    LSCDB::SaveGag(charID, until, reason, gmID);
 }
 
 void LSCService::Ungag(uint32 charID) {
     s_gags.erase(charID);
+    LSCDB::DeleteGag(charID);
 }
 
 bool LSCService::IsGagged(uint32 charID, int64& until, std::string& reason) {
@@ -467,7 +473,9 @@ bool LSCService::IsGagged(uint32 charID, int64& until, std::string& reason) {
     if (itr == s_gags.end())
         return false;
     if (itr->second.first <= GetFileTimeNow()) {
+        // only runs when a gagged character speaks or is looked up, so the db hit is rare
         s_gags.erase(itr);
+        LSCDB::DeleteGag(charID);
         return false;
     }
     until = itr->second.first;

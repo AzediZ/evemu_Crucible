@@ -52,7 +52,9 @@
 #include "corporation/LPService.h"
 #include "corporation/CorporationDB.h"
 #include "admin/CommandHelper.h"
+#include "chat/LSCService.h"
 #include "ship/Ship.h"
+#include "station/StationDataMgr.h"
 #include "ship/modules/GenericModule.h"
 #include "ship/modules/ModuleManager.h"
 
@@ -990,6 +992,105 @@ PyResult Command_unban(Client* who, CommandDB* db, EVEServiceManager &services, 
         throw CustomError ("Cannot find character %s", name.c_str());
     ServiceDB::SetAccountBanStatus(accountID, false);
     return new PyString("Unbanned.");
+}
+
+PyResult Command_whois(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    // /whois (charID|"name")  online or not
+    if (args.argCount() < 2)
+        throw CustomError ("Correct Usage: /whois (charID|\"name\")");
+    uint32 charID(cmd_find_char_id(db, args, 1, who));
+    CommandDB::WhoisData data = CommandDB::WhoisData();
+    if ((charID == 0) or !db->GetWhoisData(charID, data))
+        throw CustomError ("Cannot find character %s", args.arg(1).c_str());
+
+    Client* pTarget(sEntityList.FindClientByCharID(charID));
+    std::ostringstream str;
+    char buf[64];
+    str << "<b>" << data.name << "</b> (" << data.charID << ")<br>";
+    snprintf(buf, sizeof(buf), "%llX", data.role);
+    str << "Account: " << data.accountName << " (" << data.accountID << "), role 0x" << buf
+        << (data.banned ? ", <color=red>banned</color>" : "") << "<br>";
+    if (pTarget != nullptr) {
+        str << "Online: ";
+        if (pTarget->IsDocked()) {
+            str << "docked in " << stDataMgr.GetStationName(pTarget->GetLocationID());
+        } else {
+            str << "in space in " << sDataMgr.GetSystemName(pTarget->GetSystemID());
+        }
+        if (pTarget->GetShip().get() != nullptr) {
+            const ItemType* pType(sItemFactory.GetType(pTarget->GetShip()->typeID()));
+            str << ", flying " << pTarget->GetShip()->itemName() << " (" << (pType != nullptr ? pType->name() : "?") << ")";
+        }
+        str << "<br>";
+    } else {
+        str << (data.online ? "Online (by the db, not connected here)" : "Offline") << ", last in ";
+        if (data.stationID != 0) {
+            str << data.stationName;
+        } else {
+            str << data.systemName;
+        }
+        str << "<br>";
+    }
+    str << "Corporation: " << data.corpName << " (" << data.corpID << ")";
+    if (data.allianceID != 0)
+        str << ", alliance " << data.allianceName << " (" << data.allianceID << ")";
+    str << "<br>";
+    snprintf(buf, sizeof(buf), "%.2f", data.securityRating);
+    str << "Security status: " << buf << "<br>";
+    snprintf(buf, sizeof(buf), "%.2f", data.balance);
+    str << "Wallet: " << buf << " ISK<br>";
+    str << "Skill points: " << data.skillPoints << "<br>";
+    str << "Last logon: " << (data.logonDateTime > 0 ? Win32TimeToString(data.logonDateTime) : std::string("never"));
+    str << ", last logoff: " << (data.logoffDateTime > 0 ? Win32TimeToString(data.logoffDateTime) : std::string("never")) << "<br>";
+    int64 until(0);
+    std::string reason;
+    if (LSCService::IsGagged(charID, until, reason)) {
+        str << "Gagged until " << Win32TimeToString(until) << ": " << reason << "<br>";
+    } else {
+        str << "Not gagged<br>";
+    }
+
+    std::string reply(str.str());
+    who->SendInfoModalMsg("%s", reply.c_str());
+    return new PyString(reply);
+}
+
+PyResult Command_chatban(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    // /chatban (charID|"name") [days|perm] ["reason"]  a gag in every channel that works for offline characters too
+    const char* usage("Correct Usage: /chatban (charID|\"name\") [days|perm] [\"reason\"]");
+    if (args.argCount() < 2)
+        throw CustomError (usage);
+    uint32 charID(cmd_find_char_id(db, args, 1, who));
+    if (charID == 0)
+        throw CustomError ("Cannot find character %s", args.arg(1).c_str());
+
+    int64 days(0);  // 0 = permanent
+    std::string reason("Banned from chat by a GM");
+    size_t next(2);
+    if (args.argCount() > next) {
+        if (args.isNumber(next)) {
+            days = atoll(args.arg(next).c_str());
+            if (days < 1)
+                throw CustomError (usage);
+            ++next;
+        } else if (strcasecmp(args.arg(next).c_str(), "perm") == 0) {
+            ++next;
+        }
+    }
+    if (args.argCount() > next)
+        reason = args.arg(next);
+
+    int64 until(GetFileTimeNow() + (days > 0 ? days : 100 * 365) * Win32Time_Day);
+    LSCService::Gag(charID, until, reason, who->GetCharacterID());
+
+    std::string length(days > 0 ? std::to_string(days) + " days" : std::string("good"));
+    Client* pTarget(sEntityList.FindClientByCharID(charID));
+    if (pTarget != nullptr)
+        pTarget->SendNotifyMsg("You have been banned from chat for %s: %s", length.c_str(), reason.c_str());
+    sLog.Yellow("Command", "%s: chat-banned %u for %s: %s", who->GetName(), charID, length.c_str(), reason.c_str());
+    return new PyString("Chat-banned " + std::to_string(charID) + " for " + length + ".  /ungag lifts it.");
 }
 
 PyResult Command_givelp(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)

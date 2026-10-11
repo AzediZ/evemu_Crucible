@@ -44,11 +44,7 @@ COMMAND( unban, Acct::Role::ADMIN,
 COMMAND( givelp, Acct::Role::ADMIN,
         "('me'|<characterID>) (corporationID) (amount) - adds LP to a character for a specific corporation")
 
-/*
-COMMAND( entity, Acct::Role::ADMIN,
-        "(entityID) - unknown" )
-COMMAND( chatban, Acct::Role::ADMIN,
-        "(characterID) - bans character from channel" )
-COMMAND( whois, Acct::Role::ADMIN,
-        "(characterName) - returns information on character")
-*/
+COMMAND( whois, Acct::Role::GMH,
+        "(charID|\"name\") - shows account, corp, location and status of a character (online or not)")
+COMMAND( chatban, Acct::Role::GML,
+        "(charID|\"name\") [days|perm] [\"reason\"] - gags a character in every chat channel, online or offline (lift with /ungag)")

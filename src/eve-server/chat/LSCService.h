@@ -56,8 +56,9 @@ public:
 
     PyResult ExecuteCommand(Client *from, const char *msg);
 
-    /* chat gags (/gag, /ungag).  kept in memory: a server restart lifts them */
-    static void Gag(uint32 charID, int64 until, const std::string& reason);
+    /* chat gags (/gag, /ungag, /chatban).  kept in memory and written through to chrChatGags, so they survive a restart.
+     *  gmID is the GM who gave it (0 if unknown) */
+    static void Gag(uint32 charID, int64 until, const std::string& reason, uint32 gmID = 0);
     static void Ungag(uint32 charID);
     // true while the character is gagged.  fills in when it ends (filetime) and why
     static bool IsGagged(uint32 charID, int64& until, std::string& reason);

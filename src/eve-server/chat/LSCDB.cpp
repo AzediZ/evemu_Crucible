@@ -519,6 +519,41 @@ bool LSCDB::MarkMessageRead(uint32 messageID) {
 }
 
 
+void LSCDB::SaveGag(uint32 charID, int64 until, const std::string& reason, uint32 gmID) {
+    std::string escaped;
+    sDatabase.DoEscapeString(escaped, reason.substr(0, 255));
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "REPLACE INTO chrChatGags (characterID, untilTime, reason, gmCharacterID)"
+        " VALUES (%u, %lli, '%s', %u)", charID, until, escaped.c_str(), gmID))
+    {
+        _log(DATABASE__ERROR, "Error in SaveGag query: %s", err.c_str());
+    }
+}
+
+void LSCDB::DeleteGag(uint32 charID) {
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM chrChatGags WHERE characterID = %u", charID))
+        _log(DATABASE__ERROR, "Error in DeleteGag query: %s", err.c_str());
+}
+
+void LSCDB::LoadGags(std::map<uint32, std::pair<int64, std::string>>& into) {
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM chrChatGags WHERE untilTime <= %lli", GetFileTimeNow()))
+        _log(DATABASE__ERROR, "Error in LoadGags query: %s", err.c_str());
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT characterID, untilTime, reason FROM chrChatGags")) {
+        _log(DATABASE__ERROR, "Error in LoadGags query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = std::make_pair(row.GetInt64(1), std::string(row.GetText(2)));
+}
+
 bool LSCDB::DeleteMessage(uint32 messageID, uint32 readerID) {
     DBerror err;
     bool ret = true;

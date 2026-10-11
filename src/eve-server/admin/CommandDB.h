@@ -45,6 +45,17 @@ class CommandDB
     uint32 GetCharacterID(const std::string& name);
     // the dgmAttributeTypes name of an attribute (empty if unknown)
     std::string GetAttributeName(uint16 attributeID);
+
+    // /whois:  a character's account, corp, location and status, online or not
+    struct WhoisData {
+        uint32 charID, accountID, corpID, allianceID, stationID, solarSystemID, shipID;
+        int64 role, logonDateTime, logoffDateTime, skillPoints;
+        double balance;
+        float securityRating;
+        bool online, banned;
+        std::string name, accountName, corpName, allianceName, systemName, stationName;
+    };
+    bool GetWhoisData(uint32 charID, WhoisData& into);
     bool FullSkillList(std::vector<uint32> &skillList);
     static bool NotFullyLearnedSkillList(charSkillStates &skillList, uint32 charID);
     uint32_t GetStation(const char *name);

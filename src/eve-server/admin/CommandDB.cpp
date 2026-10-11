@@ -245,6 +245,54 @@ uint32 CommandDB::GetCharacterID(const std::string& name) {
     return row.GetUInt(0);
 }
 
+bool CommandDB::GetWhoisData(uint32 charID, WhoisData& into) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT c.characterID, c.characterName, c.accountID, a.accountName, a.role, a.banned, c.online,"
+        " c.corporationID, corp.corporationName, corp.allianceID, al.allianceName, al.shortName, c.stationID, c.solarSystemID,"
+        " c.shipID, c.balance, c.securityRating, c.skillPoints, c.logonDateTime, c.logoffDateTime,"
+        " s.solarSystemName, st.stationName"
+        " FROM chrCharacters c LEFT JOIN account a ON a.accountID = c.accountID"
+        "  LEFT JOIN crpCorporation corp ON corp.corporationID = c.corporationID"
+        "  LEFT JOIN alnAlliance al ON al.allianceID = corp.allianceID"
+        "  LEFT JOIN mapSolarSystems s ON s.solarSystemID = c.solarSystemID"
+        "  LEFT JOIN staStations st ON st.stationID = c.stationID"
+        " WHERE c.characterID = %u", charID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+
+    into.charID = row.GetUInt(0);
+    into.name = row.GetText(1);
+    into.accountID = row.IsNull(2) ? 0 : row.GetUInt(2);
+    into.accountName = row.IsNull(3) ? "" : row.GetText(3);
+    into.role = row.IsNull(4) ? 0 : row.GetInt64(4);
+    into.banned = row.IsNull(5) ? false : row.GetBool(5);
+    into.online = row.GetBool(6);
+    into.corpID = row.GetUInt(7);
+    into.corpName = row.IsNull(8) ? "" : row.GetText(8);
+    into.allianceID = row.IsNull(9) ? 0 : row.GetUInt(9);
+    into.allianceName = "";
+    if (!row.IsNull(10))
+        into.allianceName = std::string(row.GetText(10)) + (row.IsNull(11) ? "" : " [" + std::string(row.GetText(11)) + "]");
+    into.stationID = row.GetUInt(12);
+    into.solarSystemID = row.GetUInt(13);
+    into.shipID = row.GetUInt(14);
+    into.balance = row.GetDouble(15);
+    into.securityRating = row.GetFloat(16);
+    into.skillPoints = row.GetInt64(17);
+    into.logonDateTime = row.GetInt64(18);
+    into.logoffDateTime = row.GetInt64(19);
+    into.systemName = row.IsNull(20) ? "" : row.GetText(20);
+    into.stationName = row.IsNull(21) ? "" : row.GetText(21);
+    return true;
+}
+
 std::string CommandDB::GetAttributeName(uint16 attributeID) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res, "SELECT attributeName FROM dgmAttributeTypes WHERE attributeID = %u", attributeID)) {
