@@ -28,6 +28,7 @@
 
 #include <boost/algorithm/string.hpp>
 
+#include "ConsoleCommands.h"
 #include "admin/CommandDispatcher.h"
 #include "admin/SlashService.h"
 #include "chat/LSCService.h"
@@ -451,9 +452,27 @@ PyResult LSCService::SendMessage(PyCallArgs& call, PyRep* channelInfo, PyWString
             throw CustomError ("You are gagged for another %lli minutes: %s", minutes, reason.c_str());
         }
         itr->second->SendMessage(call.client, message.c_str());
+        // console 'hear all'
+        if (sConsole.HearAll())
+            sLog.Magenta("        Chat", "[%s] %s: %s", itr->second->GetDisplayName().c_str(), call.client->GetName(), message.c_str());
     }
 
     return PyStatic.NewNone();
+}
+
+uint32 LSCService::BroadcastSystemMessage(const std::string& msg) {
+    uint32 count(0);
+    for (auto cur : m_channels) {
+        if (cur.second == nullptr)
+            continue;
+        if ((cur.second->GetType() != LSC::Type::solarsystem) and (cur.second->GetType() != LSC::Type::solarsystem2))
+            continue;
+        if (cur.second->GetMemberCount() < 1)
+            continue;
+        cur.second->SendSystemMessage(msg.c_str());
+        ++count;
+    }
+    return count;
 }
 
 std::map<uint32, std::pair<int64, std::string>> LSCService::s_gags;

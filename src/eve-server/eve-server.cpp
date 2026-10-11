@@ -765,7 +765,7 @@ int main( int argc, char* argv[] )
     sStatMgr.Initialize();
     /* create console command interperter singleton */
     sLog.Green("       ServerInit", "Starting Console Manager");
-    sConsole.Initialize(&command_dispatcher);
+    sConsole.Initialize(&command_dispatcher, &newSvcMgr);
     std::printf("\n");     // spacer
 
     sLog.Blue("     ServerConfig", "Cosmic Manager Settings");

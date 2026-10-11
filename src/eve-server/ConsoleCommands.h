@@ -43,6 +43,8 @@
 #include "system/SystemManager.h"
 
 
+class EVEServiceManager;
+
 class ConsoleCommand
 : public Singleton<ConsoleCommand>
 {
@@ -50,7 +52,7 @@ class ConsoleCommand
     ConsoleCommand();
     ~ConsoleCommand()                                   { /* do nothing here */ }
 
-    void Initialize(CommandDispatcher* cd);
+    void Initialize(CommandDispatcher* cd, EVEServiceManager* svc);
 
     // this calls multiple methods that get/process/save data for running server
     void UpdateStatus();
@@ -60,22 +62,23 @@ class ConsoleCommand
     bool IsShutdown()                                   { return m_haltServer; }
     // avoid using db after it has lost connection.
     bool IsDbError()                                    { return m_dbError; }
+    // 'hear all':  echo every chat message to the console
+    bool HearAll() const                                { return m_hearAll; }
 
 private:
     // we do not own any of these...
-    LSCChannel* plscc;
-    SystemBubble* pBubbles;
-    SystemManager* pSystems;
     CommandDispatcher* pCommand;
+    EVEServiceManager* m_services;
 
     char* buf;
     fd_set fds;
     struct timeval tv;
     bool m_haltServer;
     bool m_dbError;
+    bool m_hearAll;
 
     bool HandleCommand(const char* buf);
-    void SendMessage(const char *msg);
+    void SaveAll();
     void Status(std::string& state, int64& threads, float& vm_usage, float& resident_set, float& user, float& kernel);
 
     void Test();

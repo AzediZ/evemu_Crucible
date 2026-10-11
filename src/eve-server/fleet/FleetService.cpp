@@ -1031,7 +1031,8 @@ bool FleetService::SetInviteScope(uint32 fleetID, uint8 scope, Client* pBoss)
      *  keep any other entities (standings-based lists) and set ours by the scope bits
      */
     std::vector<uint32>& local = data.local_allowedEntities;
-    uint32 ours[3] = { pBoss->GetCorporationID(), pBoss->GetAllianceID(), pBoss->GetWarFactionID() };
+    uint32 ours[3] = { static_cast<uint32>(pBoss->GetCorporationID()), static_cast<uint32>(pBoss->GetAllianceID()),
+                       static_cast<uint32>(pBoss->GetWarFactionID()) };
     uint8 bits[3] = { Fleet::Invite::Corp, Fleet::Invite::Alliance, Fleet::Invite::Militia };
     for (int i = 0; i < 3; ++i) {
         if (ours[i] == 0)

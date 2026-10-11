@@ -30,6 +30,11 @@
 
 #include "ConsoleCommands.h"
 #include "../eve-common/EVEVersion.h"
+// after eve-server.h, which brings in winsock2.h and windows.h (boost.asio) in the right order
+#if _WIN32
+#include <psapi.h>
+#include <tlhelp32.h>
+#endif
 #include "StatisticMgr.h"
 #include "effects/EffectsProcessor.h"
 #include "inventory/ItemDB.h"
@@ -37,24 +42,27 @@
 #include "market/MarketMgr.h"
 #include "missions/MissionDataMgr.h"
 #include "threading/Threading.h"
+#include "chat/LSCService.h"
+#include "services/ServiceManager.h"
+#include "ship/Ship.h"
 // #include "testing/test.h"
 
 
 ConsoleCommand::ConsoleCommand()
- :plscc(nullptr),
-  pBubbles(nullptr),
-  pSystems(nullptr),
-  pCommand(nullptr),
+ :pCommand(nullptr),
+  m_services(nullptr),
   buf(nullptr),
   tv(timeval()),
   m_haltServer(false),
-  m_dbError(false)
+  m_dbError(false),
+  m_hearAll(false)
 {
 }
 
-void ConsoleCommand::Initialize(CommandDispatcher* cd)
+void ConsoleCommand::Initialize(CommandDispatcher* cd, EVEServiceManager* svc)
 {
     pCommand = cd;
+    m_services = svc;
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     UpdateStatus();	//initial status setting
@@ -98,15 +106,64 @@ bool ConsoleCommand::Process() {
     return continueRunning;
 }
 
+namespace {
+    // console commands:  the full word or its letter
+    struct ConsoleCmd {
+        const char* word;
+        char letter;
+    };
+    static const ConsoleCmd s_consoleCmds[] = {
+        {"exit", 'x'}, {"help", 'h'}, {"hello", 'e'}, {"clients", 'c'}, {"status", 's'}, {"version", 'v'},
+        {"info", 'i'}, {"information", 'i'}, {"save", 'a'}, {"broadcast", 'b'}, {"note", 'n'}, {"message", 'm'},
+        {"profile", 'p'}, {"roles", 'o'}, {"commands", 'k'}, {"test", 't'}, {"effects", 'f'}, {"threads", 'd'},
+        {"logs", 'l'}, {"stats", 'q'}, {"hear", 'r'}
+    };
+}
+
 bool ConsoleCommand::HandleCommand(const char* buf)
 {
-    if (strncmp(buf, "x", 1) == 0) {
+    // split into the command (first word, any case) and the rest
+    std::string line(buf);
+    size_t start(line.find_first_not_of(" \t\r\n"));
+    if (start == std::string::npos)
+        return true;
+    size_t end(line.find_first_of(" \t\r\n", start));
+    std::string word(line.substr(start, (end == std::string::npos ? std::string::npos : end - start)));
+    for (auto& c : word)
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    std::string args;
+    if (end != std::string::npos) {
+        size_t argStart(line.find_first_not_of(" \t", end));
+        if (argStart != std::string::npos)
+            args = line.substr(argStart);
+        while (!args.empty() and ((args.back() == '\r') or (args.back() == '\n') or (args.back() == ' ')))
+            args.pop_back();
+    }
+
+    char cmd(0);
+    uint8 fxIdx(0);
+    if ((word.size() == 2) and (word[0] == 'f') and isdigit(static_cast<unsigned char>(word[1]))) {
+        // f<digit> runs that effects set
+        cmd = 'f';
+        fxIdx = word[1] - '0';
+    } else {
+        for (const auto& cur : s_consoleCmds) {
+            if ((word == cur.word) or ((word.size() == 1) and (word[0] == cur.letter))) {
+                cmd = cur.letter;
+                break;
+            }
+        }
+        if ((cmd == 'f') and !args.empty() and isdigit(static_cast<unsigned char>(args[0])))
+            fxIdx = args[0] - '0';
+    }
+
+    if (cmd == 'x') {
         sLog.Warning("  EVEmu", "EXIT called.  Breaking out of Main Loop.");
         m_haltServer = true;
         return false;
     }
-    else if (strncmp(buf, "h", 1) == 0) {
-        sLog.Green("  EVEmu", "Current Console Commands and Descriptions: ");
+    else if (cmd == 'h') {
+        sLog.Green("  EVEmu", "Current Console Commands and Descriptions (type the word or its letter): ");
         sLog.Warning("", "");
         sLog.Warning("           (h)elp", " Displays this dialog.");
         sLog.Warning("          h(e)llo", " Displays the 'Hello World' message.");
@@ -115,25 +172,25 @@ bool ConsoleCommand::HandleCommand(const char* buf)
         sLog.Warning("         (s)tatus", " Displays Server's System Status, showing threads, memory, and cpu time.");
         sLog.Warning("        (v)ersion", " Displays server version.");
         sLog.Warning("    (i)nformation", " Displays server information: version, memory, uptime, clients, items, systems, bubbles.");
-        sLog.Warning("           s(a)ve", " Immediatly saves all loaded items.  *Broken*");
-        sLog.Warning("      (b)roadcast", " Broadcasts a message to all clients thru the LocalChat window.  *Not Implemented*");
-        sLog.Warning("           (n)ote", " Broadcasts a message to all clients thru a notification window.");
-        sLog.Warning("        (m)essage", " Broadcasts a message to all clients thru a message window.");
-        sLog.Warning("        (p)rofile", " Prints a profile of current server runtimes.  *Incomplete*");
+        sLog.Warning("           s(a)ve", " Immediatly saves all loaded items, online characters and their ships.");
+        sLog.Warning("(b)roadcast <msg>", " Broadcasts a message to all clients thru their Local chat channel.");
+        sLog.Warning("     (n)ote <msg>", " Broadcasts a message to all clients thru a notification window.");
+        sLog.Warning("  (m)essage <msg>", " Broadcasts a message to all clients thru a message window.");
+        sLog.Warning("        (p)rofile", " Prints a profile of current server runtimes.");
         sLog.Warning("          r(o)les", " Prints a list of common roles and their values.");
-        sLog.Warning("       c(o)mmands", " Prints a list of currently loaded Commands and their required role. (long list)");
+        sLog.Warning("       commands(k)", " Prints a list of currently loaded Commands and their required role. (long list)");
         sLog.Warning("           (t)est", " Prints the current test object *varies*");
-        sLog.Warning("        e(f)fects", " Compiles and prints all item effects.");
+        sLog.Warning("   e(f)fects [n]", " Compiles and prints item effects.  f<n> works too (f1 = modules...)");
         sLog.Warning("        threa(d)s", " Prints a list of current threads.");
         sLog.Warning("    reload (l)ogs", " Reloads log.ini to change values without restarting server.");
-        sLog.Warning("(q)uery stat data", " Prints current statistic data.");
-        sLog.Warning("       hea(r) all", " Echo all chat msgs to console. *Not Implemented*");
+        sLog.Warning("  stats (q)uery", " Prints current statistic data.");
+        sLog.Warning("       hea(r) all", " Toggles echoing all chat msgs to console.");
     }
-    else if (strncmp(buf, "e", 1) == 0) {
+    else if (cmd == 'e') {
         sLog.Green("  EVEmu", "Server Hello:");
         sLog.Magenta("      Server Says", " Hello World!");
     }
-    else if (strncmp(buf, "c", 1) == 0) {
+    else if (cmd == 'c') {
         sLog.Green("  EVEmu", "Client Connection Information");
         uint8 clients = sEntityList.GetClientCount();
         sLog.Warning("      Connections", " %u Current Clients Online", clients);
@@ -153,7 +210,7 @@ bool ConsoleCommand::HandleCommand(const char* buf)
             }
         }
     }
-    else if (strncmp(buf, "s", 1) == 0) {
+    else if (cmd == 's') {
         std::string state = "";
         int64 threads(0);
         uint8 aThreads = std::thread::hardware_concurrency();
@@ -212,12 +269,12 @@ bool ConsoleCommand::HandleCommand(const char* buf)
             sLog.Warning("       Turret Dmg", "Normal.");
         }
     }
-    else if (strncmp(buf, "v", 1) == 0) {
+    else if (cmd == 'v') {
         sLog.Green("  EVEmu", "Server Version:");
         sLog.Warning("  Server Revision", " %s", EVEMU_REVISION);
         sLog.Warning("       Build Date", " %s", EVEMU_BUILD_DATE);
     }
-    else if (strncmp(buf, "i", 1) == 0) {
+    else if (cmd == 'i') {
         sLog.Green("  EVEmu", "Server Information:");
         sLog.Warning("  Server Revision", " %s", EVEMU_REVISION);
         sLog.Warning("       Build Date", " %s", EVEMU_BUILD_DATE);
@@ -247,37 +304,40 @@ bool ConsoleCommand::HandleCommand(const char* buf)
         sLog.Warning("      Connections", " %u Current Clients Online.", sEntityList.GetClientCount());
         sLog.Warning("      Connections", " %u Clients Connected since startup.", sEntityList.GetConnections());
     }
-    else if (strncmp(buf, "a", 1) == 0) {
+    else if (cmd == 'a') {
         sLog.Green("  EVEmu", "Server SaveAll:");
-        //sLog.Error("      Server Save", " Not Available Yet." );
-        sItemFactory.SaveItems();
+        SaveAll();
     }
-    else if (strncmp(buf, "b", 1) == 0) {
+    else if (cmd == 'b') {
         sLog.Green("  EVEmu", "Server Broadcast:");
-        sLog.Error(" Server Broadcast", " Not Available Yet.");
-        /** @todo  make this show in general chat channel */
-        //const char* buff = buf + 2;
-        //SendMessage(buff);
+        if (args.empty()) {
+            sLog.Error(" Server Broadcast", " Usage: broadcast <message>");
+        } else if (m_services == nullptr) {
+            sLog.Error(" Server Broadcast", " Chat service is not available.");
+        } else {
+            LSCService* pLSC(m_services->Lookup <LSCService>("LSC"));
+            uint32 count(pLSC == nullptr ? 0 : pLSC->BroadcastSystemMessage(args));
+            sLog.Warning(" Server Broadcast", " [EVE System] %s", args.c_str());
+            sLog.Warning("  Console Command", " Broadcast sent to %u Local channels.", count);
+        }
     }
-    else if (strncmp(buf, "n", 1) == 0) {
+    else if (cmd == 'n') {
         sLog.Green("  EVEmu", "Server Notify:");
-        const char* buff = buf + 2;
         std::vector<Client*> list;
         sEntityList.GetClients(list);
         for (auto cur : list)
-            cur->SendNotifyMsg(buff);
+            cur->SendNotifyMsg("%s", args.c_str());
         sLog.Warning("  Console Command", " Notification sent to all online clients.");
     }
-    else if (strncmp(buf, "m", 1) == 0) {
+    else if (cmd == 'm') {
         sLog.Green("  EVEmu", "Server Modal Message:");
-        const char* buff = buf + 2;
         std::vector<Client*> list;
         sEntityList.GetClients(list);
         for (auto cur : list)
-            cur->SendInfoModalMsg(buff);
+            cur->SendInfoModalMsg("%s", args.c_str());
         sLog.Warning("  Console Command", " Modal Message sent to all online clients.");
     }
-    else if (strncmp(buf, "p", 1) == 0) {
+    else if (cmd == 'p') {
         sLog.Green("  EVEmu", "Server Profile:");
         if (sConfig.debug.UseProfiling) {
             sLog.Warning("    Current Stamp", " %u", sEntityList.GetStamp());
@@ -292,10 +352,12 @@ bool ConsoleCommand::HandleCommand(const char* buf)
             sLog.Error("   Server Profile", "Profiling is turned off.");
         }
     }
-    else if (strncmp(buf, "r", 1) == 0) {
-        // enable console chat echo
+    else if (cmd == 'r') {
+        // console chat echo (LSCService::SendMessage checks HearAll())
+        m_hearAll = !m_hearAll;
+        sLog.Green("  EVEmu", "Hear all chat: %s", (m_hearAll ? "on" : "off"));
     }
-    else if (strncmp(buf, "o", 1) == 0) {
+    else if (cmd == 'o') {
         sLog.Green("  EVEmu", "Common Account Roles:");
         sLog.Warning("     Acct::Role::DEV", " %lli(%p)", Acct::Role::DEV, Acct::Role::DEV);
         sLog.Warning("     Acct::Role::STD", " %lli(%p)", Acct::Role::STD, Acct::Role::STD);
@@ -314,18 +376,16 @@ bool ConsoleCommand::HandleCommand(const char* buf)
         sLog.Warning(" Corp::Role::Account", " %lli(%p)", Corp::Role::AllAccount, Corp::Role::AllAccount);
         sLog.Warning("Corp::Role::Starbase", " %lli(%p)", Corp::Role::AllStarbase, Corp::Role::AllStarbase);
     }
-    else if (strncmp(buf, "o", 1) == 0) {
+    else if (cmd == 'k') {
         pCommand->ListCommands();
     }
-    else if (strncmp(buf, "t", 1) == 0) {
+    else if (cmd == 't') {
         Test();
     }
-    else if (strncmp(buf, "f", 1) == 0) {
-        std::string args(buf);
-        char& num(args.at(1));
-        FxProc(atoi(&num));
+    else if (cmd == 'f') {
+        FxProc(fxIdx);
     }
-    else if (strncmp(buf, "d", 1) == 0) {
+    else if (cmd == 'd') {
         uint8 maxCount = sConfig.server.MaxThreadReport;
         uint8 count = sThread.Count();
         sLog.Blue("   Active Threads", "There are %u active threads running in the server.", count);
@@ -336,7 +396,7 @@ bool ConsoleCommand::HandleCommand(const char* buf)
             sThread.ListThreads();
         }
     }
-    else if (strncmp(buf, "l", 1) == 0) {
+    else if (cmd == 'l') {
         /*
         sLog.~NewLog();
         sLog.InitializeLogging(sConfig.files.logDir);
@@ -352,7 +412,7 @@ bool ConsoleCommand::HandleCommand(const char* buf)
             sLog.Warning("  EVEmu", "Unable to reload settings from %s", sConfig.files.logSettings.c_str());
         }
     }
-    else if (strncmp(buf, "q", 1) == 0) {
+    else if (cmd == 'q') {
         sLog.Green("  EVEmu", "Server Statistic Data:");
         sStatMgr.PrintInfo();
     }
@@ -363,21 +423,72 @@ bool ConsoleCommand::HandleCommand(const char* buf)
     return true;
 }
 
-void ConsoleCommand::SendMessage(const char* msg) {
-    // LSCChannel::SendMessage(Client * c, const char * message, bool self)
-    //  this isnt how it works....need more info
+void ConsoleCommand::SaveAll() {
+    // this runs on the main thread (Process() is called from the main loop; the input thread only queues lines)
+    sItemFactory.SaveItems();
+    uint32 chars(0), ships(0);
+    std::vector<Client*> list;
+    sEntityList.GetClients(list);
+    for (auto cur : list) {
+        if (cur->GetChar().get() == nullptr)
+            continue;
+        cur->GetChar()->SaveFullCharacter();
+        ++chars;
+        if (cur->GetShip().get() != nullptr) {
+            cur->GetShip()->SaveShip();
+            ++ships;
+        }
+    }
+    sLog.Warning("      Server Save", " Saved %u loaded items, %u online characters and %u ships.", sItemFactory.Count(), chars, ships);
 }
 
 void ConsoleCommand::Status(std::string& state, int64& threads, float& vm_usage, float& resident_set, float& user, float& kernel)
 {
 #if _WIN32
-    // Pursche TODO: Figure out how to report this stuff
     state = "R";
-    threads = 1;
-    vm_usage = 0.0f;
-    resident_set = 0.0f;
-    user = 0.0f;
-    kernel = 0.0f;
+    // memory, in Mb
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    memset(&pmc, 0, sizeof(pmc));
+    if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
+        resident_set = pmc.WorkingSetSize / 1048576.0f;
+        vm_usage = pmc.PrivateUsage / 1048576.0f;
+    } else {
+        resident_set = 0.0f;
+        vm_usage = 0.0f;
+    }
+    // threads of this process
+    threads = 0;
+    HANDLE snap(CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0));
+    if (snap != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+        DWORD pid(GetCurrentProcessId());
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID == pid)
+                    ++threads;
+                te.dwSize = sizeof(te);
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+    }
+    if (threads < 1)
+        threads = 1;
+    /* cpu time.  FILETIME is in 100ns units.  the linux branch reports utime/CLK_TCK/100 (seconds / 100),
+     *  so this does the same to keep the server stats table comparable */
+    FILETIME created, exited, kernelTime, userTime;
+    if (GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernelTime, &userTime)) {
+        ULARGE_INTEGER k, u;
+        k.LowPart = kernelTime.dwLowDateTime;
+        k.HighPart = kernelTime.dwHighDateTime;
+        u.LowPart = userTime.dwLowDateTime;
+        u.HighPart = userTime.dwHighDateTime;
+        kernel = static_cast<float>(k.QuadPart / 1.0e7 / 100.0);
+        user = static_cast<float>(u.QuadPart / 1.0e7 / 100.0);
+    } else {
+        user = 0.0f;
+        kernel = 0.0f;
+    }
 #else
     // the fields we want
     std::string ignore = "", run_state = "";

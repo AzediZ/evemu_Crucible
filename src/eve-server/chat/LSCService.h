@@ -66,6 +66,9 @@ public:
     void CharacterLogin(Client *pClient);
     void SendServerMOTD(Client* pClient);
 
+    // sends a message from "EVE System" to every Local channel with someone in it.  returns the number of channels
+    uint32 BroadcastSystemMessage(const std::string& msg);
+
     void CreateSystemChannel(int32 channelID);
     // evacuates and deletes a server-created channel (fleet/wing/squad) if it exists
     void DeleteSystemChannel(int32 channelID);

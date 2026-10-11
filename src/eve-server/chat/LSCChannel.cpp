@@ -221,6 +221,23 @@ void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 
+void LSCChannel::SendSystemMessage(const char * message) {
+    MulticastTarget mct;
+    for (auto cur : m_chars)
+        mct.characters.insert(cur.first);
+    if (mct.characters.empty())
+        return;
+
+    OnLSC_SendMessage sm;
+    sm.sender = _FakeSenderInfo();
+    sm.channelID = EncodeID();
+    sm.message = message;
+    sm.member_count = m_chars.size();
+
+    PyTuple *answer = sm.Encode();
+    sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
+}
+
 void LSCChannel::SendServerMOTD(Client* pClient) {
     std::string uptime;
     sEntityList.GetUpTime(uptime);

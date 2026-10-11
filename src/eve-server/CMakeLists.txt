@@ -775,6 +775,10 @@ TARGET_INCLUDE_DIRECTORIES( "${TARGET_NAME}"
                             "${TARGET_INCLUDE_DIR}" )
 TARGET_LINK_LIBRARIES( "${TARGET_NAME}"
                        "eve-common" )
+# console status:  process memory counters (GetProcessMemoryInfo)
+IF( WIN32 )
+  TARGET_LINK_LIBRARIES( "${TARGET_NAME}" "psapi" )
+ENDIF( WIN32 )
 
 INSTALL( TARGETS "${TARGET_NAME}"
          RUNTIME DESTINATION "bin" )

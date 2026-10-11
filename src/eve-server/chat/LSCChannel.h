@@ -117,6 +117,8 @@ public:
 
     void Evacuate(Client * c);
     void SendMessage(Client * c, const char * message, bool self = false);
+    // a message from "EVE System" to every member (server broadcasts and notices)
+    void SendSystemMessage(const char * message);
     void SendServerMOTD(Client* pClient);
 
     void GetChannelInfo(int32 * channelID, uint32 * ownerID, std::string &displayName, std::string &motd, std::string &comparisonKey,
