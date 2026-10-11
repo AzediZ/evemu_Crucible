@@ -114,7 +114,7 @@
                     <int name="typeID" />
                 </dictInlineEntry>
                 <dictInlineEntry key="expiry">
-                    <int name="expiry" />
+                    <long name="expiry" />
                 </dictInlineEntry>
                 <dictInlineEntry key="state">
                     <int name="state" />

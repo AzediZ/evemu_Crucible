@@ -60,6 +60,9 @@ void ScanMgrService::BoundReleased (ScanBound* bound) {
 }
 
 PyResult ScanMgrService::GetSystemScanMgr(PyCallArgs& call) {
+    if (call.client->IsDocked() or (call.client->GetShipSE() == nullptr))
+        throw CustomError("You must be in space to use the scanner.");
+
     DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
     if (pDestiny == nullptr) {
         codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
@@ -71,6 +74,7 @@ PyResult ScanMgrService::GetSystemScanMgr(PyCallArgs& call) {
 
     if (it == this->m_instances.end ()) {
         pSB = new ScanBound(m_manager, *this, call.client);
+        m_instances.emplace(call.client, pSB);
     } else {
         pSB = it->second;
     }
@@ -101,9 +105,11 @@ PyResult ScanBound::ConeScan( PyCallArgs& call, PyRep* ignored1, PyRep* ignored2
     Call_ConeScan args;
     if (!args.Decode(&call.tuple)) {
         codelog(SERVICE__ERROR, "ScanBound: Failed to decode arguments.");
-        //TODO: throw exception
-        return PyStatic.NewNone();
+        throw CustomError("Invalid directional scan request.");
     }
+
+    if (m_client->GetShipSE() == nullptr)
+        throw CustomError("You must be in space to use the scanner.");
 
     DestinyManager* pDestiny = m_client->GetShipSE()->DestinyMgr();
     if (pDestiny == nullptr) {
@@ -120,7 +126,12 @@ PyResult ScanBound::ConeScan( PyCallArgs& call, PyRep* ignored1, PyRep* ignored2
     if (m_client->scan() == nullptr)
         m_client->SetScan(new Scan(m_client));
 
-    /** @todo  2s reset time on dscan */
+    // the directional scanner recalibrates between scans (client ConeScanTooFrequent)
+    int64 now(GetFileTimeNow());
+    if ((sConfig.exploring.DScanCooldown > 0)
+    and ((now - m_client->GetLastDScan()) < (sConfig.exploring.DScanCooldown * (EvE::Time::Second / 1000))))
+        throw UserError("ConeScanTooFrequent");
+    m_client->SetLastDScan(now);
 
     return m_client->scan()->ConeScan(args);
 }

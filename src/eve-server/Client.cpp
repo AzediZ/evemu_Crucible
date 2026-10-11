@@ -73,6 +73,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
   m_TS(nullptr),
   m_char(CharacterRef(nullptr)),
   m_scan(nullptr),
+  m_lastDScan(0),
   pShipSE(nullptr),
   pSession(new ClientSession()),
   m_system(nullptr),

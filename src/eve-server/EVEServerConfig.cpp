@@ -203,6 +203,10 @@ EVEServerConfig::EVEServerConfig()
     exploring.Radar = 6;
     exploring.Unrated = 8;
     exploring.Complex = 4;
+    exploring.DScanCooldown = 2000;
+    exploring.SurveyProbeConeAngle = 30.0f;
+    exploring.ProbeStrengthScale = 1.0f;
+    exploring.ProbeShipSigDivisor = 25.0f;
 
     // dungeon
     dungeon.AnomalyLifetime = 0;
@@ -847,6 +851,10 @@ bool EVEServerConfig::ProcessExploring ( const TiXmlElement* ele ) {
     AddValueParser( "Complex",              exploring.Complex );
     AddValueParser( "Gravametric",          exploring.Gravametric );
     AddValueParser( "Magnetometric",        exploring.Magnetometric );
+    AddValueParser( "DScanCooldown",        exploring.DScanCooldown );
+    AddValueParser( "SurveyProbeConeAngle", exploring.SurveyProbeConeAngle );
+    AddValueParser( "ProbeStrengthScale",   exploring.ProbeStrengthScale );
+    AddValueParser( "ProbeShipSigDivisor",  exploring.ProbeShipSigDivisor );
 
     const bool result = ParseElementChildren( ele );
 
@@ -856,6 +864,10 @@ bool EVEServerConfig::ProcessExploring ( const TiXmlElement* ele ) {
     RemoveParser( "Complex" );
     RemoveParser( "Gravametric" );
     RemoveParser( "Magnetometric" );
+    RemoveParser( "DScanCooldown" );
+    RemoveParser( "SurveyProbeConeAngle" );
+    RemoveParser( "ProbeStrengthScale" );
+    RemoveParser( "ProbeShipSigDivisor" );
 
     return result;
 }

@@ -248,6 +248,10 @@ boolean can use either 0/1 OR true/false.
         <Radar>6</Radar><!-- integer  -1 to disable.  max 128.  default 6 -->
         <Unrated>8</Unrated><!-- integer  -1 to disable.  max 128.  default 8 -->
         <Complex>4</Complex><!-- integer  -1 to disable.  max 128.  default 4 -->
+        <DScanCooldown>2000</DScanCooldown><!-- ms between directional scans of one character (client ConeScanTooFrequent).  0 = no limit.  default 2000 -->
+        <SurveyProbeConeAngle>30.0</SurveyProbeConeAngle><!-- float degrees  a survey probe flies to the moon nearest the ship's heading within this angle.  default 30.0 -->
+        <ProbeStrengthScale>1.0</ProbeStrengthScale><!-- float  multiplier on every scanner probe's strength (tuning).  default 1.0 -->
+        <ProbeShipSigDivisor>25.0</ProbeShipSigDivisor><!-- float  ships, drones and structures scan like a site of signal size (signature radius / this) percent.  lower = easier to probe.  default 25.0 -->
     </exploring>
 
     <dungeon><!-- dungeons: combat anomalies, signature sites, acceleration gates and escalations (needs cosmic DungeonEnabled) -->

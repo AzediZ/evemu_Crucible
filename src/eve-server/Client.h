@@ -334,6 +334,9 @@ public:
     // set scan timer in ms
     // this is used in scan.cpp after time calc's are done
     void SetScanTimer(uint16 time, bool useProbe=false) { m_scanTimer.Start(time);  m_scanProbe = useProbe; }
+    // filetime of this character's last directional scan (d-scan cooldown)
+    int64 GetLastDScan()                                { return m_lastDScan; }
+    void SetLastDScan(int64 time)                       { m_lastDScan = time; }
 
     //  trade
     void SetTradeSession(TradeSession* ts)              { m_TS = ts; }
@@ -370,6 +373,7 @@ protected:
     EVEServiceManager& m_services;
     LSCService* m_lsc;
     Scan* m_scan;
+    int64 m_lastDScan;
     ShipSE* pShipSE;
     TradeSession* m_TS;
     ClientSession* pSession;

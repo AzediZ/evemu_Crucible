@@ -300,6 +300,10 @@ public:
         int8 Radar;
         int8 Unrated;
         int8 Complex;
+        uint16 DScanCooldown;           // ms between directional scans per character.  0 = none  (F11)
+        float SurveyProbeConeAngle;     // degrees off the ship's heading a moon may be to be a survey probe's target  (F11)
+        float ProbeStrengthScale;       // multiplier on scanner probe strength  (F11)
+        float ProbeShipSigDivisor;      // ship/drone/structure signal size = signature radius / this  (F11)
     } exploring;
 
     // From <dungeon>  (F13: dungeons, anomalies and escalations)

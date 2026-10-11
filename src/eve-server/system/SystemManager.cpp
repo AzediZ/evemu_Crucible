@@ -1961,44 +1961,37 @@ void SystemManager::GetClientList(std::vector< Client* >& cVec)
 
 void SystemManager::DScan(int64 range, const GPoint& pos, std::vector<SystemEntity*>& vector )
 {
-    /** @todo finish this for correct dscan entity reporting
-     * all ships (not cloaked)
-     * all celestials
-     * all structures
-     * wrecks
-     * drones
-     * probes (core and combat only, i think)
-     * spheres and bubbles (ewar shit)
-     * some npcs ('normal' like rats dont show)
-     * clouds(groups 227 & 711) and asteroids are coded in client but not included here (yet)
-     *   group 227 only shown if role_mod or role_gml
-     *
-     * may not be in this version, but check for "scan inhibitor" POS module; ships in it are invis to dscan
-     * AttrDScanImmune is from rhea expansion.  may be able to implement here.
+    /* Crucible directional scanner shows everything in range that isnt cloaked:
+     *   ships (incl capsules, covert ops and recons - d-scan immunity came in 2013), npc ships and sentries,
+     *   drones, scanner probes, celestials (sun, planets, moons, belts, gates, stations), structures, customs offices,
+     *   deployables, force fields, cyno fields, warp disruption bubbles, wrecks and containers.
+     * not shown:  cloaked ships, missiles, site beacons (cosmic signatures/anomalies), bubble markers and temp clouds.
+     *   asteroids only with server.AsteroidsOnDScan.
      */
+    SystemEntity* pSE(nullptr);
     for (auto cur : m_entities) {
-        // these dont show on dscan
-        if (IsTempItem(cur.first))
+        pSE = cur.second;
+        if (pSE == nullptr)
             continue;
-        if (IsAsteroidID(cur.first))
+        if (pSE->IsMissileSE())
+            continue;
+        if (pSE->IsAsteroidSE() or IsAsteroidID(cur.first))
             if (!sConfig.server.AsteroidsOnDScan)
                 continue;
-        if (IsNPC(cur.first))
+        if (pSE->IsAnomalySE()
+        or (pSE->GetGroupID() == EVEDB::invGroups::Cosmic_Signature)
+        or (pSE->GetGroupID() == EVEDB::invGroups::Cosmic_Anomaly))
             continue;
-        if (cur.second->IsDeployableSE())       // not sure if this is right or not
-            continue;
-        if (cur.second->IsShipSE()) {
-            if (cur.second->GetGroupID() == EVEDB::invGroups::CovertOps)
+        // temp containers are bubble/debug markers
+        if (IsTempItem(cur.first))
+            if (pSE->IsContainerSE() or (pSE->GetGroupID() == EVEDB::invGroups::Temporary_Cloud))
                 continue;
-            if (cur.second->GetGroupID() == EVEDB::invGroups::CombatRecon)
-                continue;
-        }
-        if (cur.second->DestinyMgr() != nullptr)
-            if (cur.second->DestinyMgr()->IsCloaked())
+        if (pSE->DestinyMgr() != nullptr)
+            if (pSE->DestinyMgr()->IsCloaked())
                 continue;
         // made it this far.  add item to scan list
-        if (pos.distance(cur.second->GetPosition()) < range)
-            vector.push_back(cur.second);
+        if (pos.distance(pSE->GetPosition()) < range)
+            vector.push_back(pSE);
     }
 }
 
