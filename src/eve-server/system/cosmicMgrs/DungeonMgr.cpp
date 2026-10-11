@@ -82,8 +82,11 @@ void DungeonDataMgr::GetRandomDungeon(Dungeon::Dungeon& dungeon, uint8 archetype
     auto range = archetypeIndex.equal_range(archetype);
     // Calculate the number of dungeons in the range
     uint32 count = std::distance(range.first, range.second);
-    // If there are no dungeons with the specified archetype, return
+    // If there are no dungeons with the specified archetype, return an empty dungeon
     if (count == 0) {
+        dungeon.dungeonID = 0;
+        dungeon.rooms.clear();
+        _log(DUNG__WARNING, "GetRandomDungeon() - no dungeon with archetype %u", archetype);
         return;
     }
     // Generate a random number within the range of the number of dungeons
@@ -104,6 +107,8 @@ void DungeonDataMgr::GetDungeon(Dungeon::Dungeon& dungeon, uint32 dungeonID) {
         {
             dungeon = *it;
         } else {
+            dungeon.dungeonID = 0;
+            dungeon.rooms.clear();
             _log(DUNG__ERROR, "GetDungeon() - Failed to find dungeon with id %u", dungeonID);
         }
 }
@@ -178,6 +183,21 @@ void DungeonDataMgr::FillObject(DBResultRow row) {
     if (it != byDungeonID.end()) {
         Dungeon::Dungeon dData = *it;
 
+        // Populate all data for the dungeon and room
+        dData.name = row.GetText(1);
+        dData.status = row.GetUInt(2);
+        dData.factionID = row.GetUInt(3);
+        dData.archetypeID = row.GetUInt(4);
+        dData.rooms[row.GetUInt(5)].roomID = row.GetUInt(5);
+        dData.rooms[row.GetUInt(5)].roomName = row.GetText(6);
+
+        // a room without objects (LEFT JOIN)
+        if (row.IsNull(7)) {
+            byDungeonID.erase(dData.dungeonID);
+            byDungeonID.insert(dData);
+            return;
+        }
+
         // Add the object to the room
         Dungeon::RoomObject oData;
         oData.objectID = row.GetUInt(7);
@@ -191,13 +211,6 @@ void DungeonDataMgr::FillObject(DBResultRow row) {
         oData.roll = row.GetInt(15);
         oData.radius = row.GetInt(16);
         dData.rooms[row.GetUInt(5)].objects.push_back(oData);
-        // Populate all data for the dungeon and room
-        dData.name = row.GetText(1);
-        dData.status = row.GetUInt(2);
-        dData.factionID = row.GetUInt(3);
-        dData.archetypeID = row.GetUInt(4);
-        dData.rooms[row.GetUInt(5)].roomID = row.GetUInt(5);
-        dData.rooms[row.GetUInt(5)].roomName = row.GetText(6);
 
         // Replace item in container
         byDungeonID.erase(dData.dungeonID);
@@ -288,9 +301,8 @@ void DungeonMgr::Process()
 
 bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
 {
-    // TODO: create a new dungeon using the given signature
-
     Dungeon::Dungeon dData;
+    dData.dungeonID = 0;
 
     // If we are given a dungeonID, use it otherwise pick a random dungeon based on archetype
     if (dungeonID == 0) {
@@ -298,6 +310,15 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
     } else {
         sDunDataMgr.GetDungeon(dData, dungeonID);
     }
+
+    if (dData.rooms.empty()) {
+        _log(DUNG__WARNING, "DungeonMgr::MakeDungeon() - no dungeon with rooms for %s (type %u, dungeonID %u)", sig.sigName.c_str(), sig.dungeonType, dungeonID);
+        return false;
+    }
+    if (!dData.name.empty())
+        sig.sigName = dData.name;
+    else
+        sig.sigName = sDunDataMgr.GetDungeonType(sig.dungeonType);
 
     if ((sig.sigGroupID == EVEDB::invGroups::Cosmic_Signature) || (sig.sigGroupID == EVEDB::invGroups::Cosmic_Anomaly)) {
         // Create a new anomaly inventory item to track entire dungeon under
@@ -324,7 +345,7 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
         // Create the new live dungeon
         Dungeon::LiveDungeon newDungeon;
         newDungeon.anomalyID = iRef->itemID();
-        newDungeon.systemID = iRef->itemID();
+        newDungeon.systemID = m_system->GetID();
 
         // Iterate through rooms and handle item spawning for each room
         uint16 roomCounter = 0;
@@ -356,7 +377,7 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
                 sDataMgr.GetType(object.typeID, objType);
                 sDataMgr.GetGroup(objType.groupID, objGroup);
                 if (objGroup.catID == EVEDB::invCategories::Ship || objGroup.catID == EVEDB::invCategories::Drone) {
-                    m_spawnMgr->DoSpawnForAnomaly(sBubbleMgr.FindBubble(m_system->GetID(), pos), pos, GetRandLevel(), object.typeID);
+                    m_spawnMgr->DoSpawnForAnomaly(sBubbleMgr.GetBubble(m_system, pos), pos, GetRandLevel(), object.typeID, sig.ownerID);
                 } 
                 
                 // Otherwise, spawn as a normal celestial object
@@ -385,8 +406,36 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
 
         // Finally add the new dungeon to the system-wide list for tracking
         m_dungeonList.insert({newDungeon.anomalyID, newDungeon});
+        return true;
     }
     return false;
+}
+
+void DungeonMgr::Close()
+{
+    // the items of live dungeons don't survive the system.  their entities are torn down by the system unload after this
+    for (auto& dungeon : m_dungeonList) {
+        for (auto& room : dungeon.second.rooms)
+            for (auto itemID : room.second.items) {
+                SystemEntity* pSE(m_system->GetSE(itemID));
+                if (pSE != nullptr) {
+                    m_system->RemoveEntity(pSE);
+                    SafeDelete(pSE);
+                }
+                InventoryItemRef iRef(sItemFactory.GetItemRef(itemID));
+                if (iRef.get() != nullptr)
+                    iRef->Delete();
+            }
+        SystemEntity* pSE(m_system->GetSE(dungeon.second.anomalyID));
+        if (pSE != nullptr) {
+            m_system->RemoveEntity(pSE);
+            SafeDelete(pSE);
+        }
+        InventoryItemRef iRef(sItemFactory.GetItemRef(dungeon.second.anomalyID));
+        if (iRef.get() != nullptr)
+            iRef->Delete();
+    }
+    m_dungeonList.clear();
 }
 
 int8 DungeonMgr::GetFaction(uint32 factionID)

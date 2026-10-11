@@ -296,20 +296,8 @@ void SpawnMgr::SpawnKilled(SystemBubble* pBubble, uint32 itemID)
             pBubble->SetSpawned(false);
     } else if (pBubble->IsAnomaly()) {
         _log(SPAWN__DEPOP, "SpawnMgr::SpawnKilled::Anomaly - called by %u.", itemID);
-        if (m_spawns.count(pBubble->GetID()) == 1) {
-            // last npc in this wave.  get data needed for next wave, if applicable.
-            SpawnEntryDef::iterator itr = m_spawns.find(pBubble->GetID());
-            if (itr == m_spawns.end())
-                return; // this is an error.
-            MakeSpawn(pBubble, itr->second.factionID, itr->second.spawnClass, itr->second.level);
-            // now remove this spawn from map.
-            m_spawns.erase(itr);
-            // unlock warp gate if applicable
-        } else if (m_spawns.count(pBubble->GetID()) < 1) {
-            // this is an error...
-        } else {
-            // there are still npcs in this wave....continue.
-        }
+        // dungeon npcs never respawn.  waves are run by the dungeon manager
+        RemoveSpawn(pBubble->GetID(), itemID);
 
         /*  this needs to deal with multiple things.
          * 1- unlocking warp gates when needed per wave
@@ -338,18 +326,17 @@ void SpawnMgr::SpawnKilled(SystemBubble* pBubble, uint32 itemID)
 }
 
 // Spawn an individual enemy inside a dungeon (called by dungeonMgr)
-void SpawnMgr::DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level, uint16 typeID)
+void SpawnMgr::DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level, uint16 typeID, uint32 factionID/*0*/)
 {
     if (pBubble == nullptr)
         return;
     pBubble->SetAnomaly();
 
-    float secRating = m_system->GetSecValue();
-
-    // Get faction of enemy based on item type
+    // the dungeon's faction, else the faction of the npc type's race
     Inv::TypeData objType;
     sDataMgr.GetType(typeID, objType);
-    uint32 factionID = sDataMgr.GetRaceFaction(objType.race);
+    if (factionID == 0)
+        factionID = sDataMgr.GetRaceFaction(objType.race);
 
     if (is_log_enabled(SPAWN__MESSAGE))
         _log(SPAWN__MESSAGE, "SpawnMgr::DoSpawnForAnomaly() - faction: %s, region %u.", \
@@ -358,6 +345,7 @@ void SpawnMgr::DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level,
     SpawnGroup group;
     group.quantity = 1;
     group.typeID = typeID;
+    m_toSpawn.push_back(group);
 
     if (m_toSpawn.size() > 0) {
         if (is_log_enabled(SPAWN__MESSAGE)) {

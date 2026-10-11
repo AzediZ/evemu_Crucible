@@ -80,6 +80,8 @@ public:
 
     bool Init(AnomalyMgr* anomMgr, SpawnMgr* spawnMgr);
     void Process();
+    // system unload:  removes every live dungeon of this system
+    void Close();
 
     bool MakeDungeon(CosmicSignature& sig, uint32 dungeonID = 0);
 

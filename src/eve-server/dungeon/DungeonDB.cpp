@@ -67,7 +67,7 @@ void DungeonDB::GetAllDungeonData(DBQueryResult& res)
     "x, y, z, yaw, pitch, roll, radius "
 	"FROM dunDungeons "
 	"INNER JOIN dunRooms ON dunDungeons.dungeonID = dunRooms.dungeonID "
-	"INNER JOIN dunRoomObjects ON dunRooms.roomID = dunRoomObjects.roomID"))
+	"LEFT JOIN dunRoomObjects ON dunRooms.roomID = dunRoomObjects.roomID"))
     _log(DATABASE__ERROR, "Error in GetAllDungeonData query: %s", res.error.c_str());
 }
 
@@ -79,8 +79,8 @@ void DungeonDB::GetAllDungeonDataByDungeonID(DBQueryResult& res, uint32 dungeonI
     "x, y, z, yaw, pitch, roll, radius "
 	"FROM dunDungeons "
 	"INNER JOIN dunRooms ON dunDungeons.dungeonID = dunRooms.dungeonID "
-	"INNER JOIN dunRoomObjects ON dunRooms.roomID = dunRoomObjects.roomID "
-    "WHERE dunDungeons.dungeonID = %u", dungeonID));
+	"LEFT JOIN dunRoomObjects ON dunRooms.roomID = dunRoomObjects.roomID "
+    "WHERE dunDungeons.dungeonID = %u", dungeonID))
     _log(DATABASE__ERROR, "Error in GetAllDungeonData query: %s", res.error.c_str());
 }
 

@@ -43,7 +43,7 @@ public:
     std::string GetSpawnGroupName(int8 sGroup);
 
     bool DoSpawnForBubble(SystemBubble* pBubble);
-    void DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level, uint16 typeID);
+    void DoSpawnForAnomaly(SystemBubble* pBubble, GPoint pos, uint8 level, uint16 typeID, uint32 factionID = 0);
     void DoSpawnForMission(SystemBubble* pBubble, uint32 regionID);
     void DoSpawnForIncursion(SystemBubble* pBubble, uint32 regionID);
 

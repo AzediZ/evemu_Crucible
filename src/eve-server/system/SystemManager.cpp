@@ -369,6 +369,8 @@ void SystemManager::UnloadSystem() {
     m_beltMgr->ClearAll();
     // close anomaly mgr, which saves and removes sigs from system
     m_anomMgr->Close();
+    // remove live dungeons (their items don't outlive the system)
+    m_dungMgr->Close();
 
     // drones are deleted with the rest of the entities below.  nothing may look them up meanwhile
     m_drones.clear();

@@ -224,8 +224,9 @@ void AnomalyMgr::LoadAnomalies() {
         sig.position.y = row.GetDouble(10);
         sig.position.z = row.GetDouble(11);
 
-        // Register loaded signatures
-        m_dungMgr->MakeDungeon(sig);
+        // Register loaded signatures.  wormholes are made by the wormhole manager, everything else is a dungeon
+        if ((sig.dungeonType != Dungeon::Type::Wormhole) and !m_dungMgr->MakeDungeon(sig))
+            continue;
         m_sigBySigID.emplace(sig.sigID, sig);
         if (sig.dungeonType == Dungeon::Type::Anomaly) {
             m_anomByItemID.emplace(sig.sigItemID, sig);
@@ -238,10 +239,6 @@ void AnomalyMgr::LoadAnomalies() {
             } else {
                 ++m_Sigs;
             }
-        }
-
-        if (sig.dungeonType == Dungeon::Type::Wormhole) {
-            m_WH++;
         }
 
         _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::LoadAnomalies() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
@@ -282,7 +279,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
         sig.sigID = sEntityList.GetAnomalyID();
         // *Mgr will determine name, itemID and sigStrength.
         sig.sigItemID = 0;
-        sig.sigName = "Test Name Here";
+        sig.sigName = "";   // set by DungeonMgr from the dungeon
         //default to 1/80
         sig.sigStrength = 0.0125;
         // default to rogue drones
@@ -421,65 +418,63 @@ void AnomalyMgr::RegisterExitWH(CosmicSignature &sig)
 
 uint8 AnomalyMgr::GetDungeonType()
 {
-    uint8 typeID = MakeRandomInt(2,10); // skip typeMission
-    switch(typeID) {
-        case Dungeon::Type::Escalation:  // 9
-        case Dungeon::Type::Mission: {   // 1
-            // cannot create this type here.  try again.
-            return GetDungeonType();
-        } break;
-        case Dungeon::Type::Gravimetric: {   // 2
-            if (m_Grav < 0)
-                return GetDungeonType();
+    // a few tries for a type this system allows.  0 when nothing is allowed
+    for (uint8 tries = 0; tries < 20; ++tries) {
+        uint8 typeID = MakeRandomInt(2,10); // skip typeMission
+        switch(typeID) {
+            case Dungeon::Type::Escalation:  // 9
+            case Dungeon::Type::Mission: {   // 1
+                // cannot create this type here.  try again.
+                continue;
+            } break;
+            case Dungeon::Type::Gravimetric: {   // 2
+                if (m_Grav < 0)
+                    continue;
+                ++m_Grav;
+            } break;
+            case Dungeon::Type::Magnetometric: {   // 3
+                if (m_Mag < 0)
+                    continue;
+                ++m_Mag;
+            } break;
+            case Dungeon::Type::Radar: {   // 4
+                if (m_Radar < 0)
+                    continue;
+                ++m_Radar;
+            } break;
+            case Dungeon::Type::Ladar: {   // 5
+                if (m_Ladar < 0)
+                    continue;
+                ++m_Ladar;
+            } break;
+            case Dungeon::Type::Wormhole: {   // 6
+                // cap at 1 per system, except k162...which ISNT created in this system (it's an exit, from WMS)
+                //  this will need updating and be controlled by WMS.  it will have full control of WH amounts/locations
+                if (m_WH != 0)
+                    continue;
+                ++m_WH;
+            } break;
+            case Dungeon::Type::Anomaly: {   // 7. this is noob dungeon, no probe required
+                if (!(m_Anoms < (m_maxSigs / 2)))
+                    continue;
+            } break;
+            case Dungeon::Type::Unrated: {   // 8
+                if ((m_Unrated < 0) or (m_Unrated > 2)) // cap at 3
+                    continue;
+                ++m_Unrated;
+            } break;
+            case Dungeon::Type::Rated: {  // 10
+                if ((m_Complex < 0) or (m_Complex > 1)) // cap at 2
+                    continue;
+                ++m_Complex;
+            } break;
+        }
 
-            ++m_Grav;
-        } break;
-        case Dungeon::Type::Magnetometric: {   // 3
-            if (m_Mag < 0)
-                return GetDungeonType();
-
-            ++m_Mag;
-        } break;
-        case Dungeon::Type::Radar: {   // 4
-            if (m_Radar < 0)
-                return GetDungeonType();
-
-            ++m_Radar;
-        } break;
-        case Dungeon::Type::Ladar: {   // 5
-            if (m_Ladar < 0)
-                return GetDungeonType();
-
-            ++m_Ladar;
-        } break;
-        case Dungeon::Type::Wormhole: {   // 6
-            // cap at 1 per system, except k162...which ISNT created in this system (it's an exit, from WMS)
-            //  this will need updating and be controlled by WMS.  it will have full control of WH amounts/locations
-            if (m_WH != 0)
-                return GetDungeonType();
-
-            ++m_WH;
-        } break;
-        case Dungeon::Type::Anomaly: {   // 7. this is noob dungeon, no probe required
-            if (!(m_Anoms < (m_maxSigs / 2)))
-                return GetDungeonType();
-        } break;
-        case Dungeon::Type::Unrated: {   // 8
-            if ((m_Unrated < 0) or (m_Unrated > 2)) // cap at 3
-                return GetDungeonType();
-
-            ++m_Unrated;
-        } break;
-        case Dungeon::Type::Rated: {  // 10
-            if ((m_Complex < 0) or (m_Complex > 1)) // cap at 2
-                return GetDungeonType();
-
-            ++m_Complex;
-        } break;
+        _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::GetDungeonType() - Returning %s(%u)", sDunDataMgr.GetDungeonType(typeID), typeID);
+        return typeID;
     }
 
-    _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::GetDungeonType() - Returning %s(%u)", sDunDataMgr.GetDungeonType(typeID), typeID);
-    return typeID;
+    return 0;
 }
 
 uint32 AnomalyMgr::GetAnomalyID(std::string& sigID)
