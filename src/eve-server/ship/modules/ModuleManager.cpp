@@ -1423,19 +1423,10 @@ void ModuleManager::CharacterLeavingShip()
     if (pShipItem->IsPopped())
         return;
 
-    //OfflineAll();
-
-    /*  this is complicated and im gonna leave it alone for now
-     * this will include checking ship HP, cargo holds, and possibably other things
-     *  that havent been written yet.
-     * see if these can throw, else we'll have to do a bool return from calls and go from there.
-     *
-     * will also have to check current levels of hp and cargo AFTER pilot has been removed (lost skills)
-    if (is_log_enabled(MODULE__WARNING))
-        sLog.Magenta("MM::CharacterLeavingShip()","Needs to be implemented");
+    /* the ship's hp and capacitor without the pilot's skills are checked by ShipItem::ClampDamageState(), after the pilot
+     *  is gone.  cargo over capacity is allowed (Crucible keeps items)
      */
-    //CheckNewHP();
-    //CheckNewCargo();
+    ClearOverloads();
 }
 
 void ModuleManager::ShipWarping()

@@ -132,7 +132,8 @@ void ShipItem::SetPlayer(Client* pClient) {
             pInventory->RemoveItem(m_pilot->GetChar());
         // remove ship effects and char skill effects for char leaving ship.
         ProcessEffects(false);
-        // should we check for cargo and damage after char leaves ship?  maybe later
+        // without the pilot's skills the ship's hp and capacitor may be smaller
+        ClampDamageState();
         m_onlineModuleVec.clear();
         m_pilot = nullptr;
         m_isActive = false;
@@ -147,6 +148,7 @@ void ShipItem::SetPlayer(Client* pClient) {
 
     // proc effects when changing ships, or on login.
     ProcessEffects(true, sDataMgr.IsSolarSystem(locationID()));
+    ClampDamageState();
 
     // this hits on login and when boarding ship in space.  will not hit on Undock() (location is still station at this point of execution)
     if (sDataMgr.IsSolarSystem(locationID())) {
@@ -165,6 +167,40 @@ void ShipItem::SetPlayer(Client* pClient) {
             }
         } */
     }
+}
+
+void ShipItem::ClampDamageState()
+{
+    /* hp and capacitor depend on the pilot's skills.  after a pilot change, charge and damage can be past the new capacities:
+     *  cut them down (never to the point of destroying the ship).  cargo over capacity is allowed (Crucible keeps items)
+     */
+    if (m_isPopped)
+        return;
+    bool changed(false);
+    auto clamp = [&] (uint16 attrID, EvilNumber max) {
+        if (max < EvilZero)
+            max = EvilZero;
+        if (GetAttribute(attrID) > max) {
+            SetAttribute(attrID, max, false);
+            changed = true;
+        }
+    };
+    clamp(AttrShieldCharge, GetAttribute(AttrShieldCapacity));
+    clamp(AttrCapacitorCharge, GetAttribute(AttrCapacitorCapacity));
+    clamp(AttrArmorDamage, GetAttribute(AttrArmorHP));
+    clamp(AttrDamage, GetAttribute(AttrHP) - EvilOne);
+    if (!changed)
+        return;
+
+    pAttributeMap->SaveShipState();
+    if (!sDataMgr.IsSolarSystem(locationID()))
+        return;
+    SystemManager* pSystem(sEntityList.FindSystem(locationID()));
+    if (pSystem == nullptr)
+        return;
+    SystemEntity* pSE(pSystem->GetSE(m_itemID));
+    if (pSE != nullptr)
+        pSE->SendDamageStateChanged();
 }
 
 void ShipItem::Init()

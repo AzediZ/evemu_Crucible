@@ -683,6 +683,70 @@ uint32 Character::GetTotalSP() {
     return m_charData.skillPoints;
 }
 
+uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID)
+{
+    SkillRef sRef(GetCharSkillRef(skillTypeID));
+    if (sRef.get() == nullptr)
+        return 0;
+
+    /* the skill's queue entries make no sense once it has lost a level.  if it is queued or training, training stops and the
+     *  queue is rebuilt without it (a logged off character's queue is just cleared: AddToSkillQueue needs a client)
+     */
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    bool online((m_pClient != nullptr) and (sEntityList.FindClientByCharID(m_itemID) == m_pClient));
+    bool queued((m_inTraining != nullptr) and (m_inTraining->typeID() == skillTypeID));
+    std::vector<std::pair<uint16, uint8>> keep;
+    for (auto cur : m_skillQueue) {
+        if (cur.typeID == skillTypeID) {
+            queued = true;
+        } else {
+            keep.push_back(std::make_pair(cur.typeID, cur.level));
+        }
+    }
+    if (queued) {
+        CancelSkillInTraining(online);
+        m_skillQueue.clear();
+    }
+
+    uint8 level(sRef->GetAttribute(AttrSkillLevel).get_uint32());
+    if (level < 1) {
+        if (queued and online)
+            for (auto cur : keep)
+                AddToSkillQueue(cur.first, cur.second);
+        return 0;
+    }
+
+    uint32 currentSP(sRef->GetAttribute(AttrSkillPoints).get_uint32());
+    uint32 lost(sRef->GetSPForLevel(level) - sRef->GetSPForLevel(level - 1));
+    uint32 newSP(currentSP > lost ? currentSP - lost : 0);
+    uint8 newLevel(sRef->GetLevelForSP(newSP));
+    if (newLevel >= level)
+        newLevel = level - 1;
+
+    sRef->SetAttribute(AttrSkillLevel, newLevel, online);
+    sRef->SetAttribute(AttrSkillPoints, newSP, online);
+    sRef->SaveItem();
+    SaveSkillHistory(eventID, GetFileTimeNow(), m_itemID, skillTypeID, newLevel, newSP);
+    GetTotalSP();
+
+    _log(SKILL__INFO, "%s(%u): %s lost %u skill points (level %u -> %u).", name(), m_itemID, sRef->name(), lost, level, newLevel);
+
+    if (queued) {
+        if (online) {
+            for (auto cur : keep)
+                AddToSkillQueue(cur.first, cur.second);
+            UpdateSkillQueueEndTime();
+            PyTuple* tmp = new PyTuple(0);
+            m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
+        } else {
+            m_db.UpdateSkillQueueEndTime(0, m_itemID);
+            SaveSkillQueue();
+        }
+    }
+
+    return lost;
+}
+
 void Character::SaveSkillHistory(uint16 eventID, double logDate, uint32 characterID, uint16 skillTypeID, uint8 skillLevel, uint32 absolutePoints)
 {
     if (absolutePoints < 1)

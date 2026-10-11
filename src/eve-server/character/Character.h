@@ -258,6 +258,9 @@ public:
     void            UpdateSkillQueueEndTime();
     void            RemoveFromQueue(SkillRef sRef);
     void            ClearSkillFlags();
+    /* takes one level's worth of skill points off a skill, which drops a level (T3 ship loss, clone penalty).
+     *  logged in the skill history as eventID.  returns the skill points lost (0 if the skill isn't trained) */
+    uint32          LoseSkillLevel(uint16 skillTypeID, uint16 eventID);
 
     PyRep*          GetSkillHistory();
     uint32          GetTotalSP();

@@ -545,6 +545,10 @@ void ShipSE::Killed(Damage &fatal_blow) {
     if (pPilot == nullptr)
         return;    //  make error here
 
+    // a strategic cruiser destroyed with its pilot aboard costs a subsystem skill level (needs the subsystems, so before the loot)
+    if (!pPilot->InPod())
+        T3SkillLoss(pPilot->GetChar().get(), pPilot, fatal_blow);
+
     // security status penalties for everyone who attacked this pilot illegally, kill rights (CrimeWatch)
     //  a self-destruct has no killer (the pilot is the final blow on the killmail)
     sCrimeWatch.OnShipDestroyed(pPilot->GetCharacterID(), pPilot->InPod(), pPilot->GetSecurityRating(),
@@ -725,12 +729,57 @@ void ShipSE::Killed(Damage &fatal_blow) {
  *  does what the normal path does through the character: killmail, wreck, insurance, and a new pod in space (or a clone
  *  in their home station, for a pod).  the character item is moved out before the ship and its contents are deleted
  */
+/* Crucible: a strategic cruiser destroyed with its pilot aboard costs one level's worth of skill points in one random skill
+ *  required by its fitted subsystems (removed in 2021).  ejecting or self-destructing avoids it.  the client shows it on the
+ *  character sheet (OnSkillPointsRemovedDueToShipLoss -> RecentSkillLossDueToT3Ship).  config server.T3SkillLoss
+ */
+void ShipSE::T3SkillLoss(Character* pChar, Client* pClient, Damage& fatal_blow)
+{
+    if (!sConfig.server.T3SkillLoss or (pChar == nullptr))
+        return;
+    if (m_self->groupID() != EVEDB::invGroups::StrategicCruiser)
+        return;
+    if (fatal_blow.selfDestruct or (fatal_blow.srcSE == this))
+        return;
+
+    std::vector<InventoryItemRef> subSystems;
+    m_shipRef->GetMyInventory()->GetItemsByFlagRange(flagSubSystem0, flagSubSystem4, subSystems);
+    std::vector<uint16> skills;
+    for (auto cur : subSystems) {
+        uint16 skillID(cur->GetAttribute(AttrRequiredSkill1).get_uint32());
+        if ((skillID == 0) or (pChar->GetSkillLevel(skillID) < 1))
+            continue;
+        if (std::find(skills.begin(), skills.end(), skillID) == skills.end())
+            skills.push_back(skillID);
+    }
+    if (skills.empty())
+        return;
+
+    size_t pick(MakeRandomInt(0, skills.size()));
+    if (pick >= skills.size())
+        pick = skills.size() - 1;
+    uint16 skillID(skills[pick]);
+    uint32 lost(pChar->LoseSkillLevel(skillID, EvESkill::Event::ClonePenalty));
+    _log(SKILL__INFO, "%s(%u) lost %u skill points in skill %u with the %s.", pChar->name(), pChar->itemID(), lost, skillID, m_self->name());
+    if ((lost == 0) or (pClient == nullptr))
+        return;
+
+    PyTuple* tmp = new PyTuple(3);
+        tmp->SetItem(0, new PyInt(skillID));
+        tmp->SetItem(1, new PyInt(lost));
+        tmp->SetItem(2, new PyInt(m_self->typeID()));
+    pClient->SendNotification("OnSkillPointsRemovedDueToShipLoss", "charid", &tmp, false);
+}
+
 void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
                              uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition)
 {
     m_system->GetLaw()->LoggedOffShipKilled(m_self->itemID());
     CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
     bool pod(m_self->groupID() == EVEDB::invGroups::Capsule);
+    // the pilot is still aboard a ship left in space at logoff
+    if (!pod and (cRef.get() != nullptr))
+        T3SkillLoss(cRef.get(), nullptr, fatal_blow);
     uint32 locationID(GetLocationID());
     sCrimeWatch.OnShipDestroyed(ownerID, pod, ((cRef.get() != nullptr) ? cRef->GetSecurityRating() : 0.0f),
             ((pKillerClient != nullptr) ? pKillerClient->GetCharacterID() : 0), m_system);

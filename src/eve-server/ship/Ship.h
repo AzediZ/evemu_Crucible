@@ -141,6 +141,8 @@ public:
     void EmptyCargo();
     // after a subsystem change: modules past the ship's slots or hardpoints go to the hangar (cargo in space)
     void EvictExcessModules();
+    // after a pilot change: shield/capacitor charge and armor/structure damage are cut to the new capacities
+    void ClampDamageState();
 
     // loop thru modules that 'get' things and deactivate them
     void CargoFull();
@@ -385,6 +387,8 @@ public:
     // a ship left in space by a pilot who logged off was destroyed (Damage.cpp)
     void KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
                          uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition);
+    // a destroyed strategic cruiser costs its pilot a subsystem skill level (Damage.cpp).  pClient may be null (logged off)
+    void T3SkillLoss(Character* pChar, Client* pClient, Damage& fatal_blow);
 
     /* virtual functions to be overridden in derived classes */
     virtual void MissileLaunched(Missile* pMissile)     { /* Do nothing here */ }
