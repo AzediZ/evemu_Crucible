@@ -294,7 +294,7 @@ PyResult PlanetMgrBound::GetResourceData(PyCallArgs &call, PyObject* info) {
         return nullptr;
     }
 
-    return GetPlanetSE()->GetResourceData(dict);
+    return GetPlanetSE()->GetResourceData(call.client, dict);
 }
 
 //01:52:23 [PlanetDebug] PlanetMgrBound::Handle_UserAbandonPlanet() size=0

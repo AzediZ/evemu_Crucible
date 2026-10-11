@@ -428,7 +428,8 @@ SET( planet_INCLUDE
      "${TARGET_INCLUDE_DIR}/planet/PlanetDataMgr.h"
      "${TARGET_INCLUDE_DIR}/planet/PlanetMgr.h"
      "${TARGET_INCLUDE_DIR}/planet/PlanetMgrBound.h"
-     "${TARGET_INCLUDE_DIR}/planet/PlanetORBBound.h")
+     "${TARGET_INCLUDE_DIR}/planet/PlanetORBBound.h"
+     "${TARGET_INCLUDE_DIR}/planet/PlanetResource.h")
 SET( planet_SOURCE
      "${TARGET_SOURCE_DIR}/planet/Colony.cpp"
      "${TARGET_SOURCE_DIR}/planet/ColonySim.cpp"
@@ -439,7 +440,8 @@ SET( planet_SOURCE
      "${TARGET_SOURCE_DIR}/planet/PlanetDataMgr.cpp"
      "${TARGET_SOURCE_DIR}/planet/PlanetMgr.cpp"
      "${TARGET_SOURCE_DIR}/planet/PlanetMgrBound.cpp"
-     "${TARGET_SOURCE_DIR}/planet/PlanetORBBound.cpp")
+     "${TARGET_SOURCE_DIR}/planet/PlanetORBBound.cpp"
+     "${TARGET_SOURCE_DIR}/planet/PlanetResource.cpp")
 
 SET( pos_INCLUDE
      "${TARGET_INCLUDE_DIR}/pos/Array.h"

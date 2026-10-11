@@ -297,6 +297,8 @@ void PlanetMgr::RemovePin(PyTuple* args)
         // ClientColony.RemoveCreationCost
         m_cost = std::max(0.0, m_cost - sPIDataMgr.GetBasePrice(pPin->typeID));
     }
+    if (pinID < ProvisionalID)
+        m_stoppedPrograms.insert(pinID);
     std::map<uint32, std::vector<uint32>>::const_iterator itr = m_work.linksByEndpoint.find(pinID);
     if (itr != m_work.linksByEndpoint.end())
         for (auto cur : itr->second) {
@@ -455,7 +457,35 @@ void PlanetMgr::InstallProgram(PyTuple* args)
         ColonySim::CanInstallProgram(*m_sim->GetPin(pinID), m_now);
     if ((typeID != 0) and !m_planet->IsResourceType(typeID))
         throw CustomError ("%s is not found on this planet.", sPIDataMgr.GetProductName(typeID));
-    m_sim->InstallProgram(pinID, typeID, headRadius, m_planet->GetResourceField(typeID), m_now);
+    if (pinID < ProvisionalID)
+        m_stoppedPrograms.insert(pinID);
+    ColonySim::ResourceField field(m_planet->GetResourceField(typeID));
+    m_sim->InstallProgram(pinID, typeID, headRadius, field, m_now);
+
+    // the program takes its resource out of the map around its heads, in proportion to what each head finds
+    PI_Pin* pPin = m_sim->GetPin(pinID);
+    if ((typeID == 0) or (pPin->programType != typeID) or (pPin->installTime != m_now) or pPin->heads.empty())
+        return;
+    std::map<uint16, double> values;
+    double total = 0;
+    for (auto cur : pPin->heads) {
+        values[cur.first] = std::max(0.0, field(2.0 * M_PI - cur.second.longitude, cur.second.latitude));
+        total += values[cur.first];
+    }
+    if (total <= 0)
+        return;
+    int64 numCycles = (pPin->cycleTime > 0 ? (pPin->expiryTime - pPin->installTime) / pPin->cycleTime : 0);
+    std::vector<PIResource::Depletion>& rows = m_depletion[typeID];
+    for (auto cur : pPin->heads) {
+        PIResource::Depletion row = PIResource::Depletion();
+            row.latitude = cur.second.latitude;
+            row.longitude = cur.second.longitude;
+            row.headRadius = headRadius;
+            row.amount = double(pPin->qtyPerCycle) * numCycles * values[cur.first] / total;
+            row.startTime = m_now;
+            row.duration = pPin->expiryTime - pPin->installTime;
+        rows.push_back(row);
+    }
 }
 
 void PlanetMgr::Commit()
@@ -527,8 +557,23 @@ void PlanetMgr::Commit()
     for (auto cur : m_removedItems)
         DeleteColonyItem(cur);
 
+    // programs replaced or removed before their end only depleted until now (the programs as they were before this stream)
+    std::vector<PI_Pin> stopped;
+    const PI_CCPin& before = m_colony->GetData();
+    for (auto cur : m_stoppedPrograms) {
+        std::map<uint32, PI_Pin>::const_iterator itr = before.pins.find(cur);
+        if ((itr != before.pins.end()) and (itr->second.programType != 0) and (itr->second.expiryTime > m_now))
+            stopped.push_back(itr->second);
+    }
+
     m_work.currentSimTime = m_now;
     m_colony->Commit(m_work);
+
+    for (auto& cur : stopped)
+        for (auto head : cur.heads)
+            m_planet->StopDepletion(cur.programType, cur.installTime, head.second.latitude, head.second.longitude);
+    for (auto& cur : m_depletion)
+        m_planet->AddDepletion(cur.first, cur.second);
 
     // every planet with a colony has a customs office
     if (m_newCommandCenter and (m_planet->GetCustomsOffice() == nullptr))

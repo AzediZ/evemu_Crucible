@@ -583,6 +583,67 @@ uint32 PlanetDB::OnLaunchContainerGone(uint32 itemID)
     return charID;
 }
 
+void PlanetDB::LoadDepletion(uint32 planetID, uint16 typeID, std::vector<PIResource::Depletion>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT depletionID, latitude, longitude, headRadius, amount, startTime, duration"
+        " FROM piResourceDepletion WHERE planetID = %u AND typeID = %u", planetID, typeID)) {
+        _log(DATABASE__ERROR, "Error in LoadDepletion query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PIResource::Depletion depletion = PIResource::Depletion();
+            depletion.depletionID = row.GetUInt(0);
+            depletion.latitude = row.GetDouble(1);
+            depletion.longitude = row.GetDouble(2);
+            depletion.headRadius = row.GetDouble(3);
+            depletion.amount = row.GetDouble(4);
+            depletion.startTime = row.GetInt64(5);
+            depletion.duration = row.GetInt64(6);
+        into.push_back(depletion);
+    }
+}
+
+uint32 PlanetDB::AddDepletion(uint32 planetID, uint16 typeID, const PIResource::Depletion& row)
+{
+    DBerror err;
+    uint32 depletionID = 0;
+    if (!sDatabase.RunQueryLID(err, depletionID,
+        "INSERT INTO piResourceDepletion (planetID, typeID, latitude, longitude, headRadius, amount, startTime, duration)"
+        " VALUES (%u, %u, %.17g, %.17g, %.17g, %.17g, %lli, %lli)",
+        planetID, typeID, row.latitude, row.longitude, row.headRadius, row.amount, row.startTime, row.duration))
+        _log(DATABASE__ERROR, "AddDepletion - Unable to save depletion: %s", err.GetError());
+    return depletionID;
+}
+
+void PlanetDB::DeleteDepletion(const std::vector<uint32>& depletionIDs)
+{
+    if (depletionIDs.empty())
+        return;
+    std::string list;
+    for (auto cur : depletionIDs) {
+        if (!list.empty())
+            list += ",";
+        list += std::to_string(cur);
+    }
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM piResourceDepletion WHERE depletionID IN (%s)", list.c_str());
+}
+
+void PlanetDB::TruncateDepletion(uint32 planetID, uint16 typeID, int64 startTime, double latitude, double longitude, int64 now)
+{
+    if (now <= startTime)
+        return;
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "UPDATE piResourceDepletion SET amount = amount * (%lli - startTime) / duration, duration = %lli - startTime"
+        " WHERE planetID = %u AND typeID = %u AND startTime = %lli AND startTime + duration > %lli AND duration > 0"
+        "  AND ABS(latitude - %.17g) < 1e-9 AND ABS(longitude - %.17g) < 1e-9",
+        now, now, planetID, typeID, startTime, now, latitude, longitude);
+}
+
 void PlanetDB::MarkCustomsOfficeSpawned(uint32 planetID)
 {
     DBerror err;

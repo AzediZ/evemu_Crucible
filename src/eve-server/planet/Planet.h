@@ -15,6 +15,7 @@
 #include "EntityList.h"
 #include "StaticDataMgr.h"
 #include "planet/ColonySim.h"
+#include "planet/PlanetResource.h"
 #include "system/SystemEntity.h"
 
 /** @todo update this to create a planet item instead of the default celestial item */
@@ -61,8 +62,28 @@ public:
     bool                        IsResourceType(uint16 typeID);
     // the resource's value at a surface point, for extraction programs
     ColonySim::ResourceField    GetResourceField(uint16 typeID);
-    PyRep*                      GetResourceData(Call_ResourceDataDict& dict);
+    // GetResourceData(info):  KeyVal(data, numBands, proximity) with the bands this character's skills and distance allow
+    PyRep*                      GetResourceData(Client* pClient, Call_ResourceDataDict& dict);
+    // {resourceTypeID: quality}
     PyRep*                      GetPlanetResourceInfo();
+    // a resource's map:  base (generated), final (depleted) and richness
+    struct ResourceState {
+        ResourceState() : richness(0), builtTime(0), dirty(true) { }
+        double richness;
+        PIResource::Field base;
+        PIResource::Field final;
+        std::vector<PIResource::Depletion> depletion;
+        int64 builtTime;
+        bool dirty;
+    };
+    ResourceState&              GetResourceState(uint16 typeID);
+    // extraction programs take resource out of the map (saved in piResourceDepletion)
+    void                        AddDepletion(uint16 typeID, std::vector<PIResource::Depletion>& rows);
+    // a program stopped early:  its heads only took out what they extracted until now
+    void                        StopDepletion(uint16 typeID, int64 startTime, double latitude, double longitude);
+    // the final map is rebuilt on its next use
+    void                        InvalidateResource(uint16 typeID);
+    const std::vector<uint16>&  GetResourceTypes()      { return m_resourceTypes; }
     PyRep*                      GetExtractorsForPlanet(int32 planetID);
 
     void                        AbandonColony(Client* pClient, Colony* pColony);
@@ -80,10 +101,12 @@ public:
 
 protected:
     CustomsSE*                  pCO;  // our Customs Office SE  - we dont own this
-    PlanetResourceData          m_data;
 
 private:
-    std::map<uint16, std::string> m_typeBuffers;
+    // the planet type's five resources
+    std::vector<uint16>         m_resourceTypes;
+    // typeID, map.  generated on first use
+    std::map<uint16, ResourceState> m_resources;
 
     /* map of charID, Colony* for this planet.
      *   this is a hack, as the client will not reuse planet bound objects, instead calling for a new object on every call.

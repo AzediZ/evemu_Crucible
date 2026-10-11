@@ -29,6 +29,7 @@
 
 #include "../eve-server.h"
 #include "../POD_containers.h"
+#include "planet/PlanetResource.h"
 //#include "../DataClasses.h"
 
 class PlanetDB
@@ -74,6 +75,12 @@ public:
     static int64 GetLaunchTime(uint32 itemID);
     // a launch container left space:  its journal entry goes unless it burned up.  returns the owner
     static uint32 OnLaunchContainerGone(uint32 itemID);
+
+    /* resource depletion by extraction programs */
+    static void LoadDepletion(uint32 planetID, uint16 typeID, std::vector<PIResource::Depletion>& into);
+    static uint32 AddDepletion(uint32 planetID, uint16 typeID, const PIResource::Depletion& row);
+    static void DeleteDepletion(const std::vector<uint32>& depletionIDs);
+    static void TruncateDepletion(uint32 planetID, uint16 typeID, int64 startTime, double latitude, double longitude, int64 now);
 
     /* customs office spawns:  a planet gets its npc office once */
     static void MarkCustomsOfficeSpawned(uint32 planetID);

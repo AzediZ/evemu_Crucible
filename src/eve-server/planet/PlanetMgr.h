@@ -81,6 +81,10 @@ private:
     uint32 m_newCommandCenter;
     // items of removed pins and links
     std::set<uint32> m_removedItems;
+    // the resource taken out by programs installed in this stream:  resourceTypeID, rows
+    std::map<uint16, std::vector<PIResource::Depletion>> m_depletion;
+    // running programs stopped in this stream (their heads deplete less):  pinIDs
+    std::set<uint32> m_stoppedPrograms;
 };
 
 

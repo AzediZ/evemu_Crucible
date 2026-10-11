@@ -30,9 +30,12 @@
 #include "planet/Colony.h"
 #include "planet/Planet.h"
 #include "planet/PlanetMgr.h"
+#include "planet/PlanetDataMgr.h"
+#include "planet/PlanetDB.h"
 #include "planet/CustomsOffice.h"
 #include "packets/Planet.h"
 #include "pos/Structure.h"
+#include "ship/JumpDrive.h"
 #include "system/Celestial.h"
 #include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
@@ -48,7 +51,6 @@ PlanetSE::PlanetSE(InventoryItemRef self, EVEServiceManager &services, SystemMan
 : StaticSystemEntity(self, services, system),
 pCO(nullptr)
 {
-    m_data = PlanetResourceData();
 }
 
 PlanetSE::~PlanetSE()
@@ -64,64 +66,8 @@ bool PlanetSE::LoadExtras() {
     if (!StaticSystemEntity::LoadExtras())
         return false;
 
-    /** @todo use this to initialize planet data, create planet manager, or whatever else i decide is needed for planet management
-     *  this is called after SE is created.
-     */
-    std::vector<uint16> typeIDs;
-    sPlanetDataMgr.GetPlanetData(m_self->typeID(), typeIDs);
-    m_data.type_1 = typeIDs.at(0);
-    m_data.type_2 = typeIDs.at(1);
-    m_data.type_3 = typeIDs.at(2);
-    m_data.type_4 = typeIDs.at(3);
-    m_data.type_5 = typeIDs.at(4);
-
-    /** @todo save planet data after creation.  change data every x hours?days? */
-
-    /*  quality: (min=1.0, max=154.275)  */
-    // these are relative indicators of material quantity.  makes no difference to ecu or extraction amount
-    // as system matures, we will begin adjusting these (from extractor data) and saving per planet
-    float sysSec = (1.1 - m_system->GetSystemSecurityRating());    // 0.1 - 2.0
-    int min = round(sysSec *10);
-    m_data.dist_1 = MakeRandomInt(min, 75) * sysSec + MakeRandomFloat(0, 4);
-    m_data.dist_2 = MakeRandomInt(min, 75) * sysSec + MakeRandomFloat(0, 4);
-    m_data.dist_3 = MakeRandomInt(min, 75) * sysSec + MakeRandomFloat(0, 4);
-    m_data.dist_4 = MakeRandomInt(min, 75) * sysSec + MakeRandomFloat(0, 4);
-    m_data.dist_5 = MakeRandomInt(min, 75) * sysSec + MakeRandomFloat(0, 4);
-
-    //if (sysSec > 1) {
-        for (uint16 i=0; i<3600; ++i)  //this cannot use numList
-            m_data.buffer_1 += hexList[MakeRandomInt(0,15)];   // random fill buffer to capacity, 1k8 bytes.
-        for (uint16 i=0; i<3600; ++i)
-            m_data.buffer_2 += hexList[MakeRandomInt(0,15)];   // random fill buffer to capacity, 1k8 bytes.
-        for (uint16 i=0; i<3600; ++i)
-            m_data.buffer_3 += hexList[MakeRandomInt(0,15)];   // random fill buffer to capacity, 1k8 bytes.
-        for (uint16 i=0; i<3600; ++i)
-            m_data.buffer_4 += hexList[MakeRandomInt(0,15)];   // random fill buffer to capacity, 1k8 bytes.
-        for (uint16 i=0; i<3600; ++i)
-            m_data.buffer_5 += hexList[MakeRandomInt(0,15)];   // random fill buffer to capacity, 1k8 bytes.
-    /* } else {
-        for (uint16 i=0; i<1000; ++i) {
-            m_data.buffer_1 += asciiList[MakeRandomInt(0,57)];   // random fill buffer to capacity, 1k8 bytes.
-            m_data.buffer_2 += alphaList[MakeRandomInt(0,26)];   // random fill buffer to capacity, 1k8 bytes.
-            m_data.buffer_3 += numList[MakeRandomInt(0,10)];   // random fill buffer to capacity, 1k8 bytes.
-            m_data.buffer_4 += numList[MakeRandomInt(0,10)];   // random fill buffer to capacity, 1k8 bytes.
-            m_data.buffer_5 += numList[MakeRandomInt(0,10)];   // random fill buffer to capacity, 1k8 bytes.
-        }
-    } */
-/*
-    for (uint16 i=0; i<800; ++i) {
-        m_data.buffer_1 += std::to_string(0);
-        m_data.buffer_2 += std::to_string(0);
-        m_data.buffer_3 += std::to_string(0);
-        m_data.buffer_4 += std::to_string(0);
-        m_data.buffer_5 += std::to_string(0);
-    }
-*/
-    m_typeBuffers[m_data.type_1] = m_data.buffer_1;
-    m_typeBuffers[m_data.type_2] = m_data.buffer_2;
-    m_typeBuffers[m_data.type_3] = m_data.buffer_3;
-    m_typeBuffers[m_data.type_4] = m_data.buffer_4;
-    m_typeBuffers[m_data.type_5] = m_data.buffer_5;
+    // the planet type's resources.  their maps are made when they are first used
+    sPlanetDataMgr.GetPlanetData(m_self->typeID(), m_resourceTypes);
 
     // should we check for a CO here?
     //  no, it hasnt been loaded at this point
@@ -137,85 +83,142 @@ void PlanetSE::Process()
 
 bool PlanetSE::IsResourceType(uint16 typeID)
 {
-    return ((typeID != 0) and ((typeID == m_data.type_1) or (typeID == m_data.type_2) or (typeID == m_data.type_3)
-                           or  (typeID == m_data.type_4) or (typeID == m_data.type_5)));
+    return ((typeID != 0) and (std::find(m_resourceTypes.begin(), m_resourceTypes.end(), typeID) != m_resourceTypes.end()));
+}
+
+PlanetSE::ResourceState& PlanetSE::GetResourceState(uint16 typeID)
+{
+    ResourceState& state = m_resources[typeID];
+    if (state.base.bands == 0) {
+        PIResource::Generate(m_self->itemID(), typeID, m_system->GetSystemSecurityRating(), state.base, state.richness);
+        PlanetDB::LoadDepletion(m_self->itemID(), typeID, state.depletion);
+        state.dirty = true;
+    }
+    // planetResourceUpdateTime:  the map changes over the hour as depletion builds up and grows back
+    int64 now = GetFileTimeNow();
+    if (state.dirty or (state.builtTime + EvE::Time::Hour < now)) {
+        // depletion that has grown back goes
+        std::vector<uint32> faded;
+        std::vector<PIResource::Depletion> rows;
+        for (auto& cur : state.depletion) {
+            if ((now > cur.startTime + cur.duration) and (PIResource::DepletionFactor(cur, now) < 0.01)) {
+                faded.push_back(cur.depletionID);
+            } else {
+                rows.push_back(cur);
+            }
+        }
+        if (!faded.empty()) {
+            PlanetDB::DeleteDepletion(faded);
+            state.depletion.swap(rows);
+        }
+        PIResource::ApplyDepletion(state.base, state.depletion, now, state.final);
+        state.builtTime = now;
+        state.dirty = false;
+    }
+    return state;
+}
+
+void PlanetSE::AddDepletion(uint16 typeID, std::vector<PIResource::Depletion>& rows)
+{
+    if (!sConfig.cosmic.PIDepletionEnabled or rows.empty())
+        return;
+    ResourceState& state = GetResourceState(typeID);
+    for (auto& cur : rows) {
+        cur.depletionID = PlanetDB::AddDepletion(m_self->itemID(), typeID, cur);
+        state.depletion.push_back(cur);
+    }
+    state.dirty = true;
+}
+
+void PlanetSE::StopDepletion(uint16 typeID, int64 startTime, double latitude, double longitude)
+{
+    int64 now = GetFileTimeNow();
+    PlanetDB::TruncateDepletion(m_self->itemID(), typeID, startTime, latitude, longitude, now);
+    std::map<uint16, ResourceState>::iterator itr = m_resources.find(typeID);
+    if (itr == m_resources.end())
+        return;
+    for (auto& cur : itr->second.depletion)
+        if ((cur.startTime == startTime) and (cur.startTime + cur.duration > now) and (now > cur.startTime)
+        and (std::fabs(cur.latitude - latitude) < 1e-9) and (std::fabs(cur.longitude - longitude) < 1e-9)) {
+            cur.amount *= double(now - cur.startTime) / cur.duration;
+            cur.duration = now - cur.startTime;
+        }
+    itr->second.dirty = true;
+}
+
+void PlanetSE::InvalidateResource(uint16 typeID)
+{
+    std::map<uint16, ResourceState>::iterator itr = m_resources.find(typeID);
+    if (itr != m_resources.end())
+        itr->second.dirty = true;
 }
 
 ColonySim::ResourceField PlanetSE::GetResourceField(uint16 typeID)
 {
-    // a flat resource:  every spot of the planet has the same value
-    double value = (IsResourceType(typeID) ? 15.0 : 0.0);
-    return [value](double, double) { return value; };
+    // the final (depleted) map at full detail.  the client's preview is the same map, cut to its bands
+    if (!IsResourceType(typeID))
+        return [](double, double) { return 0.0; };
+    std::shared_ptr<PIResource::Field> field(new PIResource::Field(GetResourceState(typeID).final));
+    return [field](double azimuth, double polar) { return field->Value(azimuth, polar); };
 }
 
-PyRep* PlanetSE::GetResourceData(Call_ResourceDataDict& dict)
+PyRep* PlanetSE::GetResourceData(Client* pClient, Call_ResourceDataDict& dict)
 {
-    /*  from eve/client/script/environment/planet\clientPlanet.py
-     * This method is used to fetch spherical harmonic data for a given
-     * resource type on the current planet.
+    /* clientPlanet.GetResourceData / CreateResourceInfo:  the bands a character sees depend on their distance from the
+     *  planet (planetResourceScanningRanges, light years) and their skills.  the client asks, the server decides.
+     *   proximity = the closest scanning range the distance is within (planetResourceProximityPlanet in system)
+     *   newBand = min(maxBand, minBand + Planetology + 2 x Advanced Planetology)  (planetResourceProximityLimits)
+     *   Remote Sensing must be at least 5 - proximity, and the distance within the range of that level
      */
-    // will update this to use PI skills (sent in dict) as system grows..not sure how yet.
-    /** @todo  this needs a minor rewrite....bands are dictated by client request.
-     * bufferData is random fill based on bands, but kept per planet
-     * will have to create a method to fill buffer with random values, rather than fill with single value
-     *  the full 30 band data buffer will be created on planet creation for each resource, and the "bands"
-     * are the "layers" of the resource, per se, with more layers giving higher degree of accuracy.
-     *  the client sends depth request, and that will determine the bands and buffer size to return.
-     * the requested bands will have to be taken from the full 30-band data buffer, as needed.
-     * this resource data *MAY* change over the course of the running server, but not decided how/when/why yet.
-     */
+    static const double scanningRanges[5] = { 9.0, 7.0, 5.0, 3.0, 1.0 };
+    static const uint8 proximityLimits[5][2] = { {2, 6}, {4, 10}, {6, 15}, {10, 20}, {15, 30} };
 
-    // actual hex from live for "data"
-    //E80E364382F13EBFEC13F03FEB42483F1263B2BF8C94004075360EC19842ACBEC0B7FABF0C5DA73EF4F6E03FC0B21C3EE0D71F3E5206233E8FC6E43E5245E6BFAD29A63F112C81 \
-    BF6038393EFE19C1BF8FA975C2808D093FE0BB5EBF6C9A533FA1DB4FBF04DDAF3D3CE450C0435DB7BCBDDB80BF2EAD783FE028A8C04A733FBF76012BBFEA17FCBFF4F4113E6C7EC9 \
-    3FFB8EDBBE52C084BF04608B3DFA748F3E3715823F5DA7F1BE5FA97B4206CE83BE2597E03FF6AF46BF2F6EA9BE160297BFBD70FB3FC02B75BF66A0AD3FA095213F2ED9033E5B9D50 \
-    BE94BC53BE2C77E9BFDFDDE24066B21F3F5B1A043FC6531D40E2426CBE5012204036F3ACBF4EA60DBFBDDC46BFB469044020D610BFF68E0EBF1145A8BFD3B0063FF43EB7BFAF69DE \
-    3F437B92C14232D1BEA0E45FBFDC639BBE4813C43E476F2D3F3E260F403436BC3EA993B8BFCDE9153F22C3243F0021DCBF9ECB443F619A6EBF824FE03F4118ED3E96AD5C3F9413B5 \
-    3FE8D0CA3D0EE85CBDF3EC6D3E32E5EDBE3DBAA13EB2379BBF18A8233FCFA5E1BE91B0C03FA51AC9BE9F3F593F4B160FC0A817F0BEF1E5AE3F487E6C3F586B943F4921A73FA845FE \
-    BEAE9D103FE725AEBF1B3A9FC14F69733F3B1B04BF18B9AE3FCBF4D0BD447B483F3E1870BFAAA7A1BEEC3C35C076BB1C3F697F493D00C4C7BEE74CFABFA4E6053F972189BCBDC3AE \
-    3F42E984BF85FDBC3E3C9275BF3C07FFBD4C30D0BED828C43E6CF6C3C0C2F5CDBEBD5E3DBFACB29ABFCA75B1BD6A4035BFE537F83E165BD3BD5D3F4FBDACA1F6BF2A97E0BD4C1F44 \
-    3FF054B6BE692C0F3F8EFB933F52BDE4BF5D97D33E4998C8BF22E25BBE581710BF9F093A3E3D8E8F3DBFEF453F9D32443E1B2EAD41B9FB39BFA85A753F73FABFBFE1B155BE01FFBE \
-    BF897341BF715F19BE5739323EC2E50C3FF7A2B23F47499ABF6E4E1E3F93F555BEF51F8E3FBC21C13DC69CE5BFCD1E5DBF997FC23DDB348D3E300E6B3D49D4183FEDE50CBFD2EBAC \
-    BE509C37BE5310D9BF22BFA940BBE2013F9437083FEC5EB33FE79D053E8FB0903F12BB5CBF4D02BC3E26DAC2BF0CD894BDEEB8B7BEAE1F1440564199BEFE322BBFE5F690BE9E1241 \
-    3FDD38A5BFB2AEAC3E3C8681BF19A36F3F3E2C9D3EB039813E46BD47BF200996BE12F0A3BFC1DAFE3E9C5EA4BFAC65223F74A7EBC03047C3BB1CB01ABF15148F3E9B71163E6C545E \
-    3FDB34553F34096E3D6E12A03F3CF08ABFE904303F367E9ABE064D583FEAE2953F3A5DC7BE
-
-    /*
-    dict.resourceTypeID;
-    dict.advancedPlanetology;
-    dict.oldBand;
-    dict.planetology;
-    dict.remoteSensing;
-    dict.updateTime;
-    */
-    std::map<uint16, std::string>::iterator itr = m_typeBuffers.find(dict.resourceTypeID);
-    if (itr == m_typeBuffers.end())
-        return nullptr;
-    uint16 size = (uint16)pow(dict.newBand, 2) *4;
-    std::string data = itr->second.substr(0, size);
-    // adjust data for system security.  not sure how to make it 'less' yet
-    _log(PLANET__DEBUG, "PlanetSE::GetResourceData() for %s (%u) using remoteSense: %u, planetology: %u, advPlanetology: %u - updateTime: %u, proximity: %u, newBand: %u, oldBand: %u, bufferSize: %u", \
-                sPIDataMgr.GetProductName(dict.resourceTypeID), dict.resourceTypeID, dict.remoteSensing, dict.planetology, dict.advancedPlanetology, \
-                dict.updateTime, dict.proximity, dict.newBand, dict.oldBand, size);
     PyDict* args = new PyDict();
-        args->SetItemString("data", new PyString(data));
-        args->SetItemString("numBands", new PyInt(dict.newBand));
-        args->SetItemString("proximity", new PyInt(dict.proximity));
-    //PyIncRef(args);
+    args->SetItemString("data", PyStatic.NewNone());
+    args->SetItemString("numBands", new PyInt(0));
+    args->SetItemString("proximity", PyStatic.NewNone());
     PyObject* rtn = new PyObject("util.KeyVal", args);
-    if (is_log_enabled(PLANET__RES_DUMP))
-        rtn->Dump(PLANET__RES_DUMP, "   ");
+    if (!IsResourceType(dict.resourceTypeID))
+        return rtn;
+
+    uint32 mySystemID = pClient->GetSystemID();
+    int8 remoteSensing = pClient->GetChar()->GetSkillLevel(EvESkill::RemoteSensing);
+    if (remoteSensing < 1)
+        return rtn;
+    if ((mySystemID != m_system->GetID()) and (IsWSpaceID(mySystemID) or IsWSpaceID(m_system->GetID())))
+        return rtn;     // wormhole space can't be scanned remotely
+    double distance = (mySystemID == m_system->GetID() ? 0.0 : JumpDrive::LightYears(mySystemID, m_system->GetID()));
+    int8 proximity = -1;
+    for (int8 i = 0; i < 5; ++i)
+        if (scanningRanges[i] >= distance)
+            proximity = i;
+    if ((proximity < 0) or (distance > scanningRanges[std::max(0, std::min(4, 5 - remoteSensing))]))
+        return rtn;
+    if (remoteSensing < 5 - proximity)
+        return rtn;
+    int8 planetology = pClient->GetChar()->GetSkillLevel(EvESkill::Planetology);
+    int8 advancedPlanetology = pClient->GetChar()->GetSkillLevel(EvESkill::AdvancedPlanetology);
+    uint8 allowed = std::min((int)proximityLimits[proximity][1], proximityLimits[proximity][0] + planetology + 2 * advancedPlanetology);
+    uint8 numBands = (uint8)std::max(1, std::min((int)allowed, (int)dict.newBand));
+    numBands = std::min(numBands, PIResource::MaxBands);
+
+    ResourceState& state = GetResourceState(dict.resourceTypeID);
+    args->SetItemString("data", new PyString(state.final.GetBuffer(numBands)));
+    args->SetItemString("numBands", new PyInt(numBands));
+    args->SetItemString("proximity", new PyInt(proximity));
+
+    _log(PLANET__DEBUG, "PlanetSE::GetResourceData() - %s for %s on %s:  %.2f ly, proximity %u, remote sensing %u, planetology %u/%u, %u bands (asked %u)", \
+            sPIDataMgr.GetProductName(dict.resourceTypeID), pClient->GetName(), GetName(), distance, proximity, remoteSensing, \
+            planetology, advancedPlanetology, numBands, dict.newBand);
     return rtn;
 }
 
 PyRep* PlanetSE::GetPlanetResourceInfo()
 {
+    // {typeID: quality}.  the client's quality bar is quality / (1.21 x 255 x 0.5), so the bar shows the richness
     PyDict* res = new PyDict();
-        res->SetItem(new PyInt(m_data.type_1), new PyFloat(m_data.dist_1));
-        res->SetItem(new PyInt(m_data.type_2), new PyFloat(m_data.dist_2));
-        res->SetItem(new PyInt(m_data.type_3), new PyFloat(m_data.dist_3));
-        res->SetItem(new PyInt(m_data.type_4), new PyFloat(m_data.dist_4));
-        res->SetItem(new PyInt(m_data.type_5), new PyFloat(m_data.dist_5));
+    for (auto cur : m_resourceTypes)
+        res->SetItem(new PyInt(cur), new PyFloat(PIResource::MaxDisplayQuality * GetResourceState(cur).richness));
     if (is_log_enabled(PLANET__RES_DUMP))
         res->Dump(PLANET__RES_DUMP, "   ");
     return res;

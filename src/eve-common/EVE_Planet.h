@@ -109,26 +109,6 @@ namespace Launch {
     };
 }
 
-/** @todo these need their own namespace */
-/* POD structure entries for PI data */
-struct PlanetResourceData {
-    uint16 type_1;
-    uint16 type_2;
-    uint16 type_3;
-    uint16 type_4;
-    uint16 type_5;
-    float dist_1;
-    float dist_2;
-    float dist_3;
-    float dist_4;
-    float dist_5;
-    std::string buffer_1;
-    std::string buffer_2;
-    std::string buffer_3;
-    std::string buffer_4;
-    std::string buffer_5;
-};
-
 /* colony data.  this is the state the client's shared planet code (common/script/planet/*) works on.
  *  ColonySim (planet/ColonySim.h) runs the client's simulation on it.
  *  times are FILETIME.  a time of 0 stands for the client's None.
