@@ -113,6 +113,8 @@ public:
     bool GetInviteData(uint32 charID, InviteData& data);
     bool SaveInviteData(uint32 charID, InviteData& data);
     void RemoveInviteData(uint32 charID);
+    // charID holding an outstanding invite to the FC/WC/SC slot, or 0
+    uint32 GetPendingInvite(uint32 fleetID, int32 wingID, int32 squadID, int8 role);
 
     bool AddJoinRequest(uint32 fleetID, Client* pClient);
     void GetJoinRequests(uint32 fleetID, std::vector<Client*>& data);

@@ -1903,6 +1903,21 @@ void FleetService::RemoveInviteData(uint32 charID)
     m_inviteData.erase(charID); // remove invite data
 }
 
+uint32 FleetService::GetPendingInvite(uint32 fleetID, int32 wingID, int32 squadID, int8 role)
+{
+    if ((role != Fleet::Role::FleetLeader) and (role != Fleet::Role::WingLeader) and (role != Fleet::Role::SquadLeader))
+        return 0;
+    for (auto cur : m_inviteData) {
+        if ((cur.second.fleetID != fleetID) or (cur.second.role != role))
+            continue;
+        if ((role == Fleet::Role::FleetLeader)
+        or ((role == Fleet::Role::WingLeader) and (cur.second.wingID == wingID))
+        or ((role == Fleet::Role::SquadLeader) and (cur.second.squadID == squadID)))
+            return cur.first;
+    }
+    return 0;
+}
+
 bool FleetService::AddJoinRequest(uint32 fleetID, Client* pClient)
 {
     // ensure only one request per client

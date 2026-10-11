@@ -70,6 +70,32 @@ FleetBound::FleetBound(EVEServiceManager& mgr, FleetObject& parent, uint32 fleet
     this->Add("ExcludeFromVoiceMute", &FleetBound::ExcludeFromVoiceMute);
 }
 
+Character* FleetBound::CheckMember(PyCallArgs& call)
+{
+    if (call.client == nullptr)
+        throw UserError("FleetNotInFleet");
+    Character* pChar = call.client->GetChar().get();
+    if ((pChar == nullptr) or (pChar->fleetID() != (int32)m_fleetID))
+        throw UserError("FleetNotInFleet");
+    return pChar;
+}
+
+Character* FleetBound::GetTargetChar(uint32 charID, Client*& pClient)
+{
+    pClient = sFltSvc.GetMember(m_fleetID, charID);
+    if (pClient == nullptr)
+        throw UserError("FleetMemberNotFound");
+    Character* pChar = pClient->GetChar().get();
+    if (pChar == nullptr)
+        throw UserError("FleetMemberNotFound");
+    return pChar;
+}
+
+bool FleetBound::IsBossOrFC(Character* pChar)
+{
+    return (sFltSvc.IsBoss(pChar) or (pChar->fleetRole() == Fleet::Role::FleetLeader));
+}
+
 PyResult FleetBound::GetFleetID(PyCallArgs &call) {
     return new PyInt(m_fleetID);
 }
@@ -92,12 +118,7 @@ PyResult FleetBound::Init(PyCallArgs &call, std::optional <PyInt*> shipTypeID) {
     */
 
     Client* pClient = call.client;
-    if (pClient == nullptr)
-        return new PyLong(GetFileTimeNow());
-
-    Character* pChar = pClient->GetChar().get();
-    if (pChar == nullptr)
-        return new PyLong(GetFileTimeNow());
+    Character* pChar = CheckMember(call);
 
     // member is already added here, so cannot use sFltSvc.AddMember()
     JoinFleetRSP join;
@@ -148,6 +169,8 @@ PyResult FleetBound::Init(PyCallArgs &call, std::optional <PyInt*> shipTypeID) {
 }
 
 PyResult FleetBound::GetInitState(PyCallArgs &call) {
+    CheckMember(call);
+
     FleetData fData = FleetData();
     sFltSvc.GetFleetData(m_fleetID, fData);
 
@@ -206,6 +229,8 @@ PyResult FleetBound::GetInitState(PyCallArgs &call) {
     sFltSvc.GetMemeberVec(m_fleetID, members);
     PyDict* dict2 = new PyDict();
     for (auto cur : members) {
+        if ((cur == nullptr) or (cur->GetChar().get() == nullptr))
+            continue;
         MemberRSP member;
             member.charID = cur->GetCharacterID();
             member.clientID = cur->GetClientID();
@@ -235,45 +260,117 @@ PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<
     sLog.Warning("FleetBound", "Handle_Invite() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Client* pClient = sEntityList.FindClientByCharID(characterID->value());
-    if (pClient == nullptr)
-        return PyStatic.NewNone();
-    if (pClient->GetChar()->fleetID()) {
-        call.client->SendNotifyMsg("%s is already in a fleet.  Denying Fleet Invite issue.", pClient->GetChar()->name());
-        return PyStatic.NewNone();
-    }
+    // boss and commanders may invite (menusvc ImFleetLeaderOrCommander)
+    Character* pMe = CheckMember(call);
+    bool all = IsBossOrFC(pMe);
+    bool isWC = (pMe->fleetRole() == Fleet::Role::WingLeader);
+    bool isSC = (pMe->fleetRole() == Fleet::Role::SquadLeader);
+    if (!all and !isWC and !isSC)
+        throw UserError("FleetNotAllowed");
+
+    uint32 charID = characterID->value();
+    if (charID == call.client->GetCharacterID())
+        throw UserError("FleetMemberAlreadyInGroup");
+    Client* pClient = sEntityList.FindClientByCharID(charID);
+    if ((pClient == nullptr) or (pClient->GetChar().get() == nullptr))
+        throw UserError("FleetCandidateOffline").AddOwnerName("invitee", charID);
+    if (pClient->GetChar()->fleetID() == (int32)m_fleetID)
+        throw UserError("FleetMemberAlreadyInGroup");
+    if (pClient->GetChar()->fleetID() != 0)
+        throw CustomError("%s is already in another fleet.", pClient->GetName());
+    InviteData pending = InviteData();
+    if (sFltSvc.GetInviteData(charID, pending))
+        throw UserError("FleetMemberAlreadyInvited");
+    if (sFltSvc.GetFleetMemberCount(m_fleetID) >= Fleet::Limits::MaxMembers)
+        throw UserError("FleetTooManyMembers").AddAmount("num", (int)Fleet::Limits::MaxMembers);
 
     InviteData data = InviteData();
         data.fleetID = m_fleetID;
         data.inviteBy = call.client;
         data.invited = pClient;
-        data.wingID = wingID.has_value() ? wingID.value()->value() : 0;  // default sends 0
-        data.squadID = squadID.has_value() ? squadID.value()->value() : 0;  // default sends 0
+        data.wingID = wingID.has_value() ? wingID.value()->value() : 0;  // client sends None for 'any'
+        data.squadID = squadID.has_value() ? squadID.value()->value() : 0;
         data.role = role.has_value () ? role.value ()->value () : Fleet::Role::Member; // member as default
+    if (data.wingID < 0)
+        data.wingID = 0;
+    if (data.squadID < 0)
+        data.squadID = 0;
 
-    if (data.role == Fleet::Role::FleetLeader) {
-        data.wingID = -1;
-        data.squadID = -1;
-        _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
-    } else if (data.role == Fleet::Role::WingLeader) {
-        // wing should be populated at this point
-        data.squadID = -1;
-        _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
-    } else if (data.role == Fleet::Role::SquadLeader) {
-        // wing and squad should both be populated at this point
-        _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
-    } else if ((data.wingID == 0) and (data.squadID == 0)) {// char invited as generic squad member, no specific position
-        if (!sFltSvc.GetRandUnitIDs(m_fleetID, data.wingID, data.squadID))
-            throw UserError("FleetNoPositionFound");
-        _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
-    } else {
-        _log(FLEET__ERROR, "Fleet Invite Role/UnitID error.  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
+    switch (data.role) {
+        case Fleet::Role::FleetLeader: {
+            if (!all)
+                throw UserError("FleetNotAllowed");
+            data.wingID = -1;
+            data.squadID = -1;
+        } break;
+        case Fleet::Role::WingLeader: {
+            // only the boss/FC place wing commanders
+            if (!all)
+                throw UserError("FleetNotAllowed");
+            if ((data.wingID <= 0) or !sFltSvc.IsWingInFleet(data.wingID, m_fleetID))
+                throw UserError("FleetNotAllowed");
+            data.squadID = -1;
+        } break;
+        case Fleet::Role::SquadLeader: {
+            if ((data.squadID <= 0) or !sFltSvc.IsSquadInFleet(data.squadID, m_fleetID))
+                throw UserError("FleetNotAllowed");
+            SquadData sData = SquadData();
+            sFltSvc.GetSquadData(data.squadID, sData);
+            data.wingID = sData.wingID;
+            // a wing commander places squad commanders in his own wing.  squad commanders invite members only
+            if (!all and !(isWC and (data.wingID == pMe->wingID())))
+                throw UserError("FleetNotAllowed");
+            if (sFltSvc.GetSquadMemberCount(data.squadID) >= Fleet::Limits::MaxSquadMembers)
+                throw UserError("FleetTooManyMembersInSquad").AddAmount("num", (int)Fleet::Limits::MaxSquadMembers);
+        } break;
+        case Fleet::Role::Member: {
+            // wing/squad commanders place members inside their own unit
+            int32 restrictWing = (isWC and !all) ? pMe->wingID() : 0;
+            int32 restrictSquad = (isSC and !all) ? pMe->squadID() : 0;
+            if (data.squadID > 0) {
+                if (!sFltSvc.IsSquadInFleet(data.squadID, m_fleetID))
+                    throw UserError("FleetNotAllowed");
+                SquadData sData = SquadData();
+                sFltSvc.GetSquadData(data.squadID, sData);
+                data.wingID = sData.wingID;
+                if (((restrictWing > 0) and (data.wingID != restrictWing))
+                or ((restrictSquad > 0) and (data.squadID != restrictSquad)))
+                    throw UserError("FleetNotAllowed");
+                if (sFltSvc.GetSquadMemberCount(data.squadID) >= Fleet::Limits::MaxSquadMembers)
+                    throw UserError("FleetTooManyMembersInSquad").AddAmount("num", (int)Fleet::Limits::MaxSquadMembers);
+            } else {
+                if (data.wingID > 0) {
+                    if (!sFltSvc.IsWingInFleet(data.wingID, m_fleetID))
+                        throw UserError("FleetNotAllowed");
+                    if ((restrictWing > 0) and (data.wingID != restrictWing))
+                        throw UserError("FleetNotAllowed");
+                    restrictWing = data.wingID;
+                }
+                // char invited as generic squad member, no specific position
+                if (!sFltSvc.GetRandUnitIDs(m_fleetID, data.wingID, data.squadID, restrictWing, restrictSquad))
+                    throw UserError("FleetNoPositionFound");
+            }
+        } break;
+        default: {
+            _log(FLEET__ERROR, "Fleet Invite Role/UnitID error.  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
+            throw UserError("FleetNotAllowed");
+        }
     }
 
-    if (!sFltSvc.SaveInviteData(characterID->value(), data)) {
-        call.client->SendNotifyMsg("%s is invited to another fleet.  That invite must be rejected before another can be issued.", pClient->GetCharName().c_str());
-        return PyStatic.NewNone();
+    // commander slots must be free, and not promised to someone else
+    if (data.role != Fleet::Role::Member) {
+        Client* pHolder = sFltSvc.GetPositionHolder(m_fleetID, data.wingID, data.squadID, data.role);
+        if (pHolder != nullptr)
+            throw UserError("FleetPositionFilled").AddOwnerName("owner", pHolder->GetCharacterID());
+        uint32 pendingID = sFltSvc.GetPendingInvite(m_fleetID, data.wingID, data.squadID, data.role);
+        if (pendingID != 0)
+            throw UserError("FleetPositionFilledInvite").AddOwnerName("owner", pendingID);
     }
+
+    _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
+
+    if (!sFltSvc.SaveInviteData(charID, data))
+        throw UserError("FleetMemberAlreadyInvited");
 
     // join requests are accepted via invite.  delete request on invite
     sFltSvc.RemoveJoinRequest(m_fleetID, pClient);
@@ -312,6 +409,38 @@ PyResult FleetBound::AcceptInvite(PyCallArgs &call, std::optional <PyInt*> shipT
     // the invite must be for this (bound) fleet
     if (data.fleetID != m_fleetID)
         throw UserError("FleetNotInvited");
+    if (pChar->fleetID() != 0) {
+        sFltSvc.RemoveInviteData(pChar->itemID());
+        throw UserError("FleetYouAreAlreadyInFleet");
+    }
+
+    // the fleet may have changed since the invite was issued
+    if (sFltSvc.GetFleetMemberCount(m_fleetID) >= Fleet::Limits::MaxMembers) {
+        sFltSvc.RemoveInviteData(pChar->itemID());
+        throw UserError("FleetTooManyMembers").AddAmount("num", (int)Fleet::Limits::MaxMembers);
+    }
+    if (data.role != Fleet::Role::Member) {
+        Client* pHolder = sFltSvc.GetPositionHolder(m_fleetID, data.wingID, data.squadID, data.role);
+        if ((pHolder != nullptr)
+        or ((data.role == Fleet::Role::WingLeader) and !sFltSvc.IsWingInFleet(data.wingID, m_fleetID))
+        or ((data.role == Fleet::Role::SquadLeader) and !sFltSvc.IsSquadInFleet(data.squadID, m_fleetID))) {
+            // position gone; join as a member instead
+            data.role = Fleet::Role::Member;
+            data.wingID = 0;
+            data.squadID = 0;
+        }
+    }
+    if (data.role == Fleet::Role::Member) {
+        if ((data.squadID <= 0) or !sFltSvc.IsSquadInFleet(data.squadID, m_fleetID)
+        or (sFltSvc.GetSquadMemberCount(data.squadID) >= Fleet::Limits::MaxSquadMembers))
+            if (!sFltSvc.GetRandUnitIDs(m_fleetID, data.wingID, data.squadID)) {
+                sFltSvc.RemoveInviteData(pChar->itemID());
+                throw UserError("FleetNoPositionFound");
+            }
+    } else if ((data.role == Fleet::Role::SquadLeader) and (sFltSvc.GetSquadMemberCount(data.squadID) >= Fleet::Limits::MaxSquadMembers)) {
+        sFltSvc.RemoveInviteData(pChar->itemID());
+        throw UserError("FleetTooManyMembersInSquad").AddAmount("num", (int)Fleet::Limits::MaxSquadMembers);
+    }
 
     int8 booster = Fleet::Booster::No;
     switch (data.role) {
@@ -335,8 +464,8 @@ PyResult FleetBound::AcceptInvite(PyCallArgs &call, std::optional <PyInt*> shipT
         } break;
     }
 
-    sFltSvc.AddMember(call.client, m_fleetID, data.wingID, data.squadID, Fleet::Job::None, data.role, booster);
     sFltSvc.RemoveInviteData(pChar->itemID());
+    sFltSvc.AddMember(call.client, m_fleetID, data.wingID, data.squadID, Fleet::Job::None, data.role, booster);
 
     // returns nodeID and timestamp
     return this->GetOID();
@@ -350,22 +479,22 @@ PyResult FleetBound::RejectInvite(PyCallArgs &call) {
     if (pChar == nullptr)
         return new PyLong(GetFileTimeNow());
 
-    bool rejected = false;
-    if (call.tuple->AsTuple()->GetItem(0)->IsBool())
-        rejected = call.tuple->AsTuple()->GetItem(0)->AsBool()->value();
+    // fleetSvc.OnFleetInvite: RejectInvite(True) when already in a fleet, (False) on auto-reject, () on a manual 'no'
+    bool alreadyInFleet = false;
+    if ((call.tuple->size() > 0) and call.tuple->GetItem(0)->IsBool())
+        alreadyInFleet = call.tuple->GetItem(0)->AsBool()->value();
 
+    // the client calls this unprompted (auto-reject), so a missing invite is not an error
     InviteData data = InviteData();
-    if (!sFltSvc.GetInviteData(pChar->itemID(), data)) {
-        call.client->SendNotifyMsg("You do not have an outstanding Fleet Invite on issue.");
-        return new PyLong(GetFileTimeNow());
-    }
+    if (!sFltSvc.GetInviteData(pChar->itemID(), data) or (data.fleetID != m_fleetID))
+        return nullptr;
 
     if (data.inviteBy != nullptr) {
-        if (rejected) {
-            data.inviteBy->SendNotifyMsg("%s has rejected your fleet invite.", pChar->name());
-        } else {
-            data.inviteBy->SendNotifyMsg("%s has auto-rejected your fleet invite.", pChar->name());
-        }
+        // OnFleetJoinReject(memberID, reasonCode)  reason: const.rejectFleetInviteAlreadyInFleet = 2
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, new PyInt(pChar->itemID()));
+            tuple->SetItem(1, new PyInt(alreadyInFleet ? 2 : 0));
+        data.inviteBy->SendNotification("OnFleetJoinReject", "clientID", &tuple, false);
     }
     sFltSvc.RemoveInviteData(pChar->itemID());
 
@@ -379,7 +508,17 @@ PyResult FleetBound::ChangeWingName(PyCallArgs &call, PyInt* wingID, PyRep* name
     sLog.Warning("FleetBound", "Handle_ChangeWingName() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    sFltSvc.RenameWing(wingID->value(), PyRep::StringContent (name));
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsWingInFleet(wingID->value(), m_fleetID))
+        throw UserError("FleetNotAllowed");
+    if (!IsBossOrFC(pMe) and !((pMe->fleetRole() == Fleet::Role::WingLeader) and (pMe->wingID() == wingID->value())))
+        throw UserError("FleetNotAllowed");
+
+    // fleetcommon.MAX_NAME_LENGTH
+    std::string newName = PyRep::StringContent(name);
+    if (newName.size() > 10)
+        newName.resize(10);
+    sFltSvc.RenameWing(wingID->value(), newName);
 
     // returns nothing
     return nullptr;
@@ -390,7 +529,20 @@ PyResult FleetBound::ChangeSquadName(PyCallArgs &call, PyInt* squadID, PyRep* na
     sLog.Warning("FleetBound", "Handle_ChangeSquadName() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    sFltSvc.RenameSquad(squadID->value(), PyRep::StringContent(name));
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsSquadInFleet(squadID->value(), m_fleetID))
+        throw UserError("FleetNotAllowed");
+    SquadData sData = SquadData();
+    sFltSvc.GetSquadData(squadID->value(), sData);
+    if (!IsBossOrFC(pMe)
+    and !((pMe->fleetRole() == Fleet::Role::WingLeader) and (pMe->wingID() == (int32)sData.wingID))
+    and !((pMe->fleetRole() == Fleet::Role::SquadLeader) and (pMe->squadID() == squadID->value())))
+        throw UserError("FleetNotAllowed");
+
+    std::string newName = PyRep::StringContent(name);
+    if (newName.size() > 10)
+        newName.resize(10);
+    sFltSvc.RenameSquad(squadID->value(), newName);
 
     // returns nothing
     return nullptr;
@@ -401,10 +553,21 @@ PyResult FleetBound::SetOptions(PyCallArgs &call, PyObject* options) {
     sLog.Warning("FleetBound", "Handle_SetOptions() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsBoss(pMe))
+        throw UserError("FleetNotCreator");
+
+    if ((options->arguments() == nullptr) or !options->arguments()->IsDict())
+        return nullptr;
+    FleetData fData = FleetData();
+    sFltSvc.GetFleetData(m_fleetID, fData);
     PyDict* dict = options->arguments()->AsDict();
-    bool isFreeMove = dict->GetItemString("isFreeMove")->AsBool()->value();
-    bool isRegistered = dict->GetItemString("isRegistered")->AsBool()->value();
-    bool isVoiceEnabled = (dict->GetItemString("isVoiceEnabled")->AsBool()->value() ? sConfig.chat.EnableVoiceChat : false);
+    PyRep* rep(dict->GetItemString("isFreeMove"));
+    bool isFreeMove = ((rep != nullptr) and rep->IsBool()) ? rep->AsBool()->value() : fData.isFreeMove;
+    rep = dict->GetItemString("isRegistered");
+    bool isRegistered = ((rep != nullptr) and rep->IsBool()) ? rep->AsBool()->value() : fData.isRegistered;
+    rep = dict->GetItemString("isVoiceEnabled");
+    bool isVoiceEnabled = ((rep != nullptr) and rep->IsBool()) ? (rep->AsBool()->value() ? sConfig.chat.EnableVoiceChat : false) : fData.isVoiceEnabled;
 
     sFltSvc.UpdateOptions(m_fleetID, isFreeMove, isRegistered, isVoiceEnabled);
 
@@ -421,11 +584,17 @@ PyResult FleetBound::GetJoinRequests(PyCallArgs &call) {
     sLog.Warning("FleetBound", "Handle_GetJoinRequests() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    Character* pMe = CheckMember(call);
+    if (!IsBossOrFC(pMe))
+        throw UserError("FleetNotAllowed");
+
     std::vector<Client*> cVec;
-    sFltSvc.GetJoinRequests(call.client->GetChar()->fleetID(), cVec);
+    sFltSvc.GetJoinRequests(m_fleetID, cVec);
 
     PyDict* rsp = new PyDict();
     for (auto cur : cVec) {
+        if (cur == nullptr)
+            continue;
         PyDict* dict = new PyDict();
         dict->SetItemString("charID", new PyInt(cur->GetCharacterID()));
         rsp->SetItem(new PyInt(cur->GetCharacterID()), new PyObject("util.KeyVal", dict));
@@ -440,6 +609,10 @@ PyResult FleetBound::RejectJoinRequest(PyCallArgs &call, PyInt* characterID) {
     //    self.fleet.RejectJoinRequest(charID)
     sLog.Warning("FleetBound", "Handle_RejectJoinRequest() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    Character* pMe = CheckMember(call);
+    if (!IsBossOrFC(pMe))
+        throw UserError("FleetNotAllowed");
 
     // the applicant is not a member; look it up in this fleet's join requests
     Client* pClient(nullptr);
@@ -468,11 +641,17 @@ PyResult FleetBound::GetFleetComposition(PyCallArgs &call) {
     sLog.Warning("FleetBound", "Handle_GetFleetComposition() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    Character* pMe = CheckMember(call);
+    if (!IsBossOrFC(pMe) and (pMe->fleetRole() != Fleet::Role::WingLeader) and (pMe->fleetRole() != Fleet::Role::SquadLeader))
+        throw UserError("FleetNotCommanderOrBoss");
+
     Character* pChar(nullptr);
     PyList* list = new PyList();
     std::vector<Client*> members;
     sFltSvc.GetMemeberVec(m_fleetID, members);
     for (auto cur : members) {
+        if (cur == nullptr)
+            continue;
         pChar = cur->GetChar().get();
         if (pChar == nullptr)
             continue;
@@ -506,6 +685,8 @@ PyResult FleetBound::GetWings(PyCallArgs &call) {
     sLog.Warning("FleetBound", "Handle_GetWings() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    CheckMember(call);
+
     return sFltSvc.GetWings(m_fleetID);
 }
 
@@ -514,6 +695,8 @@ PyResult FleetBound::SendBroadcast(PyCallArgs &call, PyRep* message, PyInt* grou
          //    self.fleet.SendBroadcast(name, self.broadcastScope, itemID)
     sLog.Warning("FleetBound", "Handle_SendBroadcast() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    CheckMember(call);
 
     sFltSvc.FleetBroadcast(call.client, itemID->value(), Fleet::BCast::Scope::Universe, group->value(), PyRep::StringContent (message));
 
@@ -532,6 +715,8 @@ PyResult FleetBound::UpdateMemberInfo(PyCallArgs &call, std::optional <PyInt*> s
     sLog.Warning("FleetBound", "Handle_UpdateMemberInfo() size=%lli", call.tuple->size());
     //call.Dump(FLEET__DUMP);
 
+    CheckMember(call);
+
     // returns nothing
     return nullptr;
 }
@@ -540,6 +725,10 @@ PyResult FleetBound::SetMotdEx(PyCallArgs &call, PyRep* motd) {
          //    self.fleet.SetMotdEx(motd)
     sLog.Warning("FleetBound", "Handle_SetMotdEx() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    Character* pMe = CheckMember(call);
+    if (!IsBossOrFC(pMe))
+        throw UserError("FleetNotAllowed");
 
     sFltSvc.SetMOTD(m_fleetID, PyRep::StringContent(motd));
 
@@ -552,6 +741,8 @@ PyResult FleetBound::GetMotd(PyCallArgs &call) {
     sLog.Warning("FleetBound", "Handle_GetMotd() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    CheckMember(call);
+
     return sFltSvc.GetMOTD(m_fleetID);
 }
 
@@ -559,6 +750,8 @@ PyResult FleetBound::LeaveFleet(PyCallArgs &call) {
     //    self.fleet.LeaveFleet()
     sLog.Warning("FleetBound", "Handle_LeaveFleet() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    CheckMember(call);
 
     sFltSvc.LeaveFleet(call.client);
 
@@ -571,30 +764,19 @@ PyResult FleetBound::MakeLeader(PyCallArgs &call, PyInt* characterID) {
     sLog.Warning("FleetBound", "Handle_MakeLeader() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    // leaders will keep existing fleetJob.
+    /* the client only offers this to the boss, for other members ('Make Fleet Boss').
+     * it hands the boss job to the target.  roles and positions do not change.
+     */
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsBoss(pMe))
+        throw UserError("FleetNotCreator");
 
-    // get existing leader to remove current Role, if applicable
-    Client* pClient = sFltSvc.GetFleetLeader(m_fleetID);
-    if (pClient != nullptr) {
-        Character* pCharOld = pClient->GetChar().get();
-        if (pCharOld == nullptr)
-            return PyStatic.NewNone();
-        int32 wingID = -1, squadID = -1;
-        if (!sFltSvc.GetRandUnitIDs(m_fleetID, wingID, squadID)) {
-            wingID = -1;
-            squadID = -1;
-        }
-        sFltSvc.UpdateMember(pCharOld->itemID(), m_fleetID, wingID, squadID, pCharOld->fleetJob(), Fleet::Role::Member, pCharOld->fleetBooster());
-    }
+    Client* pTarget(nullptr);
+    Character* pTargetChar = GetTargetChar(characterID->value(), pTarget);
+    if (pTargetChar == pMe)
+        return nullptr;
 
-    // update new leader
-    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
-    if (pTarget == nullptr)
-        throw UserError("FleetMemberNotFound");
-    Character* pCharNew = pTarget->GetChar().get();
-    if (pCharNew == nullptr)
-        return PyStatic.NewNone();
-    sFltSvc.UpdateMember(characterID->value(), m_fleetID, -1, -1, pCharNew->fleetJob(), Fleet::Role::FleetLeader, pCharNew->fleetBooster());
+    sFltSvc.SetBoss(m_fleetID, pTarget);
 
     // returns nothing
     return nullptr;
@@ -605,43 +787,66 @@ PyResult FleetBound::SetBooster(PyCallArgs &call, PyInt* characterID, std::optio
     sLog.Warning("FleetBound", "Handle_SetBooster() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Character* pOldChar(nullptr);
-    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
-    if (pTarget == nullptr)
-        throw UserError("FleetMemberNotFound");
-    Character* pChar = pTarget->GetChar().get();
-    if (pChar == nullptr)
+    Character* pMe = CheckMember(call);
+    Client* pTarget(nullptr);
+    Character* pChar = GetTargetChar(characterID->value(), pTarget);
+
+    bool all = IsBossOrFC(pMe);
+    // commanding self only counts for commanders (menusvc checkSubordinate)
+    bool commands = sFltSvc.IsSuperior(pMe, pChar);
+    if ((pMe == pChar) and !all and (pMe->fleetRole() != Fleet::Role::WingLeader) and (pMe->fleetRole() != Fleet::Role::SquadLeader))
+        commands = false;
+
+    int8 newBooster = roleBooster.has_value() ? roleBooster.value()->value() : Fleet::Booster::No;
+    if (newBooster == pChar->fleetBooster())
         return PyStatic.NewFalse();
 
-    // there can be only one booster per each fleet/wing/squad
-    switch (roleBooster.has_value() ? roleBooster.value()->value() : 0) {
+    // there can be only one booster per each fleet/wing/squad.  an occupied slot is refused
+    switch (newBooster) {
         case Fleet::Booster::Fleet: {
+            if (!all or !commands)
+                throw UserError("FleetNotAllowed");
+            if (pChar->fleetBooster() != Fleet::Booster::No)
+                throw UserError("FleetAlreadyBooster");
             FleetData fData = FleetData();
             sFltSvc.GetFleetData(m_fleetID, fData);
-            if ((fData.booster != nullptr) and ((pOldChar = fData.booster->GetChar().get()) != nullptr)) {
-                if (!sFltSvc.UpdateMember(pOldChar->itemID(), m_fleetID, pOldChar->wingID(), pOldChar->squadID(), pOldChar->fleetJob(), pOldChar->fleetRole(), Fleet::Booster::No))
-                    return PyStatic.NewFalse();
-            }
+            if (fData.booster != nullptr)
+                throw UserError("FleetBoosterRoleFull");
         } break;
         case Fleet::Booster::Wing: {
+            if (!commands or (!all and (pMe->fleetRole() != Fleet::Role::WingLeader)))
+                throw UserError("FleetNotAllowed");
+            if ((pChar->fleetRole() == Fleet::Role::FleetLeader) or (pChar->wingID() <= 0))
+                throw UserError("FleetBoosterIllegal");
+            if (pChar->fleetBooster() != Fleet::Booster::No)
+                throw UserError("FleetAlreadyBooster");
             WingData wData = WingData();
             sFltSvc.GetWingData(pChar->wingID(), wData);
-            if ((wData.booster != nullptr) and ((pOldChar = wData.booster->GetChar().get()) != nullptr)) {
-                if (!sFltSvc.UpdateMember(pOldChar->itemID(), m_fleetID, pOldChar->wingID(), pOldChar->squadID(), pOldChar->fleetJob(), pOldChar->fleetRole(), Fleet::Booster::No))
-                    return PyStatic.NewFalse();
-            }
+            if (wData.booster != nullptr)
+                throw UserError("FleetBoosterRoleFull");
         } break;
         case Fleet::Booster::Squad: {
+            if (!commands)
+                throw UserError("FleetNotAllowed");
+            if ((pChar->fleetRole() == Fleet::Role::FleetLeader) or (pChar->fleetRole() == Fleet::Role::WingLeader) or (pChar->squadID() <= 0))
+                throw UserError("FleetBoosterIllegal");
+            if (pChar->fleetBooster() != Fleet::Booster::No)
+                throw UserError("FleetAlreadyBooster");
             SquadData sData = SquadData();
             sFltSvc.GetSquadData(pChar->squadID(), sData);
-            if ((sData.booster != nullptr) and ((pOldChar = sData.booster->GetChar().get()) != nullptr)) {
-                if (!sFltSvc.UpdateMember(pOldChar->itemID(), m_fleetID, pOldChar->wingID(), pOldChar->squadID(), pOldChar->fleetJob(), pOldChar->fleetRole(), Fleet::Booster::No))
-                    return PyStatic.NewFalse();
-            }
+            if (sData.booster != nullptr)
+                throw UserError("FleetBoosterRoleFull");
         } break;
+        case Fleet::Booster::No: {
+            // revoke: a superior of the booster, or the booster himself
+            if ((pMe != pChar) and !commands)
+                throw UserError("FleetNotAllowed");
+        } break;
+        default:
+            throw UserError("FleetBoosterIllegal");
     }
 
-    if (sFltSvc.UpdateMember(characterID->value(), m_fleetID, pChar->wingID(), pChar->squadID(), pChar->fleetJob(), pChar->fleetRole(), roleBooster.has_value() ? roleBooster.value()->value() : 0))
+    if (sFltSvc.UpdateMember(characterID->value(), m_fleetID, pChar->wingID(), pChar->squadID(), pChar->fleetJob(), pChar->fleetRole(), newBooster))
         return PyStatic.NewTrue();
 
     // returns boolean
@@ -652,16 +857,106 @@ PyResult FleetBound::MoveMember(PyCallArgs &call, PyInt* characterID, std::optio
     sLog.Warning("FleetBound", "Handle_MoveMember() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
-    if (pTarget == nullptr)
-        throw UserError("FleetMemberNotFound");
-    Character* pChar = pTarget->GetChar().get();
-    if (pChar == nullptr)
-        return PyStatic.NewFalse();
+    Character* pMe = CheckMember(call);
+    Client* pTarget(nullptr);
+    Character* pChar = GetTargetChar(characterID->value(), pTarget);
+
+    // the client sends -1 (FLEET_NONEID) for 'no wing/squad'.  0 means unchanged
+    int32 newWingID = wingID.has_value() ? wingID.value()->value() : -1;
+    int32 newSquadID = squadID.has_value() ? squadID.value()->value() : -1;
+    if (newWingID == 0)
+        newWingID = pChar->wingID();
+    if (newSquadID == 0)
+        newSquadID = pChar->squadID();
+    int8 newRole = role.has_value() ? role.value()->value() : pChar->fleetRole();
+    int8 newBooster = booster.has_value() ? booster.value()->value() : pChar->fleetBooster();
+
+    // validate the destination position
+    switch (newRole) {
+        case Fleet::Role::FleetLeader: {
+            if ((newWingID > 0) or (newSquadID > 0))
+                throw UserError("FleetNotAllowed");
+            newWingID = -1;
+            newSquadID = -1;
+        } break;
+        case Fleet::Role::WingLeader: {
+            if ((newWingID <= 0) or !sFltSvc.IsWingInFleet(newWingID, m_fleetID) or (newSquadID > 0))
+                throw UserError("FleetNotAllowed");
+            newSquadID = -1;
+        } break;
+        case Fleet::Role::SquadLeader:
+        case Fleet::Role::Member: {
+            if ((newSquadID <= 0) or !sFltSvc.IsSquadInFleet(newSquadID, m_fleetID))
+                throw UserError("FleetNotAllowed");
+            SquadData sData = SquadData();
+            sFltSvc.GetSquadData(newSquadID, sData);
+            if ((newWingID > 0) and (newWingID != (int32)sData.wingID))
+                throw UserError("FleetNotAllowed");
+            newWingID = sData.wingID;
+        } break;
+        default:
+            throw UserError("FleetNotAllowed");
+    }
+
+    // permissions (menusvc GetFleetMemberMenu2): boss/FC move anyone anywhere.  free-move lets a member place himself in any squad.
+    //  a WC moves his subordinates (or himself) within his wing, a SC within his squad
+    bool allowed(IsBossOrFC(pMe));
+    if (!allowed) {
+        bool squadRole = ((newRole == Fleet::Role::SquadLeader) or (newRole == Fleet::Role::Member));
+        FleetData fData = FleetData();
+        sFltSvc.GetFleetData(m_fleetID, fData);
+        if (fData.isFreeMove and (pMe == pChar) and squadRole) {
+            allowed = true;
+        } else if (pMe->fleetRole() == Fleet::Role::WingLeader) {
+            allowed = (squadRole and (pChar->wingID() == pMe->wingID()) and (newWingID == pMe->wingID()));
+        } else if (pMe->fleetRole() == Fleet::Role::SquadLeader) {
+            allowed = (squadRole and (pChar->squadID() == pMe->squadID()) and (newSquadID == pMe->squadID()));
+        }
+    }
+    if (!allowed)
+        throw UserError("FleetNotAllowed");
+
+    // slot occupancy and capacity
+    Client* pHolder = sFltSvc.GetPositionHolder(m_fleetID, newWingID, newSquadID, newRole);
+    if ((pHolder != nullptr) and (pHolder != pTarget)) {
+        if (newRole == Fleet::Role::FleetLeader)
+            throw UserError("FleetAlreadyLeader");
+        throw UserError("FleetPositionFilled").AddOwnerName("owner", pHolder->GetCharacterID());
+    }
+    if ((newSquadID > 0) and (newSquadID != pChar->squadID()) and (sFltSvc.GetSquadMemberCount(newSquadID) >= Fleet::Limits::MaxSquadMembers))
+        throw UserError("FleetTooManyMembersInSquad").AddAmount("num", (int)Fleet::Limits::MaxSquadMembers);
+
+    // a wing/squad booster role does not follow the member into another unit or a higher role
+    if ((newBooster == Fleet::Booster::Wing) and ((newWingID != pChar->wingID()) or (newRole == Fleet::Role::FleetLeader)))
+        newBooster = Fleet::Booster::No;
+    if ((newBooster == Fleet::Booster::Squad) and ((newSquadID != pChar->squadID()) or (newRole == Fleet::Role::FleetLeader) or (newRole == Fleet::Role::WingLeader)))
+        newBooster = Fleet::Booster::No;
+    if (newBooster != pChar->fleetBooster()) {
+        bool full(false);
+        switch (newBooster) {
+            case Fleet::Booster::Fleet: {
+                FleetData fData = FleetData();
+                sFltSvc.GetFleetData(m_fleetID, fData);
+                full = ((fData.booster != nullptr) and (fData.booster != pTarget));
+            } break;
+            case Fleet::Booster::Wing: {
+                WingData wData = WingData();
+                sFltSvc.GetWingData(newWingID, wData);
+                full = ((wData.booster != nullptr) and (wData.booster != pTarget));
+            } break;
+            case Fleet::Booster::Squad: {
+                SquadData sData = SquadData();
+                sFltSvc.GetSquadData(newSquadID, sData);
+                full = ((sData.booster != nullptr) and (sData.booster != pTarget));
+            } break;
+        }
+        if (full)
+            throw UserError("FleetBoosterRoleFull");
+    }
 
     // if voice is enabled for this fleet, SendNotification OnFleetMove to enable changing channels (on client side)
 
-    if (sFltSvc.UpdateMember(characterID->value(), m_fleetID, wingID.has_value() ? wingID.value()->value() : 0, squadID.has_value() ? squadID.value()->value() : 0, pChar->fleetJob(), role.has_value() ? role.value()->value() : 0, booster.has_value() ? booster.value()->value() : 0))
+    if (sFltSvc.UpdateMember(characterID->value(), m_fleetID, newWingID, newSquadID, pChar->fleetJob(), newRole, newBooster))
         return PyStatic.NewTrue();
 
     // returns boolean
@@ -678,9 +973,17 @@ PyResult FleetBound::KickMember(PyCallArgs &call, PyInt* characterID) {
     sLog.Warning("FleetBound", "Handle_KickMember() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    Client* pTarget = sFltSvc.GetMember(m_fleetID, characterID->value());
-    if (pTarget == nullptr)
-        throw UserError("FleetMemberNotFound");
+    Character* pMe = CheckMember(call);
+    Client* pTarget(nullptr);
+    Character* pChar = GetTargetChar(characterID->value(), pTarget);
+
+    if (pChar != pMe) {
+        if (sFltSvc.IsBoss(pChar))
+            throw UserError("FleetCantKickBoss");
+        if (!sFltSvc.IsSuperior(pMe, pChar))
+            throw UserError("FleetNotAllowed");
+    }
+
     sFltSvc.LeaveFleet(pTarget);
 
     // returns boolean
@@ -692,13 +995,31 @@ PyResult FleetBound::CreateWing(PyCallArgs &call) {
     sLog.Warning("FleetBound", "Handle_CreateWing() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    return sFltSvc.CreateWing(m_fleetID);
+    Character* pMe = CheckMember(call);
+    if (!IsBossOrFC(pMe))
+        throw UserError("FleetNotAllowed");
+    if (sFltSvc.GetWingCount(m_fleetID) >= Fleet::Limits::MaxWings)
+        throw UserError("FleetTooManyWings").AddAmount("num", (int)Fleet::Limits::MaxWings);
+
+    // the client tests 'if wingID:' and then creates the first squad itself
+    PyRep* res = sFltSvc.CreateWing(m_fleetID);
+    if (res == nullptr)
+        return PyStatic.NewNone();
+    return res;
 }
 
 PyResult FleetBound::CreateSquad(PyCallArgs &call, PyInt* wingID) {
     /* self.fleet.CreateSquad(wingID)  */
     sLog.Warning("FleetBound", "Handle_CreateSquad() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsWingInFleet(wingID->value(), m_fleetID))
+        throw UserError("FleetNotAllowed");
+    if (!IsBossOrFC(pMe) and !((pMe->fleetRole() == Fleet::Role::WingLeader) and (pMe->wingID() == wingID->value())))
+        throw UserError("FleetNotAllowed");
+    if (sFltSvc.GetSquadCount(wingID->value()) >= Fleet::Limits::MaxSquadsPerWing)
+        throw UserError("FleetTooManySquads").AddAmount("num", (int)Fleet::Limits::MaxSquadsPerWing);
 
     sFltSvc.CreateSquad(m_fleetID, wingID->value());
 
@@ -711,6 +1032,14 @@ PyResult FleetBound::DeleteWing(PyCallArgs &call, PyInt* wingID) {
     sLog.Warning("FleetBound", "Handle_DeleteWing() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsWingInFleet(wingID->value(), m_fleetID))
+        throw UserError("FleetNotAllowed");
+    if (!IsBossOrFC(pMe) and !((pMe->fleetRole() == Fleet::Role::WingLeader) and (pMe->wingID() == wingID->value())))
+        throw UserError("FleetNotAllowed");
+    if (sFltSvc.GetWingMemberCount(wingID->value()) > 0)
+        throw UserError("FleetCannotDeleteNonEmptyWing");
+
     sFltSvc.DeleteWing(wingID->value());
 
     // returns nothing
@@ -722,7 +1051,19 @@ PyResult FleetBound::DeleteSquad(PyCallArgs &call, PyInt* squadID) {
     sLog.Warning("FleetBound", "Handle_DeleteSquad() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
-    sFltSvc.DeleteSquad(squadID->value());   //call.tuple->AsTuple()->GetItem(0)->AsInt()->value()
+    Character* pMe = CheckMember(call);
+    if (!sFltSvc.IsSquadInFleet(squadID->value(), m_fleetID))
+        throw UserError("FleetNotAllowed");
+    SquadData sData = SquadData();
+    sFltSvc.GetSquadData(squadID->value(), sData);
+    if (!IsBossOrFC(pMe)
+    and !((pMe->fleetRole() == Fleet::Role::WingLeader) and (pMe->wingID() == (int32)sData.wingID))
+    and !((pMe->fleetRole() == Fleet::Role::SquadLeader) and (pMe->squadID() == squadID->value())))
+        throw UserError("FleetNotAllowed");
+    if (sFltSvc.GetSquadMemberCount(squadID->value()) > 0)
+        throw UserError("FleetCannotDeleteNonEmptySquad");
+
+    sFltSvc.DeleteSquad(squadID->value());
 
     // returns nothing
     return nullptr;
@@ -732,6 +1073,8 @@ PyResult FleetBound::AddToVoiceChat(PyCallArgs &call, PyRep* channelName) {
     //    self.fleet.AddToVoiceChat(channelName)
     sLog.Warning("FleetBound", "Handle_AddToVoiceChat() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    CheckMember(call);
 
     //sConfig.chat.EnableVoiceChat;
 
@@ -744,6 +1087,8 @@ PyResult FleetBound::SetVoiceMuteStatus(PyCallArgs &call, PyRep* status, PyRep* 
     sLog.Warning("FleetBound", "Handle_SetVoiceMuteStatus() size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
 
+    CheckMember(call);
+
     // returns nothing
     return nullptr;
 }
@@ -752,6 +1097,8 @@ PyResult FleetBound::ExcludeFromVoiceMute(PyCallArgs &call, PyInt* characterID, 
     //    self.fleet.ExcludeFromVoiceMute(charid, channel)
     sLog.Warning("FleetBound", "Handle_ExcludeFromVoiceMute()) size=%lli", call.tuple->size());
     call.Dump(FLEET__DUMP);
+
+    CheckMember(call);
 
     // returns nothing
     return nullptr;

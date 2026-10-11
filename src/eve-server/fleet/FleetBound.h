@@ -59,6 +59,13 @@ protected:
     PyResult Reconnect(PyCallArgs& call);
 
 private:
+    // throws FleetNotInFleet unless the caller is a member of this fleet
+    Character* CheckMember(PyCallArgs& call);
+    // throws FleetMemberNotFound unless charID is a member of this fleet
+    Character* GetTargetChar(uint32 charID, Client*& pClient);
+    // true for the boss and the fleet commander
+    bool IsBossOrFC(Character* pChar);
+
     uint32 m_fleetID;
 
 };
