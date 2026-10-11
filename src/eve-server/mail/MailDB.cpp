@@ -138,6 +138,9 @@ void MailDB::SetStatusBitsAll(uint32 charID, uint32 mask, bool set, bool skipTra
 
 void MailDB::SetStatusBitsByLabel(uint32 charID, int64 labelMask, uint32 mask, bool set, bool skipTrashed)
 {
+    // no label would match every mail
+    if (labelMask <= 0)
+        return;
     DBerror err;
     if (!sDatabase.RunQuery(err,
             "UPDATE mailStatus SET statusMask = statusMask %s %u"

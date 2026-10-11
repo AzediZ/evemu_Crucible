@@ -113,7 +113,7 @@ protected:
     PyResult LeaveChannels(PyCallArgs& call, PyList* channels, PyBool* usubscribe, PyLong* role);
     PyResult LeaveChannel(PyCallArgs& call, PyRep* channelInfo, PyInt* unsubscribe);
     PyResult CreateChannel(PyCallArgs& call, PyRep* channelName);
-    PyResult Configure(PyCallArgs& call, PyInt* channelID);
+    PyResult Configure(PyCallArgs& call, PyRep* channelInfo);
     PyResult DestroyChannel(PyCallArgs& call, PyInt* channelID);
     PyResult GetMembers(PyCallArgs& call, PyRep* channelInfo);
     PyResult GetMember(PyCallArgs& call);

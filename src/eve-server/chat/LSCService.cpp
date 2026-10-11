@@ -622,9 +622,10 @@ PyResult LSCService::Invite(PyCallArgs& call, PyInt* characterID, PyInt* channel
     if (pTarget == nullptr)
         throw CustomError("%s is not online.", sDataMgr.GetOwnerName(targetID).c_str());
 
-    // the client asks to put the invitee on the allowed list when the channel isn't public
+    // the client asks to put the invitee on the allowed list when the channel isn't public (operators only, so a kick
+    //  can't be lifted thru an invite)
     if (addAllowed.has_value() and (addAllowed.value() != nullptr) and (PyRep::IntegerValue(addAllowed.value()) != 0)
-    and (channel->GetEntryMode(targetID) < LSC::Mode::chConversationalist))
+    and IsPrivileged(call.client, channel) and (channel->GetEntryMode(targetID) < LSC::Mode::chConversationalist))
         channel->SetAccess(targetID, LSC::Mode::chConversationalist, 0, "", call.client);
 
     channel->AddInvite(targetID);
@@ -737,10 +738,11 @@ static bool GetNamedArg(PyCallArgs& call, const char* name, PyRep*& into)
     return true;
 }
 
-PyResult LSCService::Configure(PyCallArgs& call, PyInt* channelID)
+PyResult LSCService::Configure(PyCallArgs& call, PyRep* channelInfo)
 {
     // Configure(channelID, **{displayName, motd, oldPassword, newPassword, memberless, languageRestriction, creator})
-    LSCChannel* channel = GetChannelByID(channelID->value());
+    //  channelID is a tuple for corp/alliance channels (ChatManager setting the MOTD)
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
     if (channel == nullptr)
         throw UserError("LSCCannotSetMOTD").AddFormatValue("msg", new PyString("That channel does not exist."));
 

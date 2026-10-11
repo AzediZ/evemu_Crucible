@@ -592,13 +592,23 @@ void LSCChannel::SetAccess(uint32 accessor, int32 mode, int64 untilWhen, const s
     if (itr != m_mods.end())
         originalMode = (itr->second.m_untilWhen ? itr->second.m_originalMode : itr->second.m_mode);
 
+    // ungag/unkick (NOTSPECIFIED with a past time) ends a timed entry: back to the mode it replaced
+    if ((mode == LSC::Mode::chUnspecified) and (itr != m_mods.end()) and (itr->second.m_untilWhen != 0)) {
+        mode = itr->second.m_originalMode;
+        untilWhen = 0;
+    }
+
     std::string admin;
     if (pAdmin != nullptr)
         admin = pAdmin->GetName();
 
     if (mode == LSC::Mode::chUnspecified) {
-        if (itr != m_mods.end())
+        if (accessor == 0) {
+            // a blocked default stays an entry, so it isn't taken for a channel from before access lists (made public at load)
+            m_mods[0] = LSCChannelMod(0, LSC::Mode::chUnspecified);
+        } else if (itr != m_mods.end()) {
             m_mods.erase(itr);
+        }
         untilWhen = 0;
         originalMode = LSC::Mode::chUnspecified;
     } else {
@@ -660,6 +670,8 @@ void LSCChannel::SendOnLSC(const std::set<uint32>& charIDs, const char* method, 
     for (auto cur : charIDs)
         mct.characters.insert(cur);
     PyTuple* answer = notify.Encode();
+    // NotifyOnLSC doesn't release its arguments
+    PyDecRef(notify.arguments);
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 
