@@ -48,6 +48,7 @@ class SystemManager;
 class WreckSE;
 class FieldSE;
 class ProbeSE;
+class InterdictionSphereSE;
 
 class StationSE;
 class StaticSystemEntity;
@@ -134,6 +135,7 @@ public:
     virtual WormholeSE*         GetWormholeSE()         { return nullptr; }
     virtual FieldSE*            GetFieldSE()            { return nullptr; }
     virtual ProbeSE*            GetProbeSE()            { return nullptr; }
+    virtual InterdictionSphereSE* GetInterdictionSphereSE() { return nullptr; }
     /* Object */
     virtual ObjectSystemEntity* GetObjectSE()           { return nullptr; }
     virtual AsteroidSE*         GetAsteroidSE()         { return nullptr; }
@@ -183,6 +185,7 @@ public:
     virtual bool                IsContainerSE()         { return false; }
     virtual bool                IsFieldSE()             { return false; }
     virtual bool                IsProbeSE()             { return false; }
+    virtual bool                IsInterdictionSphereSE() { return false; }
     /* Object */
     virtual bool                IsObjectEntity()        { return false; }
     virtual bool                IsSentrySE()            { return false; }

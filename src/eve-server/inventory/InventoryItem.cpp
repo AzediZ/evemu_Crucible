@@ -277,10 +277,11 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const 
             switch (type.groupID()) {
                 case EVEDB::invGroups::Scanner_Probe:
                 case EVEDB::invGroups::Survey_Probe:
-                case EVEDB::invGroups::Warp_Disruption_Probe:
                 case EVEDB::invGroups::Obsolete_Probes: {   // make error for these?
                     return ProbeItem::_LoadItem<ProbeItem>(itemID, type, data);
                 } break;
+                // warp disrupt probes are not scan probes.  in cargo they are plain charges; launched ones are temp items (InterdictionSphereSE)
+                case EVEDB::invGroups::Warp_Disruption_Probe:
                 default: {
                     // create generic item for other charge types
                     return InventoryItemRef(new InventoryItem(itemID, type, data ));
@@ -503,10 +504,10 @@ InventoryItemRef InventoryItem::Spawn(ItemData &data)
                 default: {
                     switch (iType->groupID()) {
                         case EVEDB::invGroups::Scanner_Probe:
-                        case EVEDB::invGroups::Survey_Probe:
-                        case EVEDB::invGroups::Warp_Disruption_Probe: {
+                        case EVEDB::invGroups::Survey_Probe: {
                             return ProbeItem::Spawn(data);
                         } break;
+                        // warp disrupt probes are plain charges until launched (as flagMissile temp items, above)
                         case EVEDB::invGroups::Obsolete_Probes: {
                             // make error for these
                             _log(ITEM__ERROR, "II::Spawn - Obsolete Probe group called.");

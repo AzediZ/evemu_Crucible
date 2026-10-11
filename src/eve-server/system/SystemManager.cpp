@@ -974,7 +974,12 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                     sLog.Warning("BuildEntity", "Called for Survey_Probe");
                 } break;
                 case EVEDB::invGroups::Warp_Disruption_Probe: {
-                    sLog.Warning("BuildEntity", "Called for Warp_Disruption_Probe");
+                    // launched spheres are temp items with a 2 minute life.  one in the db is stale
+                    InventoryItemRef iRef(sItemFactory.GetItemRef(entity.itemID));
+                    if (iRef.get() != nullptr)
+                        iRef->Delete();
+                    _log(ITEM__WARNING, "DynamicEntityFactory::BuildEntity() - deleted stale warp disrupt probe %s (%u)", entity.itemName.c_str(), entity.itemID);
+                    return nullptr;
                 } break;
             }
         } break;

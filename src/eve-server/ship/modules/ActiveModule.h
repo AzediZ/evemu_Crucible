@@ -68,6 +68,7 @@ public:
     void                LaunchProbe();
     void                LaunchMissile();
     void                LaunchSnowBall();
+    void                LaunchInterdictionSphere();
 
     /* new effects processing code and updates */
     void                ApplyEffect(int8 state, bool active=false);

@@ -60,7 +60,8 @@ SystemEntity* Ewar::FindDecloaker(SystemEntity* pSE)
     for (auto cur : entities) {
         if ((cur == nullptr) or (cur == pSE) or cur->IsDead())
             continue;
-        if (cur->IsMissileSE() or cur->IsProbeSE() or cur->IsFieldSE() or cur->IsBeltSE() or cur->IsAnomalySE())
+        if (cur->IsMissileSE() or cur->IsProbeSE() or cur->IsFieldSE() or cur->IsBeltSE() or cur->IsAnomalySE()
+        or  cur->IsInterdictionSphereSE())      // interdiction spheres don't decloak
             continue;
         // something warping through doesn't
         if ((cur->DestinyMgr() != nullptr) and cur->DestinyMgr()->IsWarping())

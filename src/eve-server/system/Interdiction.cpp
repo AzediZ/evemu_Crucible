@@ -143,6 +143,36 @@ UserError InterdictionMgr::MakeDisruptedError(const WarpDisruptField* pField, do
             .AddTypeName("object", pField->typeID);
 }
 
+InterdictionSphereSE::InterdictionSphereSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system,
+                                           const FactionData& data, uint32 lifeMS)
+: ItemSystemEntity(self, services, system),
+m_lifeTimer(lifeMS)
+{
+    m_warID = data.factionID;
+    m_allyID = data.allianceID;
+    m_corpID = data.corporationID;
+    m_ownerID = data.ownerID;
+}
+
+void InterdictionSphereSE::Process()
+{
+    if (m_lifeTimer.Check(false)) {
+        m_lifeTimer.Disable();
+        _log(DESTINY__WARP_TRACE, "InterdictionSphereSE::Process() - %s(%u) expired.", GetName(), GetID());
+        // removes the ball, the field (SystemManager::RemoveEntity) and the temp item
+        Delete();
+        delete this;
+        return;
+    }
+
+    SystemEntity::Process();
+}
+
+void InterdictionSphereSE::MakeDamageState(DoDestinyDamageState& into)
+{
+    SystemEntity::MakeDamageState(into);
+}
+
 bool InterdictionMgr::GetWarpPathDrop(const GPoint& from, const GPoint& target, const GPoint& exitPoint, double inset,
                                       GPoint& dropPoint, const WarpDisruptField*& pField) const
 {

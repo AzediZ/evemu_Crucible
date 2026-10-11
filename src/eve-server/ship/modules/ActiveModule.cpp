@@ -730,6 +730,11 @@ uint32 ActiveModule::DoCycle() {
         case EVEDB::invGroups::Scan_Probe_Launcher: {
             LaunchProbe();
         } break;
+        case EVEDB::invGroups::Interdiction_Sphere_Launcher: {
+            // one sphere per activation.  moduleReactivationDelay (118s) follows
+            LaunchInterdictionSphere();
+            m_repeat = 1;
+        } break;
         // these neither require nor consume charges
         case EVEDB::invGroups::Salvager:    //working
         case EVEDB::invGroups::Target_Painter:  // working
@@ -762,7 +767,6 @@ uint32 ActiveModule::DoCycle() {
         case EVEDB::invGroups::Cloaking_Device:
         case EVEDB::invGroups::Siege_Module:
         case EVEDB::invGroups::Super_Weapon:
-        case EVEDB::invGroups::Interdiction_Sphere_Launcher:    // launch a sphere (like missile and probe)
         case EVEDB::invGroups::Jump_Portal_Generator:
         case EVEDB::invGroups::Remote_ECM_Burst:
         case EVEDB::invGroups::Warp_Disrupt_Field_Generator:
@@ -1608,6 +1612,48 @@ void ActiveModule::LaunchProbe()
 
     // add data to StatisticMgr
     sStatMgr.Increment(Stat::probesLaunched);
+}
+
+void ActiveModule::LaunchInterdictionSphere()
+{
+    // must not throw here (called from the module cycle)
+    Client* pClient = m_shipRef->GetPilot();
+    if ((pClient == nullptr) or (m_chargeRef.get() == nullptr))
+        return;
+    SystemManager* pSystem = pClient->SystemMgr();
+    if (pSystem == nullptr)
+        return;
+
+    // the sphere is a temp item (flagMissile -> temp itemID, not saved).  it doesn't move, so it sits where the ship launched it
+    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position());
+    InventoryItemRef sRef = sItemFactory.SpawnItem(idata);
+    if (sRef.get() == nullptr) {
+        _log(ITEM__ERROR, "Unable to spawn item #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
+        pClient->SendErrorMsg("Your %s in %s experienced a loading error and was disabled.", m_chargeRef->name(), m_modRef->name());
+        AbortCycle();
+        return;
+    }
+
+    FactionData data = FactionData();
+        data.ownerID = pClient->GetCharacterID();
+        data.corporationID = pClient->GetCorporationID();
+        data.allianceID = pClient->GetAllianceID();
+        data.factionID = pClient->GetWarFactionID();
+
+    // explosionDelay is the sphere's life (120s)
+    uint32 lifeMS(m_chargeRef->type().HasAttribute(AttrExplosionDelay) ? m_chargeRef->type().GetAttribute(AttrExplosionDelay).get_uint32() : 120000);
+    InterdictionSphereSE* pSE = new InterdictionSphereSE(sRef, pSystem->GetServiceMgr(), pSystem, data, lifeMS);
+    pSE->SetPosition(m_shipRef->position());
+    pSystem->AddEntity(pSE, false);
+
+    double range(m_chargeRef->GetAttribute(AttrWarpScrambleRange).get_double());
+    pSystem->GetInterdictionMgr()->AddField(pSE, range, Interdiction::Source::Probe, sRef->typeID());
+
+    _log(MODULE__MESSAGE, "%s launched %s(%u) in %s: %.0fm warp disruption field for %us", m_shipRef->name(), pSE->GetName(), pSE->GetID(),
+            pSystem->GetName(), range, lifeMS / 1000);
+
+    // Reduce ammo charge by 1 unit:
+    ConsumeCharge();
 }
 
 void ActiveModule::LaunchSnowBall()

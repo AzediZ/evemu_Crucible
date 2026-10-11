@@ -14,8 +14,8 @@
 #define _EVE_SYSTEM_INTERDICTION_H_
 
 #include "python/classes/PyExceptions.h"
+#include "system/SystemEntity.h"
 
-class SystemEntity;
 class SystemManager;
 
 namespace Interdiction {
@@ -76,6 +76,28 @@ private:
     SystemManager* m_system;    // we do not own this
 
     std::map<uint32, WarpDisruptField> m_fields;
+};
+
+/* launched warp disrupt probe (interdiction sphere).  temp item, never saved, fixed life (explosionDelay, 2 minutes) */
+class InterdictionSphereSE
+: public ItemSystemEntity
+{
+public:
+    InterdictionSphereSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, uint32 lifeMS);
+    virtual ~InterdictionSphereSE()                     { /* Do nothing here */ }
+
+    /* class type pointer querys. */
+    virtual InterdictionSphereSE* GetInterdictionSphereSE() { return this; }
+    /* class type tests. */
+    virtual bool                IsSystemEntity()        { return false; }
+    virtual bool                IsInterdictionSphereSE() { return true; }
+
+    /* SystemEntity interface */
+    virtual void                Process();              // removes itself (and its field) when its life ends
+    virtual void                MakeDamageState(DoDestinyDamageState& into);    // the type has no shield/armor attributes
+
+private:
+    Timer m_lifeTimer;
 };
 
 #endif  // _EVE_SYSTEM_INTERDICTION_H_
