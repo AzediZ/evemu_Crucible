@@ -135,7 +135,8 @@ void DroneSE::Process() {
  *   Drone Sharpshooting        +5% optimal range
  *   Mining Drone Operation     +5% mining yield, Mining Drone Specialization +3%
  *   Repair Drone Operation     +5% repair amount
- *  ship bonuses to drones (Vexor, Ishtar...) are not applied.
+ *   Fighters, Fighter Bombers  +20% damage, fighters and fighter bombers
+ *  carrier hull bonuses to fighter damage are applied (see below); other ship bonuses to drones (Vexor, Ishtar...) are not.
  */
 void DroneSE::UpdateStats(Client* pController) {
     using namespace EvESkill;
@@ -246,6 +247,36 @@ void DroneSE::UpdateStats(Client* pController) {
     for (auto spec : { AmarrDroneSpecialization, MinmatarDroneSpecialization, GallenteDroneSpecialization, CaldariDroneSpecialization })
         if (needsSkill(spec))
             s.damageMultiplier *= (1.0 + 0.02 * level(spec));
+
+    /* fighters and fighter bombers.  each skill gives +20% damage per level (its damageMultiplierBonus).
+     *  hull bonuses come from the controlling ship's own effects:
+     *   carrierGallenteDroneOwnDmg2 / carrierGallenteBomberDroneOwnDmg2   carrierGallenteBonus2 (5%) per Gallente Carrier level (Thanatos, Nyx)
+     *   shipFighterDamagePirateSupercarrier / shipFighterBomberDamagePirateSupercarrier   shipBonusPirateFaction (100%), flat (Revenant)
+     */
+    bool fighter(needsSkill(Fighters)), bomber(needsSkill(FighterBombers));
+    if (fighter)
+        s.damageMultiplier *= (1.0 + 0.20 * level(Fighters));
+    if (bomber)
+        s.damageMultiplier *= (1.0 + 0.20 * level(FighterBombers));
+    if ((fighter or bomber) and (pController != nullptr) and (pController->GetShip().get() != nullptr)) {
+        const ItemType& hull(pController->GetShip()->type());
+        auto hullAttr = [&](uint16 attrID) -> double {
+            return (hull.HasAttribute(attrID) ? hull.GetAttribute(attrID).get_double() : 0.0);
+        };
+        std::vector<TypeEffects> hullFx;
+        sFxDataMgr.GetTypeEffect(hull.id(), hullFx);
+        for (auto cur : hullFx) {
+            double bonus(0.0);
+            switch (cur.effectID) {
+                case 2332:  /* carrierGallenteDroneOwnDmg2 */                   if (fighter) bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
+                case 4720:  /* carrierGallenteBomberDroneOwnDmg2 */             if (bomber)  bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
+                case 4736:  /* shipFighterDamagePirateSupercarrier */           if (fighter) bonus = hullAttr(AttrShipBonusPirateFaction); break;
+                case 4735:  /* shipFighterBomberDamagePirateSupercarrier */     if (bomber)  bonus = hullAttr(AttrShipBonusPirateFaction); break;
+            }
+            if (bonus != 0.0)
+                s.damageMultiplier *= (1.0 + bonus / 100.0);
+        }
+    }
 
     s.miningAmount = base(AttrMiningAmount, 0.0) * (1.0 + 0.20 * level(DroneInterfacing)) * (1.0 + 0.05 * level(MiningDroneOperation));
     if (needsSkill(MiningDroneSpecialization))
