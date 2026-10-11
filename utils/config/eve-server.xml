@@ -155,8 +155,8 @@ boolean can use either 0/1 OR true/false.
     </character>
 
     <npc>
-        <IdleWander>true</IdleWander><!-- bool  npc will wander when idle   must be set to 'true' for WarpOut (below) to work -->
-        <WarpOut>600</WarpOut><!-- time npc wanders around bubble before leaving, in sec (5 min default) -->
+        <IdleWander>true</IdleWander><!-- bool  idle belt npcs loosely orbit something in their bubble -->
+        <WarpOut>600</WarpOut><!-- sec.  an idle belt/gate spawn group warps together to another belt without a spawn after this long (not while chaining, not while scrambled).  0 = never.  10 min default -->
         <!-- Spawns are implemented -->
         <RoamingSpawns>true</RoamingSpawns><!-- bool -->
         <StaticSpawns>false</StaticSpawns><!-- bool -->
@@ -224,7 +224,7 @@ boolean can use either 0/1 OR true/false.
         <BeltRespawn>6</BeltRespawn><!-- hours  (6h default) -->
         <roidRadiusMultiplier>1.0</roidRadiusMultiplier><!-- float  used to change belt radius and roid size -->
         <WormHoleEnabled>true</WormHoleEnabled><!-- bool -->
-        <CiviliansEnabled>false</CiviliansEnabled><!-- bool -->
+        <CiviliansEnabled>false</CiviliansEnabled><!-- bool  no effect: Crucible had no ambient civilian traffic, so the civilian manager does nothing -->
         <BumpEnabled>false</BumpEnabled><!-- bool.  makes player ships solid, so they bump into each other, NPCs and stations -->
     </cosmic>
 

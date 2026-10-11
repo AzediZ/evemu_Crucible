@@ -25,16 +25,12 @@
     AI Version: 0.57
 */
 
-/** @todo  ai update ideas
- *   bubble call *SomeFunction* to tell ai of new ship arriving in bubble
- *   method to use npc's preferred sig radius for targets
- *   finish flee and signal action methods (and determine who can use them and when)
- *      - this should take system sov, npc anomalies, destruction speed, and pirate faction
- *   add methods to check target/targeter warping out and chance of npc following (and possibly calling backup)
- *
- *  have data...needs coding...
- *   chase duration/distance timers
- *   ewar shit, including point/tackle
+/*  Crucible-era npc ai:
+ *   regular rats: nearest ship in sight, keep the primary until it's gone, group aggro, chase speed timers,
+ *    now and then a drone that hurt them, ewar from their type (npc/NPCEwar.h), idle groups warp between belts.
+ *   advanced ai (types with AI_ShouldUseTargetSwitching, the sleepers): threat/signature scoring incl. drones,
+ *    timed target switching, ewar on a secondary target, remote repair of friends, evasive orbit, leash.
+ *   rats neither flee nor call for help (Fleeing/Signaling states are unused).
  */
 
 #include "eve-server.h"
