@@ -62,6 +62,7 @@
 #include "system/SolarSystem.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "system/WarpInPoint.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
@@ -93,7 +94,8 @@ m_activityTime(0),
 m_activeRatSpawns(0),
 m_activeGateSpawns(0),
 m_activeRoidSpawns(0),
-m_secValue(1.1f)
+m_secValue(1.1f),
+m_tutorialSiteID(0)
 {
     m_minutes = 0;
 
@@ -1868,6 +1870,56 @@ CargoContainerRef SystemManager::GetContainerFromInventory(uint32 contID)
 StationItemRef SystemManager::GetStationFromInventory(uint32 stationID)
 {
     return StationItemRef::StaticCast( m_solarSystemRef->GetMyInventory()->GetByID( stationID ) );
+}
+
+static const uint16 tutorialSiteTypeID = 10067;     // Dust Cloud (group Cloud, which the tutorial looks for)
+
+SystemEntity* SystemManager::GetTutorialSite()
+{
+    if (m_tutorialSiteID != 0) {
+        SystemEntity* pSE(GetSE(m_tutorialSiteID));
+        if (pSE != nullptr)
+            return pSE;
+        m_tutorialSiteID = 0;
+    }
+    // made before (it is saved with the system's other dynamic items)
+    for (auto cur : m_entities) {
+        if ((cur.second == nullptr) or (cur.second->GetTypeID() != tutorialSiteTypeID))
+            continue;
+        if (cur.second->GetSelf()->itemName() == "Tutorial Site") {
+            m_tutorialSiteID = cur.first;
+            return cur.second;
+        }
+    }
+
+    // 50km from the warp-in point of the planet nearest the sun
+    if (m_planetMap.empty())
+        return nullptr;
+    SystemEntity* pPlanet(GetPlanet(GetClosestPlanetID(NULL_ORIGIN)));
+    if (pPlanet == nullptr)
+        return nullptr;
+    GPoint pos(WarpIn::Planet(pPlanet->GetID(), pPlanet->GetPosition(), pPlanet->GetRadius()));
+    pos.MakeRandomPointOnSphere(50000);
+
+    ItemData idata(tutorialSiteTypeID, 1/*EVE System*/, m_data.systemID, flagNone, "Tutorial Site", pos);
+    InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
+    if (iRef.get() == nullptr)
+        return nullptr;
+    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+        entity.itemID = iRef->itemID();
+        entity.itemName = iRef->itemName();
+        entity.typeID = iRef->typeID();
+        entity.groupID = iRef->groupID();
+        entity.categoryID = iRef->categoryID();
+        entity.ownerID = 1;
+        entity.position = pos;
+    if (!BuildDynamicEntity(entity)) {
+        iRef->Delete();
+        return nullptr;
+    }
+    m_tutorialSiteID = iRef->itemID();
+    _log(SERVICE__MESSAGE, "Tutorial site %u made in %s", m_tutorialSiteID, GetName());
+    return GetSE(m_tutorialSiteID);
 }
 
 SystemEntity* SystemManager::GetPlanet(uint32 planetID)

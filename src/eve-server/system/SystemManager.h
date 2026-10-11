@@ -200,6 +200,9 @@ public:
 
     SystemEntity* GetPlanet(uint32 planetID);
 
+    // the tutorials' warp-to site in a rookie system: a dust cloud near the first planet.  made on first use, kept in the db
+    SystemEntity* GetTutorialSite();
+
 
 protected:
     /** @todo  this needs more work */
@@ -281,6 +284,8 @@ private:
     };
     std::map<uint32, SelfDestructData> m_selfDestructs;     // shipID -> data
     std::map<uint32, int64> m_selfDestructRetry;            // charID -> earliest next attempt after an abort (filetime)
+
+    uint32 m_tutorialSiteID;                            // GetTutorialSite()
     void ProcessSelfDestructs();
     void SendSelfDestructToBubble(SystemEntity* pShipSE, uint32 charID, const char* msgKey, PyDict* args);
 

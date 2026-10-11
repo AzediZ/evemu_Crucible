@@ -45,10 +45,12 @@
 #include "system/BookmarkService.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
+#include "system/WarpInPoint.h"
 #include "system/Interdiction.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 
 BeyonceService::BeyonceService(EVEServiceManager& mgr)
@@ -441,17 +443,18 @@ bool BeyonceBound::ResolveWarpTarget(Client* pClient, const std::string& type, P
         pSE = pTarget->GetShipSE();
         toID = pSE->GetID();
     }
-    // the systems below are not implemented yet.  hold on coding till systems are working and we know what needs to be done here
-    // more info can be found in client::menuSvc.py
     else if (type == "epinstance") {
-        // epinstance, instanceid
-        //stringArg
-        pClient->SendErrorMsg("WarpToInstance is not implemented at this time.");
-        return false;
+        // escalation sites (journal, locationInfoSvc, transmissionMgr): the instance's warp-in point
+        if (!pSystem->GetDungMgr()->GetInstanceWarpIn(toID, pClient->GetCharacterID(), point))
+            throw CustomError ("That site is not in this system.");
     } else if (type == "tutorial") {
-        // tutorial, none
-        pClient->SendErrorMsg("WarpToTutorial is not implemented at this time.");
-        return false;
+        // tutorialsvc.WarpToBallpark:  the tutorial's site (a dust cloud, which is what the tutorial looks for) in a rookie system
+        if (!WarpIn::IsNewbieSystem(pSystem->GetID()))
+            throw UserError ("TutYouAreNotInANewbieSystem");
+        pSE = pSystem->GetTutorialSite();
+        if (pSE == nullptr)
+            throw CustomError ("The tutorial site could not be found.");
+        toID = pSE->GetID();
     } else {
         sLog.Error( "BeyonceService::Handle_WarpToStuff()", "Unexpected type value: '%s'.", type.c_str() );
         return false;
@@ -468,110 +471,31 @@ bool BeyonceBound::ResolveWarpTarget(Client* pClient, const std::string& type, P
 
 GPoint BeyonceBound::GetWarpInPoint(SystemEntity* pSE, uint32 toID, const GPoint& point, const GPoint& shipPos, int32& distance)
 {
-    GPoint warpToPoint(point);
-        /* formulas for warpin points for all objects
-         * x,y,z = object coords.  r = object radius
-         *
-         * for objects <90kr
-         * dest = x,y,z + (vector - r)
-         *
-         * for objects >90kr
-         * (x + (r + 5000000) * cos(r), y + 1.3r -7500, z - (r + 5000000) * sin(r))
-         *
-         * for planets, its a bit different
-         * (x + d*sin(t), y + 0.5*r*sin(j), z - d*cos(t))
-         * where:
-         * j = rand(seed=planetID).rand(0,1) - 1.0/3.0
-         * d = r*(s+1) +1000000
-         * t = sin^-1(x/abs(x) * z / sqrt(x^2 + z^2) +j)
-         * s = 20*((1/40)*(10*log10(r/10^6)-39)^20) +0.5
-         * s = max(0.5, min(s, 10.5))
-         */
-        /** @todo  that may not be right....
-         * this is straight from client
-         *
-         * def GetPlanetWarpInPoint(planetID, locVec, r):
-         *    dx = float(locVec[0])
-         *    dz = float(locVec[2])
-         *    f = float(dz) / float(math.sqrt(dx ** 2 + dz ** 2))
-         *    if dz > 0 and dx > 0 or dz < 0 and dx > 0:
-         *        f *= -1.0
-         *    theta = math.asin(f)
-         *    myRandom = random.Random(planetID)
-         *    rr = (myRandom.random() - 1.0) / 3.0
-         *    theta += rr
-         *    offset = 1000000
-         *    FACTOR = 20.0
-         *    dd = math.pow((FACTOR - 5.0 * math.log10(r / 1000000) - 0.5) / FACTOR, FACTOR) * FACTOR
-         *    dd = min(10.0, max(0.0, dd))
-         *    dd += 0.5
-         *    offset += r * dd
-         *    d = r + offset
-         *    x = 1000000
-         *    z = 0
-         *    x = math.sin(theta) * d
-         *    z = math.cos(theta) * d
-         *    y = r * math.sin(rr) * 0.5
-         *    return util.KeyVal(x=x, y=y, z=z)
-         */
-    if (pSE != nullptr) {
-        double radius = pSE->GetRadius();
-        // this will need adjustment for warping to bookmarks
-        warpToPoint = pSE->GetPosition();
-        if (pSE->IsPlanetSE()) {
-#if _WIN32
-            srand(toID);  //this is the only place random() is used....other random functions use rand() as it's non-repeatable.
-            int rando = rand();
-#else
-            srandom(toID);  //this is the only place random() is used....other random functions use rand() as it's non-repeatable.
-            int rando = random();
-#endif
-            double j = (((rando / RAND_MAX) - 1.0f) / 3.0f);
-            double s = 20 * std::pow(0.025f * (10 * std::log10(radius / 1000000) - 39), 20) + 0.5f;
-            s = EvE::max(0.5f, EvE::min(s, 10.5f));
-            double t = std::asin((warpToPoint.x / std::fabs(warpToPoint.x)) * (warpToPoint.z / std::sqrt(std::pow(warpToPoint.x, 2) + std::pow(warpToPoint.z, 2)))) + j;
-            uint32 d = radius * (s + 1) + 1000000;
-            warpToPoint.x += (d * std::sin(t));
-            warpToPoint.y += (0.5f * radius * std::sin(j));
-            warpToPoint.z -= (d * std::cos(t));
-        } else if (pSE->IsStationSE()) {
-            // this makes ship warp to station dock elevation (y), instead of warping to stations "center point" position (where icon is)
-            warpToPoint.y = stDataMgr.GetDockPosY(pSE->GetID());
-        } else if (pSE->IsCOSE()) {
-            distance += (radius / 2);
-        } else if (pSE->IsGateSE()) {
-            distance += (radius / 3);  // fudge the distance a bit for gates... its' a lil close by default
-        } else if (pSE->IsMoonSE()) {
-            if (pSE->GetMoonSE()->HasTower()) {
-                // if moon has a tower, make warpin point 20km inside edge of tower's bubble.
-                warpToPoint = pSE->GetMoonSE()->GetMyTower()->GetPosition();
-                GVector vectorFromOrigin(shipPos, warpToPoint);
-                vectorFromOrigin.normalize();   //we now have a direction
-                GPoint stopPoint = (vectorFromOrigin * (BUBBLE_RADIUS_METERS - 20000));  // 20km inside bubble.
-                warpToPoint -= stopPoint;
-                distance = 0;
-            } else {
-                // hack for warping to moons
-                // this puts ship at Az: 0.785332, Ele: 0.615505, angle: 1.5708
-                warpToPoint -= (radius * 1.25f);
-            }
-        } else if (pSE->IsWormholeSE()) {
-                distance += 20000;  // add 20k for wh
-        } else if (radius > 90000) {
-            // this doesnt work for moons
-            warpToPoint.x += ((radius + 500000) * std::cos(radius));
-            warpToPoint.y += ((radius * 1.3f) - 7500);
-            warpToPoint.z -= ((radius + 500000) * std::sin(radius));
-        }
-        if (radius < 90000) {
-            // this will include stations (max station radius 60km) and ships (warp to fleet member)
-            GVector vectorFromOrigin(shipPos, warpToPoint);
-            vectorFromOrigin.normalize();   //we now have a direction
-            GPoint stopPoint = (vectorFromOrigin * radius);
-            warpToPoint -= stopPoint;
-        }
+    // a bookmark (or other fixed point)
+    if (pSE == nullptr)
+        return point;
+
+    double radius(pSE->GetRadius());
+    // a moon with a tower: 20km inside the edge of the tower's bubble (server convenience; the tower is the destination)
+    if (pSE->IsMoonSE() and pSE->GetMoonSE()->HasTower()) {
+        GPoint warpToPoint(pSE->GetMoonSE()->GetMyTower()->GetPosition());
+        GVector vectorFromOrigin(shipPos, warpToPoint);
+        vectorFromOrigin.normalize();   //we now have a direction
+        GPoint stopPoint = (vectorFromOrigin * (BUBBLE_RADIUS_METERS - 20000));  // 20km inside bubble.
+        warpToPoint -= stopPoint;
+        distance = 0;
+        return warpToPoint;
     }
-    return warpToPoint;
+
+    if (pSE->IsCOSE()) {
+        distance += (radius / 2);
+    } else if (pSE->IsGateSE()) {
+        distance += (radius / 3);  // fudge the distance a bit for gates... its' a lil close by default
+    } else if (pSE->IsWormholeSE()) {
+        distance += 20000;  // add 20k for wh
+    }
+    // planets, large celestials and the edge of everything else (WarpInPoint.h)
+    return WarpIn::ForEntity(pSE, shipPos);
 }
 
 void BeyonceBound::GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed)

@@ -83,6 +83,9 @@ public:
 
     bool MakeDungeon(CosmicSignature& sig, uint32 dungeonID = 0);
 
+    // warp-in point of a dungeon instance (escalation sites, CmdWarpToStuff 'epinstance').  false if it isn't here or isn't charID's
+    bool GetInstanceWarpIn(uint32 instanceID, uint32 charID, GPoint& into);
+
 protected:
     ManagerDB m_db;
 

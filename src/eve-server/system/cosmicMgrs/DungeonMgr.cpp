@@ -273,6 +273,12 @@ bool DungeonMgr::Init(AnomalyMgr* anomMgr, SpawnMgr* spawnMgr)
     return false;
 }
 
+bool DungeonMgr::GetInstanceWarpIn(uint32 instanceID, uint32 charID, GPoint& into)
+{
+    /** @todo F13: per-character dungeon instances (escalations).  no instance exists before then */
+    return false;
+}
+
 void DungeonMgr::Process()
 {
     // TODO: process and update any active dungeons in the system
