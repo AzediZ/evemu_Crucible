@@ -42,6 +42,7 @@ NPC::NPC(InventoryItemRef self, EVEServiceManager& services, SystemManager* syst
 m_spawnMgr(spawnMgr),
 m_AI(new NPCAIMgr(this)),
 m_orbitingID(0),
+m_spawnGroupID(0),
 m_lawTarget(0),
 m_lawRole(Law::None)
 {

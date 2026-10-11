@@ -69,17 +69,23 @@ public:
 
     // called from SystemEntity::ApplyDamage() when we take damage and survive
     void OnDamaged(SystemEntity* pSE, float amount);
+    // for ewar modules (and neuts) used on us by players
+    void OnEwarBy(SystemEntity* pSE);
+    // a member of our spawn group was attacked by pSE.  we join in if we're idle
+    void Aggro(SystemEntity* pSE);
     // called from NPC::Killed()
     void OnKilled();
 
     // public methods to enable calls from other classes (namely, TurretFormulas.cpp)
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
     bool IsFighting();
-    uint16 GetOptimalRange()                            { return m_optimalRange; }
+    uint32 GetOptimalRange()                            { return m_optimalRange; }
     uint16 GetSigRes()                                  { return m_sigResolution; }
     uint32 GetFalloff()                                 { return m_falloff; }
     uint32 GetAttackRange()                             { return m_maxAttackRange; }
     double GetTrackingSpeed()                           { return m_trackingSpeed; }
+    uint32 GetPrimaryID()                               { return m_primaryID; }
+    float GetThreat(uint32 entityID);
 
     // npcAI methods
     void DisableWarpOutTimer()                          { m_warpOutTimer.Disable(); }
@@ -95,15 +101,37 @@ protected:
     void SetWander();
     void SetChasing(SystemEntity* pTargSE);
     void SetEngaged(SystemEntity* pTargSE);
-    void SetFleeing(SystemEntity* pTargSE);
     void ClearTarget(SystemEntity* pTargSE);
     void SetFollowing(SystemEntity* pTargSE);
-    void SetSignaling(SystemEntity* pTargSE);
     void AttackTarget(SystemEntity* pTargSE);
     void CheckDistance(SystemEntity* pTargSE);
 
     float GetTargetTime();
     void ProcessRepairs();
+
+    /* target selection */
+    // a ship we may pick on our own (players' ships in sight, pod rules).  drones only for advanced ai
+    bool IsCandidate(SystemEntity* pSE, bool drones);
+    // something that attacked us (or our group) that we can go after
+    bool CanAggro(SystemEntity* pSE);
+    // best candidate in the bubble: nearest for regular rats
+    SystemEntity* ChooseTarget();
+    // whom to shoot back at: a drone's pilot when we can see him, else whoever it was
+    SystemEntity* AggroTarget(SystemEntity* pSE);
+    // the primary (weapons) target among our locks.  picks a new one if it's gone
+    SystemEntity* GetPrimary();
+    // next primary from our locks: most threat, then nearest
+    SystemEntity* PickPrimary(SystemEntity* pExclude);
+    void SetPrimary(SystemEntity* pSE);
+    void AddThreat(SystemEntity* pSE, float amount);
+    void AlertGroup(SystemEntity* pAggressor);
+    void ProcessDroneAggro();
+
+    /* chase speed: stall (cruise speed) up to entityChaseMaxDelay, then chase speed for up to entityChaseMaxDuration */
+    void StartChaseDelay();
+    void StartChaseBoost();
+    void ProcessChase();
+    uint16 CruiseSpeed()                                { return (m_orbitSpeed > 0 ? m_orbitSpeed : m_maxSpeed); }
 
     int8 m_state;
 
@@ -115,6 +143,7 @@ private:
     bool m_useSigRadius     :1;
     bool m_useTargSwitching :1;
     bool m_useSecondTarget  :1;
+    bool m_chaseFast        :1;
 
     float m_switchTargChance;   //fuzzy logic
     uint16 m_preferedSigRadius;
@@ -129,10 +158,13 @@ private:
     uint16 m_sigResolution;
     uint16 m_orbitSpeed;
     uint16 m_targetRange;   // max targeting range  default: m_maxAttackRange (unused)
-    uint16 m_optimalRange;
-    uint16 m_boostRange;    // distance for Speed Boost activation   default:2500
+    uint32 m_optimalRange;
+    uint32 m_boostRange;    // distance for Speed Boost activation   default:2500
     uint32 m_armorRepairDuration;
     uint32 m_shieldBoosterDuration;
+    uint32 m_chaseMaxDelay;
+    uint32 m_chaseMaxDuration;
+    uint32 m_assistRange;   // npcAssistanceRange.  how far group aggro (and remote repair) reaches.  0 = sight range
 
     uint32 m_sigRadius;
     uint32 m_falloff;// distance past maximum range at which accuracy has fallen by half
@@ -140,11 +172,20 @@ private:
     uint32 m_sightRange;
     uint32 m_maxAttackRange;// max firing range   default:15000
 
+    uint32 m_primaryID;     // weapons target
+    uint32 m_pendingAggroID;// someone who attacked us (or our group) while we were idle.  handled in Process()
+
     float m_armorRepairDelayChance;
     float m_shieldBoosterDelayChance;
+    float m_chaseDelayChance;
+    float m_chaseDurationChance;
 
     double m_trackingSpeed;
     float m_damageMultiplier;
+
+    GPoint m_lastGoto;      // where we're chasing to
+
+    std::map<uint32, float> m_threat;   // entityID -> damage (and ewar) done to us
 
     NPC* m_npc;
     NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (or we're law enforcement)
@@ -160,6 +201,9 @@ private:
     Timer m_armorRepairTimer;
     Timer m_beginFindTarget;
     Timer m_warpOutTimer;
+    Timer m_chaseDelayTimer;
+    Timer m_chaseTimer;
+    Timer m_droneAggroTimer;
 };
 
 /* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */

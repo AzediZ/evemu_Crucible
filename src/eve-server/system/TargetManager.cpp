@@ -550,6 +550,13 @@ SystemEntity* TargetManager::GetFirstTarget(bool need_locked/*false*/) {
     return nullptr;
 }
 
+void TargetManager::GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked/*false*/) const
+{
+    for (auto cur : m_targets)
+        if (!need_locked or (cur.second->state == TargMgr::State::Locked))
+            into.push_back(cur.first);
+}
+
 PyList* TargetManager::GetTargets() const {
     PyList* result = new PyList();
     if (m_targets.empty())

@@ -138,6 +138,8 @@ public:
     /* NPC AI Methods */
     bool                IsTargetedBy(SystemEntity *pSE);
     SystemEntity*       GetFirstTarget(bool need_locked=false);
+    // everything we target (locking or locked), or only completed locks
+    void                GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked=false) const;
     SystemEntity*       GetTarget(uint32 targetID, bool need_locked=true) const;
 
     // called by npc

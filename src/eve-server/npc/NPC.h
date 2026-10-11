@@ -81,6 +81,9 @@ public:
     void UseShieldRecharge();
     void Orbit(SystemEntity* who);
     void ForceSetSpawner(SpawnMgr* spawnMgr)            { m_spawnMgr = spawnMgr; }
+    /* one wave or group of a dungeon/mission spawn.  group aggro stays inside it.  0 = the whole spawn in the bubble */
+    void SetSpawnGroupID(uint32 groupID)                { m_spawnGroupID = groupID; }
+    uint32 GetSpawnGroupID()                            { return m_spawnGroupID; }
 
     /* law enforcement (see npc/LawEnforcement.h) */
     void SetLawTarget(uint32 shipID, uint8 role)        { m_lawTarget = shipID; m_lawRole = role; }
@@ -106,6 +109,7 @@ protected:
 
 private:
     uint32 m_orbitingID;
+    uint32 m_spawnGroupID;
     uint32 m_lawTarget;
     uint8 m_lawRole;
 

@@ -12,6 +12,8 @@
 #include "exploration/Probes.h"
 #include "exploration/Scan.h"
 #include "inventory/AttributeEnum.h"
+#include "npc/NPC.h"
+#include "npc/NPCAI.h"
 #include "ship/Missile.h"
 #include "ship/modules/ActiveModule.h"
 #include "ship/modules/EwarModule.h"
@@ -658,6 +660,10 @@ uint32 ActiveModule::DoCycle() {
 
         m_shipRef->SetShipCapacitorLevel(newCap / shipTotalCapacitor);
     }
+
+    // npcs remember who uses ewar (and neuts) on them, like damage
+    if ((m_targetSE != nullptr) and m_targetSE->IsNPCSE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
+        m_targetSE->GetNPCSE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE());
 
     // not sure if this is entirely accurate...wip
     switch (m_modRef->groupID()) {
