@@ -2118,7 +2118,7 @@ void DestinyManager::SendJumpOutEffect(std::string JumpEffect, uint32 shipID) {
     OnSpecialFX14 effect;
         effect.entityID = mySE->GetID();
         effect.targetID = new PyInt(shipID);
-        effect.guid = "effects.JumpDriveOut";   /* JumpDriveInBO */
+        effect.guid = JumpEffect;   // effects.JumpDriveOut / effects.JumpDriveOutBO
         effect.isOffensive = 0;
         effect.start = 1;
         effect.active = 1;
@@ -2135,7 +2135,7 @@ void DestinyManager::SendJumpInEffect(std::string JumpEffect) {
     m_velocity = GVector(NULL_ORIGIN);
     std::vector<PyTuple*> updates;
     OnSpecialFX14 effect;
-        effect.guid = "effects.JumpDriveIn";
+        effect.guid = JumpEffect;   // effects.JumpDriveIn / effects.JumpDriveInBO
         effect.entityID = mySE->GetID();
         effect.isOffensive = 0;
         effect.start = 1;

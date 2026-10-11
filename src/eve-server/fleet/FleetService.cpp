@@ -56,6 +56,7 @@ void FleetService::Initialize(EVEServiceManager& svc)
     m_fleetAdvertMap.clear();
     m_reconnect.clear();
     m_watchlists.clear();
+    m_beacons.clear();
 
     //  these will have to be incremented individually, then stored according to fleet
     m_fleetID = FLEET_ID;  //950000000
@@ -1233,6 +1234,13 @@ void FleetService::DeleteFleet(uint32 fleetID)
     m_fleetMembers.erase(fleetID);
     m_joinReq.erase(fleetID);
 
+    for (auto itr = m_beacons.begin(); itr != m_beacons.end(); )
+        if (itr->second.fleetID == fleetID) {
+            itr = m_beacons.erase(itr);
+        } else {
+            ++itr;
+        }
+
     for (auto itr = m_inviteData.begin(); itr != m_inviteData.end(); )
         if (itr->second.fleetID == fleetID) {
             itr = m_inviteData.erase(itr);
@@ -1447,8 +1455,11 @@ void FleetService::LeaveFleet(Client* pClient)
 
     RemoveMember(pClient);
 
-    // the leaver's watch list goes, and nobody watches the leaver any more
+    // the leaver's cyno can no longer be used by the fleet (the field stays lit until its cycle ends)
     uint32 charID(pChar->itemID());
+    RemoveBeacon(charID);
+
+    // the leaver's watch list goes, and nobody watches the leaver any more
     m_watchlists.erase(charID);
     for (auto itr = m_watchlists.begin(); itr != m_watchlists.end(); ) {
         itr->second.erase(charID);
@@ -1968,6 +1979,66 @@ bool FleetService::Reconnect(Client* pClient, uint32 fleetID)
     if ((data.job & Fleet::Job::Creator) and (fItr->second.creator == nullptr))
         SetBoss(fleetID, pClient);
     return true;
+}
+
+// OnJumpBeaconChange(charID, solarsystemID, beaconID, active)  (fleetSvc.activeBeacon)
+static void SendBeaconChange(Client* pClient, const BeaconData& data, bool active)
+{
+    if (pClient == nullptr)
+        return;
+    PyTuple* tuple = new PyTuple(4);
+        tuple->SetItem(0, new PyInt(data.charID));
+        tuple->SetItem(1, new PyInt(data.systemID));
+        tuple->SetItem(2, new PyInt(data.beaconID));
+        tuple->SetItem(3, new PyBool(active));
+    pClient->SendNotification("OnJumpBeaconChange", "clientID", &tuple);
+}
+
+void FleetService::AddBeacon(const BeaconData& data)
+{
+    RemoveBeacon(data.charID);
+    if (m_fleetDataMap.find(data.fleetID) == m_fleetDataMap.end())
+        return;
+    m_beacons[data.charID] = data;
+
+    _log(FLEET__TRACE, "FleetService::AddBeacon() - char %u lit beacon %u in %u for fleet %u", data.charID, data.beaconID, data.systemID, data.fleetID);
+    for (auto pClient : GetFleetClients(data.fleetID))
+        if (pClient != m_departing)
+            SendBeaconChange(pClient, data, true);
+}
+
+void FleetService::RemoveBeacon(uint32 charID, uint32 beaconID/*0*/)
+{
+    std::map<uint32, BeaconData>::iterator itr = m_beacons.find(charID);
+    if (itr == m_beacons.end())
+        return;
+    if ((beaconID != 0) and (itr->second.beaconID != beaconID))
+        return;
+    BeaconData data(itr->second);
+    m_beacons.erase(itr);
+
+    _log(FLEET__TRACE, "FleetService::RemoveBeacon() - beacon %u of char %u removed from fleet %u", data.beaconID, charID, data.fleetID);
+    for (auto pClient : GetFleetClients(data.fleetID))
+        if (pClient != m_departing)
+            SendBeaconChange(pClient, data, false);
+}
+
+bool FleetService::GetBeacon(uint32 charID, BeaconData& data)
+{
+    std::map<uint32, BeaconData>::iterator itr = m_beacons.find(charID);
+    if (itr == m_beacons.end())
+        return false;
+    data = itr->second;
+    return true;
+}
+
+void FleetService::SendJumpState(Client* pClient)
+{
+    if ((pClient == nullptr) or !pClient->InFleet())
+        return;
+    for (auto& cur : m_beacons)
+        if (cur.second.fleetID == pClient->GetFleetID())
+            SendBeaconChange(pClient, cur.second, true);
 }
 
 bool FleetService::CanSeeAdvert(uint32 fleetID, Client* pViewer)

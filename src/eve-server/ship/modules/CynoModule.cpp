@@ -6,91 +6,141 @@
   */
 
 #include "ship/modules/CynoModule.h"
+#include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
 #include "fleet/FleetService.h"
 #include "pos/Tower.h"
 #include "system/sov/SovereigntyDataMgr.h"
 
+CynoFieldSE::CynoFieldSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, uint32 charID, uint32 lifeMS)
+: ItemSystemEntity(self, services, system),
+m_charID(charID),
+m_lifeTimer(lifeMS)
+{
+    m_warID = data.factionID;
+    m_allyID = data.allianceID;
+    m_corpID = data.corporationID;
+    m_ownerID = data.ownerID;
+    m_lifeTimer.Start(lifeMS);
+}
+
+CynoFieldSE::~CynoFieldSE()
+{
+    // the fleet can't jump to a field that's gone (no-op when the generator already removed it)
+    sFltSvc.RemoveBeacon(m_charID, GetID());
+}
+
+void CynoFieldSE::Process()
+{
+    if (m_lifeTimer.Check(false)) {
+        m_lifeTimer.Disable();
+        _log(MODULE__DEBUG, "CynoFieldSE::Process() - %s(%u) expired.", GetName(), GetID());
+        sFltSvc.RemoveBeacon(m_charID, GetID());
+        // removes the ball and the temp item
+        Delete();
+        delete this;
+        return;
+    }
+
+    SystemEntity::Process();
+}
+
+void CynoFieldSE::MakeDamageState(DoDestinyDamageState& into)
+{
+    SystemEntity::MakeDamageState(into);
+}
+
 CynoModule::CynoModule(ModuleItemRef mRef, ShipItemRef sRef)
 : ActiveModule(mRef, sRef),
-pClient(nullptr),
-pShipSE(nullptr),
-cSE(nullptr),
-m_firstRun(true),
-m_shipVelocity(0.0f)
+m_fieldID(0),
+m_systemID(0),
+m_charID(0),
+m_firstRun(true)
 {
-    if (!m_shipRef->HasPilot())
-        return;
-
-    pClient = m_shipRef->GetPilot();
-
-    // increase scan speed by level of survey skill
-    float cycleTime = GetAttribute(AttrDuration).get_float();
-    cycleTime *= (1 + (0.03f * (pClient->GetChar()->GetSkillLevel(EvESkill::Survey, true))));
-    SetAttribute(AttrDuration, cycleTime);
+    // Cynosural Field Theory reduces the liquid ozone per cycle through dogma (consumptionQuantity).  nothing to do here
 }
 
 void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
 {
-    pShipSE = pClient->GetShipSE();
+    EvilNumber maxVelocity(m_shipRef->GetAttribute(AttrMaxVelocity));
 
     m_firstRun = true;
     ActiveModule::Activate(effectID, targetID, repeat);
 
     // check to see if Activate() was denied.
-    if (m_Stop)
+    if ((m_ModuleState != Module::State::Activated) or !m_shipRef->HasPilot())
         return;
 
+    Client* pClient(m_shipRef->GetPilot());
+    ShipSE* pShipSE(pClient->GetShipSE());
     _log(MODULE__DEBUG, "Cynosural field generator activated by %s in %s", pClient->GetName(), m_sysMgr->GetName());
 
-    // hack to disable ship movement here
-    m_shipVelocity = pShipSE->DestinyMgr()->GetMaxVelocity();
+    /* the field holds the ship in place (speedFactor -100, siegeModeWarpStatus) until the cycle ends.
+     *  maxVelocity is put back by DeactivateCycle(), as a -100% modifier can't be undone */
+    m_shipRef->SetAttribute(AttrMaxVelocity, maxVelocity, false);
+    pShipSE->DestinyMgr()->Halt();
     pShipSE->DestinyMgr()->SetFrozen(true);
 }
 
 void CynoModule::DeactivateCycle(bool abort)
 {
-    SendOnJumpBeaconChange(false);
-    cSE->Delete();
-    SafeDelete(cSE);
-    ActiveModule::DeactivateCycle(abort);
+    if (m_ModuleState < Module::State::Deactivating)
+        return;
 
-    // hack to reinstate ship movement here
-    // may have to reset/reapply all fx for ship movement
-    pShipSE->GetSelf()->SetAttribute(AttrMaxVelocity, m_shipVelocity);
-    pShipSE->DestinyMgr()->SetFrozen(false);
+    RemoveCyno();
+
+    EvilNumber maxVelocity(m_shipRef->GetAttribute(AttrMaxVelocity));
+    ActiveModule::DeactivateCycle(abort);
+    m_shipRef->SetAttribute(AttrMaxVelocity, maxVelocity);
+
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or (pClient->GetShipSE()->DestinyMgr() == nullptr))
+        return;
+    pClient->GetShipSE()->DestinyMgr()->SetFrozen(false);
+    pClient->GetShipSE()->DestinyMgr()->SpeedBoost();
 }
 
 bool CynoModule::CanActivate()
 {
-    if (!pClient->InFleet())
-        throw UserError("CynoMustBeInFleet");
-
-    if (pShipSE->SysBubble()->HasTower()) {
-        TowerSE* ptSE = pShipSE->SysBubble()->GetTowerSE();
-        if (ptSE->HasForceField())
-            if (pShipSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
-                throw UserError("NoCynoInPOSShields");
-    }
-
-    /** @todo check for active cyno jammer */
-
-    //if (m_sysMgr->HasCynoJammer())
-    //    throw UserError("CynosuralGenerationJammed");
-
-    //Send message if the system is being jammed
-    SovereigntyData sovData = svDataMgr.GetSovereigntyData(pClient->GetLocationID());
-    if (sovData.jammerID != 0) {
-        pClient->SendNotifyMsg("This system is currently being jammed.");
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or (pClient->SystemMgr() == nullptr))
         return false;
-    }
+    ShipSE* pShipSE(pClient->GetShipSE());
+    SystemManager* pSystem(pClient->SystemMgr());
 
-    //Make sure player is not in high-sec (configurable)
-    if (!sConfig.world.highSecCyno) {
-        if (pClient->SystemMgr()->GetSecValue() >= 0.5f) {
-            pClient->SendNotifyMsg("This module may not be used in high security space.");
-            return false;
+    try {
+        if (!pClient->InFleet())
+            throw UserError("CynoMustBeInFleet");
+
+        // no cynos in wormhole space
+        if (IsWSpaceID(pSystem->GetID()))
+            throw CustomError("Cynosural fields cannot be established in wormhole space.");
+
+        //Make sure player is not in high-sec (configurable)
+        if (!sConfig.world.highSecCyno and (CrimeWatch::SecurityClass(pSystem->GetSystemSecurityRating()) == Crime::SecClass::High))
+            throw CustomError("This module may not be used in high security space.");
+
+        // a system cynosural field jammer blocks normal fields.  covert fields aren't affected
+        if (!IsCovert()) {
+            SovereigntyData sovData = svDataMgr.GetSovereigntyData(pSystem->GetID());
+            if (sovData.jammerID != 0)
+                throw UserError("CynosuralGenerationJammed");
         }
+
+        if ((pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()) {
+            TowerSE* ptSE = pShipSE->SysBubble()->GetTowerSE();
+            if (ptSE->HasForceField())
+                if (pShipSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI())
+                    throw UserError("NoCynoInPOSShields");
+        }
+
+        // maxVelocityActivationLimit (500 m/s)
+        if (HasAttribute(AttrMaxVelocityActivationLimit) and (pShipSE->DestinyMgr() != nullptr))
+            if (pShipSE->DestinyMgr()->GetSpeed() > GetAttribute(AttrMaxVelocityActivationLimit).get_double())
+                throw CustomError("You are moving too fast to activate the %s.", m_modRef->name());
+    } catch (...) {
+        Clear();
+        throw;
     }
 
     // all specific checks pass.  run generic checks in base class
@@ -99,13 +149,19 @@ bool CynoModule::CanActivate()
 
 uint32 CynoModule::DoCycle()
 {
-    // i really dont like this, but cant get it to work anywhere else...
-    uint32 retVal(0);
-    if (retVal = ActiveModule::DoCycle())
-        if (m_firstRun) {
-            m_firstRun = false;
-            CreateCyno();
-        }
+    uint32 retVal(ActiveModule::DoCycle());
+    if (retVal == 0)
+        return retVal;
+
+    if (m_firstRun) {
+        m_firstRun = false;
+        CreateCyno();
+    } else if ((m_fieldID != 0) and (m_sysMgr != nullptr)) {
+        // another cycle keeps the field up
+        CynoFieldSE* pField(dynamic_cast<CynoFieldSE*>(m_sysMgr->GetSE(m_fieldID)));
+        if (pField != nullptr)
+            pField->Extend(retVal + 1000);
+    }
 
     return retVal;
 }
@@ -113,46 +169,74 @@ uint32 CynoModule::DoCycle()
 void CynoModule::CreateCyno()
 {
     // do we already have a cyno field created?
-    if (cSE != nullptr)
+    if (m_fieldID != 0)
         return;
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or (m_sysMgr == nullptr))
+        return;
+    ShipSE* pShipSE(pClient->GetShipSE());
 
-    // Create Cyno field here
-    ItemData cData(EVEDB::invTypes::CynosuralFieldI, pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone);
-    InventoryItemRef cRef = sItemFactory.SpawnItem(cData);
-
-    _log(MODULE__DEBUG, "Creating Cynosural field");
-
-    cSE = new ItemSystemEntity(cRef, pClient->services(), m_sysMgr);
+    // the field is a temp item (not saved).  covert generators light a covert field
+    uint16 typeID(IsCovert() ? EVEDB::invTypes::CovertCynosuralFieldI : EVEDB::invTypes::CynosuralFieldI);
     GPoint location(pShipSE->GetPosition());
-    location.MakeRandomPointOnSphere(1500.0f + cRef->type().radius());
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    location.MakeRandomPointOnSphere(1500.0f + (pType != nullptr ? pType->radius() : 0) + pShipSE->GetRadius());
+    ItemData cData(typeID, pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone, "", location);
+    InventoryItemRef cRef = sItemFactory.SpawnTempItem(cData);
+    if (cRef.get() == nullptr) {
+        _log(MODULE__ERROR, "CynoModule::CreateCyno() - unable to spawn field type %u for %s", typeID, pClient->GetName());
+        return;
+    }
+    sItemFactory.AddItem(cRef);
+
+    FactionData data = FactionData();
+        data.ownerID = pClient->GetCharacterID();
+        data.corporationID = pClient->GetCorporationID();
+        data.allianceID = pClient->GetAllianceID();
+        data.factionID = pClient->GetWarFactionID();
+    // the field lasts as long as this cycle (and is extended by the next one)
+    uint32 lifeMS(GetAttribute(AttrDuration).get_uint32() + 1000);
+    CynoFieldSE* cSE = new CynoFieldSE(cRef, pClient->services(), m_sysMgr, data, pClient->GetCharacterID(), lifeMS);
     cSE->SetPosition(location);
-    cRef->SaveItem();
     m_sysMgr->AddEntity(cSE);
 
-    SendOnJumpBeaconChange(true);
+    m_fieldID = cSE->GetID();
+    m_systemID = m_sysMgr->GetID();
+    m_charID = pClient->GetCharacterID();
+
+    _log(MODULE__DEBUG, "%s lit %s(%u) in %s", pClient->GetName(), cSE->GetName(), m_fieldID, m_sysMgr->GetName());
+
+    // the fleet can jump (or bridge) to it now
+    BeaconData bData = BeaconData();
+        bData.charID = m_charID;
+        bData.fleetID = pClient->GetFleetID();
+        bData.systemID = m_systemID;
+        bData.beaconID = m_fieldID;
+        bData.moduleID = itemID();
+        bData.harmonics = (HasAttribute(AttrJumpHarmonics) ? GetAttribute(AttrJumpHarmonics).get_int() : -5);
+        bData.position = location;
+    sFltSvc.AddBeacon(bData);
 }
 
-void CynoModule::SendOnJumpBeaconChange(bool active/*false*/) {
-        //Send ProcessSovStatusChanged Notification
-        _log(MODULE__DEBUG, "Sending OnJumpBeaconChange (active = %s)", active ? "true" : "false");
+void CynoModule::RemoveCyno()
+{
+    if (m_fieldID == 0)
+        return;
 
-        uint32 fieldID(0);
-        if (cSE != nullptr)
-            fieldID = cSE->GetID();
+    sFltSvc.RemoveBeacon(m_charID, m_fieldID);
+    // the field may already be gone (its own timer, system unload)
+    SystemManager* pSystem(sEntityList.FindSystem(m_systemID));
+    if (pSystem != nullptr) {
+        SystemEntity* pSE(pSystem->GetSE(m_fieldID));
+        if (pSE != nullptr) {
+            pSE->Delete();
+            SafeDelete(pSE);
+        }
+    }
 
-        PyTuple* data = new PyTuple(4);
-            data->SetItem(0, new PyInt(pClient->GetCharacterID()));
-            data->SetItem(1, new PyInt(m_sysMgr->GetID()));
-            data->SetItem(2, new PyInt(fieldID));
-            data->SetItem(3, new PyBool(active));
-
-        std::vector<Client *> fleetClients;
-        fleetClients = sFltSvc.GetFleetClients(pClient->GetFleetID());
-        for (auto cur : fleetClients)
-            if (cur != nullptr) {
-                cur->SendNotification("OnJumpBeaconChange", "clientID", &data);
-                _log(MODULE__DEBUG, "OnJumpBeaconChange sent to %s (%u)", cur->GetName(), cur->GetCharID());
-            }
+    m_fieldID = 0;
+    m_systemID = 0;
+    m_charID = 0;
 }
 
 /*

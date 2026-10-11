@@ -941,7 +941,7 @@ void Client::SetBallPark() {
         if (IsDriveJump()) {
             SetInvulTimer(Player::Timer::JumpInvul);
             m_clientState = Player::State::Idle;
-            JumpInEffect();
+            JumpInEffect(m_jumpInGuid.empty() ? "effects.JumpDriveIn" : m_jumpInGuid.c_str());
         }
         if (IsWormholeJump()) {
             SetInvulTimer(Player::Timer::JumpInvul);
@@ -1505,18 +1505,24 @@ void Client::StargateJump(uint32 fromGate, uint32 toGate) {
 }
 
 void Client::CynoJump(InventoryItemRef beacon) {
+    CynoJump(beacon->locationID(), beacon->position());
+}
+
+void Client::CynoJump(uint32 systemID, const GPoint& beaconPos, const char* outGuid/*"effects.JumpDriveOut"*/, const char* inGuid/*"effects.JumpDriveIn"*/) {
     CheckMovePending();
 
     MapDB::AddJump(m_locationID);
 
-    m_moveSystemID = beacon->locationID();
+    m_moveSystemID = systemID;
     MapDB::AddJump(m_moveSystemID);
     m_char->VisitSystem(m_moveSystemID);
 
-    JumpOutEffect(GetShipID());
+    JumpOutEffect(GetShipID(), outGuid);
+    m_jumpInGuid = inGuid;
 
-    m_movePoint = beacon->position();
-    m_movePoint.MakeRandomPointOnSphere(2000);
+    // ships arrive at a random point 5km from the field
+    m_movePoint = beaconPos;
+    m_movePoint.MakeRandomPointOnSphere(5000);
 
     SetStateTimer(Player::State::DriveJump, Player::Timer::Jumping);
 }
@@ -1715,20 +1721,20 @@ void Client::SetStateTimer( int8 state, uint32 time/*Player::Timer::Default*/)
 }
 
 // these next two are for sending jump effects (easier to test here)
-void Client::JumpInEffect()
+void Client::JumpInEffect(const char* guid/*"effects.JumpDriveIn"*/)
 {
     if (pShipSE != nullptr)
         if (pShipSE->DestinyMgr() != nullptr)
             if (!pShipSE->DestinyMgr()->IsCloaked())
-                pShipSE->DestinyMgr()->SendJumpInEffect("effects.JumpIn");
+                pShipSE->DestinyMgr()->SendJumpInEffect(guid);
 }
 
-void Client::JumpOutEffect(uint32 locationID)
+void Client::JumpOutEffect(uint32 locationID, const char* guid/*"effects.JumpDriveOut"*/)
 {
     if (pShipSE != nullptr)
         if (pShipSE->DestinyMgr() != nullptr)
             if (!pShipSE->DestinyMgr()->IsCloaked())
-                pShipSE->DestinyMgr()->SendJumpOutEffect("effects.JumpOut", locationID);
+                pShipSE->DestinyMgr()->SendJumpOutEffect(guid, locationID);
 }
 
 std::string Client::GetStateName(int8 state)

@@ -149,6 +149,9 @@ PyResult FleetBound::Init(PyCallArgs &call, std::optional <PyInt*> shipTypeID) {
     obj->Dump(FLEET__UPDATE_DUMP, "   ");
     pClient->SendNotification("OnFleetStateChange", "clientid", obj, true);
 
+    // cynos (and jump portals) the fleet has open.  the client clears them on the fleetid session change, so they're sent here
+    sFltSvc.SendJumpState(pClient);
+
     PyTuple* count = new PyTuple(1);
         count->SetItem(0, new PyInt(254));
     _log(FLEET__UPDATE_DUMP, "OnFleetActive");

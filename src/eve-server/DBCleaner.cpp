@@ -15,7 +15,8 @@ void DBCleaner::Initialize() {
     sLog.Blue("        DBCleaner", "Database Cleaner Initialized.");
 
     // Add new cleaning jobs below
-    CleanEntity(EVEDB::invTypes::CynosuralFieldI); //Clean cynosural fields
+    CleanEntity(EVEDB::invTypes::CynosuralFieldI); //Clean cynosural fields (saved by older versions; fields are temp items now)
+    CleanEntity(EVEDB::invTypes::CovertCynosuralFieldI);
     CleanGroupFromSpace(EVEDB::invGroups::Scanner_Probe); //Clean scanner probes floating in space
     CleanGroupFromSpace(EVEDB::invGroups::Survey_Probe); //Clean survey probes floating in space
     CleanOrphanedWormholes(); //Clean up orphaned wormhole entities

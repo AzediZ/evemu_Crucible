@@ -100,6 +100,11 @@ public:
 
     // this will return nullptr and throw console msg on failure.
     SystemManager* FindOrBootSystem(uint32 systemID);
+    // the system's manager when it is loaded, else nullptr (never boots it)
+    SystemManager* FindSystem(uint32 systemID) const {
+        std::map<uint32, SystemManager*>::const_iterator itr = m_systems.find(systemID);
+        return (itr == m_systems.end() ? nullptr : itr->second);
+    }
 
     bool IsOnline(uint32 charID);
     PyRep* PyIsOnline(uint32 charID);

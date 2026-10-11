@@ -12,6 +12,8 @@
 #ifndef EVEMU_SRC_FLEET_DATA_H_
 #define EVEMU_SRC_FLEET_DATA_H_
 
+#include "math/gpoint.h"
+
 namespace Fleet {
     namespace Job {
         enum {
@@ -142,6 +144,17 @@ struct SquadData {
     Client* booster;
     std::string name;
     std::map<uint32, Client*> members;
+};
+
+// an active cynosural field a fleet can jump to (client fleetSvc.activeBeacon, keyed by the pilot who lit it)
+struct BeaconData {
+    uint32 charID;      // pilot who lit it
+    uint32 fleetID;
+    uint32 systemID;
+    uint32 beaconID;    // itemID of the field (Cynosural Field I / Covert Cynosural Field I)
+    uint32 moduleID;
+    int8 harmonics;     // the generator's jumpHarmonics (-5 normal, 5 covert)
+    GPoint position;    // the field's position (ships land around it)
 };
 
 // a member's fleet position, kept for FleetBound::Reconnect when the client disconnects

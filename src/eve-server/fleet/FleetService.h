@@ -135,6 +135,15 @@ public:
     // puts the client back into fleetID at its old position where possible.  false when that isn't possible
     bool Reconnect(Client* pClient, uint32 fleetID);
 
+    /* cynosural beacons (fleet jump targets).  OnJumpBeaconChange(charID, systemID, beaconID, active) to the fleet */
+    // registers the pilot's lit field (replaces an older one)
+    void AddBeacon(const BeaconData& data);
+    // removes charID's beacon.  beaconID != 0 removes it only when it is still that field
+    void RemoveBeacon(uint32 charID, uint32 beaconID = 0);
+    bool GetBeacon(uint32 charID, BeaconData& data);
+    // the active beacons (and bridges) of the client's fleet, to a member who just (re)joined (FleetBound::Init)
+    void SendJumpState(Client* pClient);
+
     /* fleet finder */
     // the advert is visible to pViewer (scope bits, allowed entities, security status; members always see their fleet)
     bool CanSeeAdvert(uint32 fleetID, Client* pViewer);
@@ -196,6 +205,7 @@ private:
     std::map<uint32, InviteData>        m_inviteData;       // charID/data
     std::map<uint32, ReconnectData>     m_reconnect;        // charID/fleet position at disconnect
     std::map<uint32, std::set<uint32>>  m_watchlists;       // watcher charID/watched charIDs
+    std::map<uint32, BeaconData>        m_beacons;          // charID/active cyno
 
     std::map<uint32, FleetAdvert>       m_fleetAdvertMap;   // fleetID/data
 

@@ -478,12 +478,14 @@ SET( search_SOURCE
 
 SET( ship_INCLUDE
      "${TARGET_INCLUDE_DIR}/ship/BeyonceService.h"
+     "${TARGET_INCLUDE_DIR}/ship/JumpDrive.h"
      "${TARGET_INCLUDE_DIR}/ship/Missile.h"
      "${TARGET_INCLUDE_DIR}/ship/Ship.h"
      "${TARGET_INCLUDE_DIR}/ship/ShipDB.h"
      "${TARGET_INCLUDE_DIR}/ship/ShipService.h")
 SET( ship_SOURCE
      "${TARGET_SOURCE_DIR}/ship/BeyonceService.cpp"
+     "${TARGET_SOURCE_DIR}/ship/JumpDrive.cpp"
      "${TARGET_SOURCE_DIR}/ship/Missile.cpp"
      "${TARGET_SOURCE_DIR}/ship/Ship.cpp"
      "${TARGET_SOURCE_DIR}/ship/ShipDB.cpp"

@@ -263,14 +263,17 @@ public:
     // these throw when a move is already pending (or the destination is invalid), before any effect is sent
     void CheckMovePending();
     void StargateJump(uint32 fromGate, uint32 toGate);
+    /* jump drive and jump portal moves:  lands within 5km of beaconPos in systemID.  outGuid/inGuid are the client's
+     *  effects.JumpDriveOut/In (effects.JumpDriveOutBO/InBO for black ops).  throws before anything happens when a move is pending */
+    void CynoJump(uint32 systemID, const GPoint& beaconPos, const char* outGuid = "effects.JumpDriveOut", const char* inGuid = "effects.JumpDriveIn");
     void CynoJump(InventoryItemRef beacon);
     void WormholeJump(InventoryItemRef wormhole);
 
     bool IsAutoPilot()                                  { return m_autoPilot; }
     void SetAutoPilot(bool set=false);
 
-    void JumpInEffect();
-    void JumpOutEffect(uint32 locationID);
+    void JumpInEffect(const char* guid = "effects.JumpDriveIn");
+    void JumpOutEffect(uint32 locationID, const char* guid = "effects.JumpDriveOut");
 
     void CheckBallparkTimer();
 
@@ -411,6 +414,8 @@ protected:
 
     // this is GPoint on jump and dock heading on undock
     GPoint m_movePoint;
+    // arrival effect of a drive jump (effects.JumpDriveIn or effects.JumpDriveInBO)
+    std::string m_jumpInGuid;
     // dock location in space (absolute)
     GPoint m_dockPoint;
     // upon login, the player needs to warp to a location, but the warp

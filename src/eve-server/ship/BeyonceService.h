@@ -70,6 +70,8 @@ protected:
      *  (excludeCharID is never warped).  speed is the warp speed for the whole group (0 = each ship's own speed) */
     void GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed);
     void FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed);
+    // capital jump drive to a fleet member's cyno or an alliance cynosural generator array (CmdBeaconJumpFleet/Alliance)
+    PyResult DoBeaconJump(Client* pClient, bool alliance, uint32 charID, uint32 beaconID, uint32 systemID);
 
     PyResult CmdFollowBall(PyCallArgs& call, PyInt* ballID, PyRep* distance);
     PyResult CmdSetSpeedFraction(PyCallArgs& call, PyFloat* speedFraction);
