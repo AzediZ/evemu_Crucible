@@ -77,6 +77,7 @@ DroneAIMgr::DroneAIMgr(DroneSE* pDrone)
   m_moveTargetID(0),
   m_aggressorID(0),
   m_webbedID(0),
+  m_jammedID(0),
   m_moveRange(0.0),
   m_moveSpeed(0.0),
   m_cycleActive(false),
@@ -524,7 +525,16 @@ void DroneAIMgr::ReleaseTarget() {
         pTM->ClearTarget(pTarget);
 }
 
+void DroneAIMgr::StopJam() {
+    if (m_jammedID == 0)
+        return;
+    SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_jammedID));
+    m_jammedID = 0;
+    Ewar::EndJam(m_pDrone, m_pDrone->GetID(), pTarget);
+}
+
 void DroneAIMgr::StopCycle() {
+    StopJam();
     if (!m_cycleActive)
         return;
     m_cycleActive = false;
@@ -601,6 +611,14 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
             switch (stats.effectID) {
                 case EVEEffectID::energyDestabilizationNew: {
                     Ewar::DrainCapacitor(pTarget, m_pDrone->GetSelf()->GetAttribute(AttrEnergyDestabilizationAmount).get_float());
+                } break;
+                case EVEEffectID::ewTestEffectJam: {
+                    // each cycle rolls again, like an ecm module
+                    StopJam();
+                    if (Ewar::RollJam(m_pDrone->GetSelf(), m_pDrone->GetPosition(), pTarget, AttrMaxRange, AttrFalloff, m_pDrone->GetRadius())) {
+                        Ewar::StartJam(m_pDrone, m_pDrone->GetID(), pTarget, static_cast<uint32>(stats.cycleTime));
+                        m_jammedID = pTarget->GetID();
+                    }
                 } break;
                 // damp, tracking disruption and painting drones need target dogma modifiers (F10).  they only show their effect
             }

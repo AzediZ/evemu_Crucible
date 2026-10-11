@@ -37,6 +37,7 @@
 #include "ship/modules/ModuleItem.h"
 #include "ship/modules/TurretModule.h"
 #include "ship/modules/CynoModule.h"
+#include "ship/modules/EwarModule.h"
 
 static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
 {
@@ -130,10 +131,10 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             // EWAR Modules:
             case EVEDB::invGroups::Warp_Scrambler:                          return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Stasis_Web:                              return (new ActiveModule(mRef, sRef));    // Active - external
-            case EVEDB::invGroups::ECM_Burst:                               return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::ECM_Burst:                               return (new EcmModule(mRef, sRef));       // Active - external
             case EVEDB::invGroups::Passive_Targeting_System:                return (new ActiveModule(mRef, sRef));    // Active - external
             //case EVEDB::invGroups::Automated_Targeting_System:              return (new ActiveModule(mRef, sRef));    // Active - external
-            case EVEDB::invGroups::ECM:                                     return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::ECM:                                     return (new EcmModule(mRef, sRef));       // Active - external
             case EVEDB::invGroups::ECCM:                                    return (new ActiveModule(mRef, sRef));    // Active  -  SELF
             case EVEDB::invGroups::Sensor_Backup_Array:                     return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Remote_Sensor_Damper:                    return (new ActiveModule(mRef, sRef));    // Active - external
@@ -147,7 +148,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::Remote_Sensor_Booster:                   return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Tracking_Disruptor:                      return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::ECM_Stabilizer:                          return (new PassiveModule(mRef, sRef));
-            case EVEDB::invGroups::Remote_ECM_Burst:                        return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Remote_ECM_Burst:                        return (new EcmModule(mRef, sRef));       // Active - external
 
             // Gang Assist Modules:
             case EVEDB::invGroups::Gang_Coordinator:                        return (new ActiveModule(mRef, sRef));    // Active - external

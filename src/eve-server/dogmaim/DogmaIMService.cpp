@@ -415,6 +415,10 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     if (tSE->IsInvul())
         throw CustomError ("Cannot Engage %s as they are invulnerable.", tSE->GetName());
         //throw UserError ("DeniedTargetInvulnerable");
+    // ecm.  jammed ships can't lock anything (locking the jammer came with the 2018 balance pass)
+    if (mySE->TargetMgr()->IsJammed())
+        throw UserError ("TargetingSystemsBeingJammed")
+                .AddFormatValue ("targetname", new PyString (tSE->GetName ()));
     /** @todo SE->IsFrozen() incomplete */
     if (tSE->IsFrozen())
         throw UserError ("DeniedTargetOtherFrozen")

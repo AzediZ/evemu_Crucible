@@ -98,6 +98,7 @@ private:
     void SetOrder(uint8 order, uint32 targetID=0);
     void SetState(uint8 state);
     void StopCycle();
+    void StopJam();
 
     // movement.  each only sends anything when it changes what the drone is doing
     void OrbitTarget(SystemEntity* pTarget, double range, double speed);
@@ -129,6 +130,7 @@ private:
     uint32 m_moveTargetID;
     uint32 m_aggressorID;       // most recent attacker, for aggressive mode and guarding
     uint32 m_webbedID;          // target we are currently webbing
+    uint32 m_jammedID;          // target we jammed this cycle (ecm drones)
     double m_moveRange;
     double m_moveSpeed;
 

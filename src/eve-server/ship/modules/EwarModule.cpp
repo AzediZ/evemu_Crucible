@@ -6,7 +6,10 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"
+#include "ship/Ship.h"
+#include "system/CrimeWatch.h"
 #include "ship/modules/EwarModule.h"
 #include "system/SystemEntity.h"
 #include "system/SystemManager.h"
@@ -162,5 +165,226 @@ void Ewar::SendJamNotify(bool start, uint32 sourceID, uint32 moduleID, SystemEnt
             tuple->SetItem(5, new PyInt(durationMs));
         }
         pClient->SendNotification((start ? "OnJamStart" : "OnJamEnd"), "charid", &tuple);
+    }
+}
+
+namespace {
+    // jammer bonus attribute -> target strength attribute (godma.py electronicAttributes)
+    const uint16 jamPairs[4][2] = {
+        { AttrScanGravimetricStrengthBonus,     AttrScanGravimetricStrength },
+        { AttrScanLadarStrengthBonus,           AttrScanLadarStrength },
+        { AttrScanMagnetometricStrengthBonus,   AttrScanMagnetometricStrength },
+        { AttrScanRadarStrengthBonus,           AttrScanRadarStrength }
+    };
+
+    float RangeChance(InventoryItemRef jammerRef, const GPoint& from, double fromRadius, SystemEntity* pTarget, uint16 rangeAttr, uint16 falloffAttr)
+    {
+        double distance(from.distance(pTarget->GetPosition()) - fromRadius - pTarget->GetRadius());
+        double range(jammerRef->GetAttribute(rangeAttr).get_double());
+        if (distance <= range)
+            return 1.0f;
+        double falloff(jammerRef->GetAttribute(falloffAttr).get_double());
+        if (falloff <= 0)
+            return 0.0f;
+        double over(distance - range);
+        return (float)std::pow(2.0, -(over * over) / (falloff * falloff));
+    }
+
+    float StrengthChance(InventoryItemRef jammerRef, SystemEntity* pTarget)
+    {
+        InventoryItemRef tRef(pTarget->GetSelf());
+        bool found(false);
+        float maxA(0.0f), maxD(0.0f);
+        for (uint8 i = 0; i < 4; ++i) {
+            float a(jammerRef->GetAttribute(jamPairs[i][0]).get_float());
+            if (a < 1.0f)
+                continue;
+            float d(tRef->GetAttribute(jamPairs[i][1]).get_float());
+            if (!found or (d > maxD)) {
+                maxA = a;
+                maxD = d;
+                found = true;
+            } else if ((d == maxD) and (a > maxA)) {
+                maxA = a;
+            }
+        }
+        if (!found or (maxD <= 0.0f))
+            return 1.0f;
+        return maxA / maxD;
+    }
+}
+
+float Ewar::JamChance(InventoryItemRef jammerRef, const GPoint& from, SystemEntity* pTarget, uint16 rangeAttr, uint16 falloffAttr, double fromRadius/*0*/)
+{
+    if ((jammerRef.get() == nullptr) or (pTarget == nullptr))
+        return 0.0f;
+    float chance(RangeChance(jammerRef, from, fromRadius, pTarget, rangeAttr, falloffAttr) * StrengthChance(jammerRef, pTarget));
+    return (chance > 1.0f ? 1.0f : chance);
+}
+
+bool Ewar::RollJam(InventoryItemRef jammerRef, const GPoint& from, SystemEntity* pTarget, uint16 rangeAttr, uint16 falloffAttr, double fromRadius/*0*/)
+{
+    if ((jammerRef.get() == nullptr) or (pTarget == nullptr))
+        return false;
+    float rangeChance(RangeChance(jammerRef, from, fromRadius, pTarget, rangeAttr, falloffAttr));
+    float strengthChance(StrengthChance(jammerRef, pTarget));
+    bool success((MakeRandomFloat(0, 1) <= rangeChance) and (MakeRandomFloat(0, 1) <= strengthChance));
+    _log(EFFECTS__TRACE, "Ewar::RollJam() - %s(%u) on %s(%u): range chance %.3f, strength chance %.3f - %s",
+            jammerRef->name(), jammerRef->itemID(), pTarget->GetName(), pTarget->GetID(), rangeChance, strengthChance, (success ? "jammed" : "failed"));
+    return success;
+}
+
+void Ewar::StartJam(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarget, uint32 durationMs)
+{
+    if ((pSource == nullptr) or (pTarget == nullptr) or (pTarget->TargetMgr() == nullptr))
+        return;
+    pTarget->GetEwar(true)->Apply(pSource->GetID(), Ewar::Jam, durationMs, 0, 0, InventoryItemRef(nullptr), moduleID);
+}
+
+void Ewar::EndJam(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarget)
+{
+    if ((pSource == nullptr) or (pTarget == nullptr) or (pTarget->GetEwar() == nullptr))
+        return;
+    pTarget->GetEwar()->Remove(pSource->GetID(), Ewar::Jam, moduleID);
+}
+
+void Ewar::BreakLocks(SystemEntity* pTarget)
+{
+    if ((pTarget == nullptr) or (pTarget->TargetMgr() == nullptr))
+        return;
+    pTarget->TargetMgr()->LoseAllTargets();
+}
+
+
+EcmModule::EcmModule(ModuleItemRef mRef, ShipItemRef sRef)
+: ActiveModule(mRef, sRef)
+{
+}
+
+void EcmModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/*0*/)
+{
+    ActiveModule::Activate(effectID, targetID, repeat);
+
+    if (m_ModuleState != Module::State::Activated)
+        return;
+    if ((groupID() != EVEDB::invGroups::ECM) or (m_targetSE == nullptr))
+        return;
+
+    // the jammer's ewar icon stays on the target's overview while the module runs, jammed or not
+    Ewar::SendEwarNotify(true, m_shipRef->itemID(), itemID(), m_targetSE, "electronic");
+
+    if (m_shipRef->HasPilot()) {
+        PyDict* args = new PyDict();
+            args->SetItemString("jammedShipName", new PyString(m_targetSE->GetName()));
+        m_shipRef->GetPilot()->SendRemoteMessage("TargetJammedSuccess", args);
+    }
+    if (m_targetSE->HasPilot()) {
+        PyDict* args = new PyDict();
+            args->SetItemString("jammerShipName", new PyString(m_shipRef->name()));
+        m_targetSE->GetPilot()->SendRemoteMessage("TargetJammedBy", args);
+    }
+}
+
+void EcmModule::DeactivateCycle(bool abort/*false*/)
+{
+    if (m_ModuleState < Module::State::Deactivating)
+        return;
+
+    if ((groupID() == EVEDB::invGroups::ECM) and (m_targetSE != nullptr) and m_shipRef->HasPilot()) {
+        Ewar::EndJam(m_shipRef->GetPilot()->GetShipSE(), itemID(), m_targetSE);
+        Ewar::SendEwarNotify(false, m_shipRef->itemID(), itemID(), m_targetSE, "electronic");
+    }
+
+    ActiveModule::DeactivateCycle(abort);
+}
+
+uint32 EcmModule::DoCycle()
+{
+    uint32 cycleTime(ActiveModule::DoCycle());
+    if ((cycleTime == 0) or !m_shipRef->HasPilot())
+        return cycleTime;
+
+    ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
+    switch (groupID()) {
+        case EVEDB::invGroups::ECM: {
+            if (m_targetSE == nullptr)
+                break;
+            // each cycle rolls again.  the last cycle's jam ends here
+            Ewar::EndJam(pShip, itemID(), m_targetSE);
+            if (Ewar::RollJam(m_modRef, pShip->GetPosition(), m_targetSE, AttrMaxRange, AttrFalloff, pShip->GetRadius()))
+                Ewar::StartJam(pShip, itemID(), m_targetSE, cycleTime);
+        } break;
+        case EVEDB::invGroups::ECM_Burst: {
+            Burst(pShip->GetPosition(), pShip->GetRadius(), pShip);
+        } break;
+        case EVEDB::invGroups::Remote_ECM_Burst: {
+            if (m_targetSE != nullptr)
+                Burst(m_targetSE->GetPosition(), m_targetSE->GetRadius(), m_targetSE);
+        } break;
+    }
+
+    return cycleTime;
+}
+
+void EcmModule::Burst(const GPoint& center, double centerRadius, SystemEntity* pCenterSE)
+{
+    if ((m_bubble == nullptr) or (m_sysMgr == nullptr))
+        return;
+    Client* pPilot(m_shipRef->GetPilot());
+    ShipSE* pShip(pPilot->GetShipSE());
+    double reach(GetAttribute(AttrEcmBurstRange).get_double() + (3 * GetAttribute(AttrFalloff).get_double()));
+
+    // ships, drones, npcs and sentries, friend or foe.  only their locks are broken
+    std::vector<uint32> ids;
+    std::map<uint32, SystemEntity*> entities;
+    m_bubble->GetEntities(entities);
+    if ((pCenterSE != nullptr) and (pCenterSE->SysBubble() != nullptr) and (pCenterSE->SysBubble() != m_bubble))
+        pCenterSE->SysBubble()->GetEntities(entities);
+    for (auto cur : entities) {
+        SystemEntity* pSE(cur.second);
+        if ((pSE == pShip) or pSE->IsDead() or (pSE->TargetMgr() == nullptr))
+            continue;
+        if (!pSE->IsShipSE() and !pSE->IsNPCSE() and !pSE->IsDroneSE() and !pSE->IsSentrySE())
+            continue;
+        if ((center.distance(pSE->GetPosition()) - centerRadius - pSE->GetRadius()) > reach)
+            continue;
+        ids.push_back(cur.first);
+    }
+
+    uint16 targeters(0), jammedTargeters(0);
+    std::string jammedNames;
+    for (auto id : ids) {
+        SystemEntity* pSE(m_sysMgr->GetSE(id));
+        if (pSE == nullptr)
+            continue;
+        bool targeter(pShip->TargetMgr()->IsTargetedBy(pSE));
+        if (targeter)
+            ++targeters;
+        if (!Ewar::RollJam(m_modRef, center, pSE, AttrEcmBurstRange, AttrFalloff, centerRadius))
+            continue;
+        if (targeter)
+            ++jammedTargeters;
+        if (!jammedNames.empty())
+            jammedNames += ", ";
+        jammedNames += pSE->GetName();
+        // each one we affect is an offensive act (our own drones aren't)
+        if (pSE->GetOwnerID() != (uint32)pPilot->GetCharacterID())
+            sCrimeWatch.OffensiveAct(pPilot, pSE);
+        Ewar::BreakLocks(pSE);
+    }
+
+    // [item]moduleID localization variables take a typeID
+    PyDict* args = new PyDict();
+        args->SetItemString("moduleID", new PyInt(typeID()));
+    if (targeters == 0) {
+        pPilot->SendRemoteMessage("TargetJammingWithoutTargeters", args);
+        return;
+    }
+    args->SetItemString("jammedNames", new PyString(jammedNames));
+    if (jammedTargeters == targeters) {
+        pPilot->SendRemoteMessage("TargetJammingFullSuccess", args);
+    } else {
+        args->SetItemString("targetCount", new PyInt(targeters));
+        pPilot->SendRemoteMessage("TargetJammingPartialSuccess", args);
     }
 }

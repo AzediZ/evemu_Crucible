@@ -1259,6 +1259,13 @@ bool ActiveModule::CanActivate() {
             case Warp_Scrambler: {
                 range = GetAttribute(AttrWarpScrambleRange).get_float();
             } break;
+            case ECM: {
+                // jams can land in falloff.  the jam roll decides
+                range = GetAttribute(AttrMaxRange).get_float() + (3 * GetAttribute(AttrFalloff).get_float());
+            } break;
+            case Remote_ECM_Burst: {
+                range = GetAttribute(AttrMaxRange).get_float();
+            } break;
             case Cargo_Scanner: {
                 range = GetAttribute(AttrCargoScanRange).get_float();
             } break;
