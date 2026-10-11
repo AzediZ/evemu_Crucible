@@ -259,8 +259,9 @@ public:
     void            RemoveFromQueue(SkillRef sRef);
     void            ClearSkillFlags();
     /* takes one level's worth of skill points off a skill, which drops a level (T3 ship loss, clone penalty).
+     *  spAmount > 0 takes that many skill points instead (the level follows the points).
      *  logged in the skill history as eventID.  returns the skill points lost (0 if the skill isn't trained) */
-    uint32          LoseSkillLevel(uint16 skillTypeID, uint16 eventID);
+    uint32          LoseSkillLevel(uint16 skillTypeID, uint16 eventID, uint32 spAmount = 0);
 
     PyRep*          GetSkillHistory();
     uint32          GetTotalSP();
@@ -421,6 +422,9 @@ public:
     /* pod death with a clone that saves less than the character's SP: takes cloneSkillLossPercent of the total SP from the
      *  skill with the most SP (at most cloneSkillLossCap of that skill).  returns the skill and SP lost (0 = none) */
     void                    ApplyClonePenalty(uint16& skillTypeID, uint32& spLost);
+    /* pod death (online or logged off): clone penalty, implants and boosters lost, a new Alpha clone, OnCloneTypeUpdated and
+     *  the clone activation notification.  call while the old clone grade is still set */
+    void                    PodKilled();
 
 protected:
     Character(

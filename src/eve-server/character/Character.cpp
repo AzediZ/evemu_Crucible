@@ -25,6 +25,7 @@
 */
 
 #include "eve-server.h"
+#include "EVE_Mail.h"
 //#include "../../eve-common/EVE_Skills.h"
 
 #include "Client.h"
@@ -38,7 +39,9 @@
 #include "fleet/FleetService.h"
 #include "inventory/AttributeEnum.h"
 #include "inventory/Inventory.h"
+#include "mail/NotificationMgr.h"
 #include "ship/Ship.h"
+#include "station/StationDataMgr.h"
 
 /*
  * CharacterTypeData
@@ -1000,7 +1003,8 @@ void Character::ProcessBoosterExpiry()
             expired.push_back(cur.first);
     for (auto cur : expired)
         RemoveBooster(cur);
-    if (m_pClient != nullptr)
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    if ((m_pClient != nullptr) and (sEntityList.FindClientByCharID(m_itemID) == m_pClient))
         m_pClient->SetBoosterTimer(GetNextBoosterExpiry());
 }
 
@@ -1024,9 +1028,12 @@ void Character::RemoveAllBoosters()
         DestroyAugmentation(cur, false);
     for (auto cur : m_boosters)
         CharacterDB::DeleteBooster(cur.first);
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
     m_boosters.clear();
     ApplyAbilityBonuses(true);
-    if (m_pClient != nullptr)
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+    if ((m_pClient != nullptr) and (sEntityList.FindClientByCharID(m_itemID) == m_pClient))
         m_pClient->SetBoosterTimer(0);
 }
 
@@ -1056,6 +1063,98 @@ void Character::PopulateBoosterEffects(InventoryItem* pBooster, Rsp_CommonGetInf
             es.randomSeed = PyStatic.NewNone();
         result.activeEffects[es.env_effectID] = es.Encode();
     }
+}
+
+void Character::DestroyImplants()
+{
+    std::map<uint16, int32> oldBonus(m_abilityBonus);
+    std::vector<InventoryItemRef> implants;
+    GetImplants(implants);
+    for (auto cur : implants)
+        DestroyAugmentation(cur, false);
+    ApplyAbilityBonuses(true);
+    if (oldBonus != m_abilityBonus)
+        RefreshSkillQueueTimes();
+}
+
+void Character::ApplyClonePenalty(uint16& skillTypeID, uint32& spLost)
+{
+    /* Crucible: a clone saves up to its skillPointsSaved.  podded with more, the pilot loses cloneSkillLossPercent (5%) of
+     *  the total from the skill with the most SP, at most cloneSkillLossCap (50%) of that skill  (removed in Rhea, 2014)
+     */
+    skillTypeID = 0;
+    spLost = 0;
+    if (!sConfig.character.cloneSkillLoss)
+        return;
+    uint32 cloneTypeID(0);
+    if (!m_db.GetActiveCloneType(m_itemID, cloneTypeID))
+        return;
+    const ItemType* pClone(sItemFactory.GetType(cloneTypeID));
+    if (pClone == nullptr)
+        return;
+    double cloneSP(pClone->GetAttribute(AttrSkillPointsSaved).get_double());
+
+    std::vector<InventoryItemRef> skills;
+    pInventory->GetItemsByFlag(flagSkill, skills);
+    pInventory->GetItemsByFlag(flagSkillInTraining, skills);
+    double total(0);
+    uint32 maxSP(0);
+    InventoryItemRef pick(nullptr);
+    for (auto cur : skills) {
+        uint32 sp(cur->GetAttribute(AttrSkillPoints).get_uint32());
+        total += sp;
+        if ((pick.get() == nullptr) or (sp > maxSP)
+        or ((sp == maxSP) and (cur->GetAttribute(AttrSkillTimeConstant) > pick->GetAttribute(AttrSkillTimeConstant)))) {
+            pick = cur;
+            maxSP = sp;
+        }
+    }
+    if ((total <= cloneSP) or (pick.get() == nullptr) or (maxSP == 0))
+        return;
+
+    double loss(std::min(total * sConfig.character.cloneSkillLossPercent / 100.0, maxSP * sConfig.character.cloneSkillLossCap / 100.0));
+    if (loss < 1)
+        return;
+    skillTypeID = pick->typeID();
+    spLost = LoseSkillLevel(skillTypeID, EvESkill::Event::ClonePenalty, (uint32)loss);
+    if (spLost == 0)
+        skillTypeID = 0;
+    _log(SKILL__INFO, "%s(%u) podded with %.0f SP in a clone saving %.0f: lost %u SP of %s.", \
+            name(), m_itemID, total, cloneSP, spLost, pick->name());
+}
+
+void Character::PodKilled()
+{
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    bool online((m_pClient != nullptr) and (sEntityList.FindClientByCharID(m_itemID) == m_pClient));
+
+    uint16 skillID(0);
+    uint32 spLost(0);
+    ApplyClonePenalty(skillID, spLost);
+    // implants and boosters were in the body
+    DestroyImplants();
+    RemoveAllBoosters();
+    ResetClone();
+
+    uint32 homeStationID(0);
+    CharacterDB::GetCharHomeStation(m_itemID, homeStationID);
+    if (online) {
+        PyTuple* tmp = new PyTuple(1);
+            tmp->SetItem(0, new PyInt(itemCloneAlpha));
+        m_pClient->SendNotification("OnCloneTypeUpdated", "charid", &tmp, false);
+    }
+
+    // "So you died? Well you have a {cloneTypeID} at {corpStationID} station..."  (notificationUtil PramCloneActivationNotification)
+    PyDict* data = new PyDict();
+        data->SetItemString("cloneStationID", new PyInt(homeStationID));
+        data->SetItemString("corpStationID", new PyInt(homeStationID));
+        data->SetItemString("cloneTypeID", new PyInt(itemCloneAlpha));
+        data->SetItemString("skillPointsLost", (spLost > 0) ? (PyRep*)new PyInt(spLost) : PyStatic.NewNone());
+        data->SetItemString("skillID", (skillID > 0) ? (PyRep*)new PyInt(skillID) : PyStatic.NewNone());
+        // not tracked
+        data->SetItemString("lastCloned", PyStatic.NewNone());
+        data->SetItemString("cloneBought", PyStatic.NewNone());
+    NotificationMgr::Send(m_itemID, Notify::Types::CloneActivation, stDataMgr.GetOwnerID(homeStationID), data);
 }
 
 /*
@@ -1223,7 +1322,7 @@ uint32 Character::GetTotalSP() {
     return m_charData.skillPoints;
 }
 
-uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID)
+uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID, uint32 spAmount/*0*/)
 {
     SkillRef sRef(GetCharSkillRef(skillTypeID));
     if (sRef.get() == nullptr)
@@ -1249,7 +1348,7 @@ uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID)
     }
 
     uint8 level(sRef->GetAttribute(AttrSkillLevel).get_uint32());
-    if (level < 1) {
+    if ((level < 1) and (spAmount == 0)) {
         if (queued and online)
             for (auto cur : keep)
                 AddToSkillQueue(cur.first, cur.second);
@@ -1257,10 +1356,16 @@ uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID)
     }
 
     uint32 currentSP(sRef->GetAttribute(AttrSkillPoints).get_uint32());
-    uint32 lost(sRef->GetSPForLevel(level) - sRef->GetSPForLevel(level - 1));
-    uint32 newSP(currentSP > lost ? currentSP - lost : 0);
+    uint32 lost(spAmount);
+    if (lost == 0)
+        lost = sRef->GetSPForLevel(level) - sRef->GetSPForLevel(level - 1);
+    if (lost > currentSP)
+        lost = currentSP;
+    uint32 newSP(currentSP - lost);
     uint8 newLevel(sRef->GetLevelForSP(newSP));
-    if (newLevel >= level)
+    if (newLevel > level)
+        newLevel = level;
+    if ((spAmount == 0) and (newLevel >= level))
         newLevel = level - 1;
 
     sRef->SetAttribute(AttrSkillLevel, newLevel, online);

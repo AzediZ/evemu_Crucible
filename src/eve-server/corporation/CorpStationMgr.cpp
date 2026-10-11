@@ -40,6 +40,7 @@
  */
 
 #include "eve-server.h"
+#include "EVE_Station.h"
 
 
 
@@ -51,6 +52,11 @@
 #include "station/StationDataMgr.h"
 #include "station/StationDB.h"
 #include "services/ServiceManager.h"
+#include "character/Character.h"
+#include "inventory/AttributeEnum.h"
+
+// the client's const.costCloneContract (AskAcceptCloneContractCost shows it), so not configurable  (F15)
+static constexpr double CloneContractCost = 5600.0;
 
 CorpStationMgr::CorpStationMgr(EVEServiceManager& mgr) :
     BindableService("corpStationMgr", mgr)
@@ -216,29 +222,52 @@ PyResult CorpStationMgrIMBound::GetCorporateStationInfo(PyCallArgs &call) {
 }
 
 PyResult CorpStationMgrIMBound::SetCloneTypeID(PyCallArgs &call, PyInt* cloneTypeID) {
-    //Get cost of clone
+    // medical window:  corpStationMgr.SetCloneTypeID(typeID).  the client lists only better clones of groupClone  (F15)
+    Client* pClient(call.client);
+    if (!pClient->IsDocked())
+        throw CustomError("You must be docked to buy a clone.");
+    StationData stData = StationData();
+    stDataMgr.GetStationData(pClient->GetStationID(), stData);
+    if ((stData.serviceMask & Station::Cloning) == 0)
+        throw CustomError("This station does not offer cloning services.");
+    const ItemType* pType(sItemFactory.GetType(cloneTypeID->value()));
+    if ((pType == nullptr) or (pType->groupID() != EVEDB::invGroups::Clone))
+        throw CustomError("That is not a clone.");
+    CharacterDB c_db;
+    uint32 oldTypeID(0);
+    c_db.GetActiveCloneType(pClient->GetCharacterID(), oldTypeID);
+    const ItemType* pOld(sItemFactory.GetType(oldTypeID));
+    if ((pOld != nullptr) and (pType->GetAttribute(AttrSkillPointsSaved) <= pOld->GetAttribute(AttrSkillPointsSaved)))
+        throw UserError("MedicalThisCloneIsWorse");
+
+    //Get cost of clone  (Crucible prices, see the F15 clones migration)
     double cost = m_db.GetCloneTypeCostByID(cloneTypeID->value());
 
     //take the money, send wallet blink event record the transaction in their journal.
     std::string reason = "DESC: Updating Clone in ";
     // make config option for station name or system name here?
-    reason += call.client->GetSystemName();
+    reason += pClient->GetSystemName();
     reason += " at ";
-    reason += stDataMgr.GetStationName(call.client->GetStationID());
+    reason += stDataMgr.GetStationName(pClient->GetStationID());
 
+    // paid to the station's owner
     AccountService::TransferFunds(
-        call.client->GetCharacterID(),
-        call.client->GetStationID(),
+        pClient->GetCharacterID(),
+        stData.corporationID,
         cost,
         reason.c_str(),
         Journal::EntryType::CloneActivation,
-        call.client->GetStationID(),
+        pClient->GetStationID(),
         Account::KeyType::Cash
     );
 
     //update type of clone
-    CharacterDB c_db;
-    c_db.ChangeCloneType(call.client->GetCharacterID(), cloneTypeID->value());
+    c_db.ChangeCloneType(pClient->GetCharacterID(), cloneTypeID->value());
+
+    // charactersheet OnCloneTypeUpdated(newCloneType)
+    PyTuple* tmp = new PyTuple(1);
+        tmp->SetItem(0, new PyInt(cloneTypeID->value()));
+    pClient->SendNotification("OnCloneTypeUpdated", "charid", &tmp, false);
     return PyStatic.NewNone();
 }
 
@@ -393,11 +422,11 @@ PyResult CorpStationMgrIMBound::GetPotentialHomeStations(PyCallArgs &call) {
      *  other possible stations?  test for min/max potential station count?
      */
 
-    PyDict* dict = new PyDict();
     PyList* list = new PyList();
     StationData data = StationData();
     for (auto cur : stVec) {
         stDataMgr.GetStationData(cur, data);
+        PyDict* dict = new PyDict();
         dict->SetItemString("stationID", new PyInt(cur));
         dict->SetItemString("typeID", new PyInt(data.typeID));
         dict->SetItemString("serviceMask", new PyLong(data.serviceMask));
@@ -430,10 +459,28 @@ PyResult CorpStationMgrIMBound::DoesPlayersCorpHaveJunkAtStation(PyCallArgs &cal
 
 PyResult CorpStationMgrIMBound::SetHomeStation(PyCallArgs &call, PyInt* newHomeStationID) {
     // sm.GetService('corp').GetCorpStationManager().SetHomeStation(newHomeStationID)
-    /** @todo this is once a year on live, unless a new char changes corps.
+    /** @todo this is once a year on live, unless a new char changes corps.  (F24 owns that limit)
      *  we will need to make other checks when this is called, as i dont think client checks anything.
      */
-    call.client->GetChar()->SetBaseID(newHomeStationID->value());
+    Client* pClient(call.client);
+    uint32 homeStationID(0);
+    CharacterDB::GetCharHomeStation(pClient->GetCharacterID(), homeStationID);
+    if (homeStationID == (uint32)newHomeStationID->value())
+        throw UserError("MedicalYouAlreadyHaveACloneContractAtThatStation");
+    // only the stations GetPotentialHomeStations offers
+    std::vector<uint32> stVec;
+    stVec.push_back(m_stationID);
+    stVec.push_back(CharacterDB::GetStartingStationByCareer(pClient->GetChar()->careerID()));
+    m_db.GetCorpStations(pClient->GetCorporationID(), stVec);
+    if (std::find(stVec.begin(), stVec.end(), (uint32)newHomeStationID->value()) == stVec.end())
+        throw CustomError("You can't move your clone contract to that station.");
+    // the client asked AskAcceptCloneContractCost {cost: const.costCloneContract}, paid to the new station's owner  (F15)
+    std::string reason("DESC: Clone contract moved to ");
+    reason += stDataMgr.GetStationName(newHomeStationID->value());
+    AccountService::TransferFunds(pClient->GetCharacterID(), stDataMgr.GetOwnerID(newHomeStationID->value()), CloneContractCost,
+            reason.c_str(), Journal::EntryType::CloneTransfer, newHomeStationID->value(), Account::KeyType::Cash);
+
+    pClient->GetChar()->SetBaseID(newHomeStationID->value());
     CharacterDB::ChangeCloneLocation(call.client->GetCharID(), newHomeStationID->value());
     return nullptr;
 }

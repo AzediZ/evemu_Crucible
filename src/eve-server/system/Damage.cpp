@@ -592,7 +592,13 @@ void ShipSE::Killed(Damage &fatal_blow) {
     std::stringstream blob;
     std::vector<InventoryItemRef> survivedItems;
     if (pPilot->InPod()) {
-        blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/></items>";
+        // the capsule and the implants lost with it  (F15)
+        blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/>";
+        std::vector<InventoryItemRef> implants;
+        pPilot->GetChar()->GetImplants(implants);
+        for (auto cur : implants)
+            blob << "<i t=" << cur->typeID() << " f=" << (uint16)flagImplant << " s=1 d=0 x=1/>";
+        blob << "</items>";
     } else {
         AbortCycle();
         // our drones lose control when this ship is removed from the system
@@ -814,7 +820,15 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
         data.victimDamageTaken = m_self->GetAttribute(AttrHP).get_int() + m_self->GetAttribute(AttrArmorHP).get_int()
                                + m_self->GetAttribute(AttrShieldCapacity).get_int();
     std::stringstream blob;
-    blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/></items>";
+    blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/>";
+    // a pod loses its implants  (F15)
+    if (pod and (cRef.get() != nullptr)) {
+        std::vector<InventoryItemRef> implants;
+        cRef->GetImplants(implants);
+        for (auto cur : implants)
+            blob << "<i t=" << cur->typeID() << " f=" << (uint16)flagImplant << " s=1 d=0 x=1/>";
+    }
+    blob << "</items>";
     data.killBlob = blob.str().c_str();
     data.killTime = GetFileTimeNow();
     data.moonID = 0;
@@ -855,7 +869,8 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
                 SystemData sysData;
                 sDataMgr.GetSystemData(sDataMgr.GetStationSystem(cloneStationID), sysData);
                 cRef->SetLocation(cloneStationID, sysData);
-                cRef->ResetClone();
+                // clone penalty, implants and boosters lost, new Alpha clone  (F15)
+                cRef->PodKilled();
             }
         }
         return;

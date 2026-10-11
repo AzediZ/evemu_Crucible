@@ -1357,13 +1357,10 @@ void Client::ResetAfterPopped(GPoint& position)
 }
 
 void Client::ResetAfterPodded() {
-    /** @todo
-     * destroy all implants
-     * check skillpoints vs. clone grade and adjust accordingly.
-     * reset skill effects if clone != current SP and skills lost
-     */
-
     m_autoPilot = false;
+
+    // clone penalty, implants and boosters lost, new Alpha clone, clone activation notification  (F15)
+    m_char->PodKilled();
 
     CreateNewPod();
     SetShip(m_pod);
@@ -1375,7 +1372,6 @@ void Client::ResetAfterPodded() {
 
     m_ship->Move(m_locationID, flagHangar);
     m_ship->SaveShip();
-    m_char->ResetClone();
     m_char->SaveCharacter();
 
     SpawnNewRookieShip(m_locationID);
