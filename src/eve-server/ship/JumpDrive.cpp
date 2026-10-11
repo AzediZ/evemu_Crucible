@@ -140,4 +140,10 @@ void JumpDrive::ResolveBeacon(Client* pClient, bool alliance, uint32 charID, uin
     if (!pClient->InFleet() or !sFltSvc.GetBeacon(charID, out)
     or (out.fleetID != pClient->GetFleetID()) or (out.beaconID != beaconID) or (out.systemID != systemID))
         throw CustomError("That cynosural beacon is no longer active.");
+    // the field itself must still be there (a lit field keeps its system loaded)
+    SystemManager* pSystem(sEntityList.FindSystem(out.systemID));
+    if ((pSystem == nullptr) or (pSystem->GetSE(out.beaconID) == nullptr)) {
+        sFltSvc.RemoveBeacon(charID, beaconID);
+        throw CustomError("That cynosural beacon is no longer active.");
+    }
 }

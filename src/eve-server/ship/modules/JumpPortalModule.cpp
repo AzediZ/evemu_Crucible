@@ -9,6 +9,7 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "ConsoleCommands.h"
 #include "fleet/FleetService.h"
 #include "ship/modules/JumpPortalModule.h"
 #include "ship/modules/ModuleManager.h"
@@ -27,7 +28,7 @@ m_bridgeOpen(false)
 JumpPortalModule::~JumpPortalModule()
 {
     // the bridging ship is gone (destroyed, unloaded) with the portal open
-    if (m_bridgeOpen)
+    if (m_bridgeOpen and !sConsole.IsShutdown())
         sFltSvc.RemoveBridge(m_bridge.shipID);
 }
 

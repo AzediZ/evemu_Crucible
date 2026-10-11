@@ -5,6 +5,7 @@
   * @date:   8 October 2021
   */
 
+#include "ConsoleCommands.h"
 #include "ship/modules/CynoModule.h"
 #include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
@@ -27,7 +28,8 @@ m_lifeTimer(lifeMS)
 CynoFieldSE::~CynoFieldSE()
 {
     // the fleet can't jump to a field that's gone (no-op when the generator already removed it)
-    sFltSvc.RemoveBeacon(m_charID, GetID());
+    if (!sConsole.IsShutdown())
+        sFltSvc.RemoveBeacon(m_charID, GetID());
 }
 
 void CynoFieldSE::Process()
