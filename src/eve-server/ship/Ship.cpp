@@ -689,34 +689,96 @@ void ShipItem::LoadChargesToBank(EVEItemFlags flag, std::vector< int32 >& charge
 }
 
 // only called from dogma call.  can throw
+// loads every module in the group, sharing the charges evenly when there aren't enough to fill them all
 void ShipItem::LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs)
 {
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-    if (itr == m_linkedWeapons.end())
-        return;
+    std::vector<GenericModule*> modules;
+    GetLinkedWeaponMods(pMod->flag(), modules);
+    if (modules.empty())
+        modules.push_back(pMod);
 
-    int8 pos = 0;
-    InventoryItemRef cRef(sItemFactory.GetItemRef(chargeIDs[pos]));
-    if (cRef.get() == nullptr)
-        throw UserError ("CantFindChargeToAdd");
-
-    int8 size(chargeIDs.size());
-    //load charge in master
-    VerifyHoldType(pMod->flag(), cRef, m_pilot);
-    m_ModuleManager->LoadCharge(cRef, pMod->flag());
-    // loop thru slaves and load charge(s)
-    std::list<GenericModule*>::iterator itr2 = itr->second.begin();
-    while ((itr2 != itr->second.end()) and (pos <= size)) {
-        cRef = sItemFactory.GetItemRef(chargeIDs[pos]);
-        if (cRef.get() == nullptr){
-            ++pos;
-        } else if (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())) {
-            VerifyHoldType((*itr2)->flag(), cRef, m_pilot);
-            m_ModuleManager->LoadCharge(cRef, (*itr2)->flag());
-            ++itr2;
-        } else {
-            ++pos;
+    // stacks the client offered that are still in a hold or hangar
+    auto available = [&]() {
+        std::vector<InventoryItemRef> stacks;
+        for (auto id : chargeIDs) {
+            InventoryItemRef cRef(sItemFactory.GetItemRef(id));
+            if ((cRef.get() != nullptr) and (cRef->quantity() > 0)
+            and (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())))
+                stacks.push_back(cRef);
         }
+        return stacks;
+    };
+
+    std::vector<InventoryItemRef> stacks(available());
+    if (stacks.empty())
+        throw UserError ("CantFindChargeToAdd");
+    uint16 chargeType(stacks.front()->typeID());
+    double chargeVolume(stacks.front()->GetAttribute(AttrVolume).get_double());
+    if (chargeVolume <= 0.0)
+        chargeVolume = 1.0;
+
+    int32 total(0);
+    for (auto cur : stacks)
+        if (cur->typeID() == chargeType)
+            total += cur->quantity();
+
+    uint8 left(static_cast<uint8>(modules.size()));
+    for (auto cur : modules) {
+        // how many more charges this module holds
+        int32 room(static_cast<int32>(cur->GetAttribute(AttrCapacity).get_double() / chargeVolume));
+        if (cur->IsLoaded() and (cur->GetLoadedChargeRef()->typeID() == chargeType))
+            room -= cur->GetLoadedChargeRef()->quantity();
+        int32 share((total + left - 1) / left);     // round up, so an odd charge isn't left behind
+        --left;
+        int32 want(std::min(room, share));
+        if ((want < 1) or cur->IsActive() or cur->IsLoading())
+            continue;
+        VerifyHoldType(cur->flag(), stacks.front(), m_pilot);
+        for (auto cRef : available()) {
+            if (want < 1)
+                break;
+            if (cRef->typeID() != chargeType)
+                continue;
+            int32 take(std::min(want, cRef->quantity()));
+            InventoryItemRef loadRef(cRef);
+            if (take < cRef->quantity()) {
+                loadRef = cRef->Split(take, false, true);
+                if (loadRef.get() == nullptr)
+                    break;
+            }
+            m_ModuleManager->LoadCharge(loadRef, cur->flag());
+            want -= take;
+            total -= take;
+        }
+    }
+}
+
+// the modules in a group share one charge type, the master's.  a slave loaded with another type is unloaded to
+//  cargo and loaded with the master's type, if there is any in cargo.  an empty master takes the slave's type.
+void ShipItem::MatchLinkedCharges(GenericModule* pMaster, GenericModule* pSlave)
+{
+    GenericModule* pFrom(pMaster);
+    GenericModule* pTo(pSlave);
+    if (!pMaster->IsLoaded()) {
+        if (!pSlave->IsLoaded())
+            return;
+        pFrom = pSlave;
+        pTo = pMaster;
+    }
+    uint16 chargeType(pFrom->GetLoadedChargeRef()->typeID());
+    if (pTo->IsLoaded()) {
+        if (pTo->GetLoadedChargeRef()->typeID() == chargeType)
+            return;
+        m_ModuleManager->UnloadCharge(pTo);
+    }
+    InventoryItemRef cRef(pInventory->GetByTypeFlag(chargeType, flagCargoHold));
+    if (cRef.get() == nullptr)
+        return;
+    try {
+        VerifyHoldType(pTo->flag(), cRef, m_pilot);
+        m_ModuleManager->LoadCharge(cRef, pTo->flag());
+    } catch (...) {
+        // can't load it; the module stays empty
     }
 }
 
@@ -1434,8 +1496,6 @@ void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
         return; // make error here?
     if (pMaster == pSlave)
         return; // make error here?
-    if ((pMaster->IsLoaded()) or (pSlave->IsLoaded()))
-        throw UserError ("CantLinkAmmoInWeapon");
     if ((pMaster->IsActive()) or (pSlave->IsActive()))
         throw UserError ("CantLinkModuleActive");
     if ((pMaster->IsDamaged()) or (pSlave->IsDamaged()))
@@ -1450,12 +1510,16 @@ void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
         std::list<GenericModule*> slaves;
         slaves.push_back(pSlave);
         m_linkedWeapons[pMaster] = slaves;
-        pMaster->SetLinked(true);
-        pMaster->SetLinkMaster(true);
     } else {
         itr->second.push_back(pSlave);
     }
+    // Group All makes the master's (empty) entry first, so set these here in either case
+    pMaster->SetLinked(true);
+    pMaster->SetLinkMaster(true);
     pSlave->SetLinked(true);
+
+    // loaded weapons keep their charges when grouped
+    MatchLinkedCharges(pMaster, pSlave);
 }
 
 void ShipItem::MergeModuleGroups(uint32 masterID, uint32 slaveID)
@@ -1506,11 +1570,12 @@ void ShipItem::LinkWeaponLoop(std::list<GenericModule*>& weaponList)
     GenericModule* master(nullptr);
     std::list< GenericModule*>::iterator itr = weaponList.begin();
     while (itr != weaponList.end()) {
-        if ((*itr)->IsLoaded() or (*itr)->IsLoading()) {
+        if ((*itr)->IsLoading() or (*itr)->IsActive()) {
+            // loaded weapons can be grouped (they keep their charges), but not while loading or active
             if (is_log_enabled(MODULE__INFO))
-                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) IsLoaded.  Skipping.", \
+                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) is loading or active.  Skipping.", \
                     (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID());
-            m_pilot->SendErrorMsg("You cannot group the %s while loaded with %s", (*itr)->GetSelf()->name(), (*itr)->GetLoadedChargeRef()->name());
+            m_pilot->SendErrorMsg("You cannot group the %s while it is loading or active.", (*itr)->GetSelf()->name());
             itr = weaponList.erase(itr);
         } else if (master == nullptr) {
             // lets check if this module will match a master already in list before making new master...

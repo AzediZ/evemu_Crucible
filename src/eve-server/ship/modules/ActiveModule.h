@@ -63,6 +63,7 @@ public:
 
     void                LaunchProbe();
     void                LaunchMissile();
+    bool                LaunchMissileFrom(Client* pClient, GenericModule* pLauncher);
     void                LaunchSnowBall();
 
     /* new effects processing code and updates */

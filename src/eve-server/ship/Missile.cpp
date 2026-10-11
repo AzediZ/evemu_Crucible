@@ -129,14 +129,8 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
 
     flightTime *= sConfig.rates.missileTime;
 
-    // if linked, update appropriate attributes
-    if (pMod != nullptr)
-        if (pMod->IsLinked()) {
-            uint8 mod = m_fromSE->GetShipSE()->GetShipItemRef()->GetLinkedCount(pMod);
-            m_damageMod *= mod;
-            flightTime *= mod;
-            m_hullHP *= mod;
-        }
+    // grouped launchers each launch their own missile (ActiveModule::LaunchMissile), so a missile's damage
+    //  doesn't depend on its launcher being grouped
 
     m_lifeTimer.Start(flightTime);
 

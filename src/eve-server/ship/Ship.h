@@ -266,6 +266,7 @@ public:
     void DamageGroup(GenericModule* pMod);
     // to load with ammo
     void LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs);
+    void MatchLinkedCharges(GenericModule* pMaster, GenericModule* pSlave);
     void GetLinkedWeaponMods(EVEItemFlags flag, std::vector<GenericModule*> &modules);
 
 protected:

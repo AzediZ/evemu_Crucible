@@ -1447,36 +1447,63 @@ void ActiveModule::LaunchMissile()
     Client* pClient = m_shipRef->GetPilot();
     if (pClient == nullptr)
         return;
-    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position() );
+
+    // every loaded launcher in a group launches its own missile, as in Crucible
+    std::vector<GenericModule*> modules;
+    if (m_linkMaster)
+        m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
+    if (modules.empty())
+        modules.push_back(this);
+
+    bool launched(false);
+    for (auto cur : modules) {
+        if (!cur->isOnline() or !cur->IsLoaded())
+            continue;
+        if (LaunchMissileFrom(pClient, cur))
+            launched = true;
+        else if (cur == this) {
+            AbortCycle();
+            return;
+        }
+    }
+    if (!launched)
+        return;
+
+    // Reduce ammo charge by 1 unit (from every loaded launcher in a group):
+    ConsumeCharge();
+}
+
+bool ActiveModule::LaunchMissileFrom(Client* pClient, GenericModule* pLauncher)
+{
+    InventoryItemRef chargeRef(pLauncher->GetLoadedChargeRef());
+    if (chargeRef.get() == nullptr)
+        return false;
+    ItemData idata(chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, chargeRef->name(), m_shipRef->position() );
     InventoryItemRef missileRef = sItemFactory.SpawnItem(idata);
     if (missileRef.get() == nullptr) {
-        _log(ITEM__ERROR ,"Unable to spawn item #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
-        pClient->SendErrorMsg("Your %s in %s experienced a loading error and was disabled.", m_chargeRef->name(), m_modRef->name());
-        AbortCycle();
-        return;
+        _log(ITEM__ERROR ,"Unable to spawn item #%u:'%s' of type %u.", chargeRef->itemID(), chargeRef->name(), chargeRef->typeID());
+        pClient->SendErrorMsg("Your %s in %s experienced a loading error and was disabled.", chargeRef->name(), pLauncher->GetSelf()->name());
+        return false;
     }
 
     SystemManager* pSystem = pClient->SystemMgr();
-    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, m_modRef, m_targetSE, m_shipRef->GetPilot()->GetShipSE(), this);
+    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, pLauncher->GetSelf(), m_targetSE, m_shipRef->GetPilot()->GetShipSE(), pLauncher);
     if (pMissile == nullptr) {
-        _log(ITEM__ERROR ,"Unable to create SE #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
-        pClient->SendErrorMsg("Your %s in %s experienced a launching error and was disabled.", m_chargeRef->name(), m_modRef->name());
-        AbortCycle();
-        return;
+        _log(ITEM__ERROR ,"Unable to create SE #%u:'%s' of type %u.", chargeRef->itemID(), chargeRef->name(), chargeRef->typeID());
+        pClient->SendErrorMsg("Your %s in %s experienced a launching error and was disabled.", chargeRef->name(), pLauncher->GetSelf()->name());
+        return false;
     }
 
     // the missile flies itself (see DestinyManager).  it hits when its path reaches the target
     pMissile->SetSpeed(pMissile->GetSelf()->GetAttribute(AttrMaxVelocity).get_float());
     pMissile->DestinyMgr()->MakeMissile(pMissile);
 
-    // Reduce ammo charge by 1 unit:
-    ConsumeCharge();
-
     // tell target a missile has been launched at them.. (defender missile trigger for ship, tower, pos, npc, others?)
     m_targetSE->MissileLaunched(pMissile);
 
     // add data to StatisticMgr
     sStatMgr.Increment(Stat::pcMissiles);
+    return true;
 }
 
 void ActiveModule::LaunchProbe()
