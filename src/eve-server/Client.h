@@ -300,6 +300,8 @@ public:
     PyRep *GetAggressors() const;
     void QueueDestinyUpdate(PyTuple** update, bool DoPackage=false, bool IsSetState=false);
     void QueueDestinyEvent(PyTuple** multiEvent);
+    // a damage message that adds its damage to the same message (key, weapon and target) already waiting to be sent
+    void QueueMergedDamageMessage(PyTuple** event);
     void FlushQueue();
 
     //  mission

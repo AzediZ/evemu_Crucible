@@ -371,7 +371,12 @@ bool SystemEntity::ApplyDamage(Damage &d) {
                 tuple->SetItem(1, new PyString(Dmg::Msg::Given[damageID]));
             }
             tuple->SetItem(2, dict);
-            d.srcSE->GetPilot()->QueueDestinyEvent(&tuple);
+            if (banked) {
+                // a launcher group's missiles hit together; show them as one message, like a turret group's shot
+                d.srcSE->GetPilot()->QueueMergedDamageMessage(&tuple);
+            } else {
+                d.srcSE->GetPilot()->QueueDestinyEvent(&tuple);
+            }
         } else if (d.srcSE->IsDroneSE()) {
             // verify drone has owner set
             Client* pController(d.srcSE->GetDroneSE()->GetControllerClient());

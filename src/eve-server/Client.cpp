@@ -2222,6 +2222,50 @@ void Client::QueueDestinyEvent(PyTuple** event) {
     //PyDecRef(*event);
 }
 
+/* grouped launchers fire one missile each, and their missiles hit together.  a turret group fires one shot for the
+ *  group, so it gives one damage message.  to match it, a launcher group's hits on a target in the same tick are
+ *  shown as one message with the total damage.  only the message is merged; each missile still does its own damage.
+ */
+void Client::QueueMergedDamageMessage(PyTuple** event) {
+    if ((event == nullptr) or ((*event) == nullptr))
+        return;
+    PyTuple* ev(*event);
+    PyDict* evDict((ev->size() == 3) and ev->GetItem(1)->IsString() and ev->GetItem(2)->IsDict() ? ev->GetItem(2)->AsDict() : nullptr);
+    if (evDict != nullptr) {
+        const std::string& key(ev->GetItem(1)->AsString()->content());
+        PyRep* weapon(evDict->GetItemString("weapon"));
+        PyRep* target(evDict->GetItemString("target"));
+        PyRep* damage(evDict->GetItemString("damage"));
+        if ((weapon != nullptr) and weapon->IsInt() and (target != nullptr) and target->IsInt()
+        and (damage != nullptr) and damage->IsFloat()) {
+            for (auto cur : *m_destinyEventQueue) {
+                if ((cur == nullptr) or !cur->IsTuple())
+                    continue;
+                PyTuple* queued(cur->AsTuple());
+                if ((queued->size() != 3) or !queued->GetItem(0)->IsString() or !queued->GetItem(1)->IsString()
+                or  !queued->GetItem(2)->IsDict())
+                    continue;
+                if ((queued->GetItem(0)->AsString()->content() != "OnDamageMessage")
+                or  (queued->GetItem(1)->AsString()->content() != key))
+                    continue;
+                PyDict* qDict(queued->GetItem(2)->AsDict());
+                PyRep* qWeapon(qDict->GetItemString("weapon"));
+                PyRep* qTarget(qDict->GetItemString("target"));
+                PyRep* qDamage(qDict->GetItemString("damage"));
+                if ((qWeapon == nullptr) or !qWeapon->IsInt() or (qWeapon->AsInt()->value() != weapon->AsInt()->value())
+                or  (qTarget == nullptr) or !qTarget->IsInt() or (qTarget->AsInt()->value() != target->AsInt()->value())
+                or  (qDamage == nullptr) or !qDamage->IsFloat())
+                    continue;
+                qDict->SetItemString("damage", new PyFloat(qDamage->AsFloat()->value() + damage->AsFloat()->value()));
+                PyDecRef(ev);
+                *event = nullptr;
+                return;
+            }
+        }
+    }
+    QueueDestinyEvent(event);
+}
+
 void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool IsSetState /*false*/) {
     if ((update == nullptr) or ((*update) == nullptr))
         return;
