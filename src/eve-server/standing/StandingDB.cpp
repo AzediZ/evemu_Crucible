@@ -71,8 +71,11 @@ PyRep *StandingDB::GetMyStandings(uint32 charID)
 PyRep *StandingDB::GetCharStandings(Client *pClient)
 {
     DBQueryResult res;
-    sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repStandings WHERE toID = %u OR fromID = %u",
-                       pClient->GetCharacterID(), pClient->GetCharacterID());
+    // the client shows its standing from CONCORD as the security status, so that row is always the security status
+    sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repStandings WHERE (toID = %u OR fromID = %u) AND NOT (fromID = %u AND toID = %u)"
+                       " UNION ALL SELECT %u, %u, %f",
+                       pClient->GetCharacterID(), pClient->GetCharacterID(), corpCONCORD, pClient->GetCharacterID(),
+                       corpCONCORD, pClient->GetCharacterID(), pClient->GetSecurityRating());
     return DBResultToCRowset(res);
 }
 

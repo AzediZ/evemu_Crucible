@@ -38,6 +38,15 @@ class Missile;
 class NPCAIMgr;
 class SystemManager;
 
+// law enforcement roles.  these NPCs attack only the ship they were sent for, ignore everyone else, and never pods
+namespace Law {
+    enum {
+        None    = 0,
+        Concord = 1,
+        Police  = 2
+    };
+}
+
 class NPC
 : public DynamicSystemEntity
 {
@@ -73,6 +82,13 @@ public:
     void Orbit(SystemEntity* who);
     void ForceSetSpawner(SpawnMgr* spawnMgr)            { m_spawnMgr = spawnMgr; }
 
+    /* law enforcement (see npc/LawEnforcement.h) */
+    void SetLawTarget(uint32 shipID, uint8 role)        { m_lawTarget = shipID; m_lawRole = role; }
+    uint32 GetLawTarget()                               { return m_lawTarget; }
+    uint8 GetLawRole()                                  { return m_lawRole; }
+    bool IsLawEnforcer()                                { return (m_lawRole != Law::None); }
+    bool IsConcord()                                    { return (m_lawRole == Law::Concord); }
+
     float GetThermal()                                  { return m_therDamage; }
     float GetEM()                                       { return m_emDamage; }
     float GetKinetic()                                  { return m_kinDamage; }
@@ -90,6 +106,8 @@ protected:
 
 private:
     uint32 m_orbitingID;
+    uint32 m_lawTarget;
+    uint8 m_lawRole;
 
     float m_emDamage;
     float m_expDamage;

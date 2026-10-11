@@ -340,11 +340,30 @@ public:
     // From <crime>
     struct {
         bool Enabled;
-        uint8 CWSessionTime;
-        uint8 WeaponFlagTime;
-        uint16 KillRightTime;
-        uint16 AggFlagTime;
-        uint16 CrimFlagTime;
+        uint8 WeaponFlagTime;           // s after an aggressive act before you may dock or jump
+        uint16 AggFlagTime;             // s an aggression flag lasts
+        uint16 CrimFlagTime;            // s the global criminal countdown lasts
+        uint16 KillRightDays;
+        uint16 LogoffNPCTime;           // s a logged-off ship stays when NPCs were attacking it
+        uint16 LogoffWarpTime;          // s a logged-off ship takes to warp off and vanish otherwise
+        uint16 SecGainWindow;           // s only the best npc kill per system in this window raises security status
+        float SecAggressionPenalty;     // % of the distance to -10
+        float SecShipKillPenalty;
+        float SecPodKillPenalty;
+        float SecPodKillMinPenalty;
+        bool CriminalLockdown;          // criminals can't use gates/stations in empire space except in a capsule
+        bool Concord;
+        std::string ConcordResponse;    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5
+        bool ConcordWaves;              // officers and captains first, the commander later
+        uint16 ConcordWaveDelay;        // s
+        uint16 ConcordLinger;           // s CONCORD stays after the criminal's ship is gone
+        bool FactionPolice;
+        uint16 PoliceDelay;             // s
+        uint16 PoliceTimeout;           // s
+        bool Sentries;
+        uint8 SentriesPerGate;
+        uint8 SentriesPerStation;
+        uint32 SentryRange;             // m
     } crime;
 
     // From <testing>

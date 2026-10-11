@@ -24,6 +24,7 @@
     Rewrite:    Allan
 */
 
+#include "system/CrimeWatch.h"
 #include "eve-server.h"
 
 #include "ConsoleCommands.h"
@@ -218,34 +219,15 @@ void SystemEntity::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 o
 
 /** @todo (allan)  this doesnt need to be here */
 void SystemEntity::AwardSecurityStatus(InventoryItemRef iRef, Character* pChar) {
-    //New Status = ((10 - Old Status) * Sec Incr) + Old Status
-    double oldSec = pChar->GetSecurityRating();
-    EvilNumber maxGain = 0;
-    if (iRef->HasAttribute(AttrEntitySecurityMaxGain, maxGain))
-        if (oldSec > maxGain.get_double())
-            return;
-    float killBonus = iRef->GetAttribute(AttrEntitySecurityStatusKillBonus).get_float();
-    double secAward = (((10 - oldSec) * killBonus) + oldSec) / 100;
-    secAward *=  (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::FastTalk, true))));      // 5% increase
-    if (killBonus and secAward) {
-        secAward *= sConfig.rates.secRate;
-        sLog.Magenta("SE::AwardSecurityStatus()"," %s(%u): killBonus: %f.  oldSec: %f.  secAward: %f.",
-                     GetName(), iRef->itemID(), killBonus, oldSec, secAward);
-        pChar->secStatusChange( secAward );
-        std::string msg = "Status Change for killing";
-        if (iRef->HasPilot()) {
-            msg += iRef->GetPilot()->GetName();
-            msg += " in ";
-            msg += m_system->GetNameStr();
-            sStandingMgr.UpdateStandings(iRef->itemID(), pChar->itemID(), Standings::CombatShipKill, secAward, msg);
-        } else {
-            msg += " pirates in ";
-            msg += m_system->GetNameStr();
-            sStandingMgr.UpdateStandings(corpCONCORD, pChar->itemID(), Standings::LawEnforcement, secAward, msg);
-            // decrease standings with faction of this npc kill
-            sStandingMgr.UpdateStandings(iRef->ownerID(), pChar->itemID(), Standings::CombatShipKill, -secAward, msg);
-        }
-    }
+    // security status: (10 - current) * the npc's security percentage, best npc per system per 15 minutes (CrimeWatch)
+    float secAward(sCrimeWatch.OnNPCKilled(pChar, iRef, m_system));
+    if (secAward <= 0)
+        return;
+    sLog.Magenta("SE::AwardSecurityStatus()"," %s(%u): secAward: %f.", GetName(), iRef->itemID(), secAward);
+    // killing pirates costs a little standing with their faction
+    std::string msg("Status Change for killing pirates in ");
+    msg += m_system->GetNameStr();
+    sStandingMgr.UpdateStandings(iRef->ownerID(), pChar->itemID(), Standings::CombatShipKill, -secAward, msg);
 
     /** @todo msg need work for details to appear correctly.  currently working, but could be better. (incomplete, but working)
      * see data in eve/common/script/util/eveFormat.py:300 for details

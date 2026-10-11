@@ -24,6 +24,7 @@
     Rewrite:    Allan
 */
 
+#include "system/CrimeWatch.h"
 #include "eve-server.h"
 
 #include "Client.h"
@@ -606,6 +607,10 @@ PyResult BeyonceBound::CmdWarpToStuffAutopilot(PyCallArgs &call, PyInt* destID) 
         return PyStatic.NewNone();
     }
 
+    // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
+    if (call.client->GetShip()->GetAttribute(AttrWarpScrambleStatus) > 0)
+        throw UserError ("WarpScrambled");
+
     call.client->SetInvul(false);
     call.client->SetUndock(false);
     // AP shit here.....
@@ -653,6 +658,8 @@ PyResult BeyonceBound::CmdStop(PyCallArgs &call) {
 
 // CmdTurboDock (in client code)
 PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* shipID, std::optional<PyRep*> paymentRequired) {
+    // weapons timer and criminal lockdown
+    sCrimeWatch.CheckDockOrJump(call.client, false);
     _log(AUTOPILOT__MESSAGE, "%s called Dock. AP: %s", call.client->GetName(), (call.client->IsAutoPilot() ? "true" : "false"));
     if (call.client->IsSessionChange()) {
         call.client->SendNotifyMsg("Session Change currently active.");
@@ -685,6 +692,8 @@ PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* ship
 }
 
 PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, PyInt* toStargateID, PyInt* shipID) {
+    // weapons timer and criminal lockdown
+    sCrimeWatch.CheckDockOrJump(call.client, true);
     /*  jump system messages....
 (67187, `{[location]system.name} Traffic Control: your jump-in clearance has expired.`)
 (67191, `{[location]system.name} Traffic Control: you have been cleared for jump-in within {[timeinterval]expiration.writtenForm, from=second, to=second}.`)

@@ -65,6 +65,9 @@
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
+#include "npc/LawEnforcement.h"
+#include "system/CrimeWatch.h"
+#include "ConsoleCommands.h"
 #include "station/Outpost.h"
 #include "services/ServiceManager.h"
 
@@ -76,6 +79,7 @@ m_anomMgr(new AnomalyMgr(this, svc)),
 m_beltMgr(new BeltMgr(this, svc)),
 m_dungMgr(new DungeonMgr(this, svc)),
 m_spawnMgr(new SpawnMgr(this, svc)),
+m_law(new LawEnforcement(this, svc)),
 m_loaded(false),
 m_entityChanged(false),
 m_docked(0),
@@ -130,6 +134,7 @@ SystemManager::~SystemManager() {
     SafeDelete(m_anomMgr);
     SafeDelete(m_beltMgr);
     SafeDelete(m_spawnMgr);
+    SafeDelete(m_law);
 }
 
 bool SystemManager::BootSystem() {
@@ -162,6 +167,9 @@ bool SystemManager::BootSystem() {
     for (auto cur: m_opStaticEntities)
         if (cur.second ->IsOperSE())
             cur.second->GetPOSSE()->Init();
+
+    // gate and station guns
+    m_law->Init();
 
     // system is loaded.  check for items that need initialization
     for (auto cur : m_ticEntities)
@@ -265,6 +273,7 @@ bool SystemManager::ProcessTic() {
         m_beltMgr->Process();
     m_dungMgr->Process();
     m_spawnMgr->Process();
+    m_law->Process();
 
     // drones that reached their ship during this tick
     ProcessDroneReturns();
@@ -347,6 +356,9 @@ void SystemManager::UnloadSystem() {
     /** @todo  this will throw on error.  if called from d'tor, this CANNOT throw.  fix it */
     //PayBounties();
     
+    // law enforcement forgets its entities (they're deleted below)
+    m_law->Close();
+
     // unload belts, which saves and removes roids from system
     m_beltMgr->ClearAll();
     // close anomaly mgr, which saves and removes sigs from system
@@ -1097,6 +1109,16 @@ void SystemManager::RemoveNPC(NPC* pNPC) {
     pNPC->RemoveNPC();   // this deletes NPC from DB.  NPC's dont jump, so no reason to remove from system unless killed
 }
 
+void SystemManager::RemoveDeadNPC(NPC* pNPC) {
+    if (pNPC == nullptr)
+        return;
+    auto itr = m_npcs.find(pNPC->GetID());
+    if (itr != m_npcs.end()) {
+        m_npcs.erase(itr);
+        sEntityList.RemoveNPC();
+    }
+}
+
 void SystemManager::AddEntity(SystemEntity* pSE, bool addSignal/*true*/) {
     if (pSE == nullptr)
         return;
@@ -1475,11 +1497,6 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
         if (cur.second->IsTowerSE())
             cur.second->GetTowerSE()->GetEffectState(*(into.effectStates));
 
-        /**  @todo (allan)  this needs more work.  should be done same as damageState.  28.2.16
-        //ss.aggressors is for players undocking/jumping with aggression (uses GetCriminalTimeStamps)  ** see notes in Client::GetAggressors()
-        if (cur.second->HasPilot() and cur.second->HasAggression())
-            ss.aggressors[ cur.first ] = cur.second->GetAggressors());
-        */
 
         /** @todo (allan)  to be written   -jumpbridges is a PyList */
         //  if (cur.second->IsJumpBridgeSE)
@@ -1518,6 +1535,9 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
         _log( DESTINY__SETSTATE_DECODE, "    Decoded:" );
         Destiny::DumpUpdate( DESTINY__SETSTATE_DECODE, &( into.destiny_state->content() )[0], (uint32)into.destiny_state->content().size() );
     }
+
+    // aggression flags of the pilots in this system: {aggressorID: {victimID or None: time}}
+    sCrimeWatch.GetAggressors(const_cast<SystemManager*>(this), into.aggressors);
 }
 
 void SystemManager::RemoveGlobalBall(uint32 itemID)
@@ -1856,6 +1876,9 @@ void SystemManager::UpdateData()
 // checks for if it is safe to mark the system for unloading
 bool SystemManager::SafeToUnload()
 {
+    // CONCORD on its way, or ships left in space by pilots who logged off
+    if (m_law->IsBusy() and !sConsole.IsShutdown())
+        return false;
     for (auto cur: GetEntities() ) {
         //If there are any ongoing operations by operational static structures, we don't want to unload the system until this is complete
         if (cur.second->IsPOSSE()) {

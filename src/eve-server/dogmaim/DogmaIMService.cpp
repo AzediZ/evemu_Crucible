@@ -31,6 +31,7 @@
 #include "dogmaim/DogmaIMService.h"
 #include "pos/Tower.h"
 #include "ship/modules/GenericModule.h"
+#include "npc/LawEnforcement.h"
 #include "system/Container.h"
 #include "system/SystemManager.h"
 #include "station/Station.h"
@@ -311,6 +312,9 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
 
     if (pClient->GetShipID() == targetID->value())
         throw UserError ("DeniedTargetSelf");
+
+    if ((pClient->SystemMgr() != nullptr) and pClient->SystemMgr()->GetLaw()->IsJammed(pClient->GetShipID()))
+        throw CustomError ("Your targeting systems are being jammed by CONCORD.");
 
     /** @todo pClient->IsUncloak() incomplete */
     if (pClient->IsUncloak())

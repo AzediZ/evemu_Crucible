@@ -24,6 +24,8 @@
     Rewrite:    Allan
 */
 
+#include "EntityList.h"
+#include "system/CrimeWatch.h"
 #include "eve-server.h"
 #include "../../eve-common/EVE_Station.h"
 
@@ -190,6 +192,41 @@ PyResult InventoryBound::RemoveChargeToCargo(PyCallArgs &call, PyTuple* chargeIn
     return PyStatic.NewNone();
 }
 
+/* Crucible can flagging: taking from another player's can or wreck in empire space, without the right to, flags you
+ *  to the owner's corporation (or the owner, in an npc corp) for 15 minutes.  it's not a crime.  the client's rules
+ *  (consider.ConfirmTakeFromContainer): secure containers, our own, our corp's, fleet loot and abandoned wrecks are free
+ */
+static void CheckTheft(Client* pClient, InventoryItemRef iRef)
+{
+    if (!sConfig.crime.Enabled or (pClient == nullptr) or !pClient->IsInSpace() or (pClient->SystemMgr() == nullptr))
+        return;
+    SystemEntity* pSE(pClient->SystemMgr()->GetSE(iRef->locationID()));
+    if ((pSE == nullptr) or !(pSE->IsContainerSE() or pSE->IsWreckSE()))
+        return;
+    InventoryItemRef contRef(pSE->GetSelf());
+    if ((contRef->groupID() == EVEDB::invGroups::Secure_Cargo_Container) or (contRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container))
+        return;
+    uint32 ownerID(contRef->ownerID());
+    if (!IsCharacterID(ownerID) or (ownerID == pClient->GetCharacterID()))
+        return;
+    if (pSE->IsWreckSE() and pSE->GetWreckSE()->IsAbandoned())
+        return;
+    uint32 ownerCorpID(0);
+    Client* pOwner(sEntityList.FindClientByCharID(ownerID));
+    if (pOwner != nullptr) {
+        ownerCorpID = pOwner->GetCorporationID();
+    } else {
+        CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
+        if (cRef.get() != nullptr)
+            ownerCorpID = cRef->corporationID();
+    }
+    if ((ownerCorpID == pClient->GetCorporationID()) and !IsNPCCorp(ownerCorpID))
+        return;
+    if (sCrimeWatch.CanTakeFrom(pClient->GetCharacterID(), ownerID))
+        return;
+    sCrimeWatch.Theft(pClient, ownerID, ownerCorpID);
+}
+
 PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::optional<PyRep*> sourceContainerID) {
     _log(INV__MESSAGE, "IB::MultiMerge() called by %s(%u)", m_self->name(), m_itemID);
     call.Dump(INV__DUMP);
@@ -233,8 +270,10 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
             continue;
         }
 
-        if (pInv->ValidateAddItem(destItem->flag(), srcItem))
+        if (pInv->ValidateAddItem(destItem->flag(), srcItem)) {
+            CheckTheft(call.client, srcItem);
             destItem->Merge( srcItem, qty, true );
+        }
         // if false, error is thrown in ValidateAddItem() call
     }
     sItemFactory.UnsetUsingClient();
@@ -490,6 +529,10 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             iRef->Donate(m_ownerID, m_itemID, toFlag);
             continue;
         }
+
+        // taking it out of someone else's can or wreck
+        if (iRef->locationID() != m_itemID)
+            CheckTheft(pClient, iRef);
 
         fromFlag = iRef->flag();
 

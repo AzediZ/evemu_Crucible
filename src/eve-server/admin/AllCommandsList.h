@@ -7,6 +7,7 @@
 
 #include "admin/debug_commands.h"
 #include "admin/IncursionCommands.h"
+#include "admin/CrimeCommands.h"
 
 //clean up macros
 #undef COMMAND

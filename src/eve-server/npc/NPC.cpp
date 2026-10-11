@@ -40,7 +40,10 @@
 NPC::NPC(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, SpawnMgr* spawnMgr)
 : DynamicSystemEntity(self, services, system),
 m_spawnMgr(spawnMgr),
-m_AI(new NPCAIMgr(this))
+m_AI(new NPCAIMgr(this)),
+m_orbitingID(0),
+m_lawTarget(0),
+m_lawRole(Law::None)
 {
     m_allyID = data.allianceID;
     m_warID = data.factionID;

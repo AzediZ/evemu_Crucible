@@ -80,6 +80,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/DevToolsProviderService.h"
      "${TARGET_INCLUDE_DIR}/admin/DungeonCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/IncursionCommands.h"
+     "${TARGET_INCLUDE_DIR}/admin/CrimeCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionerService.h"
      "${TARGET_INCLUDE_DIR}/admin/SlashService.h"
@@ -95,6 +96,7 @@ SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/DevToolsProviderService.cpp"
      "${TARGET_SOURCE_DIR}/admin/DungeonCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/IncursionCommands.cpp"
+     "${TARGET_SOURCE_DIR}/admin/CrimeCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionerService.cpp"
      "${TARGET_SOURCE_DIR}/admin/SlashService.cpp"
@@ -383,6 +385,7 @@ SET( missions_SOURCE
 
 SET( npc_INCLUDE
      #"${TARGET_INCLUDE_DIR}/npc/Concord.h"
+     "${TARGET_INCLUDE_DIR}/npc/LawEnforcement.h"
      "${TARGET_INCLUDE_DIR}/npc/Drone.h"
      "${TARGET_INCLUDE_DIR}/npc/DroneAI.h"
      "${TARGET_INCLUDE_DIR}/npc/EntityService.h"
@@ -392,6 +395,7 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h")
 SET( npc_SOURCE
      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
+     "${TARGET_SOURCE_DIR}/npc/LawEnforcement.cpp"
      "${TARGET_SOURCE_DIR}/npc/Drone.cpp"
      "${TARGET_SOURCE_DIR}/npc/DroneAI.cpp"
      "${TARGET_SOURCE_DIR}/npc/EntityService.cpp"

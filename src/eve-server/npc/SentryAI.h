@@ -58,6 +58,10 @@ protected:
 
     double GetTargetTime();
 
+    // law sentries: a pilot (or their drone) with a global criminal countdown, or flagged to our owner
+    SystemEntity* FindLawTarget();
+    bool IsLawTarget(SystemEntity* pTarget);
+
     State m_state;
 
     std::string GetStateName(State name);

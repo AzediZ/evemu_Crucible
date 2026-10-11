@@ -43,6 +43,7 @@
 #include "inventory/AttributeEnum.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/LawEnforcement.h"
 #include "ship/Missile.h"
 #include "system/DestinyManager.h"
 #include "system/Damage.h"
@@ -295,7 +296,7 @@ void NPCAIMgr::Process() {
 
     if (m_warpOutTimer.Check(false)) {
         // disallow warpout if spawn has active respawn timer (spawn is being chained)
-        if (m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID())) {
+        if ((m_npc->GetSpawnMgr() == nullptr) or m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID())) {
             m_state = NPCAI::State::Idle;
             m_warpOutTimer.Disable();
         }
@@ -311,6 +312,16 @@ void NPCAIMgr::Process() {
      */
     switch(m_state) {
         case NPCAI::State::Idle: {
+            if (m_npc->IsLawEnforcer()) {
+                // CONCORD and faction police only go after the ship they were sent for (LawEnforcement moves them if it leaves)
+                SystemEntity* pTarget(m_npc->SystemMgr()->GetSE(m_npc->GetLawTarget()));
+                if ((pTarget == nullptr) or (pTarget->SysBubble() != m_npc->SysBubble()) or (pTarget->DestinyMgr() == nullptr))
+                    break;
+                if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
+                    break;
+                Target(pTarget);
+                break;
+            }
             if (m_beginFindTarget.Check()) {
                 std::vector<Client*> clientVec;
                 clientVec.clear();
@@ -655,6 +666,8 @@ void NPCAIMgr::Target(SystemEntity* pSE) {
 void NPCAIMgr::Targeted(SystemEntity* pSE) {
     if (pSE == nullptr)
         return;
+    if (m_npc->IsLawEnforcer() and (pSE->GetID() != m_npc->GetLawTarget()))
+        return;
     double targetTime = GetTargetTime();
 
     _log(NPC__AI_TRACE, "%s(%u): Targeted by %s(%u) while %s.", \
@@ -797,9 +810,13 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
              EVEEffectID::targetAttack
             );
 
-    if (sConfig.npc.UseDamageMultiplier)
+    if (sConfig.npc.UseDamageMultiplier or m_npc->IsLawEnforcer())
         if (m_damageMultiplier > 0)
             d *= m_damageMultiplier;
+
+    // CONCORD scrambles, webs and jams its target first
+    if (m_npc->IsConcord())
+        m_npc->SystemMgr()->GetLaw()->OnLawAttack(m_npc, pSE);
 
     pSE->ApplyDamage(d);
 }

@@ -28,6 +28,7 @@
 
 
 #include "character/AggressionMgrService.h"
+#include "system/CrimeWatch.h"
 
 AggressionMgrBound::AggressionMgrBound(EVEServiceManager& mgr, AggressionMgrService& parent, uint32 systemID) :
     EVEBoundObject (mgr, parent),
@@ -39,13 +40,17 @@ AggressionMgrBound::AggressionMgrBound(EVEServiceManager& mgr, AggressionMgrServ
 
 PyResult AggressionMgrBound::GetCriminalTimeStamps(PyCallArgs &call, PyInt* characterID)
 {
-    return new PyDict();
+    // {victimID or None: time of the last act}.  michelle.RefreshCriminalFlagCountDown, on dock and undock
+    return sCrimeWatch.GetCriminalTimeStamps(characterID->value());
 }
 
 PyResult AggressionMgrBound::CheckLootRightExceptions(PyCallArgs &call, PyInt* containerID)
 {
-    // return true to allow looting
-    return new PyBool(true);
+    // true if we may take from this container without being flagged (the client asks before warning about theft)
+    InventoryItemRef iRef(sItemFactory.GetItemRef(containerID->value()));
+    if (iRef.get() == nullptr)
+        return new PyBool(true);
+    return new PyBool(sCrimeWatch.CanTakeFrom(call.client->GetCharacterID(), iRef->ownerID()));
 }
 
 AggressionMgrService::AggressionMgrService(EVEServiceManager& mgr) :

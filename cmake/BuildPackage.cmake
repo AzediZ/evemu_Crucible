@@ -47,11 +47,11 @@ MACRO( BUILD_PACKAGE PKG )
       SHOW_PROGRESS EXPECTED_MD5 "${PKG_MD5}"
       )
 
-    # If the archive is newer than the extracted
-    # directory, proceed with extraction
-    IF( "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}"
-        IS_NEWER_THAN
-        "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}" )
+    # If the archive is newer than the extracted directory, or an earlier
+    # extraction never finished (the listfile is written last), extract it
+    SET( PKG_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}" )
+    IF( ( "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}" IS_NEWER_THAN "${PKG_SOURCE_DIR}" )
+        OR ( NOT EXISTS "${PKG_SOURCE_DIR}/CMakeLists.txt" ) )
       # Print a status message
       MESSAGE( STATUS "Extracting ${PKG_ARCHIVE}" )
       # Make sure the extract directory exists
@@ -62,7 +62,11 @@ MACRO( BUILD_PACKAGE PKG )
         COMMAND "${CMAKE_COMMAND}" -E
         tar -xf "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}"
+        RESULT_VARIABLE PKG_EXTRACT_RESULT
         )
+      IF( NOT PKG_EXTRACT_RESULT EQUAL 0 )
+        MESSAGE( FATAL_ERROR "Extracting ${PKG_ARCHIVE} failed (${PKG_EXTRACT_RESULT}).  Delete ${PKG_SOURCE_DIR} and configure again." )
+      ENDIF()
       # Write the CMakeLists.txt
       FILE( WRITE
         "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}/CMakeLists.txt"
@@ -91,4 +95,6 @@ MACRO( BUILD_PACKAGE PKG )
   UNSET( PKG_ARCHIVE )
   UNSET( PKG_ARCHIVE_PREFIX )
   UNSET( PKG_EXTRACT_PREFIX )
+  UNSET( PKG_SOURCE_DIR )
+  UNSET( PKG_EXTRACT_RESULT )
 ENDMACRO( BUILD_PACKAGE )

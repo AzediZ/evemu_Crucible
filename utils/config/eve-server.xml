@@ -264,12 +264,32 @@ boolean can use either 0/1 OR true/false.
         <AnomalyFaction>0</AnomalyFaction><!-- force anomaly to this faction if !=0   -this is for testing dung spawn system -->
     </debug>
 
-    <crime><!-- not implemented yet -->
-        <CrimFlagTime>900</CrimFlagTime> <!-- seconds  (15m default) -->
-        <AggFlagTime>900</AggFlagTime> <!-- seconds (15m default) -->
-        <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds (60s default) -->
-        <CWSessionTime>60</CWSessionTime> <!-- seconds (60s default) -->
-        <KillRightTime>900</KillRightTime> <!-- seconds (15m default) -->
+    <crime><!-- Crucible (pre-Retribution) crime rules, CONCORD, faction police, sentries and logoff timers -->
+        <Enabled>true</Enabled><!-- bool -->
+        <CrimFlagTime>900</CrimFlagTime> <!-- seconds the global criminal countdown lasts (15m default) -->
+        <AggFlagTime>900</AggFlagTime> <!-- seconds an aggression flag lasts (15m default) -->
+        <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds after an aggressive act before you may dock or jump (60s default) -->
+        <KillRightDays>30</KillRightDays> <!-- days a kill right lasts -->
+        <LogoffNPCTime>120</LogoffNPCTime> <!-- seconds a logged-off ship stays in space when NPCs were attacking it -->
+        <LogoffWarpTime>60</LogoffWarpTime> <!-- seconds a logged-off ship takes to warp off and vanish otherwise.  PvP aggression keeps it for AggFlagTime -->
+        <SecGainWindow>900</SecGainWindow> <!-- seconds.  only the best npc kill per system in this window raises security status -->
+        <SecAggressionPenalty>1.5</SecAggressionPenalty> <!-- % of the distance to -10, scaled by system security -->
+        <SecShipKillPenalty>6.0</SecShipKillPenalty>
+        <SecPodKillPenalty>37.5</SecPodKillPenalty>
+        <SecPodKillMinPenalty>12.5</SecPodKillMinPenalty>
+        <CriminalLockdown>true</CriminalLockdown><!-- criminals can't use gates or stations in empire space, except in a capsule -->
+        <Concord>true</Concord><!-- bool -->
+        <ConcordResponse>6,6,7,10,14,19</ConcordResponse><!-- response seconds in 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 systems -->
+        <ConcordWaves>false</ConcordWaves><!-- true: police officers and captains arrive first, the commander ConcordWaveDelay later -->
+        <ConcordWaveDelay>10</ConcordWaveDelay>
+        <ConcordLinger>60</ConcordLinger><!-- seconds CONCORD stays after the criminal's ship is gone -->
+        <FactionPolice>true</FactionPolice><!-- chase low security status pilots in high-sec -->
+        <PoliceDelay>15</PoliceDelay>
+        <PoliceTimeout>600</PoliceTimeout>
+        <Sentries>true</Sentries><!-- sentry guns at gates and stations in empire space -->
+        <SentriesPerGate>3</SentriesPerGate>
+        <SentriesPerStation>2</SentriesPerStation>
+        <SentryRange>150000</SentryRange><!-- meters -->
     </crime>
 
     <threads><!-- not implemented yet -->

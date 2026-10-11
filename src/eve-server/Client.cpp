@@ -31,6 +31,8 @@
 #include "../eve-common/EVE_Character.h"
 //#include "../../eve-common/EVE_Skills.h"
 
+#include "system/CrimeWatch.h"
+#include "npc/LawEnforcement.h"
 #include "Client.h"
 #include "ConsoleCommands.h"
 #include "EVEServerConfig.h"
@@ -112,6 +114,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
     m_packaged = false;
     m_portrait = false;
     m_autoPilot = false;
+    m_shipLeftInSpace = false;
     m_bubbleWait = false;     // allow client processing of subsquent destiny msgs
     m_charCreation = false;
     m_setStateSent = false;
@@ -178,8 +181,9 @@ Client::~Client() {
         m_char->LogOut();
     }
 
-    // save shipstate and remove from ItemFactory
-    m_ship->LogOut();
+    // save shipstate and remove from ItemFactory.  a ship left in space is logged out when it leaves (LawEnforcement)
+    if (!m_shipLeftInSpace)
+        m_ship->LogOut();
 
     m_system->RemoveClient(this, true);
     // remove char from entitylist
@@ -636,6 +640,24 @@ void Client::WarpOut() {
     if (!InPod())
         m_ship->SetFlag(flagShipOffline);
     pShipSE->SetPosition(m_ship->position());
+
+    /* logoff timer.  the ship stays in space: 15 minutes if it was in a fight with players,
+     *  otherwise it warps off and vanishes after a minute (two if NPCs were attacking it)
+     */
+    if (sConfig.crime.Enabled and !sConsole.IsShutdown() and (m_system != nullptr) and (pShipSE->SysBubble() != nullptr)) {
+        bool npc(false);
+        bool pvp(sCrimeWatch.LogoffTimer(GetCharacterID(), npc) > 0);
+        // modules stop and lose the pilot's skills while the pilot is still here
+        m_ship->Eject();
+        // off the bubble's pilot list, then back as an empty ship
+        sBubbleMgr.Remove(pShipSE);
+        pShipSE->SetPilot(nullptr);
+        sBubbleMgr.Add(pShipSE);
+        m_system->GetLaw()->AddLoggedOffShip(pShipSE, GetCharacterID(), pvp, npc);
+        m_shipLeftInSpace = true;
+        pShipSE = nullptr;
+        return;
+    }
     DestroyShipSE();
     return;
     /*
@@ -804,8 +826,13 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
         if (pShipSE != nullptr)
             pShipSE->ResetShipSystemMgr(m_system);
 
+        // the ship we left in space when we logged off may still be there (logoff timer).  carry on from where it is now
+        GPoint shipPos(pt);
+        if (pShipSE == nullptr)
+            m_system->GetLaw()->ReclaimLoggedOffShip(m_shipId, shipPos);
+
         // once systemData.radius implemented, remove this in favor of below check
-        m_ship->SetPosition(pt);
+        m_ship->SetPosition(shipPos);
 
         /* comment this block for later use...
          * m_systemData.radius is not populated yet, and this does weird things with ships
@@ -817,7 +844,7 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
         }
         */
 
-        SetDestiny(pt);
+        SetDestiny(shipPos);
 
         // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
         //  client's autopilot off in every new system
@@ -832,6 +859,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
 
     UpdateSession();
     SendSessionChange();
+
+    // undock, gate jump, login in space: a live criminal flag brings CONCORD, low security status the faction police
+    if (IsInSpace())
+        sCrimeWatch.OnEnterSpace(this);
 }
 
 void Client::SetDestiny(const GPoint& pt, bool update/*false*/) {

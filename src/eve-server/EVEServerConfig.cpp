@@ -237,12 +237,31 @@ EVEServerConfig::EVEServerConfig()
     chat.EnforceRookieInHelp = false;
 
     // crime
-    crime.Enabled = false; //N
-    crime.AggFlagTime = 900 /*s*/;//N
-    crime.CrimFlagTime = 900 /*s*/;//N
-    crime.CWSessionTime = 60 /*s*/;//N
-    crime.KillRightTime = 900 /*s*/;//N
-    crime.WeaponFlagTime = 60 /*s*/;//N
+    crime.Enabled = true;
+    crime.AggFlagTime = 900 /*s*/;
+    crime.CrimFlagTime = 900 /*s*/;
+    crime.WeaponFlagTime = 60 /*s*/;
+    crime.KillRightDays = 30;
+    crime.LogoffNPCTime = 120 /*s*/;
+    crime.LogoffWarpTime = 60 /*s*/;
+    crime.SecGainWindow = 900 /*s*/;
+    crime.SecAggressionPenalty = 1.5f;
+    crime.SecShipKillPenalty = 6.0f;
+    crime.SecPodKillPenalty = 37.5f;
+    crime.SecPodKillMinPenalty = 12.5f;
+    crime.CriminalLockdown = true;
+    crime.Concord = true;
+    crime.ConcordResponse = "6,6,7,10,14,19";
+    crime.ConcordWaves = false;
+    crime.ConcordWaveDelay = 10 /*s*/;
+    crime.ConcordLinger = 60 /*s*/;
+    crime.FactionPolice = true;
+    crime.PoliceDelay = 15 /*s*/;
+    crime.PoliceTimeout = 600 /*s*/;
+    crime.Sentries = true;
+    crime.SentriesPerGate = 3;
+    crime.SentriesPerStation = 2;
+    crime.SentryRange = 150000 /*m*/;
 
     // testing
     testing.EnableDrones = false;
@@ -874,21 +893,40 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
 
 bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
 {
-    AddValueParser( "Enabled",          crime.Enabled );
-    AddValueParser( "AggFlagTime",      crime.AggFlagTime );
-    AddValueParser( "CrimFlagTime",     crime.CrimFlagTime );
-    AddValueParser( "CWSessionTime",    crime.CWSessionTime );
-    AddValueParser( "KillRightTime",    crime.KillRightTime );
-    AddValueParser( "WeaponFlagTime",   crime.WeaponFlagTime );
+    AddValueParser( "Enabled",              crime.Enabled );
+    AddValueParser( "AggFlagTime",          crime.AggFlagTime );
+    AddValueParser( "CrimFlagTime",         crime.CrimFlagTime );
+    AddValueParser( "WeaponFlagTime",       crime.WeaponFlagTime );
+    AddValueParser( "KillRightDays",        crime.KillRightDays );
+    AddValueParser( "LogoffNPCTime",        crime.LogoffNPCTime );
+    AddValueParser( "LogoffWarpTime",       crime.LogoffWarpTime );
+    AddValueParser( "SecGainWindow",        crime.SecGainWindow );
+    AddValueParser( "SecAggressionPenalty", crime.SecAggressionPenalty );
+    AddValueParser( "SecShipKillPenalty",   crime.SecShipKillPenalty );
+    AddValueParser( "SecPodKillPenalty",    crime.SecPodKillPenalty );
+    AddValueParser( "SecPodKillMinPenalty", crime.SecPodKillMinPenalty );
+    AddValueParser( "CriminalLockdown",     crime.CriminalLockdown );
+    AddValueParser( "Concord",              crime.Concord );
+    AddValueParser( "ConcordResponse",      crime.ConcordResponse );
+    AddValueParser( "ConcordWaves",         crime.ConcordWaves );
+    AddValueParser( "ConcordWaveDelay",     crime.ConcordWaveDelay );
+    AddValueParser( "ConcordLinger",        crime.ConcordLinger );
+    AddValueParser( "FactionPolice",        crime.FactionPolice );
+    AddValueParser( "PoliceDelay",          crime.PoliceDelay );
+    AddValueParser( "PoliceTimeout",        crime.PoliceTimeout );
+    AddValueParser( "Sentries",             crime.Sentries );
+    AddValueParser( "SentriesPerGate",      crime.SentriesPerGate );
+    AddValueParser( "SentriesPerStation",   crime.SentriesPerStation );
+    AddValueParser( "SentryRange",          crime.SentryRange );
 
     const bool result = ParseElementChildren( ele );
 
-    RemoveParser( "Enabled" );
-    RemoveParser( "AggFlagTime" );
-    RemoveParser( "CrimFlagTime" );
-    RemoveParser( "CWSessionTime" );
-    RemoveParser( "KillRightTime" );
-    RemoveParser( "WeaponFlagTime" );
+    for (const char* name : {"Enabled", "AggFlagTime", "CrimFlagTime", "WeaponFlagTime", "KillRightDays", "LogoffNPCTime",
+            "LogoffWarpTime", "SecGainWindow", "SecAggressionPenalty", "SecShipKillPenalty", "SecPodKillPenalty",
+            "SecPodKillMinPenalty", "CriminalLockdown", "Concord", "ConcordResponse", "ConcordWaves", "ConcordWaveDelay",
+            "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
+            "SentriesPerStation", "SentryRange"})
+        RemoveParser( name );
 
     return result;
 }

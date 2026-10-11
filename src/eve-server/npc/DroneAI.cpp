@@ -24,6 +24,7 @@
  *  each call below is idempotent (destiny ignores a command that changes nothing), so they are simply repeated every tick.
  */
 
+#include "system/CrimeWatch.h"
 #include "eve-server.h"
 
 #include "Client.h"
@@ -571,6 +572,18 @@ void DroneAIMgr::SendEffect(SystemEntity* pTarget, bool start) {
 
 void DroneAIMgr::Fire(SystemEntity* pTarget) {
     const DroneStats& stats(m_pDrone->Stats());
+    // crime: the drone's pilot is acting on the target
+    Client* pOwner(m_pDrone->GetControllerClient());
+    if (pOwner == nullptr)
+        pOwner = m_pDrone->GetOwnerClient();
+    if (pOwner != nullptr) {
+        if ((m_action == DroneAI::Action::RepairShield) or (m_action == DroneAI::Action::RepairArmor)) {
+            sCrimeWatch.AssistanceAct(pOwner, pTarget);
+        } else if ((m_action != DroneAI::Action::None) and (m_action != DroneAI::Action::Mine)) {
+            sCrimeWatch.OffensiveAct(pOwner, pTarget);
+        }
+    }
+
     SendEffect(pTarget, true);
 
     switch (m_action) {
