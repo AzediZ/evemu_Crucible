@@ -1755,6 +1755,19 @@ void Client::LoadStationHangar(uint32 stationID) {
     sItemFactory.UnsetUsingClient();
 }
 
+Inventory* Client::GetStationHangar(uint32 stationID) {
+    if (!sDataMgr.IsStation(stationID))
+        return nullptr;
+    StationItemRef sRef = sItemFactory.GetStationRef(stationID);
+    if (sRef.get() == nullptr)
+        return nullptr;
+    // station inventories are loaded per character.  this returns early if this char's hangar is already loaded
+    sItemFactory.SetUsingClient(this);
+    sRef->GetMyInventory()->LoadContents();
+    sItemFactory.UnsetUsingClient();
+    return sRef->GetMyInventory();
+}
+
 void Client::MoveItem(uint32 itemID, uint32 location, EVEItemFlags flag)
 {
     sItemFactory.SetUsingClient(this);

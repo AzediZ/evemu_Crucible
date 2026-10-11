@@ -106,6 +106,18 @@ namespace Mission {
         };
     }
 
+    namespace Objective {
+        // result of MissionObjectives::Check()
+        enum {
+            Incomplete      = 0,
+            Complete        = 1,
+            WrongLocation   = 2,
+            MissingItems    = 3,
+            NotAccepted     = 4,
+            Unsupported     = 5
+        };
+    }
+
     namespace Type {
         enum {
             // i think these are arbitrary

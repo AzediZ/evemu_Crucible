@@ -219,6 +219,8 @@ public:
     void SetDestiny(const GPoint& pt, bool update=false);
     ShipItemRef SpawnNewRookieShip(uint32 stationID);
     void LoadStationHangar(uint32 stationID);
+    // loads (if needed) and returns the inventory of stationID holding this character's hangar items. null if not a station
+    Inventory* GetStationHangar(uint32 stationID);
     void AddStationHangar(uint32 stationID);
     void RemoveStationHangar(uint32 stationID);
 

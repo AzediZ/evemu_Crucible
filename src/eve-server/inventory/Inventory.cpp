@@ -593,6 +593,77 @@ bool Inventory::ContainsTypeByFlag(uint16 typeID, EVEItemFlags flag) const
     return false;
 }
 
+uint32 Inventory::GetTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID) const
+{
+    uint32 count(0);
+    std::set<uint32> seen;  // an item can be listed twice under one flag
+    auto range = m_contentsByFlag.equal_range(flag);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        if (itr->second->typeID() != typeID)
+            continue;
+        if (itr->second->isSingleton())
+            continue;
+        if (itr->second->ownerID() != ownerID)
+            continue;
+        if (!seen.insert(itr->second->itemID()).second)
+            continue;
+        if (itr->second->quantity() > 0)
+            count += itr->second->quantity();
+    }
+    return count;
+}
+
+bool Inventory::TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out)
+{
+    if (qty < 1)
+        return true;
+
+    std::vector<InventoryItemRef> candidates;
+    uint32 count(0);
+    std::set<uint32> seen;
+    auto range = m_contentsByFlag.equal_range(flag);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        if (itr->second->typeID() != typeID)
+            continue;
+        if (itr->second->isSingleton())
+            continue;
+        if (itr->second->ownerID() != ownerID)
+            continue;
+        if (!seen.insert(itr->second->itemID()).second)
+            continue;
+        if (itr->second->quantity() < 1)
+            continue;
+        candidates.push_back(itr->second);
+        count += itr->second->quantity();
+    }
+
+    if (count < qty)
+        return false;
+
+    // use up small stacks before splitting a big one
+    std::sort(candidates.begin(), candidates.end(),
+              [](const InventoryItemRef& a, const InventoryItemRef& b) { return a->quantity() < b->quantity(); });
+
+    uint32 remaining(qty);
+    for (auto cur : candidates) {
+        if (remaining < 1)
+            break;
+        if ((uint32)cur->quantity() <= remaining) {
+            remaining -= cur->quantity();
+            out.push_back(cur);
+            continue;
+        }
+        InventoryItemRef sRef = cur->Split(remaining, true);
+        if (sRef.get() == nullptr) {
+            _log(INV__ERROR, "Inventory::TakeTypeQtyForOwner() - Failed to split %u units from %s(%u)", remaining, cur->name(), cur->itemID());
+            return false;
+        }
+        out.push_back(sRef);
+        remaining = 0;
+    }
+
+    return (remaining == 0);
+}
 
 void Inventory::StackAll(EVEItemFlags locFlag, uint32 ownerID/*0*/)
 {

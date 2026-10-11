@@ -66,6 +66,12 @@ public:
     bool ContainsTypeQtyByFlag(uint16 typeID, EVEItemFlags flag=flagNone, uint32 qty=0) const;
     int ContainsTypeStackQtyByFlag(uint16 typeID, EVEItemFlags flag=flagNone, uint32 qty=0) const;
     bool ContainsTypeByFlag(uint16 typeID, EVEItemFlags flag=flagNone) const;
+    // total quantity of unassembled stacks of typeID owned by ownerID under flag
+    uint32 GetTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID) const;
+    /* takes exactly qty units of unassembled typeID owned by ownerID under flag (smallest stacks first, last one is split)
+     * fills 'out' with the taken stacks (still at this location with the same owner; caller Deletes or Donates them)
+     * returns false and changes nothing if there is not enough */
+    bool TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out);
 
     float GetCapacity(EVEItemFlags flag) const;
     float GetStoredVolume(EVEItemFlags flag, bool combined=true) const;
