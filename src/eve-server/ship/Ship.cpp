@@ -1468,7 +1468,7 @@ void ShipItem::BurnOut(GenericModule* pMod)
     m_ModuleManager->OnModuleWentOffline(pMod);
 }
 
-void ShipItem::StripFitting()
+void ShipItem::StripFitting(bool all/*false*/)
 {
     bool banked(HasLinkedWeapons());
     UnlinkAllWeapons(true);
@@ -1482,6 +1482,9 @@ void ShipItem::StripFitting()
     std::vector<InventoryItemRef> moduleList;
     m_ModuleManager->GetModuleListOfRefsAsc(moduleList);
     for (auto cur : moduleList) {
+        // a T3 keeps its subsystems (CantUnfitSubSystems), and rigs are only removed by destroying them
+        if (!all and (IsRigSlot(cur->flag()) or IsSubSystem(cur->flag())))
+            continue;
         m_ModuleManager->UnfitModule(cur->itemID());
         cur->Move(locationID(), flag, true);
     }

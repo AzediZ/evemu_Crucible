@@ -88,6 +88,8 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
             m_damageMod *= count;
             m_hullHP *= count;
             m_numLaunchers = count;
+            // the stacked missile takes damage (defenders) against the combined hp
+            m_self->SetAttribute(AttrHP, m_hullHP, false);
         }
     }
 

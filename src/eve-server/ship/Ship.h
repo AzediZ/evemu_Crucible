@@ -136,7 +136,8 @@ public:
     void UnloadAllModules()                             { m_ModuleManager->UnloadAllModules();  }
     // this will test for active modules and throw where applicable
     void MoveModuleSlot(EVEItemFlags slot1, EVEItemFlags slot2);
-    void StripFitting();
+    // the client's strip fitting leaves rigs and subsystems (they can't be unfitted).  all = repackaging, which takes them too
+    void StripFitting(bool all=false);
     // this will remove all items from all ship cargo holds
     void EmptyCargo();
     // after a subsystem change: modules past the ship's slots or hardpoints go to the hangar (cargo in space)

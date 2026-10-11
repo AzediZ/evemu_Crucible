@@ -253,7 +253,7 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
                         //  maybe we should instruct player that ship is fitted/has cargo, and let them do this
                         if (iRef->IsShipItem()) {
                             iRef->GetShipItem()->EmptyCargo();
-                            iRef->GetShipItem()->StripFitting();
+                            iRef->GetShipItem()->StripFitting(true);
                             // check insurance and delete if applicable
                             ShipDB::DeleteInsuranceByShipID(itemID);
                         }
