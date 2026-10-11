@@ -116,6 +116,7 @@ private:
     Timer               m_timer;
     Timer               m_reloadTimer;
 
+    uint32              m_slaveCycleMS = 0;     // cycle time copied from the group's master (see SetSlaveData)
 };
 
 

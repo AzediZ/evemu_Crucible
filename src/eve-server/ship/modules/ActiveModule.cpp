@@ -508,6 +508,8 @@ void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
         m_targetID = pMaster->m_targetID;
         m_targetSE = pMaster->m_targetSE;
         m_repeat = pMaster->m_repeat;
+        // a slave's own cycle timer doesn't run (its master cycles for the group), so its effects use the master's
+        m_slaveCycleMS = pMaster->GetRemainingCycleTimeMS();
     }
     m_bubble = pShip->SysBubble();
     m_sysMgr = pShip->SystemMgr();
@@ -1308,6 +1310,8 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
 
     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
     uint32 timeLeft(GetRemainingCycleTimeMS());
+    if ((timeLeft == 0) and IsLinked() and !IsMaster())
+        timeLeft = m_slaveCycleMS;  // without a duration the client doesn't show this weapon firing
 
     if (m_destinyMgr != nullptr)
         m_destinyMgr->SendSpecialEffect(
