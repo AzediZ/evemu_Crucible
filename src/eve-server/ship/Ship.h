@@ -170,6 +170,13 @@ public:
     void SetRackHeat(int8 rack, double heat);
     // brings the heat attributes up to date, for ship info sent to the client
     void UpdateHeatAttributes();
+
+    /* doomsday lockouts (filetime the lockout ends).  kept on the ship item, so a new ShipSE (relog) keeps them */
+    void SetWarpLockout(int64 until)                    { m_warpLockUntil = until; }
+    void SetJumpLockout(int64 until)                    { m_jumpLockUntil = until; }
+    // remaining lockout in filetime units, 0 when over
+    int64 WarpLockoutRemaining();
+    int64 JumpLockoutRemaining();
     // docking: stops all rack heating
     void StopHeating();
     // after one of pMod's overloaded cycles, pMod and its rack may take heat damage
@@ -282,6 +289,9 @@ protected:
 
 private:
     Client* m_pilot;
+
+    int64 m_warpLockUntil;              // no warp until (30s after firing the doomsday)
+    int64 m_jumpLockUntil;              // no jump drive, jump portal or cloak until (10min after firing the doomsday)
 
     //the ship's module manager.  We own this
     ModuleManager* m_ModuleManager;
@@ -401,6 +411,12 @@ public:
     DroneSE* LaunchDrone(InventoryItemRef dRef);
 
     bool GetFleetSMBUsage()                             { return m_allowFleetSMBUsage; }
+
+    /* doomsday lockouts (see ShipItem).  remaining time in filetime units, 0 when over */
+    void SetWarpLockout(int64 until)                    { m_shipRef->SetWarpLockout(until); }
+    void SetJumpLockout(int64 until)                    { m_shipRef->SetJumpLockout(until); }
+    int64 WarpLockoutRemaining()                        { return m_shipRef->WarpLockoutRemaining(); }
+    int64 JumpLockoutRemaining()                        { return m_shipRef->JumpLockoutRemaining(); }
     void SetFleetSMBUsage(bool set=false)               { m_allowFleetSMBUsage = set; }
 
 protected:

@@ -33,7 +33,9 @@ m_loaded(false),
 m_isActive(false),
 m_isPopped(false),
 m_isDocking(false),
-m_isUndocking(false)
+m_isUndocking(false),
+m_warpLockUntil(0),
+m_jumpLockUntil(0)
 {
     m_onlineModuleVec.clear();
     pInventory = new Inventory(InventoryItemRef(this));
@@ -45,6 +47,18 @@ ShipItem::~ShipItem()
 {
     SafeDelete(pInventory);
     SafeDelete(m_ModuleManager);
+}
+
+int64 ShipItem::WarpLockoutRemaining()
+{
+    int64 now(GetFileTimeNow());
+    return ((m_warpLockUntil > now) ? (m_warpLockUntil - now) : 0);
+}
+
+int64 ShipItem::JumpLockoutRemaining()
+{
+    int64 now(GetFileTimeNow());
+    return ((m_jumpLockUntil > now) ? (m_jumpLockUntil - now) : 0);
 }
 
 ShipItemRef ShipItem::Load( uint32 shipID)

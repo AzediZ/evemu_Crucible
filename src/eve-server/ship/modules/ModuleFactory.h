@@ -38,6 +38,7 @@
 #include "ship/modules/TurretModule.h"
 #include "ship/modules/CynoModule.h"
 #include "ship/modules/JumpPortalModule.h"
+#include "ship/modules/SuperWeapon.h"
 #include "ship/modules/EwarModule.h"
 #include "ship/modules/CloakModule.h"
 #include "ship/modules/SmartBombModule.h"
@@ -62,7 +63,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
             case EVEDB::invGroups::Heat_Sink:                               return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Magnetic_Field_Stabilizer:               return (new PassiveModule(mRef, sRef));
             case EVEDB::invGroups::Ballistic_Control_system:                return (new PassiveModule(mRef, sRef));
-            case EVEDB::invGroups::Super_Weapon:                            return (new ActiveModule(mRef, sRef));    // Active - external
+            case EVEDB::invGroups::Super_Weapon:                            return (new SuperWeapon(mRef, sRef));     // Active - external (doomsday)
             case EVEDB::invGroups::Interdiction_Sphere_Launcher:            return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Warp_Disrupt_Field_Generator:            return (new ActiveModule(mRef, sRef));    // Active - external
             case EVEDB::invGroups::Missile_Launcher_Snowball:               return (new ActiveModule(mRef, sRef));    // Active - external

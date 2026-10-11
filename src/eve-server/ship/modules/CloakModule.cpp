@@ -46,6 +46,12 @@ bool CloakModule::CanActivate()
         Clear();
         throw UserError("CantCloakPolicePursuit");
     }
+    // a titan can't cloak for 10 minutes after firing its doomsday
+    if (pShip->JumpLockoutRemaining() > 0) {
+        int64 remaining(pShip->JumpLockoutRemaining());
+        Clear();
+        throw CustomError("Your ship cannot cloak for another %u seconds after firing its super weapon.", (uint32)(remaining / EvE::Time::Second) + 1);
+    }
     GenericModule* pMod(m_shipRef->GetModuleManager()->GetActiveNoCloakModule());
     if (pMod != nullptr) {
         uint16 modTypeID(pMod->typeID());

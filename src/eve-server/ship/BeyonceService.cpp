@@ -364,6 +364,16 @@ void BeyonceBound::CheckCloakedWarp(Client* pClient)
         throw UserError ("CantWarpWhileCloaked");
 }
 
+bool BeyonceBound::CheckWarpLockout(Client* pClient)
+{
+    // a titan can't warp for 30s after firing its doomsday
+    int64 remaining(pClient->GetShipSE()->WarpLockoutRemaining());
+    if (remaining < 1)
+        return false;
+    pClient->SendNotifyMsg("Your ship cannot warp for another %u seconds after firing its super weapon.", (uint32)(remaining / EvE::Time::Second) + 1);
+    return true;
+}
+
 bool BeyonceBound::ResolveWarpTarget(Client* pClient, const std::string& type, PyRep* id, GPoint& point, SystemEntity*& pSE, uint32& toID)
 {
     SystemManager* pSystem = pClient->SystemMgr();
@@ -581,7 +591,7 @@ void BeyonceBound::GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std:
         DestinyManager* pDestiny(pShip->DestinyMgr());
         if ((pDestiny == nullptr) or pDestiny->IsWarping() or pDestiny->IsFrozen())
             continue;
-        if (pShip->IsWarpScrambled() or !CanWarpCloaked(pClient))
+        if (pShip->IsWarpScrambled() or !CanWarpCloaked(pClient) or (pShip->WarpLockoutRemaining() > 0))
             continue;
         if ((pInterdict != nullptr) and pInterdict->IsWarpDisrupted(pShip))
             continue;
@@ -639,6 +649,8 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
     if (call.client->SystemMgr() != nullptr)
         call.client->SystemMgr()->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE());
     CheckCloakedWarp(call.client);
+    if (CheckWarpLockout(call.client))
+        return PyStatic.NewNone();
 
     DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
     if (pDestiny == nullptr) {
@@ -732,6 +744,8 @@ PyResult BeyonceBound::CmdWarpToStuffAutopilot(PyCallArgs &call, PyInt* destID) 
     // warp disruption fields (bubbles).  the autopilot turns itself off on 'WarpDisrupted' (autopilot.py)
     pSystem->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE(), true);
     CheckCloakedWarp(call.client);
+    if (CheckWarpLockout(call.client))
+        return PyStatic.NewNone();
 
     call.client->SetInvul(false);
     call.client->SetUndock(false);

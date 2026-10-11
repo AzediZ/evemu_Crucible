@@ -30,7 +30,7 @@ namespace JumpDrive {
     void ConsumeFuel(ShipItemRef ship, uint16 typeID, uint32 qty);
 
     /* throws when the pilot's jump drive can't be used now:  an active cyno, jump portal or siege module (pIgnore is skipped),
-     *  the doomsday's jump lockout, warp scramble or a warp disruption field */
+     *  the doomsday's jump lockout (JumpSuperweaponActive), warp scramble or a warp disruption field */
     void CheckDriveFree(Client* pClient, GenericModule* pIgnore = nullptr);
     // throws for a jump within one system, out of or into wormhole space
     void CheckDestination(uint32 fromSystemID, uint32 toSystemID);

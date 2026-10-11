@@ -21,31 +21,33 @@
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
     Author:        AknorJaden
+    Rewrite:       EVEmu Team (Crucible doomsday, Oct 2026)
 */
 
 #ifndef __SUPERWEAPON_H__
 #define __SUPERWEAPON_H__
 
+#include "ship/modules/ActiveModule.h"
 
+/* titan doomsday (Crucible):  one capital ship target, damage applied once on activation, one cycle (the 10 minute rate of fire).
+ *  null-sec only (disallowInEmpireSpace, checked by ActiveModule).  after firing, the titan can't warp for effectDeactivationDelay (30s)
+ *  and can't jump, bridge or cloak for jumpDelayDuration (10 minutes) */
 class SuperWeapon
+: public ActiveModule
 {
 public:
-    SuperWeapon( InventoryItemRef item, ShipItemRef ship );
-    virtual ~SuperWeapon() { }
+    SuperWeapon(ModuleItemRef mRef, ShipItemRef sRef);
+    virtual ~SuperWeapon()                              { /* do nothing here */ }
+
+    virtual SuperWeapon*        GetSuperWeapon()        { return this; }
+    virtual bool                IsSuperWeapon() const   { return true; }
 
     /* ActiveModule overrides */
-    virtual void Activate(SystemEntity* pSE);
-    virtual double DoCycle();
-    virtual void StopCycle(bool abort=false);
+    virtual void                Activate(uint16 effectID, uint32 targetID=0, int16 repeat=0);
+    virtual bool                CanActivate();
 
-protected:
-	void _ProcessCycle() {}
-	void _ShowCycle();
-    //double _GetCapNeed();
-    void _SetCapNeed();
-
-	Timer m_buildUpTimer;
-	Timer m_effectDurationTimer;
+private:
+    void                        ApplySuperWeaponDamage();
 };
 
 #endif

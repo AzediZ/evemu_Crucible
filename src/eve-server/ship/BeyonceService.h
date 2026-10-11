@@ -59,6 +59,8 @@ protected:
     void CheckCloakedWarp(Client* pClient);
     // false when a cloaking device that isn't warp safe is running
     static bool CanWarpCloaked(Client* pClient);
+    // true (after telling the pilot) during the doomsday's warp lockout
+    bool CheckWarpLockout(Client* pClient);
 
     /* CmdWarpToStuff helpers */
     // finds what to warp to: a fixed point (bookmarks) or an entity.  false (after telling the client when needed) when there's nothing to warp to

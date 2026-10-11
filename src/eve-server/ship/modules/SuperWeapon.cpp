@@ -21,235 +21,93 @@
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
     Author:        AknorJaden
+    Rewrite:       EVEmu Team (Crucible doomsday, Oct 2026)
 */
-
-/** @todo  this entire file needs rework to update with current code  */
-
 
 #include "eve-server.h"
 
+#include "Client.h"
 #include "ship/Ship.h"
 #include "ship/modules/SuperWeapon.h"
-#include "system/SystemBubble.h"
 #include "system/Damage.h"
+#include "system/TargetManager.h"
 
-SuperWeapon::SuperWeapon( InventoryItemRef item, ShipItemRef ship )
-:
-	m_buildUpTimer(0), m_effectDurationTimer(0)
+SuperWeapon::SuperWeapon(ModuleItemRef mRef, ShipItemRef sRef)
+: ActiveModule(mRef, sRef)
 {
 }
 
-void SuperWeapon::Activate(SystemEntity* pSE)
+bool SuperWeapon::CanActivate()
 {
-	// TODO:
-	// 1. Prevent activation on certain targets: asteroids, NPC stations, ice, clouds...  Perhaps restrict to ships and structures.
-	// 2. Check for minimum qty of consumable materials needed according to the 'consumptionType' attribute value in appropriate cargo bay on board the ship
+    /* Crucible: "Titan super weapons can now only fire at other capital ships.  It can no longer fire its superweapon at any structures."
+     *  ActiveModule::Activate() has set m_targetSE.  the module must be cleared before throwing
+     */
+    try {
+        if (m_targetSE == nullptr)
+            throw UserError("DeniedActivateTargetNotPresent");
+        // the target must be locked
+        Client* pClient(m_shipRef->GetPilot());
+        if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr)
+        or (pClient->GetShipSE()->TargetMgr()->GetTarget(m_targetSE->GetID(), true) == nullptr))
+            throw UserError("DeniedActivateTargetNotPresent");
 
-    m_targetSE = pSE;
-    m_targetID = pSE->GetID();
+        InventoryItemRef targRef(m_targetSE->GetSelf());
+        // npcs flagged immune (AI_ImmuneToSuperWeapon)
+        if (targRef->GetAttribute(AttrAI_ImmuneToSuperWeapon) > EvilZero)
+            throw UserError("CantActivateDoomsDayOnImmuneShips")
+                    .AddFormatValue("targetName", new PyString(m_targetSE->GetName()))
+                    .AddFormatValue("moduleName", new PyString(m_modRef->name()));
+        // ships (players' or npcs') only
+        if (!m_targetSE->IsShipSE() and !m_targetSE->IsNPCSE())
+            throw UserError("CantActivateDoomsDayOnNonShip")
+                    .AddFormatValue("module", new PyInt(typeID()));
+        // capitals only (titan, supercarrier, carrier, dreadnought, freighter, jump freighter, rorqual)
+        if (targRef->GetAttribute(AttrIsCapitalSize) < EvilOne)
+            throw UserError("CannotActivateSuperWeaponOnNonCapitalShip")
+                    .AddFormatValue("moduleTypeID", new PyInt(typeID()));
+    } catch (...) {
+        Clear();
+        throw;
+    }
 
-	// Activate active processing component timer:
-	ActiveModule::Activate(pSE);
-	//_ShowCycle();
-	//m_ActiveModuleProc->ProcessActiveCycle();
+    // disallowInEmpireSpace, isotopes and capacitor are checked in the base class
+    return ActiveModule::CanActivate();
 }
 
-void SuperWeapon::StopCycle(bool abort)
+void SuperWeapon::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/*0*/)
 {
-	// TODO:
-	// 1. Enable warping and jump drive
+    ActiveModule::Activate(effectID, targetID, repeat);
 
-    std::string effectString = "";
-    uint32 effectID = 0;
-	switch (m_modRef->typeID())
-	{
-		case 24550:
-			effectString = "effects.SuperWeaponAmarr";
-            effectID = effectSuperWeaponAmarr;
-			break;
+    if ((m_ModuleState != Module::State::Activated) or !m_shipRef->HasPilot() or (m_targetSE == nullptr))
+        return;
 
-		case 24552:
-			effectString = "effects.SuperWeaponCaldari";
-            effectID = effectSuperWeaponCaldari;
-			break;
+    // no warp for effectDeactivationDelay (ms), no jump drive, portal or cloak for jumpDelayDuration (s)
+    ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
+    int64 now(GetFileTimeNow());
+    pShip->SetWarpLockout(now + (GetAttribute(AttreffectDeactivationDelay).get_int() * (EvE::Time::Second / 1000)));
+    pShip->SetJumpLockout(now + (GetAttribute(AttrJumpDelayDuration).get_int() * EvE::Time::Second));
 
-		case 24554:
-			effectString = "effects.SuperWeaponGallente";
-            effectID = effectSuperWeaponGallente;
-			break;
-
-		case 23674:
-			effectString = "effects.SuperWeaponMinmatar";
-            effectID = effectSuperWeaponMinmatar;
-			break;
-	}
-
-    uint32 timeLeft = GetRemainingCycleTimeMS();
-    timeLeft /= 1000;
-
-	// Create Special Effect:
-	m_shipRef->GetPilot()->GetShipSE()->DestinyMgr()->SendSpecialEffect
-	(
-        m_shipRef,
-        m_modRef->itemID(),
-        m_modRef->typeID(),
-        0,
-        0,
-        effectString,
-        1,
-        0,
-        0,
-        timeLeft,
-        0
-    );
-
-	GodmaEnvironment ge;
-        ge.selfID = m_modRef->itemID();
-        ge.charID = m_shipRef->ownerID();
-        ge.shipID = m_shipRef->itemID();
-        ge.target = PyStatic.NewNone();
-        ge.subLoc = PyStatic.NewNone();
-        ge.area = new PyList;
-        ge.effectID = effectID;
-    Notify_OnGodmaShipEffect shipEff;
-        shipEff.itemID = ge.selfID;
-        shipEff.effectID = ge.effectID;
-        shipEff.timeNow = Win32TimeNow();
-        shipEff.start = 0;
-        shipEff.active = 0;
-        shipEff.environment = ge.Encode();
-        shipEff.startTime = (shipEff.timeNow + (timeLeft * EvE::Time::Second));
-        shipEff.duration = timeLeft;
-        shipEff.repeat = 0;
-        shipEff.error = PyStatic.NewNone();
-
-    PyTuple* tuple = shipEff.Encode();
-
-    if (m_destinyMgr->IsWarping() or (m_bubble == nullptr))
-        m_shipRef->GetPilot()->QueueDestinyEvent(&tuple);
-    else
-        m_bubble->BubblecastDestinyEvent(&tuple, "destiny");
+    // the damage lands at once (no build-up delay).  the cycle that follows is the rate of fire
+    ApplySuperWeaponDamage();
 }
 
-double SuperWeapon::DoCycle()
+void SuperWeapon::ApplySuperWeaponDamage()
 {
-        if ((!m_shipRef->GetPilot()->GetShipSE()->SysBubble())
-            || (!m_shipRef->GetPilot()->GetShipSE()->SysBubble()->GetEntity(m_targetID))
-            /*|| (!m_chargeLoaded) || (!m_chargeRef)*/ )
-        {
-            Deactivate();
-            return 0;
-        }
+    ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
+    // Doomsday Operation raises damageMultiplier through dogma
+    float mult(HasAttribute(AttrDamageMultiplier) ? GetAttribute(AttrDamageMultiplier).get_float() : 1.0f);
+    if (mult <= 0.0f)
+        mult = 1.0f;
+    Damage d(pShip, m_modRef,
+             GetAttribute(AttrKineticDamage).get_float() * mult,
+             GetAttribute(AttrThermalDamage).get_float() * mult,
+             GetAttribute(AttrEmDamage).get_float() * mult,
+             GetAttribute(AttrExplosiveDamage).get_float() * mult,
+             1.0f, m_effectID);
 
-		_ShowCycle();
+    _log(MODULE__MESSAGE, "%s fired %s(%u) at %s(%u) for %.0f damage", pShip->GetName(), m_modRef->name(), itemID(),
+            m_targetSE->GetName(), m_targetSE->GetID(), d.GetTotal());
 
-		// Do massive, crazy damage to targets within a sphere of damage, screw CCP and their 'this can only target capital ships' junk ;)
-		// NOTE: due to the small bit of time to "build up" the weapon firing action, we need a timer to delay application of damage to the target(s)
-		// Avatar:  5 seconds to build after activation,  5 seconds duration, instant reach to target
-		// Erebus:  6 seconds to build after activation,  6 seconds duration, instant reach to target
-		// Leviathan:  range to target 124km,  6 seconds to launch after activation, 9 seconds flight time
-		// Ragnarok:  range to target 125km,  6 seconds to build after activation, 4 seconds duration, instant reach to target
-		//
-		// TODO:
-		// 0. Somehow disable warping and jump drive until deactivated
-		// 1. Set 'm_buildUpTimer' to the "build up time"
-		// 2. Set 'm_effectDurationTimer' to the "duration/flight time" of the super weapon effect
-		// 3. Move Damage action to SuperWeapon::Process() function and check for timer expirations before applying damage
-		// 4. Consider applying damage in increments, such as 5 stages of the 2 million hp (400,000 hp per stage, once per second)
-		// 5. Loop through all entities in the bubble, filtering on dynamic entities that are ships, drones, structures, cans
-		//    and calculate distance from target to calculate area-of-effect damage using some 1/x formula, where damage sustained
-		//    drops off the further away from the primary target.
-
-        Damage d(m_shipRef->GetPilot()->GetShipSE(),
-                 m_modRef,
-                 m_chargeRef->GetAttribute(AttrKineticDamage).get_float(),     // kinetic damage
-                 m_chargeRef->GetAttribute(AttrThermalDamage).get_float(),     // thermal damage
-                 m_chargeRef->GetAttribute(AttrEmDamage).get_float(),     // em damage
-                 m_chargeRef->GetAttribute(AttrExplosiveDamage).get_float(),     // explosive damage
-                 1,
-                 effectProjectileFired       // from EVEEffectID::
-        );
-
-        m_targetSE->ApplyDamage(d);
-
-		// Reduce consumable in cargo:
-		// TODO
-        return m_cycleTime;
-}
-
-void SuperWeapon::_ShowCycle()
-{
-    std::string effectString = "";
-    uint32 effectID = 0;
-	switch (m_modRef->typeID())
-	{
-	case 24550:
-		effectString = "effects.SuperWeaponAmarr";
-        effectID = effectSuperWeaponAmarr;
-		break;
-
-	case 24552:
-		effectString = "effects.SuperWeaponCaldari";
-        effectID = effectSuperWeaponCaldari;
-		break;
-
-	case 24554:
-		effectString = "effects.SuperWeaponGallente";
-        effectID = effectSuperWeaponGallente;
-		break;
-
-	case 23674:
-		effectString = "effects.SuperWeaponMinmatar";
-        effectID = effectSuperWeaponMinmatar;
-		break;
-	}
-
-	// Create Special Effect:
-	m_shipRef->GetPilot()->GetShipSE()->DestinyMgr()->SendSpecialEffect
-	(
-        m_shipRef,
-        m_modRef->itemID(),
-        m_modRef->typeID(),
-        0,
-        0,
-        effectString,
-        1,
-        1,
-        1,
-        m_cycleTime,
-        1
-    );
-
-    // Create Destiny Updates:
-    GodmaEnvironment ge;
-        ge.selfID = m_modRef->itemID();
-        ge.charID = m_shipRef->ownerID();
-        ge.shipID = m_shipRef->itemID();;
-        ge.targetID = 0;
-        ge.subLoc = sDataMgr.NewNone();
-        ge.area = new PyList;
-        ge.effectID = effectID;
-    Notify_OnGodmaShipEffect shipEff;
-        shipEff.itemID = ge.selfID;
-        shipEff.effectID = ge.effectID;
-        shipEff.timeNow = Win32TimeNow();
-        shipEff.start = 1;
-        shipEff.active = 1;
-        shipEff.environment = ge.Encode();
-        shipEff.startTime = shipEff.timeNow;
-        shipEff.duration = m_cycleTime;
-        shipEff.repeat = m_repeat;
-        shipEff.error = sDataMgr.NewNone();
-    std::vector<PyTuple*> events;
-        events.push_back(shipEff.Encode());
-    std::vector<PyTuple*> updates;
-    m_shipRef->GetPilot()->GetShipSE()->DestinyMgr()->SendDestinyUpdate(updates, events, false);
-    //m_shipRef->GetPilot()->QueueDestinyEvent(&tup);
-}
-
-void SuperWeapon::_SetCapNeed()
-{
-    // this will be needed for modules and rigs that affect cap need for mining modules
-    //double need = GetAttribute(AttrCapacitorNeed);
-
+    // the offensive act was recorded by ActiveModule::CrimeCheck() on activation
+    m_targetSE->ApplyDamage(d);
 }

@@ -180,11 +180,7 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             damageID = 6;
         } break;
         case EVEDB::invGroups::Super_Weapon: {
-        /*   TODO
-         * this damage will need to be adjusted based on distance from target, then called for each target,
-         *  and modified/corrected as the weapon implementation is completed.
-         *  all modifiers to be calc'd in weapon code and sent here for correct damageID
-         */
+            // the doomsday's damage is worked out in SuperWeapon (one target, always hits)
             damageID = 5;
         } break;
         case EVEDB::invGroups::Missile_Launcher_Snowball: {

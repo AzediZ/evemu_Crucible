@@ -90,6 +90,12 @@ void JumpDrive::CheckDriveFree(Client* pClient, GenericModule* pIgnore/*nullptr*
                     .AddFormatValue("moduleType", new PyInt(pMod->typeID()));
     }
 
+    // "Your Super Weapon has recently been fired. You will not be able to activate your jump engines for another {time}."
+    int64 lockout(pShipSE->JumpLockoutRemaining());
+    if (lockout > 0)
+        throw UserError("JumpSuperweaponActive")
+                .AddFormatValue("time", new PyLong(lockout));
+
     // no jump drive while the ship can't warp
     if (pShipSE->IsWarpScrambled())
         throw CustomError("Your jump drive cannot be activated while your ship is warp scrambled.");
