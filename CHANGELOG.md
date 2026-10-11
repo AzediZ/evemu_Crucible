@@ -32,3 +32,9 @@ We had written our own player drone and fighter control first, on 10 October 202
 - **Fighter bombers hit.** They missed every shot: bombers have no turret stats (no optimal, falloff or tracking), only a missile range (`entityAttackRange`, 20 km), so the drone hit formula counted every target as out of range. A bomber now always hits within that range and never beyond it. Damage scales like a missile's, by the target's signature radius and speed against the bomber's explosion radius and velocity, so big slow capitals take full damage. They orbit at their 7.5 km fly range instead of being pulled in under 1 km.
 - **Fighter bombers attack only capitals, stations and structures.** That means ships with `isCapitalSize` (carriers, dreadnoughts, supercarriers, titans, freighters, jump freighters, the Rorqual), NPC mission carriers and Sansha incursion capitals, and stations, starbase and sovereignty structures. Ordering them onto anything else returns an error, and they skip other ships when aggressive, guarding or assisting (`DroneSE::CanAttack()`).
 - **Fighter damage bonuses.** The Fighters and Fighter Bombers skills give +20% damage per level. Carrier hull bonuses follow the ship's own effects: +5% per Gallente Carrier level for Thanatos fighters and Nyx fighters and bombers, and +100% for the Revenant's fighters and bombers.
+
+The fighter bomber changes and damage bonuses were tested in game on 11 October 2026. Bombers hit capitals with every volley and refuse other targets.
+
+### Known issues
+
+- **Fighter bomber damage is too uniform.** In testing, every bomber volley on a capital did full damage with the same hit message. That is what the missile formula gives against big, slow capitals, but the damage application needs tuning later.
