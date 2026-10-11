@@ -26,6 +26,7 @@
 #include "imageserver/ImageServerConnection.h"
 
 boost::asio::const_buffers_1 ImageServerConnection::_responseOK = boost::asio::buffer("HTTP/1.0 200 OK\r\nContent-Type: image/jpeg\r\n\r\n", 45);
+boost::asio::const_buffers_1 ImageServerConnection::_responseOKPng = boost::asio::buffer("HTTP/1.0 200 OK\r\nContent-Type: image/png\r\n\r\n", 44);
 boost::asio::const_buffers_1 ImageServerConnection::_responseNotFound = boost::asio::buffer("HTTP/1.0 404 Not Found\r\n\r\n", 26);
 boost::asio::const_buffers_1 ImageServerConnection::_responseRedirectBegin = boost::asio::buffer("HTTP/1.0 301 Moved Permanently\r\nLocation: ", 42);
 boost::asio::const_buffers_1 ImageServerConnection::_responseRedirectEnd = boost::asio::buffer("\r\n\r\n", 4);
@@ -45,11 +46,18 @@ boost::asio::ip::tcp::socket& ImageServerConnection::socket()
 void ImageServerConnection::Process()
 {
     // receive all HTTP headers from the client
-    boost::asio::async_read_until(_socket, _buffer, "\r\n\r\n", std::bind(&ImageServerConnection::ProcessHeaders, shared_from_this()));
+    boost::asio::async_read_until(_socket, _buffer, "\r\n\r\n",
+            std::bind(&ImageServerConnection::ProcessHeaders, shared_from_this(), std::placeholders::_1, std::placeholders::_2));
 }
 
-void ImageServerConnection::ProcessHeaders()
+void ImageServerConnection::ProcessHeaders(const boost::system::error_code& ec, std::size_t bytes)
 {
+    // disconnects and oversized headers (not_found) just close the connection
+    if (ec) {
+        Close();
+        return;
+    }
+
     std::istream stream(&_buffer);
     std::string request;
 
@@ -87,7 +95,7 @@ void ImageServerConnection::ProcessHeaders()
     }
     request = request.substr(1);
 
-    int del = request.find_first_of('_');
+    size_t del = request.find_first_of('_');
     if (del == std::string::npos)
     {
         NotFound();
@@ -115,8 +123,8 @@ void ImageServerConnection::ProcessHeaders()
         return;
     }
 
-    // first we have to send the responseOK, then our actual result
-    boost::asio::async_write(_socket, _responseOK, boost::asio::transfer_all(), std::bind(&ImageServerConnection::SendImage, shared_from_this()));
+    // first we have to send the responseOK, then our actual result.  portraits are jpg, logos and type icons png
+    boost::asio::async_write(_socket, (_category == "Character" ? _responseOK : _responseOKPng), boost::asio::transfer_all(), std::bind(&ImageServerConnection::SendImage, shared_from_this()));
 }
 
 void ImageServerConnection::SendImage()
@@ -151,7 +159,8 @@ void ImageServerConnection::RedirectFinalize()
 
 void ImageServerConnection::Close()
 {
-    _socket.close();
+    boost::system::error_code ec;
+    _socket.close(ec);
 }
 
 bool ImageServerConnection::starts_with(std::string& haystack, const char *const needle)

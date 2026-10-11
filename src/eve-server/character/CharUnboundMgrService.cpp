@@ -361,7 +361,8 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
     sItemFactory.UnsetUsingClient();
 
     // we need to report the charID to the ImageServer so it can correctly assign a previously received image
-    sImageServer.ReportNewCharacter(pClient->GetUserID(), charRef->itemID());
+    if (!sImageServer.SavePortrait(pClient->GetUserID(), charRef->itemID()))
+        pClient->SendInfoModalMsg("Your character portrait was not received by the server.  Your character was created, but will show no portrait until it is recaptured.");
 
     //  add charID to staticOwners
     CharacterDB::AddOwnerCache(charRef->itemID(), charRef->itemName(), char_type->id());

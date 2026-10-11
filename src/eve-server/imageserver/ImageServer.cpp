@@ -28,6 +28,8 @@
 #include "imageserver/ImageServer.h"
 #include "imageserver/ImageServerListener.h"
 
+#include <filesystem>
+
 const char *const ImageServer::FallbackURL = "http://image.eveonline.com/";
 
 const char *const ImageServer::Categories[] = {
@@ -52,13 +54,15 @@ ImageServer::ImageServer()
     sLog.Cyan("      ImageServer", "Image Server URL: %s", _url.c_str());
     sLog.Cyan("      ImageServer", "Image Server path: %s", _basePath.c_str());
 
-    if (CreateDirectory( _basePath.c_str(), NULL ) == 0) {
-        for (int i = 0; i < CategoryCount; i++) {
-            std::string subdir = _basePath;
-            subdir.append(Categories[i]);
-            CreateDirectory( subdir.c_str(), NULL );
-        }
-    } /* else directory probably exists */
+    // create the base directory and every category directory (existing ones are fine)
+    for (int i = 0; i < CategoryCount; i++) {
+        std::string subdir = _basePath;
+        subdir.append(Categories[i]);
+        std::error_code ec;
+        std::filesystem::create_directories(subdir, ec);
+        if (ec)
+            sLog.Error("      ImageServer", "Unable to create image directory %s: %s", subdir.c_str(), ec.message().c_str());
+    }
     sLog.Blue("      ImageServer", "Image Server Initalized.");
 }
 
@@ -67,49 +71,87 @@ void ImageServer::ReportNewImage(uint32 accountID, std::shared_ptr<std::vector<c
     sLog.Warning("      ImageServer"," ReportNewImage() called.");
     Lock lock(_limboLock);
 
-    if (_limboImages.find(accountID) != _limboImages.end()) {
-        _limboImages.insert(std::pair<uint32,std::shared_ptr<std::vector<char> > >(accountID, imageData));
-    } else {
-        _limboImages[accountID] = imageData;
-    }
+    // the latest upload wins (a re-shot portrait replaces the pending one)
+    _limboImages[accountID] = imageData;
 }
 
-void ImageServer::ReportNewCharacter(uint32 creatorAccountID, uint32 characterID)
+bool ImageServer::SavePortrait(uint32 accountID, uint32 characterID)
 {
-    sLog.Warning("      ImageServer"," ReportNewCharacter() called.");
-    Lock lock(_limboLock);
-
-    // check if we received an image from this account previously
-    if (_limboImages.find(creatorAccountID) == _limboImages.end()) {
-        sLog.Error("      ImageServer"," Image not received for characterID %u.", characterID);
-        /** @todo  need to get client here, and send msg about emailing char pic and name to charPics@eve.alasiya.net for manual insertion */
-        return;
+    sLog.Warning("      ImageServer"," SavePortrait() called.");
+    std::shared_ptr<std::vector<char> > data;
+    {
+        Lock lock(_limboLock);
+        // check if we received an image from this account previously
+        auto itr = _limboImages.find(accountID);
+        if (itr == _limboImages.end()) {
+            sLog.Error("      ImageServer"," Image not received for characterID %u.", characterID);
+            return false;
+        }
+        data = itr->second;
+        // and delete it from our limbo map
+        _limboImages.erase(itr);
     }
 
-    // we have, so save it
-    //std::ofstream stream;
-    std::string dirName = "Character";
-    std::string path(GetFilePath(dirName, characterID, 512));
-    FILE * fp = fopen(path.c_str(), "wb");
+    if ((data.get() == nullptr) or data->empty()) {
+        sLog.Error("      ImageServer"," Empty image received for characterID %u.", characterID);
+        return false;
+    }
 
-    //stream.open(path, std::ios::binary | std::ios::trunc | std::ios::out);
-    std::shared_ptr<std::vector<char> > data = _limboImages[creatorAccountID];
-
-    fwrite(&((*data)[0]), 1, data->size(), fp);
-    fclose(fp);
-
-    //std::copy(data->begin(), data->end(), std::ostream_iterator<char>(stream));
-    //stream.flush();
-    //stream.close();
-
-    /** @todo  we will need to make size 64 and size 40 images, and possibably 128/256 of char portaits */
+    /** @todo  we will need to make size 64 and size 40 images, and possibably 128/256 of char portaits.  GetImage() serves the 512 one for every size */
     // github.com/nothings/stb/blob/master/stb_image_resize.h
     // github.com/nothings/stb/blob/master/stb_image.h
+    std::string dirName = "Character";
+    std::string path(GetFilePath(dirName, characterID, 512));
+    std::string tmpPath(path + ".tmp");
 
-    // and delete it from our limbo map
-    _limboImages.erase(creatorAccountID);
+    // write a temp file, then move it over the old picture so a reader never sees a partial file
+    FILE* fp = fopen(tmpPath.c_str(), "wb");
+    if (fp == nullptr) {
+        sLog.Error("      ImageServer", "Unable to open %s for writing: %s", tmpPath.c_str(), strerror(errno));
+        return false;
+    }
+    size_t written = fwrite(data->data(), 1, data->size(), fp);
+    bool ok = (fclose(fp) == 0) and (written == data->size());
+    if (!ok) {
+        sLog.Error("      ImageServer", "Unable to write %s (%zu of %zu bytes)", tmpPath.c_str(), written, data->size());
+        std::error_code ec;
+        std::filesystem::remove(tmpPath, ec);
+        return false;
+    }
 
-    sLog.Green("      ImageServer", "Received image from %u and saved as %s", creatorAccountID, path.c_str());
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
+    ec.clear();
+    std::filesystem::rename(tmpPath, path, ec);
+    if (ec) {
+        sLog.Error("      ImageServer", "Unable to move %s to %s: %s", tmpPath.c_str(), path.c_str(), ec.message().c_str());
+        std::filesystem::remove(tmpPath, ec);
+        return false;
+    }
+
+    sLog.Green("      ImageServer", "Received image from %u and saved as %s", accountID, path.c_str());
+    return true;
+}
+
+std::shared_ptr<std::vector<char> > ImageServer::ReadFile(const std::string& path)
+{
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (fp == nullptr)
+        return std::shared_ptr<std::vector<char> >();
+
+    std::shared_ptr<std::vector<char> > ret;
+    if (fseek(fp, 0, SEEK_END) == 0) {
+        long length = ftell(fp);
+        if ((length > 0) and (fseek(fp, 0, SEEK_SET) == 0)) {
+            ret = std::shared_ptr<std::vector<char> >(new std::vector<char>());
+            ret->resize(length);
+            if (fread(ret->data(), 1, length, fp) != (size_t)length)
+                ret.reset();
+        }
+    }
+
+    fclose(fp);
+    return ret;
 }
 
 std::shared_ptr<std::vector<char> > ImageServer::GetImage(std::string& category, uint32 id, uint32 size)
@@ -119,41 +161,29 @@ std::shared_ptr<std::vector<char> > ImageServer::GetImage(std::string& category,
     if (!ValidateCategory(category) || !ValidateSize(category, size))
         return std::shared_ptr<std::vector<char> >();
 
-    //std::ifstream stream;
-    std::string path(GetFilePath(category, id, size));
-    FILE * fp = fopen(path.c_str(), "rb");
-    if (fp == NULL)
-        return std::shared_ptr<std::vector<char> >();
-    fseek(fp, 0, SEEK_END);
-    size_t length = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
+    std::shared_ptr<std::vector<char> > ret = ReadFile(GetFilePath(category, id, size));
+    if (ret)
+        return ret;
 
-    //stream.open(path, std::ios::binary | std::ios::in);
-    // not found or other error
-    //if (stream.fail())
-    //    return std::shared_ptr<std::vector<char> >();
+    // the requested size is missing.  portraits are only saved as 512 (the client scales them), other images use the largest one we have
+    if (category == "Character")
+        return ReadFile(GetFilePath(category, id, 512));
 
-    // get length
-    //stream.seekg(0, std::ios::end);
-    //int length = stream.tellg();
-    //stream.seekg(0, std::ios::beg);
+    static const uint32 sizes[] = { 1024, 512, 256, 128, 64, 40, 32 };
+    for (auto cur : sizes) {
+        if ((cur == size) or !ValidateSize(category, cur))
+            continue;
+        ret = ReadFile(GetFilePath(category, id, cur));
+        if (ret)
+            return ret;
+    }
 
-    std::shared_ptr<std::vector<char> > ret = std::shared_ptr<std::vector<char> >(new std::vector<char>());
-    ret->resize(length);
-
-    // HACK
-    //stream.read(&((*ret)[0]), length);
-    fread(&((*ret)[0]), 1, length, fp);
-
-    return ret;
+    return std::shared_ptr<std::vector<char> >();
 }
 
 std::string ImageServer::GetFilePath(std::string& category, uint32 id, uint32 size)
 {
     std::string extension = category == "Character" ? "jpg" : "png";
-
-    // HACK: We don't have any other
-    size = 512;
 
     std::stringstream builder;
     builder << _basePath << category << "/" << id << "_" << size << "." << extension;

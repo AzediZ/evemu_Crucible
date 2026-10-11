@@ -47,7 +47,7 @@ public:
 
 private:
     ImageServerConnection(boost::asio::io_context& io);
-    void ProcessHeaders();
+    void ProcessHeaders(const boost::system::error_code& ec, std::size_t bytes);
     void SendImage();
     void NotFound();
     void Close();
@@ -63,11 +63,13 @@ private:
     uint32 _size;
     std::string _redirectUrl;
 
-    boost::asio::streambuf _buffer;
+    // bounded: a client that never ends its headers gets an error instead of growing this without limit
+    boost::asio::streambuf _buffer{8192};
     boost::asio::ip::tcp::socket _socket;
     std::shared_ptr<std::vector<char> > _imageData;
 
     static boost::asio::const_buffers_1 _responseOK;
+    static boost::asio::const_buffers_1 _responseOKPng;
     static boost::asio::const_buffers_1 _responseNotFound;
     static boost::asio::const_buffers_1 _responseRedirectBegin;
     static boost::asio::const_buffers_1 _responseRedirectEnd;

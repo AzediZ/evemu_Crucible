@@ -55,7 +55,9 @@ public:
     std::string& url();
 
     void ReportNewImage(uint32 accountID, std::shared_ptr<std::vector<char> > imageData);
-    void ReportNewCharacter(uint32 creatorAccountID, uint32 characterID);
+    // saves the portrait last uploaded by accountID as characterID's picture.  false if none was received or it could not be written
+    bool SavePortrait(uint32 accountID, uint32 characterID);
+    bool ReportNewCharacter(uint32 creatorAccountID, uint32 characterID)    { return SavePortrait(creatorAccountID, characterID); }
 
     std::string GetFilePath(std::string& category, uint32 id, uint32 size);
     std::shared_ptr<std::vector<char> > GetImage(std::string& category, uint32 id, uint32 size);
@@ -71,6 +73,8 @@ private:
     void RunInternal();
     bool ValidateCategory(std::string& category);
     bool ValidateSize(std::string& category, uint32 size);
+    // reads a whole file.  empty pointer when missing, empty or unreadable
+    std::shared_ptr<std::vector<char> > ReadFile(const std::string& path);
 
     std::unordered_map<uint32 /*accountID*/, std::shared_ptr<std::vector<char> > /*imageData*/> _limboImages;
     std::shared_ptr<boost::asio::detail::thread> _ioThread;
