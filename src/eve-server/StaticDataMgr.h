@@ -182,6 +182,7 @@ private:
     std::map<uint32, std::vector<uint32>>               m_whClassDestinations; //classID/typeID
     std::map<uint32, std::vector<uint32>>               m_whClassSystems;   //classID/systemID
     std::map<uint32, uint32>                            m_regions;          // regionID/ownerFactionID
+    std::unordered_map<int32, std::string>              m_ownerNames;       // ownerID/ownerName  (filled on demand)
     std::map<uint32, uint32>                            m_ratRegions;       // regionID/ratFactionID
     std::map<uint32, SystemData>                        m_systemData;       // systemID/data
     std::map<uint32, uint32>                            m_agentSystem;      // agentID/systemID

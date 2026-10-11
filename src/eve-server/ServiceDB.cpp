@@ -30,6 +30,7 @@
 #include "EntityList.h"
 #include "EVEServerConfig.h"
 #include "ServiceDB.h"
+#include "config/ConfigDB.h"
 
 uint32 ServiceDB::SetClientSeed()
 {
@@ -529,27 +530,12 @@ PyRep* ServiceDB::LookupKnownLocationsByGroup(const std::string & search, uint32
 /** @todo look into this...may be wrong */
 PyRep* ServiceDB::PrimeOwners(std::vector< int32 >& itemIDs)
 {
-    DBQueryResult res;
-    DBResultRow row;
+    // mailSvc stores each value as a cfg.eveowners data row, so these are full 5-column rows
+    std::map<int32, OwnerRow> rows;
+    ConfigDB::GetOwnerRows(itemIDs, rows);
     PyDict* dict = new PyDict();
-    for (auto cur : itemIDs) {
-        if (IsCharacterID(cur)) {
-            sDatabase.RunQuery(res, "SELECT characterID, characterName, typeID FROM chrCharacters WHERE characterID = %u", cur);
-        } else if (IsPlayerCorp(cur)) {
-            sDatabase.RunQuery(res, "SELECT corporationID, corporationName, typeID FROM crpCorporation WHERE corporationID = %u", cur);
-        } else if (IsAlliance(cur)) {
-            sDatabase.RunQuery(res, "SELECT allianceID, allianceName, typeID FROM alnAlliance WHERE allianceID = %u", cur);
-        } else {
-            ; // make error
-        }
-        if (res.GetRow(row)) {
-            PyList* list = new PyList();
-                list->AddItem(new PyInt(row.GetInt(0)));
-                list->AddItem(new PyString(row.GetText(1)));
-                list->AddItem(new PyInt(row.GetInt(2)));
-            dict->SetItem(new PyInt(row.GetInt(0)), list);
-        }
-    }
+    for (auto& cur : rows)
+        dict->SetItem(new PyInt(cur.first), ConfigDB::OwnerRowToList(cur.second));
 
     return dict;
 }

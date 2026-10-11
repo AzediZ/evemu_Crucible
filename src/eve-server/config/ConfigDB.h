@@ -33,10 +33,27 @@
 
 class PyRep;
 
+// one cfg.eveowners row:  ownerID, ownerName, typeID, gender, ownerNameID
+struct OwnerRow {
+    int32 ownerID;
+    std::string ownerName;
+    uint32 typeID;
+    int8 gender;            // -1 = None (not a character)
+    uint32 ownerNameID;     // 0 = None
+};
+
 class ConfigDB
 : public ServiceDB
 {
 public:
+    /* owner rows for characters, agents, corporations, alliances, factions, stations, types (<33000) and
+     *  other static owners.  ids not found are left out.  shared by config.GetMultiOwnersEx, mailMgr.PrimeOwners
+     *  and StaticDataMgr::GetOwnerName
+     */
+    static void GetOwnerRows(const std::vector<int32>& ids, std::map<int32, OwnerRow>& into);
+    // 5-element list in cfg.eveowners header order
+    static PyList* OwnerRowToList(const OwnerRow& row);
+
     PyRep *GetMultiOwnersEx(const std::vector<int32> &entityIDs);
     PyRep *GetMultiLocationsEx(const std::vector<int32> &entityIDs);
     PyRep *GetMultiStationEx(const std::vector<int32> &entityIDs);

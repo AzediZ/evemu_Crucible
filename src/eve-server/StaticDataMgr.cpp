@@ -18,6 +18,7 @@
 #include "StaticDataMgr.h"
 #include "EVEServerConfig.h"
 #include "database/EVEDBUtils.h"
+#include "config/ConfigDB.h"
 #include "manufacturing/FactoryDB.h"
 #include "map/MapDB.h"
 #include "station/StationDB.h"
@@ -100,6 +101,7 @@ int StaticDataMgr::Initialize()
 
 void StaticDataMgr::Clear()
 {
+    m_ownerNames.clear();
     m_ramReq.clear();
     m_moonGoo.clear();
     m_ramMatl.clear();
@@ -1605,15 +1607,22 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
     return rsp;
 }
 
-/** @todo  finish this.
- *      - only used by GetCurrentEntities().  custom call for alasiya eve
- */
 std::string StaticDataMgr::GetOwnerName(int32 ownerID)
 {
-    if (ownerID == 1)
-        return "System";
+    std::unordered_map<int32, std::string>::iterator itr = m_ownerNames.find(ownerID);
+    if (itr != m_ownerNames.end())
+        return itr->second;
 
-    return "Unknown - WIP";
+    std::map<int32, OwnerRow> rows;
+    ConfigDB::GetOwnerRows(std::vector<int32>(1, ownerID), rows);
+    std::map<int32, OwnerRow>::iterator rItr = rows.find(ownerID);
+    if (rItr == rows.end())
+        return "Unknown";
+
+    // player names can change (character/corp/alliance renames are rare, but don't cache those)
+    if (!IsCharacterID(ownerID) and !IsPlayerCorp(ownerID) and !IsAlliance(ownerID))
+        m_ownerNames.emplace(ownerID, rItr->second.ownerName);
+    return rItr->second.ownerName;
 }
 
 uint8 StaticDataMgr::GetRegionQuarter(uint32 regionID)

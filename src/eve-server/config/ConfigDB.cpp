@@ -28,168 +28,150 @@
 
 #include "config/ConfigDB.h"
 
-PyRep *ConfigDB::GetMultiOwnersEx(const std::vector<int32> &entityIDs) {
-    // separate list of ids into respective groups
-    std::vector<int32> player, corp, ally, owner, npc, station;
-    player.clear();
-    corp.clear();
-    ally.clear();
-    owner.clear();
-    npc.clear();
-    station.clear();
+namespace {
+    // runs one owner query and adds its rows (ownerID, ownerName, typeID, gender, ownerNameID) to 'into'
+    void AddOwnerRows(std::map<int32, OwnerRow>& into, const char* query, const std::string& ids)
+    {
+        DBQueryResult res;
+        if (!sDatabase.RunQuery(res, query, ids.c_str())) {
+            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+            return;
+        }
+        DBResultRow row;
+        while (res.GetRow(row)) {
+            OwnerRow data = OwnerRow();
+            data.ownerID = row.GetInt(0);
+            data.ownerName = (row.IsNull(1) ? "" : std::string(row.GetText(1), row.ColumnLength(1)));
+            data.typeID = (row.IsNull(2) ? 0 : row.GetUInt(2));
+            data.gender = (row.IsNull(3) ? -1 : (int8)row.GetInt(3));
+            data.ownerNameID = (row.IsNull(4) ? 0 : row.GetUInt(4));
+            into[data.ownerID] = data;
+        }
+    }
+}
 
-    for (auto cur : entityIDs) {
-        if (IsCorp(cur)) {
+void ConfigDB::GetOwnerRows(const std::vector<int32>& ids, std::map<int32, OwnerRow>& into)
+{
+    std::vector<int32> player, agent, corp, ally, faction, station, type, owner;
+    for (auto cur : ids) {
+        if (into.find(cur) != into.end())
+            continue;
+        if (cur == 1) {
+            OwnerRow data = OwnerRow();
+            data.ownerID = 1;
+            data.ownerName = "EVE System";
+            data.typeID = 0;
+            data.gender = -1;
+            data.ownerNameID = 0;
+            into[1] = data;
+        } else if (IsCharacterID(cur)) {
+            player.push_back(cur);
+        } else if (IsAgent(cur)) {
+            agent.push_back(cur);
+        } else if (IsFaction(cur)) {
+            faction.push_back(cur);
+        } else if (IsCorp(cur)) {
             corp.push_back(cur);
         } else if (IsAlliance(cur)) {
             ally.push_back(cur);
-        } else if (IsCharacterID(cur)) {
-            player.push_back(cur);
-        } else if (cur < 33000) {
-            npc.push_back(cur);
         } else if (IsStationID(cur)) {
             station.push_back(cur);
+        } else if ((cur > 0) and (cur < 33000)) {
+            type.push_back(cur);
         } else {
             owner.push_back(cur);
         }
-
-        // add check here for trader joe.
-        //  will have to hardcode data, then run thru db query cause i dont know how to build packet for this return
     }
 
-    /**
-     * This function used to return only the last requested value - DB results were not persisted.
-     * With this in mind, i had to move the logic from DBResultToTupleSet here, so that we could compose result tuple
-     * from bits of different queries.
+    std::string list;
+    if (!player.empty()) {
+        list.clear();
+        ListToINString(player, list);
+        AddOwnerRows(into, "SELECT characterID, characterName, typeID, gender, NULL"
+                " FROM chrCharacters WHERE characterID IN (%s)", list);
+    }
+    if (!agent.empty()) {
+        list.clear();
+        ListToINString(agent, list);
+        AddOwnerRows(into, "SELECT c.characterID, c.characterName, IF(c.typeID > 0, c.typeID, o.typeID), c.gender, NULL"
+                " FROM chrNPCCharacters AS c LEFT JOIN eveStaticOwners AS o ON o.ownerID = c.characterID"
+                " WHERE c.characterID IN (%s)", list);
+    }
+    if (!corp.empty()) {
+        list.clear();
+        ListToINString(corp, list);
+        AddOwnerRows(into, "SELECT corporationID, corporationName, 2, NULL, NULL"
+                " FROM crpCorporation WHERE corporationID IN (%s)", list);
+    }
+    if (!ally.empty()) {
+        list.clear();
+        ListToINString(ally, list);
+        AddOwnerRows(into, "SELECT allianceID, allianceName, 16159, NULL, NULL"
+                " FROM alnAlliance WHERE allianceID IN (%s)", list);
+    }
+    if (!faction.empty()) {
+        list.clear();
+        ListToINString(faction, list);
+        AddOwnerRows(into, "SELECT factionID, factionName, 30, NULL, NULL"
+                " FROM facFactions WHERE factionID IN (%s)", list);
+    }
+    if (!station.empty()) {
+        list.clear();
+        ListToINString(station, list);
+        AddOwnerRows(into, "SELECT stationID, stationName, stationTypeID, NULL, NULL"
+                " FROM staStations WHERE stationID IN (%s)", list);
+    }
+    if (!type.empty()) {
+        list.clear();
+        ListToINString(type, list);
+        AddOwnerRows(into, "SELECT typeID, typeName, typeID, NULL, typeNameID"
+                " FROM invTypes WHERE typeID IN (%s)", list);
+    }
+
+    // anything not found above may still be a static owner (npc characters, eve system entities)
+    for (auto cur : ids)
+        if ((cur != 1) and (into.find(cur) == into.end()))
+            owner.push_back(cur);
+    if (!owner.empty()) {
+        list.clear();
+        ListToINString(owner, list);
+        AddOwnerRows(into, "SELECT ownerID, ownerName, typeID, NULL, NULL"
+                " FROM eveStaticOwners WHERE ownerID IN (%s)", list);
+    }
+}
+
+PyList* ConfigDB::OwnerRowToList(const OwnerRow& row)
+{
+    PyList* list = new PyList(5);
+        list->SetItem(0, new PyInt(row.ownerID));
+        list->SetItem(1, new PyWString(row.ownerName));
+        list->SetItem(2, new PyInt(row.typeID));
+        list->SetItem(3, (row.gender < 0 ? PyStatic.NewNone() : new PyInt(row.gender)));
+        list->SetItem(4, (row.ownerNameID == 0 ? PyStatic.NewNone() : new PyInt(row.ownerNameID)));
+    return list;
+}
+
+PyRep *ConfigDB::GetMultiOwnersEx(const std::vector<int32> &entityIDs) {
+    /* cfg.eveowners:  (header, rows), always this shape (the client unpacks it), every row keyed by a requested id.
+     *  stations keep their stationID as the key (the client removes each returned key from its request set)
      */
-    PyList *results = new PyList();
-    DBQueryResult res;
-    std::string ids = "";
+    std::map<int32, OwnerRow> rows;
+    GetOwnerRows(entityIDs, rows);
 
-    if (corp.size()) {
-        ListToINString(corp, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  corporationID AS ownerID,"
-            "  corporationName AS ownerName,"
-            "  2 AS typeID,"                    // corp typeID
-            "  false AS gender,"
-            "  NULL AS ownerNameID"             // this is a messageID - have not taken time to find and insert
-            " FROM crpCorporation"
-            " WHERE corporationID IN (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-        ids = "";
-    }
+    PyList* header = new PyList(5);
+        header->SetItemString(0, "ownerID");
+        header->SetItemString(1, "ownerName");
+        header->SetItemString(2, "typeID");
+        header->SetItemString(3, "gender");
+        header->SetItemString(4, "ownerNameID");
+    PyList* results = new PyList();
+    for (auto& cur : rows)
+        results->AddItem(OwnerRowToList(cur.second));
 
-    if (ally.size()) {
-        ListToINString(ally, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  allianceID AS ownerID,"
-            "  allianceName AS ownerName,"
-            "  16159 AS typeID,"                 // alliance typeID.
-            "  false AS gender,"
-            "  NULL AS ownerNameID"
-            " FROM alnAlliance"
-            " WHERE allianceID IN (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-        ids = "";
-    }
-
-    if (player.size()) {
-        ListToINString(player, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  characterID AS ownerID,"
-            "  characterName AS ownerName,"
-            "  typeID,"
-            "  gender,"
-            "  NULL AS ownerNameID"
-            " FROM chrCharacters"
-            " WHERE characterID IN (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-        ids = "";
-    }
-
-    if (npc.size()) {
-        ListToINString(npc, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  typeID AS ownerID,"
-            "  typeName AS ownerName,"
-            "  typeID,"
-            "  1 AS gender,"
-            "  typeNameID AS ownerNameID"
-            " FROM invTypes"
-            " WHERE typeID IN (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-        ids = "";
-    }
-
-    if (station.size()) {
-        ListToINString(station, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  corporationID AS ownerID,"
-            "  corporationName AS ownerName,"
-            "  2 AS typeID"                    // corp typeID
-            " FROM crpCorporation"
-            " WHERE corporationID IN (SELECT corporationID FROM staStations WHERE stationID IN (%s))", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-        ids = "";
-    }
-
-    if (owner.size()) {
-        ListToINString(owner, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            "  ownerID,"
-            "  ownerName,"
-            "  typeID,"
-            "  true AS gender,"
-            "  NULL AS ownerNameID"
-            " FROM eveStaticOwners"
-            " WHERE ownerID IN (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        } else {
-            populateResListWithValues(res, results);
-        }
-    }
-
-    if (!results->empty()) {
-        uint32 cc = res.ColumnCount();
-        PyTuple *response = new PyTuple(2);
-        PyList *cols = new PyList(cc);
-        for(uint32 r(0); r < cc; ++r)
-            cols->SetItemString(r, res.ColumnName(r));
-        response->items[0] = cols;
-        response->items[1] = results;
-
-        return response;
-    } else {
-        return new PyTuple(0);
-    }
+    PyTuple* response = new PyTuple(2);
+        response->SetItem(0, header);
+        response->SetItem(1, results);
+    return response;
 }
 
 PyRep *ConfigDB::GetMultiAllianceShortNamesEx(const std::vector<int32> &entityIDs) {

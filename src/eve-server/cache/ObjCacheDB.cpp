@@ -698,11 +698,12 @@ PyRep *ObjCacheDB::Generate_cacheLocations()
     return DBResultToCRowset(res);
 }
 
-PyRep *ObjCacheDB::Generate_cacheOwners()  //  FIXME   add gender checks  -allan
+PyRep *ObjCacheDB::Generate_cacheOwners()
 {
     DBQueryResult res;
-    //const char *q = "SELECT ownerID, ownerName, typeID, gender, ownerNameID FROM cacheOwners";
-    const char *q = "SELECT ownerID, ownerName, typeID FROM cacheOwners";
+    // cfg.eveowners header:  ownerID, ownerName, typeID, gender, ownerNameID  (gender only for player characters)
+    const char *q = "SELECT o.ownerID, o.ownerName, o.typeID, c.gender, NULLIF(o.ownerNameID, 0) AS ownerNameID"
+        " FROM cacheOwners AS o LEFT JOIN chrCharacters AS c ON c.characterID = o.ownerID";
     /*
     const char *q = "SELECT e.itemID AS ownerID, e.itemName AS ownerName, e.typeID, 0 AS gender, 0 AS locationNameID"
     "  FROM entity AS e"
