@@ -478,6 +478,30 @@ PyRep *FactoryDB::AssemblyLinesSelectAlliance(const int32 allianceID) {
     return DBResultToCRowset(res);
 }
 
+PyRep *FactoryDB::GetBlueprintInformationAtLocation(uint32 locationID, uint32 ownerID, int32 flag/*-1*/)
+{
+    std::string flagFilter;
+    if (flag >= 0)
+        flagFilter = " AND e.flag = " + std::to_string(flag);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT"
+        " e.itemID, e.typeID, e.ownerID, e.locationID, e.flag AS flagID, e.quantity, e.singleton,"
+        " CAST(b.copy AS UNSIGNED) AS copy, b.pLevel AS productivityLevel, b.mLevel AS materialLevel,"
+        " b.runs AS licensedProductionRunsRemaining"
+        " FROM entity AS e"
+        " JOIN invBlueprints AS b ON b.itemID = e.itemID"
+        " WHERE e.locationID = %u AND e.ownerID = %u%s",
+        locationID, ownerID, flagFilter.c_str()))
+    {
+        _log(DATABASE__ERROR, "Failed to query blueprints at %u for %u: %s.", locationID, ownerID, res.error.c_str());
+        return nullptr;
+    }
+
+    return DBResultToCRowset(res);
+}
+
 PyRep *FactoryDB::AssemblyLinesGet(const uint32 containerID) {
     DBQueryResult res;
 

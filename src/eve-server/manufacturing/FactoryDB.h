@@ -30,6 +30,8 @@ public:
     static PyRep* AssemblyLinesSelectCorporation(const uint32 corporationID);
     static PyRep* AssemblyLinesSelectAlliance(const int32 allianceID);
     static PyRep* AssemblyLinesGet(const uint32 containerID);
+    // blueprints of ownerID at locationID (flag -1 = any) for the corp vote/lock windows
+    static PyRep* GetBlueprintInformationAtLocation(uint32 locationID, uint32 ownerID, int32 flag = -1);
     static PyRep* GetMaterialCompositionOfItemType(const uint32 typeID);
     static void GetOutpostMaterialCompositionOfItemType(const uint32 typeID, DBQueryResult& res);
 

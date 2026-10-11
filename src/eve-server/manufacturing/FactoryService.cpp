@@ -38,6 +38,7 @@
 #include "eve-server.h"
 
 
+#include "Client.h"
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/FactoryService.h"
 
@@ -79,16 +80,17 @@ PyResult FactoryService::GetMaterialsForTypeWithActivity(PyCallArgs &call, PyInt
 
 
 // these next two are for corp locked items calls
+//  the client iterates the result (corp_ui_votes.py), so these always return a rowset.  only the caller's corp blueprints are listed
 PyResult FactoryService::GetBlueprintInformationAtLocation(PyCallArgs &call, PyInt* hangarID, PyInt* one) {
     //    blueprints = sm.RemoteSvc('factory').GetBlueprintInformationAtLocation(hangarID, 1)
     _log(MANUF__MESSAGE, "FactoryService::GetBlueprintInformationAtLocation() size= %lli", call.tuple->size());
     call.Dump(MANUF__DUMP);
-    return nullptr;
+    return FactoryDB::GetBlueprintInformationAtLocation(hangarID->value(), call.client->GetCorporationID());
 }
 
 PyResult FactoryService::GetBlueprintInformationAtLocationWithFlag(PyCallArgs &call, PyInt* locationID, PyInt* flag, PyInt* one) {
     //blueprints = sm.RemoteSvc('factory').GetBlueprintInformationAtLocationWithFlag(locationID, self.flagInput, 1)
     _log(MANUF__MESSAGE, "FactoryService::Handle_GetBlueprintInformationAtLocationWithFlag() size= %lli", call.tuple->size());
     call.Dump(MANUF__DUMP);
-    return nullptr;
+    return FactoryDB::GetBlueprintInformationAtLocation(locationID->value(), call.client->GetCorporationID(), flag->value());
 }
