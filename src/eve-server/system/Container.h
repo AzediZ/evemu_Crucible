@@ -265,9 +265,6 @@ public:
     bool IsEmpty()                                      { return m_contRef->IsEmpty(); }
     bool IsAbandoned()                                  { return m_abandoned; }
 
-    /** @todo (allan) finish this */
-    double GetOwnerBounty()                             { return 0; }
-
 protected:
     WreckContainerRef m_contRef;
 

@@ -183,6 +183,7 @@ void AccountDB::AddJournalEntry(uint32 ownerID, int8 entryTypeID, uint32 ownerFr
     DBerror err;
     sDatabase.RunQuery(err,
         "INSERT INTO %s (ownerID, entryTypeID, accountKey, transactionDate, ownerID1, ownerID2, referenceID, currency, amount, balance, description)"
-        " VALUES (%u,%u,%u,%f,%u,%u,%u,%i,%.2f,%.2f,'%s')",
-        tblName.c_str(), ownerID, entryTypeID, accountKey, GetFileTimeNow(), ownerFromID, ownerToID, referenceID, currency, amount, newBalance, eDesc.c_str());
+        " VALUES (%u,%u,%u,%f,%u,%u,%i,%i,%.2f,%.2f,'%s')",
+        // referenceID is signed:  single npc bounties store -typeID (the client shows the type name)
+        tblName.c_str(), ownerID, entryTypeID, accountKey, GetFileTimeNow(), ownerFromID, ownerToID, (int32)referenceID, currency, amount, newBalance, eDesc.c_str());
 }

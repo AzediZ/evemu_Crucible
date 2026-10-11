@@ -959,38 +959,48 @@ void DynamicSystemEntity::AwardBounty(Client* pClient)
     reason += pClient->GetSystemName();
 
     BountyData data = BountyData();
-    data.fromID = m_self->itemID();
+    data.fromID = m_self->typeID();     // the delayed payout lists kills by type
     data.toID = pClient->GetCharacterID();
     data.refTypeID = Journal::EntryType::BountyPrize;
     data.fromKey = Account::KeyType::Cash;
     data.toKey = Account::KeyType::Cash;
     data.reason = reason;
 
-    // handle distribution to fleets
+    /* single kills are BountyPrize journal entries with referenceID -typeID (the client shows the npc's type name),
+     * delayed payouts are one BountyPrizes entry per tic (SystemManager::PayBounties)
+     */
+    std::vector< uint32 > members;
     if (pClient->InFleet()) {
         // get fleet members onGrid and distrubute bounty
-        std::vector< uint32 > members;
         sFltSvc.GetFleetMembersOnGrid(pClient, members);
+        if (members.empty())
+            members.push_back(pClient->GetCharacterID());
         // split bounty between members
         bounty /= members.size();
-        // send bounty to members
+        data.amount = bounty;
         if (sConfig.server.BountyPayoutDelayed and sConfig.server.FleetShareDelayed) {
             for (auto cur :members)
                 m_system->AddBounty(cur, data);
-        } else {
-            reason += " (FleetShare) ";
-            reason += " by ";
-            reason += pClient->GetName();
-            data.reason = reason;
-            for (auto cur :members)
-                AccountService::TransferFunds(corpCONCORD, cur, bounty, reason.c_str(), Journal::EntryType::BountyPrize, -GetTypeID());
+            return;
         }
+        reason += " (FleetShare) ";
+        reason += " by ";
+        reason += pClient->GetName();
     } else {
         data.amount = bounty;
         if (sConfig.server.BountyPayoutDelayed) {
             m_system->AddBounty(pClient->GetCharacterID(), data);
-        } else {
-            AccountService::TransferFunds(corpCONCORD, pClient->GetCharacterID(), bounty, reason.c_str(), Journal::EntryType::BountyPrize, -GetTypeID());
+            return;
+        }
+        members.push_back(pClient->GetCharacterID());
+    }
+
+    // immediate payout.  a failed transfer must not break the kill
+    for (auto cur : members) {
+        try {
+            AccountService::TransferFunds(corpCONCORD, cur, bounty, reason.c_str(), Journal::EntryType::BountyPrize, -GetTypeID());
+        } catch (...) {
+            _log(CLIENT__ERROR, "AwardBounty() - unable to pay %.2f bounty for %s(%u) to %u", bounty, GetName(), GetID(), cur);
         }
     }
 }

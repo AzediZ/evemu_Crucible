@@ -108,9 +108,9 @@ struct BountyData {
     uint8 refTypeID;
     uint16 fromKey;
     uint16 toKey;
-    uint32 fromID;
+    uint32 fromID;      // npc typeID
     uint32 toID;
-    float amount;
+    double amount;
     std::string reason;
 };
 

@@ -357,9 +357,8 @@ void SystemManager::UnloadSystem() {
     // inform MarketBot of system unloading to remove system stations from proc loop.
     //sMktBotMgr.RemoveSystem();
 
-    // system is being unloaded.  pay bounties now
-    /** @todo  this will throw on error.  if called from d'tor, this CANNOT throw.  fix it */
-    //PayBounties();
+    // system is being unloaded.  pay bounties now (PayBounties doesn't throw)
+    PayBounties();
     
     // law enforcement forgets its entities (they're deleted below)
     m_law->Close();
@@ -1272,94 +1271,56 @@ void SystemManager::AddMarker(SystemEntity* pSE, bool sendBall/*false*/, bool ad
 
 
 void SystemManager::AddBounty(uint32 charID, BountyData& data) {
-    /*
-struct BountyData {     // this is comming from rat killed.
-    uint32 fromID;
-    uint32 toID;
-    double amount;
-    uint8 refTypeID;
-    uint16 fromKey;
-    uint16 toKey;
-    std::string reason;  this can stay blank for now.  populate during PayBounties
-}; */
+    // data comes from the npc killed:  fromID is its typeID, amount this pilot's share
     _log(CLIENT__TEXT, "AddBounty called for charID %u in system %s(%u).", charID, m_data.name.c_str(), m_data.systemID);
-    std::map<uint32, BountyData>::iterator itr = m_bountyMap.find(charID);
-    if (itr != m_bountyMap.end()) {
-        itr->second.amount += data.amount;
-        std::map<uint32, RatDataMap>::iterator rItr = m_ratMap.find(charID);
-        if (rItr != m_ratMap.end()) {
-            RatDataMap::iterator it = rItr->second.begin();
-            if (it == rItr->second.end()){
-                RatDataMap vec;
-                vec.emplace(data.fromID, 1);
-                rItr->second = vec;
-            } else {
-                ++(it->second);
-            }
-        } else {
-            RatDataMap vec;
-            vec.emplace(data.fromID, 1);
-            m_ratMap.emplace(charID, vec);
-        }
-    } else {
-        m_bountyMap.emplace(charID, data);
-        RatDataMap vec;
-        vec.emplace(data.fromID, 1);
-        m_ratMap.emplace(charID, vec);
+    BountyData& acc = m_bountyMap[charID];     // value-initialised on first use
+    if (acc.toID == 0) {
+        acc = data;
+        acc.toID = charID;
+        acc.amount = 0;
     }
+    acc.amount += data.amount;
+    ++m_ratMap[charID][static_cast<uint16>(data.fromID)];
 }
 
 void SystemManager::PayBounties() {
-    _log(CLIENT__TEXT, "PayBounties called for system %s(%u).", m_data.name.c_str(), m_data.systemID);
-
-    int8 count = 0;
-        /* recDescNpcBountyList = 'NBL'                <-- descrives a full list of [typeID: qty]
-         * recDescNpcBountyListTruncated = 'NBLT'      <-- describes a trunicated list
-recDescription = 'DESC'
-recDescNpcBountyList = 'NBL'
-recDescNpcBountyListTruncated = 'NBLT'
-recStoreItems = 'STOREITEMS'
-         */
-
-    /** @todo  this isnt right...which is why it's not working.
-     * see code in client/script/ui/shared/neocom/wallet.py for more info.  (lots to look over. no time tonite.)
-     * more data....
-     *
-     *   ["description" => <92:         << jnlRef:CorpBountyTax?
-            - 1630077495                << total bounties paid on this timer
-            - 325275.0                  << corp taxes taken?
-            NBL:                        << see above
-                11030: 2
-                11935: 1
-                23323: 1
-                23332: 2
-                23340: 2
-            > [WStr]]
-     *
-     *
-     *
+    /* one 'Bounty Prizes' journal entry per pilot per tic (Crucible paid every 20 minutes):
+     *  referenceID = solarSystemID (the client shows the location)
+     *  description = yaml dict {NBL: {typeID: count, ...}} plus NBLT when the list is truncated
+     *  (client wallet._ParseDescription lists '<type name> x <count>' per entry and a 'truncated' line)
      */
-    for (auto cur : m_bountyMap) {
-        std::string reason = "NBLT: "; //this needs to be populated as [NBL(T): type:amt, type:amt, ... ] to get proper shit in client
+    _log(CLIENT__TEXT, "PayBounties called for system %s(%u).", m_data.name.c_str(), m_data.systemID);
+    static const size_t NBL_MAX = 20;
+
+    for (auto& cur : m_bountyMap) {
+        std::string desc;
         std::map<uint32, RatDataMap>::iterator itr = m_ratMap.find(cur.first);
-        if (itr != m_ratMap.end()) {
-            count = itr->second.size();
-            for (auto cur : itr->second) {
-                reason += std::to_string(cur.first);
-                reason += ":";
-                reason += std::to_string(cur.second);
-                if (count > 1)
-                    reason += ",";
-                --count;
+        if ((itr != m_ratMap.end()) and !itr->second.empty()) {
+            // most killed types first
+            std::vector<std::pair<uint16, uint16>> rats(itr->second.begin(), itr->second.end());
+            std::stable_sort(rats.begin(), rats.end(),
+                    [](const std::pair<uint16, uint16>& a, const std::pair<uint16, uint16>& b) { return a.second > b.second; });
+            desc = "{NBL: {";
+            for (size_t n = 0; (n < rats.size()) and (n < NBL_MAX); ++n) {
+                if (n > 0)
+                    desc += ", ";
+                desc += std::to_string(rats[n].first);
+                desc += ": ";
+                desc += std::to_string(rats[n].second);
             }
-            // will have to figure out how to *correctly* limit this data to count<20 or so...
-        } //else {
+            desc += "}";
+            if (rats.size() > NBL_MAX)
+                desc += ", NBLT: 1";
+            desc += "}";
+        }
 
-        reason += ",...";    // this will show as "truncated" in client
-        //}
-
-        AccountService::TransferFunds(corpCONCORD, cur.first, cur.second.amount, reason, Journal::EntryType::BountyPrizes, m_data.systemID);
-        count = 0;
+        if (cur.second.amount < 0.01)
+            continue;
+        try {
+            AccountService::TransferFunds(corpCONCORD, cur.first, cur.second.amount, desc, Journal::EntryType::BountyPrizes, m_data.systemID);
+        } catch (...) {
+            _log(CLIENT__ERROR, "PayBounties() - unable to pay %.2f to %u in %s(%u)", cur.second.amount, cur.first, m_data.name.c_str(), m_data.systemID);
+        }
     }
 
     m_ratMap.clear();

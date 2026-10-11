@@ -59,7 +59,7 @@ EVEServerConfig::EVEServerConfig()
     server.processTic = 1.0;
     server.AllowNonPublished = false;
     server.FleetShareDelayed = false;
-    server.BountyPayoutDelayed = false; // this system isnt working yet.  disable by default
+    server.BountyPayoutDelayed = true;  // Crucible paid npc bounties as one 'Bounty Prizes' entry every 20 minutes
     server.BountyPayoutTimer = 20/*m*/;
     server.LoadOldMissions = false;
     server.AsteroidsOnDScan = false;

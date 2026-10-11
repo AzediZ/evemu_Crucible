@@ -291,7 +291,7 @@ private:
 
     // for bounty processing (20m timer)
     Timer m_bountyTimer;
-    typedef std::map<uint16, uint8> RatDataMap;  // typeID/amt
+    typedef std::map<uint16, uint16> RatDataMap;  // typeID/amt
     std::map<uint32, BountyData> m_bountyMap;  // charID/data
     std::map<uint32, RatDataMap> m_ratMap;  // charID/rat data
 
