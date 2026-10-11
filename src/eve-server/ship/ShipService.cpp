@@ -34,6 +34,7 @@
 #include "planet/Moon.h"
 #include "pos/Structure.h"
 #include "ship/ShipService.h"
+#include "ship/modules/GenericModule.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
 #include "system/Interdiction.h"
@@ -104,6 +105,26 @@ ShipBound::ShipBound (EVEServiceManager& mgr, ShipService& parent, ShipItem* shi
     this->Add("StoreVessel", &ShipBound::StoreVessel);
 }
 
+/* names of the active modules that can't be stopped early (cyno, siege, triage, jump portal...).  "" if none
+ *  these keep a pilot in the ship (ShipEjectFailedSystemsOccupied)
+ */
+static std::string ActiveBlockingModules(ShipItemRef shipRef)
+{
+    std::string names;
+    if ((shipRef.get() == nullptr) or (shipRef->GetModuleManager() == nullptr))
+        return names;
+    std::vector<GenericModule*> modules;
+    shipRef->GetModuleManager()->GetActiveModules(modules);
+    for (auto pMod : modules) {
+        if ((pMod == nullptr) or !pMod->GetAttribute(AttrDisallowEarlyDeactivation).get_bool())
+            continue;
+        if (!names.empty())
+            names += ", ";
+        names += pMod->GetSelf()->itemName();
+    }
+    return names;
+}
+
 /* only called in space */
 PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyInt*> oldShipID) {
     if (call.client->IsSessionChange()) {
@@ -116,15 +137,6 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
     ShipSE* pShipSE =  pClient->GetShipSE();
     if (pShipSE == nullptr)
         throw CustomError ("Invalid Ship.  Ref: ServerError xxxxx");
-    /** @todo  check for active cyno (when we implement it...) and other things that affect eject */
-    if (pShipSE->isGlobal()) { /* close enough.  cyno (isGlobal() = true), so this will work */
-        /* find proper error msg for this...im sure there is one  */
-        throw CustomError ("You cannot eject current ship with an active Cyno Field.");
-    }
-
-    //  do we need this? yes....this needs more work in destiny to implement correctly
-    if (pShipSE->DestinyMgr()->GetSpeed() > 20)
-        throw CustomError ("You cannot eject current ship while moving faster than 20m/s. Ref: ServerError 05139.");
 
     SystemManager* pSystem = pClient->SystemMgr();
     if (pSystem == nullptr) {
@@ -132,36 +144,43 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
         return nullptr;
     }
 
-    // this will segfault if newShipID is invalid or not in system inventory
-    pShipSE = pSystem->GetSE(newShipID->value())->GetShipSE();
+    SystemEntity* pNewSE(pSystem->GetSE(newShipID->value()));
+    if ((pNewSE == nullptr) or !pNewSE->IsShipSE() or pNewSE->IsDead())
+        throw UserError ("ScoopObjectGone").AddFormatValue("target", new PyString("The ship"));
+    ShipSE* pNewShipSE(pNewSE->GetShipSE());
 
-    if (pShipSE == nullptr) {
-        _log(SHIP__ERROR, "Handle_Board() - Failed to get new ship %u for %s.", newShipID->value(), pClient->GetName());
-        throw CustomError ("Something bad happened as you prepared to board the ship.  Ref: ServerError 25107.");
+    // an empty pod in space, or a ship somebody is flying
+    if ((pNewShipSE->GetTypeID() == itemTypeCapsule) or pNewShipSE->HasPilot())
+        throw UserError ("ShipAlreadyHasPilot");
+
+    // a pod climbing into a ship isn't switching ships (as far as CONCORD's evidence rule goes)
+    if (!pClient->InPod()) {
+        sCrimeWatch.CanSwitchShip(pClient);
+        std::string modules(ActiveBlockingModules(pClient->GetShip()));
+        if (!modules.empty())
+            throw UserError ("ShipEjectFailedSystemsOccupied").AddFormatValue("types", new PyString(modules));
     }
 
-    if (pShipSE->GetTypeID() == itemTypeCapsule) {
-        codelog(ITEM__ERROR, "Empty Pod %u in space.  SystemID %u.", newShipID->value(), pSystem->GetID());
-        throw CustomError ("You already have a pod.  These cannot be boarded manally.");
+    uint32 ownerID(pNewShipSE->GetOwnerID());
+    if (ownerID != pClient->GetCharacterID()) {
+        // nobody may take a ship that someone has locked
+        if ((pNewShipSE->TargetMgr() != nullptr) and pNewShipSE->TargetMgr()->IsTargeted())
+            throw UserError ("CantBoardTargeted");
+        // nor one whose owner is being chased by CONCORD
+        if (IsCharacterID(ownerID) and sCrimeWatch.IsCriminal(ownerID))
+            throw UserError ("ShipInvolvedInPoliceCrime");
     }
-
-    //CantBoardTargeted
-
-    //  do we need this? yes....this needs more work in destiny to implement correctly
-    if (pShipSE->DestinyMgr()->GetSpeed() > 20)
-        throw CustomError ("You cannot board the ship while it's moving faster than 20m/s. Ref: ServerError 05139.");
 
     // should we eject player here and deny boarding new ship, or just leave char in current ship and return?
-    if (!pShipSE->GetShipItemRef()->ValidateBoardShip(pClient->GetChar()))
-        throw CustomError ("You do not have the skills to fly a %s.", pShipSE->GetName());
+    if (!pNewShipSE->GetShipItemRef()->ValidateBoardShip(pClient->GetChar()))
+        throw CustomError ("You do not have the skills to fly a %s.", pNewShipSE->GetName());
 
-    float distance = pClient->GetShipSE()->GetPosition().distance(pShipSE->GetPosition());
-    // fudge for radii ?
+    // the client's maxBoardingDistance is a surface distance
+    double distance(pShipSE->GetPosition().distance(pNewShipSE->GetPosition()) - pShipSE->GetRadius() - pNewShipSE->GetRadius());
     if (distance > sConfig.world.shipBoardDistance)
-        throw CustomError ("You are too far from %s to board it.<br>You must be within %u meters to board this ship.",\
-                pShipSE->GetName(), sConfig.world.shipBoardDistance);
+        throw UserError ("NotCloseEnoughToBoard").AddFormatValue("maxdist", new PyInt(sConfig.world.shipBoardDistance));
 
-    pClient->Board(pShipSE);
+    pClient->Board(pNewShipSE);
     // a criminal in a new ship is still a criminal
     sCrimeWatch.OnEnterSpace(pClient);
 
@@ -173,7 +192,7 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
     return this->GetOID();
 }
 
-/* only called in space */
+/* only called in space.  the client refuses it in a station itself (NoEjectingToSpaceInStation) */
 PyResult ShipBound::Eject(PyCallArgs &call) {
     if (call.client->IsSessionChange()) {
         call.client->SendNotifyMsg("Session Change currently active.");
@@ -182,33 +201,27 @@ PyResult ShipBound::Eject(PyCallArgs &call) {
 
     //no arguments.
     Client* pClient = call.client;
-    /** @todo create and implement "Weapon Flag"....
-     *      Weapon Flag --  the 60-sec timer started upon any offensive weapon activation
-     *   this will be in client's criminaltimer object
-     *
-     * if (pClient->CrimeMgr()->IsWeaponFlagActive())
-     *  deny eject
-     */
-    //{'FullPath': u'UI/Messages', 'messageID': 256625, 'label': u'NoEjectingToSpaceInStationBody'}(u"You can't eject into space while you're docked. Try leaving your ship the usual way.", None, None)
-
     SystemEntity* pShipSE = pClient->GetShipSE();
     if (pShipSE == nullptr)
         throw CustomError ("Invalid Ship.  Ref: ServerError xxxxx");
-    /** @todo  check for active cyno (when we implement it...) and other things that affect eject */
-    if (pShipSE->isGlobal()) { /* close enough.  cyno (isGlobal() = true), so this will work */
-        /* find proper error msg for this...im sure there is one  */
-        throw CustomError ("You cannot eject with an active Cyno Field.");
-    }
+    if (pClient->InPod())
+        throw UserError ("CannotEjectFromCapsule");
+    if (pShipSE->DestinyMgr()->IsWarping())
+        throw UserError ("ShipInWarp");
 
-    //  do we need this? yes....this needs more work in destiny to implement correctly
-    if (pShipSE->DestinyMgr()->GetSpeed() > 20)
-        throw CustomError ("You cannot eject current ship while moving faster than 20m/s. Ref: ServerError 05139.");
+    // Crucible: criminals may not switch ships.  (the weapons timer lock is optional, crime.SwitchShipWeaponsTimer)
+    sCrimeWatch.CanSwitchShip(pClient);
+
+    // modules that can't be stopped early keep the pilot in (cyno field, siege, triage, jump portal...)
+    std::string modules(ActiveBlockingModules(pClient->GetShip()));
+    if (!modules.empty())
+        throw UserError ("ShipEjectFailedSystemsOccupied").AddFormatValue("types", new PyString(modules));
 
     pClient->Eject();
 
     /* return error msg from this call, if applicable (not sure how yet), else nodeid and timestamp */
     // returns nodeID and timestamp
-    // 
+    //
     // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
     //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
     return this->GetOID();

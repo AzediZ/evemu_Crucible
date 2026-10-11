@@ -137,6 +137,8 @@ public:
 
     /* NPC AI Methods */
     bool                IsTargetedBy(SystemEntity *pSE);
+    // somebody has (or is getting) a lock on us
+    bool                IsTargeted() const              { return !m_targetedBy.empty(); }
     SystemEntity*       GetFirstTarget(bool need_locked=false);
     // everything we target (locking or locked), or only completed locks
     void                GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked=false) const;
