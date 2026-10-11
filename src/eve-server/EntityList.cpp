@@ -376,6 +376,13 @@ uint32 EntityList::GetLoggedInCount() const
     return count;
 }
 
+void EntityList::GetProbesForChar(uint32 charID, uint32 systemID, std::vector<ProbeSE*>& into)
+{
+    for (auto cur : m_probes)
+        if ((cur.second->GetOwnerCharID() == charID) and (cur.second->SystemMgr() != nullptr) and (cur.second->SystemMgr()->GetID() == systemID))
+            into.push_back(cur.second);
+}
+
 bool EntityList::IsOnline(uint32 charID)
 {
     if (m_players.find(charID) == m_players.end())

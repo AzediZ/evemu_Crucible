@@ -170,6 +170,8 @@ public:
     void AddProbe(uint32 probeID, ProbeSE* pSE)         { m_probes[probeID] = pSE; }
     // remove ProbeSE* from map
     void RemoveProbe(uint32 probeID)                    { m_probes.erase(probeID); }
+    // this character's probes in this system (lost or controlled)
+    void GetProbesForChar(uint32 charID, uint32 systemID, std::vector<ProbeSE*>& into);
 
 
 protected:

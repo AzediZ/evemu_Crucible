@@ -45,11 +45,16 @@ public:
     void ShipScanResult();
     void ProbeScanResult();
 
-    void SystemScanStarted(uint16 duration);
+    void SystemScanStarted(uint32 duration);
 
     // probe methods
     void AddProbe(ProbeSE* pProbe);
     void RemoveProbe(ProbeSE* pProbe);
+    // the pilot lost control of his probes (dock, jump, ship change, logoff).  they stay in space, lost.
+    //  notify sends OnScannerInfoRemoved (the client flushes its scanner itself on solar system and ship changes)
+    void AbandonProbes(bool notify=false);
+    // a scan (on-board or probes) is running
+    bool IsScanning()                                   { return (m_busy or m_probeScan or !m_activeProbeMap.empty()); }
 
     bool GetProbeDataForSig(SignalData& data);
     // this will determine signal strength, deviation, and other aspects based on signal type and probe data
@@ -61,11 +66,11 @@ protected:
 
 private:
     ManagerDB* m_db;
-    Client* m_client;
-    SystemManager* m_system;
+    Client* m_client;           // the system is always m_client->SystemMgr() (never cached; we live across jumps)
 
     void CalcProbeAngles(GPoint& sigPos, std::vector<ProbeSE*>& probeVec, std::map<float, std::pair<ProbeSE*, ProbeSE*>>& angleMap);
 
+    bool m_busy;                // RequestScans until its results are sent
     bool m_probeScan;
 
     std::map<uint32, ProbeSE*> m_probeMap;        // probeID/ProbeSE*

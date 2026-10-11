@@ -149,11 +149,21 @@ m_scanShips(false)
         m_lifeTimer.Start(self->GetAttribute(AttrExplosionDelay).get_uint32());
     }
 
+    CalcStats();
+    SetRangeStep(5);
+    m_state = Probe::State::Idle;
+
+    _log(SCAN__INFO, "Created ProbeSE for %u. timeNow: %.0f, expiry: %lli, scan Str: %.4f, deviation: %.5f, ship: %s", \
+            m_self->itemID(), GetFileTimeNow(), m_expiry, m_scanStrength, m_scanDeviation, m_scanShips?"true":"false");
+}
+
+void ProbeSE::CalcStats()
+{
     // set base str, deviation and range
-    m_rangeFactor = self->GetAttribute(AttrRangeFactor).get_uint32();
-    m_scanStrength = self->GetAttribute(AttrBaseSensorStrength).get_float();
-    m_scanDeviation = self->GetAttribute(AttrBaseMaxScanDeviation).get_float();
-    m_baseScanRange = self->GetAttribute(AttrBaseScanRange).get_float() * (ONE_AU_IN_METERS /100);
+    m_rangeFactor = m_self->GetAttribute(AttrRangeFactor).get_uint32();
+    m_scanStrength = m_self->GetAttribute(AttrBaseSensorStrength).get_float();
+    m_scanDeviation = m_self->GetAttribute(AttrBaseMaxScanDeviation).get_float();
+    m_baseScanRange = m_self->GetAttribute(AttrBaseScanRange).get_float() * (ONE_AU_IN_METERS /100);
 
     // i think we may have to do probe modifiers here....they are not being done thru fx system
     Character* pChar = m_client->GetChar().get();
@@ -166,7 +176,7 @@ m_scanShips(false)
     //m_scanDeviation *= (1 - (0.01 * pChar->GetSkillLevel(EvESkill::SensorLinking)));           // -1% deviation per level
 
     // ship
-    switch (shipRef->typeID()) {
+    switch (m_shipRef->typeID()) {
         //t1
         case 29248: { /* Magnate */
             m_scanStrength *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::AmarrFrigate)))); // +5% strength per level
@@ -193,11 +203,11 @@ m_scanShips(false)
     }
 
     // modules (launchers - 5 or 10)
-    if (moduleRef->HasAttribute(AttrScanStrengthBonus))
-        m_scanStrength *= (1 + (0.01f * moduleRef->GetAttribute(AttrScanStrengthBonus).get_float()));
+    if (m_moduleRef->HasAttribute(AttrScanStrengthBonus))
+        m_scanStrength *= (1 + (0.01f * m_moduleRef->GetAttribute(AttrScanStrengthBonus).get_float()));
 
     // rigs (10 or 15)
-    m_scanStrength *= (1 + shipRef->GetModuleManager()->GetRigScanBonus());
+    m_scanStrength *= (1 + m_shipRef->GetModuleManager()->GetRigScanBonus());
 
     // implants (virtue - 1-5, hardwire 2,6,10)
     // skill (AstrometricRangefinding @ 10%/lvl)  <-- this doesnt get set on character object - checked above...
@@ -205,9 +215,6 @@ m_scanShips(false)
     //  also, the bonus will be determined by the implant fx, which would be set in attrib.
     if (pChar->HasAttribute(AttrScanStrengthBonus))
         m_scanStrength *= (1 + (0.01f * pChar->GetAttribute(AttrScanStrengthBonus).get_float()));
-
-    _log(SCAN__INFO, "Created ProbeSE for %u. timeNow: %.0f, expiry: %lli, scan Str: %.4f, deviation: %.5f, ship: %s", \
-            m_self->itemID(), GetFileTimeNow(), m_expiry, m_scanStrength, m_scanDeviation, m_scanShips?"true":"false");
 }
 
     /*
@@ -243,10 +250,12 @@ ProbeSE::~ProbeSE() {
 
 bool ProbeSE::ProcessTic()
 {
+    // the caller (EntityList's probe loop) erases us from its map when this returns false
     if (m_lifeTimer.Check()) {
-        Delete();
+        _log(SCAN__INFO, "ProbeSE::Process() probe %u expired", m_self->itemID());
+        RemoveProbe(false);
+        m_self->Delete();
         delete(this);
-        // delete from entity map
         return false;
     }
     if (m_returnTimer.Enabled())
@@ -255,10 +264,21 @@ bool ProbeSE::ProcessTic()
             _log(SCAN__INFO, "ProbeSE::Process() return timer hit for probeID %u", m_self->itemID());
             if (m_state == Probe::State::Warping)
                 SendWarpEnd();
-            RemoveProbe();
+            if (!CanReturn()) {
+                // the ship it was returning to is gone.  the probe stays in space, lost
+                if (m_client != nullptr)
+                    m_client->SendRemoteMessage("ScannerProbeShipLeftReturnAborted");
+                Abandon();
+                return true;
+            }
+            if (!m_shipRef->GetMyInventory()->HasAvailableSpace(flagCargoHold, m_self)) {
+                m_client->SendNotifyMsg("Your cargo hold has no room for the %s.  It waits where it is.", m_self->name());
+                SendStateChange(Probe::State::Idle);
+                return true;
+            }
+            RemoveProbe(false);
             m_self->MergeTypesInCargo(m_shipRef.get(), flagCargoHold);
             delete(this);
-            // delete from entity map
             return false;
         }
     if (m_stateTimer.Enabled())
@@ -291,10 +311,20 @@ bool ProbeSE::IsMoving()
     return false;
 }
 
+void ProbeSE::SetRangeStep(uint8 step)
+{
+    if (step < 1)
+        step = 1;
+    if (step > 8)       // const.scanProbeNumberOfRangeSteps
+        step = 8;
+    m_rangeStep = step;
+    m_scanRange = m_self->type().GetAttribute(AttrBaseScanRange).get_float()
+                * std::pow(m_self->type().GetAttribute(AttrRangeFactor).get_float(), m_rangeStep - 1) * ONE_AU_IN_METERS;
+}
+
 void ProbeSE::UpdateProbe(ProbeData& data)
 {
-    m_scanRange = data.scanRange;
-    m_rangeStep = data.rangeStep;
+    SetRangeStep(data.rangeStep);
     m_destination = data.dest;
 
     float time(1), dist = GetPosition().distance(m_destination);
@@ -316,9 +346,66 @@ void ProbeSE::UpdateProbe(ProbeData& data)
                 GetID(), GetStateName(m_state), m_scanRange, m_rangeStep, dist, time );
 }
 
+bool ProbeSE::CanReturn()
+{
+    if ((m_client == nullptr) or (m_shipRef.get() == nullptr))
+        return false;
+    return (m_client->IsInSpace() and (m_client->GetShipID() == m_shipRef->itemID()) and (m_client->SystemMgr() == m_system));
+}
+
+uint32 ProbeSE::GetLauncherDuration()
+{
+    if (m_moduleRef.get() == nullptr)
+        return 10000;
+    uint32 duration(m_moduleRef->GetAttribute(AttrDuration).get_uint32());
+    return (duration < 1000 ? 10000 : duration);
+}
+
+void ProbeSE::Abandon()
+{
+    _log(SCAN__INFO, "ProbeSE::Abandon() - probe %u of %u is lost.", m_self->itemID(), m_ownerID);
+    // no client from here on.  a warp in progress ends at its destination
+    m_client = nullptr;
+    m_scan = nullptr;
+    m_returnTimer.Disable();
+    if (m_stateTimer.Enabled()) {
+        m_stateTimer.Disable();
+        if (IsMoving()) {
+            if (m_state == Probe::State::Warping) {
+                SendWarpEnd();
+            } else {
+                m_self->SetPosition(m_destination);
+            }
+        }
+    }
+    m_state = Probe::State::Inactive;
+}
+
+void ProbeSE::Reconnect(Client* pClient, ShipItemRef shipRef, InventoryItemRef launcherRef)
+{
+    m_client = pClient;
+    m_shipRef = shipRef;
+    m_moduleRef = launcherRef;
+
+    m_warID = m_client->GetWarFactionID();
+    m_allyID = m_client->GetAllianceID();
+    m_corpID = m_client->GetCorporationID();
+    m_secStatus = m_client->GetSecurityRating();
+
+    CalcStats();
+    m_state = Probe::State::Idle;
+    SendNewProbe();
+    _log(SCAN__INFO, "ProbeSE::Reconnect() - probe %u reconnected to %s", m_self->itemID(), m_client->GetName());
+}
+
 void ProbeSE::RecoverProbe(PyList* list)
 {
-    if (m_client == nullptr)
+    if (!CanReturn())
+        return;
+    // only probes at rest come back, and only into room in the hold
+    if ((m_state != Probe::State::Idle) and (m_state != Probe::State::Inactive))
+        return;
+    if (!m_shipRef->GetMyInventory()->HasAvailableSpace(flagCargoHold, m_self))
         return;
     m_destination = m_shipRef->position() + 250;
     float time(1), dist = GetPosition().distance(m_destination);
@@ -342,6 +429,8 @@ void ProbeSE::RecoverProbe(PyList* list)
 
 void ProbeSE::SendNewProbe()
 {
+    if (m_client == nullptr)
+        return;
     ScanResultPos ssr_oed;
         ssr_oed.x = GetPosition().x;
         ssr_oed.y = GetPosition().y;
@@ -376,7 +465,7 @@ void ProbeSE::SendStateChange(uint8 state)
     m_client->SendNotification("OnProbeStateChanged", "clientID", &tuple);  // this is sequenced
 }
 
-void ProbeSE::RemoveProbe()
+void ProbeSE::RemoveProbe(bool fromEntityList/*true*/)
 {
     // remove from scan map, but check for abandoned probes (no scan)
     if (m_scan != nullptr) {
@@ -388,7 +477,8 @@ void ProbeSE::RemoveProbe()
     // set item loc to null
     m_self->SetPosition(NULL_ORIGIN);
     // remove from entity list
-    sEntityList.RemoveProbe(m_self->itemID());
+    if (fromEntityList)
+        sEntityList.RemoveProbe(m_self->itemID());
 
     if (m_client == nullptr)
         return;
@@ -424,6 +514,10 @@ void ProbeSE::SendWarpStart(float travelTime/*0*/)
         tuple->SetItem(2, new PyObjectEx(false, to));       //to
         tuple->SetItem(3, new PyLong(GetFileTimeNow()));    //startTime
         tuple->SetItem(4, new PyFloat(travelTime));         //duration in ms
+    if (m_client == nullptr) {
+        PyDecRef(tuple);
+        return;
+    }
     m_client->SendNotification("OnProbeWarpStart", "clientID", &tuple);  // this is sequenced
 
     // not sure if this will work right...slimItem is removed when probe warps out

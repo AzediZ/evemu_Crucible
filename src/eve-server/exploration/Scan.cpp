@@ -35,9 +35,9 @@
 #include "system/cosmicMgrs/AnomalyMgr.h"
 
 Scan::Scan(Client* pClient)
-: m_client(pClient),
-  m_system(pClient->SystemMgr())
+: m_client(pClient)
 {
+    m_busy = false;
     m_probeScan = false;
     m_probeMap.clear();
     m_activeProbeMap.clear();
@@ -52,47 +52,69 @@ void Scan::AddProbe(ProbeSE* pProbe)
 void Scan::RemoveProbe(ProbeSE* pProbe)
 {
     m_probeMap.erase(pProbe->GetID());
+    m_activeProbeMap.erase(pProbe->GetID());
+}
+
+void Scan::AbandonProbes(bool notify/*false*/)
+{
+    _log(SCAN__TRACE, "Scan::AbandonProbes() - %s loses control of %u probes", m_client->GetName(), m_probeMap.size());
+    for (auto cur : m_probeMap)
+        cur.second->Abandon();
+    m_probeMap.clear();
+    m_activeProbeMap.clear();
+    m_probeScan = false;
+    m_busy = false;
+
+    if (!notify)
+        return;
+    PyTuple* tuple = new PyTuple(0);
+    m_client->SendNotification("OnScannerInfoRemoved", "charid", &tuple);
 }
 
 void Scan::ProcessScan(bool useProbe/*false*/)
 {
     if (!useProbe) {
         ShipScanResult();
+        m_busy = false;
         return;
     }
     if (m_probeScan) {
         ProbeScanResult();
         m_probeScan = false;
+        m_busy = false;
         m_activeProbeMap.clear();
         return;
     }
+    if (m_activeProbeMap.empty()) {
+        // the probes went away meanwhile
+        m_busy = false;
+        return;
+    }
 
+    // probe scan time is the launcher's duration (10s, less with Astrometric Acquisition and hull bonuses)
     bool idle = true;
-    uint16 ntime(0), duration = m_client->GetShip()->GetAttribute(AttrScanSpeed).get_uint32();
-    if (duration < 1000)
-        duration = 8000;    // 8s default probe scan time.
+    uint32 moveTime(0), duration(0);
     for (auto cur : m_activeProbeMap) {
+        duration = std::max<uint32>(duration, cur.second->GetLauncherDuration());
         if (cur.second->IsMoving()) {
             idle = false;
-            ntime = cur.second->GetMoveTime();
-            // this time isnt right (but very close).  need to really think it thru for correctness
-            //  currrently, it will allow probes to hit 'idle' as scanning starts, or a few ms after.
-            if (ntime > duration)       // flipped conditional
-                duration = ntime;
-        } else {
-            cur.second->SendStateChange(Probe::State::Idle);
+            moveTime = std::max<uint32>(moveTime, cur.second->GetMoveTime());
         }
     }
-    if (idle) {
-        m_probeScan = true;
-        for (auto cur : m_activeProbeMap) {
-            cur.second->SendStateChange(Probe::State::Scanning);
-            cur.second->StartStateTimer(duration);
-        }
-        SystemScanStarted(duration);
+    _log(SCAN__TRACE, "ProcessScan() - probes - active:%lu, total:%lu, duration: %u, moving: %ums", \
+                m_activeProbeMap.size(), m_probeMap.size(), duration, moveTime);
+    if (!idle) {
+        // check again when the last probe arrives
+        m_client->SetScanTimer(moveTime + 100, true);
+        return;
     }
-    _log(SCAN__TRACE, "ProcessScan() - probes - active:%lu, total:%lu, duration: %u, idle: %s", \
-                m_activeProbeMap.size(), m_probeMap.size(), duration, idle?"true":"false");
+
+    m_probeScan = true;
+    for (auto cur : m_activeProbeMap) {
+        cur.second->SendStateChange(Probe::State::Scanning);
+        cur.second->StartStateTimer(duration);
+    }
+    SystemScanStarted(duration);
     m_client->SetScanTimer(duration, true);
 }
 
@@ -138,8 +160,18 @@ PyRep* Scan::ConeScan(Call_ConeScan args) {
 }
 
 void Scan::RequestScans(PyDict* dict) {
-    uint16 duration = m_client->GetShip()->GetAttribute(AttrScanSpeed).get_uint32();
+    if (IsScanning())
+        throw UserError ("ScnAlreadyInProgress");
+
+    // on-board scanner time is the ship's scanSpeed
+    uint32 duration = m_client->GetShip()->GetAttribute(AttrScanSpeed).get_uint32();
+    if (duration < 1000)
+        duration = 8000;
     if ((dict == nullptr) or dict->empty()) {
+        if (m_client->GetShip()->groupID() == EVEDB::invGroups::Capsule)
+            throw UserError ("PodCannotScan");
+        if (!m_probeMap.empty())
+            throw UserError ("ScnShipScannerTooManyProbes");
         _log(SCAN__MESSAGE, "Scan::RequestScans() called by %s in %s using ship scanner.", \
                 m_client->GetName(), m_client->GetSystemName().c_str());
 
@@ -149,6 +181,7 @@ void Scan::RequestScans(PyDict* dict) {
             ossst.scanProbesDict = new PyDict();
         PyTuple* ev = ossst.Encode();
         m_client->SendNotification("OnSystemScanStarted", "charid", &ev);
+        m_busy = true;
         m_client->SetScanTimer(duration);
         return;
     }
@@ -178,11 +211,12 @@ void Scan::RequestScans(PyDict* dict) {
             continue;
         }
 
+        // the range comes from the range step (the client's scanRange isn't trusted)
         ProbeData data = ProbeData();
             data.state = args.state;    // do we need this?
             data.expiry = args.expiry;
             data.rangeStep = args.rangeStep;
-            data.scanRange = args.scanRange;
+            data.scanRange = 0;
         // set probe target
         PyObjectEx* obj = args.destination->AsObjectEx();
         PyTuple* dest = obj->header()->AsTuple()->GetItem(1)->AsTuple();
@@ -198,11 +232,15 @@ void Scan::RequestScans(PyDict* dict) {
         if (itr == m_activeProbeMap.end())
             cur.second->SetState(Probe::State::Inactive);
     }
+    if (m_activeProbeMap.empty())
+        return;
 
-    m_client->SetScanTimer(duration, true);
+    m_busy = true;
+    // first check right after the probes' moves are set (ProcessScan waits for them)
+    m_client->SetScanTimer(100, true);
 }
 
-void Scan::SystemScanStarted(uint16 duration)
+void Scan::SystemScanStarted(uint32 duration)
 {
     _log(SCAN__TRACE, "Scan::SystemScanStarted()  for %s in system %u", m_client->GetName(), m_client->GetSystemID());
 
@@ -249,11 +287,11 @@ void Scan::ShipScanResult() {
     // client scan data found in EVE_Scanning.h
     std::vector<CosmicSignature> anom;
     if (m_client->IsShowall()) {
-        m_system->GetAllEntities(anom);
+        m_client->SystemMgr()->GetAllEntities(anom);
         // bubble centers only populate when bubble markers are enabled.
-        sBubbleMgr.GetBubbleCenterMarkers(m_system->GetID(), anom);
+        sBubbleMgr.GetBubbleCenterMarkers(m_client->SystemMgr()->GetID(), anom);
     } else {
-        m_system->GetAnomMgr()->GetAnomalyList(anom);
+        m_client->SystemMgr()->GetAnomMgr()->GetAnomalyList(anom);
     }
 
     PyList* resultList = new PyList();
@@ -301,7 +339,7 @@ void Scan::ProbeScanResult()
     std::vector<CosmicSignature> sig, anom;
 
     // are anomalies shown in probe scan results?  config option?
-    m_system->GetAnomMgr()->GetAnomalyList(anom);
+    m_client->SystemMgr()->GetAnomMgr()->GetAnomalyList(anom);
     for (auto anoms : anom) {
         SystemScanResult ssr;
             ssr.typeID = anoms.sigTypeID;
@@ -345,7 +383,7 @@ void Scan::ProbeScanResult()
         resultList->AddItem(ssr.Encode());
     }
 
-    m_system->GetAnomMgr()->GetSignatureList(sig);
+    m_client->SystemMgr()->GetAnomMgr()->GetSignatureList(sig);
     for (auto sigs : sig) {
         SignalData data = SignalData();
             data.sig = sigs;
@@ -504,7 +542,7 @@ struct CosmicSignature {
     }
 
     _log(SCAN__TRACE, "Scan::GetProbeDataForSig()  probeVec size: %u for signal %s (%s)", \
-            probeVec.size(), data.sig.sigName.c_str(), m_system->GetAnomMgr()->GetScanGroupName(data.sig.scanGroupID));
+            probeVec.size(), data.sig.sigName.c_str(), m_client->SystemMgr()->GetAnomMgr()->GetScanGroupName(data.sig.scanGroupID));
 
     if (probeVec.empty())
         return false;

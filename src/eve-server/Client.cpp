@@ -119,6 +119,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
     m_packaged = false;
     m_portrait = false;
     m_autoPilot = false;
+    m_shipId = 0;
     m_shipLeftInSpace = false;
     m_bubbleWait = false;     // allow client processing of subsquent destiny msgs
     m_charCreation = false;
@@ -210,7 +211,7 @@ Client::~Client() {
     m_system = nullptr; // DO NOT delete m_system here
 
     SafeDelete(m_TS);
-    SafeDelete(m_scan);
+    ReleaseScan();
     SafeDelete(pShipSE);
     SafeDelete(pSession);
     PyDecRef(m_destinyEventQueue);
@@ -443,7 +444,8 @@ void Client::ProcessClient() {
         if (m_scanTimer.Check(false)) {
             _log(CLIENT__TIMER, "ProcessClient():  Scan Timer hit for %s(%u).", m_char->name(), m_char->itemID());
             m_scanTimer.Disable();
-            m_scan->ProcessScan(m_scanProbe);
+            if (m_scan != nullptr)
+                m_scan->ProcessScan(m_scanProbe);
         }
 
     if (m_ballparkTimer.Enabled())
@@ -740,6 +742,9 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
             if ((IsJump()) and !m_autoPilot)
                 pShipSE->DestinyMgr()->Halt();
 
+        // probes stay behind, lost
+        ReleaseScan();
+
         // remove from current system before resetting system vars
         m_system->RemoveEntity(pShipSE);
 
@@ -984,6 +989,7 @@ void Client::MoveToPosition(const GPoint &pt) {
 }
 
 void Client::DockToStation() {
+    ReleaseScan();
     pShipSE->Dock();
     // ap cleared on client side when docking.
     m_autoPilot = false;
@@ -1372,7 +1378,19 @@ void Client::ResetAfterPodded() {
     SendSessionChange();
 }
 
+void Client::ReleaseScan(bool notify/*false*/)
+{
+    m_scanTimer.Disable();
+    if (m_scan == nullptr)
+        return;
+    m_scan->AbandonProbes(notify);
+    SafeDelete(m_scan);
+}
+
 void Client::SetShip(ShipItemRef shipRef) {
+    // a new ship has no control of the old one's probes
+    if (m_shipId != shipRef->itemID())
+        ReleaseScan();
     shipRef->ChangeOwner(m_char->itemID());
     if (pShipSE != nullptr)
         pShipSE->SetPilot(nullptr);

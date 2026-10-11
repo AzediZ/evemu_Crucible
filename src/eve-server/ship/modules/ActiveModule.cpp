@@ -1352,6 +1352,20 @@ bool ActiveModule::CanActivate() {
         }
     }
 
+    // scanner probes:  Astrometrics allows 3 + 1 per level under control
+    if ((groupID() == EVEDB::invGroups::Scan_Probe_Launcher) and (m_chargeRef.get() != nullptr)
+    and (m_chargeRef->groupID() == EVEDB::invGroups::Scanner_Probe) and m_shipRef->HasPilot()) {
+        Client* pClient(m_shipRef->GetPilot());
+        uint8 limit(3 + pClient->GetChar()->GetSkillLevel(EvESkill::Astrometrics));
+        if ((pClient->scan() != nullptr) and (pClient->scan()->GetProbeCount() >= limit)) {
+            uint16 typeID(m_chargeRef->typeID());
+            Clear();
+            throw UserError("NoProbeManagementAbilitiesLeft")
+                    .AddFormatValue("probeTypeID", new PyInt(typeID))
+                    .AddFormatValue("limit", new PyInt(limit));
+        }
+    }
+
     // check distance for targetable actions
     if (m_targetSE != nullptr) {
         // weapons use ships AttrMaxTargetRange which is checked in TargetMgr
@@ -1753,9 +1767,14 @@ void ActiveModule::LaunchProbe()
     if (pClient->scan() == nullptr)
         pClient->SetScan(new Scan(pClient));
 
-    uint8 pcount = pClient->scan()->GetProbeCount();
-    if (pcount > (pClient->GetChar()->GetSkillLevel(EvESkill::Astrometrics) + 3)) {
-        pClient->SendErrorMsg("You can only control %u probes based on your current skills.", pcount);
+    // Astrometrics:  3 probes + one per level.  (CanActivate refuses the activation, this stops a repeating launcher)
+    uint8 limit(3 + pClient->GetChar()->GetSkillLevel(EvESkill::Astrometrics));
+    if (pClient->scan()->GetProbeCount() >= limit) {
+        PyDict* args = new PyDict();
+            args->SetItemString("probeTypeID", new PyInt(m_chargeRef->typeID()));
+            args->SetItemString("limit", new PyInt(limit));
+        pClient->SendRemoteMessage("NoProbeManagementAbilitiesLeft", args);
+        m_Stop = true;
         return;
     }
 

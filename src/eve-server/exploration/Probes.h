@@ -92,9 +92,19 @@ public:
     /* specific functions handled in this class. */
     void RecoverProbe(PyList* list);
     void UpdateProbe(ProbeData& data);
-    // removes probe from system and scan map, and sends RemoveProbe call to client
-    // does not remove probe from entity list
-    void RemoveProbe();
+    // removes probe from system and scan map, and sends RemoveProbe call to client.
+    //  fromEntityList=false when called from EntityList's probe loop (the loop erases it)
+    void RemoveProbe(bool fromEntityList=true);
+
+    /* lost probes:  probes stay in space when their pilot docks, jumps, changes ship or logs off.  they keep their owner
+     *  and life, and can be reconnected (ScanBound::ReconnectToLostProbes) from a ship with their launcher online */
+    void Abandon();
+    void Reconnect(Client* pClient, ShipItemRef shipRef, InventoryItemRef launcherRef);
+    bool IsAbandoned()                                  { return (m_client == nullptr); }
+    uint32 GetOwnerCharID()                             { return m_ownerID; }
+    uint32 GetLauncherID()                              { return (m_moduleRef.get() != nullptr ? m_moduleRef->itemID() : 0); }
+    // probe scan time (ms):  the launcher's duration, with its dogma (Astrometric Acquisition, hulls)
+    uint32 GetLauncherDuration();
     void SendNewProbe();
     void SendSlimChange();
     void SendStateChange(uint8 state);
@@ -103,13 +113,15 @@ public:
 
     void SetScan(Scan* pScan)                           { m_scan = pScan; }
     void RemoveScan()                                   { m_scan = nullptr; }
-    void StartStateTimer(uint16 time)                   { m_stateTimer.Start(time); }
+    void StartStateTimer(uint32 time)                   { m_stateTimer.Start(time); }
 
     bool IsMoving();
 
     void SetState(uint8 state=Probe::State::Idle)       { m_state = state; }
     uint8 GetState()                                    { return m_state; }
     uint8 GetRangeStep()                                { return m_rangeStep; }
+    // range step 1..8 -> scan range = baseScanRange * rangeFactor^(step-1) AU (client GetScanRangeStepsByTypeID)
+    void SetRangeStep(uint8 step);
 
     // remaining move time in ms
     uint16 GetMoveTime()                                { return m_stateTimer.GetRemainingTime(); }
@@ -140,6 +152,11 @@ public:
     bool HasMaxSkill();
 
 private:
+    // strength and deviation from the probe, skills, launcher, ship and fittings
+    void CalcStats();
+    // the pilot can take this probe back aboard (same ship, in space, in this system)
+    bool CanReturn();
+
     Timer m_lifeTimer;
     Timer m_returnTimer;
     Timer m_stateTimer;

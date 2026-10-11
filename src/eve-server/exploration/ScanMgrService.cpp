@@ -26,6 +26,7 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "EntityList.h"
 
 
 #include "Probes.h"
@@ -180,13 +181,18 @@ PyResult ScanBound::RecoverProbes(PyCallArgs& call, PyList* probeIDs) {
         ints.push_back(t->value());
     }
 
+    if (!m_client->IsInSpace() or (m_client->SystemMgr() == nullptr))
+        return list;
+    // only our own, controlled probes.  RecoverProbe() adds the ones that will come back
     SystemEntity* pSE(nullptr);
     for (auto cur : ints) {
         pSE = m_client->SystemMgr()->GetSE(cur);
-        if (pSE == nullptr)
+        if ((pSE == nullptr) or !pSE->IsProbeSE())
             continue;
-        if (pSE->IsProbeSE())
-            pSE->GetProbeSE()->RecoverProbe(list);
+        ProbeSE* pProbe(pSE->GetProbeSE());
+        if ((pProbe->GetOwnerCharID() != m_client->GetCharacterID()) or pProbe->IsAbandoned())
+            continue;
+        pProbe->RecoverProbe(list);
     }
 
     return list;
@@ -198,21 +204,69 @@ PyResult ScanBound::DestroyProbe(PyCallArgs& call, PyInt* probeID) {
     _log(SCAN__TRACE, "ScanBound::Handle_DestroyProbe() - size=%lli", call.tuple->size());
     call.Dump(SCAN__DUMP);
 
+    if (!m_client->IsInSpace() or (m_client->SystemMgr() == nullptr))
+        throw UserError ("ProbeNotInBallpark");
     SystemEntity* pSE(m_client->SystemMgr()->GetSE(probeID->value()));
-    if (pSE != nullptr)
-        pSE->Delete();
-    SafeDelete(pSE);
+    if (pSE == nullptr)
+        throw UserError ("ProbeNotInBallpark");
+    // only a probe of ours.  (this used to delete any entity by id)
+    if (!pSE->IsProbeSE() or (pSE->GetProbeSE()->GetOwnerCharID() != m_client->GetCharacterID()))
+        throw CustomError ("You do not control that probe.");
 
-    return nullptr;
+    ProbeSE* pProbe(pSE->GetProbeSE());
+    // scan map, system, entity list and the client's OnRemoveProbe
+    pProbe->RemoveProbe();
+    pProbe->GetSelf()->Delete();
+    SafeDelete(pProbe);
+
+    return PyStatic.NewNone();
 }
 
 PyResult ScanBound::ReconnectToLostProbes(PyCallArgs& call) {
-    // no args
-    //  will have to test against client launcher vs probe m_moduleID
-    // will have to write *something* to loop thru active probes in system for this....
+    /* the client checks its 5 minute reconnect delay (ScannerProbeReconnectWait), an online launcher and the pod.
+     *  lost probes of ours in this system come back under control when the launcher that launched them is online on
+     *  our ship (ScanNoProbeLauncherFitted), up to our probe limit.  they are re-bound to this ship
+     */
+    if (!m_client->IsInSpace() or (m_client->SystemMgr() == nullptr) or (m_client->GetShipSE() == nullptr))
+        return PyStatic.NewNone();
+    ShipItemRef shipRef(m_client->GetShip());
+    if (shipRef->groupID() == EVEDB::invGroups::Capsule)
+        throw UserError ("ScnProbeRecoverToPod");
 
-    //  search inactive probes in system for ownerID, reset variables as per launch, add to all maps, then send client update
-    // will need separate map for probes to use this?  or just loop thru EVERYTHING in system in the off chance we'll find a lost probe?
-    //    i dunno...both kinda suck at this point
-    return nullptr;
+    // online launchers on this ship
+    std::map<uint32, InventoryItemRef> launchers;
+    std::vector<InventoryItemRef> modules;
+    shipRef->GetModuleManager()->GetModuleListOfRefsAsc(modules);
+    for (auto cur : modules)
+        if ((cur->groupID() == EVEDB::invGroups::Scan_Probe_Launcher) and cur->IsOnline())
+            launchers[cur->itemID()] = cur;
+    if (launchers.empty())
+        throw UserError ("ScanNoProbeLauncherFitted");
+
+    std::vector<ProbeSE*> lost;
+    sEntityList.GetProbesForChar(m_client->GetCharacterID(), m_client->GetSystemID(), lost);
+    if (lost.empty())
+        return PyStatic.NewNone();
+
+    if (m_client->scan() == nullptr)
+        m_client->SetScan(new Scan(m_client));
+    uint8 limit(3 + m_client->GetChar()->GetSkillLevel(EvESkill::Astrometrics));
+    bool noLauncher(false);
+    for (auto cur : lost) {
+        if (!cur->IsAbandoned())
+            continue;
+        auto itr = launchers.find(cur->GetLauncherID());
+        if (itr == launchers.end()) {
+            noLauncher = true;
+            continue;
+        }
+        if (m_client->scan()->GetProbeCount() >= limit)
+            break;
+        cur->Reconnect(m_client, shipRef, itr->second);
+        m_client->scan()->AddProbe(cur);
+    }
+    if (noLauncher and (m_client->scan()->GetProbeCount() == 0))
+        throw UserError ("ScanNoProbeLauncherFitted");
+
+    return PyStatic.NewNone();
 }

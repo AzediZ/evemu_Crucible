@@ -331,9 +331,12 @@ public:
     //  scan
     Scan* scan()                                        { return m_scan; }
     void SetScan(Scan* pScan)                           { m_scan = pScan; }
+    // the pilot loses control of his probes (they stay in space, lost) and his scanner state.  every path that
+    //  changes the pilot's ship or system, docks him or logs him off calls this
+    void ReleaseScan(bool notify=false);
     // set scan timer in ms
     // this is used in scan.cpp after time calc's are done
-    void SetScanTimer(uint16 time, bool useProbe=false) { m_scanTimer.Start(time);  m_scanProbe = useProbe; }
+    void SetScanTimer(uint32 time, bool useProbe=false) { m_scanTimer.Start(time);  m_scanProbe = useProbe; }
     // filetime of this character's last directional scan (d-scan cooldown)
     int64 GetLastDScan()                                { return m_lastDScan; }
     void SetLastDScan(int64 time)                       { m_lastDScan = time; }
