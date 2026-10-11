@@ -615,6 +615,9 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
                 case EVEEffectID::ewTestEffectJam: {
                     // each cycle rolls again, like an ecm module
                     StopJam();
+                    // ewar immune targets (supercapitals, sieged/triaged ships)
+                    if (pTarget->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+                        break;
                     if (Ewar::RollJam(m_pDrone->GetSelf(), m_pDrone->GetPosition(), pTarget, AttrMaxRange, AttrFalloff, m_pDrone->GetRadius())) {
                         Ewar::StartJam(m_pDrone, m_pDrone->GetID(), pTarget, static_cast<uint32>(stats.cycleTime));
                         m_jammedID = pTarget->GetID();

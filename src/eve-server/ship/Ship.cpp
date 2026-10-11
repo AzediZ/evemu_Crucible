@@ -353,16 +353,17 @@ void ShipItem::ProcessModules() {
 
 void ShipItem::Eject()
 {
-    // the ship keeps nothing from the pilot's fleet links
-    if (HasPilot() and (GetPilot()->GetShipSE() != nullptr) and (GetPilot()->GetShipSE()->GetID() == itemID()))
-        GetPilot()->GetShipSE()->RemoveLinkBonuses();
     if (m_ModuleManager != nullptr) {
         // overload effects need the pilot, so they come off before the pilot leaves
         m_ModuleManager->ClearOverloads();
         StopHeating();
         m_ModuleManager->AbortCycle();
-        m_ModuleManager->CharacterLeavingShip();
     }
+    // the ship keeps nothing from the pilot's fleet links.  after the modules stop: our own links refresh the fleet as they stop
+    if (HasPilot() and (GetPilot()->GetShipSE() != nullptr) and (GetPilot()->GetShipSE()->GetID() == itemID()))
+        GetPilot()->GetShipSE()->RemoveLinkBonuses();
+    if (m_ModuleManager != nullptr)
+        m_ModuleManager->CharacterLeavingShip();
     SaveShip();
     // linked weapons will be persistant here.
     //UnlinkAllWeapons();

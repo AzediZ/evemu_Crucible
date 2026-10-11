@@ -339,6 +339,9 @@ uint32 EcmModule::DoCycle()
                 break;
             // each cycle rolls again.  the last cycle's jam ends here
             Ewar::EndJam(pShip, itemID(), m_targetSE);
+            // a target that went into siege/triage since we started is immune
+            if (m_targetSE->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+                break;
             if (Ewar::RollJam(m_modRef, pShip->GetPosition(), m_targetSE, AttrMaxRange, AttrFalloff, pShip->GetRadius()))
                 Ewar::StartJam(pShip, itemID(), m_targetSE, cycleTime);
         } break;
@@ -388,6 +391,9 @@ void EcmModule::Burst(const GPoint& center, double centerRadius, SystemEntity* p
         bool targeter(pShip->TargetMgr()->IsTargetedBy(pSE));
         if (targeter)
             ++targeters;
+        // ewar immune (supercapitals, sieged/triaged ships)
+        if (pSE->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+            continue;
         if (!Ewar::RollJam(m_modRef, center, pSE, AttrEcmBurstRange, AttrFalloff, centerRadius))
             continue;
         if (targeter)

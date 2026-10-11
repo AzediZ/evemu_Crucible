@@ -77,6 +77,10 @@ void CloakModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/*
     if (m_ModuleState != Module::State::Activated)
         return;
 
+    // a cloak is a toggle: its effect has no duration attribute, so the client sends repeat 0.  it runs until it is stopped
+    m_repeat = 1000;
+    m_Stop = false;
+
     Client* pClient(m_shipRef->GetPilot());
     ShipSE* pShip(pClient->GetShipSE());
     // our own locks (and locks in progress) drop

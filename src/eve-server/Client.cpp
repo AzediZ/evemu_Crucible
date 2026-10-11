@@ -1289,6 +1289,9 @@ void Client::ResetAfterPopped(GPoint& position)
     pShipSE = newShipSE;
 
     UpdateNewShip();
+    // the lost ship's warfare links never got to stop.  the fleet gets what is left
+    if (InFleet())
+        sFltSvc.UpdateLinks(m_fleet);
     //SetStateTimer(Player::State::Killed, Player::Timer::Killed);
     SendSessionChange();
 }
