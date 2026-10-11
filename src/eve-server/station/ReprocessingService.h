@@ -67,6 +67,14 @@ protected:
     float CalcReprocessingEfficiency(const Client *pClient, InventoryItemRef item = InventoryItemRef(nullptr)) const;
     float CalcTax(float standing) const;
     PyRep* GetQuote(uint32 itemID, Client* pClient);
+    /* can pClient reprocess iRef here: own item (or corp item with FactoryManager and hangar access) in this station's
+     *  item hangar / corp office hangars, or in the cargo of the active ship docked here; not the active ship; no contents.
+     *  throws when throwOnError, else returns false */
+    bool ValidateItem(Client* pClient, InventoryItemRef iRef, bool throwOnError);
+
+public:
+    // sum of refining yield bonuses (attribute 379 refiningYieldMutator, %) of the char's plugged-in implants
+    static float GetImplantRefiningBonus(CharacterRef cRef);
 
     float GetStanding(const Client* pClient) const; // gets the higher of char/corp standings with station owner
 };

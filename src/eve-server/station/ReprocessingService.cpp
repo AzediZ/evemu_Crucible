@@ -43,6 +43,8 @@
 #include "packets/Manufacturing.h"
 #include "manufacturing/RamMethods.h"
 #include "station/ReprocessingService.h"
+#include "station/StationDataMgr.h"
+#include "inventory/Inventory.h"
 #include "Station.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
@@ -187,37 +189,60 @@ PyResult ReprocessingServiceBound::Reprocess(PyCallArgs &call, PyList* itemIDs, 
         skipChecksVector.push_back(t->content());
     }
 
-    if (!sDataMgr.IsStation(call.client->GetLocationID())) {
-        _log(MANUF__WARNING, "Character %s tried to reprocess, but isn't is station.", call.client->GetName());
-        return nullptr;
+    if ((m_stationRef.get() == nullptr) or ((uint32)call.client->GetStationID() != m_stationRef->GetID())) {
+        _log(MANUF__WARNING, "Character %s tried to reprocess, but isn't docked in this station.", call.client->GetName());
+        throw CustomError("You must be docked in this station to use its reprocessing plant.");
     }
 
     _log(MANUF__INFO, "%s: Calling Reprocess().", call.client->GetName());
     call.Dump(MANUF__DUMP);
 
-    if (ownerID.has_value() == false)
-        ownerID = new PyInt(call.client->GetCharacterID());
-    if (flag.has_value() == false || flag.value()->value() == flagNone)
-        flag = new PyInt(flagHangar);
-
-    if (ownerID.value()->value() == call.client->GetCorporationID()) {
+    // output goes to the char's item hangar, or to a hangar of the corp's office in this station
+    uint32 outOwnerID(ownerID.has_value() ? ownerID.value()->value() : call.client->GetCharacterID());
+    EVEItemFlags outFlag(flagHangar);
+    uint32 outLocationID(m_stationRef->GetID());
+    if (outOwnerID == call.client->GetCharacterID()) {
+        outFlag = flagHangar;
+    } else if ((outOwnerID == call.client->GetCorporationID()) and IsPlayerCorp(outOwnerID)) {
         if ((call.client->GetCorpRole() & Corp::Role::FactoryManager) != Corp::Role::FactoryManager) {
             _log(MANUF__WARNING, "%s(%u) doesnt have FactoryManager role to access materials for reprocessing.", \
                         call.client->GetName(), call.client->GetCharacterID());
-            call.client->SendErrorMsg("You do not have the role \'Factory Manager\' which is required to access factory services on behalf of a corporation.");
-            //throw error here...dunno the format yet.
-            return nullptr;
+            throw CustomError("You do not have the role 'Factory Manager' which is required to access factory services on behalf of a corporation.");
         }
+        if (flag.has_value() and (flag.value()->value() != flagNone))
+            outFlag = (EVEItemFlags)flag.value()->value();
+        if (!IsHangarFlag(outFlag))
+            throw CustomError("Invalid output hangar.");
+        outLocationID = stDataMgr.GetOfficeIDForCorp(m_stationRef->GetID(), outOwnerID);
+        if (outLocationID == 0)
+            throw CustomError("Your corporation does not have an office in this station.");
 
-        sRamMthd.HangarRolesCheck(call.client, flag.value()->value());
+        sRamMthd.HangarRolesCheck(call.client, outFlag);
+    } else {
+        _log(MANUF__WARNING, "%s(%u) tried to reprocess for owner %u.", call.client->GetName(), call.client->GetCharacterID(), outOwnerID);
+        throw CustomError("Invalid output owner.");
     }
 
-    InventoryItemRef iRef(nullptr);
-    double tax = CalcTax(GetStanding(call.client));
-    for (auto cur : items)  {
-        iRef = sItemFactory.GetItemRef(cur);
+    // validate every item before anything is reprocessed
+    std::vector<InventoryItemRef> validItems;
+    std::set<uint32> seen;
+    for (auto cur : items) {
+        if (!seen.insert(cur).second)
+            continue;
+        InventoryItemRef iRef = sItemFactory.GetItemRef(cur);
         if (iRef.get() == nullptr)
             continue;
+        ValidateItem(call.client, iRef, true);
+        if (iRef->type().portionSize() > iRef->quantity()) {
+            throw UserError ("QuantityLessThanMinimumPortion")
+                    .AddTypeName ("typename", iRef->typeID ())
+                    .AddAmount ("portion", iRef->type ().portionSize ());
+        }
+        validItems.push_back(iRef);
+    }
+
+    double tax = CalcTax(GetStanding(call.client));
+    for (auto iRef : validItems)  {
 
         // this should never happen, but for sure ...
         if (iRef->type().portionSize() > iRef->quantity()) {
@@ -240,13 +265,12 @@ PyResult ReprocessingServiceBound::Reprocess(PyCallArgs &call, PyList* itemIDs, 
             if (quantity == 0)
                 continue;
 
-            ItemData idata(itr->typeID, ownerID.value()->value(), locTemp, flagNone, quantity);
+            ItemData idata(itr->typeID, outOwnerID, locTemp, flagNone, quantity);
             InventoryItemRef iRef2 = sItemFactory.SpawnItem( idata );
             if (iRef2.get() == nullptr)
                 continue;
 
-            // update this for corp usage
-            iRef2->Move(m_stationRef->GetID(), (EVEItemFlags)flag.value()->value(), true);
+            iRef2->Move(outLocationID, outFlag, true);
         }
 
         uint32 qtyLeft = iRef->quantity() % iRef->type().portionSize();
@@ -269,7 +293,6 @@ float ReprocessingServiceBound::CalcReprocessingEfficiency(const Client* pClient
         *(1 + 0.04 * RefineryEfficiencySkill)
         *(1 + 0.05 * OreProcessingSkill)
     */
-    /** @todo  check for implants here ... once they're working  */
     CharacterRef cRef = pClient->GetChar();
     double efficiency =  (0.375f
                         * (1 + (0.02f * cRef->GetSkillLevel(EvESkill::Refining)))             // 2% lvl
@@ -284,12 +307,86 @@ float ReprocessingServiceBound::CalcReprocessingEfficiency(const Client* pClient
         }
     }
 
+    // Zainou 'Beancounter' H40/H50/H60 implants (pre-Odyssey: multiplies the skill part)
+    efficiency *= (1 + GetImplantRefiningBonus(cRef) / 100.0);
+
     efficiency += m_staEfficiency;
 
-    if (efficiency > 1.0f)
-        efficiency = 1.05f;  // should be 1.0 max
+    // Crucible yield is capped at 100%
+    if (efficiency > 1.0)
+        efficiency = 1.0;
 
     return efficiency;
+}
+
+float ReprocessingServiceBound::GetImplantRefiningBonus(CharacterRef cRef)
+{
+    if (cRef.get() == nullptr)
+        return 0.0f;
+    Inventory* pInv = cRef->GetMyInventory();
+    if (pInv == nullptr)
+        return 0.0f;
+
+    // implants are only found here once they are stored as items in the char's inventory (F15)
+    float bonus(0.0f);
+    std::vector<InventoryItemRef> implants;
+    pInv->GetItemsByFlag(flagImplant, implants);
+    for (auto cur : implants)
+        if (cur->HasAttribute(AttrRefiningYieldMutator))
+            bonus += cur->GetAttribute(AttrRefiningYieldMutator).get_float();
+    return bonus;
+}
+
+bool ReprocessingServiceBound::ValidateItem(Client* pClient, InventoryItemRef iRef, bool throwOnError)
+{
+    std::string error;
+    uint32 stationID(m_stationRef.get() == nullptr ? 0 : m_stationRef->GetID());
+
+    if (iRef->itemID() == pClient->GetShipID()) {
+        if (throwOnError)
+            throw UserError("CannotReprocessActive");
+        return false;
+    }
+
+    if (iRef->ownerID() == pClient->GetCharacterID()) {
+        // (a) item hangar of this station, or (c) cargo of the active ship docked here
+        bool inHangar((iRef->locationID() == stationID) and (iRef->flag() == flagHangar));
+        bool inCargo(((uint32)pClient->GetStationID() == stationID) and (iRef->locationID() == pClient->GetShipID()) and (iRef->flag() == flagCargoHold));
+        if (!inHangar and !inCargo)
+            error = "Items must be in your item hangar or your active ship's cargo hold in this station to be reprocessed.";
+    } else if ((iRef->ownerID() == pClient->GetCorporationID()) and IsPlayerCorp(iRef->ownerID())) {
+        // (b) a hangar of the corp's office in this station
+        if ((pClient->GetCorpRole() & Corp::Role::FactoryManager) != Corp::Role::FactoryManager) {
+            _log(MANUF__WARNING, "%s(%u) doesnt have FactoryManager role to access materials for reprocessing.", \
+                    pClient->GetName(), pClient->GetCharacterID());
+            error = "You do not have the role 'Factory Manager' which is required to access factory services on behalf of a corporation.";
+        } else if ((iRef->locationID() != stDataMgr.GetOfficeIDForCorp(stationID, iRef->ownerID())) or !IsHangarFlag(iRef->flag())) {
+            error = "Corporation items must be in your corporation's office hangars in this station to be reprocessed.";
+        } else if (throwOnError) {
+            // this throws "access denied to bom hangar" on error.  probably wrong for this application
+            sRamMthd.HangarRolesCheck(pClient, iRef->flag());
+        }
+    } else {
+        _log(SERVICE__ERROR, "Character %u tried to reprocess item %u of owner %u.", pClient->GetCharacterID(), iRef->itemID(), iRef->ownerID());
+        error = "The requested item is not yours.";
+    }
+
+    // ships and containers must be empty (contents would be orphaned)
+    if (error.empty() and (iRef->GetMyInventory() != nullptr)) {
+        iRef->GetMyInventory()->LoadContents();
+        if (!iRef->GetMyInventory()->IsEmpty()) {
+            error = "Remove all modules, charges, drones and cargo from ";
+            error += iRef->name();
+            error += " before reprocessing it.";
+        }
+    }
+
+    if (error.empty())
+        return true;
+    if (throwOnError)
+        throw CustomError("%s", error.c_str());
+    _log(MANUF__TRACE, "ReprocessingServiceBound::ValidateItem() - %s(%u): %s", iRef->name(), iRef->itemID(), error.c_str());
+    return false;
 }
 
 PyRep *ReprocessingServiceBound::GetQuote(uint32 itemID, Client* pClient) {
@@ -297,28 +394,9 @@ PyRep *ReprocessingServiceBound::GetQuote(uint32 itemID, Client* pClient) {
     if (iRef.get() == nullptr)
         return nullptr;    // No action as GetQuote is also called for reprocessed items (probably for check)
 
-    // update this for corp items
-    if (iRef->ownerID() == pClient->GetCorporationID()) {
-        /** @todo update this for item location - need to verify corp roles are being set correctly  */
-        int64 roles = pClient->GetRolesAtAll();
-        //roles = pClient->GetRolesAtBase() | pClient->GetRolesAtAll();
-        //roles = pClient->GetRolesAtHQ() | pClient->GetRolesAtAll();
-        //roles = pClient->GetRolesAtOther() | pClient->GetRolesAtAll();
-        if ((pClient->GetCorpRole() & Corp::Role::FactoryManager) != Corp::Role::FactoryManager) {
-            _log(MANUF__WARNING, "%s(%u) doesnt have FactoryManager role to access materials for reprocessing.", \
-                    pClient->GetName(), pClient->GetCharacterID());
-            pClient->SendErrorMsg("You do not have the role \'Factory Manager\' which is required to access factory services on behalf of a corporation.");
-            //throw error here...dunno the format yet.
-            return nullptr;
-        }
-
-        // this throw "access denied to bom hangar" on error.  probably wrong for this application
-        sRamMthd.HangarRolesCheck(pClient, iRef->flag());
-    } else if (iRef->ownerID() != pClient->GetCharacterID()) {
-        _log(SERVICE__ERROR, "Character %u tried to reprocess item %u of character %u.", pClient->GetCharacterID(), iRef->itemID(), iRef->ownerID());
-        pClient->SendErrorMsg("The requested item is not yours.");
+    // owner, location, contents (no quote for items that can't be reprocessed here)
+    if (!ValidateItem(pClient, iRef, false))
         return nullptr;
-    }
 
     if (iRef->quantity() < iRef->type().portionSize()) {
         throw UserError ("QuantityLessThanMinimumPortion")
