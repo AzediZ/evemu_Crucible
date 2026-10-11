@@ -84,6 +84,9 @@ bool NPC::Load()
 
     SetResists();
 
+    // the leash pulls sleepers and deadspace npcs back here
+    m_AI->SetHome(GetPosition());
+
     return DynamicSystemEntity::Load();
 }
 

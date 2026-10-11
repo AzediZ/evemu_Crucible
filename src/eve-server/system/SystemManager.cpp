@@ -1358,27 +1358,52 @@ void SystemManager::GetSpawnBubbles(SpawnBubbleMap* bubbleMap)
 {
     if (is_log_enabled(SPAWN__MESSAGE))
         _log(SPAWN__MESSAGE, "SystemManager::GetSpawnBubbles() - called for %s(%u)", m_data.name.c_str(), m_data.systemID);
-    SpawnBubbleMap::iterator itr = m_ratBubbles.begin();
-    while (itr != m_ratBubbles.end())
-        bubbleMap->emplace(itr->first, itr->second);
+    for (auto cur : m_ratBubbles)
+        bubbleMap->emplace(cur.first, cur.second);
 }
 
 void SystemManager::RemoveSpawnBubble(SystemBubble* pBubble)
 {
-    if (pBubble->IsBelt()) {
-        m_ratBubbles.erase(pBubble->GetID());
-        --m_activeRatSpawns;
-    } else if (pBubble->IsGate()) {
-        m_ratBubbles.erase(pBubble->GetID());
-        --m_activeGateSpawns;
+    // only spawns we counted are uncounted (a spawn can be removed again after it moved)
+    if (m_ratBubbles.erase(pBubble->GetID()) > 0) {
+        if (pBubble->IsBelt()) {
+            if (m_activeRatSpawns > 0)
+                --m_activeRatSpawns;
+        } else if (pBubble->IsGate()) {
+            if (m_activeGateSpawns > 0)
+                --m_activeGateSpawns;
+        }
     }
     if (is_log_enabled(SPAWN__MESSAGE))
         _log(SPAWN__MESSAGE, "SystemManager::RemoveSpawnBubble() - called for bubbleID %u in %s(%u).", pBubble->GetID(), m_data.name.c_str(), m_data.systemID);
 }
 
+void SystemManager::MoveSpawnBubble(SystemBubble* pOld, SystemBubble* pNew)
+{
+    // a rat spawn moved to another bubble (npc group warp)
+    if ((pOld == nullptr) or (pNew == nullptr) or (pOld == pNew))
+        return;
+    if (m_ratBubbles.find(pOld->GetID()) == m_ratBubbles.end())
+        return;
+    RemoveSpawnBubble(pOld);
+    if (m_ratBubbles.emplace(pNew->GetID(), pNew).second) {
+        if (pNew->IsBelt()) {
+            ++m_activeRatSpawns;
+        } else if (pNew->IsGate()) {
+            ++m_activeGateSpawns;
+        }
+    }
+}
+
 uint32 SystemManager::GetRandBeltID()
 {
-    return m_beltVector.at(MakeRandomInt(0, m_beltCount));
+    if (m_beltVector.empty())
+        return 0;
+    // MakeRandomInt() can return its upper bound
+    uint32 index(MakeRandomInt(0, m_beltVector.size()));
+    if (index >= m_beltVector.size())
+        index = m_beltVector.size() - 1;
+    return m_beltVector.at(index);
 }
 
 void SystemManager::ProcessDroneReturns() {

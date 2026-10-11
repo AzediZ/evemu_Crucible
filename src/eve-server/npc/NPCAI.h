@@ -89,7 +89,12 @@ public:
 
     // npcAI methods
     void DisableWarpOutTimer()                          { m_warpOutTimer.Disable(); }
-    void WarpOutComplete()                              { m_warpOutTimer.Disable(); m_state = NPCAI::State::Idle; }
+    // from DestinyManager::OnWarpExited()
+    void WarpOutComplete();
+    // our spawn group is warping away (SpawnMgr::WarpOutSpawn()), or we follow a target through warp
+    void BeginWarp(int8 state = NPCAI::State::WarpOut);
+    // where we were spawned.  the leash pulls us back here
+    void SetHome(const GPoint& home)                    { m_home = home; }
 
     void LaunchMissile(uint16 typeID, SystemEntity* pTargSE);   // us to them
     void MissileLaunched(Missile* pMissile); // them to us
@@ -126,6 +131,15 @@ protected:
     void AddThreat(SystemEntity* pSE, float amount);
     void AlertGroup(SystemEntity* pAggressor);
     void ProcessDroneAggro();
+
+    /* movement */
+    void StartWarpOutTimer();
+    // maybe follow our last target through warp (<npc><WarpFollowChance>).  true if we went
+    bool TryWarpFollow(SystemEntity* pSE);
+    // too far from home: give up and go back
+    void CheckLeash();
+    // going home after the leash pulled us back.  we don't take on anyone until we're there (or 30s passed)
+    bool IsReturning();
 
     /* chase speed: stall (cruise speed) up to entityChaseMaxDelay, then chase speed for up to entityChaseMaxDuration */
     void StartChaseDelay();
@@ -184,6 +198,7 @@ private:
     float m_damageMultiplier;
 
     GPoint m_lastGoto;      // where we're chasing to
+    GPoint m_home;          // where we spawned (or last arrived by warp)
 
     std::map<uint32, float> m_threat;   // entityID -> damage (and ewar) done to us
 
@@ -204,6 +219,7 @@ private:
     Timer m_chaseDelayTimer;
     Timer m_chaseTimer;
     Timer m_droneAggroTimer;
+    Timer m_leashTimer;
 };
 
 /* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */

@@ -66,6 +66,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_chaseDelayTimer(0),
   m_chaseTimer(0),
   m_droneAggroTimer(0),
+  m_leashTimer(0),
   m_missileTypeID(0),
   m_isWandering(false),
   m_ewarChecked(false),
@@ -73,6 +74,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_primaryID(0),
   m_pendingAggroID(0),
   m_lastGoto(NULL_ORIGIN),
+  m_home(NULL_ORIGIN),
   m_ewar(nullptr)
 {
     m_threat.clear();
@@ -259,11 +261,11 @@ void NPCAIMgr::Process() {
         return;
 
     if (m_warpOutTimer.Check(false)) {
-        // disallow warpout if spawn has active respawn timer (spawn is being chained)
-        if ((m_npc->GetSpawnMgr() == nullptr) or m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID())) {
-            m_state = NPCAI::State::Idle;
-            m_warpOutTimer.Disable();
-        }
+        // an idle spawn moves on after a while.  not while its dead members are waiting for a respawn (chained)
+        m_warpOutTimer.Disable();
+        if (IsIdle() and (m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr)
+        and !m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID()))
+            WarpOut();
     }
 
     /* NPCAI::State definitions   -allan 25July15  (UD 1June16)
@@ -289,6 +291,10 @@ void NPCAIMgr::Process() {
             // a jammed npc can't lock anything (EwarState already broke its locks)
             if ((m_npc->GetEwar() != nullptr) and m_npc->GetEwar()->IsJammed())
                 break;
+            if (IsReturning()) {
+                m_pendingAggroID = 0;
+                break;
+            }
             // someone attacked us or our group
             if (m_pendingAggroID != 0) {
                 SystemEntity* pAggressor(m_npc->SystemMgr()->GetSE(m_pendingAggroID));
@@ -311,6 +317,8 @@ void NPCAIMgr::Process() {
                 if (!m_beginFindTarget.Enabled())
                     m_beginFindTarget.Start(m_attackSpeed);  //find target is based on npc attack speed.
             }
+            if (!m_warpOutTimer.Enabled())
+                StartWarpOutTimer();
         } break;
         case NPCAI::State::Chasing:
         case NPCAI::State::Following:
@@ -345,11 +353,18 @@ void NPCAIMgr::Process() {
             if (m_missileTimer.Check())
                 LaunchMissile(m_missileTypeID, pSE);
             ProcessDroneAggro();
+            CheckLeash();
         } break;
         case NPCAI::State::WarpOut:
         case NPCAI::State::WarpFollow:{
-            _log(NPC__AI_TRACE, "%s(%u): Called %s - needs to be completed.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
-            m_state = NPCAI::State::Idle;
+            // still aligning.  (in warp we returned above; WarpOutComplete() ends this state)
+            if (m_destiny->IsAligningForWarp())
+                break;
+            // the warp was stopped (scrambled while aligning).  we stay here
+            _log(NPC__AI_TRACE, "%s(%u): %s was cut short.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
+            SetIdle();
+            if ((m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr))
+                m_npc->GetSpawnMgr()->MoveSpawn(m_npc, m_npc->SysBubble());
         } break;
         default: {
             // Fleeing and Signaling aren't used (Crucible rats neither fled nor called for help; group aggro covers the latter)
@@ -395,36 +410,168 @@ bool NPCAIMgr::IsFighting() {
     return (m_state != NPCAI::State::Idle);
 }
 
+void NPCAIMgr::StartWarpOutTimer()
+{
+    // anomaly, incursion and mission rats stay.  so does anything not from a spawn manager
+    if ((sConfig.npc.WarpOut == 0) or (m_npc->GetSpawnMgr() == nullptr) or m_npc->IsLawEnforcer())
+        return;
+    SystemBubble* pBubble(m_npc->SysBubble());
+    if ((pBubble == nullptr) or pBubble->IsAnomaly() or pBubble->IsIncursion() or pBubble->IsMission())
+        return;
+    m_warpOutTimer.Start(sConfig.npc.WarpOut *1000); // s to ms
+}
+
 void NPCAIMgr::WarpOut()
 {
     m_warpOutTimer.Disable();
-
-    if (m_state == NPCAI::State::WarpOut) {
-        m_state = NPCAI::State::Idle;
+    if ((m_npc->GetSpawnMgr() == nullptr) or m_npc->IsLawEnforcer() or (m_npc->SysBubble() == nullptr))
+        return;
+    if ((m_state == NPCAI::State::WarpOut) or (m_state == NPCAI::State::WarpFollow))
+        return;
+    // a player has us pointed.  try again later
+    if (m_npc->IsWarpScrambled()) {
+        m_warpOutTimer.Start(30000);
         return;
     }
 
-    m_state = NPCAI::State::WarpOut;
     SystemManager* pSys = m_npc->SystemMgr();
 
     /** @todo  eventually, this will check with anomaly mgr for possible npc hideouts in system
      * based on npc faction, system, players in system, players in bubble, and *more later*
      * to determine a warpto target for this npc, or this group
      *
-     * for now, if there are players in system, just warp to another belt.
+     * for now, if there are players in system, the whole spawn group warps to another belt that has no spawn.
      * if there are no players in this system, avoid using proc tics on npcs
      */
-
-    if (pSys->PlayerCount()) {
-        // pSys->GetAnomMgr();
-        uint32 newBeltID = pSys->GetRandBeltID();
-        if (newBeltID == sBubbleMgr.GetBeltID(m_npc->SysBubble()->GetID()))
-            newBeltID = pSys->GetRandBeltID();
-
-        SystemEntity* newSE = pSys->GetSE(newBeltID);
-        m_destiny->WarpTo(newSE->GetPosition());
-        m_npc->GetSpawnMgr()->MoveSpawn(m_npc, sBubbleMgr.FindBubble(newSE));
+    if (pSys->PlayerCount() < 1) {
+        StartWarpOutTimer();
+        return;
     }
+
+    SystemBubble* pBubble(m_npc->SysBubble());
+    uint32 curBeltID(sBubbleMgr.GetBeltID(pBubble->GetID()));
+    for (uint8 i = 0; i < 3; ++i) {
+        uint32 beltID(pSys->GetRandBeltID());
+        if ((beltID == 0) or (beltID == curBeltID))
+            continue;
+        SystemEntity* pBelt(pSys->GetSE(beltID));
+        if (pBelt == nullptr)
+            continue;
+        SystemBubble* pDest(sBubbleMgr.FindBubble(pBelt));
+        if (pDest == nullptr)
+            pDest = sBubbleMgr.GetBubble(pSys, pBelt->GetPosition());
+        if ((pDest == nullptr) or (pDest == pBubble))
+            continue;
+        // another group lives there
+        if (m_npc->GetSpawnMgr()->HasSpawn(pDest->GetID()))
+            continue;
+        _log(NPC__AI_TRACE, "%s(%u): Warping my group out to %s(%u).", m_npc->GetName(), m_npc->GetID(), pBelt->GetName(), beltID);
+        if (m_npc->GetSpawnMgr()->WarpOutSpawn(m_npc, pDest, pBelt->GetPosition()))
+            return;
+    }
+    // nowhere to go.  try again later
+    StartWarpOutTimer();
+}
+
+void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
+{
+    // leaving: drop everything
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
+    m_npc->TargetMgr()->ClearTargets();
+    m_missileTimer.Disable();
+    m_beginFindTarget.Disable();
+    m_mainAttackTimer.Disable();
+    m_chaseDelayTimer.Disable();
+    m_chaseTimer.Disable();
+    m_droneAggroTimer.Disable();
+    m_warpOutTimer.Disable();
+    m_primaryID = 0;
+    m_pendingAggroID = 0;
+    m_threat.clear();
+    m_isWandering = false;
+    m_destiny->SetMaxVelocity(m_maxSpeed);
+    m_state = state;
+}
+
+void NPCAIMgr::WarpOutComplete()
+{
+    m_warpOutTimer.Disable();
+    if ((m_state != NPCAI::State::WarpOut) and (m_state != NPCAI::State::WarpFollow))
+        return;
+    _log(NPC__AI_TRACE, "%s(%u): %s complete.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
+    m_state = NPCAI::State::Idle;
+    m_destiny->SetMaxVelocity(CruiseSpeed());
+    // make sure our spawn manager has us in this bubble, and this is home now
+    if ((m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr))
+        m_npc->GetSpawnMgr()->MoveSpawn(m_npc, m_npc->SysBubble());
+    m_home = m_npc->GetPosition();
+    // look around right away
+    m_beginFindTarget.Start(1000);
+}
+
+bool NPCAIMgr::TryWarpFollow(SystemEntity* pSE)
+{
+    // Crucible rats never followed a ship through warp.  <npc><WarpFollowChance> > 0 lets belt and gate rats do it
+    if ((sConfig.npc.WarpFollowChance <= 0.0f) or m_npc->IsLawEnforcer() or (m_npc->GetSpawnMgr() == nullptr))
+        return false;
+    if ((pSE == nullptr) or !pSE->IsShipSE() or !pSE->HasPilot() or (pSE->DestinyMgr() == nullptr))
+        return false;
+    if (!pSE->DestinyMgr()->IsWarping() and !pSE->DestinyMgr()->IsAligningForWarp())
+        return false;
+    SystemBubble* pBubble(m_npc->SysBubble());
+    if ((pBubble == nullptr) or !(pBubble->IsBelt() or pBubble->IsGate()))
+        return false;
+    if (pBubble->IsAnomaly() or pBubble->IsIncursion() or pBubble->IsMission())
+        return false;
+    if (m_npc->IsWarpScrambled())
+        return false;
+    if (MakeRandomFloat() >= sConfig.npc.WarpFollowChance)
+        return false;
+
+    GPoint destination(pSE->DestinyMgr()->GetTargetPoint());
+    if (destination.isNaN() or (destination.distance(m_npc->GetPosition()) < 150000))
+        return false;
+    _log(NPC__AI_TRACE, "%s(%u): Following %s(%u) through warp.", m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID());
+    BeginWarp(NPCAI::State::WarpFollow);
+    m_destiny->WarpTo(destination, MakeRandomInt(2, 15) *1000);
+    return true;
+}
+
+void NPCAIMgr::CheckLeash()
+{
+    // sleepers and deadspace/mission/incursion npcs don't let themselves be pulled away from home.  belt rats and law do
+    if ((sConfig.npc.LeashRange == 0) or m_npc->IsLawEnforcer())
+        return;
+    SystemBubble* pBubble(m_npc->SysBubble());
+    if (pBubble == nullptr)
+        return;
+    if (!m_useTargSwitching and !(pBubble->IsAnomaly() or pBubble->IsMission() or pBubble->IsIncursion()))
+        return;
+    if (m_npc->GetPosition().distance(m_home) <= sConfig.npc.LeashRange)
+        return;
+
+    _log(NPC__AI_TRACE, "%s(%u): Pulled %.0fm from home.  Giving up and going back.", \
+            m_npc->GetName(), m_npc->GetID(), m_npc->GetPosition().distance(m_home));
+    m_npc->TargetMgr()->ClearTargets();
+    m_pendingAggroID = 0;
+    SetIdle();
+    m_destiny->SetMaxVelocity(m_maxSpeed);
+    m_destiny->GotoPoint(m_home);
+    m_leashTimer.Start(30000);
+}
+
+bool NPCAIMgr::IsReturning()
+{
+    if (!m_leashTimer.Enabled())
+        return false;
+    if (!m_leashTimer.Check(false) and (m_npc->GetPosition().distance(m_home) > 5000))
+        return true;
+    // home (or long enough).  back to normal
+    m_leashTimer.Disable();
+    m_destiny->Stop();
+    m_destiny->SetMaxVelocity(CruiseSpeed());
+    return false;
 }
 
 void NPCAIMgr::SetWander()
@@ -453,7 +600,7 @@ void NPCAIMgr::SetWander()
             WarpOut();
             return;
         }
-        m_destiny->SetMaxVelocity(m_orbitSpeed);
+        m_destiny->SetMaxVelocity(CruiseSpeed());
         uint16 orbitDistance = MakeRandomInt(10000, 20000);
         m_destiny->Orbit(pSE, orbitDistance);
         _log(NPC__AI_TRACE, "%s(%u):  Just for shits-n-giggles, I\'m gonna orbit %s(%u) at %um.", \
@@ -474,7 +621,7 @@ void NPCAIMgr::SetIdle() {
     _log(NPC__AI_TRACE, "%s(%u): Idle: returning to idle.", m_npc->GetName(), m_npc->GetID());
     m_state = NPCAI::State::Idle;
     m_destiny->Stop();
-    m_destiny->SetMaxVelocity(m_orbitSpeed);
+    m_destiny->SetMaxVelocity(CruiseSpeed());
 
     // repair timers keep running until we're whole (they stop themselves)
     m_missileTimer.Disable();
@@ -488,15 +635,8 @@ void NPCAIMgr::SetIdle() {
     m_primaryID = 0;
     m_threat.clear();
 
-    SystemBubble* pBubble = m_npc->SysBubble();
-    //disallow warpout if anomaly, incursion or mission rat
-    if (pBubble->IsAnomaly() or pBubble->IsIncursion() or pBubble->IsMission())
-        return;
-
-    //disallow warpout by NOT setting timer.
-    if (sConfig.npc.WarpOut > 0)
-        if (m_npc->GetSpawnMgr() != nullptr)
-            m_warpOutTimer.Start(sConfig.npc.WarpOut *1000); // s to ms
+    //disallow warpout if anomaly, incursion or mission rat (and by config)
+    StartWarpOutTimer();
 }
 
 void NPCAIMgr::SetChasing(SystemEntity* pSE) {
@@ -674,6 +814,8 @@ void NPCAIMgr::Targeted(SystemEntity* pSE) {
         case NPCAI::State::Idle: {
             if ((m_npc->GetEwar() != nullptr) and m_npc->GetEwar()->IsJammed())
                 break;
+            if (IsReturning())
+                break;
             _log(NPC__AI_TRACE, "%s(%u): Begin Approaching and start Targeting sequence.", \
                     m_npc->GetName(), m_npc->GetID());
             SystemEntity* pTarget(AggroTarget(pSE));
@@ -703,6 +845,9 @@ void NPCAIMgr::TargetLost(SystemEntity* pSE) {
         case NPCAI::State::Following:
         case NPCAI::State::Engaged: {
             if (m_npc->TargetMgr()->HasNoTargets()) {
+                // our last target warped off.  maybe we follow
+                if ((pSE->GetID() == m_primaryID) and TryWarpFollow(pSE))
+                    return;
                 _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) lost. No targets remain.  Return to Idle.", \
                         m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID());
                 SetIdle();

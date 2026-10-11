@@ -134,61 +134,93 @@ void SpawnMgr::Process() {
 
 void SpawnMgr::MoveSpawn(NPC* pNPC, SystemBubble* pBubble)
 {
-    if (pNPC == nullptr)
-        return;
-    if (pBubble == nullptr)
+    if ((pNPC == nullptr) or (pBubble == nullptr))
         return;
     uint32 npcID =  pNPC->GetID();
-    _log(SPAWN__TRACE, "MoveSpawn() called by %s(%u) from bubbleID %u to bubbleID %u", pNPC->GetName(), npcID, pNPC->SysBubble()->GetID(), pBubble->GetID() );
 
-    // get npc spawn data and add to new location
-    auto range = m_spawns.equal_range(pNPC->SysBubble()->GetID());
-    auto itr = range.first;
-    while (itr != range.second) {
-        if (itr->second.itemID == npcID) {
-            m_spawns.emplace(pBubble->GetID(), itr->second);
-            m_spawns.erase(itr);
-            break;
+    // the entry may be filed under any bubble (an npc that warped on its own, or a group warp that was cut short)
+    for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
+        if (itr->second.itemID != npcID)
+            continue;
+        uint16 oldID(itr->first);
+        if (oldID == pBubble->GetID())
+            return;
+        _log(SPAWN__TRACE, "MoveSpawn() called by %s(%u) from bubbleID %u to bubbleID %u", pNPC->GetName(), npcID, oldID, pBubble->GetID() );
+        SpawnEntry entry(itr->second);
+        m_spawns.erase(itr);
+        m_spawns.emplace(pBubble->GetID(), entry);
+
+        if (std::find(m_bubbles.begin(), m_bubbles.end(), pBubble) == m_bubbles.end())
+            m_bubbles.push_back(pBubble);
+        pBubble->SetSpawned(true);
+
+        // the old bubble lost its last member (dead ones waiting for a respawn keep the spawn there)
+        if (m_spawns.count(oldID) == 0) {
+            SystemBubble* pOld(sBubbleMgr.FindBubbleByID(oldID));
+            std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pOld);
+            if (bItr != m_bubbles.end())
+                m_bubbles.erase(bItr);
+            if (pOld != nullptr) {
+                m_system->MoveSpawnBubble(pOld, pBubble);
+                pOld->ResetBubbleRatSpawn();
+            }
         }
-        ++itr;
+        return;
     }
-
-    //find out if any rats remain before setting bubble spawned to false
-    if (pNPC->SysBubble()->CountNPCs() < 2)
-        pNPC->SysBubble()->SetSpawned(false);
-    // this will NOT count as new bubble being spawned.
-    //pBubble->SetSpawned(true);
 }
 
-void SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble)
+bool SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& where)
 {
-    if (pNPC == nullptr)
-        return;
-    if (pBubble == nullptr)
-        return;
-    _log(SPAWN__TRACE, "WarpOutSpawn() called by %s(%u) from bubbleID %u to bubbleID %u", pNPC->GetName(), pNPC->GetID(), pNPC->SysBubble()->GetID(), pBubble->GetID() );
-    NPC* rNPC(nullptr);
-    auto range = m_spawns.equal_range(pNPC->SysBubble()->GetID());
-    auto itr = range.first;
-    while (itr != range.second) {
-        if (itr->second.enabled) {
-            ++itr;
+    if ((pNPC == nullptr) or (pBubble == nullptr) or (pNPC->SysBubble() == nullptr))
+        return false;
+    SystemBubble* pOld(pNPC->SysBubble());
+    if (pOld == pBubble)
+        return false;
+    uint16 oldID(pOld->GetID());
+
+    // collect the group first.  (erasing while walking the range was undefined behaviour)
+    std::vector<SpawnEntry> entries;
+    std::vector<NPC*> npcs;
+    auto range = m_spawns.equal_range(oldID);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        if (itr->second.enabled)
+            continue;   // dead, waiting for a respawn
+        NPC* rNPC(m_system->GetNPCSE(itr->second.itemID));
+        if ((rNPC == nullptr) or rNPC->IsDead() or (rNPC->DestinyMgr() == nullptr))
             continue;
-        }
-        rNPC = m_system->GetNPCSE(itr->second.itemID);
-        if (rNPC == nullptr) {
-            ++itr;
-            continue;
-        }
-        rNPC->DestinyMgr()->WarpTo(pBubble->GetCenter(), MakeRandomFloat(10, 30) *100);
-        rNPC->GetAIMgr()->DisableWarpOutTimer();
-        m_spawns.emplace(pBubble->GetID(), itr->second);
-        m_spawns.erase(itr);
-        ++itr;
+        entries.push_back(itr->second);
+        npcs.push_back(rNPC);
+    }
+    if (npcs.empty())
+        return false;
+
+    _log(SPAWN__TRACE, "WarpOutSpawn() called by %s(%u): %u npcs from bubbleID %u to bubbleID %u", \
+            pNPC->GetName(), pNPC->GetID(), (uint32)npcs.size(), oldID, pBubble->GetID());
+
+    // the whole group moves.  members waiting for a respawn are dropped, so nothing respawns at the old place
+    m_spawns.erase(oldID);
+    for (auto& cur : entries)
+        m_spawns.emplace(pBubble->GetID(), cur);
+
+    for (auto cur : npcs) {
+        cur->GetAIMgr()->BeginWarp();
+        cur->DestinyMgr()->WarpTo(where, MakeRandomInt(5, 30) *1000);
     }
 
-    pNPC->SysBubble()->SetSpawned(false);
+    std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pOld);
+    if (bItr != m_bubbles.end())
+        m_bubbles.erase(bItr);
+    if (std::find(m_bubbles.begin(), m_bubbles.end(), pBubble) == m_bubbles.end())
+        m_bubbles.push_back(pBubble);
+    m_system->MoveSpawnBubble(pOld, pBubble);
+    pOld->ResetBubbleRatSpawn();
     pBubble->SetSpawned(true);
+    return true;
+}
+
+bool SpawnMgr::HasSpawn(uint16 bubbleID)
+{
+    return (m_spawns.find(bubbleID) != m_spawns.end());
 }
 
 
@@ -244,7 +276,9 @@ void SpawnMgr::SpawnKilled(SystemBubble* pBubble, uint32 itemID)
             _log(SPAWN__DEPOP, "SpawnMgr::SpawnKilled - Belt Spawn has been destoyed.  Resetting spawn checks for bubble %u.", pBubble->GetID());
             // spawn destroyed.  delete from list and reset bubble checks.
             m_spawns.erase(pBubble->GetID()); // just in case....may/may not be in here.
-            m_bubbles.erase(std::find(m_bubbles.begin(), m_bubbles.end(), pBubble));
+            std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pBubble);
+            if (bItr != m_bubbles.end())
+                m_bubbles.erase(bItr);
             pBubble->ResetBubbleRatSpawn();
             m_system->RemoveSpawnBubble(pBubble);
             return;

@@ -96,6 +96,7 @@ public:
     // for spawn system     -allan 15July15     (not complete)
     typedef std::map<uint32, SystemBubble*> SpawnBubbleMap;
     void RemoveSpawnBubble(SystemBubble* pBubble);
+    void MoveSpawnBubble(SystemBubble* pOld, SystemBubble* pNew);
     void GetSpawnBubbles(SpawnBubbleMap* bubbleMap);
     void IncRatSpawnCount()                             { ++m_activeRatSpawns; }
     void DecRatSpawnCount()                             { --m_activeRatSpawns; }

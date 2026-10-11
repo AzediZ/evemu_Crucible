@@ -32,10 +32,12 @@ public:
 
     void Process();
     void SetDungMgr(DungeonMgr* pDmgr)                  { m_dungMgr = pDmgr; }
-    // not working... warp a spawned npc group from one location to another (change bubbles)
-    void WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble);
+    // warp pNPC's whole spawn group to where (in pBubble).  false if there was nothing to move
+    bool WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& where);
     // update SpawnMgr on npcs new location (change bubbles)
     void MoveSpawn(NPC* pNPC, SystemBubble* pBubble);
+    // a spawn (alive or waiting for a respawn) lives in this bubble
+    bool HasSpawn(uint16 bubbleID);
 
     std::string GetSpawnClassName(int8 sClass);
     std::string GetSpawnGroupName(int8 sGroup);
