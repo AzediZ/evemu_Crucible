@@ -29,6 +29,10 @@ public:
 
     // pItem is modifier container
     void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false);
+    /* applies the owner-required-skill modifiers (missile/probe/drone bonuses from skills, implants, boosters, the hull and
+     *  fitted modules) to an item that wasn't there when the ship's effects were processed: a charge loaded in space,
+     *  a launched probe or bomb.  resets the target's attributes first */
+    void            ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, ShipItem* pShip);
     // pItem is modifier container
     // pMod is not used
     void            ParseExpression(InventoryItem* pItem, Expression expression, fxData& data, GenericModule* pMod=nullptr);

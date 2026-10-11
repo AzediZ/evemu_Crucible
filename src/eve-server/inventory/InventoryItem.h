@@ -298,6 +298,10 @@ public:
     void RemoveModifier(fxData &data);
     // this deletes all attributes, reloads default attribs from itemType and
     void ResetAttributes();   //  when called at the wrong time, this will really fuck up ship attributes.  ;)
+    /* undo for modifiers that can't be reversed by math (assignments, x0, -100%).  the value an attribute had before
+     *  srcID's modifier was applied is kept, and put back when that modifier is removed.  ResetAttributes() clears them */
+    void SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value);     // keeps the first value saved
+    bool TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& value);    // false if none.  removes it
 
     //  if itemType requires skill(skillID) return true else return false
     bool HasReqSkill(const uint16 skillID)              { return m_type.HasReqSkill(skillID); }

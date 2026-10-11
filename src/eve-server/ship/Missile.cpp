@@ -48,7 +48,9 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
   m_alive(true),
   m_orbitingID(0),
   m_speed(0),
-  m_hullHP(self->GetAttribute(AttrHP).get_int())
+  m_hullHP(self->GetAttribute(AttrHP).get_int()),
+  m_secStatus(0.0f),
+  m_numLaunchers(1)
 {
     if (pSE->HasPilot()) {
         m_ownerID = pSE->GetPilot()->GetChar()->itemID();
@@ -60,68 +62,16 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
     m_allyID = pSE->GetAllianceID();
     m_corpID = pSE->GetCorporationID();
 
+    // the launcher copied the loaded charge's attributes onto us (ActiveModule::LaunchMissile), so the pilot's skill,
+    //  implant, hull, rig and subsystem bonuses are already in flight time, velocity, explosion and damage
     double flightTime = self->GetAttribute(AttrExplosionDelay).get_float();
 
-    // missile skills do not apply correctly in fx processor.  not sure why yet.
     if (pSE->HasPilot()) {
         Character* pChar = pSE->GetPilot()->GetChar().get();
-        flightTime *= (1 + (0.1f * (pChar->GetSkillLevel(EvESkill::MissileBombardment, true)))); // 10% increase in flightTime
-
-        self->MultiplyAttribute(AttrMaxVelocity, (1 + (0.1f * (pChar->GetSkillLevel(EvESkill::MissileProjection, true))))); // 10% increase in velocity
-        self->MultiplyAttribute(AttrAoeCloudSize, (1 - (0.05f * (pChar->GetSkillLevel(EvESkill::GuidedMissilePrecision, true)))));  //  5% decrease in exp radius
-        self->MultiplyAttribute(AttrAoeVelocity, (1 + (0.1f * (pChar->GetSkillLevel(EvESkill::TargetNavigationPrediction, true)))));  // 10% increase in exp velocity
-
-        m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::WarheadUpgrades, true)))); // 5% increase in damage (upped from 2%)
-        switch (m_self->groupID()) {
-            case EVEDB::invGroups::Light_Missile:
-            case EVEDB::invGroups::FoF_Light_Missile:
-            case EVEDB::invGroups::Advanced_Light_Missile: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::LightMissiles, true)))); // 5% increase in damage
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Light_Missile)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::LightMissileSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Heavy_Missile:
-            case EVEDB::invGroups::FoF_Heavy_Missile:
-            case EVEDB::invGroups::Advanced_Heavy_Missile: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::HeavyMissiles, true)))); // 5% increase in damage
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Heavy_Missile)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::HeavyMissileSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Cruise_Missile:
-            case EVEDB::invGroups::FoF_Cruise_Missile:
-            case EVEDB::invGroups::Advanced_Cruise_Missile: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::CruiseMissiles, true)))); // 5% increase in
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Cruise_Missile)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::CruiseMissileSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Torpedo:
-            case EVEDB::invGroups::Advanced_Torpedo: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::Torpedoes, true)))); // 5% increase in damage
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Torpedo)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::TorpedoSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Rocket:
-            case EVEDB::invGroups::Advanced_Rocket: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::Rockets, true)))); // 5% increase in damage
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Rocket)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::RocketSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Defender_Missile: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::DefenderMissiles, true)))); // 5% increase in damage
-            } break;
-            case EVEDB::invGroups::Assault_Missile:
-            case EVEDB::invGroups::Advanced_Assault_Missile: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::HeavyAssaultMissiles, true)))); // 5% increase in damage
-                if (m_self->groupID() == EVEDB::invGroups::Advanced_Assault_Missile)
-                    m_damageMod *= (1 + (0.03f * (pChar->GetSkillLevel(EvESkill::HeavyAssaultMissileSpecialization, true)))); // 3% increase in damage
-            } break;
-            case EVEDB::invGroups::Citadel_Cruise: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::CitadelCruiseMissiles, true)))); // 5% increase in damage
-            } break;
-            case EVEDB::invGroups::Citadel_Torpedo: {
-                m_damageMod *= (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::CitadelTorpedoes, true)))); // 5% increase in damage
-            } break;
-        }
+        // ballistic control systems multiply the character's missileDamageMultiplier
+        if (pChar->HasAttribute(AttrMissileDamageMultiplier))
+            m_damageMod *= pChar->GetAttribute(AttrMissileDamageMultiplier).get_float();
+        m_secStatus = pChar->GetSecurityRating();
     }
 
     // overloading a launcher doesn't change missile damage.  in Crucible a launcher's overload effect (overloadRofBonus)
@@ -137,6 +87,7 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
         if (count > 1) {
             m_damageMod *= count;
             m_hullHP *= count;
+            m_numLaunchers = count;
         }
     }
 
@@ -210,13 +161,13 @@ PyDict* Missile::MakeSlimItem() {
         slim->SetItemString("categoryID",               new PyInt(m_self->categoryID()));
         slim->SetItemString("name",                     new PyString(m_self->itemName()));
         slim->SetItemString("sourceModuleID",           new PyInt(m_modRef->itemID()));
+        slim->SetItemString("sourceShipID",             new PyInt(m_fromID));
         slim->SetItemString("corpID",                   IsCorp(m_corpID) ? new PyInt(m_corpID) : PyStatic.NewNone());
         slim->SetItemString("allianceID",               IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone());
         slim->SetItemString("warFactionID",             IsFaction(m_warID) ? new PyInt(m_warID) : PyStatic.NewNone());
-        slim->SetItemString("securityStatus",           new PyFloat(0/*pChar->GetSecurityRating()*/)); /** @todo (allan) fix this */
-        slim->SetItemString("ownerID",                  new PyInt(m_ownerID)); // this is corp ID??
-        slim->SetItemString("numLaunchers",             PyStatic.NewOne());  /** @todo (allan) fix this */
-        slim->SetItemString("nameID",                   new PyInt(0));  /** @todo (allan) fix this */
+        slim->SetItemString("securityStatus",           new PyFloat(m_secStatus));
+        slim->SetItemString("ownerID",                  new PyInt(m_ownerID));
+        slim->SetItemString("numLaunchers",             new PyInt(m_numLaunchers));
     return(slim);
 }
 

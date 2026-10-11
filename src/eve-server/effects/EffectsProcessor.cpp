@@ -13,6 +13,7 @@
 #include "effects/EffectsActions.h"
 #include "effects/EffectsProcessor.h"
 #include "inventory/InventoryItem.h"
+#include "inventory/Inventory.h"
 #include "character/Character.h"
 #include "ship/Ship.h"
 #include "ship/modules/GenericModule.h"
@@ -117,8 +118,14 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
             if (!data.typeID)
                 data.typeID = data.srcRef->typeID();    // get items on ship that require SkillItem in srcRef
         } break;
+        case Operands::GM: {    //37, %(arg1)s.GetModule(%(arg2)s)      --used by subsystems as (GetModule(Ship:201):55)
+            /* only 5 subsystem effects use this, e.g. subsystemBonusAmarrEngineering2CapacitorRechargeRate is
+             *  CurrentShip.ECM->rechargeRate.  the group (ECM) is a data quirk: the bonus is the ship's (cap recharge time,
+             *  as the subsystem's info text says), and the client applies it to the ship.  so only arg1 (the location) is used
+             */
+            ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
+        } break;
         // do as stated
-        case Operands::GM:      //37, %(arg1)s.GetModule(%(arg2)s)      --used by subsystems as (GetModule(Ship:201):55)
         case Operands::RSA: {   //64, %(arg1)s.%(arg2)s      -- used by AGRSM
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
@@ -163,12 +170,20 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
         } break;
         case Operands::ALGM:    //7,  (%(arg1)s).AddLocationGroupModifier (%(arg2)s)
         case Operands::ALM:     //8,  (%(arg1)s).AddLocationModifier (%(arg2)s)
-        case Operands::ALRSM:   //9,  (%(arg1)s).AddLocationRequiredSkillModifier(%(arg2)s)
-        case Operands::AORSM: { //11, (%(arg1)s).AddOwnerRequiredSkillModifier(%(arg2)s)
+        case Operands::ALRSM: { //9,  (%(arg1)s).AddLocationRequiredSkillModifier(%(arg2)s)
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
             if ((skill) and (!data.fxSrc))      // fxSrc = Self in this case.  update to remove this hack?
                 data.fxSrc = Source::Skill;
+            pItem->AddModifier(data);
+        } break;
+        case Operands::AORSM: { //11, (%(arg1)s).AddOwnerRequiredSkillModifier(%(arg2)s)
+            /* items owned by the pilot that need the skill: charges (missiles, bombs), drones, probes, and fitted modules
+             *  that have the attribute.  skills, implants, ship hulls, rigs and subsystems use this for missile bonuses
+             */
+            ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
+            ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
+            data.fxSrc = Source::Owner;
             pItem->AddModifier(data);
         } break;
         // remove modifier calls only partially enabled for modules and charges.
@@ -184,12 +199,17 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
         } break;
         case Operands::RLGM:    //59, (%(arg1)s).RemoveLocationGroupModifier (%(arg2)s)
         case Operands::RLM:     //60, (%(arg1)s).RemoveLocationModifier (%(arg2)s)
-        case Operands::RLRSM:   //61, (%(arg1)s).RemoveLocationRequiredSkillModifier(%(arg2)s)
-        case Operands::RORSM: { //62, (%(arg1)s).RemoveOwnerRequiredSkillModifier(%(arg2)s)
+        case Operands::RLRSM: { //61, (%(arg1)s).RemoveLocationRequiredSkillModifier(%(arg2)s)
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
             if ((skill) and (!data.fxSrc))     // fxSrc = Self in this case.  update to remove this hack?
                 data.fxSrc = Source::Skill;
+            pItem->RemoveModifier(data);
+        } break;
+        case Operands::RORSM: { //62, (%(arg1)s).RemoveOwnerRequiredSkillModifier(%(arg2)s)
+            ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg1), data, pMod);
+            ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
+            data.fxSrc = Source::Owner;
             pItem->RemoveModifier(data);
         } break;
         /*
@@ -413,6 +433,28 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                     } break;
                 }
             } break;
+            case Source::Owner: {     // owner-required-skill modifier
+                /* fitted modules and loaded charges that need the skill in 'typeID' and have the attribute.
+                 *  (the attribute test keeps missile bonuses off the launchers.)  launched missiles copy the loaded charge;
+                 *  charges loaded in space, probes and bombs get these from ApplyOwnerModifiers()
+                 */
+                if (cur.second.typeID == 0)
+                    continue;
+                std::vector<InventoryItemRef> moduleList;
+                pShip->GetModuleManager()->GetModuleListByReqSkill(cur.second.typeID, moduleList);
+                for (auto mod : moduleList)
+                    if (mod->HasAttribute(cur.second.targAttr))
+                        itemRefVec.push_back(mod);
+                std::map<EVEItemFlags, InventoryItemRef> charges;
+                pShip->GetModuleManager()->GetLoadedCharges(charges);
+                for (auto charge : charges)
+                    if ((charge.second.get() != nullptr)
+                    and charge.second->HasReqSkill(cur.second.typeID)
+                    and charge.second->HasAttribute(cur.second.targAttr))
+                        itemRefVec.push_back(charge.second);
+                if (itemRefVec.empty())
+                    continue;   // nothing fitted or loaded uses this skill.  nbd
+            } break;
             /** @todo this needs more work */
             case Source::Gang: {      // source is a gang leader skill
                 switch (cur.second.targLoc) {
@@ -436,18 +478,15 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                     } break;
                 }
             } break;
-            case Source::Ship: {      // source is a subsystem
-                ;   // not sure how to do this on yet.  t3 ships arent implemented (actually blocked)
-                _log(EFFECTS__DEBUG, "FxProc::ApplyEffects(): %s is ship source calling target %s.", cur.second.srcRef->name(), GetTargLocName(cur.second.targLoc));
-            } break;
             case Source::Invalid: {
                 _log(EFFECTS__ERROR, "FxProc::ApplyEffects(): source location invalid.");
                 continue;
             } break;
-            // these are not used (not coded)
+            // the parser never produces these (subsystem effects are Self/Skill/Group, target effects use Target::Target)
+            case Source::Ship:
             case Source::Target:
-            case Source::Owner: {
-                _log(EFFECTS__ERROR, "FxProc::ApplyEffects(): source location %s not coded.", GetSourceName(cur.second.fxSrc));
+            default: {
+                _log(EFFECTS__DEBUG, "FxProc::ApplyEffects(): %s uses source location %s.  ignored.", cur.second.srcRef->name(), GetSourceName(cur.second.fxSrc));
                 continue;
             } break;
         }
@@ -475,11 +514,42 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
             cur.second.srcRef->name(), cur.second.srcRef->itemID(), GetSourceName(cur.second.fxSrc), cur.second.srcAttr, srcValue.get_float());
         } */
 
+        /* modifiers that can't be undone by math (assignments, x0, -100%) save the target's value first.
+         *  removing such a modifier puts that value back.  RemoveModifier() has already inverted the math of removes,
+         *  so any remove looks for a snapshot first
+         */
+        bool irreversible(false);
+        switch (cur.first) {
+            case Math::PreAssignment:
+            case Math::PostAssignment: {
+                irreversible = true;
+            } break;
+            case Math::PostPercent: {
+                irreversible = (srcValue == -100);
+            } break;
+            case Math::PreMul:
+            case Math::PostMul: {
+                irreversible = (srcValue == EvilZero);
+            } break;
+        }
+        uint32 srcID(cur.second.srcRef->itemID());
+
         // set target attr to modified value
         EvilNumber targValue(EvilZero), newValue(EvilZero);
         for (auto item : itemRefVec) {
             if (item.get() == nullptr)  // still occasional nulls in the vector (segfaults)
                 continue;
+            if (cur.second.remove) {
+                EvilNumber snapshot(EvilZero);
+                if (item->TakeFxSnapshot(cur.second.targAttr, srcID, snapshot)) {
+                    _log(EFFECTS__MESSAGE, "FxProc::ApplyEffects(%i): %s(%u) removed.  %s on %s restored to %.3f.", \
+                        cur.first, cur.second.srcRef->name(), srcID, sDataMgr.GetAttrName(cur.second.targAttr), item->name(), snapshot.get_float());
+                    item->SetAttribute(cur.second.targAttr, snapshot, update);
+                    continue;
+                }
+            } else if (irreversible) {
+                item->SaveFxSnapshot(cur.second.targAttr, srcID, item->GetAttribute(cur.second.targAttr));
+            }
             // get targAttr
             targValue = item->GetAttribute(cur.second.targAttr);
             // check for inf/nan and then reset?  this will fuck up all previous fx processing on this value.
@@ -522,6 +592,78 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
      */
 
     pItem->ClearModifiers();
+
+    if (sConfig.debug.UseProfiling)
+        sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);
+}
+
+void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, ShipItem* pShip)
+{
+    /* an item that wasn't there when the ship's effects were processed (a charge loaded in space, a launched probe or bomb)
+     *  gets the owner-required-skill modifiers (AORSM) of everything that gives them: the pilot's skills, implants and
+     *  boosters, the ship hull, and the fitted modules (rigs, subsystems, online and active modules).
+     *  the sources' expressions are parsed into the target's (scratch) modifier map, and only the Owner entries that apply
+     *  to the target are used.  source values are read as they are now (skill levels and other bonuses already applied)
+     */
+    if ((target.get() == nullptr) or (pChar == nullptr) or (pShip == nullptr))
+        return;
+    double profileStartTime(GetTimeUSeconds());
+
+    target->ResetAttributes();
+    target->ClearModifiers();
+
+    std::vector<std::pair<InventoryItemRef, std::vector<int8>>> sources;
+    std::vector<int8> all = {FX::State::Passive, FX::State::Active, FX::State::Target, FX::State::Online, FX::State::Overloaded};
+    std::vector<int8> passive = {FX::State::Passive};
+    std::vector<InventoryItemRef> items;
+    pChar->GetSkillsList(items);
+    pChar->GetMyInventory()->GetItemsByFlag(flagImplant, items);
+    pChar->GetMyInventory()->GetItemsByFlag(flagBooster, items);
+    for (auto cur : items)
+        sources.push_back(std::make_pair(cur, passive));
+    sources.push_back(std::make_pair(static_cast<InventoryItemRef>(pShip), all));
+    items.clear();
+    pShip->GetModuleManager()->GetModuleListOfRefsAsc(items);
+    for (auto cur : items) {
+        GenericModule* pMod(pShip->GetModuleManager()->GetModule(cur->flag()));
+        if ((pMod == nullptr) or !pMod->isOnline())
+            continue;
+        std::vector<int8> states = {FX::State::Passive, FX::State::Online};
+        if (pMod->IsActive())
+            states.push_back(FX::State::Active);
+        sources.push_back(std::make_pair(cur, states));
+    }
+
+    for (auto& src : sources) {
+        for (auto state : src.second) {
+            std::map<uint16, Effect> effectMap;
+            src.first->type().GetEffectMap(state, effectMap);
+            for (auto& fx : effectMap) {
+                fxData data = fxData();
+                data.action = FX::Action::Invalid;
+                data.srcRef = src.first;
+                ParseExpression(target.get(), sFxDataMgr.GetExpression(fx.second.preExpression), data);
+            }
+        }
+    }
+
+    // apply in math order, as ApplyEffects() does
+    for (auto cur : target->GetModifiers()) {
+        if (cur.second.fxSrc != FX::Source::Owner)
+            continue;
+        if ((cur.second.typeID == 0) or !target->HasReqSkill(cur.second.typeID) or !target->HasAttribute(cur.second.targAttr))
+            continue;
+        EvilNumber srcValue(cur.second.srcRef->GetAttribute(cur.second.srcAttr));
+        EvilNumber targValue(target->GetAttribute(cur.second.targAttr));
+        EvilNumber newValue(CalculateAttributeValue(targValue, srcValue, cur.first));
+        if (is_log_enabled(EFFECTS__MESSAGE))
+            _log(EFFECTS__MESSAGE, "FxProc::ApplyOwnerModifiers(%i): %s(%u) - src %s=%.3f <%s> set %s on %s from %.3f to %.3f.", \
+                cur.first, cur.second.srcRef->name(), cur.second.srcRef->itemID(), sDataMgr.GetAttrName(cur.second.srcAttr), \
+                srcValue.get_float(), GetMathMethodName(cur.first), sDataMgr.GetAttrName(cur.second.targAttr), target->name(), \
+                targValue.get_float(), newValue.get_float());
+        target->SetAttribute(cur.second.targAttr, newValue, false);
+    }
+    target->ClearModifiers();
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);

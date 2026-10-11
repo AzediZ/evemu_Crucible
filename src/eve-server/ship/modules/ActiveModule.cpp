@@ -1035,6 +1035,10 @@ void ActiveModule::LoadCharge(InventoryItemRef chargeRef)
     }
 
     if (!pClient->IsLogin()) {
+        // a charge loaded in space missed the ship's effects pass: give it the pilot's missile (etc) bonuses now.
+        //  docked and undocking loads get them from ShipItem::ProcessEffects()
+        if (pClient->IsInSpace() and !m_shipRef->IsUndocking())
+            sFxProc.ApplyOwnerModifiers(chargeRef, pClient->GetChar().get(), m_shipRef.get());
         // process new charge's effects (load timer will determine if fx are applied based on existing charge)
         // GM::Online proc fx when client logs in...this is to avoid dupe calls
         for (auto it : chargeRef->type().m_stateFxMap) {
@@ -1602,6 +1606,17 @@ void ActiveModule::LaunchMissile()
         AbortCycle();
         return;
     }
+
+    /* the missile is a fresh item of the charge's type.  it flies and hits with the loaded charge's attributes,
+     *  which carry the pilot's skill, implant, hull, rig and subsystem bonuses (owner-required-skill modifiers)
+     */
+    static const uint16 missileAttrs[] = {
+        AttrEmDamage, AttrExplosiveDamage, AttrKineticDamage, AttrThermalDamage, AttrExplosionDelay, AttrMaxVelocity,
+        AttrAoeCloudSize, AttrAoeVelocity, AttrAoeFalloff, AttrAoeDamageReductionFactor, AttrAoeDamageReductionSensitivity,
+        AttrHP, AttrSignatureRadius, AttrDetonationRange };
+    for (auto attrID : missileAttrs)
+        if (m_chargeRef->HasAttribute(attrID))
+            missileRef->SetAttribute(attrID, m_chargeRef->GetAttribute(attrID), false);
 
     SystemManager* pSystem = pClient->SystemMgr();
     Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, m_modRef, m_targetSE, m_shipRef->GetPilot()->GetShipSE(), this);

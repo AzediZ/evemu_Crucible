@@ -86,6 +86,8 @@ protected:
 
     double m_speed;
     double m_hullHP;
+    float m_secStatus;                  // shooter's security status (slim item)
+    uint8 m_numLaunchers;               // launchers that fired this (banked launchers fire one stacked missile)
 
 };
 

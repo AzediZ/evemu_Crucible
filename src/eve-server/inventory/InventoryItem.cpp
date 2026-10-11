@@ -49,6 +49,7 @@
 struct ModifierContainer : public ModifierContainerBase
 {
     std::multimap<int8, fxData> modifiers;     // k,v of math, data<math, src, targLoc, targAttr, srcAttr, grpID, typeID>, ordered by key (mathMethod)
+    std::map<int64, EvilNumber> snapshots;    // (attrID << 32 | srcID), value before an irreversible modifier from srcID
 };
 
 /*
@@ -1504,6 +1505,8 @@ void InventoryItem::AddModifier(fxData &data)
 
 void InventoryItem::RemoveModifier(fxData &data)
 {
+    // irreversible modifiers are undone from a snapshot (FxProc::ApplyEffects).  the math is inverted for the rest
+    data.remove = true;
     switch (data.math) {
         case FX::Math::PreMul:         data.math = FX::Math::PreDiv;          break;
         case FX::Math::PreDiv:         data.math = FX::Math::PreMul;          break;
@@ -1537,6 +1540,25 @@ void InventoryItem::ClearModifiers()
 void InventoryItem::ResetAttributes() {
     _log(EFFECTS__TRACE, "Resetting attrib map for %s", m_data.name.c_str());
     pAttributeMap->Load(true);
+    static_cast<ModifierContainer*>(m_modifierContainer)->snapshots.clear();
+}
+
+void InventoryItem::SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value)
+{
+    ModifierContainer* modifierContainer = static_cast<ModifierContainer*>(m_modifierContainer);
+    // emplace keeps an existing entry, so a modifier applied twice keeps the value from before the first time
+    modifierContainer->snapshots.emplace(((int64)attrID << 32) | srcID, value);
+}
+
+bool InventoryItem::TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& value)
+{
+    ModifierContainer* modifierContainer = static_cast<ModifierContainer*>(m_modifierContainer);
+    std::map<int64, EvilNumber>::iterator itr = modifierContainer->snapshots.find(((int64)attrID << 32) | srcID);
+    if (itr == modifierContainer->snapshots.end())
+        return false;
+    value = itr->second;
+    modifierContainer->snapshots.erase(itr);
+    return true;
 }
 
 std::multimap<int8, fxData>& InventoryItem::GetModifiers()

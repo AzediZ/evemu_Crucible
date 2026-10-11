@@ -22,6 +22,7 @@ struct fxData {
     uint16 srcAttr;
     uint16 grpID;       // used to define items in env grouped by item groupID
     uint16 typeID;      // used to define items in env grouped by skill requirement
+    bool remove;        // set by InventoryItem::RemoveModifier.  undoes an irreversible modifier from its snapshot
     InventoryItemRef srcRef;   // source item ref, if required
 };
 #endif // _EVE_FX_DATA_H__
