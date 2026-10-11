@@ -480,6 +480,8 @@ void Character::ResetModifiers()
     ResetAttributes();
     std::vector<InventoryItemRef> allSkills;
     pInventory->GetItemsByFlag(flagSkill, allSkills);
+    // ProcessEffects applies the skill in training's effects too (its self multipliers must not compound)
+    pInventory->GetItemsByFlag(flagSkillInTraining, allSkills);
     for (auto curSkill : allSkills) {
         curSkill->ClearModifiers();
         curSkill->ResetAttributes();
@@ -728,6 +730,9 @@ void Character::ApplyAugmentationEffects(InventoryItemRef iRef, bool add)
         GetBoosters(sources);
         std::vector<TypeEffects> typeFx;
         for (auto src : sources) {
+            // the item's own set bonus reaches it through its own effects below
+            if (src->itemID() == iRef->itemID())
+                continue;
             typeFx.clear();
             sFxDataMgr.GetTypeEffect(src->typeID(), typeFx);
             for (auto curFx : typeFx) {
@@ -1543,6 +1548,8 @@ void Character::LoadPausedSkillQueue(uint16 typeID)
     skill = GetCharSkillRef(m_skillQueue.front().typeID).get();
     skill->SetFlag(flagSkillInTraining, true);
     skill->SaveItem();
+    // SkillQueueLoop and IsTraining() need it (F15 restarts the queue through here when ability attribs change)
+    m_inTraining = skill;
 
     OnSkillStartTraining osst;
         osst.itemID = skill->itemID();
