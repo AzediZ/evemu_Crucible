@@ -28,6 +28,16 @@
 
 #include "services/Service.h"
 
+// one lpStore row
+struct LPOffer {
+    uint32 storeID;
+    uint32 corporationID;
+    uint16 typeID;
+    int32 iskCost;
+    int32 quantity;
+    int32 lpCost;
+};
+
 class LPService : public Service <LPService>
 {
 public:
@@ -51,7 +61,7 @@ protected:
     static DBQueryResult GetLPRowsForCharacter(int32 characterID);
     static DBQueryResult GetLPOffersForCorp(int32 corporationID);
     static DBQueryResult GetRequiredItemsForOffer(int32 storeID);
-    static DBResultRow GetLPOffer(int32 storeID);
+    static bool GetLPOffer(int32 storeID, LPOffer& into);
     static void CreateNewLPBalance(int32 characterID, int32 corporationID, int balance);
     static void UpdateLPBalance(int32 characterID, int32 corporationID, int balance);
 };

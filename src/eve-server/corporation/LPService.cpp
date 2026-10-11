@@ -28,6 +28,9 @@
 
 #include "corporation/LPService.h"
 #include "account/AccountService.h"
+#include "inventory/Inventory.h"
+#include "manufacturing/Blueprint.h"
+#include "station/StationDataMgr.h"
 
 LPService::LPService() :
     Service("LPSvc", eAccessLevel_Character)
@@ -48,11 +51,14 @@ void LPService::AddLP(uint32 characterID, uint32 corporationID, int amount)
   } else {
     UpdateLPBalance(characterID, corporationID, currentBalance + amount);
   }
-  // Notify Client of LP Change
+  // Notify Client of LP Change (if online)
+  Client* pClient = sEntityList.FindClientByCharID(characterID);
+  if (pClient == nullptr)
+    return;
   OnLPChange ac;
   ac.corpID = corporationID;
   PyTuple *answer = ac.Encode();
-  sEntityList.FindClientByCharID(characterID)->SendNotification("OnLPChange", "cash", &answer, false);
+  pClient->SendNotification("OnLPChange", "cash", &answer, false);
 }
 
 int LPService::GetLPReward(uint16 missionID, uint32 solarsystemID, uint8 agentLevel)
@@ -67,67 +73,84 @@ int LPService::GetLPReward(uint16 missionID, uint32 solarsystemID, uint8 agentLe
 }
 
 PyResult LPService::TakeOffer(PyCallArgs& call, PyInt* corpID, PyInt* storeID) {
-  if (!corpID->value() >= 1000000 && !corpID->value() <= 1000200) { // Bounds check valid corpID in call
-    return new PyNone;
-  }
+  // the client always opens the store of the current station's owner (eveCommands OpenLpstore -> eve.stationItem.ownerID)
+  uint32 stationID = call.client->GetStationID();
+  if (stationID == 0)
+    throw CustomError("You must be docked to use the LP store.");
+  if (!IsNPCCorp(corpID->value()) or ((uint32)corpID->value() != stDataMgr.GetOwnerID(stationID)))
+    throw CustomError("This LP store is not available here.");
 
-  if (!storeID->value() >= 1 && !storeID->value() <= 30000) { // Bounds check valid storeID in call
-    return new PyNone;
-  }
+  // Lookup Store Offer.  it must belong to this corp's store
+  LPOffer offer = LPOffer();
+  if (!GetLPOffer(storeID->value(), offer) or (offer.corporationID != (uint32)corpID->value()))
+    throw CustomError("That offer is not available here.");
 
-  // Lookup Store Offer
-  DBResultRow offer = GetLPOffer(storeID->value());
-  int32 typeID = offer.GetInt(0);
-  int32 iskCost = offer.GetInt(1);
-  int32 quantity = offer.GetInt(2);
-  int32 lpCost = offer.GetInt(3);
+  uint32 charID = call.client->GetCharacterID();
 
-  // Confirm char has LP & ISK
-  int32 lpBalance = GetLPBalanceForCorp(call.client->GetCharacterID(), corpID->value());
-  if (lpBalance < lpCost) {
+  // Confirm char has LP (ISK is checked by TransferFunds)
+  int32 lpBalance = GetLPBalanceForCorp(charID, corpID->value());
+  if (lpBalance < offer.lpCost) {
     throw CustomError("You do not have enough LP to make this purchase.");
   }
 
-  int32 charIsk = call.client->GetBalance();
-  if (charIsk < iskCost) {
-    throw CustomError("You do not have enough ISK to make this purchase.");
+  // Check required items: the char's own unassembled items in the item hangar of this station
+  std::map<uint16, uint32> required;
+  DBQueryResult requiredItems = GetRequiredItemsForOffer(offer.storeID);
+  DBResultRow row;
+  while (requiredItems.GetRow(row))
+    required[row.GetInt(0)] += row.GetInt(1);
+  Inventory* pHangar(nullptr);
+  if (!required.empty()) {
+    pHangar = call.client->GetStationHangar(stationID);
+    if (pHangar == nullptr)
+      throw CustomError("You do not have the required items in your hangar.");
+    for (auto cur : required)
+      if (pHangar->GetTypeQtyForOwner(cur.first, flagHangar, charID) < cur.second)
+        throw CustomError("You do not have the required items in your hangar.");
   }
 
-  // Check required items & remove if all are present.
-  DBQueryResult requiredItems = GetRequiredItemsForOffer(storeID->value());
-  if (requiredItems.GetRowCount() > 0) {
-    // TODO: Remove required from hangar, the client pre-checks the required items are available or else the button is hidden.
+  // ISK first.  this throws if the wallet is short, and nothing has changed yet
+  if (offer.iskCost > 0)
+    AccountService::TransferFunds(charID, corpID->value(), offer.iskCost, "LP Store purchase", Journal::EntryType::PaymentToLPStore, offer.storeID);
+
+  // Remove required items
+  for (auto cur : required) {
+    std::vector<InventoryItemRef> taken;
+    if (!pHangar->TakeTypeQtyForOwner(cur.first, flagHangar, charID, cur.second, taken))
+      _log(SERVICE__ERROR, "LPService::TakeOffer - failed to take %u of type %u from %u for offer %u.", cur.second, cur.first, charID, offer.storeID);
+    for (auto iRef : taken)
+      iRef->Delete();
   }
 
-  // Remove LP & ISK
-  AddLP(call.client->GetCharacterID(), corpID->value(), -lpCost);
-
-  AccountService::TransferFunds(call.client->GetCharacterID(), corpID->value(), iskCost, "LP Store purchase", Journal::EntryType::PaymentToLPStore, storeID->value());
+  // Remove LP
+  AddLP(charID, corpID->value(), -offer.lpCost);
 
   // Give char item from store and place in hangar.
-  EVEItemFlags flag;
-  uint32 locationID = 0;
-  locationID = call.client->GetStationID();
-  flag = flagHangar;
-
-  ItemData idata(
-    typeID,
-    call.client->GetCharacterID(),
-    locTemp, //temp location
-    flag,
-    quantity
-  );
-
-  InventoryItemRef iRef = sItemFactory.SpawnItem(idata);
-
-  if (iRef.get() == nullptr) {
-    throw CustomError ("Unable to create item of type %i.", typeID);
+  InventoryItemRef iRef(nullptr);
+  const ItemType* pType = sItemFactory.GetType(offer.typeID);
+  if ((pType != nullptr) and (pType->categoryID() == EVEDB::invCategories::Blueprint)) {
+    // blueprint offers are one copy with 'quantity' runs (client shows "Blueprint Copy, N runs")
+    ItemData idata(offer.typeID, charID, locTemp, flagNone);
+    EvERam::bpData bpdata = EvERam::bpData();
+      bpdata.copy   = true;
+      bpdata.runs   = offer.quantity;
+      bpdata.mLevel = 0;
+      bpdata.pLevel = 0;
+    iRef = Blueprint::Spawn(idata, bpdata);
+  } else {
+    ItemData idata(offer.typeID, charID, locTemp, flagHangar, offer.quantity);
+    iRef = sItemFactory.SpawnItem(idata);
   }
 
-  iRef->Move(locationID, flag, true);
+  if (iRef.get() == nullptr) {
+    throw CustomError ("Unable to create item of type %u.", offer.typeID);
+  }
+
+  iRef->Move(stationID, flagHangar, true);
   iRef->SaveItem();
 
-  return new PyNone;
+  // truthy return makes the client show LPStoreOfferAccepted
+  return new PyBool(true);
 }
 
 PyResult LPService::ExchangeConcordLP(PyCallArgs& call, PyInt* corporationID, PyFloat* amount)
@@ -199,7 +222,7 @@ PyResult LPService::GetLPsForCharacter(PyCallArgs& call)
 //18:55:57 L CharMgrService::Handle_GetAvailableOffersFromCorp(): size=2, 0=Integer(), 1=Boolean()
 PyResult LPService::GetAvailableOffersFromCorp(PyCallArgs& call, PyInt* corporationID, PyBool* trueValue)
 {
-  if (!corporationID->value() >= 1000000 && !corporationID->value() <= 1000200) { // Bounds check valid corpID in call, else return empty list.
+  if (!IsNPCCorp(corporationID->value())) { // Bounds check valid corpID in call, else return empty list.
     return new PyList;
   }
   DBQueryResult dbRes = GetLPOffersForCorp(corporationID->value());
@@ -313,21 +336,29 @@ DBQueryResult LPService::GetLPOffersForCorp(int32 corporationID)
   return dbRes;
 }
 
-DBResultRow LPService::GetLPOffer(int32 storeID)
+bool LPService::GetLPOffer(int32 storeID, LPOffer& into)
 {
   DBQueryResult dbResOffer;
   if (!sDatabase.RunQuery(dbResOffer,
       "SELECT "
-      " typeID, iskCost, quantity, lpCost"
+      " corporationID, typeID, iskCost, quantity, lpCost"
       " FROM lpStore"
       " WHERE storeID = %i LIMIT 1", \
       storeID ))
   {
       codelog(DATABASE__ERROR, "Error in query: %s", dbResOffer.error.c_str());
+      return false;
   }
   DBResultRow offerRow;
-  dbResOffer.GetRow(offerRow);
-  return offerRow;
+  if (!dbResOffer.GetRow(offerRow))
+    return false;
+  into.storeID = storeID;
+  into.corporationID = offerRow.GetUInt(0);
+  into.typeID = offerRow.GetUInt(1);
+  into.iskCost = offerRow.GetInt(2);
+  into.quantity = offerRow.GetInt(3);
+  into.lpCost = offerRow.GetInt(4);
+  return true;
 }
 
 DBQueryResult LPService::GetRequiredItemsForOffer(int32 storeID)
