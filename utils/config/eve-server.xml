@@ -204,6 +204,9 @@ boolean can use either 0/1 OR true/false.
         <!-- Restrict joining corp/alliance/fleet/local/region channels to members (Crucible behaviour). Disable only on test servers.
              Channel passwords and the send/configure/destroy checks always apply. -->
         <EnforceChannelAccess>true</EnforceChannelAccess><!-- bool -->
+        <!-- true = a watchlisted character's online state is only shown when they have you on their watchlist too
+             (the post-2015 rule).  false = Crucible: you see the state of everyone on your watchlist -->
+        <ContactStatusMutual>false</ContactStatusMutual><!-- bool -->
     </chat>
 
     <cosmic>

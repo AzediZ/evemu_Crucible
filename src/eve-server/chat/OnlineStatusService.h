@@ -33,6 +33,11 @@ class OnlineStatusService : public Service<OnlineStatusService> {
 public:
     OnlineStatusService();
 
+    // push OnContactLoggedOn/Off(charID) to the online owners allowed to see charID's state
+    static void NotifyStatusChange(uint32 charID, bool online);
+    // targetID is on viewerID's watchlist (and, with chat.ContactStatusMutual, the other way round)
+    static bool CanSeeStatus(uint32 viewerID, uint32 targetID);
+
 protected:
     PyResult GetInitialState(PyCallArgs& call);
     PyResult GetOnlineStatus(PyCallArgs& call, PyInt* characterID);

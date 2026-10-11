@@ -215,6 +215,7 @@ EVEServerConfig::EVEServerConfig()
     chat.EnableVoiceChat = false;
     chat.EnforceRookieInHelp = false;
     chat.EnforceChannelAccess = true;
+    chat.ContactStatusMutual = false;   // Crucible: any watchlisted character's online state is shown  (F23)
 
     // crime
     crime.Enabled = true;
@@ -770,6 +771,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     AddValueParser( "EnableVoiceChat",      chat.EnableVoiceChat );
     AddValueParser( "EnforceRookieInHelp",  chat.EnforceRookieInHelp );
     AddValueParser( "EnforceChannelAccess", chat.EnforceChannelAccess );
+    AddValueParser( "ContactStatusMutual",  chat.ContactStatusMutual );
 
     const bool result = ParseElementChildren( ele );
 
@@ -779,6 +781,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     RemoveParser( "EnableVoiceChat" );
     RemoveParser( "EnforceRookieInHelp" );
     RemoveParser( "EnforceChannelAccess" );
+    RemoveParser( "ContactStatusMutual" );
 
     return result;
 }

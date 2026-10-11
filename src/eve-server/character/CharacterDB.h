@@ -139,11 +139,41 @@ public:
     bool GetActiveCloneType(uint32 charID, uint32 &typeID);
     std::string GetCharName(uint32 charID);
 
-    PyRep* GetContacts(uint32 charID, bool blocked);
-    void AddContact(uint32 ownerID, uint32 charID, int32 standing, bool inWatchlist);
-    void UpdateContact(int32 standing, uint32 charID, uint32 ownerID);
+    // contacts.  rowset contactID, inWatchlist, relationshipID, labelMask
+    PyRep* GetContacts(uint32 charID);
+    // blocked owners, rowset senderID
+    PyRep* GetBlocked(uint32 charID);
+    // insert or update standing and watchlist
+    void AddContact(uint32 ownerID, uint32 contactID, float standing, bool inWatchlist);
+    // inWatchlist -1 = unchanged
+    void UpdateContact(uint32 ownerID, uint32 contactID, float standing, int8 inWatchlist = -1);
+    bool IsContact(uint32 ownerID, uint32 contactID);
     void RemoveContact(uint32 charID, uint32 ownerID);
-    void SetBlockContact(uint32 charID, uint32 ownerID, bool blocked);
+    static void Block(uint32 ownerID, uint32 blockedID);
+    static void Unblock(uint32 ownerID, uint32 blockedID);
+    // has ownerID blocked otherID
+    static bool IsBlocked(uint32 ownerID, uint32 otherID);
+    // the ones of ownerIDs that have blocked blockedID
+    static void GetBlockedBy(const std::vector<uint32>& ownerIDs, uint32 blockedID, std::set<uint32>& into);
+    // owners that have charID on their watchlist / the watchlist of ownerID
+    static void GetWatchers(uint32 charID, std::vector<uint32>& into);
+    static void GetWatchlist(uint32 ownerID, std::vector<uint32>& into);
+    static bool IsInWatchlist(uint32 ownerID, uint32 contactID);
+
+    /* contact labels for chrLabels/chrContacts, crpLabels/crpContacts and alnLabels/alnContacts.
+     *  labelIDs are bit values (1 << 0..62) per owner.  tables are code constants, never client input
+     */
+    // dict labelID -> KeyVal(labelID, name, color)
+    static PyRep* GetContactLabels(const char* labelTable, uint32 ownerID);
+    static bool ContactLabelNameExists(const char* labelTable, uint32 ownerID, const std::string& name, int64 skipLabelID = 0);
+    static uint32 GetContactLabelCount(const char* labelTable, uint32 ownerID);
+    // lowest free bit; 0 = all 63 used.  color null = None
+    static int64 CreateContactLabel(const char* labelTable, uint32 ownerID, const std::string& name, const int32* color);
+    // null = unchanged
+    static void EditContactLabel(const char* labelTable, uint32 ownerID, int64 labelID, const std::string* name, const int32* color);
+    // also clears the bit from the owner's contacts
+    static void DeleteContactLabel(const char* labelTable, const char* contactTable, uint32 ownerID, int64 labelID);
+    static void SetContactLabelBits(const char* contactTable, uint32 ownerID, const std::vector<int32>& contactIDs, int64 mask, bool set);
 
     bool GetCharItems(uint32 charID, std::vector<uint32> &into);
     static bool GetCareerBySchool(uint32 schoolID, uint8 &raceID, uint32 &careerID);
@@ -185,7 +215,9 @@ public:
     bool        SetNote(uint32 ownerID, uint32 itemID, const char *str);
 
     uint32      AddOwnerNote(uint32 charID, const std::string &label, const std::string &content);
-    bool        EditOwnerNote(uint32 charID, uint32 noteID, const std::string &label, const std::string &content);
+    // null = unchanged
+    bool        EditOwnerNote(uint32 charID, uint32 noteID, const std::string* label, const std::string* content);
+    void        RemoveOwnerNote(uint32 charID, uint32 noteID);
 
     static int64       PrepareCharacterForDelete(uint32 accountID, uint32 charID);
     static void        CancelCharacterDeletePrepare(uint32 accountID, uint32 charID);
@@ -236,10 +268,6 @@ public:
     // get skill level for given skill for offline character (used by market tax)
     static uint8 GetSkillLevel(uint32 charID, uint16 skillTypeID);
 
-    PyRep*      GetLabels(uint32 charID);
-    void        SetLabel(uint32 charID, uint32 color, std::string name);
-    void        EditLabel(uint32 charID, uint32 labelID, uint32 color, std::string name);
-    void        DeleteLabel(uint32 charID, uint32 labelID);
 
     void        VisitSystem(uint32 solarSystemID, uint32 charID);
 

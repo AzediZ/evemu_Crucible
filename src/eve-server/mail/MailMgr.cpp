@@ -27,6 +27,7 @@
 #include "EVE_Mail.h"
 #include "Client.h"
 #include "EntityList.h"
+#include "character/CharacterDB.h"
 #include "mail/MailDB.h"
 #include "mail/MailMgr.h"
 
@@ -99,6 +100,15 @@ uint32 MailMgr::SendMail(uint32 senderID, const std::vector<int32>& toCharacterI
     for (auto cur : groupIDs)
         if (IsCharacterID(cur))
             recipients.insert(cur);
+
+    // characters that blocked the sender don't get the mail
+    if (IsCharacterID(senderID)) {
+        std::vector<uint32> ids(recipients.begin(), recipients.end());
+        std::set<uint32> blocking;
+        CharacterDB::GetBlockedBy(ids, senderID, blocking);
+        for (auto cur : blocking)
+            recipients.erase(cur);
+    }
 
     // the sender keeps a copy in "sent".  npc/agent/list senders don't
     if (IsCharacterID(senderID))

@@ -47,7 +47,9 @@ protected:
     PyResult GetPrivateInfo(PyCallArgs& call, PyInt* characterID);
     PyResult AddToBounty(PyCallArgs& call, PyInt* characterID, PyInt* amount);
     PyResult GetTopBounties(PyCallArgs& call);
-    PyResult AddOwnerNote(PyCallArgs& call, PyString* idStr, PyWString* part);
+    PyResult AddOwnerNote(PyCallArgs& call, PyRep* label, PyRep* note);
+    PyResult EditOwnerNote(PyCallArgs& call, PyInt* noteID, PyRep* label, std::optional<PyRep*> note);
+    PyResult RemoveOwnerNote(PyCallArgs& call, PyInt* noteID);
     PyResult GetOwnerNote(PyCallArgs& call, PyInt* noteID);
     PyResult GetOwnerNoteLabels(PyCallArgs& call);
     PyResult GetContactList(PyCallArgs& call);
@@ -62,21 +64,28 @@ protected:
     PyResult GetPaperdollState(PyCallArgs& call);
     PyResult GetNote(PyCallArgs& call, PyInt* itemID);
     PyResult SetNote(PyCallArgs& call, PyInt* itemID, PyString* note);
-    PyResult AddContact(PyCallArgs& call, PyInt* characterID, PyInt* standing, PyInt* inWatchlist, PyInt* notify, std::optional<PyString*> note);
-    PyResult AddContact(PyCallArgs& call, PyInt* characterID, PyFloat* standing, PyInt* inWatchlist, PyBool* notify, std::optional<PyWString*> note);
-    PyResult EditContact(PyCallArgs& call, PyInt* characterID, PyInt* standing, PyInt* inWatchlist, PyInt* notify, std::optional<PyString*> note);
-    PyResult EditContact(PyCallArgs& call, PyInt* characterID, PyFloat* standing, PyInt* inWatchlist, PyBool* notify, std::optional<PyWString*> note);
+    PyResult AddContact(PyCallArgs& call, PyInt* contactID);
+    PyResult AddContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message);
+    PyResult EditContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message);
     PyResult GetRecentShipKillsAndLosses(PyCallArgs& call, PyInt* num, std::optional<PyInt*> startIndex);
     PyResult GetLabels(PyCallArgs& call);
-    PyResult CreateLabel(PyCallArgs& call);
+    PyResult CreateLabel(PyCallArgs& call, PyRep* name, std::optional<PyRep*> color);
+    PyResult EditLabel(PyCallArgs& call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color);
+    PyResult DeleteLabel(PyCallArgs& call, PyRep* labelID);
+    PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelID);
+    PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelID);
     PyResult DeleteContacts(PyCallArgs& call, PyList* contactIDs);
     PyResult BlockOwners(PyCallArgs& call, PyList* ownerIDs);
     PyResult UnblockOwners(PyCallArgs& call, PyList* ownerIDs);
-    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyInt* relationshipID);
+    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyRep* relationshipID);
     PyResult GetImageServerLink(PyCallArgs& call);
 
 	//overloaded in order to support bound objects:
     BoundDispatcher* BindObject(Client *client, PyRep* bindParameters) override;
+
+private:
+    // AddContact/EditContact: store, then the optional ContactAdd/ContactEdit notification
+    void SaveContact(Client* pClient, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit);
 };
 
 

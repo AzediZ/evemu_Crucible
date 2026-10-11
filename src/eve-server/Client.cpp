@@ -42,6 +42,7 @@
 
 #include "StaticDataMgr.h"
 #include "chat/LSCService.h"
+#include "chat/OnlineStatusService.h"
 #include "character/CharUnboundMgrService.h"
 #include "corporation/CorporationDB.h"
 #include "fleet/FleetService.h"
@@ -172,6 +173,7 @@ Client::~Client() {
         }
 
         if (!sConsole.IsShutdown()) {
+            OnlineStatusService::NotifyStatusChange(m_char->itemID(), false);
             if (IsDocked()) {
                 if (GetTradeSession()) {
                     this->services().Lookup <TradeService>("trademgr")->CancelTrade(this);
@@ -338,6 +340,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
 
     //create corp and ally chat channels (if not already created)
     this->m_lsc->CharacterLogin(this);
+    // tell the characters watching us
+    OnlineStatusService::NotifyStatusChange(GetCharacterID(), true);
 
     // load char LPs
     //m_lpMap

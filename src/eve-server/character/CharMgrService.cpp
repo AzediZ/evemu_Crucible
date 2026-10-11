@@ -27,12 +27,15 @@
 #include "eve-server.h"
 
 #include "../../eve-common/EVE_Character.h"
+#include "EVE_Mail.h"
 
 
 
 #include "EntityList.h"
 #include "account/AccountService.h"
 #include "character/CharMgrService.h"
+#include "mail/MailMgr.h"
+#include "mail/NotificationMgr.h"
 #include "packets/CorporationPkts.h"
 #include "services/ServiceManager.h"
 
@@ -129,12 +132,13 @@ CharMgrService::CharMgrService(EVEServiceManager& mgr) :
     this->Add("GetNote", &CharMgrService::GetNote);
     this->Add("SetNote", &CharMgrService::SetNote);
     this->Add("AddOwnerNote", &CharMgrService::AddOwnerNote);
+    this->Add("EditOwnerNote", &CharMgrService::EditOwnerNote);
+    this->Add("RemoveOwnerNote", &CharMgrService::RemoveOwnerNote);
     this->Add("GetOwnerNote", &CharMgrService::GetOwnerNote);
     this->Add("GetOwnerNoteLabels", &CharMgrService::GetOwnerNoteLabels);
-    this->Add("AddContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*, PyInt*, PyInt*, PyInt*, std::optional<PyString*>)> (&CharMgrService::AddContact));
-    this->Add("AddContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*, PyFloat*, PyInt*, PyBool*, std::optional<PyWString*>)> (&CharMgrService::AddContact));
-    this->Add("EditContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*, PyInt*, PyInt*, PyInt*, std::optional<PyString*>)> (&CharMgrService::EditContact));
-    this->Add("EditContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*, PyFloat*, PyInt*, PyBool*, std::optional<PyWString*>)> (&CharMgrService::EditContact));
+    this->Add("AddContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*)> (&CharMgrService::AddContact));
+    this->Add("AddContact", static_cast <PyResult(CharMgrService::*)(PyCallArgs&, PyInt*, PyRep*, PyRep*, PyRep*, std::optional<PyRep*>)> (&CharMgrService::AddContact));
+    this->Add("EditContact", &CharMgrService::EditContact);
     this->Add("DeleteContacts", &CharMgrService::DeleteContacts);
     this->Add("GetRecentShipKillsAndLosses", &CharMgrService::GetRecentShipKillsAndLosses);
     this->Add("BlockOwners", &CharMgrService::BlockOwners);
@@ -144,6 +148,10 @@ CharMgrService::CharMgrService(EVEServiceManager& mgr) :
     //these 2 are for labels in PnP window;
     this->Add("GetLabels", &CharMgrService::GetLabels);
     this->Add("CreateLabel", &CharMgrService::CreateLabel);
+    this->Add("EditLabel", &CharMgrService::EditLabel);
+    this->Add("DeleteLabel", &CharMgrService::DeleteLabel);
+    this->Add("AssignLabels", &CharMgrService::AssignLabels);
+    this->Add("RemoveLabels", &CharMgrService::RemoveLabels);
 }
 
 BoundDispatcher* CharMgrService::BindObject(Client *client, PyRep* bindParameters) {
@@ -186,7 +194,7 @@ PyResult CharMgrService::GetTopBounties(PyCallArgs& call)
 
 PyResult CharMgrService::GetLabels(PyCallArgs& call)
 {
-    return m_db.GetLabels(call.client->GetCharacterID());
+    return CharacterDB::GetContactLabels("chrLabels", call.client->GetCharacterID());
 }
 
 PyResult CharMgrService::GetPaperdollState(PyCallArgs& call)
@@ -202,8 +210,8 @@ PyResult CharMgrService::GetPublicInfo3(PyCallArgs &call, PyInt* characterID)
 PyResult CharMgrService::GetContactList(PyCallArgs &call)
 {
     PyDict* dict = new PyDict();
-        dict->SetItemString("addresses", m_db.GetContacts(call.client->GetCharacterID(), false));
-        dict->SetItemString("blocked", m_db.GetContacts(call.client->GetCharacterID(), true));
+        dict->SetItemString("addresses", m_db.GetContacts(call.client->GetCharacterID()));
+        dict->SetItemString("blocked", m_db.GetBlocked(call.client->GetCharacterID()));
     PyObject* args = new PyObject("util.KeyVal", dict);
     if (is_log_enabled(CLIENT__RSP_DUMP))
         args->Dump(CLIENT__RSP_DUMP, "");
@@ -486,305 +494,288 @@ PyResult CharMgrService::SetNote(PyCallArgs &call, PyInt* itemID, PyString* note
     return PyStatic.NewNone();
 }
 
-PyResult CharMgrService::AddOwnerNote(PyCallArgs& call, PyString* idStr, PyWString* part) {
-    /*
-    15:51:12 Server: AddOwnerNote call made to charMgr
-    15:51:12 [SvcCall] Service charMgr: calling AddOwnerNote
-    15:51:12 CharMgrService::Handle_AddOwnerNote(): size=2
-    15:51:12 [SvcCall]   Call Arguments:
-    15:51:12 [SvcCall]       Tuple: 2 elements
-    15:51:12 [SvcCall]         [ 0] String: 'S:Folders'
-    15:51:12 [SvcCall]         [ 1] WString: '1::F::0::Main|'
-    15:51:12 [SvcCall]   Call Named Arguments:
-    15:51:12 [SvcCall]     Argument 'machoVersion':
-    15:51:12 [SvcCall]         Integer field: 1
-
-    15:54:45 Server: AddOwnerNote call made to charMgr
-    15:54:45 [SvcCall] Service charMgr: calling AddOwnerNote
-    15:54:45 CharMgrService::Handle_AddOwnerNote(): size=2
-    15:54:45 [SvcCall]   Call Arguments:
-    15:54:45 [SvcCall]       Tuple: 2 elements
-    15:54:45 [SvcCall]         [ 0] String: 'S:Folders'
-    15:54:45 [SvcCall]         [ 1] WString: '1::F::0::Main|2::F::0::test|'
-    15:54:45 [SvcCall]   Call Named Arguments:
-    15:54:45 [SvcCall]     Argument 'machoVersion':
-    15:54:45 [SvcCall]         Integer field: 1
-
-    10:41:26 W CharMgrService::Handle_GetOwnerNoteLabels(): size= 0
-    10:41:26 [CharDebug]   Call Arguments:
-    10:41:26 [CharDebug]      Tuple: Empty
-    10:41:26 [CharDebug]  Named Arguments:
-    10:41:26 [CharDebug]   machoVersion
-    10:41:26 [CharDebug]        Integer: 1
-    10:41:39 [Service] charMgr::AddOwnerNote()
-    10:41:39 W CharMgrService::Handle_AddOwnerNote(): size=2
-    10:41:39 [CharDebug]   Call Arguments:
-    10:41:39 [CharDebug]      Tuple: 2 elements
-    10:41:39 [CharDebug]       [ 0]    WString: 'N:testing this shit'
-    10:41:39 [CharDebug]       [ 1]     String: '<br>'
-    10:41:39 [CharDebug]  Named Arguments:
-    10:41:39 [CharDebug]   machoVersion
-    10:41:39 [CharDebug]        Integer: 1
-
-    /../carbon/client/script/ui/control/buttons.py(245) OnClick
-    /client/script/ui/shared/neocom/notepad.py(706) NewNote
-    /client/script/ui/shared/neocom/notepad.py(581) ShowNote
-    id = 'None'
-    self = form.Notepad object at 0x4052ac30, name=notepad, destroyed=False>
-    force = 0
-        t = 'N'
-        noteID = ['N', 'None']
-        ValueError: invalid literal for int() with base 10: 'None'
-
-    /client/script/ui/shared/neocom/notepad.py(802) OnClick
-    /client/script/ui/shared/neocom/notepad.py(581) ShowNote
-    id = 'None'
-    self = form.Notepad object at 0x4052ac30, name=notepad, destroyed=False>
-    force = 0
-        t = 'N'
-        noteID = ['N', 'None']
-        ValueError: invalid literal for int() with base 10: 'None'
-
-    10:57:20 W CharMgrService::Handle_AddOwnerNote(): size=2
-    10:57:20 [CharDebug]   Call Arguments:
-    10:57:20 [CharDebug]      Tuple: 2 elements
-    10:57:20 [CharDebug]       [ 0]    WString: 'N:new note in new folder'
-    10:57:20 [CharDebug]       [ 1]     String: '<br>'
-    10:57:20 [CharDebug]  Named Arguments:
-    10:57:20 [CharDebug]   machoVersion
-    10:57:20 [CharDebug]        Integer: 1
-
-    /client/script/ui/shared/neocom/notepad.py(706) NewNote
-    /client/script/ui/shared/neocom/notepad.py(581) ShowNote
-    id = 'None'
-    self = form.Notepad object at 0x4052ac30, name=notepad, destroyed=False>
-    force = 0
-        t = 'N'
-        noteID = ['N', 'None']
-        ValueError: invalid literal for int() with base 10: 'None'
-
-    on notepad close....
-    10:58:09 [Service] charMgr::AddOwnerNote()
-    10:58:09 W CharMgrService::Handle_AddOwnerNote(): size=2
-    10:58:09 [CharDebug]   Call Arguments:
-    10:58:09 [CharDebug]      Tuple: 2 elements
-    10:58:09 [CharDebug]       [ 0]     String: 'S:Folders'
-    10:58:09 [CharDebug]       [ 1]    WString: '1::F::0::Main|2::F::0::added folder|3::N::2::None|'
-    10:58:09 [CharDebug]  Named Arguments:
-    10:58:09 [CharDebug]   machoVersion
-    10:58:09 [CharDebug]        Integer: 1
-
-
-    */
-
-  sLog.Warning( "CharMgrService::Handle_AddOwnerNote()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  return nullptr;
+/*  notepad.  every note is one chrOwnerNote row; the label prefix tells the kind:
+ *   N: note (label = title), S: client setting (eg. 'S:Folders', split in 6000 char parts), B: bookmark note, I: item note
+ */
+static bool IsValidNoteLabel(const std::string& label)
+{
+    if ((label.size() < 2) or (label[1] != ':'))
+        return false;
+    return ((label[0] == 'N') or (label[0] == 'S') or (label[0] == 'B') or (label[0] == 'I'));
 }
 
+// chrOwnerNote.note is a text column
+static const size_t maxOwnerNoteSize = 65000;
+
+PyResult CharMgrService::AddOwnerNote(PyCallArgs& call, PyRep* label, PyRep* note) {
+    // AddOwnerNote(label, note) -> noteID.  either arg may arrive as String or WString
+    std::string labelStr = PyRep::StringContent(label);
+    std::string noteStr = PyRep::StringContent(note);
+    if (!IsValidNoteLabel(labelStr) or (labelStr.size() > 255))
+        throw CustomError("Invalid note label.");
+    if (noteStr.size() > maxOwnerNoteSize)
+        throw CustomError("This note is too long.");
+
+    uint32 noteID = m_db.AddOwnerNote(call.client->GetCharacterID(), labelStr, noteStr);
+    if (noteID == 0)
+        throw CustomError("The note could not be saved.");
+    return new PyInt(noteID);
+}
+
+PyResult CharMgrService::EditOwnerNote(PyCallArgs& call, PyInt* noteID, PyRep* label, std::optional<PyRep*> note) {
+    // EditOwnerNote(noteID, label[, note]).  renaming a note sends no text
+    std::string labelStr = PyRep::StringContent(label);
+    if (!IsValidNoteLabel(labelStr) or (labelStr.size() > 255))
+        throw CustomError("Invalid note label.");
+
+    std::string noteStr;
+    bool hasNote = (note.has_value() and (note.value() != nullptr) and !note.value()->IsNone());
+    if (hasNote) {
+        noteStr = PyRep::StringContent(note.value());
+        if (noteStr.size() > maxOwnerNoteSize)
+            throw CustomError("This note is too long.");
+    }
+
+    m_db.EditOwnerNote(call.client->GetCharacterID(), noteID->value(), &labelStr, hasNote ? &noteStr : nullptr);
+    return PyStatic.NewNone();
+}
+
+PyResult CharMgrService::RemoveOwnerNote(PyCallArgs& call, PyInt* noteID) {
+    m_db.RemoveOwnerNote(call.client->GetCharacterID(), noteID->value());
+    return PyStatic.NewNone();
+}
 
 PyResult CharMgrService::GetOwnerNote(PyCallArgs &call, PyInt* noteID)
-{  /*
-        [PyObjectEx Type2]
-          [PyTuple 2 items]
-            [PyTuple 1 items]
-              [PyToken dbutil.CRowset]
-            [PyDict 1 kvp]
-              [PyString "header"]
-              [PyObjectEx Normal]
-                [PyTuple 2 items]
-                  [PyToken blue.DBRowDescriptor]
-                  [PyTuple 1 items]
-                    [PyTuple 6 items]
-                      [PyTuple 2 items]
-                        [PyString "noteDate"]
-                        [PyInt 64]
-                      [PyTuple 2 items]
-                        [PyString "typeID"]
-                        [PyInt 2]
-                      [PyTuple 2 items]
-                        [PyString "referenceID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "note"]
-                        [PyInt 130]
-                      [PyTuple 2 items]
-                        [PyString "userID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "label"]
-                        [PyInt 130]
-          [PyPackedRow 19 bytes]
-            ["noteDate" => <129041092800000000> [FileTime]]
-            ["typeID" => <1> [I2]]
-            ["referenceID" => <1661059544> [I4]]
-            ["note" => <1::F::0::Main|> [WStr]]
-            ["userID" => <0> [I4]]
-            ["label" => <S:Folders> [WStr]]
-            */
-
-    sLog.Warning( "CharMgrService::Handle_GetOwnerNote()", "size= %lli", call.tuple->size());
-    call.Dump(CHARACTER__DEBUG);
-    return nullptr;
-    //return m_db.GetOwnerNote(call.client->GetCharacterID());
+{
+    // rowset (noteID, label, note) of the caller's note; the client reads [0].note and [0].label
+    return m_db.GetOwnerNote(call.client->GetCharacterID(), noteID->value());
 }
 
 PyResult CharMgrService::GetOwnerNoteLabels(PyCallArgs &call)
-{  /*
-        [PyObjectEx Type2]
-          [PyTuple 2 items]
-            [PyTuple 1 items]
-              [PyToken dbutil.CRowset]
-            [PyDict 1 kvp]
-              [PyString "header"]
-              [PyObjectEx Normal]
-                [PyTuple 2 items]
-                  [PyToken blue.DBRowDescriptor]
-                  [PyTuple 1 items]
-                    [PyTuple 2 items]
-                      [PyTuple 2 items]
-                        [PyString "noteID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "label"]
-                        [PyInt 130]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <4424362> [I4]]
-            ["label" => <S:Folders> [WStr]]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <4424363> [I4]]
-            ["label" => <N:Ratting - Chaining Rules> [WStr]]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <4424364> [I4]]
-            ["label" => <N:Harbinger Training Schedule> [WStr]]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <4424365> [I4]]
-            ["label" => <N:Damage Types for Races and Rats> [WStr]]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <5332889> [I4]]
-            ["label" => <N:KES Link> [WStr]]
-          [PyPackedRow 5 bytes]
-            ["noteID" => <5536321> [I4]]
-            ["label" => <N:Pelorn's PvP Route> [WStr]]
-    [PyNone]
-*/
-  sLog.Warning( "CharMgrService::Handle_GetOwnerNoteLabels()", "size= %lli", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
+{
+    // rowset (noteID, label) of all the caller's notes
     return m_db.GetOwnerNoteLabels(call.client->GetCharacterID());
 }
 
-/**     ***********************************************************************
- * @note   these do absolutely nothing at this time....
+/*  contacts (address book).
+ *   standings are the five client levels (contact*Standing: -10, -5, 0, 5, 10).
+ *   agents are added with AddContact(agentID) only; they have no standing or watchlist.
+ *   the blocked list is separate (chrBlocked); blocking doesn't touch the contact.
  */
-
-//18:07:30 L CharMgrService::Handle_AddContact(): size=1, 0=Integer(2784)
-//18:07:35 L CharMgrService::Handle_AddContact(): size=1, 0=Integer(63177)
-
-PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* characterID, PyInt* standing, PyInt* inWatchlist, PyInt* notify, std::optional<PyString*> note)
+static bool IsTrue(PyRep* rep)
 {
-  sLog.Warning( "CharMgrService::Handle_AddContact()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-    //TODO: Notify char that they have been added as a contact if notify is True
-
-    m_db.AddContact(call.client->GetCharacterID(), characterID->value(), standing->value(), inWatchlist->value());
-
-  return nullptr;
+    if ((rep == nullptr) or rep->IsNone())
+        return false;
+    if (rep->IsBool())
+        return rep->AsBool()->value();
+    if (rep->IsInt() or rep->IsLong())
+        return (PyRep::IntegerValue(rep) != 0);
+    if (rep->IsFloat())
+        return (rep->AsFloat()->value() != 0);
+    return true;
 }
 
-PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* characterID, PyFloat* standing, PyInt* inWatchlist, PyBool* notify, std::optional<PyWString*> note)
+static float ClampStanding(PyRep* rep)
 {
-  sLog.Warning( "CharMgrService::Handle_AddContact()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-    //TODO: Notify char that they have been added as a contact if notify is True
-
-    m_db.AddContact(call.client->GetCharacterID(), characterID->value(), standing->value(), inWatchlist->value());
-
-  return nullptr;
+    double value(0);
+    if (rep->IsFloat()) {
+        value = rep->AsFloat()->value();
+    } else if (rep->IsInt() or rep->IsLong()) {
+        value = (double)PyRep::IntegerValue(rep);
+    }
+    // nearest of the five levels
+    static const float levels[] = { -10.0f, -5.0f, 0.0f, 5.0f, 10.0f };
+    float best(0.0f);
+    double dist(100.0);
+    for (float cur : levels) {
+        if (std::fabs(value - cur) < dist) {
+            dist = std::fabs(value - cur);
+            best = cur;
+        }
+    }
+    return best;
 }
 
-PyResult CharMgrService::EditContact(PyCallArgs& call, PyInt* characterID, PyInt* standing, PyInt* inWatchlist, PyInt* notify, std::optional<PyString*> note)
+PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* contactID)
 {
-  sLog.Warning( "CharMgrService::Handle_EditContact()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  m_db.UpdateContact(standing->value(), characterID->value(), call.client->GetCharacterID());
-  return nullptr;
+    // the address book adds agents with only their id
+    if (!IsAgent(contactID->value()))
+        throw CustomError("Only agents can be added without a standing.");
+    m_db.AddContact(call.client->GetCharacterID(), contactID->value(), 0.0f, false);
+    return PyStatic.NewNone();
 }
 
-PyResult CharMgrService::EditContact(PyCallArgs& call, PyInt* characterID, PyFloat* standing, PyInt* inWatchlist, PyBool* notify, std::optional<PyWString*> note)
+PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message)
 {
-  sLog.Warning( "CharMgrService::Handle_EditContact()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  m_db.UpdateContact(standing->value(), characterID->value(), call.client->GetCharacterID());
-  return nullptr;
+    SaveContact(call.client, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, false);
+    return PyStatic.NewNone();
 }
 
-PyResult CharMgrService::CreateLabel(PyCallArgs& call)
+PyResult CharMgrService::EditContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message)
 {
-  sLog.Warning( "CharMgrService::Handle_CreateLabel()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
+    SaveContact(call.client, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, true);
+    return PyStatic.NewNone();
+}
 
-  return nullptr;
+void CharMgrService::SaveContact(Client* pClient, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit)
+{
+    // CSPA charges for the notification (ContactCostNotApproved) are not implemented
+    uint32 charID = pClient->GetCharacterID();
+    if (contactID == charID)
+        throw CustomError("You can't add yourself as a contact.");
+    bool isChar = IsCharacterID(contactID);
+    if (!isChar and !IsAgent(contactID) and !IsCorp(contactID) and !IsAlliance(contactID) and !IsFaction(contactID))
+        throw CustomError("That can't be added as a contact.");
+
+    float standing = ClampStanding(relationshipID);
+    // only characters can be watched
+    bool watch = (isChar and IsTrue(inWatchlist));
+
+    bool wasWatched = (isChar and CharacterDB::IsInWatchlist(charID, contactID));
+    if (isEdit and m_db.IsContact(charID, contactID)) {
+        m_db.UpdateContact(charID, contactID, standing, watch ? 1 : 0);
+    } else {
+        m_db.AddContact(charID, contactID, standing, watch);
+    }
+
+    // with mutual watchlists, a contact watching me sees my state only while I watch them
+    if ((watch != wasWatched) and sConfig.chat.ContactStatusMutual and CharacterDB::IsInWatchlist(contactID, charID)) {
+        Client* pContact = sEntityList.FindClientByCharID(contactID);
+        if (pContact != nullptr) {
+            PyTuple* tuple = new PyTuple(1);
+                tuple->SetItem(0, new PyInt(charID));
+            pContact->SendNotification(watch ? "OnContactLoggedOn" : "OnContactLoggedOff", "charid", &tuple);
+        }
+    }
+
+    if (!IsTrue(notify) or !isChar)
+        return;
+    // the notification is optional, and never reaches someone who blocked me
+    if (CharacterDB::IsBlocked(contactID, charID))
+        return;
+
+    PyDict* data = new PyDict();
+        data->SetItemString("level", new PyFloat(standing));
+    if ((message != nullptr) and !message->IsNone()) {
+        std::string text = PyRep::StringContent(message);
+        if (!text.empty())
+            data->SetItemString("message", new PyWString(text));
+    }
+    NotificationMgr::Send(contactID, isEdit ? Notify::Types::ContactEdit : Notify::Types::ContactAdd, charID, data);
 }
 
 PyResult CharMgrService::DeleteContacts(PyCallArgs& call, PyList* contactIDs)
 {
-  // sm.RemoteSvc('charMgr').DeleteContacts([contactIDs])
-
-  sLog.Warning( "CharMgrService::Handle_DeleteContacts()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr) {
-      m_db.RemoveContact(PyRep::IntegerValueU32(*itr), call.client->GetCharacterID());
-  }
-
-  return nullptr;
+    // DeleteContacts([contactIDs])
+    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr)
+        m_db.RemoveContact(PyRep::IntegerValueU32(*itr), call.client->GetCharacterID());
+    return PyStatic.NewNone();
 }
 
 PyResult CharMgrService::BlockOwners(PyCallArgs& call, PyList* ownerIDs)
 {
-  //        sm.RemoteSvc('charMgr').BlockOwners([ownerID])
-  sLog.Warning( "CharMgrService::Handle_BlockOwners()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  for (PyList::const_iterator itr = ownerIDs->begin(); itr != ownerIDs->end(); ++itr) {
-      m_db.SetBlockContact(PyRep::IntegerValueU32(*itr), call.client->GetCharacterID(), true);
-  }
-
-  return nullptr;
+    // blocking is for players: self and npc ids are ignored
+    uint32 charID = call.client->GetCharacterID();
+    for (PyList::const_iterator itr = ownerIDs->begin(); itr != ownerIDs->end(); ++itr) {
+        uint32 ownerID = PyRep::IntegerValueU32(*itr);
+        if ((ownerID == charID) or !(IsCharacterID(ownerID) or IsPlayerCorp(ownerID) or IsAlliance(ownerID)))
+            continue;
+        CharacterDB::Block(charID, ownerID);
+    }
+    return PyStatic.NewNone();
 }
 
 PyResult CharMgrService::UnblockOwners(PyCallArgs& call, PyList* ownerIDs)
 {
-  //            sm.RemoteSvc('charMgr').UnblockOwners(blocked)
-  sLog.Warning( "CharMgrService::Handle_UnblockOwners()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
-
-  for (PyList::const_iterator itr = ownerIDs->begin(); itr != ownerIDs->end(); ++itr) {
-      m_db.SetBlockContact(PyRep::IntegerValueU32(*itr), call.client->GetCharacterID(), false);
-  }
-
-  return nullptr;
+    for (PyList::const_iterator itr = ownerIDs->begin(); itr != ownerIDs->end(); ++itr)
+        CharacterDB::Unblock(call.client->GetCharacterID(), PyRep::IntegerValueU32(*itr));
+    return PyStatic.NewNone();
 }
 
-PyResult CharMgrService::EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyInt* relationshipID)
+PyResult CharMgrService::EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyRep* relationshipID)
 {
-  /*
-            sm.RemoteSvc('charMgr').EditContactsRelationshipID(contactIDs, relationshipID)
- */
-  sLog.Warning( "CharMgrService::Handle_EditContactsRelationshipID()", "size=%lu", call.tuple->size());
-  call.Dump(CHARACTER__DEBUG);
+    float standing = ClampStanding(relationshipID);
+    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr)
+        m_db.UpdateContact(call.client->GetCharacterID(), PyRep::IntegerValueU32(*itr), standing);
+    return PyStatic.NewNone();
+}
 
-  for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr) {
-      m_db.UpdateContact(relationshipID->value(), PyRep::IntegerValueU32(*itr), call.client->GetCharacterID());
-  }
+/*  contact labels.  labelIDs are bit values, so they can be longs */
+static const char* s_contactLabels = "chrLabels";
+static const char* s_contacts = "chrContacts";
 
-  return nullptr;
+PyResult CharMgrService::CreateLabel(PyCallArgs& call, PyRep* name, std::optional<PyRep*> color)
+{
+    uint32 charID = call.client->GetCharacterID();
+    std::string labelName = PyRep::StringContent(name);
+    if (labelName.empty())
+        throw UserError("MailLabelMustProvideName");
+    MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+    if (CharacterDB::ContactLabelNameExists(s_contactLabels, charID, labelName))
+        throw UserError("MailLabelNameExists");
+
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    int64 labelID = CharacterDB::CreateContactLabel(s_contactLabels, charID, labelName, hasColor ? &colorVal : nullptr);
+    if (labelID == 0)
+        throw CustomError("You have too many labels.");
+    return new PyLong(labelID);
+}
+
+PyResult CharMgrService::EditLabel(PyCallArgs& call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color)
+{
+    uint32 charID = call.client->GetCharacterID();
+    int64 id = PyRep::IntegerValue(labelID);
+
+    std::string labelName;
+    bool hasName = !name->IsNone();
+    if (hasName) {
+        labelName = PyRep::StringContent(name);
+        if (labelName.empty())
+            throw UserError("MailLabelMustProvideName");
+        MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+        if (CharacterDB::ContactLabelNameExists(s_contactLabels, charID, labelName, id))
+            throw UserError("MailLabelNameExists");
+    }
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    CharacterDB::EditContactLabel(s_contactLabels, charID, id, hasName ? &labelName : nullptr, hasColor ? &colorVal : nullptr);
+    return PyStatic.NewNone();
+}
+
+PyResult CharMgrService::DeleteLabel(PyCallArgs& call, PyRep* labelID)
+{
+    CharacterDB::DeleteContactLabel(s_contactLabels, s_contacts, call.client->GetCharacterID(), PyRep::IntegerValue(labelID));
+    return PyStatic.NewNone();
+}
+
+static void GetContactIDs(PyList* list, std::vector<int32>& into)
+{
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        if ((*itr)->IsInt() or (*itr)->IsLong())
+            into.push_back(PyRep::IntegerValue(*itr));
+}
+
+PyResult CharMgrService::AssignLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelID)
+{
+    std::vector<int32> ids;
+    GetContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits(s_contacts, call.client->GetCharacterID(), ids, PyRep::IntegerValue(labelID), true);
+    return PyStatic.NewNone();
+}
+
+PyResult CharMgrService::RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelID)
+{
+    std::vector<int32> ids;
+    GetContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits(s_contacts, call.client->GetCharacterID(), ids, PyRep::IntegerValue(labelID), false);
+    return PyStatic.NewNone();
 }
 
 PyResult CharMgrService::GetFactions(PyCallArgs& call)

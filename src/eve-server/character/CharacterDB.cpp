@@ -879,46 +879,60 @@ void CharacterDB::SetCharacterOnlineStatus(uint32 char_id, bool online) {
         sDatabase.RunQuery(err, "UPDATE srvStatus SET Connections = Connections + 1");
 }
 
-PyRep* CharacterDB::GetContacts(uint32 charID, bool blocked)
+PyRep* CharacterDB::GetContacts(uint32 charID)
 {
+    // inWatchlist is a bit(1) column; cast so it arrives as an int
     DBQueryResult res;
     if (!sDatabase.RunQuery( res,
-        "SELECT contactID, inWatchlist, relationshipID, labelMask"
-        " FROM chrContacts WHERE ownerID = %u and blocked = %u", charID, blocked))
-    {
-        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
-        return nullptr;
-    }
+        "SELECT contactID, CAST(inWatchlist AS UNSIGNED) AS inWatchlist, relationshipID, labelMask"
+        " FROM chrContacts WHERE ownerID = %u", charID))
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
 
     return DBResultToCRowset(res);
 }
 
-void CharacterDB::AddContact(uint32 ownerID, uint32 charID, int32 standing, bool inWatchlist)
+PyRep* CharacterDB::GetBlocked(uint32 charID)
 {
-    DBerror err;
-    sDatabase.RunQuery(err,
-        "INSERT INTO chrContacts (ownerID, contactID, relationshipID, "
-        " inWatchlist, labelMask, blocked) VALUES "
-        " (%u, %u, %i, %i, 0, 0) ",
-        ownerID, charID, standing, inWatchlist);
+    // the client reads blocked owners as .senderID
+    DBQueryResult res;
+    if (!sDatabase.RunQuery( res, "SELECT blockedID AS senderID FROM chrBlocked WHERE ownerID = %u", charID))
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+
+    return DBResultToCRowset(res);
 }
 
-void CharacterDB::UpdateContact(int32 standing, uint32 charID, uint32 ownerID)
+void CharacterDB::AddContact(uint32 ownerID, uint32 contactID, float standing, bool inWatchlist)
 {
     DBerror err;
-    sDatabase.RunQuery(err,
-        "UPDATE chrContacts SET relationshipID=%i "
-        " WHERE contactID=%u AND ownerID=%u ",
-         standing, charID, ownerID);
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO chrContacts (ownerID, contactID, relationshipID, inWatchlist, labelMask, blocked)"
+        " VALUES (%u, %u, %f, %u, 0, 0)"
+        " ON DUPLICATE KEY UPDATE relationshipID = VALUES(relationshipID), inWatchlist = VALUES(inWatchlist)",
+        ownerID, contactID, standing, (inWatchlist ? 1 : 0)))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
 }
 
-void CharacterDB::SetBlockContact(uint32 charID, uint32 ownerID, bool blocked)
+void CharacterDB::UpdateContact(uint32 ownerID, uint32 contactID, float standing, int8 inWatchlist/*-1*/)
 {
     DBerror err;
-    sDatabase.RunQuery(err,
-        "UPDATE chrContacts SET blocked=%u "
-        " WHERE contactID=%u AND ownerID=%u ",
-        blocked, charID, ownerID);
+    if (inWatchlist < 0) {
+        sDatabase.RunQuery(err,
+            "UPDATE chrContacts SET relationshipID = %f WHERE ownerID = %u AND contactID = %u",
+            standing, ownerID, contactID);
+    } else {
+        sDatabase.RunQuery(err,
+            "UPDATE chrContacts SET relationshipID = %f, inWatchlist = %u WHERE ownerID = %u AND contactID = %u",
+            standing, (inWatchlist ? 1 : 0), ownerID, contactID);
+    }
+}
+
+bool CharacterDB::IsContact(uint32 ownerID, uint32 contactID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT contactID FROM chrContacts WHERE ownerID = %u AND contactID = %u", ownerID, contactID))
+        return false;
+    return (res.GetRowCount() > 0);
 }
 
 void CharacterDB::RemoveContact(uint32 charID, uint32 ownerID)
@@ -928,6 +942,230 @@ void CharacterDB::RemoveContact(uint32 charID, uint32 ownerID)
         "DELETE from chrContacts "
         " WHERE contactID=%u AND ownerID=%u ",
          charID, ownerID);
+}
+
+void CharacterDB::Block(uint32 ownerID, uint32 blockedID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "INSERT IGNORE INTO chrBlocked (ownerID, blockedID) VALUES (%u, %u)", ownerID, blockedID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void CharacterDB::Unblock(uint32 ownerID, uint32 blockedID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM chrBlocked WHERE ownerID = %u AND blockedID = %u", ownerID, blockedID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+bool CharacterDB::IsBlocked(uint32 ownerID, uint32 otherID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT blockedID FROM chrBlocked WHERE ownerID = %u AND blockedID = %u", ownerID, otherID))
+        return false;
+    return (res.GetRowCount() > 0);
+}
+
+void CharacterDB::GetBlockedBy(const std::vector<uint32>& ownerIDs, uint32 blockedID, std::set<uint32>& into)
+{
+    std::ostringstream ids;
+    for (size_t i = 0; i < ownerIDs.size(); ++i) {
+        ids << "," << ownerIDs[i];
+        if (((i + 1) % 300 == 0) or (i + 1 == ownerIDs.size())) {
+            DBQueryResult res;
+            if (sDatabase.RunQuery(res,
+                    "SELECT ownerID FROM chrBlocked WHERE blockedID = %u AND ownerID IN (0%s)",
+                    blockedID, ids.str().c_str()))
+            {
+                DBResultRow row;
+                while (res.GetRow(row))
+                    into.insert(row.GetUInt(0));
+            }
+            ids.str("");
+        }
+    }
+}
+
+void CharacterDB::GetWatchers(uint32 charID, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT ownerID FROM chrContacts WHERE contactID = %u AND inWatchlist = 1", charID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void CharacterDB::GetWatchlist(uint32 ownerID, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT contactID FROM chrContacts WHERE ownerID = %u AND inWatchlist = 1", ownerID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+bool CharacterDB::IsInWatchlist(uint32 ownerID, uint32 contactID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT contactID FROM chrContacts WHERE ownerID = %u AND contactID = %u AND inWatchlist = 1",
+            ownerID, contactID))
+        return false;
+    return (res.GetRowCount() > 0);
+}
+
+/* contact labels, shared by characters (chrLabels/chrContacts), corps (crpLabels/crpContacts) and
+ *  alliances (alnLabels/alnContacts).  labelIDs are bit values (1 << n, n = 0..62) per owner, the way the
+ *  client tests them (labelMask & labelID).  the tables are compile time names, never client input.
+ */
+PyRep* CharacterDB::GetContactLabels(const char* labelTable, uint32 ownerID)
+{
+    // dict labelID -> KeyVal(labelID, name, color)
+    PyDict* ret = new PyDict();
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT labelID, name, color FROM %s WHERE ownerID = %u", labelTable, ownerID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return ret;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        int64 labelID = row.GetInt64(0);
+        PyDict* dict = new PyDict();
+            dict->SetItemString("labelID", new PyLong(labelID));
+            dict->SetItemString("name", new PyWString(row.GetText(1), row.ColumnLength(1)));
+            dict->SetItemString("color", row.IsNull(2) ? PyStatic.NewNone() : new PyInt(row.GetInt(2)));
+        ret->SetItem(new PyLong(labelID), new PyObject("util.KeyVal", dict));
+    }
+    return ret;
+}
+
+bool CharacterDB::ContactLabelNameExists(const char* labelTable, uint32 ownerID, const std::string& name, int64 skipLabelID/*0*/)
+{
+    std::string eName;
+    sDatabase.DoEscapeString(eName, name);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT labelID FROM %s WHERE ownerID = %u AND name = '%s' AND labelID <> %lli",
+            labelTable, ownerID, eName.c_str(), skipLabelID))
+        return false;
+    return (res.GetRowCount() > 0);
+}
+
+uint32 CharacterDB::GetContactLabelCount(const char* labelTable, uint32 ownerID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM %s WHERE ownerID = %u", labelTable, ownerID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+int64 CharacterDB::CreateContactLabel(const char* labelTable, uint32 ownerID, const std::string& name, const int32* color)
+{
+    std::set<int64> used;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT labelID FROM %s WHERE ownerID = %u", labelTable, ownerID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        used.insert(row.GetInt64(0));
+
+    int64 labelID(0);
+    for (uint8 bit = 0; bit <= 62; ++bit) {
+        if (used.find(1LL << bit) == used.end()) {
+            labelID = (1LL << bit);
+            break;
+        }
+    }
+    if (labelID == 0)
+        return 0;
+
+    std::string eName;
+    sDatabase.DoEscapeString(eName, name);
+    std::string colorStr("NULL");
+    if (color != nullptr)
+        colorStr = std::to_string(*color);
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "INSERT INTO %s (labelID, ownerID, color, name) VALUES (%lli, %u, %s, '%s')",
+            labelTable, labelID, ownerID, colorStr.c_str(), eName.c_str()))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+        return 0;
+    }
+    return labelID;
+}
+
+void CharacterDB::EditContactLabel(const char* labelTable, uint32 ownerID, int64 labelID, const std::string* name, const int32* color)
+{
+    if ((name == nullptr) and (color == nullptr))
+        return;
+
+    std::ostringstream set;
+    if (name != nullptr) {
+        std::string eName;
+        sDatabase.DoEscapeString(eName, *name);
+        set << "name = '" << eName << "'";
+    }
+    if (color != nullptr) {
+        if (name != nullptr)
+            set << ", ";
+        set << "color = " << *color;
+    }
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE %s SET %s WHERE ownerID = %u AND labelID = %lli",
+            labelTable, set.str().c_str(), ownerID, labelID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void CharacterDB::DeleteContactLabel(const char* labelTable, const char* contactTable, uint32 ownerID, int64 labelID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE %s SET labelMask = labelMask & ~%lli WHERE ownerID = %u", contactTable, labelID, ownerID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM %s WHERE ownerID = %u AND labelID = %lli", labelTable, ownerID, labelID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void CharacterDB::SetContactLabelBits(const char* contactTable, uint32 ownerID, const std::vector<int32>& contactIDs, int64 mask, bool set)
+{
+    if (contactIDs.empty())
+        return;
+
+    std::ostringstream ids;
+    for (auto cur : contactIDs)
+        ids << "," << cur;
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE %s SET labelMask = labelMask %s %lli WHERE ownerID = %u AND contactID IN (0%s)",
+            contactTable, (set ? "|" : "& ~"), mask, ownerID, ids.str().c_str()))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
 }
 
 //just return all itemIDs which has ownerID set to characterID
@@ -1424,14 +1662,28 @@ uint32 CharacterDB::AddOwnerNote(uint32 charID, const std::string & label, const
     return id;
 }
 
-bool CharacterDB::EditOwnerNote(uint32 charID, uint32 noteID, const std::string & label, const std::string & content) {
-    DBerror err;
-    std::string contS;
-    sDatabase.DoEscapeString(contS, content);
+bool CharacterDB::EditOwnerNote(uint32 charID, uint32 noteID, const std::string* label, const std::string* content) {
+    if ((label == nullptr) and (content == nullptr))
+        return true;
 
+    std::ostringstream set;
+    if (label != nullptr) {
+        std::string lblS;
+        sDatabase.DoEscapeString(lblS, *label);
+        set << "label = '" << lblS << "'";
+    }
+    if (content != nullptr) {
+        std::string contS;
+        sDatabase.DoEscapeString(contS, *content);
+        if (label != nullptr)
+            set << ", ";
+        set << "note = '" << contS << "'";
+    }
+
+    DBerror err;
     if (!sDatabase.RunQuery(err,
-        "UPDATE chrOwnerNote SET note = '%s' WHERE ownerID = %u AND noteID = %u;",
-        contS.c_str(), charID, noteID))
+        "UPDATE chrOwnerNote SET %s WHERE ownerID = %u AND noteID = %u",
+        set.str().c_str(), charID, noteID))
     {
         codelog(DATABASE__ERROR, "Error on query: %s", err.c_str());
         return false;
@@ -1440,90 +1692,28 @@ bool CharacterDB::EditOwnerNote(uint32 charID, uint32 noteID, const std::string 
     return true;
 }
 
+void CharacterDB::RemoveOwnerNote(uint32 charID, uint32 noteID) {
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM chrOwnerNote WHERE ownerID = %u AND noteID = %u", charID, noteID))
+        codelog(DATABASE__ERROR, "Error on query: %s", err.c_str());
+}
+
 PyRep *CharacterDB::GetOwnerNoteLabels(uint32 charID) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res, "SELECT noteID, label FROM chrOwnerNote WHERE ownerID = %u", charID))
-    {
         codelog(DATABASE__ERROR, "Error on query: %s", res.error.c_str());
-        return nullptr;
-    }
 
     return DBResultToCRowset(res);
 }
 
 PyRep *CharacterDB::GetOwnerNote(uint32 charID, uint32 noteID) {
-    /*
-                    [PyTuple 6 items]
-                      [PyTuple 2 items]
-                        [PyString "noteDate"]
-                        [PyInt 64]
-                      [PyTuple 2 items]
-                        [PyString "typeID"]
-                        [PyInt 2]
-                      [PyTuple 2 items]
-                        [PyString "referenceID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "note"]
-                        [PyInt 130]
-                      [PyTuple 2 items]
-                        [PyString "userID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "label"]
-                        [PyInt 130]
-          [PyPackedRow 19 bytes]
-            ["noteDate" => <129041092800000000> [FileTime]]
-            ["typeID" => <1> [I2]]
-            ["referenceID" => <1661059544> [I4]]
-            ["note" => <1::F::0::Main|> [WStr]]
-            ["userID" => <0> [I4]]
-            ["label" => <S:Folders> [WStr]]
-            */
+    // the client uses [0].note and [0].label
     DBQueryResult res;
-
-    if (!sDatabase.RunQuery(res, "SELECT note FROM chrOwnerNote WHERE ownerID = %u AND noteID = %u", charID, noteID))
-    {
+    if (!sDatabase.RunQuery(res,
+            "SELECT noteID, label, note FROM chrOwnerNote WHERE ownerID = %u AND noteID = %u", charID, noteID))
         codelog(DATABASE__ERROR, "Error on query: %s", res.error.c_str());
-        return nullptr;
-    }
 
     return DBResultToCRowset(res);
-}
-
-void CharacterDB::EditLabel(uint32 charID, uint32 labelID, uint32 color, std::string name)
-{
-    std::string eName;
-    sDatabase.DoEscapeString(eName, name);
-
-    DBQueryResult res;
-    sDatabase.RunQuery(res, "UPDATE chrLabels SET color = %u, name = '%s' WHERE ownerID = %u AND labelID = %u", color, eName.c_str(), charID, labelID);
-}
-
-PyRep* CharacterDB::GetLabels(uint32 charID)
-{
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT labelID, color, name FROM chrLabels WHERE ownerID = %u", charID)) {
-        codelog(DATABASE__ERROR, "Error on query: %s", res.error.c_str());
-        return nullptr;
-    }
-
-    return DBResultToCIndexedRowset(res, "labelID");
-}
-
-void CharacterDB::SetLabel(uint32 charID, uint32 color, std::string name)
-{
-    std::string eName;
-    sDatabase.DoEscapeString(eName, name);
-
-    DBQueryResult res;
-    sDatabase.RunQuery(res, "INSERT INTO chrLabels (color, name, ownerID) VALUES (%u, '%s', %u)", color, eName.c_str(), charID);
-}
-
-void CharacterDB::DeleteLabel(uint32 charID, uint32 labelID)
-{
-    DBerror err;
-    sDatabase.RunQuery(err,"DELETE FROM chrLabels WHERE ownerID = %u AND labelID = %u", charID, labelID);
 }
 
 bool CharacterDB::LoadSkillQueue(uint32 characterID, SkillQueue &into) {

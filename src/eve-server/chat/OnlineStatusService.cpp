@@ -25,9 +25,16 @@
 
 #include "eve-server.h"
 
-
+#include "Client.h"
+#include "EVEServerConfig.h"
 #include "EntityList.h"
+#include "character/CharacterDB.h"
 #include "chat/OnlineStatusService.h"
+
+/* watchlist online state (address book).  a character's state is shown to the owners that have it on their
+ *  watchlist (and, with chat.ContactStatusMutual, are on its watchlist too).
+ *  GetInitialState rows: contactID I4, online I4.  pushes OnContactLoggedOn/OnContactLoggedOff(charID)
+ */
 
 OnlineStatusService::OnlineStatusService() :
     Service("onlineStatus", eAccessLevel_Character)
@@ -36,128 +43,64 @@ OnlineStatusService::OnlineStatusService() :
     this->Add("GetOnlineStatus", &OnlineStatusService::GetOnlineStatus);
 }
 
-/** @todo finish this */
+bool OnlineStatusService::CanSeeStatus(uint32 viewerID, uint32 targetID)
+{
+    if (!CharacterDB::IsInWatchlist(viewerID, targetID))
+        return false;
+    if (sConfig.chat.ContactStatusMutual and !CharacterDB::IsInWatchlist(targetID, viewerID))
+        return false;
+    return true;
+}
+
+void OnlineStatusService::NotifyStatusChange(uint32 charID, bool online)
+{
+    std::vector<uint32> watchers;
+    CharacterDB::GetWatchers(charID, watchers);
+    if (watchers.empty())
+        return;
+
+    std::vector<uint32> mutual;
+    if (sConfig.chat.ContactStatusMutual)
+        CharacterDB::GetWatchlist(charID, mutual);
+
+    for (auto cur : watchers) {
+        if (sConfig.chat.ContactStatusMutual and (std::find(mutual.begin(), mutual.end(), cur) == mutual.end()))
+            continue;
+        Client* pClient = sEntityList.FindClientByCharID(cur);
+        if (pClient == nullptr)
+            continue;
+        PyTuple* tuple = new PyTuple(1);
+            tuple->SetItem(0, new PyInt(charID));
+        pClient->SendNotification(online ? "OnContactLoggedOn" : "OnContactLoggedOff", "charid", &tuple);
+    }
+}
+
 PyResult OnlineStatusService::GetInitialState(PyCallArgs &call) {
-/*
-21:35:16 L OnlineStatusService::Handle_GetInitialState(): size= 0
-21:35:16 [SvcCall]   Call Arguments:
-21:35:16 [SvcCall]       Tuple: Empty
-21:35:16 [SvcCall]   Call Named Arguments:
-21:35:16 [SvcCall]     Argument 'machoVersion':
-21:35:16 [SvcCall]         Integer field: 1
-  sLog.White( "OnlineStatusService::Handle_GetInitialState()", "size=%lu", call.tuple->size());
-  call.Dump(SERVICE__CALL_DUMP);
+    // online state of every character on the caller's watchlist.  the client indexes it by contactID
+    DBRowDescriptor* header = new DBRowDescriptor();
+        header->AddColumn("contactID", DBTYPE_I4);
+        header->AddColumn("online", DBTYPE_I4);
+    CRowSet* rowset = new CRowSet(&header);
 
+    uint32 charID = call.client->GetCharacterID();
+    std::vector<uint32> watchlist;
+    CharacterDB::GetWatchlist(charID, watchlist);
+    for (auto cur : watchlist) {
+        if (!IsCharacterID(cur))
+            continue;
+        if (sConfig.chat.ContactStatusMutual and !CharacterDB::IsInWatchlist(cur, charID))
+            continue;
+        PyPackedRow* row = rowset->NewRow();
+            row->SetField((uint32)0, new PyInt(cur));
+            row->SetField(1, new PyInt(sEntityList.IsOnline(cur) ? 1 : 0));
+    }
 
-      [PySubStream 1861 bytes]
-        [PyObjectEx Type2]
-          [PyTuple 2 items]
-            [PyTuple 1 items]
-              [PyToken dbutil.CRowset]
-            [PyDict 1 kvp]
-              [PyString "header"]
-              [PyObjectEx Normal]
-                [PyTuple 2 items]
-                  [PyToken blue.DBRowDescriptor]
-                  [PyTuple 1 items]
-                    [PyTuple 2 items]
-                      [PyTuple 2 items]
-                        [PyString "contactID"]
-                        [PyInt 3]
-                      [PyTuple 2 items]
-                        [PyString "online"]
-                        [PyInt 3]
-          [PyPackedRow 9 bytes]
-            ["contactID" => <108985089> [I4]]
-            ["online" => <0> [I4]]
-          [PyPackedRow 9 bytes]
-            ["contactID" => <116081192> [I4]]
-            ["online" => <0> [I4]]
-          [PyPackedRow 9 bytes]
-            ["contactID" => <116844755> [I4]]
-            ["online" => <0> [I4]]
-          [PyPackedRow 9 bytes]
-            ["contactID" => <118879785> [I4]]
-            ["online" => <1> [I4]]
-  */
-    // this is used to query the initial online state of all contacts.
-
-    DBRowDescriptor *header = new DBRowDescriptor();
-    header->AddColumn("contactID", DBTYPE_I4);
-    header->AddColumn("online", DBTYPE_BOOL);
-    CRowSet *rowset = new CRowSet( &header );
-    // loop thru contact list and fill following row accordingly
-    //PyPackedRow* row = rowset->NewRow();
-    //row->SetField(new PyInt(*charID*), sEntityList.PyIsOnline(PyRep::IntegerValue(charID)))); // charID/online
     return rowset;
 }
 
 PyResult OnlineStatusService::GetOnlineStatus(PyCallArgs &call, PyInt* characterID) {
-    // this is used to query the online state of a character by charID.
-     return sEntityList.PyIsOnline(characterID->value());
+    // the address book asks this for a contact it just put on the watchlist
+    if (!IsCharacterID(characterID->value()) or !CanSeeStatus(call.client->GetCharacterID(), characterID->value()))
+        return PyStatic.NewFalse();
+    return sEntityList.PyIsOnline(characterID->value());
 }
-
-/*
-==================== Sent from Server 81 bytes
-
-[PyObjectData Name: macho.Notification]
-  [PyTuple 7 items]
-    [PyInt 12]
-    [PyObjectData Name: macho.MachoAddress]
-      [PyTuple 4 items]
-        [PyInt 1]
-        [PyInt 806438]
-        [PyNone]
-        [PyNone]
-    [PyObjectData Name: macho.MachoAddress]
-      [PyTuple 4 items]
-        [PyInt 4]
-        [PyString "OnContactLoggedOn"]
-        [PyList 0 items]
-        [PyString "clientID"]
-    [PyInt 5654387]
-    [PyTuple 1 items]
-      [PyTuple 2 items]
-        [PyInt 0]
-        [PySubStream 15 bytes]
-          [PyTuple 2 items]
-            [PyInt 0]
-            [PyTuple 2 items]
-              [PyInt 1]
-              [PyTuple 1 items]
-                [PyInt 649670823]
-    [PyNone]
-    [PyNone]
-
-==================== Sent from Server 81 bytes
-
-[PyObjectData Name: macho.Notification]
-  [PyTuple 6 items]
-    [PyInt 12]
-    [PyObjectData Name: macho.MachoAddress]
-      [PyTuple 4 items]
-        [PyInt 1]
-        [PyInt 698462]
-        [PyNone]
-        [PyNone]
-    [PyObjectData Name: macho.MachoAddress]
-      [PyTuple 4 items]
-        [PyInt 4]
-        [PyString "OnContactLoggedOff"]
-        [PyList 0 items]
-        [PyString "clientID"]
-    [PyInt 5654387]
-    [PyTuple 1 items]
-      [PyTuple 2 items]
-        [PyInt 0]
-        [PySubStream 15 bytes]
-          [PyTuple 2 items]
-            [PyInt 0]
-            [PyTuple 2 items]
-              [PyInt 1]
-              [PyTuple 1 items]
-                [PyInt 1610990724]
-    [PyNone]
-
-
-*/

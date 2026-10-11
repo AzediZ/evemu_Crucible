@@ -313,6 +313,7 @@ public:
         bool EnableVoiceChat;
         bool EnforceRookieInHelp;
         bool EnforceChannelAccess;
+        bool ContactStatusMutual;
     } chat;
 
     // From <crime>
