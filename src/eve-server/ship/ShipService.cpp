@@ -1379,105 +1379,29 @@ PyResult ShipBound::StoreVessel(PyCallArgs &call, PyInt* destID) {
 }
 
 PyResult ShipBound::SelfDestruct(PyCallArgs &call, PyInt* shipID) {
-    /** @todo finish this later
-     * 22:13:29 L ShipBound::Handle_SelfDestruct(): size=1
-     * 22:13:29 [SvcCall]   Call Arguments:
-     * 22:13:29 [SvcCall]       Tuple: 1 elements
-     * 22:13:29 [SvcCall]         [ 0] Integer field: 140000378     <- ship id
-     *
-  _log(SERVICE__CALL_DUMP, "ShipBound::Handle_SelfDestruct()");
-    call.Dump(SERVICE__CALL_DUMP);
-    [PyTuple 1 items]
-      [PyTuple 2 items]
-        [PyInt 0]
-        [PySubStream 60 bytes]
-          [PyTuple 2 items]
-            [PyInt 0]
-            [PyTuple 2 items]
-              [PyInt 1]
-              [PyTuple 2 items]
-                [PyString "SelfDestructTimer"]
-                [PyDict 2 kvp]
-                  [PyString "what"]
-                  [PyTuple 2 items]
-                    [PyInt 4]
-                    [PyInt 24700]
-                  [PyString "time"]
-                  [PyString "2 Minutes"]
-    *********  sends msg every 10 sec ************
-    [PyTuple 1 items]
-      [PyTuple 2 items]
-        [PyInt 0]
-        [PySubStream 70 bytes]
-          [PyTuple 2 items]
-            [PyInt 0]
-            [PyTuple 2 items]
-              [PyInt 1]
-              [PyTuple 2 items]
-                [PyString "SelfDestructTimer"]
-                [PyDict 2 kvp]
-                  [PyString "what"]
-                  [PyTuple 2 items]
-                    [PyInt 4]
-                    [PyInt 24700]
-                  [PyString "time"]
-                  [PyString "1 Minute 49 Seconds"]
-    ************  destruct immediate  ****************
-    [PyTuple 1 items]
-      [PyTuple 2 items]
-        [PyInt 0]
-        [PySubStream 47 bytes]
-          [PyTuple 2 items]
-            [PyInt 0]
-            [PyTuple 2 items]
-              [PyInt 1]
-              [PyTuple 2 items]
-                [PyString "SelfDestructImmediate"]
-                [PyDict 1 kvp]
-                  [PyString "what"]
-                  [PyTuple 2 items]
-                    [PyInt 4]
-                    [PyInt 24700]
-    ***********  not sure how to kill ship  *************
-    Damage damage((static_cast<SystemEntity*>(who)),true);
-    entity->Killed(damage);
-    *************  cancel destruct  *****************
-    [PyTuple 3 items]
-      [PyInt 6]
-      [PyInt 2]
-      [PyTuple 1 items]
-        [PySubStream 94 bytes]
-          [PyObjectEx Normal]
-            [PyTuple 3 items]
-              [PyToken ccp_exceptions.UserError]
-              [PyTuple 2 items]
-                [PyString "SelfDestructAborted2"]
-                [PyDict 1 kvp]
-                  [PyString "when"]
-                  [PyInt 83]
-              [PyDict 2 kvp]
-                [PyString "msg"]
-                [PyString "SelfDestructAborted2"]
-                [PyString "dict"]
-                [PyDict 1 kvp]
-                  [PyString "when"]
-                  [PyInt 83]
-                  //if (mySE->HasPilot() and mySE->GetPilot()->CanThrow())
-        throw UserError ("SelfDestructAborted2");
-*/
-
-    /*{'messageKey': 'SelfDestructAborted2', 'dataID': 17879480, 'suppressable': False, 'bodyID': 258024, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 2405}
-     * {'messageKey': 'SelfDestructAbortedOther2', 'dataID': 17879483, 'suppressable': False, 'bodyID': 258025, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 2406}
-     * {'messageKey': 'SelfDestructCancelledExternal', 'dataID': 17876999, 'suppressable': False, 'bodyID': 257085, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 3182}
-     * {'messageKey': 'SelfDestructCancelledWarp', 'dataID': 17878652, 'suppressable': False, 'bodyID': 257707, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 2564}
-     * {'messageKey': 'SelfDestructImmediate', 'dataID': 17881593, 'suppressable': False, 'bodyID': 258829, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1533}
-     * {'messageKey': 'SelfDestructImmediateOther', 'dataID': 17881596, 'suppressable': False, 'bodyID': 258830, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1534}
-     * {'messageKey': 'SelfDestructInitiated', 'dataID': 17881805, 'suppressable': False, 'bodyID': 258902, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1535}
-     * {'messageKey': 'SelfDestructInitiatedOther', 'dataID': 17881599, 'suppressable': False, 'bodyID': 258831, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1536}
-     * {'messageKey': 'SelfDestructTimer', 'dataID': 17878655, 'suppressable': False, 'bodyID': 257708, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 2563}
-     * {'messageKey': 'SelfDestructTooEarly', 'dataID': 17881605, 'suppressable': False, 'bodyID': 258833, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1537}
+    /* menusvc.SelfDestructShip -> PerformSessionChange('selfdestruct', ship.SelfDestruct, shipID).  only offered for the current ship.
+     *  selecting it again aborts the countdown.  the messages (SelfDestructInitiated/Timer/Immediate, Aborted2, Cancelled*, the
+     *  *Other versions for the pilots around) are sent by SystemManager, which runs the timer.  the live server sent
+     *  SelfDestructTimer {what: (4, typeID), time: "1 Minute 49 Seconds"} every 10 seconds
      */
-    /* return error msg from this call, if applicable, else nodeid and timestamp */
+    Client* pClient(call.client);
+    if (pClient->IsSessionChange() or !pClient->IsInSpace())
+        return nullptr;
+    SystemManager* pSystem(pClient->SystemMgr());
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if ((pSystem == nullptr) or (pShipSE == nullptr))
+        return nullptr;
+    if (shipID->value() != pClient->GetShipID())
+        throw UserError("CannotSelfDestruct");
+    if (pShipSE->DestinyMgr()->IsWarping())
+        throw UserError("ShipInWarp");
+
+    if (pSystem->IsSelfDestructing(pShipSE->GetID())) {
+        pSystem->AbortSelfDestruct(pClient);
+    } else {
+        pSystem->StartSelfDestruct(pClient);
+    }
+
     // returns nodeID and timestamp
     // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
     //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES

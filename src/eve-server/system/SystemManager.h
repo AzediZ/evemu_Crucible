@@ -54,6 +54,17 @@ class LawEnforcement;
 class InterdictionMgr;
 class EVEServiceManager;
 
+namespace SelfDestruct {
+    // how a running self-destruct ended without exploding
+    namespace Cancel {
+        enum {
+            Silent      = 0,
+            Warp        = 1,    // SelfDestructCancelledWarp
+            External    = 2     // SelfDestructCancelledExternal (pilot left the ship, docked, jumped...)
+        };
+    }
+}
+
 class DynamicEntityFactory {
 public:
     // you MUST call (your SystemManager)->AddEntity([this returned object]) after this to actually put the entity in space
@@ -155,6 +166,12 @@ public:
     // SetState droneState: the drones this pilot owns or controls, anywhere in the system
     PyObject* MakeDroneState(uint32 charID) const;
 
+    /* ship self-destruct.  the pilot's current ship explodes SelfDestructDelay seconds after starting it */
+    void StartSelfDestruct(Client* pClient);    // throws the client's errors
+    bool AbortSelfDestruct(Client* pClient);    // the pilot changed their mind.  true if one was running
+    void CancelSelfDestruct(uint32 shipID, uint8 cancelType);   // SelfDestruct::Cancel
+    bool IsSelfDestructing(uint32 shipID) const         { return (m_selfDestructs.find(shipID) != m_selfDestructs.end()); }
+
     uint32 GetRandBeltID();
     uint32 GetClosestPlanetID(const GPoint& myPos);
 
@@ -254,6 +271,18 @@ private:
     std::map<uint32, DroneSE*> m_drones;                // all drones in space here.  we do not own these (they are also in m_entities)
     std::vector<uint32> m_droneReturns;                 // drones to move into their ship's drone bay after this tick
     void ProcessDroneReturns();
+
+    // running self-destructs
+    struct SelfDestructData {
+        uint32 charID;          // pilot who started it
+        uint32 shipTypeID;
+        int64 endTime;          // filetime
+        int64 nextMsg;          // filetime of the next SelfDestructTimer message
+    };
+    std::map<uint32, SelfDestructData> m_selfDestructs;     // shipID -> data
+    std::map<uint32, int64> m_selfDestructRetry;            // charID -> earliest next attempt after an abort (filetime)
+    void ProcessSelfDestructs();
+    void SendSelfDestructToBubble(SystemEntity* pShipSE, uint32 charID, const char* msgKey, PyDict* args);
 
     // for bounty processing (20m timer)
     Timer m_bountyTimer;

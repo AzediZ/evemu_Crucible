@@ -1152,6 +1152,10 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
         }
     }
 
+    // warping stops a running self-destruct
+    if (mySE->IsShipSE() and mySE->HasPilot() and (mySE->SystemMgr() != nullptr))
+        mySE->SystemMgr()->CancelSelfDestruct(mySE->GetID(), SelfDestruct::Cancel::Warp);
+
     BeginMovement();
     // the client needs over 75% of max speed to enter warp
     if (m_speedFraction < 1.0f)

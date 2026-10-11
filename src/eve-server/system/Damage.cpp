@@ -507,8 +507,9 @@ void ShipSE::Killed(Damage &fatal_blow) {
         return;    //  make error here
 
     // security status penalties for everyone who attacked this pilot illegally, kill rights (CrimeWatch)
+    //  a self-destruct has no killer (the pilot is the final blow on the killmail)
     sCrimeWatch.OnShipDestroyed(pPilot->GetCharacterID(), pPilot->InPod(), pPilot->GetSecurityRating(),
-            ((pClient != nullptr) ? pClient->GetCharacterID() : 0), m_system);
+            ((pClient != nullptr) ? pClient->GetCharacterID() : 0), m_system, fatal_blow.selfDestruct);
 
     /* populate kill data for killMail and save to db  -allan 01May16  --updated 13July17 */
     KillData data = KillData();
@@ -601,7 +602,8 @@ void ShipSE::Killed(Damage &fatal_blow) {
         // log podKill
         MapDB::AddPodKill(locationID);
 
-        if (pClient != nullptr)
+        // no bounty for podding yourself
+        if ((pClient != nullptr) and (pClient != pPilot) and !fatal_blow.selfDestruct)
             pClient->GetChar()->PayBounty(pPilot->GetChar());
 
         std::string corpse_name = pPilot->GetName();

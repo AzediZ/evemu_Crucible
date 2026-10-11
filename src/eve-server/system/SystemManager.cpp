@@ -56,6 +56,7 @@
 #include "station/Station.h"
 #include "system/Asteroid.h"
 #include "system/Container.h"
+#include "system/Damage.h"
 #include "system/DestinyCollision.h"
 #include "system/DestinyManager.h"
 #include "system/SolarSystem.h"
@@ -280,6 +281,8 @@ bool SystemManager::ProcessTic() {
 
     // drones that reached their ship during this tick
     ProcessDroneReturns();
+    // self-destruct timers (outside the entity loop, as a ship may explode here)
+    ProcessSelfDestructs();
 
     // process planets for PI
     if (m_minutetimer.Check()) {
@@ -1177,6 +1180,9 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
     // a ship leaving space (docking, jumping, logging off, destroyed) loses control of its drones
     if (pSE->IsShipSE())
         DroneSE::ReleaseDronesOf(this, pSE->GetID());
+    // ...and stops its self-destruct (the self-destruct itself has already removed its entry)
+    if (pSE->IsShipSE() and IsSelfDestructing(pSE->GetID()))
+        CancelSelfDestruct(pSE->GetID(), (pSE->HasPilot() ? SelfDestruct::Cancel::External : SelfDestruct::Cancel::Silent));
     m_drones.erase(pSE->GetID());
     // a field source leaving space (probe expired, deployable destroyed or scooped, HIC docked/jumped/died) takes its field along
     m_interdiction->RemoveField(pSE->GetID());
@@ -1433,6 +1439,180 @@ void SystemManager::ProcessDroneReturns() {
         DroneSE* pDrone(itr->second);
         if (pDrone->FinishReturnToBay())
             SafeDelete(pDrone);     // no longer in space
+    }
+}
+
+/* self-destruct.  "1 Minute 49 Seconds", as the SelfDestructTimer message captured from the live server */
+static std::string FormatSelfDestructTime(uint32 seconds)
+{
+    uint32 minutes(seconds / 60);
+    seconds %= 60;
+    std::string time;
+    if (minutes > 0)
+        time = std::to_string(minutes) + (minutes == 1 ? " Minute" : " Minutes");
+    if ((seconds > 0) or (minutes == 0)) {
+        if (!time.empty())
+            time += " ";
+        time += std::to_string(seconds) + (seconds == 1 ? " Second" : " Seconds");
+    }
+    return time;
+}
+
+void SystemManager::SendSelfDestructToBubble(SystemEntity* pShipSE, uint32 charID, const char* msgKey, PyDict* args)
+{
+    // the *Other messages are for the other pilots around the ship (the client can mute them)
+    std::vector<Client*> players;
+    if ((pShipSE != nullptr) and (pShipSE->SysBubble() != nullptr))
+        pShipSE->SysBubble()->GetPlayers(players);
+    for (auto pClient : players) {
+        if ((pClient == nullptr) or (pClient->GetCharacterID() == charID))
+            continue;
+        PyIncRef(args);
+        pClient->SendRemoteMessage(msgKey, args);
+    }
+    PyDecRef(args);
+}
+
+void SystemManager::StartSelfDestruct(Client* pClient)
+{
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if (pShipSE == nullptr)
+        return;
+    uint32 charID(pClient->GetCharacterID()), shipTypeID(pShipSE->GetTypeID());
+    int64 now(GetFileTimeNow());
+    std::map<uint32, int64>::iterator itr = m_selfDestructRetry.find(charID);
+    if (itr != m_selfDestructRetry.end()) {
+        if (itr->second > now)
+            throw UserError("SelfDestructTooEarly")
+                    .AddFormatValue("shipTypeID", new PyInt(shipTypeID))
+                    .AddFormatValue("timeRemaining", new PyLong(itr->second - now));
+        m_selfDestructRetry.erase(itr);
+    }
+
+    SelfDestructData data = SelfDestructData();
+        data.charID = charID;
+        data.shipTypeID = shipTypeID;
+        data.endTime = now + (int64)sConfig.world.SelfDestructDelay * EvE::Time::Second;
+        data.nextMsg = now + 10 * EvE::Time::Second;
+    m_selfDestructs[pShipSE->GetID()] = data;
+
+    PyDict* args = new PyDict();
+        args->SetItemString("what", Client::TypeNameArg(shipTypeID));
+        args->SetItemString("when", new PyInt(sConfig.world.SelfDestructDelay));
+    pClient->SendRemoteMessage("SelfDestructInitiated", args);
+
+    args = new PyDict();
+        args->SetItemString("charID", new PyInt(charID));
+        args->SetItemString("shipTypeID", new PyInt(shipTypeID));
+        args->SetItemString("timeRemaining", new PyLong(data.endTime - now));
+    SendSelfDestructToBubble(pShipSE, charID, "SelfDestructInitiatedOther", args);
+
+    _log(SHIP__MESSAGE, "%s started the self-destruct of %s(%u).", pClient->GetName(), pShipSE->GetName(), pShipSE->GetID());
+}
+
+bool SystemManager::AbortSelfDestruct(Client* pClient)
+{
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if (pShipSE == nullptr)
+        return false;
+    std::map<uint32, SelfDestructData>::iterator itr = m_selfDestructs.find(pShipSE->GetID());
+    if (itr == m_selfDestructs.end())
+        return false;
+    int64 now(GetFileTimeNow());
+    int64 left(itr->second.endTime - now);
+    if (left < 0)
+        left = 0;
+    uint32 charID(itr->second.charID);
+    m_selfDestructs.erase(itr);
+    m_selfDestructRetry[charID] = now + (int64)sConfig.world.SelfDestructRetryDelay * EvE::Time::Second;
+
+    PyDict* args = new PyDict();
+        args->SetItemString("timeLeft", new PyLong(left));
+    pClient->SendRemoteMessage("SelfDestructAborted2", args);
+
+    args = new PyDict();
+        args->SetItemString("charID", new PyInt(charID));
+        args->SetItemString("timeLeft", new PyLong(left));
+    SendSelfDestructToBubble(pShipSE, charID, "SelfDestructAbortedOther2", args);
+    return true;
+}
+
+void SystemManager::CancelSelfDestruct(uint32 shipID, uint8 cancelType)
+{
+    std::map<uint32, SelfDestructData>::iterator itr = m_selfDestructs.find(shipID);
+    if (itr == m_selfDestructs.end())
+        return;
+    uint32 charID(itr->second.charID), shipTypeID(itr->second.shipTypeID);
+    m_selfDestructs.erase(itr);
+    if (cancelType == SelfDestruct::Cancel::Silent)
+        return;
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    if (pClient == nullptr)
+        return;
+    PyDict* args = new PyDict();
+        args->SetItemString("what", Client::TypeNameArg(shipTypeID));
+    pClient->SendRemoteMessage((cancelType == SelfDestruct::Cancel::Warp ? "SelfDestructCancelledWarp" : "SelfDestructCancelledExternal"), args);
+}
+
+void SystemManager::ProcessSelfDestructs()
+{
+    if (m_selfDestructs.empty())
+        return;
+    // destroying a ship changes the map, so work from a copy of the keys
+    std::vector<uint32> shipIDs;
+    for (auto cur : m_selfDestructs)
+        shipIDs.push_back(cur.first);
+
+    int64 now(GetFileTimeNow());
+    for (auto shipID : shipIDs) {
+        std::map<uint32, SelfDestructData>::iterator itr = m_selfDestructs.find(shipID);
+        if (itr == m_selfDestructs.end())
+            continue;
+        SystemEntity* pSE(GetSE(shipID));
+        if ((pSE == nullptr) or !pSE->IsShipSE() or pSE->IsDead()) {
+            m_selfDestructs.erase(itr);
+            continue;
+        }
+        // the pilot left the ship (eject, board)
+        if (!pSE->HasPilot() or (pSE->GetPilot()->GetCharacterID() != itr->second.charID)) {
+            CancelSelfDestruct(shipID, SelfDestruct::Cancel::External);
+            continue;
+        }
+        Client* pClient(pSE->GetPilot());
+        if (now < itr->second.endTime) {
+            if (now >= itr->second.nextMsg) {
+                itr->second.nextMsg += 10 * EvE::Time::Second;
+                uint32 left((uint32)((itr->second.endTime - now + EvE::Time::Second - 1) / EvE::Time::Second));
+                PyDict* args = new PyDict();
+                    args->SetItemString("what", Client::TypeNameArg(itr->second.shipTypeID));
+                    args->SetItemString("time", new PyString(FormatSelfDestructTime(left)));
+                pClient->SendRemoteMessage("SelfDestructTimer", args);
+            }
+            continue;
+        }
+        // GM /unkillable
+        if (SystemEntity::IsUnkillable(shipID)) {
+            CancelSelfDestruct(shipID, SelfDestruct::Cancel::External);
+            continue;
+        }
+
+        uint32 charID(itr->second.charID), shipTypeID(itr->second.shipTypeID);
+        m_selfDestructs.erase(itr);
+
+        PyDict* args = new PyDict();
+            args->SetItemString("shipTypeID", new PyInt(shipTypeID));
+        pClient->SendRemoteMessage("SelfDestructImmediate", args);
+        args = new PyDict();
+            args->SetItemString("shipTypeID", new PyInt(shipTypeID));
+            args->SetItemString("charID", new PyInt(charID));
+        SendSelfDestructToBubble(pSE, charID, "SelfDestructImmediateOther", args);
+
+        _log(SHIP__MESSAGE, "%s(%u) of %s self-destructs.", pSE->GetName(), shipID, pClient->GetName());
+        // no killer: the pilot is the final blow, aggressors get nothing (CrimeWatch), insurance still pays
+        Damage d(pSE, true);
+            d.weaponRef = pSE->GetSelf();
+            d.selfDestruct = true;
+        pSE->Destroy(d);
     }
 }
 
