@@ -23,13 +23,83 @@
     Author: AlTahir
 */
 
+#ifndef __CONTRACT_UTILS_H__INCL__
+#define __CONTRACT_UTILS_H__INCL__
+
 #include "services/Callable.h"
+#include "inventory/InventoryItem.h"
+
+namespace Contract {
+    // appConst conStatus*
+    namespace Status {
+        enum {
+            Outstanding         = 0,
+            InProgress          = 1,
+            FinishedIssuer      = 2,
+            FinishedContractor  = 3,
+            Finished            = 4,
+            Cancelled           = 5,
+            Rejected            = 6,
+            Failed              = 7,
+            Deleted             = 8,
+            Reversed            = 9
+        };
+    }
+    // appConst conType*
+    namespace Type {
+        enum {
+            ItemExchange    = 1,
+            Auction         = 2,
+            Courier         = 3,
+            Loan            = 4
+        };
+    }
+}
+
+// one ctrContracts row
+struct ContractInfo {
+    bool forCorp;
+    bool isPrivate;
+    bool rewardEscrowed;    // reward is held by ownerSystem (taken at creation)
+    int32 contractID;
+    int32 type;
+    int32 status;
+    int32 price;
+    int32 reward;
+    int32 collateral;
+    int32 numDays;
+    uint32 issuerID;
+    uint32 issuerCorpID;
+    uint32 assigneeID;
+    uint32 acceptorID;
+    uint32 startStationID;
+    uint32 endStationID;
+    uint32 startSolarSystemID;
+    uint32 endSolarSystemID;
+    uint32 crateID;
+    int64 dateExpired;
+    int64 dateAccepted;
+    float volume;
+};
 
 /**
  * Wrapper class. Houses utility functions, used by ContractProxy and ContractMgr
+ *
+ * money held in escrow by contracts (reward from creation, collateral from acceptance) is held by ownerSystem.
+ *   anything that ends a contract (expiry, overdue courier, auctions...) must use these helpers to keep that consistent
  */
 class ContractUtils {
 public:
+    static bool GetContractInfo(int32 contractID, ContractInfo& into);
+    // sets status, and each of the other fields that is non-zero
+    static bool SetStatus(int32 contractID, int32 status, int64 dateAccepted = 0, int64 dateCompleted = 0, uint32 acceptorID = 0, uint32 crateID = 0);
+    // changes owner of iRef and everything inside it (assembled ships, containers)
+    static void ChangeOwnerRecursive(InventoryItemRef iRef, uint32 newOwner);
+    // gives the contract's items (still held by ownerSystem in the start station) back to the issuer
+    static void ReturnItemsToIssuer(const ContractInfo& c);
+    // refunds an escrowed reward to the issuer
+    static void RefundReward(const ContractInfo& c);
+
     static PyResult GetContractEntry(int contractId);
     static PyList* GetContractEntries(std::vector<int> contractIDList);
     static PyResult GetContractListForOwner(PyInt* ownerID, PyInt* contractStatus, std::optional <PyInt*> contractType, std::optional <PyBool*> issuedToBy);
@@ -40,4 +110,6 @@ private:
     static void FillItemData(DBResultRow* itemRow, PyPackedRow* targetRow);
     static void FillBidData(DBResultRow* bidRow, PyPackedRow* targetRow);
 };
+
+#endif  // __CONTRACT_UTILS_H__INCL__
 

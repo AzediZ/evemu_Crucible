@@ -121,7 +121,8 @@ public:
     // overload to merge the blueprints properly
     virtual bool            Merge(InventoryItemRef to_merge, uint32 qty=0, bool notify=true);
     // overload to split the blueprints properly
-    virtual InventoryItemRef Split(int32 qty_to_take, bool notify=true)
+    //  (signature must match InventoryItem::Split, or splits through an InventoryItemRef lose the blueprint data)
+    virtual InventoryItemRef Split(int32 qty_to_take, bool notify=true, bool silent=false) override
                                                         { return SplitBlueprint( qty_to_take, notify ); }
 
     BlueprintRef            SplitBlueprint(int32 qty_to_take, bool notify=true);

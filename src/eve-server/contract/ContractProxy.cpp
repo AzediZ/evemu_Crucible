@@ -37,6 +37,8 @@
 
 #include "contract/ContractUtils.h"
 #include "account/AccountService.h"
+#include "manufacturing/Blueprint.h"
+#include "station/StationDataMgr.h"
 
 ContractProxy::ContractProxy () :
     Service("contractProxy")
@@ -236,56 +238,171 @@ PyResult ContractProxy::CreateContract(PyCallArgs &call,
 }
 
 
-PyResult ContractProxy::CreateContract(PyCallArgs &call, 
+namespace {
+    // keyword argument by name, or nullptr when missing
+    PyRep* GetKeyword(PyCallArgs& call, const char* name) {
+        std::map<std::string, PyRep*>::iterator itr = call.byname.find(name);
+        if (itr == call.byname.end())
+            return nullptr;
+        return itr->second;
+    }
+}
+
+PyResult ContractProxy::CreateContract(PyCallArgs &call,
     PyInt* contractType, PyInt* isPrivate, std::optional <PyInt*> assigneeID, PyInt* expireTime, PyInt* duration, PyInt* startStationID, std::optional<PyInt*> endStationID,
     PyInt* price, PyInt* reward, PyInt* collateral, PyWString* title, PyWString* description) {
-    int startStationDivision, startSystemId, startRegionId, endSystemId, endRegionId;
-    bool forCorp;
+    int startStationDivision(flagHangar), startSystemId(0), startRegionId(0), endSystemId(0), endRegionId(0);
+    bool forCorp(false);
+    uint32 charID(call.client->GetCharacterID());
 
     /**
      * Since named args (byname) aren't included in packet, we process them separately.
      */
-    if (call.byname.find("flag")->second->IsInt()) {
-        startStationDivision = call.byname.find("flag")->second->AsInt()->value();
-    } else {
-        codelog(SERVICE__ERROR, "startStationDivision value is of invalid type");
-        return nullptr;
+    PyRep* rep = GetKeyword(call, "flag");
+    if ((rep != nullptr) and rep->IsInt())
+        startStationDivision = rep->AsInt()->value();
+    rep = GetKeyword(call, "forCorp");
+    if (rep != nullptr) {
+        if (rep->IsBool()) {
+            forCorp = rep->AsBool()->value();
+        } else if (rep->IsInt()) {
+            forCorp = (rep->AsInt()->value() != 0);
+        }
     }
-    if (call.byname.find("forCorp")->second->IsBool()) {
-        forCorp = call.byname.find("forCorp")->second->AsBool()->value();
-    } else {
-        codelog(SERVICE__ERROR, "forCorp value is of invalid type");
-        return nullptr;
-    }
+
+    // corp contracts are not supported yet (same as corp market orders)
+    if (forCorp)
+        throw CustomError("Corporation contracts are not available at this time.");
+
+    if ((contractType->value() != Contract::Type::ItemExchange)
+    and (contractType->value() != Contract::Type::Auction)
+    and (contractType->value() != Contract::Type::Courier))
+        throw CustomError("Invalid contract type.");
+    if ((price->value() < 0) or (reward->value() < 0) or (collateral->value() < 0))
+        throw CustomError("Contract prices, rewards and collateral cannot be negative.");
+    if (expireTime->value() < 1)
+        throw CustomError("Invalid contract expiration time.");
+    if (duration->value() < 0)
+        throw CustomError("Invalid contract duration.");
+
+    uint32 assignee(assigneeID.has_value() ? assigneeID.value()->value() : 0);
+    if (isPrivate->value() and (assignee == 0))
+        throw CustomError("A private contract needs an assignee.");
+
     if (sDataMgr.IsStation(startStationID->value())) {
         startSystemId = sDataMgr.GetStationSystem(startStationID->value());
         startRegionId = sDataMgr.GetStationRegion(startStationID->value());
     } else {
         codelog(SERVICE__ERROR, "Specified start Station ID has no Station counterparts in DB");
-        return nullptr;
+        throw CustomError("Invalid start station.");
     }
-    if (endStationID.has_value()) {
-        if (sDataMgr.IsStation(endStationID.value()->value())) {
-            endSystemId = sDataMgr.GetStationSystem(endStationID.value()->value());
-            endRegionId = sDataMgr.GetStationRegion(endStationID.value()->value());
+    uint32 endStation(0);
+    if (endStationID.has_value() and (endStationID.value()->value() != 0)) {
+        endStation = endStationID.value()->value();
+        if (sDataMgr.IsStation(endStation)) {
+            endSystemId = sDataMgr.GetStationSystem(endStation);
+            endRegionId = sDataMgr.GetStationRegion(endStation);
         } else {
             codelog(SERVICE__ERROR, "Specified end Station ID has no Station counterparts in DB");
-            return nullptr;
+            throw CustomError("Invalid destination station.");
         }
     } else {
         endSystemId = startSystemId;
         endRegionId = 0;
     }
+    if ((contractType->value() == Contract::Type::Courier) and (endStation == 0))
+        throw CustomError("A courier contract needs a destination station.");
 
-    // Courier-specific step - if we have a reward, we'd want to take it in advance and store it "in heap" to block no-funds scam
-    if (contractType->value() == 3 && reward->value() > 0) {
-        if (call.client->GetBalance() >= reward->value()) {
-            call.client->AddBalance(-reward->value());
-        } else {
-            call.client->SendNotifyMsg("You do not have enough ISK to pay the reward");
-            return nullptr;
+    /**
+     * Validate every item before anything is created.  traded items must be the issuer's own,
+     *  in the item hangar of the start station, and not the active ship.
+     */
+    struct TradedItem {
+        InventoryItemRef iRef;
+        int32 quantity;
+    };
+    std::vector<TradedItem> tradedItems;
+    std::set<uint32> seenIDs;
+    rep = GetKeyword(call, "itemList");
+    if ((rep != nullptr) and rep->IsList()) {
+        PyList* list = rep->AsList();
+        if (!list->empty()) {
+            // make sure this char's hangar in the start station is loaded
+            call.client->GetStationHangar(startStationID->value());
+        }
+        for (size_t index = 0; index < list->size(); ++index) {
+            PyRep* entry = list->GetItem(index);
+            PyRep* idRep(nullptr);
+            PyRep* qtyRep(nullptr);
+            if (entry->IsList() and (entry->AsList()->size() >= 2)) {
+                idRep = entry->AsList()->GetItem(0);
+                qtyRep = entry->AsList()->GetItem(1);
+            } else if (entry->IsTuple() and (entry->AsTuple()->size() >= 2)) {
+                idRep = entry->AsTuple()->GetItem(0);
+                qtyRep = entry->AsTuple()->GetItem(1);
+            }
+            if ((idRep == nullptr) or (qtyRep == nullptr) or !idRep->IsInt() or !qtyRep->IsInt())
+                throw CustomError("Invalid item list.");
+
+            uint32 itemID(idRep->AsInt()->value());
+            int32 qty(qtyRep->AsInt()->value());
+            if (!seenIDs.insert(itemID).second)
+                throw CustomError("The same item cannot be added to a contract twice.");
+
+            InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+            if (iRef.get() == nullptr)
+                throw CustomError("One of the items for this contract could not be found.");
+            if (itemID == call.client->GetShipID())
+                throw UserError("ConCannotTradeCurrentShip");
+            if (iRef->ownerID() != charID) {
+                _log(SERVICE__WARNING, "CreateContract - %s(%u) tried to contract %s(%u) owned by %u.", \
+                        call.client->GetName(), charID, iRef->name(), itemID, iRef->ownerID());
+                throw CustomError("You do not own %s.", iRef->name());
+            }
+            if ((iRef->locationID() != (uint32)startStationID->value()) or (iRef->flag() != flagHangar))
+                throw CustomError("%s must be in your item hangar in %s.", iRef->name(), stDataMgr.GetStationName(startStationID->value()).c_str());
+            if ((qty < 1) or (qty > iRef->quantity()))
+                throw CustomError("Invalid quantity of %s.", iRef->name());
+            if (iRef->isSingleton() and (qty != iRef->quantity()))
+                throw CustomError("Invalid quantity of %s.", iRef->name());
+
+            tradedItems.push_back({iRef, qty});
         }
     }
+
+    std::map<int32, int32> requestedItems;
+    rep = GetKeyword(call, "requestItemTypeList");
+    if ((rep != nullptr) and rep->IsList()) {
+        PyList* list = rep->AsList();
+        for (size_t index = 0; index < list->size(); ++index) {
+            PyRep* entry = list->GetItem(index);
+            PyRep* typeRep(nullptr);
+            PyRep* qtyRep(nullptr);
+            if (entry->IsList() and (entry->AsList()->size() >= 2)) {
+                typeRep = entry->AsList()->GetItem(0);
+                qtyRep = entry->AsList()->GetItem(1);
+            } else if (entry->IsTuple() and (entry->AsTuple()->size() >= 2)) {
+                typeRep = entry->AsTuple()->GetItem(0);
+                qtyRep = entry->AsTuple()->GetItem(1);
+            }
+            if ((typeRep == nullptr) or (qtyRep == nullptr) or !typeRep->IsInt() or !qtyRep->IsInt())
+                throw CustomError("Invalid requested item list.");
+            if ((qtyRep->AsInt()->value() < 1) or (sItemFactory.GetType(typeRep->AsInt()->value()) == nullptr))
+                throw CustomError("Invalid requested item.");
+            requestedItems[typeRep->AsInt()->value()] += qtyRep->AsInt()->value();
+        }
+    }
+    if (!requestedItems.empty() and (contractType->value() != Contract::Type::ItemExchange))
+        throw CustomError("Only item exchange contracts can ask for items.");
+
+    if (tradedItems.empty() and requestedItems.empty()) {
+        codelog(SERVICE__ERROR, "No traded or requested items was specified. Aborting");
+        throw CustomError("A contract needs at least one item.");
+    }
+
+    std::string titleStr, descStr;
+    sDatabase.DoEscapeString(titleStr, title->content());
+    sDatabase.DoEscapeString(descStr, description->content());
 
     /**
      * Then, we go for actual entries creation.
@@ -298,176 +415,122 @@ PyResult ContractProxy::CreateContract(PyCallArgs &call,
         "(contractType, issuerID, issuerCorpID, forCorp, isPrivate, assigneeID, "
         "dateIssued, dateExpired, expireTimeInMinutes, duration, numDays, "
         "startStationID, startSolarSystemID, startRegionID, endStationID, endSolarSystemID, endRegionID, "
-        "price, reward, collateral, title, description, issuerAllianceID, startStationDivision) "
+        "price, reward, collateral, title, description, issuerAllianceID, startStationDivision, rewardEscrowed) "
         "VALUES "
         "(%u, %u, %u, %u, %u, %u, "
         "%lli, %lli, %u, %u, %u, "
         "%u, %u, %u, %u, %u, %u,"
-        "%u, %u, %u, '%s', '%s', %u, %u)",
-        contractType->value(), call.client->GetCharacterID(), call.client->GetCorporationID(), forCorp, isPrivate->value()?1:0, assigneeID.has_value() ? assigneeID.value()->value() : 0,
-        int64(GetFileTimeNow()), int64(GetRelativeFileTime(0, 0, expireTime->value())), expireTime->value(), duration->value(), expireTime->value() / 1440,
-        startStationID->value(), startSystemId, startRegionId, endStationID.has_value() ? endStationID.value()->value() : 0, endSystemId, endRegionId,
-        price->value(), reward->value(), collateral->value(), title->content().c_str(), description->content().c_str(), call.client->GetAllianceID(), startStationDivision))
+        "%i, %i, %i, '%s', '%s', %u, %u, %u)",
+        contractType->value(), charID, call.client->GetCorporationID(), forCorp, isPrivate->value()?1:0, assignee,
+        int64(GetFileTimeNow()), int64(GetRelativeFileTime(0, 0, expireTime->value())), expireTime->value(), duration->value(),
+        (contractType->value() == Contract::Type::Courier ? duration->value() : expireTime->value() / 1440),
+        startStationID->value(), startSystemId, startRegionId, endStation, endSystemId, endRegionId,
+        price->value(), reward->value(), collateral->value(), titleStr.c_str(), descStr.c_str(), call.client->GetAllianceID(), startStationDivision,
+        (reward->value() > 0 ? 1 : 0)))
     {
         codelog(DATABASE__ERROR, "Failed to insert new entity: %s", err.c_str());
-        return nullptr;
+        throw CustomError("Failed to create the contract.");
+    }
+
+    // the reward is held by the system from now on, so the issuer can't spend it before the contract ends
+    if (reward->value() > 0) {
+        try {
+            AccountService::TransferFunds(charID, ownerSystem, reward->value(), "Contract reward", Journal::EntryType::ContractRewardAdded, contractId);
+        } catch (...) {
+            sDatabase.RunQuery(err, "DELETE FROM ctrContracts WHERE contractId = %u", contractId);
+            throw;
+        }
     }
 
     /**
-     * Then, we insert the items.
-     * First off, we gather the list of attributes for these items, using select query.
-     * To save resources and reduce amount of DB hits, we compose the query by adding ID's first, then we execute it separately.
+     * Then, we insert the items.  the contracted part of a stack is split off, and the items are held by the system
      */
     std::string itemsToInsert;
     float totalVolume = 0.00;
-    if (call.byname.find("itemList")->second->IsList()) {
-        PyList *tradedItems = call.byname.find("itemList")->second->AsList();
-        if (!tradedItems->empty()) {
-            //TODO: We need to account for items that can be packed in a container/ship/container inside the ship
-            std::string query = "SELECT entity.itemID, entity.ownerID, entity.typeID, entity.quantity, entity.locationID, iB.pLevel, "
-                                "       iB.mLevel, iB.copy, iB.runs, ea.valueInt as damage, entity.flag "
-                                "FROM entity "
-                                "LEFT JOIN invBlueprints iB on entity.itemID = iB.itemID "
-                                "LEFT JOIN entity_attributes ea on entity.itemID = ea.itemID and ea.attributeID = 3 "
-                                "WHERE entity.itemID IN (%s)";
-            std::string queryIds;
-            std::map<int, int> expectedQuantities;              // Key is itemID, value is quantity. We use map to save time on list iteration
-            for (int index = 0; index < tradedItems->size(); index++) {
-                PyList *tradedItem = tradedItems->GetItem(index)->AsList();
-                int itemID = tradedItem->GetItem(0)->AsInt()->value();
-                int quantity = tradedItem->GetItem(1)->AsInt()->value();
-
-                queryIds.append(std::to_string(itemID));
-                expectedQuantities[itemID] = quantity;
-
-                // if it's not the last item - add a trailing comma
-                if (index != tradedItems->size() - 1) {
-                    queryIds.append(", ");
-                }
-            }
-
-            DBQueryResult res;
-            if (!sDatabase.RunQuery(res,query.c_str(), queryIds.c_str()))
-            {
-                codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-                return nullptr;
-            }
-
-            /**
-             * I HATE the fact that i have to do the same bloody loop again, but we didn't have DB values prior to that.
-             * We need to validate traded items exist, have correct owner and quantities. Any item that fails the check is excluded from the list.
-             */
-             DBResultRow row;
-             int expectedOwnerID = call.client->GetCharacterID();
-             // We work directly with DBQueryResult since resulting CRowSet does not fit ctrItems format - thus, it would be needless processing.
-             while(res.GetRow(row)) {
-                 int itemID = row.GetInt(0);
-                 int ownerID = row.GetInt(1);
-                 int quantity = row.GetInt(3);
-                 int parentID = row.GetInt(4) >= 14000000 ? row.GetInt(4) : 0;
-                 int pLevel = row.IsNull(5) ? 0 : row.GetInt(5);
-                 int mLevel = row.IsNull(6) ? 0 : row.GetInt(6);
-                 int isCopy = row.IsNull(7) ? 0 : (row.GetBool(7) ? 1 : 0);
-                 int runs = row.IsNull(8) ? 0 : row.GetInt(8);
-                 int damage = row.IsNull(9) ? 0 : row.GetInt(9);
-                 int flag = row.IsNull(10) ? 0 : row.GetInt(10);
-
-                 if (ownerID == expectedOwnerID && quantity == expectedQuantities.find(itemID)->second) {
-                     itemsToInsert.append("(" + std::to_string(contractId) + ", " +
-                        std::to_string(itemID) + ", " +
-                        std::to_string(quantity) + ", " +
-                        row.GetText(2) + ", " +
-                        "1, " +
-                        std::to_string(parentID) + ", " +
-                        std::to_string(pLevel) + ", " +
-                        std::to_string(mLevel) + ", " +
-                        std::to_string(isCopy) + "," +
-                        std::to_string(runs) + ", " +
-                        std::to_string(damage) + ", " +
-                        std::to_string(flag)+ "),");
-
-                     // We only calculate volume for courier-type contracts - the other types don't use this value.
-                     if (contractType->value() == 3) {
-                         totalVolume += sItemFactory.GetStationRef(startStationID->value())->GetMyInventory()->GetByID(itemID)->GetAttribute(161).get_float() * quantity;
-                     }
-
-                     sItemFactory.GetItemRef(itemID)->ChangeOwner(1, true);
-                 }
-             }
-        }
-    }
-
-
-    if (call.byname.find("requestItemTypeList")->second->IsList()) {
-        PyList *requestedItems = call.byname.find("requestItemTypeList")->second->AsList();
-        if (!requestedItems->empty()) {
-            for (int index = 0; index < requestedItems->size(); index++) {
-                PyList *requestedItem = requestedItems->GetItem(index)->AsList();
-                itemsToInsert.append("(" + std::to_string(contractId) + ", " +
-                                     "0, " +
-                                     std::to_string(requestedItem->GetItem(1)->AsInt()->value()) + ", " +
-                                     std::to_string(requestedItem->GetItem(0)->AsInt()->value()) + ", " +
-                                     "0, 0, 0, 0, 0, 0, 0, 0),");
+    for (auto& cur : tradedItems) {
+        InventoryItemRef iRef(cur.iRef);
+        if (cur.quantity < iRef->quantity()) {
+            iRef = iRef->Split(cur.quantity, true);
+            if (iRef.get() == nullptr) {
+                _log(SERVICE__ERROR, "CreateContract - Failed to split %i from %s(%u).", cur.quantity, cur.iRef->name(), cur.iRef->itemID());
+                continue;
             }
         }
+
+        int pLevel(0), mLevel(0), isCopy(0), runs(0);
+        if (iRef->categoryID() == EVEDB::invCategories::Blueprint) {
+            BlueprintRef bRef = BlueprintRef::StaticCast(iRef);
+            pLevel = bRef->pLevel();
+            mLevel = bRef->mLevel();
+            isCopy = bRef->copy() ? 1 : 0;
+            runs = bRef->runs();
+        }
+
+        itemsToInsert.append("(" + std::to_string(contractId) + ", " +
+            std::to_string(iRef->itemID()) + ", " +
+            std::to_string(iRef->quantity()) + ", " +
+            std::to_string(iRef->typeID()) + ", " +
+            "1, 0, " +
+            std::to_string(pLevel) + ", " +
+            std::to_string(mLevel) + ", " +
+            std::to_string(isCopy) + "," +
+            std::to_string(runs) + ", " +
+            std::to_string(iRef->GetAttribute(AttrDamage).get_int()) + ", " +
+            std::to_string(iRef->flag()) + "),");
+
+        // We only calculate volume for courier-type contracts - the other types don't use this value.
+        if (contractType->value() == Contract::Type::Courier)
+            totalVolume += iRef->GetAttribute(AttrVolume).get_float() * iRef->quantity();
+
+        // the item stays in the hangar but belongs to the contract (contents of ships/containers keep their owner until accepted)
+        iRef->ChangeOwner(ownerSystem, true);
+        iRef->SaveItem();
     }
 
-    if(!itemsToInsert.empty()) {
+    for (auto cur : requestedItems) {
+        itemsToInsert.append("(" + std::to_string(contractId) + ", " +
+                             "0, " +
+                             std::to_string(cur.second) + ", " +
+                             std::to_string(cur.first) + ", " +
+                             "0, 0, 0, 0, 0, 0, 0, 0),");
+    }
+
+    if (!itemsToInsert.empty()) {
         itemsToInsert.pop_back();
         std::string query = "INSERT INTO ctrItems (contractId, itemID, quantity, itemTypeID, inCrate, parentID, "
                             "productivityLevel, materialLevel, isCopy, licensedProductionRunsRemaining, damage, flagID) "
                             "VALUES " + itemsToInsert;
         uint32 last_insert;
         if (!sDatabase.RunQueryLID(err, last_insert, query.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Failed to insert new entity: %s", err.c_str());
-            return nullptr;
-        }
+            codelog(DATABASE__ERROR, "Failed to insert contract items: %s", err.c_str());
 
         // We only insert volume for courier-type contracts - the other types don't use this value.
-        if (contractType->value() == 3) {
-            DBerror err;
-            if (!sDatabase.RunQuery(err,
-                                    "UPDATE ctrContracts SET volume = %f WHERE contractId = %u", totalVolume, contractId))
-            {
+        if (contractType->value() == Contract::Type::Courier) {
+            if (!sDatabase.RunQuery(err, "UPDATE ctrContracts SET volume = %f WHERE contractId = %u", totalVolume, contractId))
                 codelog(DATABASE__ERROR, "Failed to update contract volume: %s", err.c_str());
-            }
         }
-
-    } else {
-        codelog(SERVICE__ERROR, "No traded or requested items was specified. Aborting");
-        return nullptr;
     }
 
     return new PyInt((int) contractId);
 }
 
 PyResult ContractProxy::DeleteContract(PyCallArgs &call, PyInt* contractID) {
-    sLog.White( "ContractProxy::Handle_DeleteContract()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
+    ContractInfo c = ContractInfo();
+    if (!ContractUtils::GetContractInfo(contractID->value(), c))
+        throw UserError("ConContractNotFound");
 
-    // In order to return items back to the owner, we need a full list of entityID's to return. We gather them using utils function
-    std::vector<int> entityIds;
-    ContractUtils::GetContractItemIDs(contractID->value(), &entityIds);
-    for (auto entityID : entityIds) {
-        // We have to put in couple layers of checks here. First one will cut requested item entries out of the equation
-        if (entityID != 0) {
-            // We have to check if we actually got the item ref - in case of invalid entity ID specified.
-            InventoryItemRef ref = sItemFactory.GetItemRef(entityID);
-            if (ref) {
-                ref->ChangeOwner(call.client->GetCharacterID(), true);
-            } else {
-                continue;
-            }
-        }
-    }
+    // only the issuer can delete, and only before anyone accepted it (expired contracts are still outstanding)
+    if (c.issuerID != call.client->GetCharacterID())
+        throw UserError("ConNotYourContract");
+    if ((c.status != Contract::Status::Outstanding) and (c.status != Contract::Status::Rejected))
+        throw CustomError("You can only delete contracts that have not been accepted.");
 
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            "UPDATE ctrContracts SET status = 8 WHERE contractId = %u", contractID->value()))
-    {
-        codelog(DATABASE__ERROR, "Failed to update contract volume: %s", err.c_str());
-    }
+    // mark it first, so a second call can't return the items or reward again
+    if (!ContractUtils::SetStatus(c.contractID, Contract::Status::Deleted))
+        return new PyBool(false);
+
+    ContractUtils::ReturnItemsToIssuer(c);
+    ContractUtils::RefundReward(c);
 
     return new PyBool(true);
 }
@@ -476,304 +539,244 @@ PyResult ContractProxy::GetContract(PyCallArgs &call, PyInt* contractID) {
     return ContractUtils::GetContractEntry(contractID->value());
 }
 
-PyResult ContractProxy::AcceptContract(PyCallArgs &call, PyInt* contractID) {
-    // For the time being - we ignore the second value in tuple (forCorp), since it's not yet functional.
+PyResult ContractProxy::AcceptContract(PyCallArgs &call, PyInt* contractID, std::optional<PyRep*> forCorp) {
+    // client sends (contractID, forCorp).  corp contracts are not supported yet
+    if (forCorp.has_value() and forCorp.value()->IsBool() and forCorp.value()->AsBool()->value())
+        throw CustomError("Corporation contracts are not available at this time.");
+    if (forCorp.has_value() and forCorp.value()->IsInt() and (forCorp.value()->AsInt()->value() != 0))
+        throw CustomError("Corporation contracts are not available at this time.");
 
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT contractType, status, price, reward, collateral, volume, startStationID, issuerID, forCorp, startSolarSystemID, endSolarSystemID FROM ctrContracts WHERE contractId = %u", contractID->value()))
-    {
-        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-        return nullptr;
+    ContractInfo c = ContractInfo();
+    if (!ContractUtils::GetContractInfo(contractID->value(), c))
+        throw UserError("ConContractNotFound");
+
+    uint32 charID(call.client->GetCharacterID());
+    int64 timestamp = int64(GetFileTimeNow());
+
+    // We can only accept outstanding contracts
+    if (c.status != Contract::Status::Outstanding)
+        throw CustomError("This contract is no longer available.");
+    if (c.dateExpired <= timestamp)
+        throw CustomError("This contract has expired.");
+    if (c.issuerID == charID)
+        throw CustomError("You cannot accept your own contract.");
+    if (c.isPrivate
+    and (c.assigneeID != charID)
+    and (c.assigneeID != call.client->GetCorporationID())
+    and ((call.client->GetAllianceID() == 0) or (c.assigneeID != call.client->GetAllianceID())))
+        throw UserError("ConNotYourContract");
+
+    // the traded items must still be held by the contract in the start station
+    std::vector<int> itemIDs;
+    ContractUtils::GetContractItemIDs(c.contractID, &itemIDs);
+    std::vector<InventoryItemRef> tradedItems;
+    for (auto itemID : itemIDs) {
+        InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+        if ((iRef.get() == nullptr) or (iRef->ownerID() != ownerSystem) or (iRef->locationID() != c.startStationID)) {
+            _log(SERVICE__WARNING, "AcceptContract - item %i of contract %i is no longer held by the contract.", itemID, c.contractID);
+            throw CustomError("This contract is no longer valid.");
+        }
+        tradedItems.push_back(iRef);
     }
-    if (res.GetRowCount() == 0) {
-        return nullptr;
-    }
-    DBResultRow row;
-    res.GetRow(row);
-    int contractType = row.GetInt(0);
-    int status = row.GetInt(1);
-    int price = row.GetInt(2);
-    int reward = row.GetInt(3);
-    int collateral = row.GetInt(4);
-    float volume = row.GetFloat(5);
-    int startStationID = row.GetInt(6);
-    int issuerID = row.GetInt(7);
-    bool forCorp = row.GetBool(8);
-    int startSolarSystemID = row.GetInt(9);
-    int endSolarSystemID = row.GetInt(10);
 
-    if (status == 0) {
-        // We can only accept outstanding contracts. If it's not - we ignore the call.
-        int64 timestamp = int64(GetFileTimeNow());
-        switch (contractType) {
-            case 1: {
-                // Item Exchange
-                // We start off by gathering traded and requested items
-                std::vector<int> tradedItems;
-                std::map<int, int> requestedItems;
-                ContractUtils::GetContractItemIDs(contractID->value(), &tradedItems);
-                ContractUtils::GetRequestedItems(contractID->value(), &requestedItems);
+    switch (c.type) {
+        case Contract::Type::ItemExchange: {
+            // requested items must be the acceptor's own, unassembled, in the item hangar of the start station
+            std::map<int, int> requestedItems;
+            ContractUtils::GetRequestedItems(c.contractID, &requestedItems);
+            Inventory* pHangar(nullptr);
+            if (!requestedItems.empty()) {
+                pHangar = call.client->GetStationHangar(c.startStationID);
+                if (pHangar == nullptr)
+                    throw CustomError("This contract is no longer valid.");
+                for (const auto& entry : requestedItems)
+                    if (pHangar->GetTypeQtyForOwner(entry.first, flagHangar, charID) < (uint32)entry.second)
+                        throw CustomError("You do not have the required items in your hangar in %s.", stDataMgr.GetStationName(c.startStationID).c_str());
+            }
 
-                // Next, we perform checks to make sure we fit all contract requirements. I won't do it by nesting if loops - i'll just use trigger booleans;
-                bool iskRequirementMet(true), rewardRequirementMet(true), requestedItemsRequirementsMet(true);
-                if (price > 0) {
-                    if (call.client->GetBalance() < price) {
-                        iskRequirementMet = false;
-                    }
-                }
-                if (reward > 0) {
-                    if (sItemFactory.GetCharacterRef(issuerID)->balance(Account::CreditType::ISK) < reward) {
-                        rewardRequirementMet = false;
-                    }
-                }
-                if (!requestedItems.empty()) {
-                    for (const auto& entry : requestedItems) {
-                        // Since we don't have a direct way to find items by typeID, we go over all items on current station and checking whether we have any of correct type and quantity
-                        // TODO: Implement forCorp loop when corp contracts are unblocked.
-                        if (sItemFactory.GetStationRef(startStationID)->GetMyInventory()->ContainsTypeStackQtyByFlag(entry.first, EVEItemFlags::flagHangar, entry.second) == 0) {
-                            requestedItemsRequirementsMet = false;
-                        }
-                    }
-                }
-
-                // Then, we go for acceptance
-                if (iskRequirementMet && rewardRequirementMet && requestedItemsRequirementsMet) {
-                    // If we have a reward value - then contract's WTB
-                    if (reward > 0) {
-                        AccountService::TransferFunds(issuerID, call.client->GetCharacterID(), reward, "Payment for accepted contract", Journal::EntryType::ContractReward, contractID->value());
-                    }
-
-                    // If we have price value - then contract's WTS
-                    if (price > 0) {
-                        AccountService::TransferFunds(call.client->GetCharacterID(), issuerID, price, "Payment for accepted contract", Journal::EntryType::ContractPrice, contractID->value());
-                    }
-
-                    // Then, we go for requested items
-                    if (!requestedItems.empty()) {
-                        for (auto entry : requestedItems) {
-                            int entityID = sItemFactory.GetStationRef(startStationID)->GetMyInventory()->ContainsTypeStackQtyByFlag(entry.first, flagHangar, entry.second);
-                            if (sItemFactory.GetStationRef(startStationID)->GetMyInventory()->GetByID(entityID)->quantity() > entry.second) {
-                                // If located stack contains more than we need, we split it and transfer the required amount.
-                                sItemFactory.GetStationRef(startStationID)->GetMyInventory()->GetByID(entityID)->Split(entry.second)->ChangeOwner(issuerID, true);
-                            } else {
-                                // If not - we simply transfer it to issuer.
-                                sItemFactory.GetItemRef(entityID)->ChangeOwner(issuerID, true);
-                            }
-                        }
-                    }
-
-                    // And finally, we go for traded items
-                    if (!tradedItems.empty()) {
-                        for (auto item : tradedItems) {
-                            sItemFactory.GetItemRef(item)->ChangeOwner(call.client->GetCharacterID(), true);
-                        }
-                    }
-
-                    // Once all manipulations are done, we update contract status. Response is sent outside the switch clause;
-                    DBerror err;
-                    if (!sDatabase.RunQuery(err,
-                                            "UPDATE ctrContracts SET status = 4, dateAccepted = %lli, dateCompleted = %lli, acceptorID = %u WHERE contractId = %u",
-                                            timestamp, timestamp, call.client->GetCharacterID(), contractID))
-                    {
-                        codelog(DATABASE__ERROR, "Failed to update contract : %s", err.c_str());
-                    }
+            // legacy rows (reward not escrowed): the issuer pays the reward now
+            if ((c.reward > 0) and !c.rewardEscrowed) {
+                Client* pIssuer = sEntityList.FindClientByCharID(c.issuerID);
+                double issuerBalance(0);
+                if (pIssuer != nullptr) {
+                    issuerBalance = pIssuer->GetBalance();
                 } else {
-                    if (!iskRequirementMet) {
-                        call.client->SendNotifyMsg("You have insufficient funds");
-                        return nullptr;
-                    }
-                    if (!rewardRequirementMet) {
-                        call.client->SendNotifyMsg("Issuer have insufficient funds to pay for the contract");
-                        return nullptr;
-                    }
-                    if (!requestedItemsRequirementsMet) {
-                        call.client->SendNotifyMsg("You do not have required items to accept this contract");
-                        return nullptr;
-                    }
+                    CharacterRef cRef = sItemFactory.GetCharacterRef(c.issuerID);
+                    if (cRef.get() != nullptr)
+                        issuerBalance = cRef->balance(Account::CreditType::ISK);
                 }
-                break;
+                if (issuerBalance < c.reward)
+                    throw CustomError("The issuer of this contract does not have enough ISK to pay the reward.");
             }
-            case 3:
-            {
-                // Courier contract
-                // First off, we validate if contract has a collateral. If yes - we check if player has enough ISK to pay. If not - we send a notification and quit
-                if (collateral > 0) {
-                    if (call.client->GetBalance() < collateral) {
-                        call.client->SendNotifyMsg("You do not have enough ISK to pay collateral");
-                        return nullptr;
-                    }
-                    // If we have enough - we take it
-                    call.client->AddBalance(-collateral);
-                }
 
-                /**
-                 * Courier contract acceptance includes following steps:
-                 * - Create a plastic wrap container
-                 * - Set capacity and volume attribute to the volume of the contracted items
-                 * - Move all items inside this container
-                 * -
-                 * - Give that container to the character
-                 * - Update contract entry - move it to In Progress and leave a time-stamp when it was accepted.
-                 */
-                // Create container and set capacity and volume attributes;
-                std::string containerName = sItemFactory.GetSolarSystemRef(startSolarSystemID)->name();
-                containerName = containerName + " -> " + sItemFactory.GetSolarSystemRef(endSolarSystemID)->name() + "(" + std::to_string(volume) + "m3)";
+            // this throws if the acceptor is short; nothing has changed yet
+            if (c.price > 0)
+                AccountService::TransferFunds(charID, c.issuerID, c.price, "Payment for accepted contract", Journal::EntryType::ContractPrice, c.contractID);
 
-                ItemData itemData(itemPlasticWrap, call.client->GetCharacterID(), locTemp, flagNone);
-                itemData.name = containerName;
-                InventoryItemRef plasticWrap = sItemFactory.SpawnItem(itemData);
-                if (plasticWrap.get() != nullptr) {
-                    plasticWrap->SetAttribute(AttrVolume, volume);
-                    plasticWrap->SetAttribute(AttrCapacity, volume);
-                }
-                plasticWrap->SaveItem();
-                // Then, move all required items into it
-                std::vector<int> items;
-                ContractUtils::GetContractItemIDs(contractID->value(), &items);
-                for (auto item : items) {
-                    InventoryItemRef itm = sItemFactory.GetItemRef(item);
-                    if (itm.get() != nullptr) {
-                        itm->Move(plasticWrap->itemID(), flagNone, true);
-                        itm->ChangeOwner(call.client->GetCharacterID());
-                    }
-                }
-                // And we give the container to the player
-                plasticWrap->Move(startStationID, flagHangar, true);
+            // mark it accepted before anything else moves, so a second call fails the status check
+            ContractUtils::SetStatus(c.contractID, Contract::Status::Finished, timestamp, timestamp, charID);
 
-                // Finally, we update DB entry
-                DBerror err;
-                if (!sDatabase.RunQuery(err,
-                                        "UPDATE ctrContracts SET status = 1, dateAccepted = %lli, acceptorID = %u, crateID = %u WHERE contractId = %u",
-                                        timestamp, call.client->GetCharacterID(), plasticWrap->itemID(), contractID))
-                {
-                    codelog(DATABASE__ERROR, "Failed to update contract : %s", err.c_str());
+            if (c.reward > 0) {
+                if (c.rewardEscrowed) {
+                    AccountService::TransferFunds(ownerSystem, charID, c.reward, "Contract reward", Journal::EntryType::ContractReward, c.contractID);
+                } else {
+                    AccountService::TransferFunds(c.issuerID, charID, c.reward, "Contract reward", Journal::EntryType::ContractReward, c.contractID);
                 }
-                break;
             }
-            default:
-                // We do not expect anything abnormal.
-                return nullptr;
-        }
-        // Once type-specific manipulations are done, we query brief contract information (requested by client) and send it out.
-        if (!sDatabase.RunQuery(res, "SELECT contractId, contractType, startStationID, endStationID, dateAccepted, numDays FROM ctrContracts WHERE contractId = %u", contractID))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            return nullptr;
-        }
 
-        // DBResultToCRowset return doesn't work, for some reason (fails at unmarshalling on client's side), so making it a KeyVal dict
-        res.GetRow(row);
-        PyDict* ret = new PyDict;
-        ret->SetItemString("contractID", new PyInt(row.GetInt(0)));
-        ret->SetItemString("type", new PyInt(row.GetInt(1)));
-        ret->SetItemString("startStationID", new PyInt(row.GetInt(2)));
-        ret->SetItemString("endStationID", new PyInt(row.GetInt(3)));
-        ret->SetItemString("dateAccepted", new PyLong(row.GetInt64(4)));
-        ret->SetItemString("numDays", new PyInt(row.GetInt(5)));
-        return new PyObject("util.KeyVal", ret);
-    } else {
-        return nullptr;
+            // requested items go to the issuer in the start station
+            for (const auto& entry : requestedItems) {
+                std::vector<InventoryItemRef> taken;
+                if (!pHangar->TakeTypeQtyForOwner(entry.first, flagHangar, charID, entry.second, taken))
+                    _log(SERVICE__ERROR, "AcceptContract - failed to take %i of type %i from %u for contract %i.", entry.second, entry.first, charID, c.contractID);
+                for (auto cur : taken)
+                    cur->Donate(c.issuerID, c.startStationID, flagHangar, true);
+            }
+
+            // traded items go to the acceptor
+            for (auto cur : tradedItems)
+                ContractUtils::ChangeOwnerRecursive(cur, charID);
+        } break;
+        case Contract::Type::Courier: {
+            // collateral is held by the system until the contract ends.  this throws if the acceptor is short
+            if (c.collateral > 0)
+                AccountService::TransferFunds(charID, ownerSystem, c.collateral, "Contract collateral", Journal::EntryType::ContractCollateral, c.contractID);
+
+            /**
+             * Courier contract acceptance includes following steps:
+             * - Create a plastic wrap container
+             * - Set capacity and volume attribute to the volume of the contracted items
+             * - Move all items inside this container (they stay owned by the system until delivered)
+             * - Give that container to the character
+             * - Update contract entry - move it to In Progress and leave a time-stamp when it was accepted.
+             */
+            std::string containerName = sDataMgr.GetSystemName(c.startSolarSystemID);
+            containerName += " -> ";
+            containerName += sDataMgr.GetSystemName(c.endSolarSystemID);
+            containerName += " (" + std::to_string(c.volume) + "m3)";
+
+            ItemData itemData(itemPlasticWrap, charID, locTemp, flagNone);
+            itemData.name = containerName;
+            InventoryItemRef plasticWrap = sItemFactory.SpawnItem(itemData);
+            if (plasticWrap.get() == nullptr) {
+                if (c.collateral > 0)
+                    AccountService::TransferFunds(ownerSystem, charID, c.collateral, "Contract collateral refund", Journal::EntryType::ContractCollateralRefund, c.contractID);
+                throw CustomError("Unable to create the courier package.");
+            }
+            plasticWrap->SetAttribute(AttrVolume, c.volume);
+            plasticWrap->SetAttribute(AttrCapacity, c.volume);
+            plasticWrap->SaveItem();
+
+            ContractUtils::SetStatus(c.contractID, Contract::Status::InProgress, timestamp, 0, charID, plasticWrap->itemID());
+
+            for (auto cur : tradedItems)
+                cur->Move(plasticWrap->itemID(), flagNone, true);
+
+            // And we give the container to the player
+            plasticWrap->Move(c.startStationID, flagHangar, true);
+        } break;
+        default:
+            throw CustomError("This type of contract cannot be accepted.");
     }
+
+    // DBResultToCRowset return doesn't work, for some reason (fails at unmarshalling on client's side), so making it a KeyVal dict
+    PyDict* ret = new PyDict;
+    ret->SetItemString("contractID", new PyInt(c.contractID));
+    ret->SetItemString("type", new PyInt(c.type));
+    ret->SetItemString("startStationID", new PyInt(c.startStationID));
+    ret->SetItemString("endStationID", new PyInt(c.endStationID));
+    ret->SetItemString("dateAccepted", new PyLong(timestamp));
+    ret->SetItemString("numDays", new PyInt(c.numDays));
+    return new PyObject("util.KeyVal", ret);
 }
 
 
 PyResult ContractProxy::CompleteContract(PyCallArgs &call, PyInt* contractID, PyInt* completionStatus) {
-    sLog.White( "ContractProxy::Handle_CompleteContract()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT contractType, status, price, reward, collateral, volume, startStationID, endStationID, issuerID, forCorp, crateID FROM ctrContracts WHERE contractId = %u", contractID))
-    {
-        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+    ContractInfo c = ContractInfo();
+    if (!ContractUtils::GetContractInfo(contractID->value(), c))
         return new PyBool(false);
-    }
-    if (res.GetRowCount() == 0) {
-        return new PyBool(false);
-    }
-    DBResultRow row;
-    res.GetRow(row);
-    int contractType = row.GetInt(0);
-    int status = row.GetInt(1);
-    int reward = row.GetInt(3);
-    int collateral = row.GetInt(4);
-    int startStationID = row.GetInt(6);
-    int endStationID = row.GetInt(7);
-    int issuerID = row.GetInt(8);
-    bool forCorp = row.GetBool(9);
-    int crateID = row.GetInt(10);
 
+    uint32 charID(call.client->GetCharacterID());
     int64 timestamp = int64(GetFileTimeNow());
     switch (completionStatus->value()) {
-        case 4: {
-            // Complete
+        case Contract::Status::Finished: {
+            // acceptor delivering a courier package
+            if ((c.type != Contract::Type::Courier) or (c.status != Contract::Status::InProgress))
+                throw CustomError("This contract is not in progress.");
+            if (c.acceptorID != charID)
+                throw UserError("ConNotYourContract");
             // First, we need to make sure that the container is indeed located in the end station
-            if (call.client->GetStationID() != endStationID) {
-                call.client->SendNotifyMsg("You have to deliver the package to %s", sItemFactory.GetStationRef(endStationID)->name());
-                return new PyBool(false);
-            }
+            if ((uint32)call.client->GetStationID() != c.endStationID)
+                throw CustomError("You have to deliver the package to %s.", stDataMgr.GetStationName(c.endStationID).c_str());
+
+            InventoryItemRef crate = sItemFactory.GetItemRef(c.crateID);
+            if ((crate.get() == nullptr) or (crate->ownerID() != charID)
+            or ((crate->locationID() != c.endStationID) and (crate->locationID() != call.client->GetShipID())))
+                throw CustomError("The courier package must be in your hangar or cargo hold in %s.", stDataMgr.GetStationName(c.endStationID).c_str());
+
             // Then, we validate the presence of all expected items
             std::map<int, int> expectedItems;
-            ContractUtils::GetContractItemIDsAndQuantities(contractID->value(), &expectedItems);
-            bool allItemsPresent(true);
+            ContractUtils::GetContractItemIDsAndQuantities(c.contractID, &expectedItems);
             for (const auto& entry : expectedItems) {
                 InventoryItemRef item = sItemFactory.GetItemRef(entry.first);
-                if (item.get()) {
-                    if (item->quantity() == entry.second && item->locationID() == crateID) {
-                        continue;
-                    }
+                if ((item.get() == nullptr) or (item->quantity() != entry.second) or (item->locationID() != c.crateID)) {
+                    call.client->SendNotifyMsg("Not all required items are located in the container");
+                    return new PyBool(false);
                 }
-                allItemsPresent = false;
             }
 
-            if (allItemsPresent) {
-                // Once checks have passed, we extract the items into contractor's inventory
-                for (const auto& entry : expectedItems) {
-                    InventoryItemRef item = sItemFactory.GetItemRef(entry.first);
-                    item->ChangeOwner(issuerID, true);
-                    item->Move(endStationID, flagHangar, true);
-                }
-                // Plastic wrap seems to self-destruct after all the items are removed from it, so there's no need to delete it.
-
-                // Then, we return the collateral (if any) and pay the reward (if any)
-                if (collateral > 0) {
-                    call.client->AddBalance(collateral);
-                }
-                if (reward > 0) {
-                    call.client->AddBalance(reward);
-                }
-
-                // Then, we update the contract as Completed.
-                DBerror err;
-                if (!sDatabase.RunQuery(err,
-                                        "UPDATE ctrContracts SET status = %u, dateCompleted = %lli WHERE contractId = %u",
-                                        completionStatus->value(), timestamp, contractID->value()))
-                {
-                    codelog(DATABASE__ERROR, "Failed to update contract : %s", err.c_str());
-                }
-            } else {
-                call.client->SendNotifyMsg("Not all required items are located in the container");
+            if (!ContractUtils::SetStatus(c.contractID, Contract::Status::Finished, 0, timestamp))
                 return new PyBool(false);
+
+            // Once checks have passed, we extract the items into the issuer's hangar in the destination
+            for (const auto& entry : expectedItems) {
+                InventoryItemRef item = sItemFactory.GetItemRef(entry.first);
+                ContractUtils::ChangeOwnerRecursive(item, c.issuerID);
+                item->Move(c.endStationID, flagHangar, true);
             }
-            break;
-        }
-        case 7: {
-            // Fail
-            // We pay the collateral to issuer and update the contract as failed.
-            if (collateral > 0) {
-                // Since we've taken the collateral prior to it and left it "hanging in the air" we put it back into acceptor's wallet and then issue a transfer
-                call.client->AddBalance(collateral);
-                AccountService::TransferFunds(call.client->GetCharacterID(), issuerID, collateral, "Collateral payment for failed contract", Journal::EntryType::ContractCollateral, contractID->value());
+            crate = sItemFactory.GetItemRef(c.crateID);
+            if (crate.get() != nullptr)
+                crate->Delete();
+
+            // Then, we pay the reward and return the collateral (both held by the system)
+            if (c.reward > 0)
+                AccountService::TransferFunds(ownerSystem, charID, c.reward, "Contract reward", Journal::EntryType::ContractReward, c.contractID);
+            if (c.collateral > 0)
+                AccountService::TransferFunds(ownerSystem, charID, c.collateral, "Contract collateral refund", Journal::EntryType::ContractCollateralRefund, c.contractID);
+        } break;
+        case Contract::Status::Failed: {
+            if ((c.type != Contract::Type::Courier) or (c.status != Contract::Status::InProgress))
+                throw CustomError("This contract is not in progress.");
+            // the acceptor can give up at any time; the issuer only when the acceptor is overdue
+            bool overdue(timestamp > (c.dateAccepted + (int64)c.numDays * EvE::Time::Day));
+            if ((c.acceptorID != charID) and !((c.issuerID == charID) and overdue))
+                throw UserError("ConNotYourContract");
+
+            if (!ContractUtils::SetStatus(c.contractID, Contract::Status::Failed, 0, timestamp))
+                return new PyBool(false);
+
+            // collateral goes to the issuer, the reward back to the issuer
+            if (c.collateral > 0)
+                AccountService::TransferFunds(ownerSystem, c.issuerID, c.collateral, "Contract collateral payout", Journal::EntryType::ContractCollateralPayout, c.contractID);
+            ContractUtils::RefundReward(c);
+
+            // the acceptor paid for the goods with the collateral and keeps the package
+            std::map<int, int> expectedItems;
+            ContractUtils::GetContractItemIDsAndQuantities(c.contractID, &expectedItems);
+            for (const auto& entry : expectedItems) {
+                InventoryItemRef item = sItemFactory.GetItemRef(entry.first);
+                if ((item.get() != nullptr) and (item->ownerID() == ownerSystem))
+                    ContractUtils::ChangeOwnerRecursive(item, c.acceptorID);
             }
-            // Then, we update the contract as Афшдув.
-            DBerror err;
-            if (!sDatabase.RunQuery(err,
-                                    "UPDATE ctrContracts SET status = %u, dateCompleted = %lli WHERE contractId = %u",
-                                    completionStatus->value(), timestamp, contractID->value()))
-            {
-                codelog(DATABASE__ERROR, "Failed to update contract : %s", err.c_str());
-            }
-            break;
-        }
+        } break;
+        case Contract::Status::Rejected: {
+            // assignee of a private contract turning it down.  the items stay locked until the issuer deletes it
+            if ((c.status != Contract::Status::Outstanding) or !c.isPrivate
+            or ((c.assigneeID != charID) and (c.assigneeID != call.client->GetCorporationID())))
+                throw UserError("ConNotYourContract");
+            if (!ContractUtils::SetStatus(c.contractID, Contract::Status::Rejected))
+                return new PyBool(false);
+        } break;
         default:
             // We do not expect anything else
             return new PyBool(false);

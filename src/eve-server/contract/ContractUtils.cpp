@@ -28,6 +28,8 @@
 
 
 #include "ContractUtils.h"
+#include "account/AccountService.h"
+#include "inventory/Inventory.h"
 
 // Since these queries are used in multiple GET functions, we initialize them as constants and use at will.
 const std::string getContractQueryBase = "SELECT contractId as contractID, contractType as type, issuerID, issuerCorpID, forCorp, isPrivate as availability, "
@@ -384,7 +386,8 @@ void ContractUtils::GetRequestedItems(int contractId, std::map<int32, int32> *in
 
     DBResultRow row;
     while (res.GetRow(row)) {
-        into->insert(std::pair<int, int> (row.GetInt(0), row.GetInt(1)));
+        // the same type can be requested on more than one line
+        (*into)[row.GetInt(0)] += row.GetInt(1);
     }
 }
 
@@ -407,4 +410,108 @@ void ContractUtils::GetContractItemIDsAndQuantities(int contractId, std::map<int
     }
 }
 
+bool ContractUtils::GetContractInfo(int32 contractID, ContractInfo& into) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT contractType, status, price, reward, collateral, numDays, issuerID, issuerCorpID, assigneeID, acceptorID,"
+        " startStationID, endStationID, startSolarSystemID, endSolarSystemID, crateID, forCorp, isPrivate, rewardEscrowed,"
+        " dateExpired, dateAccepted, volume"
+        " FROM ctrContracts WHERE contractId = %i", contractID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
 
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+
+    into.contractID         = contractID;
+    into.type               = row.GetInt(0);
+    into.status             = row.GetInt(1);
+    into.price              = row.GetInt(2);
+    into.reward             = row.GetInt(3);
+    into.collateral         = row.GetInt(4);
+    into.numDays            = row.GetInt(5);
+    into.issuerID           = row.GetUInt(6);
+    into.issuerCorpID       = row.GetUInt(7);
+    into.assigneeID         = row.GetUInt(8);
+    into.acceptorID         = row.GetUInt(9);
+    into.startStationID     = row.GetUInt(10);
+    into.endStationID       = row.GetUInt(11);
+    into.startSolarSystemID = row.GetUInt(12);
+    into.endSolarSystemID   = row.GetUInt(13);
+    into.crateID            = row.GetUInt(14);
+    into.forCorp            = row.GetBool(15);
+    into.isPrivate          = (row.GetInt(16) != 0);
+    into.rewardEscrowed     = (row.GetInt(17) != 0);
+    into.dateExpired        = row.GetInt64(18);
+    into.dateAccepted       = row.GetInt64(19);
+    into.volume             = row.GetFloat(20);
+    return true;
+}
+
+bool ContractUtils::SetStatus(int32 contractID, int32 status, int64 dateAccepted/*0*/, int64 dateCompleted/*0*/, uint32 acceptorID/*0*/, uint32 crateID/*0*/) {
+    std::string query = "UPDATE ctrContracts SET status = " + std::to_string(status);
+    if (dateAccepted > 0)
+        query += ", dateAccepted = " + std::to_string(dateAccepted);
+    if (dateCompleted > 0)
+        query += ", dateCompleted = " + std::to_string(dateCompleted);
+    if (acceptorID > 0)
+        query += ", acceptorID = " + std::to_string(acceptorID);
+    if (crateID > 0)
+        query += ", crateID = " + std::to_string(crateID);
+    query += " WHERE contractId = " + std::to_string(contractID);
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err, query.c_str())) {
+        codelog(DATABASE__ERROR, "Failed to update contract %i: %s", contractID, err.c_str());
+        return false;
+    }
+    return true;
+}
+
+void ContractUtils::ChangeOwnerRecursive(InventoryItemRef iRef, uint32 newOwner) {
+    if (iRef.get() == nullptr)
+        return;
+
+    iRef->ChangeOwner(newOwner, true);
+    iRef->SaveItem();
+
+    Inventory* pInv = iRef->GetMyInventory();
+    if (pInv == nullptr)
+        return;
+    pInv->LoadContents();
+    std::vector<InventoryItemRef> contents;
+    pInv->GetInventoryVec(contents);
+    for (auto cur : contents)
+        ChangeOwnerRecursive(cur, newOwner);
+}
+
+void ContractUtils::ReturnItemsToIssuer(const ContractInfo& c) {
+    std::vector<int> itemIDs;
+    GetContractItemIDs(c.contractID, &itemIDs);
+    for (auto itemID : itemIDs) {
+        if (itemID == 0)
+            continue;
+        InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+        if (iRef.get() == nullptr)
+            continue;
+        // only items still held by the contract
+        if ((iRef->ownerID() != ownerSystem) or (iRef->locationID() != c.startStationID)) {
+            _log(SERVICE__WARNING, "ContractUtils::ReturnItemsToIssuer() - item %u of contract %i is not held by the contract (owner %u, location %u).", \
+                    itemID, c.contractID, iRef->ownerID(), iRef->locationID());
+            continue;
+        }
+        ChangeOwnerRecursive(iRef, c.issuerID);
+    }
+}
+
+void ContractUtils::RefundReward(const ContractInfo& c) {
+    if (c.reward < 1)
+        return;
+    // courier rewards were always taken at creation, also on rows from before the rewardEscrowed column
+    if (!c.rewardEscrowed and (c.type != Contract::Type::Courier))
+        return;
+    AccountService::TransferFunds(ownerSystem, c.issuerID, c.reward, "Contract reward refund", Journal::EntryType::ContractRewardRefund, c.contractID);
+}
