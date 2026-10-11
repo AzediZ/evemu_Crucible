@@ -2076,16 +2076,14 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client* 
             if (!HasAttribute(AttrHasShipMaintenanceBay)) {
                 throw CustomError ("Your %s has no ship maintenance bay.", name());
             }
-            if (typeID() == EVEDB::invTypes::Rorqual)
-                if ((iRef->groupID() != EVEDB::invGroups::MiningBarge)
-                and (iRef->groupID() != EVEDB::invGroups::Exhumer)
-                and (iRef->groupID() != EVEDB::invGroups::Industrial)
-                and (iRef->groupID() != EVEDB::invGroups::TransportShip)
-                and (iRef->groupID() != EVEDB::invGroups::Freighter)
-                and (iRef->groupID() != EVEDB::invGroups::Prototype_Exploration_Ship)
-                and (iRef->groupID() != EVEDB::invGroups::CapitalIndustrialShip)) {
-                    throw CustomError ("Only indy ships may be placed into the Rorqual's ship hold.");
-                }
+            // the Rorqual's bay only takes the classes the client lists
+            if ((typeID() == EVEDB::invTypes::Rorqual)
+            and (iRef->categoryID() == EVEDB::invCategories::Ship)
+            and (iRef->groupID() != EVEDB::invGroups::MiningBarge)
+            and (iRef->groupID() != EVEDB::invGroups::Exhumer)
+            and (iRef->groupID() != EVEDB::invGroups::Industrial)
+            and (iRef->groupID() != EVEDB::invGroups::TransportShip))
+                throw UserError ("CannotAddShipTypeToMaintainanceBay");
             if (iRef->categoryID() != EVEDB::invCategories::Ship) {
                 throw CustomError ("Only ships may be placed into the maintenance bay.");
             }

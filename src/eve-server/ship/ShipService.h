@@ -30,6 +30,8 @@
 #include "services/BoundService.h"
 
 class ShipBound;
+class ShipSE;
+class SystemEntity;
 
 class ShipService : public BindableService <ShipService, ShipBound>
 {
@@ -76,6 +78,17 @@ protected:
 
     /* launches one deployable (mobile warp disruptor) from the pilot's ship into space, unanchored.  returns the launched itemID.  throws */
     static uint32 LaunchDeployable(Client* pClient, InventoryItemRef iRef, uint32 ownerID);
+
+    /* ship maintenance array (POS) and ship maintenance bay (carriers, Orca, Rorqual...) */
+    // a ship-storing container in this system the pilot may use: an online SMA (or assembly array, for launching), or a ship
+    //  with a maintenance bay.  flag gets the container's ship flag.  throws the client's errors
+    static SystemEntity* GetShipContainer(Client* pClient, uint32 containerID, EVEItemFlags& flag, bool forLaunch);
+    // can this ship go into pDest?  throws the client's errors
+    static void CheckStorable(Client* pClient, ShipItemRef shipRef, SystemEntity* pDest, EVEItemFlags flag);
+    // a stored ship that may be launched/boarded from pContainer (the item checks of LaunchFromContainer).  throws
+    static ShipItemRef GetStoredShip(Client* pClient, SystemEntity* pContainer, uint32 shipID);
+    // puts a stored (assembled) ship into space next to its container.  returns its new entity.  throws
+    static ShipSE* LaunchStoredShip(Client* pClient, SystemEntity* pContainer, ShipItemRef shipRef);
 
 private:
     ShipItem* pShip;

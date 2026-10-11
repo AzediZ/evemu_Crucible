@@ -1332,63 +1332,315 @@ PyResult ShipBound::ConfigureShip(PyCallArgs &call, PyDict* configuration)
 }
 
 
-/** ***********************************************************************
- * @note   these below are partially coded
+/* ship maintenance array (POS) and ship maintenance bay (carriers, supercarriers, titans, Orca, Rorqual)
+ *  Crucible rules: stored ships are assembled and carry nothing but charges in their holds (world.StoreShipWithCargo for the
+ *  later rule), the Rorqual only takes industrial classes, criminals and pilots with live aggression can't store their ship.
+ *  an SMA can be used by anyone in the owner's corp or alliance (there were no SMA access settings yet).  someone else's
+ *  maintenance bay needs the same corp, or the same fleet when its pilot allows fleet access (ConfigureShip)
  */
+static const float maxShipMaintenanceDistance = 5000.0f;    // client maxConfigureDistance (surface distance)
+static const float maxShipScoopDistance = 2500.0f;          // client maxCargoContainerTransferDistance
 
+static double SurfaceDistance(SystemEntity* pA, SystemEntity* pB)
+{
+    double distance(pA->GetPosition().distance(pB->GetPosition()) - pA->GetRadius() - pB->GetRadius());
+    return (distance < 0 ? 0 : distance);
+}
 
-/** ***********************************************************************
- * @note   these do absolutely nothing at this time....
- */
+SystemEntity* ShipBound::GetShipContainer(Client* pClient, uint32 containerID, EVEItemFlags& flag, bool forLaunch)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    ShipSE* pMyShipSE(pClient->GetShipSE());
+    if ((pSystem == nullptr) or (pMyShipSE == nullptr))
+        throw UserError ("CantLaunchContainerNotPresent");
+    SystemEntity* pSE(pSystem->GetSE(containerID));
+    if ((pSE == nullptr) or pSE->IsDead())
+        throw UserError ("CantLaunchContainerNotPresent");
 
+    uint16 groupID(pSE->GetSelf()->groupID());
+    if (pSE->IsPOSSE() and ((groupID == EVEDB::invGroups::Ship_Maintenance_Array)
+                        or (forLaunch and (groupID == EVEDB::invGroups::Assembly_Array)))) {
+        if (pSE->GetPOSSE()->GetState() < EVEPOS::StructureState::Online)
+            throw CustomError ("The %s is not online.", pSE->GetName());
+        // the client's checkIsMineOrCorpsOrAlliances
+        if ((pSE->GetCorporationID() != pClient->GetCorporationID())
+        and ((pClient->GetAllianceID() == 0) or (pSE->GetAllianceID() != pClient->GetAllianceID())))
+            throw CustomError ("You do not have access to the %s.", pSE->GetName());
+        flag = flagNone;
+    } else if (pSE->IsShipSE() and pSE->GetSelf()->HasAttribute(AttrHasShipMaintenanceBay)) {
+        bool access(pSE == pMyShipSE);
+        if (!access)
+            access = (pSE->GetOwnerID() == pClient->GetCharacterID());
+        if (!access and pSE->HasPilot()) {
+            Client* pPilot(pSE->GetPilot());
+            if (pPilot->GetCorporationID() == pClient->GetCorporationID())
+                access = true;
+            else if ((pClient->GetFleetID() != 0) and (pPilot->GetFleetID() == pClient->GetFleetID()) and pSE->GetShipSE()->GetFleetSMBUsage())
+                access = true;
+        }
+        if (!access)
+            throw CustomError ("You cannot do that because you are not a fellow corporation member of the pilot, or in their fleet (if they have allowed fleet members access).");
+        flag = flagShipHangar;
+    } else {
+        throw UserError ("CantLaunchContainerIncompatible")
+                .AddFormatValue("structure", new PyString(sDataMgr.GetGroupName(groupID)));
+    }
+
+    if ((pSE != pMyShipSE) and (SurfaceDistance(pMyShipSE, pSE) > maxShipMaintenanceDistance))
+        throw UserError ("NotCloseEnoughToAdd").AddFormatValue("maxdist", new PyInt(maxShipMaintenanceDistance));
+
+    return pSE;
+}
+
+void ShipBound::CheckStorable(Client* pClient, ShipItemRef shipRef, SystemEntity* pDest, EVEItemFlags flag)
+{
+    InventoryItemRef destRef(pDest->GetSelf());
+    if (shipRef->groupID() == EVEDB::invGroups::Capsule)
+        throw UserError ("CannotStoreCapsule");
+    if (!shipRef->isSingleton())
+        throw UserError ("CannotPlaceUnassembledShipInSMA")
+                .AddFormatValue("container", new PyInt(destRef->typeID()))
+                .AddFormatValue("type", new PyInt(shipRef->typeID()));
+    if (shipRef->HasPilot() and (shipRef->GetPilot() != pClient))
+        throw UserError ("CannotPlacePilotedShipInStructure")
+                .AddFormatValue("container", new PyInt(destRef->typeID()))
+                .AddFormatValue("type", new PyInt(shipRef->typeID()));
+
+    // cargo.  fitted modules, their charges, rigs and drones are fine
+    std::vector<InventoryItemRef> contents;
+    shipRef->GetMyInventory()->GetInventoryVec(contents);
+    for (auto cur : contents) {
+        if (!IsCargoHoldFlag(cur->flag()))
+            continue;
+        if (sConfig.world.StoreShipWithCargo) {
+            // the later rule: only assembled containers are refused
+            uint16 groupID(cur->groupID());
+            if (cur->isSingleton() and ((groupID == EVEDB::invGroups::Cargo_Container)
+                                     or (groupID == EVEDB::invGroups::Secure_Cargo_Container)
+                                     or (groupID == EVEDB::invGroups::Audit_Log_Secure_Container)
+                                     or (groupID == EVEDB::invGroups::Freight_Container)))
+                throw UserError ("CannotStoreCargoNotEmpty").AddFormatValue("ship", new PyString(shipRef->itemName()));
+        } else if (cur->categoryID() != EVEDB::invCategories::Charge) {
+            throw UserError ("CannotStoreContainsCargo");
+        }
+    }
+
+    // the Rorqual's bay only takes industrial classes
+    if ((destRef->typeID() == EVEDB::invTypes::Rorqual) and (flag == flagShipHangar)
+    and (shipRef->groupID() != EVEDB::invGroups::MiningBarge)
+    and (shipRef->groupID() != EVEDB::invGroups::Exhumer)
+    and (shipRef->groupID() != EVEDB::invGroups::Industrial)
+    and (shipRef->groupID() != EVEDB::invGroups::TransportShip))
+        throw UserError ("CannotAddShipTypeToMaintainanceBay");
+
+    if (!destRef->GetMyInventory()->HasAvailableSpace(flag, shipRef))
+        throw UserError ("CannotStoreDestinationUnsuitable")
+                .AddFormatValue("ship", new PyString(shipRef->itemName()))
+                .AddFormatValue("dest", new PyString(destRef->itemName()));
+}
+
+ShipItemRef ShipBound::GetStoredShip(Client* pClient, SystemEntity* pContainer, uint32 shipID)
+{
+    InventoryItemRef iRef(sItemFactory.GetItemRef(shipID));
+    uint32 containerTypeID(pContainer->GetSelf()->typeID());
+    if ((iRef.get() == nullptr) or (iRef->locationID() != pContainer->GetID()))
+        throw UserError ("CantLaunchItemNotPresent")
+                .AddFormatValue("itemTypeID", new PyInt((iRef.get() == nullptr) ? 0 : iRef->typeID()))
+                .AddFormatValue("containerTypeID", new PyInt(containerTypeID));
+    if (iRef->categoryID() != EVEDB::invCategories::Ship)
+        throw UserError ("CantLaunchItemUnlaunchable")
+                .AddFormatValue("item", new PyString(iRef->itemName()))
+                .AddFormatValue("containerTypeID", new PyInt(containerTypeID));
+    if (!iRef->isSingleton())
+        throw UserError ("CantLaunchItemNonSingleton")
+                .AddFormatValue("item", new PyString(iRef->itemName()))
+                .AddFormatValue("containerTypeID", new PyInt(containerTypeID));
+    // the pilot of a ship with a maintenance bay may launch anything in it.  from someone else's bay, only your own ships
+    if (pContainer->IsShipSE() and (pContainer != pClient->GetShipSE()) and (iRef->ownerID() != pClient->GetCharacterID()))
+        throw CustomError ("The %s in the %s does not belong to you.", iRef->name(), pContainer->GetName());
+
+    ShipItemRef shipRef(sItemFactory.GetShipRef(shipID));
+    if (shipRef.get() == nullptr)
+        throw UserError ("CantLaunchItemNotPresent")
+                .AddFormatValue("itemTypeID", new PyInt(iRef->typeID()))
+                .AddFormatValue("containerTypeID", new PyInt(containerTypeID));
+    return shipRef;
+}
+
+ShipSE* ShipBound::LaunchStoredShip(Client* pClient, SystemEntity* pContainer, ShipItemRef shipRef)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    uint32 containerID(shipRef->locationID());
+    EVEItemFlags oldFlag(shipRef->flag());
+
+    GPoint pos(pContainer->GetPosition());
+    pos.MakeRandomPointOnSphere(pContainer->GetRadius() + shipRef->radius() + MakeRandomFloat(100, 300));
+
+    shipRef->SetCustomInfo(nullptr);
+    shipRef->Move(pSystem->GetID(), flagNone, true);
+    shipRef->SetPosition(pos);
+
+    DBSystemDynamicEntity entity = DBSystemDynamicEntity();
+        entity.itemID = shipRef->itemID();
+        entity.itemName = shipRef->itemName();
+        entity.typeID = shipRef->typeID();
+        entity.groupID = shipRef->groupID();
+        entity.categoryID = shipRef->categoryID();
+        entity.ownerID = shipRef->ownerID();
+        entity.corporationID = pClient->GetCorporationID();
+        entity.allianceID = pClient->GetAllianceID();
+        entity.factionID = pClient->GetWarFactionID();
+        entity.position = pos;
+    SystemEntity* pSE(DynamicEntityFactory::BuildEntity(*pSystem, entity));
+    if ((pSE == nullptr) or !pSE->IsShipSE()) {
+        SafeDelete(pSE);
+        shipRef->Move(containerID, oldFlag, true);
+        throw CustomError ("The %s could not be launched.  Ref: ServerError 25108.", shipRef->name());
+    }
+    pSystem->AddEntity(pSE);
+    pClient->GetShipSE()->DestinyMgr()->SendJettisonPacket();
+    return pSE->GetShipSE();
+}
 
 PyResult ShipBound::LaunchFromContainer(PyCallArgs &call, PyInt* structureID, PyList* ids) {
-    /*
-     * def LaunchSMAContents(self, invItems):
-     *        ids = []
-     *        for invItem in invItems:
-     *            structureID = invItem.locationID
-     *            ids += [invItem.itemID] * invItem.stacksize
-     *
-     *  LaunchFromContainer(structureID, ids)
+    /* menusvc.LaunchSMAContents():  LaunchFromContainer(structureID, ids), ids holding each itemID 'stacksize' times
+     *  (ships are singletons, so a repeat means nothing).  the client checks for warp itself
      */
+    Client* pClient(call.client);
+    if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+        return nullptr;
+    if (pClient->GetShipSE()->DestinyMgr()->IsWarping())
+        throw UserError ("ShipInWarp");
 
-    _log(SERVICE__CALL_DUMP, "ShipBound::Handle_LaunchFromContainer()");
-    call.Dump(SERVICE__CALL_DUMP);
+    EVEItemFlags flag(flagNone);
+    SystemEntity* pContainer(GetShipContainer(pClient, structureID->value(), flag, true));
+
+    std::set<uint32> shipIDs;
+    for (PyList::const_iterator itr = ids->begin(); itr != ids->end(); ++itr)
+        if ((*itr)->IsInt())
+            shipIDs.insert((*itr)->AsInt()->value());
+
+    for (auto shipID : shipIDs)
+        LaunchStoredShip(pClient, pContainer, GetStoredShip(pClient, pContainer, shipID));
 
     return nullptr;
 }
 
-
-// ShipMaintenanceArray
 PyResult ShipBound::ScoopToSMA(PyCallArgs &call, PyInt* objectID) {
-    // no packet data
+    /* menusvc.RealScoopSMA(), after approaching.  offered for any ship that isn't a capsule or ours when our ship has a maintenance bay */
+    Client* pClient(call.client);
+    SystemManager* pSystem(pClient->SystemMgr());
+    ShipSE* pMyShipSE(pClient->GetShipSE());
+    if (!pClient->IsInSpace() or (pSystem == nullptr) or (pMyShipSE == nullptr))
+        return nullptr;
 
-    _log(SERVICE__CALL_DUMP, "ShipBound::Handle_ScoopToSMA()");
-    call.Dump(SERVICE__CALL_DUMP);
+    SystemEntity* pSE(pSystem->GetSE(objectID->value()));
+    if ((pSE == nullptr) or pSE->IsDead())
+        throw UserError ("ScoopObjectGone").AddFormatValue("target", new PyString("The ship"));
+    if (!pMyShipSE->GetSelf()->HasAttribute(AttrHasShipMaintenanceBay) or !pSE->IsShipSE()
+    or  (pSE->GetSelf()->groupID() == EVEDB::invGroups::Capsule) or (pSE == pMyShipSE))
+        throw UserError ("CantScoopThat")
+                .AddFormatValue("targetGroup", new PyString(sDataMgr.GetGroupName(pSE->GetSelf()->groupID())));
+    if (pSE->HasPilot())
+        throw UserError ("ShipAlreadyHasPilot");
+
+    // our own ships, or abandoned ones nobody has locked
+    uint32 charID(pClient->GetCharacterID());
+    bool abandoned(pSE->GetOwnerID() == 1);
+    if (!abandoned and (pSE->GetOwnerID() != charID))
+        throw CustomError ("The %s does not belong to you.", pSE->GetName());
+    if (abandoned and (pSE->TargetMgr() != nullptr) and pSE->TargetMgr()->IsTargeted())
+        throw UserError ("CannotScoopTargetedShip");
+
+    if (SurfaceDistance(pMyShipSE, pSE) > maxShipScoopDistance)
+        throw UserError ("NotCloseEnoughToAdd").AddFormatValue("maxdist", new PyInt(maxShipScoopDistance));
+
+    ShipItemRef shipRef(pSE->GetShipSE()->GetShipItemRef());
+    CheckStorable(pClient, shipRef, pMyShipSE, flagShipHangar);
+
+    if (abandoned)
+        shipRef->ChangeOwner(charID);
+    // out of space and into our bay
+    pSystem->RemoveEntity(pSE);
+    SafeDelete(pSE);
+    shipRef->SetCustomInfo(nullptr);
+    shipRef->Move(pMyShipSE->GetID(), flagShipHangar, true);
+    shipRef->SaveShip();
 
     return nullptr;
 }
-
 
 PyResult ShipBound::BoardStoredShip(PyCallArgs &call, PyInt* structureID, PyInt* shipID) {
-    // no packet data
+    // menusvc.BoardSMAShip():  PerformSessionChange('board', ship.BoardStoredShip, structureID, shipID)
+    Client* pClient(call.client);
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
+        return nullptr;
+    }
+    if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+        return nullptr;
+    if (pClient->GetShipSE()->DestinyMgr()->IsWarping())
+        throw UserError ("ShipInWarp");
 
-    //sm.StartService('sessionMgr').PerformSessionChange('board', ship.BoardStoredShip, structureID, shipID)
-    _log(SERVICE__CALL_DUMP, "ShipBound::Handle_BoardStoredShip()");
-    call.Dump(SERVICE__CALL_DUMP);
+    EVEItemFlags flag(flagNone);
+    SystemEntity* pContainer(GetShipContainer(pClient, structureID->value(), flag, true));
+    ShipItemRef shipRef(GetStoredShip(pClient, pContainer, shipID->value()));
 
-    return nullptr;
+    if (!shipRef->ValidateBoardShip(pClient->GetChar()))
+        throw CustomError ("You do not have the skills to fly a %s.", shipRef->name());
+    if (!pClient->InPod()) {
+        sCrimeWatch.CanSwitchShip(pClient);
+        std::string modules(ActiveBlockingModules(pClient->GetShip()));
+        if (!modules.empty())
+            throw UserError ("ShipEjectFailedSystemsOccupied").AddFormatValue("types", new PyString(modules));
+    }
+
+    // the ship comes out next to its container and the pilot boards it there.  the old ship stays in space
+    ShipSE* pNewShipSE(LaunchStoredShip(pClient, pContainer, shipRef));
+    pClient->Board(pNewShipSE);
+    sCrimeWatch.OnEnterSpace(pClient);
+
+    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
+    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
+    return this->GetOID();
 }
 
 PyResult ShipBound::StoreVessel(PyCallArgs &call, PyInt* destID) {
-    // no packet data
+    // menusvc.StoreVessel():  PerformSessionChange('storeVessel', ship.StoreVessel, destID).  always the current ship
+    Client* pClient(call.client);
+    if (pClient->IsSessionChange()) {
+        pClient->SendNotifyMsg("Session Change currently active.");
+        return nullptr;
+    }
+    ShipSE* pShipSE(pClient->GetShipSE());
+    if (!pClient->IsInSpace() or (pShipSE == nullptr))
+        return nullptr;
+    if (pClient->InPod())
+        throw UserError ("CannotStoreCapsule");
 
-    //sm.StartService('sessionMgr').PerformSessionChange('storeVessel', ship.StoreVessel, destID)
-    _log(SERVICE__CALL_DUMP, "ShipBound::Handle_StoreVessel()");
-    call.Dump(SERVICE__CALL_DUMP);
+    sCrimeWatch.CanSwitchShip(pClient);
+    // a pilot can't hide their ship from anyone they are fighting
+    if (sConfig.crime.Enabled and sCrimeWatch.HasLiveFlags(pClient->GetCharacterID()))
+        throw UserError ("CannotStoreVesselBecauseOfCombat");
+    std::string modules(ActiveBlockingModules(pClient->GetShip()));
+    if (!modules.empty())
+        throw UserError ("ShipEjectFailedSystemsOccupied").AddFormatValue("types", new PyString(modules));
+    if (pShipSE->DestinyMgr()->IsWarping())
+        throw UserError ("ShipInWarp");
 
-    return nullptr;
+    EVEItemFlags flag(flagNone);
+    SystemEntity* pDest(GetShipContainer(pClient, destID->value(), flag, false));
+    if (pDest == pShipSE)
+        throw UserError ("CannotStoreDestinationUnsuitable")
+                .AddFormatValue("ship", new PyString(pShipSE->GetName()))
+                .AddFormatValue("dest", new PyString(pDest->GetName()));
+    CheckStorable(pClient, pClient->GetShip(), pDest, flag);
+
+    pClient->StoreShip(pDest->GetSelf(), flag);
+
+    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
+    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
+    return this->GetOID();
 }
 
 PyResult ShipBound::SelfDestruct(PyCallArgs &call, PyInt* shipID) {

@@ -1250,6 +1250,52 @@ void Client::Eject()
     SendSessionChange();
 }
 
+void Client::StoreShip(InventoryItemRef destRef, EVEItemFlags flag)
+{
+    if (m_pod.get() == nullptr)
+        CreateNewPod();
+    if ((m_pod.get() == nullptr) or (pShipSE == nullptr) or (pShipSE->SysBubble() == nullptr)) {
+        _log(SHIP__ERROR, "StoreShip() - Failed to get podItem or ship for %s.", GetName());
+        throw CustomError ("Something bad happened as you prepared to store your ship.  Ref: ServerError 25107.");
+    }
+
+    // same as Eject(), except the old ship goes into the container instead of being left in space.  it keeps its owner
+    ShipSE* oldShipSE(pShipSE);
+    ShipItemRef oldShipRef(m_ship);
+    DroneSE::ReleaseDronesOf(m_system, oldShipSE->GetID());
+
+    m_ship->SetCustomInfo(nullptr);
+    m_ship->SetPlayer(nullptr);
+    m_ship->Eject();
+
+    oldShipSE->DestinyMgr()->Eject();
+
+    GPoint capsulePosition(oldShipSE->GetPosition());
+    capsulePosition.MakeRandomPointOnSphere(m_ship->radius() + m_pod->radius() + MakeRandomInt(30, 120));
+    m_pod->SetPosition(capsulePosition);
+    m_pod->Move(m_locationID, flagCapsule, true);
+
+    FactionData data = FactionData();
+        data.ownerID = GetCharacterID();
+        data.factionID = GetWarFactionID();
+        data.allianceID = GetAllianceID();
+        data.corporationID = GetCorporationID();
+    ShipSE* newShipSE = new ShipSE(m_pod, m_system->GetServiceMgr(), m_system, data);
+    newShipSE->SetLauncherID(destRef->itemID());
+    SetShip(m_pod);
+    m_system->AddEntity(newShipSE);
+    pShipSE = newShipSE;
+
+    // the old ship leaves space
+    m_system->RemoveEntity(oldShipSE);
+    SafeDelete(oldShipSE);
+    oldShipRef->Move(destRef->itemID(), flag, true);
+    oldShipRef->SaveShip();
+
+    UpdateNewShip();
+    SendSessionChange();
+}
+
 void Client::ResetAfterPopped(GPoint& position)
 {
     m_autoPilot = false;
