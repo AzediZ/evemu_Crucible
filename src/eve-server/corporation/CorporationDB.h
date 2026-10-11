@@ -184,6 +184,15 @@ public:
     static bool GetCorporationBySchool(uint32 schoolID, uint32 &corporationID);
     static bool GetLocationCorporationByCareer(CharacterData &cdata, uint32 &corporationID);
     static bool DoesCorporationExist(uint32 corpID);
+
+    /* corp item lockdown (crpLockedItems:  itemID, ownerID, locationID = stationID, locked)  (F20 ItemLockdown) */
+    static void GetLockedItemIDs(std::set<uint32>& into);
+    static void AddLockedItem(uint32 itemID, uint32 corpID, uint32 stationID);
+    static void RemoveLockedItem(uint32 itemID);
+    // stationIDs with locked items of the corp
+    static PyRep* GetLockedItemLocations(uint32 corpID);
+    // CIndexedRowset by itemID:  itemID, typeID, ownerID, locationID
+    static PyRep* GetLockedItemsByLocation(uint32 corpID, uint32 stationID);
 };
 
 #endif

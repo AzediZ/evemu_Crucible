@@ -33,6 +33,7 @@
 
 #include "StaticDataMgr.h"
 #include "character/CharacterDB.h"
+#include "corporation/ItemLockdown.h"
 #include "inventory/ContainerSecurity.h"
 #include "inventory/InvBrokerService.h"
 #include "inventory/InventoryBound.h"
@@ -48,9 +49,11 @@
 
 static void GetIntList(PyList* list, std::vector<uint32>& into);
 
-// locked items can't be trashed:  locked audit log container contents, or an audit log container holding any
+// locked items can't be trashed:  corp-locked blueprints, locked audit log container contents, or an audit log container holding any
 static bool IsTrashLocked(InventoryItemRef iRef)
 {
+    if (ItemLockdown::IsLocked(iRef->itemID()))
+        return true;
     if (iRef->flag() == flagLocked)
         return true;
     if ((iRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container) and (iRef->GetMyInventory() != nullptr)) {
@@ -625,6 +628,10 @@ static InventoryItemRef GetCorpHangarItem(Client* pClient, uint32 itemID, uint32
 
     if (!Inventory::CanTakeFromCorpHangar(pClient, stationID, iRef->flag()))
         throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from that hangar division."));
+
+    // corp-locked blueprints stay where they are
+    if (ItemLockdown::IsLocked(itemID))
+        throw UserError("CrpItemIsLocked");
 
     return iRef;
 }

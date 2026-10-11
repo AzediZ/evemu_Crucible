@@ -31,6 +31,7 @@
 
 #include "Client.h"
 #include "account/AccountService.h"
+#include "corporation/ItemLockdown.h"
 #include "inventory/ContainerSecurity.h"
 #include "inventory/Inventory.h"
 #include "station/StationDataMgr.h"
@@ -216,6 +217,9 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
                 throw CustomError("Unfit %s before repackaging it.", iRef->name());
             if (GetItemDamage(iRef) > 0)
                 throw UserError("CantRepackageDamagedItem");
+            // a corp-locked blueprint
+            if (ItemLockdown::IsLocked(itemID))
+                throw UserError("CrpItemIsLocked");
             // an audit log container with a log entry less than three weeks old
             if (ContainerSecurity::IsAuditLog(iRef) and sContSec.HasRecentLog(itemID, GetFileTimeNow() - (Win32Time_Day * 21)))
                 throw UserError("CanNotRepackageALSC");

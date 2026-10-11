@@ -37,6 +37,8 @@
 #include "system/SolarSystem.h"
 
 #include "contract/ContractUtils.h"
+#include "corporation/ItemLockdown.h"
+#include "inventory/ContainerSecurity.h"
 #include "account/AccountService.h"
 #include "manufacturing/Blueprint.h"
 #include "market/MarketMgr.h"
@@ -648,6 +650,11 @@ PyResult ContractProxy::CreateContract(PyCallArgs &call,
                 throw UserError("ConCannotTradeCurrentShip");
             if (iRef->groupID() == EVEDB::invGroups::Capsule)
                 throw UserError("ConIllegalType");
+            // corp-locked blueprints, and password protected containers  (F20)
+            if (ItemLockdown::IsLocked(itemID))
+                throw UserError("CrpItemIsLocked");
+            if (ContainerSecurity::IsSecure(iRef) and sContSec.HasAnyPassword(itemID))
+                throw UserError("ConPasswordProtectedContainer");
             if (iRef->ownerID() != walletID) {
                 _log(SERVICE__WARNING, "CreateContract - %s(%u) tried to contract %s(%u) owned by %u.", \
                         pClient->GetName(), charID, iRef->name(), itemID, iRef->ownerID());

@@ -30,6 +30,7 @@ protected:
     PyResult GetCorporations(PyCallArgs& call, PyInt* corporationID);
     PyResult GetInfoWindowDataForChar(PyCallArgs& call, std::optional <PyInt*> characterID);
     PyResult GetLockedItemLocations(PyCallArgs& call);
+    PyResult GetLockedItemsByLocation(PyCallArgs& call, PyInt* locationID);
     PyResult AddCorporation(PyCallArgs& call,
         PyRep* name, PyRep* ticker, PyRep* description, PyRep* url, PyFloat* taxRate,
         PyRep* shape1, PyRep* shape2, PyRep* shape3,

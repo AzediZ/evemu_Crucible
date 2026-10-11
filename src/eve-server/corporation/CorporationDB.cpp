@@ -2603,3 +2603,57 @@ int32 CorporationDB::GetCorpIDforChar(int32 charID)
     _log(DATABASE__MESSAGE, "No data found for character's %u corporation.", charID);
     return 0;
 }
+
+void CorporationDB::GetLockedItemIDs(std::set<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID FROM crpLockedItems WHERE locked = 1")) {
+        codelog(CORP__DB_ERROR, "Error in GetLockedItemIDs query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.insert(row.GetUInt(0));
+}
+
+void CorporationDB::AddLockedItem(uint32 itemID, uint32 corpID, uint32 stationID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "REPLACE INTO crpLockedItems (itemID, ownerID, locationID, locked) VALUES (%u, %u, %u, 1)", itemID, corpID, stationID))
+        codelog(CORP__DB_ERROR, "Error in AddLockedItem query for item %u: %s", itemID, err.c_str());
+}
+
+void CorporationDB::RemoveLockedItem(uint32 itemID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM crpLockedItems WHERE itemID = %u", itemID);
+}
+
+PyRep* CorporationDB::GetLockedItemLocations(uint32 corpID)
+{
+    PyList* list = new PyList();
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT DISTINCT locationID FROM crpLockedItems WHERE ownerID = %u AND locked = 1", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in GetLockedItemLocations query for corp %u: %s", corpID, res.error.c_str());
+        return list;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        list->AddItem(new PyInt(row.GetInt(0)));
+    return list;
+}
+
+PyRep* CorporationDB::GetLockedItemsByLocation(uint32 corpID, uint32 stationID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT l.itemID, e.typeID, l.ownerID, l.locationID"
+        " FROM crpLockedItems AS l"
+        "  JOIN entity AS e ON e.itemID = l.itemID"
+        " WHERE l.ownerID = %u AND l.locationID = %u AND l.locked = 1", corpID, stationID)) {
+        codelog(CORP__DB_ERROR, "Error in GetLockedItemsByLocation query for corp %u: %s", corpID, res.error.c_str());
+        return new PyDict();
+    }
+    return DBResultToCIndexedRowset(res, "itemID");
+}

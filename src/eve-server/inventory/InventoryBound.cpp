@@ -49,6 +49,7 @@
 #include "manufacturing/FactoryDB.h"
 #include "contract/ContractUtils.h"
 #include "inventory/ContainerSecurity.h"
+#include "corporation/ItemLockdown.h"
 
 InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<InventoryBound>& parent, InventoryItemRef item, EVEItemFlags flag, uint32 ownerID, bool passive) :
     EVEBoundObject(mgr, parent),
@@ -1028,6 +1029,10 @@ void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, u
     if ((iRef->locationID() == toLocationID) and (iRef->flag() == toFlag))
         return;
 
+    // a corp-locked blueprint stays where it is, even within the office
+    if (ItemLockdown::IsLocked(iRef->itemID()))
+        throw UserError("CrpItemIsLocked");
+
     // what the item is in now (not loaded for stations and systems)
     InventoryItemRef srcRef = sItemFactory.GetItemRefFromID(iRef->locationID(), false);
     if ((srcRef.get() == nullptr) and (IsPlayerItem(iRef->locationID()) or IsOfficeID(iRef->locationID())))
@@ -1042,6 +1047,10 @@ void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, u
             throw UserError("CrpItemIsLocked");
         // a password protected container
         sContSec.CheckOpen(pClient, srcRef);
+        // the contents of a container held in a contract (owned by the system until the contract ends)
+        if ((srcRef->ownerID() == ownerSystem) and IsPlayerItem(srcRef->itemID())
+        and !sDataMgr.IsSolarSystem(srcRef->locationID()))
+            throw CustomError("That container is part of a contract.  Nothing can be taken out of it.");
     }
 
     // corp hangar division take roles

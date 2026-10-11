@@ -38,6 +38,7 @@
 #include "system/SystemManager.h"
 #include "standing/StandingDB.h"
 #include "corporation/CorporationDB.h"
+#include "corporation/ItemLockdown.h"
 
 /*
  * MARKET__ERROR
@@ -365,6 +366,9 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         throw CustomError("You cannot sell %u %s when you only have %i.  If applicable, merge stacks and try again.", qty, iRef->name(), iRef->quantity());
     if (iRef->itemID() == pClient->GetShipID())
         throw CustomError("You cannot sell your active ship.");
+    // corp-locked blueprints stay where they are  (F20)
+    if (ItemLockdown::IsLocked(iRef->itemID()))
+        throw UserError("CrpItemIsLocked");
     // assembled items (and blueprint copies) cannot be sold on the market
     if (iRef->isSingleton())
         throw UserError("RepackageBeforeSelling").AddTypeName("item", iRef->typeID());

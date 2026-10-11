@@ -206,6 +206,7 @@ SET( corporation_INCLUDE
      "${TARGET_INCLUDE_DIR}/corporation/CorpRegistryBound.h"
      "${TARGET_INCLUDE_DIR}/corporation/CorpRegistryService.h"
      "${TARGET_INCLUDE_DIR}/corporation/CorpStationMgr.h"
+     "${TARGET_INCLUDE_DIR}/corporation/ItemLockdown.h"
      "${TARGET_INCLUDE_DIR}/corporation/LPService.h"
      "${TARGET_INCLUDE_DIR}/corporation/LPStore.h"
      "${TARGET_INCLUDE_DIR}/corporation/OfficeSparseBound.h" )
@@ -219,6 +220,7 @@ SET( corporation_SOURCE
      "${TARGET_SOURCE_DIR}/corporation/CorpRegistryBound.cpp"
      "${TARGET_SOURCE_DIR}/corporation/CorpRegistryService.cpp"
      "${TARGET_SOURCE_DIR}/corporation/CorpStationMgr.cpp"
+     "${TARGET_SOURCE_DIR}/corporation/ItemLockdown.cpp"
      "${TARGET_SOURCE_DIR}/corporation/LPService.cpp"
      "${TARGET_SOURCE_DIR}/corporation/LPStore.cpp"
      "${TARGET_SOURCE_DIR}/corporation/OfficeSparseBound.cpp" )

@@ -16,6 +16,7 @@
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpRegistryBound.h"
 #include "corporation/OfficeSparseBound.h"
+#include "corporation/ItemLockdown.h"
 #include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 #include "alliance/AllianceDB.h"
@@ -46,6 +47,7 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("GetCorporations", &CorpRegistryBound::GetCorporations);
     this->Add("GetInfoWindowDataForChar", &CorpRegistryBound::GetInfoWindowDataForChar);
     this->Add("GetLockedItemLocations", &CorpRegistryBound::GetLockedItemLocations);
+    this->Add("GetLockedItemsByLocation", &CorpRegistryBound::GetLockedItemsByLocation);
     this->Add("AddCorporation", &CorpRegistryBound::AddCorporation);
     this->Add("GetSuggestedTickerNames", &CorpRegistryBound::GetSuggestedTickerNames);
     this->Add("GetOffices", &CorpRegistryBound::GetOffices);
@@ -2182,26 +2184,21 @@ PyResult CorpRegistryBound::InsertVote(PyCallArgs &call, PyInt* corporationID, P
     return PyStatic.NewNone();
 }
 
+PyResult CorpRegistryBound::GetLockedItemLocations(PyCallArgs& call)
+{
+    // corp.itemLocking:  locationIDs = self.GetCorpRegistry().GetLockedItemLocations()   (stations with locked items)
+    return ItemLockdown::GetLockedItemLocations(m_corpID);
+}
+
+PyResult CorpRegistryBound::GetLockedItemsByLocation(PyCallArgs& call, PyInt* locationID)
+{
+    // corp.itemLocking:  rows = self.GetCorpRegistry().GetLockedItemsByLocation(locationID), kept and updated by OnLockedItemChange
+    return ItemLockdown::GetLockedItemsByLocation(m_corpID, locationID->value());
+}
+
 /**     ***********************************************************************
  * @note   these do absolutely nothing at this time....
  */
-
-PyResult CorpRegistryBound::GetLockedItemLocations(PyCallArgs& call)
-{    /*
-    03:15:28 W CorpRegistryBound::Handle_GetLockedItemLocations(): size= 0
-    03:15:28 [CorpCallDump]   Call Arguments:
-    03:15:28 [CorpCallDump]       Tuple: Empty
-    */
-    //            locationIDs = self.GetCorpRegistry().GetLockedItemLocations()
-
-    // called from corp.assets.lockdown
-    _log(CORP__CALL, "CorpRegistryBound::Handle_GetLockedItemLocations()");
-    call.Dump(CORP__CALL_DUMP);
-
-    //this returns an empty list for me on live.
-    //  ...because there are no locked items for your corp. :/
-    return new PyList();
-}
 
 PyResult CorpRegistryBound::AddCorporateContact(PyCallArgs &call, PyInt* contactID, PyInt* relationshipID) {
     //self.GetCorpRegistry().AddCorporateContact(contactID, relationshipID)
