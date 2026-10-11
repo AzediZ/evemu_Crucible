@@ -82,6 +82,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/IncursionCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/CrimeCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
+     "${TARGET_INCLUDE_DIR}/admin/GMToolCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionerService.h"
      "${TARGET_INCLUDE_DIR}/admin/SlashService.h"
      "${TARGET_INCLUDE_DIR}/admin/SystemCommands.h"
@@ -98,6 +99,7 @@ SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/IncursionCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/CrimeCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
+     "${TARGET_SOURCE_DIR}/admin/GMToolCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionerService.cpp"
      "${TARGET_SOURCE_DIR}/admin/SlashService.cpp"
      "${TARGET_SOURCE_DIR}/admin/SystemCommands.cpp"
@@ -790,5 +792,5 @@ TARGET_LINK_LIBRARIES( "${TARGET_NAME}"
 
 INSTALL( TARGETS "${TARGET_NAME}"
          RUNTIME DESTINATION "bin" )
-INSTALL( FILES "${TARGET_UTILS_DIR}/config/devtools.raw"
+INSTALL( FILES "${TARGET_UTILS_DIR}/config/devtools.raw" "${TARGET_UTILS_DIR}/config/gmtools.py"
          DESTINATION "etc" )
