@@ -489,14 +489,15 @@ void AgentBound::CompleteMission(Client* pClient, uint8 action, PyTuple* agentSa
     missionCompleted = true;
     offer.stateID = Mission::State::Completed;
     offer.dateCompleted = GetFileTimeNow();
-    m_agent->UpdateOffer(charID, offer);
+    // saved as completed and dropped from the agent's and the mission manager's open offers
+    //  (left in the mission manager, Process() would 'expire' it a week later and drop the pilot's next offer with this agent)
+    m_agent->DeleteOffer(charID, Mission::State::Completed);
     m_agent->SendMissionUpdate(pClient, "completed");
     agentSays->SetItem(0, new PyInt(m_agent->GetCompleteRsp(charID)));
     agentSays->SetItem(1, new PyInt(charID));
 
     MissionRewards::Pay(m_agent, pClient, offer, sharers);
     m_agent->UpdateStandings(pClient, Standings::MissionCompleted, offer.important, &sharers);
-    m_agent->RemoveOffer(charID);
     sMissionInstanceMgr.Release(offer.offerID);
     // the storyline counter
     sMissionDataMgr.OnMissionCompleted(pClient, m_agent, offer);
@@ -866,6 +867,9 @@ PyResult AgentBound::GetDungeonShipRestrictions(PyCallArgs &call, PyInt* dungeon
             if (std::find(denied.begin(), denied.end(), cur) == denied.end())
                 denied.push_back(cur);
     }
+    // pods never use the gates (DunPodsCannotWarp).  the client's popup also fails for a ship group in neither list
+    if (std::find(denied.begin(), denied.end(), (uint32)EVEDB::invGroups::Capsule) == denied.end())
+        denied.push_back(EVEDB::invGroups::Capsule);
 
     PyList* restricted = new PyList();
     for (auto cur : denied)

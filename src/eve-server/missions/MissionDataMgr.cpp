@@ -85,9 +85,13 @@ void MissionDataMgr::Process()
     // collect first:  failing/expiring an offer removes it from m_offers
     double now(GetFileTimeNow());
     std::vector<MissionOffer> expired;
-    for (auto& cur : m_offers)
+    for (auto& cur : m_offers) {
+        // only open offers and running missions expire
+        if ((cur.second.stateID > Mission::State::Accepted) and (cur.second.stateID != Mission::State::Defered))
+            continue;
         if ((cur.second.expiryTime > 0) and (cur.second.expiryTime < now))
             expired.push_back(cur.second);
+    }
 
     for (auto& offer : expired) {
         Agent* pAgent(sEntityList.GetAgent(offer.agentID));
@@ -156,7 +160,7 @@ void MissionDataMgr::FailOffer(MissionOffer& data, bool notify)
 
     PyDict* notice = new PyDict();
         notice->SetItemString("header", new PyString("Mission failed"));
-        notice->SetItemString("body", new PyString("You have failed the mission \"" + data.name + "\".  The time allowed to complete it has run out."));
+        notice->SetItemString("body", new PyString("You have failed the mission \"" + data.name + "\"."));
     NotificationMgr::Send(data.characterID, Notify::Types::MissionOfferExpiration, data.agentID, notice);
 }
 
