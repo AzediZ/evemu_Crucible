@@ -35,7 +35,11 @@
 #include "inventory/Inventory.h"
 #include "npc/Drone.h"
 #include "npc/DroneAI.h"
+#include "npc/NPC.h"
+#include "npc/NPCAI.h"
 #include "ship/Ship.h"
+#include "ship/modules/GenericModule.h"
+#include "ship/modules/ModuleManager.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
@@ -598,10 +602,108 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
         case DroneAI::Action::Web: {
             StartWeb(pTarget);
         } break;
+        case DroneAI::Action::Ewar: {
+            StartEwar(pTarget);
+            // neutralizers drain the target's capacitor every cycle
+            const ItemType& type(m_pDrone->GetSelf()->type());
+            if (type.HasAttribute(AttrEnergyDestabilizationAmount)) {
+                InventoryItemRef tRef(pTarget->GetSelf());
+                if (tRef->HasAttribute(AttrCapacitorCharge)) {
+                    double charge(tRef->GetAttribute(AttrCapacitorCharge).get_double()
+                                - type.GetAttribute(AttrEnergyDestabilizationAmount).get_double());
+                    tRef->SetAttribute(AttrCapacitorCharge, (charge < 0.0 ? 0.0 : charge));
+                    _log(DRONE__AI_TRACE, "Drone %s(%u): neutralized %s(%u) capacitor to %.1f", m_pDrone->GetName(), m_pDrone->GetID(),
+                         pTarget->GetName(), pTarget->GetID(), (charge < 0.0 ? 0.0 : charge));
+                }
+            }
+        } break;
         default:
-            // electronic warfare and neutralizing drones show their effect, but have none yet
             break;
     }
+}
+
+/* electronic warfare drones change their target's attributes while they work on it.  how much comes from the drone's
+ *  own attributes, as shown in its info window:
+ *   target painters    signatureRadiusBonus (%)       -> the target's signature radius
+ *   sensor dampeners   maxTargetRangeMultiplier,
+ *                      scanResolutionMultiplier       -> the target's lock range and scan resolution
+ *   tracking disruptors trackingSpeedMultiplier, maxRangeMultiplier,
+ *                      fallofMultiplier               -> an NPC's guns, or a ship's turrets
+ *  each change is undone when the drone stops (StopWeb), changes target, is recalled or dies.  several drones on one
+ *  target multiply together; there are no stacking penalties.  jammers are separate (not done yet)
+ */
+void DroneAIMgr::StartEwar(SystemEntity* pTarget) {
+    if (pTarget->GetID() == m_ewarTargetID)
+        return;
+    StopEwar();
+    m_ewarTargetID = pTarget->GetID();
+
+    const ItemType& type(m_pDrone->GetSelf()->type());
+    auto factor = [&](uint16 attrID) -> double {
+        return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_double() : 1.0);
+    };
+    auto apply = [&](InventoryItemRef iRef, uint16 attrID, double f) {
+        if ((iRef.get() == nullptr) or (f <= 0.0) or (f == 1.0) or !iRef->HasAttribute(attrID))
+            return;
+        double before(iRef->GetAttribute(attrID).get_double());
+        iRef->SetAttribute(attrID, before * f);
+        m_ewarMods.push_back({iRef->itemID(), attrID, f});
+        _log(DRONE__AI_TRACE, "Drone %s(%u): ewar on %s(%u) attribute %u: %.3f -> %.3f", m_pDrone->GetName(), m_pDrone->GetID(),
+             iRef->name(), iRef->itemID(), attrID, before, before * f);
+    };
+
+    InventoryItemRef tRef(pTarget->GetSelf());
+    if (type.HasAttribute(AttrSignatureRadiusBonus))
+        apply(tRef, AttrSignatureRadius, 1.0 + type.GetAttribute(AttrSignatureRadiusBonus).get_double() / 100.0);
+    apply(tRef, AttrMaxTargetRange, factor(AttrMaxTargetRangeMultiplier));
+    apply(tRef, AttrScanResolution, factor(AttrScanResolutionMultiplier));
+
+    double tracking(factor(AttrTrackingSpeedMultiplier)), optimal(factor(AttrMaxRangeMultiplier)), falloff(factor(AttrFallofMultiplier));
+    if ((tracking != 1.0) or (optimal != 1.0) or (falloff != 1.0)) {
+        std::vector<InventoryItemRef> guns;
+        if (pTarget->IsShipSE()) {
+            std::list<GenericModule*> weapons;
+            pTarget->GetShipSE()->GetShipItemRef()->GetModuleManager()->GetWeapons(weapons);
+            for (auto cur : weapons)
+                switch (cur->GetSelf()->groupID()) {
+                    case EVEDB::invGroups::Projectile_Weapon:
+                    case EVEDB::invGroups::Hybrid_Weapon:
+                    case EVEDB::invGroups::Energy_Weapon:
+                        guns.push_back(cur->GetSelf());
+                        break;
+                }
+        } else {
+            guns.push_back(tRef);   // an NPC's guns are part of the NPC
+        }
+        for (auto gun : guns) {
+            apply(gun, AttrTrackingSpeed, tracking);
+            apply(gun, AttrMaxRange, optimal);
+            apply(gun, AttrFalloff, falloff);
+        }
+    }
+    // NPCs keep copies of their weapon stats
+    if (!m_ewarMods.empty() and pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr))
+        pTarget->GetNPCSE()->GetAIMgr()->RefreshWeaponStats();
+}
+
+void DroneAIMgr::StopEwar() {
+    for (auto& cur : m_ewarMods) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.itemID));
+        if ((iRef.get() == nullptr) or !iRef->HasAttribute(cur.attrID))
+            continue;   // the target is gone
+        double before(iRef->GetAttribute(cur.attrID).get_double());
+        iRef->SetAttribute(cur.attrID, before / cur.factor);
+        _log(DRONE__AI_TRACE, "Drone %s(%u): ewar removed from %s(%u) attribute %u: %.3f -> %.3f", m_pDrone->GetName(), m_pDrone->GetID(),
+             iRef->name(), iRef->itemID(), cur.attrID, before, before / cur.factor);
+    }
+    bool changed(!m_ewarMods.empty());
+    m_ewarMods.clear();
+    if (changed) {
+        SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_ewarTargetID));
+        if ((pTarget != nullptr) and pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr))
+            pTarget->GetNPCSE()->GetAIMgr()->RefreshWeaponStats();
+    }
+    m_ewarTargetID = 0;
 }
 
 void DroneAIMgr::StartWeb(SystemEntity* pTarget) {
@@ -615,6 +717,7 @@ void DroneAIMgr::StartWeb(SystemEntity* pTarget) {
 }
 
 void DroneAIMgr::StopWeb() {
+    StopEwar();
     if (m_webbedID == 0)
         return;
     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_webbedID));

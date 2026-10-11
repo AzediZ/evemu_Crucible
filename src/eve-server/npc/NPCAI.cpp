@@ -265,6 +265,13 @@ NPCAIMgr::NPCAIMgr(NPC* who)
     //    AttrEntityGroupRespawnChance = 640,
 }
 
+void NPCAIMgr::RefreshWeaponStats() {
+    m_sigRadius = m_self->GetAttribute(AttrSignatureRadius).get_uint32();
+    m_optimalRange = m_self->GetAttribute(AttrMaxRange).get_uint32();
+    m_falloff = m_self->GetAttribute(AttrFalloff).get_uint32();
+    m_trackingSpeed = m_self->GetAttribute(AttrTrackingSpeed).get_double();
+}
+
 void NPCAIMgr::Process() {
     if (m_destiny->IsWarping())
         return;

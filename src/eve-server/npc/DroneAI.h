@@ -50,7 +50,7 @@ namespace DroneAI {
             RepairShield    = 3,
             RepairArmor     = 4,
             Web             = 5,
-            Ewar            = 6     // jammers, painters, dampeners, disruptors, neutralizers.  effects only, for now
+            Ewar            = 6     // jammers, painters, dampeners, disruptors, neutralizers (see DroneAIMgr::StartEwar)
         };
     }
 }
@@ -109,7 +109,9 @@ private:
     void FinishMiningCycle(ShipSE* pController, SystemEntity* pRoid);
     void SendEffect(SystemEntity* pTarget, bool start);
     void StartWeb(SystemEntity* pTarget);
-    void StopWeb();
+    void StopWeb();             // also undoes electronic warfare (see StartEwar)
+    void StartEwar(SystemEntity* pTarget);
+    void StopEwar();
 
     // target lock with the drone's own sensors
     bool LockTarget(SystemEntity* pTarget);
@@ -129,6 +131,14 @@ private:
     uint32 m_moveTargetID;
     uint32 m_aggressorID;       // most recent attacker, for aggressive mode and guarding
     uint32 m_webbedID;          // target we are currently webbing
+    // attribute changes our electronic warfare made, to undo when we stop
+    struct EwarMod {
+        uint32 itemID;
+        uint16 attrID;
+        double factor;
+    };
+    std::vector<EwarMod> m_ewarMods;
+    uint32 m_ewarTargetID = 0;
     double m_moveRange;
     double m_moveSpeed;
 

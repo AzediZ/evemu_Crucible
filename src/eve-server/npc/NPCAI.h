@@ -54,6 +54,8 @@ class EvilNumber;
 class NPCAIMgr {
 protected:
 public:
+    // re-read the weapon stats cached below, after electronic warfare changed them (see DroneAIMgr::StartEwar)
+    void RefreshWeaponStats();
     NPCAIMgr(NPC *who);
     ~NPCAIMgr()                                         { /* do nothing here */ }
 
