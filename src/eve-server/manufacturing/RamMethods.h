@@ -51,6 +51,8 @@ public:
     void ConsumeMaterials(uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
     // units of a required item a job takes
     uint32 GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs);
+    // units of an item that is not used up (damage < 1, from StaticDataMgr::GetRamReturns) that come back when the job ends
+    uint32 GetReturnQuantity(const EvERam::RequiredItem& item, uint32 runs);
 
     void VerifyCompleteJob(const Call_CompleteJob& args, EvERam::JobProperties& data, Client* const pClient);
 

@@ -586,9 +586,9 @@ PyResult RamProxyService::CompleteJob(PyCallArgs &call, PyRep* info, PyRep* jobI
     std::vector<EvERam::RequiredItem> reqItems;
     sDataMgr.GetRamReturns(installedTypeID, data.activity, reqItems);
     for (auto cur : reqItems) {
-        uint32 quantity = (cur.quantity * data.jobRuns * (1 - cur.damagePerJob));
+        uint32 quantity(sRamMthd.GetReturnQuantity(cur, data.jobRuns));
         if (quantity == 0)
-            quantity = 1;
+            continue;
 
         ItemData idata(cur.typeID, data.ownerID, locTemp, flagNone, quantity);
         InventoryItemRef iRef = sItemFactory.SpawnItem( idata );

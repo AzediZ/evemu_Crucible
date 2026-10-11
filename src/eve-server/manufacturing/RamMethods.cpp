@@ -396,9 +396,9 @@ void RamMethods::TerminateStructureJobs(uint32 containerID, int8 status)
             std::vector<EvERam::RequiredItem> reqItems;
             sDataMgr.GetRamReturns(typeID, cur.activity, reqItems);
             for (auto item : reqItems) {
-                uint32 quantity = (item.quantity * cur.jobRuns * (1 - item.damagePerJob));
+                uint32 quantity(GetReturnQuantity(item, cur.jobRuns));
                 if (quantity == 0)
-                    quantity = 1;
+                    continue;
                 ItemData idata(item.typeID, cur.ownerID, locTemp, flagNone, quantity);
                 InventoryItemRef rRef = sItemFactory.SpawnItem( idata );
                 if (rRef.get() != nullptr)
@@ -712,6 +712,19 @@ uint32 RamMethods::GetMaterialQuantity(const EvERam::RequiredItem& item, float m
     if (!item.extra)
         qty += (uint32)round(item.quantity * charMaterialMultiplier - item.quantity);
     return qty * runs;
+}
+
+uint32 RamMethods::GetReturnQuantity(const EvERam::RequiredItem& item, uint32 runs)
+{
+    /* the job uses up ceil(quantity * runs * damage) units (a 1-run job with a 10% R.A.M. uses the whole unit), the rest comes back.
+     *  the small offset keeps float error (0.1f * 10 = 1.0000001) from using up an extra unit */
+    double total((double)item.quantity * runs);
+    double used(ceil(total * item.damagePerJob - 0.0001));
+    if (used < 0)
+        used = 0;
+    if (used >= total)
+        return 0;
+    return (uint32)(total - used);
 }
 
 void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems)

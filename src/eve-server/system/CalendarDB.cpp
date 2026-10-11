@@ -146,13 +146,18 @@ uint32 CalendarDB::SaveSystemEvent(uint32 ownerID, uint32 creatorID, int64 start
     EvE::TimeParts data = EvE::TimeParts();
     data = GetTimeParts(startDateTime);
 
+    // the text holds player-chosen names (characters, structures)
+    std::string eTitle, eDesc;
+    sDatabase.DoEscapeString(eTitle, title);
+    sDatabase.DoEscapeString(eDesc, description);
+
     uint32 eventID(0);
     DBerror err;
     sDatabase.RunQueryLID(err, eventID,
         "INSERT INTO sysCalendarEvents(ownerID, creatorID, eventDateTime, autoEventType,"
         " eventTitle, eventText, flag, month, year, importance)"
         " VALUES (%u, %u, %lli, %u, '%s', '%s', %u, %u, %u, %u)",
-        ownerID, creatorID, startDateTime, autoEventType, title.c_str(), description.c_str(),
+        ownerID, creatorID, startDateTime, autoEventType, eTitle.c_str(), eDesc.c_str(),
         Calendar::Flag::Automated, data.month, data.year, important?1:0);
 
     return eventID;
