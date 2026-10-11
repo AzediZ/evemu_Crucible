@@ -31,6 +31,8 @@
 
 #include "eve-compat.h"
 
+#include <type_traits>
+
 
 // this file should have all stuff regarding attribute caching..
 enum EVIL_NUMBER_TYPE
@@ -149,6 +151,8 @@ public:
         b operator a ( b val) \
         { \
             if (this->mType == evil_number_int) \
+                if (std::is_floating_point<std::remove_cv_t<b>>::value) \
+                    return static_cast<double>(this->iVal) a static_cast<double>(val); \
                 return this->iVal a static_cast<int64>(val); \
             else \
                 return this->fVal a static_cast<double>(val); \
@@ -198,9 +202,11 @@ public:
      * @return operator overload function for operator 'a' comparing to a value 'val' of type 'b'
      */
     #define LOGIC_OPERATOR(a, b) \
-        bool operator a ( b val) \
+        bool operator a ( b val) const \
         { \
             if (this->mType == evil_number_int) { \
+                if (std::is_floating_point<std::remove_cv_t<b>>::value) \
+                    return static_cast<double>(this->iVal) a static_cast<double>(val); \
                 return this->iVal a static_cast<int64>(val); \
             } else if (this->mType == evil_number_float) { \
                 return this->fVal a static_cast<double>(val); \
@@ -245,7 +251,7 @@ public:
      * @return will return true when this and val are equal
      * @note can I create 2 floats that would be equal when doing normal float compare and not equal when doing integer compare.
      */
-    bool operator==(const EvilNumber& val)
+    bool operator==(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal == val.iVal;
@@ -257,8 +263,7 @@ public:
             return double(this->iVal) == val.fVal;
     }
 
-    // doesnt work when compared to 0 (num != 0)
-    bool operator!=(const EvilNumber& val)
+    bool operator!=(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal != val.iVal;
@@ -270,7 +275,7 @@ public:
             return double(this->iVal) != val.fVal;
     }
 
-    bool operator<(const EvilNumber& val)
+    bool operator<(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal < val.iVal;
@@ -282,7 +287,7 @@ public:
             return double(this->iVal) < val.fVal;
     }
 
-    bool operator>(const EvilNumber& val)
+    bool operator>(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal > val.iVal;
@@ -294,7 +299,7 @@ public:
             return double(this->iVal) > val.fVal;
     }
 
-    bool operator<=(const EvilNumber& val)
+    bool operator<=(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal <= val.iVal;
@@ -306,7 +311,7 @@ public:
             return double(this->iVal) <= val.fVal;
     }
 
-    bool operator>=(const EvilNumber& val)
+    bool operator>=(const EvilNumber& val) const
     {
         if (this->mType == evil_number_int && val.mType == evil_number_int)
             return this->iVal >= val.iVal;

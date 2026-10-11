@@ -37,7 +37,7 @@ PyRep* DBColumnToPyRep(const DBResultRow& row, uint32 index)
 {
     /* check for valid column */
     if (row.IsNull(index))
-        return PyStatic.NewNone();      // this doesnt work right.  client still sees this as 0 instead of None
+        return PyStatic.NewNone();
 
     switch(row.ColumnType(index)) {
         case DBTYPE_I1:
@@ -425,7 +425,7 @@ PyDict *DBResultToPackedRowDict(DBQueryResult &result, uint32 key_index)
  */
 PyObjectEx *DBResultToCRowset(DBQueryResult &result)
 {
-    /** @todo Mem leak.  `header` never freed */
+    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
     DBRowDescriptor *header = new DBRowDescriptor(result);
     CRowSet *rowset = new CRowSet(&header);
 
@@ -458,7 +458,7 @@ PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, const char *key)
 }
 
 PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, uint32 key_index) {
-    /** @todo Mem leak.  `header` never freed */
+    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
     DBRowDescriptor *header = new DBRowDescriptor(result);
     CIndexedRowSet *rowset = new CIndexedRowSet(&header);
 

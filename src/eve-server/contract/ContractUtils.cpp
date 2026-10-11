@@ -150,6 +150,8 @@ PyList* ContractUtils::GetContractEntries(std::vector<int> contractIDList) {
 
             auto pos = itemsMap.find(contractID);
             if (pos == itemsMap.end()) {
+                // each rowset holds its own reference to the shared header
+                PyIncRef(itemsHeader);
                 CRowSet* rowset = new CRowSet(&itemsHeader);
                 PyPackedRow* into = rowset->NewRow();
                 FillItemData(&itemRow, into);
@@ -170,7 +172,8 @@ PyList* ContractUtils::GetContractEntries(std::vector<int> contractIDList) {
 
             auto pos = bidsMap.find(contractID);
             if (pos == bidsMap.end()) {
-                CRowSet* rowset = new CRowSet(&itemsHeader);
+                PyIncRef(bidsHeader);
+                CRowSet* rowset = new CRowSet(&bidsHeader);
                 PyPackedRow* into = rowset->NewRow();
                 FillBidData(&bidRow, into);
 
@@ -188,11 +191,27 @@ PyList* ContractUtils::GetContractEntries(std::vector<int> contractIDList) {
 
             PyDict* contract = new PyDict;
             contract->SetItemString("contract", DBRowToPackedRow(contractRow));
-            contract->SetItemString("items", itemsMap.find(contractID) == itemsMap.end() ? new CRowSet(&itemsHeader) : itemsMap.find(contractID)->second);
-            contract->SetItemString("bids", bidsMap.find(contractID) == bidsMap.end() ? new CRowSet(&bidsHeader) : bidsMap.find(contractID)->second);
+            auto itemItr = itemsMap.find(contractID);
+            if (itemItr == itemsMap.end()) {
+                PyIncRef(itemsHeader);
+                contract->SetItemString("items", new CRowSet(&itemsHeader));
+            } else {
+                contract->SetItemString("items", itemItr->second);
+            }
+            auto bidItr = bidsMap.find(contractID);
+            if (bidItr == bidsMap.end()) {
+                PyIncRef(bidsHeader);
+                contract->SetItemString("bids", new CRowSet(&bidsHeader));
+            } else {
+                contract->SetItemString("bids", bidItr->second);
+            }
 
             contractsList->AddItem(new PyObject("util.KeyVal", contract));
         }
+
+        // release the creation references; the rowsets hold their own
+        PyDecRef(itemsHeader);
+        PyDecRef(bidsHeader);
 
         return contractsList;
     } else {

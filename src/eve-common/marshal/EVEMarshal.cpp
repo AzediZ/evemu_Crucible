@@ -418,13 +418,28 @@ bool MarshalStream::VisitPackedRow( const PyPackedRow* pyPackedRow )
 
     cur = sizeMap.lower_bound( 1 );
     end = sizeMap.lower_bound( 0 );
-    PyBool* b(nullptr);
     for (; cur != end; ++cur)
     {
-        b = pyPackedRow->GetField(cur->second)->AsBool();
+        value = pyPackedRow->GetField(cur->second);
+
+        // a null boolean only sets its null bit (same layout as the other columns)
+        if (value->IsNone()) {
+            unsigned long nullBit = cur->second + booleansBitLength;
+            Buffer::iterator<uint8> bitIterator = bitData.begin<uint8>() + (nullBit >> 3);
+            *bitIterator |= (1 << (nullBit & 0x7));
+            continue;
+        }
+
+        bool bValue(false);
+        if (value->IsBool())
+            bValue = value->AsBool()->value();
+        else if (value->IsInt())
+            bValue = (value->AsInt()->value() != 0);
+        else if (value->IsLong())
+            bValue = (value->AsLong()->value() != 0);
 
         // false values do not need anything to be done
-        if (b->value() == false)
+        if (!bValue)
             continue;
 
         // get the bit this boolean should be written at

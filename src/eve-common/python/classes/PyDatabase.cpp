@@ -130,8 +130,10 @@ CRowSet::CRowSet( DBRowDescriptor** rowDesc )
 
 PyPackedRow* CRowSet::NewRow()
 {
-    //DBRowDescriptor* rowDesc = _GetRowDesc();
-    PyPackedRow* row = new PyPackedRow( _GetRowDesc() );
+    // the row releases its header on destruction; it is shared with this rowset
+    DBRowDescriptor* rowDesc = _GetRowDesc();
+    PyIncRef(rowDesc);
+    PyPackedRow* row = new PyPackedRow( rowDesc );
 
     list().AddItem( row );
     return row;
@@ -179,8 +181,10 @@ CIndexedRowSet::CIndexedRowSet( DBRowDescriptor** rowDesc )
 
 PyPackedRow* CIndexedRowSet::NewRow( PyRep* key )
 {
-    //DBRowDescriptor* rowDesc = _GetRowDesc();
-    PyPackedRow* row = new PyPackedRow( _GetRowDesc() );
+    // the row releases its header on destruction; it is shared with this rowset
+    DBRowDescriptor* rowDesc = _GetRowDesc();
+    PyIncRef(rowDesc);
+    PyPackedRow* row = new PyPackedRow( rowDesc );
 
     dict().SetItem( key , row );
     return row;
@@ -224,6 +228,7 @@ CFilterRowSet::CFilterRowSet( DBRowDescriptor** rowDesc )
 CRowSet* CFilterRowSet::NewRowset( PyRep* key )
 {
     DBRowDescriptor* rowDesc = _GetRowDesc();
+    PyIncRef(rowDesc);
     CRowSet* row = new CRowSet( &rowDesc );
 
     dict().SetItem( key , row );
