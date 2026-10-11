@@ -68,6 +68,7 @@ protected:
     PyResult GetCharacterAttributeModifiers(PyCallArgs& call, PyInt* attr);
     PyResult CharAddImplant(PyCallArgs& call, PyInt* itemID);
     PyResult RemoveImplantFromCharacter(PyCallArgs& call, PyInt* itemID);
+    PyResult CharUseBooster(PyCallArgs& call, PyInt* itemID, PyInt* locationID);
 };
 
 #endif

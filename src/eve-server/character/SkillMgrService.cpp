@@ -61,6 +61,7 @@ SkillMgrBound::SkillMgrBound(EVEServiceManager &mgr, SkillMgrService& parent, Ch
     this->Add("GetSkillHistory", &SkillMgrBound::GetSkillHistory);
     this->Add("CharAddImplant", &SkillMgrBound::CharAddImplant);
     this->Add("RemoveImplantFromCharacter", &SkillMgrBound::RemoveImplantFromCharacter);
+    this->Add("CharUseBooster", &SkillMgrBound::CharUseBooster);
     this->Add("GetRespecInfo", &SkillMgrBound::GetRespecInfo);
     this->Add("RespecCharacter", &SkillMgrBound::RespecCharacter);
     this->Add("GetCharacterAttributeModifiers", &SkillMgrBound::GetCharacterAttributeModifiers);
@@ -309,5 +310,12 @@ PyResult SkillMgrBound::RemoveImplantFromCharacter(PyCallArgs& call, PyInt* item
     if (iRef.get() == nullptr)
         throw CustomError("That implant could not be found.");
     call.client->GetChar()->UnplugImplant(iRef);
+    return nullptr;
+}
+
+PyResult SkillMgrBound::CharUseBooster(PyCallArgs& call, PyInt* itemID, PyInt* locationID)
+{
+    // menusvc ConsumeBooster:  GetSkillHandler().CharUseBooster(invItem.itemID, invItem.locationID)
+    call.client->GetChar()->ConsumeBooster(GetUsableItem(call.client, itemID->value()));
     return nullptr;
 }

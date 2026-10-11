@@ -1294,6 +1294,13 @@ bool InventoryItem::Populate(Rsp_CommonGetInfo_Entry& result )
         }
     }
 
+    // a booster's working effects (the character sheet lists those)  (F15)
+    if ((m_data.flag == flagBooster) and IsCharacterID(m_data.locationID)) {
+        CharacterRef cRef(sItemFactory.GetCharacterRef(m_data.locationID));
+        if (cRef.get() != nullptr)
+            cRef->PopulateBoosterEffects(this, result);
+    }
+
     return true;
 }
 

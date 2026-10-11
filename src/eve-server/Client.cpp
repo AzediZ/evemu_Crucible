@@ -132,6 +132,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
     m_locationID = 0;
     m_moveSystemID = 0;
     m_skillTimer = 0;
+    m_boosterTimer = 0;
     m_dockStationID = 0;
 
     m_lpMap.clear();
@@ -286,6 +287,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
     m_char->SetLoginTime();
     m_char->SetClient(this);
     m_char->SkillQueueLoop(false);
+    // boosters that ran out while logged off go on the first tick
+    SetBoosterTimer(m_char->GetNextBoosterExpiry());
 
     // register with our system manager AFTER character is constructed and initialized
     m_system->AddClient(this, true);
@@ -386,6 +389,10 @@ void Client::ProcessClient() {
     if (m_skillTimer > 0)
         if (m_skillTimer < GetFileTimeNow())
             m_char->SkillQueueLoop();
+
+    if (m_boosterTimer > 0)
+        if (m_boosterTimer < GetFileTimeNow())
+            m_char->ProcessBoosterExpiry();
 
     if (m_sessionTimer.Check(false)) {
         _log(CLIENT__TIMER, "Client::ProcessClient():  SetSessionChange to false for %s(%u)", m_char->name(), m_char->itemID());

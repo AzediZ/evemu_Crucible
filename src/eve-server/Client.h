@@ -365,6 +365,8 @@ public:
 
     // skill training timer shit
     void SetTrainingEndTime(int64 endTime)              { m_skillTimer = endTime; }
+    // filetime the next booster expires.  0 = none  (F15)
+    void SetBoosterTimer(int64 expiry)                  { m_boosterTimer = expiry; }
 
 protected:
     ServiceDB m_sDB;
@@ -447,6 +449,7 @@ protected:
     std::map<uint32, bool>  m_hangarLoaded;
 
     int64                   m_skillTimer;
+    int64                   m_boosterTimer;
 
     int8                    m_clientState;
 

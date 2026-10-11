@@ -299,6 +299,7 @@ bool Character::_Load() {
             sLog.Warning("Character::_Load","LoadCertificates returned false for char %u", m_itemID);
             return (m_loaded = false);
         }
+        LoadBoosters();
         // implant and booster ability bonuses are never saved; add them to the loaded attribs
         m_abilityBonus.clear();
         ApplyAbilityBonuses(false);
@@ -871,6 +872,190 @@ void Character::UnplugImplant(InventoryItemRef iRef)
         throw UserError("FailedPlugInImplant");
     // unplugged implants are destroyed (ConfirmUnPlugInImplant)
     DestroyAugmentation(iRef, true);
+}
+
+// a skill's per-level bonus attribute (from the skill's type) times the character's level, in percent
+static float SkillBonusPercent(const Character* pChar, uint16 skillTypeID, uint16 attrID)
+{
+    const ItemType* pType(sItemFactory.GetType(skillTypeID));
+    if (pType == nullptr)
+        return 0.0f;
+    return pType->GetAttribute(attrID).get_float() * pChar->GetSkillLevel(skillTypeID);
+}
+
+// booster duration in ms: the type's boosterDuration (or the configured fallback) +20%/level Biology
+static double BoosterDurationMs(const Character* pChar, InventoryItem* pBooster)
+{
+    double duration(pBooster->GetDefaultAttribute(AttrBoosterDuration).get_double());
+    if (duration <= 0)
+        duration = sConfig.character.boosterFallbackDurationHours * 3600000.0;
+    return duration * (1.0 + SkillBonusPercent(pChar, EvESkill::Biology, AttrDurationBonus) / 100.0);
+}
+
+void Character::ConsumeBooster(InventoryItemRef iRef)
+{
+    if ((iRef->groupID() != EVEDB::invGroups::Booster) or (iRef->GetAttribute(AttrBoosterness).get_uint32() == 0))
+        throw CustomError("%s is not a booster.", iRef->name());
+    uint8 slot(iRef->GetAttribute(AttrBoosterness).get_uint32());
+    // Crucible: no boosters while a skill trains
+    if (sConfig.character.requirePausedTraining and IsTraining())
+        throw UserError("FailedBoosterConsume");
+    CheckRequiredSkills(iRef);
+    // Cerebral Accelerator: only for young characters
+    EvilNumber maxAge(iRef->GetAttribute(AttrBoosterMaxCharAgeHours));
+    if (maxAge > EvilZero)
+        if (((int64)GetFileTimeNow() - createDateTime()) / EvE::Time::Hour > maxAge.get_int())
+            throw UserError("BoosterPastMaxCharAge");
+    InventoryItemRef oldRef(GetBoosterInSlot(slot));
+    if (oldRef.get() != nullptr)
+        throw UserError("OnlyOneBoosterActive")
+                .AddTypeName("typeName", iRef->typeID())
+                .AddTypeName("typeName2", oldRef->typeID());
+
+    double duration(BoosterDurationMs(this, iRef.get()));
+    int64 expiry((int64)GetFileTimeNow() + (int64)(duration / 1000.0 * EvE::Time::Second));
+
+    // side effects fire independently, each with its boosterEffectChance -5%/level Neurotoxin Recovery
+    float chanceMod(1.0f + SkillBonusPercent(this, EvESkill::NeurotoxinRecovery, AttrBoosterChanceBonus) / 100.0f);
+    uint8 mask(0);
+    std::vector<TypeEffects> typeFx;
+    sFxDataMgr.GetTypeEffect(iRef->typeID(), typeFx);
+    for (auto curFx : typeFx) {
+        Effect effect(sFxDataMgr.GetEffect(curFx.effectID));
+        if ((effect.fittingUsageChanceAttributeID < AttrBoosterEffectChance1) or (effect.fittingUsageChanceAttributeID > AttrBoosterEffectChance5))
+            continue;
+        float chance(iRef->GetAttribute(effect.fittingUsageChanceAttributeID).get_float() * chanceMod);
+        if (MakeRandomFloat(0, 1) < chance)
+            mask |= (1 << (effect.fittingUsageChanceAttributeID - AttrBoosterEffectChance1));
+    }
+
+    // boosters come off a stack one at a time
+    if (iRef->quantity() > 1) {
+        iRef = iRef->Split(1);
+        if (iRef.get() == nullptr)
+            throw CustomError("Unable to split the stack of boosters.");
+    }
+    iRef->ChangeSingleton(true);
+    // state first, so the move's item info already has the expiry and the working effects
+    BoosterState state = BoosterState();
+        state.expiryTime = expiry;
+        state.sideEffectMask = mask;
+    m_boosters[iRef->itemID()] = state;
+    CharacterDB::AddBooster(iRef->itemID(), m_itemID, expiry, mask);
+    iRef->SetAttribute(AttrExpiryTime, expiry, false);
+    iRef->Move(m_itemID, flagBooster, true);
+    iRef->SetAttribute(AttrExpiryTime, expiry, true);
+    _log(CHARACTER__INFO, "%s(%u) consumed %s(%u) in slot %u for %.0f min, side effects 0x%x.", \
+            name(), m_itemID, iRef->name(), iRef->itemID(), slot, duration / 60000.0, mask);
+
+    AugmentationAdded(iRef);
+    if (m_pClient != nullptr)
+        m_pClient->SetBoosterTimer(GetNextBoosterExpiry());
+}
+
+void Character::LoadBoosters()
+{
+    /* booster rows hold the expiry and the side effects.  boosters expire in real time, also while logged off:
+     *  expired ones (and boosters without a row) are given a past expiry here and go on the first client tick,
+     *  so their removal reaches the client
+     */
+    m_boosters.clear();
+    std::map<uint32, std::pair<int64, uint8>> rows;
+    CharacterDB::LoadBoosters(m_itemID, rows);
+    std::vector<InventoryItemRef> boosters;
+    GetBoosters(boosters);
+    for (auto cur : boosters) {
+        BoosterState state = BoosterState();
+            state.expiryTime = 1;
+            state.sideEffectMask = 0;
+        std::map<uint32, std::pair<int64, uint8>>::iterator itr = rows.find(cur->itemID());
+        if (itr != rows.end()) {
+            state.expiryTime = itr->second.first;
+            state.sideEffectMask = itr->second.second;
+            rows.erase(itr);
+        }
+        m_boosters[cur->itemID()] = state;
+        cur->SetAttribute(AttrExpiryTime, state.expiryTime, false);
+    }
+    // rows of boosters that are gone
+    for (auto cur : rows)
+        CharacterDB::DeleteBooster(cur.first);
+}
+
+int64 Character::GetNextBoosterExpiry() const
+{
+    int64 next(0);
+    for (auto cur : m_boosters)
+        if ((next == 0) or (cur.second.expiryTime < next))
+            next = cur.second.expiryTime;
+    return next;
+}
+
+void Character::ProcessBoosterExpiry()
+{
+    int64 now(GetFileTimeNow());
+    std::vector<uint32> expired;
+    for (auto cur : m_boosters)
+        if (cur.second.expiryTime <= now)
+            expired.push_back(cur.first);
+    for (auto cur : expired)
+        RemoveBooster(cur);
+    if (m_pClient != nullptr)
+        m_pClient->SetBoosterTimer(GetNextBoosterExpiry());
+}
+
+void Character::RemoveBooster(uint32 itemID)
+{
+    InventoryItemRef iRef(pInventory->GetByID(itemID));
+    if ((iRef.get() == nullptr) or (iRef->flag() != flagBooster)) {
+        m_boosters.erase(itemID);
+        CharacterDB::DeleteBooster(itemID);
+        return;
+    }
+    DestroyAugmentation(iRef, true);
+}
+
+void Character::RemoveAllBoosters()
+{
+    // boosters live in the body: pod death and clone jumps end them
+    std::vector<InventoryItemRef> boosters;
+    GetBoosters(boosters);
+    for (auto cur : boosters)
+        DestroyAugmentation(cur, false);
+    for (auto cur : m_boosters)
+        CharacterDB::DeleteBooster(cur.first);
+    m_boosters.clear();
+    ApplyAbilityBonuses(true);
+    if (m_pClient != nullptr)
+        m_pClient->SetBoosterTimer(0);
+}
+
+void Character::PopulateBoosterEffects(InventoryItem* pBooster, Rsp_CommonGetInfo_Entry& result)
+{
+    std::map<uint32, BoosterState>::iterator itr = m_boosters.find(pBooster->itemID());
+    if (itr == m_boosters.end())
+        return;
+    double duration(BoosterDurationMs(this, pBooster));
+    std::vector<TypeEffects> typeFx;
+    sFxDataMgr.GetTypeEffect(pBooster->typeID(), typeFx);
+    for (auto curFx : typeFx) {
+        Effect effect(sFxDataMgr.GetEffect(curFx.effectID));
+        if (!IsAbilityBonusEffect(effect.effectID) and !IsAugmentationEffectActive(pBooster, effect))
+            continue;   // a side effect that didn't fire
+        EntityEffectState es;
+            es.env_itemID = pBooster->itemID();
+            es.env_charID = m_itemID;
+            es.env_shipID = m_charData.shipID;
+            es.env_target = m_itemID;
+            es.env_other = PyStatic.NewNone();
+            es.env_area = PyStatic.NewNone();
+            es.env_effectID = effect.effectID;
+            es.startTime = itr->second.expiryTime - (int64)(duration / 1000.0 * EvE::Time::Second);
+            es.duration = -1;
+            es.repeat = 0;
+            es.randomSeed = PyStatic.NewNone();
+        result.activeEffects[es.env_effectID] = es.Encode();
+    }
 }
 
 /*
