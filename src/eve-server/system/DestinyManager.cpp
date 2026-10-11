@@ -1045,7 +1045,7 @@ void DestinyManager::GotoPoint(const GPoint& point) {
     SendSingleDestinyUpdate(&up);   // consumed
 }
 
-void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/) {
+void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/) {
     /* warp order..
      * pick destination -> align/accel -> aura "warp drive active" -> cap drain -> accel
      *      -> enter warp -> warp -> decel -> leave warp -> coast -> stop
@@ -1157,7 +1157,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     if (m_speedFraction < 1.0f)
         SetSpeedFraction(1.0f);
 
-    ApplyWarpTo(destination, minRange, GetWarpSpeed());
+    // m_warpFactor (set here) drives both the client's WarpTo and the server's warp simulation
+    ApplyWarpTo(destination, minRange, (warpSpeed > 0 ? warpSpeed : GetWarpSpeed()));
 
     // bubble at the exit point.  the exact exit point is fixed when warp proper starts, which is close enough here
     GVector back(destination, m_position);

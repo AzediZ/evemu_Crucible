@@ -82,6 +82,8 @@ EVEServerConfig::EVEServerConfig()
     world.shipBoardDistance = 300;
     world.highSecCyno = false;
     world.empireInterdiction = false;
+    world.fleetWarpOnGridOnly = false;      // Crucible fleet warp is system-wide (on-grid only came in 2015)  (F08)
+    world.fleetWarpSlowestSpeed = true;     // every ship in a fleet warp uses the slowest warp speed  (F08)
 
     // rates
     rates.npcBountyMultiply = 1.0;
@@ -411,6 +413,8 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     AddValueParser( "saveOnUpdate",      world.saveOnUpdate );
     AddValueParser( "highSecCyno",       world.highSecCyno );
     AddValueParser( "empireInterdiction", world.empireInterdiction );
+    AddValueParser( "fleetWarpOnGridOnly", world.fleetWarpOnGridOnly );
+    AddValueParser( "fleetWarpSlowestSpeed", world.fleetWarpSlowestSpeed );
     AddValueParser( "mailDelay",         world.mailDelay );
     AddValueParser( "shootRoids",        world.shootRoids );
     AddValueParser( "shootWrecks",       world.shootWrecks );
@@ -430,6 +434,8 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     RemoveParser( "saveOnUpdate" );
     RemoveParser( "highSecCyno" );
     RemoveParser( "empireInterdiction" );
+    RemoveParser( "fleetWarpOnGridOnly" );
+    RemoveParser( "fleetWarpSlowestSpeed" );
     RemoveParser( "mailDelay" );
     RemoveParser( "shootRoids" );
     RemoveParser( "shootWrecks" );

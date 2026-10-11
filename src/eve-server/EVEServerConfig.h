@@ -80,6 +80,8 @@ public:
         bool saveOnUpdate;
         bool highSecCyno;
         bool empireInterdiction;
+        bool fleetWarpOnGridOnly;
+        bool fleetWarpSlowestSpeed;
         bool shootRoids;
         bool shootWrecks;
         uint8 mailDelay;

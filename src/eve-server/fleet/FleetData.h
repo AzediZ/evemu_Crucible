@@ -119,6 +119,7 @@ struct FleetData {
     std::string motd;
     std::multimap<uint32, uint32> isMutedByLeader;
     std::multimap<uint32, uint32> isExcludedFromMuting;
+    std::map<uint32, std::string> targetTags;   // itemID/tag ('0'-'9', 'A'-'J', 'X', 'Y', 'Z').  one item per tag
 };
 
 // fleetID, wing name and squad count (5 per fleet)

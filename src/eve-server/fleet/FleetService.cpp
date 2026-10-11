@@ -268,10 +268,8 @@ bool FleetService::AddMember(Client* pClient, uint32 fleetID, int32 wingID, int3
         fData.joinTime = GetFileTimeNow();
     pChar->SetFleetData(fData);
 
-    PyDict* dict = new PyDict();
-        dict->SetItemString("targetTags", new PyDict());
     PyTuple* obj = new PyTuple(1);
-        obj->SetItem(0, new PyObject("util.KeyVal", dict));
+        obj->SetItem(0, MakeFleetState(fleetID));
     pClient->SendNotification("OnFleetStateChange", "charid", obj, true);
 
     bool fleet(false);
@@ -1682,6 +1680,93 @@ Client* FleetService::GetPositionHolder(uint32 fleetID, int32 wingID, int32 squa
         case Fleet::Role::SquadLeader:  return (squadID > 0 ? GetSquadLeader(squadID) : nullptr);
     }
     return nullptr;
+}
+
+bool FleetService::IsCommander(Client* pClient)
+{
+    if ((pClient == nullptr) or !pClient->InFleet())
+        return false;
+    Character* pChar = pClient->GetChar().get();
+    if (pChar == nullptr)
+        return false;
+    switch (pChar->fleetRole()) {
+        case Fleet::Role::FleetLeader:  return true;
+        case Fleet::Role::WingLeader:   return (pChar->wingID() > 0);
+        case Fleet::Role::SquadLeader:  return (pChar->squadID() > 0);
+    }
+    return false;
+}
+
+void FleetService::GetSubordinates(Client* pCmdr, std::vector<Client*>& into, bool sameSystem/*true*/, bool sameBubble/*false*/)
+{
+    if (!IsCommander(pCmdr))
+        return;
+    Character* pCmdrChar = pCmdr->GetChar().get();
+    int8 role(pCmdrChar->fleetRole());
+    SystemBubble* pBubble(nullptr);
+    if (sameBubble) {
+        if ((pCmdr->GetShipSE() == nullptr) or !pCmdr->IsInSpace())
+            return;
+        pBubble = pCmdr->GetShipSE()->SysBubble();
+        if (pBubble == nullptr)
+            return;
+    }
+
+    auto range = m_fleetMembers.equal_range(pCmdr->GetFleetID());
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        Client* pClient(itr->second);
+        if ((pClient == nullptr) or (pClient == pCmdr) or (pClient == m_departing))
+            continue;
+        if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+            continue;
+        Character* pChar = pClient->GetChar().get();
+        if (pChar == nullptr)
+            continue;
+        if ((role == Fleet::Role::WingLeader) and (pChar->wingID() != pCmdrChar->wingID()))
+            continue;
+        if ((role == Fleet::Role::SquadLeader) and (pChar->squadID() != pCmdrChar->squadID()))
+            continue;
+        if (sameSystem and (pClient->GetSystemID() != pCmdr->GetSystemID()))
+            continue;
+        if (sameBubble and (pClient->GetShipSE()->SysBubble() != pBubble))
+            continue;
+        into.push_back(pClient);
+    }
+}
+
+void FleetService::SetTargetTag(uint32 fleetID, uint32 itemID, const std::string& tag)
+{
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if (fItr == m_fleetDataMap.end())
+        return;
+
+    std::map<uint32, std::string>& tags = fItr->second.targetTags;
+    // a tag marks one item only
+    for (auto itr = tags.begin(); itr != tags.end(); )
+        if ((itr->second == tag) and (itr->first != itemID)) {
+            itr = tags.erase(itr);
+        } else {
+            ++itr;
+        }
+    tags[itemID] = tag;
+
+    _log(FLEET__TRACE, "FleetService::SetTargetTag() - fleetID: %u item %u tagged '%s'", fleetID, itemID, tag.c_str());
+
+    PyTuple* tuple = new PyTuple(1);
+        tuple->SetItem(0, MakeFleetState(fleetID));
+    SendFleetUpdate(fleetID, "OnFleetStateChange", tuple);
+}
+
+PyRep* FleetService::MakeFleetState(uint32 fleetID)
+{
+    PyDict* tags = new PyDict();
+    std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+    if (fItr != m_fleetDataMap.end())
+        for (auto& cur : fItr->second.targetTags)
+            tags->SetItem(new PyInt(cur.first), new PyString(cur.second));
+    PyDict* dict = new PyDict();
+        dict->SetItemString("targetTags", tags);
+    return new PyObject("util.KeyVal", dict);
 }
 
 void FleetService::RemoveMember(Client* pClient)

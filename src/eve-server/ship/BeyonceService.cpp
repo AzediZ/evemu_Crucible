@@ -28,7 +28,9 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "EntityList.h"
 #include "StaticDataMgr.h"
+#include "fleet/FleetService.h"
 #include "cache/ObjCacheService.h"
 #include "planet/PlanetDB.h"
 #include "system/SystemDB.h"
@@ -343,70 +345,25 @@ PyResult BeyonceBound::CmdOrbit(PyCallArgs &call, PyInt* entityID, PyRep* rangeV
 }
 
 // only the covert ops cloak can warp
-void BeyonceBound::CheckCloakedWarp(Client* pClient)
+bool BeyonceBound::CanWarpCloaked(Client* pClient)
 {
     ShipSE* pShip(pClient->GetShipSE());
     if ((pShip == nullptr) or (pShip->DestinyMgr() == nullptr) or !pShip->DestinyMgr()->IsModuleCloaked())
-        return;
+        return true;
     GenericModule* pMod(pClient->GetShip()->GetModuleManager()->GetActiveModuleByGroup(EVEDB::invGroups::Cloaking_Device));
-    if ((pMod != nullptr) and pMod->IsCloakModule() and pMod->GetCloakModule()->IsWarpSafeCloak())
-        return;
-    throw UserError ("CantWarpWhileCloaked");
+    return ((pMod != nullptr) and pMod->IsCloakModule() and pMod->GetCloakModule()->IsWarpSafeCloak());
 }
 
-PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* id) {
-    _log(AUTOPILOT__MESSAGE, "%s called WarpToStuff. AP: %s", call.client->GetName(), (call.client->IsAutoPilot() ? "true" : "false"));
-    //call.client->SetAutoPilot(false);
+void BeyonceBound::CheckCloakedWarp(Client* pClient)
+{
+    if (!CanWarpCloaked(pClient))
+        throw UserError ("CantWarpWhileCloaked");
+}
 
-  _log(SERVICE__CALL_DUMP, "BeyonceBound::Handle_CmdWarpToStuff() - size=%lli", call.tuple->size());
-   call.Dump(SERVICE__CALL_DUMP);
-
-   /** @todo (allan) finish warp scramble system */
-   // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
-   if (call.client->GetShipSE()->IsWarpScrambled())
-        throw UserError ("WarpScrambled");
-    // warp disruption fields (bubbles)
-    if (call.client->SystemMgr() != nullptr)
-        call.client->SystemMgr()->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE());
-    CheckCloakedWarp(call.client);
-
-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
-    if (pDestiny == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-    if (pDestiny->IsWarping()){
-        call.client->SendNotifyMsg( "You are already warping");
-        return PyStatic.NewNone();
-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
-        return PyStatic.NewNone();
-    } else if (pDestiny->IsFrozen()) {
-        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
-        return PyStatic.NewNone();
-    }
-
-    SystemManager* pSystem = call.client->SystemMgr();
-    if (pSystem == nullptr) {
-        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
-        return PyStatic.NewNone();
-    }
-
-    bool fleet(false);
-    if (call.byname.find("fleet") != call.byname.end())
-        if (!(call.byname.find("fleet")->second->IsNone()))
-            fleet = call.byname.find("fleet")->second->AsBool()->value();
-
-    // get the warp-to distance specified by the client
-    int32 distance(0); //Was set to 5000; setting to 0 makes warp in to station and gate more realistic.
-    if (call.byname.find("minRange") != call.byname.end())
-        distance = PyRep::IntegerValueU32(call.byname.find("minRange")->second);
-
-    GPoint warpToPoint(NULL_ORIGIN);
-    SystemEntity* pSE(nullptr);
-    double radius(0);
-    uint32 toID(0);
+bool BeyonceBound::ResolveWarpTarget(Client* pClient, const std::string& type, PyRep* id, GPoint& point, SystemEntity*& pSE, uint32& toID)
+{
+    SystemManager* pSystem = pClient->SystemMgr();
     std::string stringArg = "";
-
     if ((id->IsString())
     or  (id->IsWString())) {
         stringArg = PyRep::StringContent(id);
@@ -414,70 +371,90 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
         toID = PyRep::IntegerValueU32(id);
     }
 
-    if (type->content() == "item" ) {
+    if (type == "item" ) {
         pSE = pSystem->GetSE(toID);
         if (pSE == nullptr) {
-            codelog(CLIENT__ERROR, "%s: unable to find item location %u in %s(%u)", call.client->GetName(), toID, pSystem->GetName(), pSystem->GetID());
-            return PyStatic.NewNone();
+            codelog(CLIENT__ERROR, "%s: unable to find item location %u in %s(%u)", pClient->GetName(), toID, pSystem->GetName(), pSystem->GetID());
+            return false;
         }
-    } else if (type->content() == "bookmark" ) {
+    } else if (type == "bookmark" ) {
         double x(0.0), y(0.0), z(0.0);
         uint16 typeID(0);
         uint32 locationID(0);
-        uint32 bookmarkID(PyRep::IntegerValueU32(call.tuple->GetItem(1)));
+        uint32 bookmarkID(toID);
 
         if (this->m_bookmark == nullptr) {
             sLog.Error( "BeyonceService::Handle_WarpToStuff()", "Attempt to access BookmarkService returned NULL." );
-            return PyStatic.NewNone();
+            return false;
         }
+        toID = 0;
         this->m_bookmark->LookupBookmark(bookmarkID, toID, typeID, locationID, x, y, z);
 
         if ( typeID == 5 ) {
-            if (call.client->GetSystemID() != locationID) {
+            if (pClient->GetSystemID() != locationID) {
                 //  this bm is for different system.  make error here.
-                return PyStatic.NewNone();
+                return false;
             }
-            warpToPoint.x = x;
-            warpToPoint.y = y;
-            warpToPoint.z = z;
+            point.x = x;
+            point.y = y;
+            point.z = z;
         } else {
             // Bookmark type is of a static system entity, so search for it and obtain its coordinates:
             pSE = pSystem->GetSE( toID );
             if (pSE == nullptr) {
-                codelog(CLIENT__ERROR, "%s: unable to find bookmark location %u in %s(%u)", call.client->GetName(), toID, pSystem->GetName(), pSystem->GetID());
-                return PyStatic.NewNone();
+                codelog(CLIENT__ERROR, "%s: unable to find bookmark location %u in %s(%u)", pClient->GetName(), toID, pSystem->GetName(), pSystem->GetID());
+                return false;
             }
         }
-    } else if (type->content() == "scan") {
+    } else if (type == "scan") {
         uint32 anomID = pSystem->GetAnomMgr()->GetAnomalyID(stringArg);
         pSE = pSystem->GetSE(anomID);
-    } else if (type->content() == "launch") {
+        toID = anomID;
+    } else if (type == "launch") {
         //warpToPoint = PlanetDB::GetLaunchPos(toID);
         pSE = pSystem->GetSE(toID);
         // launchpickup - launch, launchid
+    } else if (type == "char") {
+        /* warp to a fleet member (menusvc WarpToMember / WarpFleetToMember):  the member must be in our fleet, in space in this system.
+         *  the warp ends at the member's ship (cloaked members too)
+         */
+        Client* pTarget(sEntityList.FindClientByCharID(toID));
+        if ((pTarget == nullptr) or !pClient->InFleet() or (pTarget->GetFleetID() != pClient->GetFleetID())
+        or !pTarget->IsInSpace() or (pTarget->GetSystemID() != pClient->GetSystemID()) or (pTarget->GetShipSE() == nullptr))
+            throw UserError("FleetNotAMember");
+        if (pTarget == pClient)
+            return false;
+        pSE = pTarget->GetShipSE();
+        toID = pSE->GetID();
     }
     // the systems below are not implemented yet.  hold on coding till systems are working and we know what needs to be done here
     // more info can be found in client::menuSvc.py
-    else if (type->content() == "epinstance") {
+    else if (type == "epinstance") {
         // epinstance, instanceid
         //stringArg
-        call.client->SendErrorMsg("WarpToInstance is not implemented at this time.");
-        return PyStatic.NewNone();
-    } else if (type->content() == "tutorial") {
+        pClient->SendErrorMsg("WarpToInstance is not implemented at this time.");
+        return false;
+    } else if (type == "tutorial") {
         // tutorial, none
-        call.client->SendErrorMsg("WarpToTutorial is not implemented at this time.");
-        return PyStatic.NewNone();
-    } else if (type->content() == "char") {
-    //  fleet warping
-    // [warptomember] char, charid, minrange
-    // [warpfleettomember] char, charid, minrange, fleet=1
-        call.client->SendErrorMsg("WarpToChar is not implemented at this time.");
-        return PyStatic.NewNone();
+        pClient->SendErrorMsg("WarpToTutorial is not implemented at this time.");
+        return false;
     } else {
-        sLog.Error( "BeyonceService::Handle_WarpToStuff()", "Unexpected type value: '%s'.", type->content().c_str() );
-        return PyStatic.NewNone();
+        sLog.Error( "BeyonceService::Handle_WarpToStuff()", "Unexpected type value: '%s'.", type.c_str() );
+        return false;
     }
 
+    if ((pSE == nullptr) and point.isZero()) {
+        // point is zero ....make error and return
+        codelog(CLIENT__ERROR, "%s: warpToPoint.isZero() = true.  Cannot find location %u for '%s'", pClient->GetName(), toID, type.c_str());
+        pClient->SendErrorMsg("WarpTo: Item location not found.");
+        return false;
+    }
+    return true;
+}
+
+GPoint BeyonceBound::GetWarpInPoint(SystemEntity* pSE, uint32 toID, const GPoint& point, const GPoint& shipPos, int32& distance)
+{
+    GPoint warpToPoint(point);
         /* formulas for warpin points for all objects
          * x,y,z = object coords.  r = object radius
          *
@@ -524,7 +501,7 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
          *    return util.KeyVal(x=x, y=y, z=z)
          */
     if (pSE != nullptr) {
-        radius = pSE->GetRadius();
+        double radius = pSE->GetRadius();
         // this will need adjustment for warping to bookmarks
         warpToPoint = pSE->GetPosition();
         if (pSE->IsPlanetSE()) {
@@ -554,7 +531,7 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
             if (pSE->GetMoonSE()->HasTower()) {
                 // if moon has a tower, make warpin point 20km inside edge of tower's bubble.
                 warpToPoint = pSE->GetMoonSE()->GetMyTower()->GetPosition();
-                GVector vectorFromOrigin(call.client->GetShipSE()->GetPosition(), warpToPoint);
+                GVector vectorFromOrigin(shipPos, warpToPoint);
                 vectorFromOrigin.normalize();   //we now have a direction
                 GPoint stopPoint = (vectorFromOrigin * (BUBBLE_RADIUS_METERS - 20000));  // 20km inside bubble.
                 warpToPoint -= stopPoint;
@@ -573,25 +550,147 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
             warpToPoint.z -= ((radius + 500000) * std::sin(radius));
         }
         if (radius < 90000) {
-            // this will include stations (max station radius 60km)
-            GVector vectorFromOrigin(call.client->GetShipSE()->GetPosition(), warpToPoint);
+            // this will include stations (max station radius 60km) and ships (warp to fleet member)
+            GVector vectorFromOrigin(shipPos, warpToPoint);
             vectorFromOrigin.normalize();   //we now have a direction
             GPoint stopPoint = (vectorFromOrigin * radius);
             warpToPoint -= stopPoint;
         }
     }
-    if (warpToPoint.isZero()) {
-        // point is zero ....make error and return
-        codelog(CLIENT__ERROR, "%s: warpToPoint.isZero() = true.  Cannot find location %u for '%s'", call.client->GetName(), toID, type->content().c_str());
-        call.client->SendErrorMsg("WarpTo: Item location not found.");
+    return warpToPoint;
+}
+
+void BeyonceBound::GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed)
+{
+    speed = 0;
+    std::vector<Client*> candidates;
+    sFltSvc.GetSubordinates(pCmdr, candidates, true, sConfig.world.fleetWarpOnGridOnly);
+
+    // members that can't warp right now are left behind (Crucible didn't tell them)
+    InterdictionMgr* pInterdict(pCmdr->SystemMgr() != nullptr ? pCmdr->SystemMgr()->GetInterdictionMgr() : nullptr);
+    for (auto pClient : candidates) {
+        if (pClient->GetCharacterID() == excludeCharID)
+            continue;
+        if (pClient->IsSessionChange() or pClient->IsJump() or pClient->IsDock() or pClient->IsLoginWarping())
+            continue;
+        ShipSE* pShip(pClient->GetShipSE());
+        DestinyManager* pDestiny(pShip->DestinyMgr());
+        if ((pDestiny == nullptr) or pDestiny->IsWarping() or pDestiny->IsFrozen())
+            continue;
+        if (pShip->IsWarpScrambled() or !CanWarpCloaked(pClient))
+            continue;
+        if ((pInterdict != nullptr) and pInterdict->IsWarpDisrupted(pShip))
+            continue;
+        members.push_back(pClient);
+    }
+
+    if (!sConfig.world.fleetWarpSlowestSpeed or members.empty())
+        return;
+    // the whole group warps at the speed of its slowest ship
+    if (pCmdr->GetShipSE()->DestinyMgr() != nullptr)
+        speed = pCmdr->GetShipSE()->DestinyMgr()->GetWarpSpeed();
+    for (auto pClient : members) {
+        int32 mySpeed(pClient->GetShipSE()->DestinyMgr()->GetWarpSpeed());
+        if ((speed == 0) or (mySpeed < speed))
+            speed = mySpeed;
+    }
+}
+
+void BeyonceBound::FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed)
+{
+    for (auto pClient : members) {
+        ShipSE* pShip(pClient->GetShipSE());
+        // the target may have changed since GetFleetWarpMembers() (a member's own warp to it can't go anywhere)
+        if ((pShip == nullptr) or (pShip == pSE) or (pShip->DestinyMgr() == nullptr))
+            continue;
+        int32 distance(minRange);
+        GPoint warpToPoint(GetWarpInPoint(pSE, toID, point, pShip->GetPosition(), distance));
+        distance += (pShip->GetRadius() * 2); // add ship diameter to distance
+
+        pClient->SetInvul(false);
+        pClient->SetUndock(false);
+        pClient->SetAutoPilot(false);
+        pShip->DestinyMgr()->WarpTo(warpToPoint, distance, false, nullptr, speed);
+        if (!pShip->DestinyMgr()->IsAligningForWarp() and !pShip->DestinyMgr()->IsWarping())
+            continue;   // too close, no capacitor, bubbled...  WarpTo told them
+
+        PyDict* args = new PyDict();
+            args->SetItemString("leader", new PyString(pCmdr->GetName()));
+        pClient->SendRemoteMessage("FleetWarp", args);
+    }
+    _log(FLEET__TRACE, "%s fleet warped %u members to %u (speed %i)", pCmdr->GetName(), (uint32)members.size(), toID, speed);
+}
+
+PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* id) {
+    _log(AUTOPILOT__MESSAGE, "%s called WarpToStuff. AP: %s", call.client->GetName(), (call.client->IsAutoPilot() ? "true" : "false"));
+    //call.client->SetAutoPilot(false);
+
+  _log(SERVICE__CALL_DUMP, "BeyonceBound::Handle_CmdWarpToStuff() - size=%lli", call.tuple->size());
+   call.Dump(SERVICE__CALL_DUMP);
+
+   // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
+   if (call.client->GetShipSE()->IsWarpScrambled())
+        throw UserError ("WarpScrambled");
+    // warp disruption fields (bubbles)
+    if (call.client->SystemMgr() != nullptr)
+        call.client->SystemMgr()->GetInterdictionMgr()->CheckCanWarp(call.client->GetShipSE());
+    CheckCloakedWarp(call.client);
+
+    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
+    if (pDestiny == nullptr) {
+        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
         return PyStatic.NewNone();
     }
+    if (pDestiny->IsWarping()){
+        call.client->SendNotifyMsg( "You are already warping");
+        return PyStatic.NewNone();
+    }  else if (pDestiny->AbortIfLoginWarping(true)) {
+        return PyStatic.NewNone();
+    } else if (pDestiny->IsFrozen()) {
+        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
+        return PyStatic.NewNone();
+    }
+
+    SystemManager* pSystem = call.client->SystemMgr();
+    if (pSystem == nullptr) {
+        codelog(CLIENT__ERROR, "%s: Client has no system manager!", call.client->GetName());
+        return PyStatic.NewNone();
+    }
+
+    // warp fleet/wing/squad (menusvc sends fleet=True for commanders only).  anyone else just warps alone
+    bool fleet(false);
+    std::map<std::string, PyRep*>::const_iterator kwItr = call.byname.find("fleet");
+    if ((kwItr != call.byname.end()) and (kwItr->second != nullptr) and !kwItr->second->IsNone())
+        fleet = (kwItr->second->IsBool() ? kwItr->second->AsBool()->value() : (PyRep::IntegerValue(kwItr->second) != 0));
+
+    // get the warp-to distance specified by the client
+    int32 distance(0); //Was set to 5000; setting to 0 makes warp in to station and gate more realistic.
+    if (call.byname.find("minRange") != call.byname.end())
+        distance = PyRep::IntegerValueU32(call.byname.find("minRange")->second);
+
+    GPoint point(NULL_ORIGIN);
+    SystemEntity* pSE(nullptr);
+    uint32 toID(0);
+    if (!ResolveWarpTarget(call.client, type->content(), id, point, pSE, toID))
+        return PyStatic.NewNone();
+
+    // the subordinates (and the group's warp speed) are taken before anyone moves
+    std::vector<Client*> members;
+    int32 speed(0);
+    if (fleet and sFltSvc.IsCommander(call.client))
+        GetFleetWarpMembers(call.client, (type->content() == "char" ? PyRep::IntegerValueU32(id) : 0), members, speed);
+
+    int32 myDistance(distance);
+    GPoint warpToPoint(GetWarpInPoint(pSE, toID, point, call.client->GetShipSE()->GetPosition(), myDistance));
 
     call.client->SetInvul(false);
     call.client->SetUndock(false);
 
-    distance += (call.client->GetShipSE()->GetRadius() * 2); // add ship diameter to distance
-    pDestiny->WarpTo(warpToPoint, distance);
+    myDistance += (call.client->GetShipSE()->GetRadius() * 2); // add ship diameter to distance
+    pDestiny->WarpTo(warpToPoint, myDistance, false, nullptr, speed);
+
+    if (!members.empty())
+        FleetWarp(call.client, members, point, pSE, toID, distance, speed);
 
     return PyStatic.NewNone();
 }
@@ -1244,15 +1343,46 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID, 
 }
 
 PyResult BeyonceBound::CmdFleetRegroup(PyCallArgs &call) {
-    // not sure what this is supposed to do yet
-    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdFleetRegroup");
-    call.Dump(SHIP__WARNING);
-    return nullptr;
+    // fleetSvc.Regroup() -> bp.CmdFleetRegroup().  the commander's subordinates on grid approach the commander at full speed
+    if (!call.client->InFleet() or !(sFltSvc.IsCommander(call.client) or sFltSvc.IsBoss(call.client->GetChar().get())))
+        throw UserError("FleetNotAllowed");
+    ShipSE* pCmdrSE(call.client->GetShipSE());
+    if ((pCmdrSE == nullptr) or !call.client->IsInSpace())
+        return PyStatic.NewNone();
+
+    std::vector<Client*> members;
+    sFltSvc.GetSubordinates(call.client, members, true, true);
+    for (auto pClient : members) {
+        if (pClient->IsSessionChange() or pClient->IsJump() or pClient->IsDock() or pClient->IsLoginWarping())
+            continue;
+        DestinyManager* pDestiny(pClient->GetShipSE()->DestinyMgr());
+        if ((pDestiny == nullptr) or pDestiny->IsWarping() or pDestiny->IsFrozen())
+            continue;
+        pClient->SetUndock(false);
+        pClient->SetAutoPilot(false);
+        pDestiny->Follow(pCmdrSE, 50);
+        pDestiny->SetSpeedFraction(1.0f);
+
+        PyDict* args = new PyDict();
+            args->SetItemString("leader", new PyString(call.client->GetName()));
+        pClient->SendRemoteMessage("FleetRegroup", args);
+    }
+
+    return PyStatic.NewNone();
 }
 
 PyResult BeyonceBound::CmdFleetTagTarget(PyCallArgs &call, PyInt* itemID, PyString* tag) {
-    // bp.CmdFleetTagTarget(itemID, tag)
-    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdFleetTagTarget");
-    call.Dump(SHIP__WARNING);
+    // bp.CmdFleetTagTarget(itemID, tag).  the client offers this to commanders (menusvc ImFleetCommander)
+    if (!call.client->InFleet() or !(sFltSvc.IsCommander(call.client) or sFltSvc.IsBoss(call.client->GetChar().get())))
+        throw UserError("FleetNotAllowed");
+    // menusvc tags: '0'-'9', 'A'-'J', 'X', 'Y', 'Z'
+    const std::string& str(tag->content());
+    if (str.size() != 1)
+        return PyStatic.NewNone();
+    char c(str[0]);
+    if (!(((c >= '0') and (c <= '9')) or ((c >= 'A') and (c <= 'J')) or (c == 'X') or (c == 'Y') or (c == 'Z')))
+        return PyStatic.NewNone();
+
+    sFltSvc.SetTargetTag(call.client->GetFleetID(), itemID->value(), str);
     return PyStatic.NewNone();
 }

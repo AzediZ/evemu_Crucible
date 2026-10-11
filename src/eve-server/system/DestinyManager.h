@@ -127,7 +127,8 @@ public:
     void SetSpeedFraction(float fraction=1.0f);
 
     /* Larger movement */
-    void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr);
+    // warpSpeed is warp speed in AU/s * 10 (as GetWarpSpeed()); 0 uses this ship's own speed.  fleet warps pass the slowest speed of the group
+    void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr, int32 warpSpeed = 0);
 
     /* Ship State Query functions */
     bool IsMoving()                                     { return ((m_ballMode != Destiny::Ball::Mode::STOP) or (m_velocity.lengthSquared() > 1.0)); }

@@ -57,6 +57,19 @@ public:
 protected:
     // throws CantWarpWhileCloaked unless the active cloak is a covert ops cloak
     void CheckCloakedWarp(Client* pClient);
+    // false when a cloaking device that isn't warp safe is running
+    static bool CanWarpCloaked(Client* pClient);
+
+    /* CmdWarpToStuff helpers */
+    // finds what to warp to: a fixed point (bookmarks) or an entity.  false (after telling the client when needed) when there's nothing to warp to
+    bool ResolveWarpTarget(Client* pClient, const std::string& type, PyRep* id, GPoint& point, SystemEntity*& pSE, uint32& toID);
+    /* the warp-in point of pSE (or point when pSE is null) for a ship at shipPos.
+     *  distance is the requested range on entry and the range to use on return (some objects add to it) */
+    static GPoint GetWarpInPoint(SystemEntity* pSE, uint32 toID, const GPoint& point, const GPoint& shipPos, int32& distance);
+    /* commander warp: the commander's subordinates in the system (or on grid, world.fleetWarpOnGridOnly) that can warp now
+     *  (excludeCharID is never warped).  speed is the warp speed for the whole group (0 = each ship's own speed) */
+    void GetFleetWarpMembers(Client* pCmdr, uint32 excludeCharID, std::vector<Client*>& members, int32& speed);
+    void FleetWarp(Client* pCmdr, const std::vector<Client*>& members, const GPoint& point, SystemEntity* pSE, uint32 toID, int32 minRange, int32 speed);
 
     PyResult CmdFollowBall(PyCallArgs& call, PyInt* ballID, PyRep* distance);
     PyResult CmdSetSpeedFraction(PyCallArgs& call, PyFloat* speedFraction);

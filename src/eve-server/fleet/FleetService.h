@@ -111,6 +111,17 @@ public:
     uint8 GetWingCount(uint32 fleetID)                 { return m_fleetWings.count(fleetID); }
     uint8 GetSquadCount(uint32 wingID)                 { return m_wingSquads.count(wingID); }
 
+    /* fleet movement helpers */
+    // FC, WC or SC (the boss alone is not a commander)
+    bool IsCommander(Client* pClient);
+    /* the commander's subordinates in space with a ship: FC -> whole fleet, WC -> own wing, SC -> own squad.  never pCmdr.
+     *  sameSystem/sameBubble limit them to the commander's solar system/bubble */
+    void GetSubordinates(Client* pCmdr, std::vector<Client*>& into, bool sameSystem = true, bool sameBubble = false);
+    // tags an item for the fleet.  a tag marks one item only: reusing it moves it.  sends OnFleetStateChange
+    void SetTargetTag(uint32 fleetID, uint32 itemID, const std::string& tag);
+    // util.KeyVal(targetTags={itemID: tag}) for OnFleetStateChange
+    PyRep* MakeFleetState(uint32 fleetID);
+
     void FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8 group, std::string msg);
 
     void SendActiveStatus(uint32 fleetID, int32 wingID, int32 squadID);

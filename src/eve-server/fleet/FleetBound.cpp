@@ -143,10 +143,8 @@ PyResult FleetBound::Init(PyCallArgs &call, std::optional <PyInt*> shipTypeID) {
     }
     pClient->SendNotification("OnFleetJoin", "clientid", &res, true);
 
-    PyDict* dict = new PyDict();
-        dict->SetItemString("targetTags", new PyDict());
     PyTuple* obj = new PyTuple(1);
-        obj->SetItem(0, new PyObject("util.KeyVal", dict));
+        obj->SetItem(0, sFltSvc.MakeFleetState(m_fleetID));
     _log(FLEET__UPDATE_DUMP, "OnFleetStateChange");
     obj->Dump(FLEET__UPDATE_DUMP, "   ");
     pClient->SendNotification("OnFleetStateChange", "clientid", obj, true);
