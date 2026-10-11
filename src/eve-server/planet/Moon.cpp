@@ -13,6 +13,9 @@
 #include "StaticDataMgr.h"
 #include "system/Celestial.h"
 #include "system/SystemManager.h"
+#include "pos/PosMgrDB.h"
+#include "EVEServerConfig.h"
+#include <random>
 
 /** @note  general design notes
  * moonse will have a Moon class to hold data and call other functions/methods as needed
@@ -54,9 +57,9 @@ Moon::Moon()
 
 MoonSE::MoonSE(InventoryItemRef self, EVEServiceManager &services, SystemManager* system)
 : StaticSystemEntity(self, services, system),
-m_towerSE(nullptr)
+m_towerSE(nullptr),
+m_resourcesLoaded(false)
 {
-    /** @todo finish moon resources...this is hacked */
     m_resources.clear();
 /*
           [PyTuple 2 items]
@@ -169,27 +172,72 @@ Moon materials have different rarity classes, starting with R4 being the most co
     Titanium Chromide
     Vanadium Hafnite
      */
-    std::map<uint16, uint8> data;
-    sDataMgr.GetMoonResouces(data);
-
-    for (auto cur : data)
-        switch (cur.second) {
-            case 1: {
-                m_resources.insert(std::pair<uint16, uint8>(cur.first, 6));
-            } break;
-            case 4: {
-                m_resources.insert(std::pair<uint16, uint8>(cur.first, 4));
-            } break;
-            case 6:{
-                m_resources.insert(std::pair<uint16, uint8>(cur.first, 3));
-            } break;
-            case 8:{
-                m_resources.insert(std::pair<uint16, uint8>(cur.first, 2));
-            } break;
-            case 10:{
-                m_resources.insert(std::pair<uint16, uint8>(cur.first, 1));
-            } break;
-        }
-
+    // the materials load on first use (moonResources, generated once per moon)
     return true;
+}
+
+void MoonSE::LoadResources()
+{
+    if (m_resourcesLoaded)
+        return;
+    m_resourcesLoaded = true;
+    m_resources.clear();
+    if (PosMgrDB::GetMoonResources(GetID(), m_resources))
+        return;
+    GenerateResources();
+    PosMgrDB::SaveMoonResources(GetID(), m_resources);
+}
+
+uint8 MoonSE::GetResource(uint16 typeID)
+{
+    LoadResources();
+    std::map<uint16, uint8>::iterator itr(m_resources.find(typeID));
+    return (itr == m_resources.end() ? 0 : itr->second);
+}
+
+void MoonSE::GenerateResources()
+{
+    /* deterministic per moon and pos.MoonGooSeed.  half the moons (MoonGooEmptyChance) have nothing, the rest one (50%),
+     *  two (35%) or three (15%) different materials, picked by rarity class with weights for the system's security:
+     *  high-sec R4 80 / R8 20;  low-sec R4 50 / R8 25 / R16 15 / R32 7 / R64 3;  null-sec and w-space R4 40 / R8 25 / R16 18 /
+     *  R32 11 / R64 6.  each at quantity 1 (100 units an hour for a harvester)
+     */
+    static const uint16 classes[5][4] = {
+        { 16634, 16635, 16633, 16636 },     // R4:  atmospheric gases, evaporite deposits, hydrocarbons, silicates
+        { 16640, 16639, 16638, 16637 },     // R8:  cobalt, scandium, titanium, tungsten
+        { 16643, 16641, 16644, 16642 },     // R16: cadmium, chromium, platinum, vanadium
+        { 16647, 16648, 16646, 16649 },     // R32: caesium, hafnium, mercury, technetium
+        { 16650, 16651, 16652, 16653 }      // R64: dysprosium, neodymium, promethium, thulium
+    };
+    std::mt19937 rng(sConfig.pos.MoonGooSeed ^ GetID());
+    std::uniform_real_distribution<double> roll(0.0, 1.0);
+    if (roll(rng) < sConfig.pos.MoonGooEmptyChance)
+        return;
+
+    double weights[5] = { 40, 25, 18, 11, 6 };
+    float trueSec(m_system->GetSystemSecurityRating());
+    if (IsKSpaceID(m_system->GetID()) and (trueSec >= 0.45f)) {
+        weights[0] = 80; weights[1] = 20; weights[2] = 0; weights[3] = 0; weights[4] = 0;
+    } else if (IsKSpaceID(m_system->GetID()) and (trueSec > 0.0f)) {
+        weights[0] = 50; weights[1] = 25; weights[2] = 15; weights[3] = 7; weights[4] = 3;
+    }
+
+    double count(roll(rng));
+    uint8 materials(count < 0.5 ? 1 : (count < 0.85 ? 2 : 3));
+    double total(0);
+    for (int i = 0; i < 5; ++i)
+        total += weights[i];
+    for (uint8 picked = 0, tries = 0; (picked < materials) and (tries < 50); ++tries) {
+        double pick(roll(rng) * total);
+        int rarity(0);
+        while ((rarity < 4) and (pick >= weights[rarity])) {
+            pick -= weights[rarity];
+            ++rarity;
+        }
+        uint16 typeID(classes[rarity][std::uniform_int_distribution<int>(0, 3)(rng)]);
+        if (m_resources.find(typeID) != m_resources.end())
+            continue;
+        m_resources[typeID] = 1;
+        ++picked;
+    }
 }

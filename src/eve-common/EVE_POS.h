@@ -109,6 +109,19 @@ namespace EVEPOS {
         };
     }
 
+    // a row of invTypeReactions
+    struct ReactionRow {
+        uint16 typeID;
+        bool input;
+        uint16 quantity;    // x the material's moonMiningAmount per cycle
+    };
+    // a moon process link:  sourceID sends typeID to destID (posProcessLinks)
+    struct ProcessLink {
+        uint32 sourceID;
+        uint16 typeID;
+        uint32 destID;
+    };
+
     struct POS_Connections {
         uint32 toID;
         uint32 sourceID;

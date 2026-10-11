@@ -46,13 +46,21 @@ public:
     bool HasTower()                                     { return (m_towerSE != nullptr); }
     void SetTower(StructureSE* pSE)                     { m_towerSE = pSE; }
 
-    std::map<uint16, uint8>::iterator GooEnd()          { return m_resources.end(); }
-    std::map<uint16, uint8>::iterator GooBegin()        { return m_resources.begin(); }
+    // the moon's materials (typeID, quantity).  loaded (or generated) on first use
+    std::map<uint16, uint8>::iterator GooEnd()          { LoadResources(); return m_resources.end(); }
+    std::map<uint16, uint8>::iterator GooBegin()        { LoadResources(); return m_resources.begin(); }
+    // quantity of a material, 0 if the moon has none
+    uint8 GetResource(uint16 typeID);
 
 
 private:
+    void LoadResources();
+    // procedural materials for a moon that never had any (pos.MoonGooSeed, pos.MoonGooEmptyChance)
+    void GenerateResources();
+
     StructureSE* m_towerSE;
 
+    bool m_resourcesLoaded;
     std::map<uint16, uint8> m_resources;     // moon goo (typeID, amt)
 
 };

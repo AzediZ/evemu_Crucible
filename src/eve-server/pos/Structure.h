@@ -208,6 +208,10 @@ public:
     // sets the control tower of a module (anchoring near another tower, orphaning)
     void                        SetControlTower(TowerSE* pTower);
     int32                       GetProvisionTypeID()    { return m_data.provisionTypeID; }
+    void                        SetProvisionTypeID(int32 typeID)    { m_data.provisionTypeID = typeID; }
+    // moon process ran last hour (harvesters, silos, reactors)
+    bool                        IsProcessActive()       { return m_data.active; }
+    void                        SetProcessActive(bool set)  { m_data.active = set; }
     // shield charge / capacity
     float                       GetShieldFraction();
     // the pilot manning a starbase weapon (manual control), 0 = none

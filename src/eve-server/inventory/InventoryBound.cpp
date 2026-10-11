@@ -38,6 +38,7 @@
 #include "planet/Planet.h"
 #include "planet/Colony.h"
 #include "pos/Structure.h"
+#include "pos/Array.h"
 #include "ship/modules/GenericModule.h"
 #include "system/BookmarkDB.h"
 #include "system/Container.h"
@@ -1266,9 +1267,14 @@ PyResult InventoryBound::ListDroneBay(PyCallArgs &call) {
 }
 
 PyResult InventoryBound::RunRefiningProcess(PyCallArgs &call) {
+    // menu 'Run refining process' on a refining array
     _log(POS__MESSAGE, "%s Calling InventoryBound::RunRefiningProcess() for %s(%u)", call.client->GetName(), m_self->name(), m_itemID);
     call.Dump(POS__DUMP);
-    return nullptr;
+    SystemEntity* pSE(m_self->categoryID() == EVEDB::invCategories::Structure ? StructureItemRef::StaticCast(m_self)->GetMySE() : nullptr);
+    if ((pSE == nullptr) or !pSE->IsPOSSE() or (pSE->GetPOSSE()->GetArraySE() == nullptr))
+        throw CustomError ("That is not a refinery.");
+    pSE->GetPOSSE()->GetArraySE()->StartRefining(call.client);
+    return PyStatic.NewNone();
 }
 
 // This function is called when an outpost construction platform is instructed to build

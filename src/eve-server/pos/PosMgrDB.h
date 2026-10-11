@@ -15,7 +15,6 @@
 #include "../../eve-common/EVE_POS.h"
 
 
-struct ReactorData;
 
 class StructureSE;
 
@@ -43,6 +42,14 @@ public:
     // solar systems with control towers that are onlining, online or reinforced
     static void GetActiveTowerSystems(std::vector<uint32>& into);
 
+    /* moon mining */
+    // a moon's materials (typeID/quantity).  false when they were never generated
+    static bool GetMoonResources(uint32 moonID, std::map<uint16, uint8>& into);
+    static void SaveMoonResources(uint32 moonID, const std::map<uint16, uint8>& resources);
+    // a tower's moon process links
+    static void GetProcessLinks(uint32 towerID, std::vector<EVEPOS::ProcessLink>& into);
+    static void ReplaceProcessLinks(uint32 towerID, const std::vector<EVEPOS::ProcessLink>& links);
+
     // pos data methods
     void DeleteData(uint32 itemID);
 
@@ -63,9 +70,6 @@ public:
     void UninstallBridgeLink(uint32 itemID);
     void UninstallRemoteBridgeLink(uint32 itemID);
 
-    bool GetReactorData(ReactorData* pData, EVEPOS::StructureData& sData);
-    void SaveReactorData(ReactorData* pData, EVEPOS::StructureData& sData);
-    void UpdateReactorData(ReactorData* pData, EVEPOS::StructureData& sData);
 
     bool GetCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData);
     void SaveCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData);

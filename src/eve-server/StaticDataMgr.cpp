@@ -133,6 +133,7 @@ void StaticDataMgr::Clear()
     m_t3Blueprints.clear();
     m_towerResources.clear();
     m_miniBalls.clear();
+    m_reactions.clear();
 
     PySafeDecRef(m_keyMap);
     PySafeDecRef(m_agents);
@@ -705,6 +706,18 @@ void StaticDataMgr::Populate()
         m_miniBalls[row.GetUInt(0)].push_back(ball);
     }
     sLog.Cyan("    StaticDataMgr", "%lu types with collision miniballs loaded in %.3fms.", m_miniBalls.size(), (GetTimeMSeconds() - startTime));
+
+    startTime = GetTimeMSeconds();
+    ManagerDB::GetTypeReactions(*res);
+    while (res->GetRow(row)) {
+        //SELECT reactionTypeID, input, typeID, quantity FROM invTypeReactions
+        EVEPOS::ReactionRow reaction = EVEPOS::ReactionRow();
+        reaction.input = (row.GetInt(1) != 0);
+        reaction.typeID = row.GetUInt(2);
+        reaction.quantity = (row.IsNull(3) ? 1 : row.GetUInt(3));
+        m_reactions.emplace(row.GetUInt(0), reaction);
+    }
+    sLog.Cyan("    StaticDataMgr", "%lu starbase reaction rows loaded in %.3fms.", m_reactions.size(), (GetTimeMSeconds() - startTime));
 
     //cleanup
     SafeDelete(res);
@@ -1317,6 +1330,14 @@ const std::vector<Destiny::MiniBall>* StaticDataMgr::GetMiniBalls(uint16 typeID)
     if ((itr == m_miniBalls.end()) or itr->second.empty())
         return nullptr;
     return &itr->second;
+}
+
+bool StaticDataMgr::GetReaction(uint16 reactionTypeID, std::vector<EVEPOS::ReactionRow>& into)
+{
+    auto range = m_reactions.equal_range(reactionTypeID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
+    return !into.empty();
 }
 
 void StaticDataMgr::GetTowerResources(uint16 towerTypeID, std::vector<EVEPOS::TowerResource>& into)

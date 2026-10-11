@@ -73,6 +73,62 @@ void PosMgrDB::GetActiveTowerSystems(std::vector<uint32>& into)
         into.push_back(row.GetUInt(0));
 }
 
+bool PosMgrDB::GetMoonResources(uint32 moonID, std::map<uint16, uint8>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT g.moonID, r.typeID, r.quantity FROM moonResourcesGenerated AS g"
+            " LEFT JOIN moonResources AS r ON r.moonID = g.moonID WHERE g.moonID = %u", moonID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetMoonResources query: %s", res.error.c_str());
+        // don't regenerate over a db error
+        return true;
+    }
+    DBResultRow row;
+    bool generated(false);
+    while (res.GetRow(row)) {
+        generated = true;
+        if (!row.IsNull(1))
+            into[row.GetUInt(1)] = row.GetUInt(2);
+    }
+    return generated;
+}
+
+void PosMgrDB::SaveMoonResources(uint32 moonID, const std::map<uint16, uint8>& resources)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM moonResources WHERE moonID = %u", moonID);
+    for (auto cur : resources)
+        sDatabase.RunQuery(err, "INSERT INTO moonResources (moonID, typeID, quantity) VALUES (%u, %u, %u)", moonID, cur.first, cur.second);
+    sDatabase.RunQuery(err, "REPLACE INTO moonResourcesGenerated (moonID) VALUES (%u)", moonID);
+}
+
+void PosMgrDB::GetProcessLinks(uint32 towerID, std::vector<EVEPOS::ProcessLink>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT sourceID, typeID, destID FROM posProcessLinks WHERE towerID = %u", towerID)) {
+        codelog(DATABASE__ERROR, "Error in GetProcessLinks query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        EVEPOS::ProcessLink link = EVEPOS::ProcessLink();
+        link.sourceID = row.GetUInt(0);
+        link.typeID = row.GetUInt(1);
+        link.destID = row.GetUInt(2);
+        into.push_back(link);
+    }
+}
+
+void PosMgrDB::ReplaceProcessLinks(uint32 towerID, const std::vector<EVEPOS::ProcessLink>& links)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM posProcessLinks WHERE towerID = %u", towerID);
+    for (auto cur : links)
+        sDatabase.RunQuery(err, "REPLACE INTO posProcessLinks (sourceID, typeID, destID, towerID) VALUES (%u, %u, %u, %u)",
+                           cur.sourceID, cur.typeID, cur.destID, towerID);
+}
+
 void PosMgrDB::GetControlTowerFuelRequirements(DBQueryResult& res) {
     if (!sDatabase.RunQuery(res,
             "SELECT controlTowerTypeID, resourceTypeID, purpose, quantity, minSecurityLevel, factionID, wormholeClassID"
@@ -393,28 +449,6 @@ void PosMgrDB::UninstallRemoteBridgeLink(uint32 itemID) //Removes a link from th
         " toItemID=0, toTypeID=0, toSystemID=0 "
         " WHERE toItemID=%u",   // mysql can't select from the table it updates; the remote is whichever bridge points here
         itemID);
-}
-
-bool PosMgrDB::GetReactorData(ReactorData* pData, EVEPOS::StructureData& sData)
-{
-    return true;
-}
-
-void PosMgrDB::SaveReactorData(ReactorData* pData, EVEPOS::StructureData& sData)
-{
-    /*
-    bool active;
-    int32 itemID;
-    int16 reaction;     // bp typeID?
-    std::map<uint32, EVEPOS::POS_Connections> connections;  // itemID, data
-    std::map<uint32, EVEPOS::POS_Resource> demands;         // itemID, resourceData(typeID/quantity)
-    std::map<uint32, EVEPOS::POS_Resource> supplies;        // itemID, resourceData(typeID/quantity)
-*/
-}
-
-void PosMgrDB::UpdateReactorData(ReactorData* pData, EVEPOS::StructureData& sData)
-{
-    // not used yet.
 }
 
 bool PosMgrDB::GetCustomsData(EVEPOS::CustomsData& cData, EVEPOS::OrbitalData& oData)

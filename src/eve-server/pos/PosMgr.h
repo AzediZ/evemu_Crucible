@@ -61,7 +61,7 @@ protected:
     PyResult UnanchorStructure(PyCallArgs& call, PyInt* itemID);
     PyResult AssumeStructureControl(PyCallArgs& call, PyInt* itemID);
     PyResult RelinquishStructureControl(PyCallArgs& call, PyInt* itemID);
-    PyResult ChangeStructureProvisionType(PyCallArgs& call, PyInt* towerID, PyInt* itemID, PyInt* typeID);
+    PyResult ChangeStructureProvisionType(PyCallArgs& call, PyInt* towerID, PyInt* itemID, PyRep* typeID);
     PyResult CompleteOrbitalStateChange(PyCallArgs& call, PyInt* itemID);
     PyResult GetMoonProcessInfoForTower(PyCallArgs& call, PyInt* itemID);
     PyResult LinkResourceForTower(PyCallArgs& call, PyInt* itemID, PyList* connections);

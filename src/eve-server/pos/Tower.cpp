@@ -159,6 +159,9 @@ void TowerSE::Init()
 
     // an online tower catches up on its first tic (its structures aren't all initialized yet)
     m_catchUp = IsPowered();
+    // moon process links
+    m_links.clear();
+    PosMgrDB::GetProcessLinks(m_data.itemID, m_links);
 
     // an online tower with a password has its force field
     m_harmonic = (IsPowered() ? EVEPOS::Harmonic::Online : EVEPOS::Harmonic::Offline);
@@ -550,6 +553,10 @@ void TowerSE::ProcessCycle(int64 cycleTime)
             return;
         }
     }
+
+    // moon mining and reactions run while the tower is online (not reinforced)
+    if (IsOnline())
+        RunMoonProcesses();
 
     m_tdata.lastCycle = cycleTime;
     // replayed hours save once at the end
@@ -1196,6 +1203,435 @@ PyRep* TowerSE::GetUsageFlagList()
     return new PyObject("util.Rowset", dict);
 }
 
+bool TowerSE::IsProcessStructure(StructureSE* pSE)
+{
+    switch (pSE->GetSelf()->groupID()) {
+        case EVEDB::invGroups::Moon_Mining:
+        case EVEDB::invGroups::Silo:
+        case EVEDB::invGroups::Mobile_Reactor:
+            return true;
+    }
+    return false;
+}
+
+uint32 TowerSE::ProcessUnits(uint16 typeID, uint32 qty)
+{
+    // quantities in moon harvesting and reactions are in batches of the material's moonMiningAmount
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if (pType == nullptr)
+        return qty;
+    uint32 amount(pType->GetAttribute(AttrMoonMiningAmount).get_uint32());
+    return (qty * (amount > 0 ? amount : 1));
+}
+
+float TowerSE::GetSiloCapacity(StructureSE* pSilo)
+{
+    // the silo's capacity with its tower's silo bonus
+    float capacity(pSilo->GetSelf()->type().capacity());
+    TowerSE* pTower(pSilo->GetControlTower());
+    if (pTower != nullptr) {
+        EvilNumber bonus(EvilZero);
+        if (pTower->GetSelf()->HasAttribute(AttrControlTowerSiloCapacityBonus, bonus))
+            capacity *= (1.0f + bonus.get_float() / 100.0f);
+    }
+    return capacity;
+}
+
+InventoryItemRef TowerSE::GetReaction(StructureSE* pReactor)
+{
+    // the reaction 'blueprint' sitting in a reactor
+    std::vector<InventoryItemRef> items;
+    pReactor->GetSelf()->GetMyInventory()->GetItemsByFlag(flagNone, items);
+    for (auto cur : items)
+        if (cur->categoryID() == EVEDB::invCategories::Reaction)
+            return cur;
+    return InventoryItemRef(nullptr);
+}
+
+uint32 TowerSE::GetSiloUnits(StructureSE* pSilo, uint16 typeID)
+{
+    std::vector<InventoryItemRef> items;
+    pSilo->GetSelf()->GetMyInventory()->GetItemsByFlag(flagNone, items);
+    uint32 units(0);
+    for (auto cur : items)
+        if ((cur->typeID() == typeID) and !cur->isSingleton())
+            units += cur->quantity();
+    return units;
+}
+
+uint32 TowerSE::AddToSilo(StructureSE* pSilo, uint16 typeID, uint32 units)
+{
+    // as much as fits
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if ((pType == nullptr) or (units == 0))
+        return 0;
+    double volume(pType->volume() > 0 ? pType->volume() : 1);
+    double freeVolume(GetSiloCapacity(pSilo) - pSilo->GetSelf()->GetMyInventory()->GetStoredVolume(flagNone));
+    uint32 room(freeVolume > 0 ? (uint32)(freeVolume / volume) : 0);
+    if (units > room)
+        units = room;
+    if (units == 0)
+        return 0;
+
+    InventoryItemRef stack(pSilo->GetSelf()->GetMyInventory()->GetByTypeFlag(typeID, flagNone));
+    if ((stack.get() != nullptr) and !stack->isSingleton()) {
+        stack->AlterQuantity(units, true);
+    } else {
+        ItemData idata(typeID, pSilo->GetSelf()->ownerID(), locTemp, flagNone, units);
+        InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
+        if (iRef.get() == nullptr)
+            return 0;
+        iRef->Move(pSilo->GetID(), flagNone, true);
+    }
+    return units;
+}
+
+void TowerSE::TakeFromSilo(StructureSE* pSilo, uint16 typeID, uint32 units)
+{
+    std::vector<InventoryItemRef> items;
+    pSilo->GetSelf()->GetMyInventory()->GetItemsByFlag(flagNone, items);
+    for (auto cur : items) {
+        if (units == 0)
+            break;
+        if ((cur->typeID() != typeID) or cur->isSingleton())
+            continue;
+        if (cur->quantity() > units) {
+            cur->AlterQuantity(-((int32)units), true);
+            units = 0;
+        } else {
+            units -= cur->quantity();
+            cur->SetQuantity(0, true, true);
+        }
+    }
+}
+
+uint32 TowerSE::GetLinkDest(uint32 sourceID, uint16 typeID)
+{
+    for (auto cur : m_links)
+        if ((cur.sourceID == sourceID) and (cur.typeID == typeID))
+            return cur.destID;
+    return 0;
+}
+
+bool TowerSE::IsLinked(uint32 itemID)
+{
+    for (auto cur : m_links)
+        if ((cur.sourceID == itemID) or (cur.destID == itemID))
+            return true;
+    return false;
+}
+
+bool TowerSE::Supplies(StructureSE* pSE, uint16 typeID)
+{
+    switch (pSE->GetSelf()->groupID()) {
+        case EVEDB::invGroups::Moon_Mining:
+        case EVEDB::invGroups::Silo:
+            return ((typeID != 0) and (pSE->GetProvisionTypeID() == typeID));
+        case EVEDB::invGroups::Mobile_Reactor: {
+            InventoryItemRef reaction(GetReaction(pSE));
+            std::vector<EVEPOS::ReactionRow> rows;
+            if ((reaction.get() == nullptr) or !sDataMgr.GetReaction(reaction->typeID(), rows))
+                return false;
+            for (auto cur : rows)
+                if (!cur.input and (cur.typeID == typeID))
+                    return true;
+        } break;
+    }
+    return false;
+}
+
+bool TowerSE::Demands(StructureSE* pSE, uint16 typeID)
+{
+    switch (pSE->GetSelf()->groupID()) {
+        case EVEDB::invGroups::Silo:
+            return ((typeID != 0) and (pSE->GetProvisionTypeID() == typeID));
+        case EVEDB::invGroups::Mobile_Reactor: {
+            InventoryItemRef reaction(GetReaction(pSE));
+            std::vector<EVEPOS::ReactionRow> rows;
+            if ((reaction.get() == nullptr) or !sDataMgr.GetReaction(reaction->typeID(), rows))
+                return false;
+            for (auto cur : rows)
+                if (cur.input and (cur.typeID == typeID))
+                    return true;
+        } break;
+    }
+    return false;
+}
+
+bool TowerSE::SetProcessLinks(PyList* links)
+{
+    // [(sourceID, destID, typeID), ...]:  every link between two of this tower's process structures, the source
+    //  supplying and the destination taking that material, one destination per source and material.  else nothing changes
+    std::vector<EVEPOS::ProcessLink> newLinks;
+    for (PyList::const_iterator itr = links->begin(); itr != links->end(); ++itr) {
+        if (!(*itr)->IsTuple() and !(*itr)->IsList())
+            return false;
+        PyRep* sRep((*itr)->IsTuple() ? (*itr)->AsTuple()->GetItem(0) : (*itr)->AsList()->GetItem(0));
+        PyRep* dRep((*itr)->IsTuple() ? (*itr)->AsTuple()->GetItem(1) : (*itr)->AsList()->GetItem(1));
+        PyRep* tRep((*itr)->IsTuple() ? (*itr)->AsTuple()->GetItem(2) : (*itr)->AsList()->GetItem(2));
+        if ((sRep == nullptr) or (dRep == nullptr) or (tRep == nullptr) or !sRep->IsInt() or !dRep->IsInt() or !tRep->IsInt())
+            return false;
+        EVEPOS::ProcessLink link = EVEPOS::ProcessLink();
+            link.sourceID = sRep->AsInt()->value();
+            link.destID = dRep->AsInt()->value();
+            link.typeID = tRep->AsInt()->value();
+        std::map<uint32, StructureSE*>::iterator src(m_structs.find(link.sourceID)), dst(m_structs.find(link.destID));
+        if ((src == m_structs.end()) or (dst == m_structs.end()) or (link.sourceID == link.destID))
+            return false;
+        if (!IsProcessStructure(src->second) or !IsProcessStructure(dst->second))
+            return false;
+        if (!Supplies(src->second, link.typeID) or !Demands(dst->second, link.typeID))
+            return false;
+        for (auto cur : newLinks)
+            if ((cur.sourceID == link.sourceID) and (cur.typeID == link.typeID))
+                return false;
+        newLinks.push_back(link);
+    }
+
+    m_links = newLinks;
+    PosMgrDB::ReplaceProcessLinks(m_data.itemID, m_links);
+    NotifyProcessChange();
+    return true;
+}
+
+void TowerSE::ChangeProvisionType(uint32 itemID, uint16 typeID)
+{
+    std::map<uint32, StructureSE*>::iterator itr(m_structs.find(itemID));
+    if (itr == m_structs.end())
+        throw CustomError ("That structure isn't controlled by this tower.");
+    StructureSE* pSE(itr->second);
+    uint16 groupID(pSE->GetSelf()->groupID());
+    if (groupID == EVEDB::invGroups::Moon_Mining) {
+        // only what this moon has
+        if ((typeID != 0) and ((m_moonSE == nullptr) or (m_moonSE->GetResource(typeID) == 0)))
+            throw UserError("MoonHarvesterInvalidType").AddFormatValue("type", new PyInt(typeID));
+    } else if (groupID == EVEDB::invGroups::Silo) {
+        if (typeID != 0) {
+            const ItemType* pType(sItemFactory.GetType(typeID));
+            if (pType == nullptr)
+                throw UserError("MoonInvalidSiloType");
+            // coupling arrays and the like hold one group, other silos moon materials and their products
+            EvilNumber cargoGroup(EvilZero);
+            if (pSE->GetSelf()->HasAttribute(AttrCargoGroup, cargoGroup) and (cargoGroup.get_uint32() != 0)) {
+                if (pType->groupID() != cargoGroup.get_uint32())
+                    throw UserError("MoonInvalidSiloType");
+            } else {
+                switch (pType->groupID()) {
+                    case EVEDB::invGroups::Moon_Materials:
+                    case EVEDB::invGroups::Intermediate_Materials:
+                    case EVEDB::invGroups::Composite:
+                    case EVEDB::invGroups::Gas_Isotopes:
+                    case EVEDB::invGroups::Mineral:
+                        break;
+                    default:
+                        throw UserError("MoonInvalidSiloType");
+                }
+            }
+        }
+        // a silo with something else in it can't change
+        std::vector<InventoryItemRef> items;
+        pSE->GetSelf()->GetMyInventory()->GetItemsByFlag(flagNone, items);
+        for (auto cur : items)
+            if (cur->typeID() != typeID)
+                throw UserError("MoonSilosCannotChangeWithContents")
+                        .AddFormatValue("newType", new PyInt(typeID))
+                        .AddFormatValue("contenttype", new PyInt(cur->typeID()));
+    } else {
+        throw CustomError ("Only moon harvesters and silos are set to a material.");
+    }
+
+    pSE->SetProvisionTypeID(typeID);
+    pSE->SaveData();
+
+    // the links that carried the old material go
+    std::vector<EVEPOS::ProcessLink> kept;
+    for (auto cur : m_links)
+        if (((cur.sourceID != itemID) and (cur.destID != itemID)) or (cur.typeID == typeID))
+            kept.push_back(cur);
+    if (kept.size() != m_links.size()) {
+        m_links = kept;
+        PosMgrDB::ReplaceProcessLinks(m_data.itemID, m_links);
+    }
+    NotifyProcessChange();
+}
+
+void TowerSE::RunMoonProcesses()
+{
+    /* an hour of moon mining and reactions.  only online process structures take part.
+     *  harvesters deliver to their linked silo or reactor (no link, no harvest kept).  a reactor runs when it gets every
+     *  input it needs (fed straight this hour, or from its linked silos) and every output has a linked place with room;
+     *  else it stays idle and takes nothing.  its first hour after onlining is the start-up.  silos just store
+     */
+    std::map<uint32, std::map<uint16, uint32>> fed;     // reactor itemID / (typeID, units) delivered this hour
+    std::map<uint32, bool> wasActive;
+    std::vector<StructureSE*> harvesters, reactors;
+    for (auto cur : m_structs) {
+        if (!IsProcessStructure(cur.second))
+            continue;
+        wasActive[cur.first] = cur.second->IsProcessActive();
+        if (!cur.second->IsOnline()) {
+            cur.second->SetProcessActive(false);
+            continue;
+        }
+        if (cur.second->GetSelf()->groupID() == EVEDB::invGroups::Moon_Mining)
+            harvesters.push_back(cur.second);
+        if (cur.second->GetSelf()->groupID() == EVEDB::invGroups::Mobile_Reactor)
+            reactors.push_back(cur.second);
+        if (cur.second->GetSelf()->groupID() == EVEDB::invGroups::Silo)
+            cur.second->SetProcessActive(true);
+    }
+
+    // deliver to a silo or a reactor.  returns what was taken
+    auto deliver = [&](uint32 destID, uint16 typeID, uint32 units) -> uint32 {
+        std::map<uint32, StructureSE*>::iterator itr(m_structs.find(destID));
+        if ((itr == m_structs.end()) or !itr->second->IsOnline())
+            return 0;
+        if (itr->second->GetSelf()->groupID() == EVEDB::invGroups::Silo)
+            return AddToSilo(itr->second, typeID, units);
+        if (itr->second->GetSelf()->groupID() == EVEDB::invGroups::Mobile_Reactor) {
+            fed[destID][typeID] += units;
+            return units;
+        }
+        return 0;
+    };
+
+    for (auto pSE : harvesters) {
+        uint16 typeID(pSE->GetProvisionTypeID());
+        uint8 moonQty((typeID == 0) or (m_moonSE == nullptr) ? 0 : m_moonSE->GetResource(typeID));
+        if (moonQty == 0) {
+            pSE->SetProcessActive(false);
+            continue;
+        }
+        uint32 quality(pSE->GetSelf()->GetAttribute(AttrHarvesterQuality).get_uint32());
+        uint32 units(ProcessUnits(typeID, std::min<uint32>(quality > 0 ? quality : 1, moonQty)));
+        uint32 destID(GetLinkDest(pSE->GetID(), typeID));
+        if (destID != 0)
+            deliver(destID, typeID, units);
+        pSE->SetProcessActive(true);
+    }
+
+    // reactors, those fed by other reactors after them (a few passes:  chains are short, loops never run)
+    std::set<uint32> done;
+    for (uint8 pass = 0; pass < 4; ++pass) {
+        for (auto pSE : reactors) {
+            if (done.find(pSE->GetID()) != done.end())
+                continue;
+            InventoryItemRef reaction(GetReaction(pSE));
+            std::vector<EVEPOS::ReactionRow> rows;
+            if ((reaction.get() == nullptr) or !sDataMgr.GetReaction(reaction->typeID(), rows)) {
+                pSE->SetProcessActive(false);
+                done.insert(pSE->GetID());
+                continue;
+            }
+            // wait for reactors that feed this one
+            bool waiting(false);
+            for (auto link : m_links)
+                if ((link.destID == pSE->GetID()) and (done.find(link.sourceID) == done.end()))
+                    for (auto other : reactors)
+                        if (other->GetID() == link.sourceID)
+                            waiting = true;
+            if (waiting and (pass < 3))
+                continue;
+            done.insert(pSE->GetID());
+
+            // start-up hour
+            if (!pSE->IsProcessActive()) {
+                pSE->SetProcessActive(true);
+                continue;
+            }
+
+            // inputs:  what was fed, the rest from linked silos
+            bool ok(true);
+            std::map<uint32, std::map<uint16, uint32>> takeFromSilo;    // silo / (type, units)
+            for (auto row : rows) {
+                if (!row.input)
+                    continue;
+                uint32 need(ProcessUnits(row.typeID, row.quantity));
+                uint32 have(fed[pSE->GetID()][row.typeID]);
+                if (have >= need)
+                    continue;
+                need -= have;
+                for (auto link : m_links) {
+                    if ((need == 0) or (link.destID != pSE->GetID()) or (link.typeID != row.typeID))
+                        continue;
+                    std::map<uint32, StructureSE*>::iterator src(m_structs.find(link.sourceID));
+                    if ((src == m_structs.end()) or (src->second->GetSelf()->groupID() != EVEDB::invGroups::Silo)
+                    or !src->second->IsOnline())
+                        continue;
+                    uint32 stored(GetSiloUnits(src->second, row.typeID) - takeFromSilo[link.sourceID][row.typeID]);
+                    uint32 take(std::min(stored, need));
+                    takeFromSilo[link.sourceID][row.typeID] += take;
+                    need -= take;
+                }
+                if (need > 0)
+                    ok = false;
+            }
+            // outputs:  every one needs a linked place with room
+            if (ok)
+                for (auto row : rows) {
+                    if (row.input)
+                        continue;
+                    uint32 destID(GetLinkDest(pSE->GetID(), row.typeID));
+                    std::map<uint32, StructureSE*>::iterator dst(m_structs.find(destID));
+                    if ((destID == 0) or (dst == m_structs.end()) or !dst->second->IsOnline()) {
+                        ok = false;
+                        break;
+                    }
+                    if (dst->second->GetSelf()->groupID() == EVEDB::invGroups::Silo) {
+                        const ItemType* pType(sItemFactory.GetType(row.typeID));
+                        double volume((pType != nullptr) and (pType->volume() > 0) ? pType->volume() : 1);
+                        double freeVolume(GetSiloCapacity(dst->second) - dst->second->GetSelf()->GetMyInventory()->GetStoredVolume(flagNone));
+                        if (freeVolume < ProcessUnits(row.typeID, row.quantity) * volume) {
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+            if (!ok) {
+                _log(POS__DEBUG, "TowerSE::RunMoonProcesses() - reactor %s(%u) has nothing to do this hour.", pSE->GetName(), pSE->GetID());
+                continue;
+            }
+
+            for (auto silo : takeFromSilo)
+                for (auto cur : silo.second)
+                    if (cur.second > 0)
+                        TakeFromSilo(m_structs[silo.first], cur.first, cur.second);
+            for (auto row : rows)
+                if (!row.input)
+                    deliver(GetLinkDest(pSE->GetID(), row.typeID), row.typeID, ProcessUnits(row.typeID, row.quantity));
+        }
+    }
+
+    // keep the activity, tell the managers watching
+    bool changed(false);
+    for (auto cur : wasActive) {
+        StructureSE* pSE(m_structs[cur.first]);
+        if (pSE->IsProcessActive() != cur.second) {
+            pSE->SaveData();
+            changed = true;
+        }
+    }
+    if (changed and !m_replaying)
+        NotifyProcessChange();
+}
+
+void TowerSE::NotifyProcessChange()
+{
+    // OnMoonProcessChange(towerID, structures) to the tower's corp members in its bubble (the tower window refreshes)
+    if (m_bubble == nullptr)
+        return;
+    std::vector<Client*> players;
+    m_bubble->GetPlayers(players);
+    for (auto pClient : players) {
+        if ((uint32)pClient->GetCorporationID() != m_corpID)
+            continue;
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, new PyInt(m_data.itemID));
+            tuple->SetItem(1, GetProcessInfo());
+        pClient->SendNotification("OnMoonProcessChange", "charid", &tuple);
+    }
+}
+
 PyRep* TowerSE::GetProcessInfo()
 {
     /*
@@ -1237,20 +1673,64 @@ PyRep* TowerSE::GetProcessInfo()
 
     PyList* list = new PyList();
     for (auto cur : m_structs) {
-        switch (cur.second->GetSelf()->groupID()) {
-            case EVEDB::invGroups::Moon_Mining:
-            case EVEDB::invGroups::Silo:
-            case EVEDB::invGroups::Mobile_Reactor: {
-                PyTuple* tuple = new PyTuple(6);
-                tuple->SetItem(0, new PyInt(cur.first));
-                tuple->SetItem(1, new PyBool(false));
-                tuple->SetItem(2, PyStatic.NewNone());
-                tuple->SetItem(3, new PyList());
-                tuple->SetItem(4, new PyList());
-                tuple->SetItem(5, new PyList());
-                list->AddItem(tuple);
+        if (!IsProcessStructure(cur.second))
+            continue;
+        StructureSE* pSE(cur.second);
+        uint16 groupID(pSE->GetSelf()->groupID());
+        uint16 typeID(pSE->GetProvisionTypeID());
+
+        // (reactionItemID, reactionTypeID)
+        PyRep* reaction(nullptr);
+        if (groupID == EVEDB::invGroups::Mobile_Reactor) {
+            InventoryItemRef rRef(GetReaction(pSE));
+            if (rRef.get() != nullptr) {
+                PyTuple* rTuple = new PyTuple(2);
+                    rTuple->SetItem(0, new PyInt(rRef->itemID()));
+                    rTuple->SetItem(1, new PyInt(rRef->typeID()));
+                reaction = rTuple;
             }
         }
+        // links into this structure:  (sourceID, typeID)
+        PyList* connections = new PyList();
+        for (auto link : m_links)
+            if (link.destID == cur.first) {
+                PyTuple* lTuple = new PyTuple(2);
+                    lTuple->SetItem(0, new PyInt(link.sourceID));
+                    lTuple->SetItem(1, new PyInt(link.typeID));
+                connections->AddItem(lTuple);
+            }
+        // reactors:  the client works them out from the reaction
+        PyList* demands = new PyList();
+        PyList* supplies = new PyList();
+        if ((typeID != 0) and (groupID == EVEDB::invGroups::Silo)) {
+            const ItemType* pType(sItemFactory.GetType(typeID));
+            double volume((pType != nullptr) and (pType->volume() > 0) ? pType->volume() : 1);
+            uint32 capacity((uint32)(GetSiloCapacity(pSE) / volume));
+            PyTuple* dTuple = new PyTuple(2);
+                dTuple->SetItem(0, new PyInt(typeID));
+                dTuple->SetItem(1, new PyInt(capacity));
+            demands->AddItem(dTuple);
+            PyTuple* sTuple = new PyTuple(2);
+                sTuple->SetItem(0, new PyInt(typeID));
+                sTuple->SetItem(1, new PyInt(capacity));
+            supplies->AddItem(sTuple);
+        } else if ((typeID != 0) and (groupID == EVEDB::invGroups::Moon_Mining)) {
+            uint32 quality(pSE->GetSelf()->GetAttribute(AttrHarvesterQuality).get_uint32());
+            uint8 moonQty(m_moonSE == nullptr ? 0 : m_moonSE->GetResource(typeID));
+            PyTuple* sTuple = new PyTuple(2);
+                sTuple->SetItem(0, new PyInt(typeID));
+                sTuple->SetItem(1, new PyInt(std::min<uint32>(quality > 0 ? quality : 1, moonQty)));
+            supplies->AddItem(sTuple);
+        }
+
+        PyTuple* tuple = new PyTuple(6);
+            tuple->SetItem(0, new PyInt(cur.first));
+            tuple->SetItem(1, new PyBool(pSE->IsProcessActive()));
+            tuple->SetItem(2, (reaction == nullptr ? PyStatic.NewNone() : reaction));
+            tuple->SetItem(3, connections);
+            tuple->SetItem(4, demands);
+            tuple->SetItem(5, supplies);
+        list->AddItem(tuple);
     }
 
     if (is_log_enabled(POS__RSP_DUMP))

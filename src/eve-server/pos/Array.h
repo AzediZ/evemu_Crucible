@@ -40,8 +40,17 @@ public:
     // assembly arrays and mobile laboratories with R.A.M. assembly lines
     bool                        IsRamInstallation() const   { return m_ram; }
 
+    /* refining arrays:  the ore in the processing area (flagCargo) is refined in one batch after
+     *  operationalDuration x refiningDelayMultiplier, at the array's refiningYieldMultiplier.  throws the reasons it can't
+     */
+    void                        StartRefining(Client* pClient);
+
 private:
+    void                        FinishRefining();
+
     bool m_ram;
+    bool m_refinery;
+    Timer m_refineTimer;
 
 
 };

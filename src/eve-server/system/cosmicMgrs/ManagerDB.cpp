@@ -641,6 +641,12 @@ void ManagerDB::GetControlTowerResources(DBQueryResult& res)
         _log(DATABASE__ERROR, "Error in GetControlTowerResources query: %s", res.error.c_str());
 }
 
+void ManagerDB::GetTypeReactions(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT reactionTypeID, input, typeID, quantity FROM invTypeReactions"))
+        _log(DATABASE__ERROR, "Error in GetTypeReactions query: %s", res.error.c_str());
+}
+
 void ManagerDB::GetMiniBalls(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res, "SELECT typeID, x, y, z, radius FROM invTypeMiniBalls ORDER BY typeID, idx"))

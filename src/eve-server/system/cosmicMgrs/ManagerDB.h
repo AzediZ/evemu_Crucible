@@ -103,6 +103,7 @@ public:
     /* starbases */
     static void GetControlTowerResources(DBQueryResult& res);
     static void GetMiniBalls(DBQueryResult& res);
+    static void GetTypeReactions(DBQueryResult& res);
     static void GetWHClassDestinations(uint32 systemClass, DBQueryResult& res);
     static void GetWHClassSystems(uint32 systemClass, DBQueryResult& res);
 

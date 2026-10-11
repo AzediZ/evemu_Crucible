@@ -59,7 +59,28 @@ public:
     /* tower data methods */
     PyRep* GetDeployFlags();
     PyRep* GetUsageFlagList();
+    // the moon process structures for the tower window:  (itemID, active, reaction, connections, demands, supplies)
     PyRep* GetProcessInfo();
+
+    /* moon mining, silos and reactions */
+    // [(sourceID, destID, typeID)] from the tower window.  false (nothing changed) when any link is invalid
+    bool SetProcessLinks(PyList* links);
+    // a harvester's material or a silo's content type (0 = none).  throws the client's errors
+    void ChangeProvisionType(uint32 itemID, uint16 typeID);
+    // an hour of harvesting and reactions
+    void RunMoonProcesses();
+    // OnMoonProcessChange to the corp members in the bubble
+    void NotifyProcessChange();
+    // a silo's capacity (m3) with the tower's silo bonus
+    static float GetSiloCapacity(StructureSE* pSilo);
+    // units of a material in a quantity of moon process batches (x moonMiningAmount)
+    static uint32 ProcessUnits(uint16 typeID, uint32 qty);
+    // the reaction item in a reactor, or nullptr
+    static InventoryItemRef GetReaction(StructureSE* pReactor);
+    // the destination of a link (0 = none)
+    uint32 GetLinkDest(uint32 sourceID, uint16 typeID);
+    // any link into or out of a structure
+    bool IsLinked(uint32 itemID);
 
     void UpdatePassword();
     void SetDeployFlags(int8 anchor=0, int8 unanchor=0, int8 online=0, int8 offline=0);
@@ -217,6 +238,17 @@ private:
     void UpdateForceField();
     // replays the hours missed while the system was unloaded
     void CatchUp();
+    // moon harvesters, silos and reactors
+    static bool IsProcessStructure(StructureSE* pSE);
+    // the structure gives / takes this material through links
+    bool Supplies(StructureSE* pSE, uint16 typeID);
+    bool Demands(StructureSE* pSE, uint16 typeID);
+    uint32 GetSiloUnits(StructureSE* pSilo, uint16 typeID);
+    // stores up to units in the silo, returns what fit
+    uint32 AddToSilo(StructureSE* pSilo, uint16 typeID, uint32 units);
+    void TakeFromSilo(StructureSE* pSilo, uint16 typeID, uint32 units);
+
+    std::vector<EVEPOS::ProcessLink> m_links;   // moon process links
 
     std::map<uint32, int64> m_aggressors;   // aggressor id / last attack
     int64 m_lastAttackNotify;               // last TowerAlertMsg

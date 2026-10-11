@@ -9,6 +9,8 @@
 
 
 #include "pos/Module.h"
+#include "pos/Tower.h"
+#include "inventory/Inventory.h"
 
 
 ModuleSE::ModuleSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& data)
@@ -31,31 +33,69 @@ void ModuleSE::Process()
 
 
 ReactorSE::ReactorSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& data)
-: StructureSE(structure, services, system, data),
-pData(new ReactorData())
+: StructureSE(structure, services, system, data)
 {
 
-}
-
-ReactorSE::~ReactorSE()
-{
-    SafeDelete(pData);
 }
 
 void ReactorSE::Init()
 {
+    // the material (provisionTypeID) and activity are in posStructureData, the links with the tower
     StructureSE::Init();
+}
 
-    if (!m_db.GetReactorData(pData, m_data)) {
-        _log(SE__TRACE, "ReactorSE %s(%u) has no saved data.  Initializing default set.", m_self->name(), m_self->itemID());
-        // invalid data....init to 0 as this will only hit for currently-launching items (or errors)
-        InitData();
+void ReactorSE::ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag)
+{
+    StructureSE::ValidateAddItem(pClient, iRef, toFlag);
+    if (pClient == nullptr)
+        return;
+    switch (m_self->groupID()) {
+        case EVEDB::invGroups::Silo: {
+            // its material only.  the inventory checks the room, with the tower's silo bonus
+            if (m_data.provisionTypeID == 0)
+                throw UserError("CantAddStructureLimitedToTypeNotSet")
+                        .AddFormatValue("actualTypeID", new PyInt(iRef->typeID()))
+                        .AddFormatValue("structureTypeID", new PyInt(GetTypeID()));
+            if (iRef->typeID() != (uint32)m_data.provisionTypeID)
+                throw UserError("CantAddStructureLimitedTo")
+                        .AddTypeName("actual", iRef->typeID())
+                        .AddFormatValue("structureTypeID", new PyInt(GetTypeID()))
+                        .AddTypeName("desired", m_data.provisionTypeID);
+            m_self->SetAttribute(AttrCapacity, TowerSE::GetSiloCapacity(this), false);
+        } break;
+        case EVEDB::invGroups::Mobile_Reactor: {
+            // one reaction of the groups (or types) the reactor takes, while it isn't working
+            if (IsOnline())
+                throw UserError("CannotPlaceInOperatingStructure")
+                        .AddFormatValue("item", new PyInt(iRef->typeID()))
+                        .AddFormatValue("type", new PyInt(GetTypeID()));
+            bool accepted(iRef->categoryID() == EVEDB::invCategories::Reaction);
+            EvilNumber value(EvilZero);
+            if (accepted and m_self->HasAttribute(AttrPosCargobayAcceptGroup, value) and (value.get_uint32() != 0))
+                accepted = (value.get_uint32() == iRef->groupID());
+            if (!accepted and m_self->HasAttribute(AttrPosCargobayAcceptType, value) and (value.get_uint32() != 0))
+                accepted = (value.get_uint32() == iRef->typeID());
+            if (!accepted or (TowerSE::GetReaction(this).get() != nullptr))
+                throw UserError("CantAddStructureLimitedToReactionGroup");
+        } break;
+        default: {
+            throw UserError("CannotPlaceTypeInStructure")
+                    .AddFormatValue("container", new PyInt(GetTypeID()))
+                    .AddFormatValue("type", new PyInt(iRef->typeID()));
+        } break;
     }
 }
 
-void ReactorSE::InitData() {
-    pData->Init();
-    m_db.SaveReactorData(pData, m_data);
+void ReactorSE::ValidateRemoveItem(Client* pClient, InventoryItemRef iRef)
+{
+    StructureSE::ValidateRemoveItem(pClient, iRef);
+    if ((pClient == nullptr) or (m_self->groupID() != EVEDB::invGroups::Mobile_Reactor))
+        return;
+    // the reaction stays while the reactor works or has links
+    if (IsOnline())
+        throw UserError("CannotAccessActiveStructure");
+    if ((iRef->categoryID() == EVEDB::invCategories::Reaction) and (m_towerSE != nullptr) and m_towerSE->IsLinked(GetID()))
+        throw UserError("CantTakeReactionWhileReactorLinked");
 }
 
 void ReactorSE::Process()

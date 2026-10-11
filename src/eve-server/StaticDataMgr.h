@@ -138,6 +138,8 @@ public:
     void                GetTowerResources(uint16 towerTypeID, std::vector<EVEPOS::TowerResource>& into);
     // collision miniballs of a type (invTypeMiniBalls; offsets from the ball's center).  nullptr when it has none
     const std::vector<Destiny::MiniBall>* GetMiniBalls(uint16 typeID);
+    // inputs and outputs of a starbase reaction (invTypeReactions).  false when the type isn't a reaction
+    bool                GetReaction(uint16 reactionTypeID, std::vector<EVEPOS::ReactionRow>& into);
     // activity of an assembly line type (ramAssemblyLineTypes)
     uint8               GetAssemblyLineActivity(uint8 assemblyLineTypeID);
     // tech 3 blueprint types whose product is of productGroupID and raceID (reverse engineering outputs)
@@ -268,6 +270,7 @@ private:
     std::multimap<uint16, std::pair<uint8, uint8>>      m_ramInstContents;  // installationTypeID/(assemblyLineTypeID, quantity)
     std::multimap<uint16, EVEPOS::TowerResource>        m_towerResources;   // controlTowerTypeID/resource row
     std::map<uint16, std::vector<Destiny::MiniBall>>    m_miniBalls;        // typeID/miniballs
+    std::multimap<uint16, EVEPOS::ReactionRow>          m_reactions;        // reactionTypeID/row
     std::map<uint8, uint8>                              m_ramLineActivity;  // assemblyLineTypeID/activityID
     std::multimap<uint32, uint16>                       m_t3Blueprints;     // (productGroupID << 8 | raceID)/blueprintTypeID, built on first use
 };

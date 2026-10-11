@@ -44,7 +44,7 @@ class ReactorSE
 {
 public:
     ReactorSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& data);
-    virtual ~ReactorSE();
+    virtual ~ReactorSE()                                { /* do nothing here */ }
 
     /* class type pointer querys. */
     virtual ReactorSE*          GetReactorSE()          { return this; }
@@ -57,11 +57,9 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
-    virtual void                InitData();
-
-
-private:
-    ReactorData*                pData; //ReactorData class
+    // silos take their material, reactors their reaction, harvesters nothing
+    virtual void                ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag);
+    virtual void                ValidateRemoveItem(Client* pClient, InventoryItemRef iRef);
 
 };
 

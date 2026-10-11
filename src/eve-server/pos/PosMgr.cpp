@@ -370,13 +370,15 @@ PyResult PosMgrBound::UninstallJumpBridgeLink(PyCallArgs &call, PyInt* itemID) {
 }
 
 PyResult PosMgrBound::GetSiloCapacityByItemID(PyCallArgs &call, PyInt* itemID) {
+    // invCache:  the silo's actual capacity (m3), with its tower's silo bonus
     _log(POS__TRACE,  "PosMgrBound::Handle_GetSiloCapacityByItemID()");
     call.Dump(POS__DUMP);
 
-    uint16 typeID = 0;
-    /** @todo  put this in static data */
-
-    return m_db.GetSiloCapacityForType(typeID);
+    SystemManager* pSystem(call.client->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetPOSSE() == nullptr))
+        throw CustomError ("That structure can't be found.");
+    return new PyFloat(TowerSE::GetSiloCapacity(pSE->GetPOSSE()));
 }
 
 PyResult PosMgrBound::GetTowerNotificationSettings(PyCallArgs &call, PyInt* itemID) {
@@ -758,7 +760,7 @@ PyResult PosMgrBound::OnlineOrbital(PyCallArgs &call, PyInt* itemID) {
     return PyStatic.NewNone();
 }
 
-PyResult PosMgrBound::ChangeStructureProvisionType(PyCallArgs &call, PyInt* towerID, PyInt* itemID, PyInt* typeID) {
+PyResult PosMgrBound::ChangeStructureProvisionType(PyCallArgs &call, PyInt* towerID, PyInt* itemID, PyRep* typeID) {
     // this changes silo content or mining product
     /*
      * 03:11:32 W PosMgrBound::Handle_ChangeStructureProvisionType(): size=3
@@ -771,16 +773,22 @@ PyResult PosMgrBound::ChangeStructureProvisionType(PyCallArgs &call, PyInt* towe
     _log(POS__TRACE,  "PosMgrBound::Handle_ChangeStructureProvisionType()");
     call.Dump(POS__DUMP);
 
-    /** @todo  finish this.. */
+    // the tower window's production tab (typeID None clears it)
+    TowerSE* pTSE(GetTower(call.client, towerID, Corp::Role::StarbaseConfig | Corp::Role::StarbaseCaretaker, true));
+    pTSE->ChangeProvisionType(itemID->value(), (typeID->IsInt() ? typeID->AsInt()->value() : 0));
 
     return PyStatic.NewNone();
 }
 
 PyResult PosMgrBound::LinkResourceForTower(PyCallArgs &call, PyInt* itemID, PyList* connections) {
+    // [(sourceID, destID, typeID), ...].  the client reloads the links when this isn't true
     _log(POS__TRACE,  "PosMgrBound::Handle_LinkResourceForTower()");
     call.Dump(POS__DUMP);
 
-    return PyStatic.NewNone();
+    TowerSE* pTSE(GetTower(call.client, itemID, Corp::Role::StarbaseConfig | Corp::Role::StarbaseCaretaker, true));
+    if (pTSE->SetProcessLinks(connections))
+        return PyStatic.NewTrue();
+    return PyStatic.NewFalse();
 }
 
 PyResult PosMgrBound::RunMoonProcessCycleforTower(PyCallArgs &call, PyInt* itemID) {
@@ -793,6 +801,16 @@ PyResult PosMgrBound::RunMoonProcessCycleforTower(PyCallArgs &call, PyInt* itemI
      */
     _log(POS__TRACE,  "PosMgrBound::Handle_RunMoonProcessCycleforTower()");
     call.Dump(POS__DUMP);
+
+    // GM button:  one hour of moon processes now
+    if ((call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::WORLDMOD)) == 0)
+        throw CustomError ("Not allowed");
+    SystemManager* pSystem(call.client->SystemMgr());
+    SystemEntity* pSE((pSystem == nullptr) ? nullptr : pSystem->GetSE(itemID->value()));
+    if ((pSE == nullptr) or (pSE->GetTowerSE() == nullptr))
+        throw CustomError ("That control tower can't be found.");
+    pSE->GetTowerSE()->RunMoonProcesses();
+    pSE->GetTowerSE()->NotifyProcessChange();
 
     return PyStatic.NewNone();
 }
