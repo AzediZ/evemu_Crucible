@@ -35,6 +35,55 @@
 #include "python/PyDumpVisitor.h"
 #include "EVEVersion.h"
 
+namespace {
+    /* the plain password (sent after passwordVersion 1) is a util.PasswordString, a unicode subclass the client
+     *  marshals as an object around the string.  returns that string (not a new ref), or nullptr
+     */
+    PyRep* FindPasswordString(PyRep* rep, uint8 depth = 0)
+    {
+        if ((rep == nullptr) or (depth > 4))
+            return nullptr;
+        if (rep->IsWString())
+            return rep;
+        if (rep->IsString())
+            return (rep->AsString()->content() == "util.PasswordString" ? nullptr : rep);
+        if (rep->IsTuple()) {
+            PyTuple* tuple = rep->AsTuple();
+            for (size_t i = 0; i < tuple->size(); ++i) {
+                PyRep* str = FindPasswordString(tuple->GetItem(i), depth + 1);
+                if (str != nullptr)
+                    return str;
+            }
+        } else if (rep->IsObjectEx()) {
+            return FindPasswordString(rep->AsObjectEx()->header(), depth + 1);
+        } else if (rep->IsObject()) {
+            return FindPasswordString(rep->AsObject()->arguments(), depth + 1);
+        }
+        return nullptr;
+    }
+
+    // replaces a util.PasswordString user_password in (challenge, dict) with its string, so CryptoChallengePacket decodes
+    void UnwrapPasswordString(PyRep* rep)
+    {
+        if (!rep->IsTuple() or (rep->AsTuple()->size() != 2))
+            return;
+        PyRep* item = rep->AsTuple()->GetItem(1);
+        if ((item == nullptr) or !item->IsDict())
+            return;
+        PyDict* dict = item->AsDict();
+        PyRep* pass = dict->GetItemString("user_password");
+        if ((pass == nullptr) or !(pass->IsObjectEx() or pass->IsObject()))
+            return;
+        PyRep* str = FindPasswordString(pass);
+        if (str == nullptr) {
+            dict->SetItemString("user_password", PyStatic.NewNone());
+            return;
+        }
+        PyIncRef(str);  // keep it alive when the object it was in is released
+        dict->SetItemString("user_password", str);
+    }
+}
+
 EVEClientSession::EVEClientSession(EVETCPConnection** n)
 : mNet(*n),
 mPacketHandler(nullptr)
@@ -162,6 +211,7 @@ PyPacket* EVEClientSession::_HandleCrypto(PyRep* rep) {
 
 PyPacket* EVEClientSession::_HandleAuthentication(PyRep* rep) {
     //just to be sure
+    UnwrapPasswordString(rep);
     CryptoChallengePacket ccp;
     if (!ccp.Decode(&rep)) {
         sLog.Error("_HandleAuthentication", "%s: Received invalid crypto challenge!", GetAddress().c_str());
