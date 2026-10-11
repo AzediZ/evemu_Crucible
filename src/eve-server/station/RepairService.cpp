@@ -30,7 +30,9 @@
 
 
 #include "Client.h"
+#include "account/AccountService.h"
 #include "inventory/Inventory.h"
+#include "station/StationDataMgr.h"
 #include "ship/ShipDB.h"
 #include "station/RepairService.h"
 #include "station/Station.h"
@@ -89,23 +91,64 @@ void RepairService::GetDamageReports(uint32 itemID, Inventory* pInv, PyList* lis
         rid.itemID = cur->itemID();
         rid.typeID = cur->typeID();
         rid.groupID = cur->groupID();
-        rid.damage = cur->GetAttribute(AttrDamage).get_int();
+        // whole units, rounded up.  the client quotes ceil(damage) * costToRepairOneUnitOfDamage and RepairItems charges the same
+        rid.damage = (int32)std::ceil(GetItemDamage(cur));
         rid.maxHealth = cur->GetAttribute(AttrHP).get_int();
+        if (cur->IsShipItem() or (cur->categoryID() == EVEDB::invCategories::Drone))
+            rid.maxHealth += cur->GetAttribute(AttrArmorHP).get_int();
         // not sure how to find this data
         rid.repairable = 1;
-        if (cur->IsShipItem()) {    // have to check for drone here, also
-            rid.damage += cur->GetAttribute(AttrArmorDamage).get_int();
-            rid.maxHealth += cur->GetAttribute(AttrArmorHP).get_int();
-            // ship is (basePrice)*7.5e-10
-            rid.costToRepairOneUnitOfDamage = (cur->type().basePrice() * sConfig.rates.ShipRepairModifier);
-        }
-        else {
-            // modules are (basePrice)*1.25e-6
-            rid.costToRepairOneUnitOfDamage = (cur->type().basePrice() * sConfig.rates.ModuleRepairModifier);
-        }
+        rid.costToRepairOneUnitOfDamage = GetRepairCostPerHP(cur);
 
         list->AddItem(rid.Encode());
     }
+}
+
+float RepairService::GetItemDamage(InventoryItemRef iRef) {
+    float damage = iRef->GetAttribute(AttrDamage).get_float();
+    if (iRef->IsShipItem() or (iRef->categoryID() == EVEDB::invCategories::Drone))
+        damage += iRef->GetAttribute(AttrArmorDamage).get_float();
+    if (damage < 0)
+        damage = 0;
+    return damage;
+}
+
+double RepairService::GetRepairCostPerHP(InventoryItemRef iRef) {
+    if (iRef->IsShipItem())
+        // ship is (basePrice)*7.5e-10
+        return (iRef->type().basePrice() * sConfig.rates.ShipRepairModifier);
+    // modules are (basePrice)*1.25e-6
+    return (iRef->type().basePrice() * sConfig.rates.ModuleRepairModifier);
+}
+
+bool RepairService::IsRepairableHere(Client* pClient, InventoryItemRef iRef, uint32 stationID) {
+    uint32 officeID(0);
+    if (iRef->ownerID() == pClient->GetCharacterID()) {
+        // personal item
+    } else if ((iRef->ownerID() == pClient->GetCorporationID()) and IsPlayerCorp(iRef->ownerID())) {
+        officeID = stDataMgr.GetOfficeIDForCorp(stationID, iRef->ownerID());
+        if (officeID == 0)
+            return false;
+    } else {
+        return false;
+    }
+
+    // in the station (hangar) or the corp's office there
+    uint32 locationID(iRef->locationID());
+    if ((locationID == stationID) or ((officeID != 0) and (locationID == officeID)))
+        return true;
+
+    // fitted to, or carried in, a ship or container that is in the station (this includes the active ship while docked)
+    if (!IsPlayerItem(locationID))
+        return false;
+    InventoryItemRef cRef = sItemFactory.GetItemRef(locationID);
+    if (cRef.get() == nullptr)
+        return false;
+    if (cRef->locationID() == stationID)
+        return true;
+    if ((officeID != 0) and (cRef->locationID() == officeID))
+        return true;
+    return false;
 }
 
 PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStationID, PyList* skipChecks) {
@@ -142,6 +185,46 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
 
     if (skipChecks->size() > 0)
         ;  // skipChecks is populated....do something constructive here
+
+    /* first pass: validate every item before anything changes.
+     *  the item must be the caller's (or their corp's, in its office there), in the station given as key (or inside something there),
+     *  not the active ship, and undamaged (repackaging resets damage, so it would be a free repair) */
+    for (PyDict::const_iterator dictItr = validIDsByStationID->begin(); dictItr != validIDsByStationID->end(); ++dictItr) {
+        if (!dictItr->first->IsInt() or !dictItr->second->IsList())
+            throw CustomError("Invalid repackage request.");
+        uint32 stationID = dictItr->first->AsInt()->value();
+        if (!sDataMgr.IsStation(stationID))
+            throw CustomError("Items can only be repackaged in a station.");
+        pList = dictItr->second->AsList();
+        for (PyList::const_iterator listItr = pList->begin(); listItr != pList->end(); ++listItr) {
+            if (!(*listItr)->IsTuple() or ((*listItr)->AsTuple()->size() < 1))
+                throw CustomError("Invalid repackage request.");
+            itemID = PyRep::IntegerValue((*listItr)->AsTuple()->GetItem(0));
+            iRef = sItemFactory.GetItemRef(itemID);
+            if (iRef.get() == nullptr)
+                continue;
+            if (itemID == call.client->GetShipID())
+                throw CustomError("You cannot repackage your active ship.");
+            if (!IsRepairableHere(call.client, iRef, stationID)) {
+                _log(SERVICE__WARNING, "UnasembleItems - %s(%u) tried to repackage %s(%u) owned by %u in %u (station %u).", \
+                        call.client->GetName(), call.client->GetCharacterID(), iRef->name(), itemID, iRef->ownerID(), iRef->locationID(), stationID);
+                throw CustomError("You cannot repackage %s.", iRef->name());
+            }
+            // fitted modules are repackaged with their ship (StripFitting), not on their own
+            if (IsModuleSlot(iRef->flag()))
+                throw CustomError("Unfit %s before repackaging it.", iRef->name());
+            if (GetItemDamage(iRef) > 0)
+                throw UserError("CantRepackageDamagedItem");
+            if (iRef->IsShipItem()) {
+                // fitted modules lose their damage when the ship is repackaged
+                std::vector<InventoryItemRef> modules;
+                iRef->GetShipItem()->GetModuleItemVec(modules);
+                for (auto cur : modules)
+                    if (GetItemDamage(cur) > 0)
+                        throw UserError("CantRepackageDamagedItem");
+            }
+        }
+    }
 
     /** @todo  may have to switch to station inventory to get item to check if this is container, and remove items BEFORE repacking!!  */
     for (PyDict::const_iterator dictItr = validIDsByStationID->begin(); dictItr != validIDsByStationID->end(); ++dictItr) {
@@ -217,41 +300,50 @@ PyResult RepairServiceBound::RepairItems(PyCallArgs &call, PyList* itemIDs, PyFl
      * 00:18:28 [PhysicsInfo]         [ 0]   [ 0] Integer field: 140005905  <-- itemID
      * 00:18:28 [PhysicsInfo]         [ 1] Real field: 112500.000000        <-- isk amount to spend on repairs.
      */
-    if (iskAmount->value() < 0.01)
+    // also false for NaN
+    if (!(iskAmount->value() >= 0.01))
         return nullptr;
 
-    /* itemIDs is list of itemIDs to repair.
-     * iskAmount is how much to spend on repairs.
-     *  - this needs to be checked against total repair amount, and use fraction to reduce damage for all items in list
-     */
+    if ((uint32)call.client->GetStationID() != m_locationID)
+        throw CustomError("You must be docked in this station to use its repair facilities.");
 
-    InventoryItemRef iRef(nullptr);
-    double cost(0), total(0);
-    uint32 damage(0);
-    std::vector<InventoryItemRef> itemRefVec;
-    PyList::const_iterator itr = itemIDs->begin(), end = itemIDs->end();
-    for (; itr != end; ++itr) {
-        iRef = sItemFactory.GetItemRef(PyRep::IntegerValueU32(*itr));
+    /* itemIDs is list of itemIDs to repair (damage report lines: ships, their fitted modules, other items).
+     * iskAmount is how much to spend on repairs.
+     *  the client asks for a full repair (and always sends the full amount) when any module is selected.
+     *  ships (and other non-module items) can be partially repaired for part of the cost.
+     */
+    struct RepairEntry {
+        InventoryItemRef iRef;
+        float damage;
+    };
+    std::vector<RepairEntry> entries;
+    std::set<uint32> seen;
+    double total(0);
+    bool hasModule(false);
+    for (PyList::const_iterator itr = itemIDs->begin(); itr != itemIDs->end(); ++itr) {
+        uint32 itemID(PyRep::IntegerValueU32(*itr));
+        if (!seen.insert(itemID).second)
+            continue;
+        InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
         if (iRef.get() == nullptr)
             continue;
-
-        cost = 0;
-        damage = iRef->GetAttribute(AttrDamage).get_uint32();
-        itemRefVec.push_back(iRef);
-        if (iRef->IsShipItem()) {
-            damage += iRef->GetAttribute(AttrArmorDamage).get_uint32();
-            // ship is (basePrice)*7.5e-10
-            cost = (iRef->type().basePrice() * sConfig.rates.ShipRepairModifier);
-        } else {
-            // modules are (basePrice)*1.25e-6
-            cost = (iRef->type().basePrice() * sConfig.rates.ModuleRepairModifier);
+        if (!RepairService::IsRepairableHere(call.client, iRef, m_locationID)) {
+            _log(SERVICE__WARNING, "RepairItems - %s(%u) tried to repair %s(%u) owned by %u in %u (station %u).", \
+                    call.client->GetName(), call.client->GetCharacterID(), iRef->name(), itemID, iRef->ownerID(), iRef->locationID(), m_locationID);
+            continue;
         }
-        total += damage * cost;
+        float damage(RepairService::GetItemDamage(iRef));
+        if (damage <= 0)
+            continue;
+        // same formula as the client's quote: ceil(damage) * costToRepairOneUnitOfDamage
+        total += std::ceil(damage) * RepairService::GetRepairCostPerHP(iRef);
+        if (iRef->categoryID() == EVEDB::invCategories::Module)
+            hasModule = true;
+        entries.push_back({iRef, damage});
     }
 
-    float fraction = 1.0;
-    if (iskAmount->value() < total)
-        fraction = total / iskAmount->value();
+    if (entries.empty())
+        return nullptr;
 
     /** @todo  entire repair be based on items damage vs mats list at market value
      * get bp required mats for building.
@@ -268,47 +360,38 @@ PyResult RepairServiceBound::RepairItems(PyCallArgs &call, PyList* itemIDs, PyFl
      * {'messageKey': 'RepairNoMoneyForRepair', 'dataID': 17882601, 'suppressable': False, 'bodyID': 259197, 'messageType': 'info', 'urlAudio': '', 'urlIcon': '', 'titleID': 259196, 'messageID': 1493}
      */
 
-    if (fraction > 1.0)
-        fraction = 1;
-    EvilNumber toRepair = EvilZero, curDamage = EvilZero;
-    for (auto cur : itemRefVec) {
-        if (cur->IsShipItem()) {
-            if (fraction == 1) {
-                cur->SetAttribute(AttrDamage, EvilZero);
-                cur->SetAttribute(AttrArmorDamage, EvilZero);
-                continue;
-            }
+    double amount(std::min((double)iskAmount->value(), total));
+    double fraction(1.0);
+    if (amount < (total - 0.01)) {
+        // modules can't be partially repaired.  the client sends the full amount when any is selected
+        if (hasModule)
+            throw CustomError("Modules can only be repaired completely.  The repair costs %.2f ISK.", total);
+        fraction = amount / total;
+    } else {
+        amount = total;
+    }
 
-            uint32 cHull =  cur->GetAttribute(AttrDamage).get_uint32();
-            uint32 cArmor =  cur->GetAttribute(AttrArmorDamage).get_uint32();
-            curDamage = cHull + cArmor;
-            toRepair = curDamage * fraction;
-            // this will repair hull first, then armor
-            if (toRepair > cHull) {
-                toRepair -= cHull;
-                cur->SetAttribute(AttrDamage, EvilZero);
-                if (toRepair >= cArmor) {
-                    cur->SetAttribute(AttrArmorDamage, EvilZero);
-                } else {
-                    toRepair = cArmor - toRepair;
-                    cur->SetAttribute(AttrArmorDamage, toRepair);
-                }
-            } else {
-                cur->SetAttribute(AttrDamage, toRepair);
-            }
-        } else {
-            if (fraction == 1) {
-                cur->SetAttribute(AttrDamage, EvilZero);
-                continue;
-            }
-            if ((cur->GetAttribute(AttrDamage).get_float() / cur->GetAttribute(AttrHP).get_float()) > fraction) {
-                toRepair = cur->GetAttribute(AttrHP) * fraction;
-            } else {
-                toRepair = EvilZero;
-            }
-            if (toRepair < EvilZero)
-                toRepair = EvilZero;
-            cur->SetAttribute(AttrDamage, toRepair);
+    // charge first.  this throws if the wallet is short, and nothing is repaired
+    AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(m_locationID), amount, "Repair", Journal::EntryType::RepairBill, m_locationID);
+
+    for (auto& cur : entries) {
+        bool hasArmor(cur.iRef->IsShipItem() or (cur.iRef->categoryID() == EVEDB::invCategories::Drone));
+        if (fraction >= 1.0) {
+            cur.iRef->SetAttribute(AttrDamage, EvilZero);
+            if (hasArmor)
+                cur.iRef->SetAttribute(AttrArmorDamage, EvilZero);
+            continue;
+        }
+
+        // this will repair hull first, then armor
+        float toRepair(cur.damage * fraction);
+        float hull(cur.iRef->GetAttribute(AttrDamage).get_float());
+        float newHull(std::max(0.0f, hull - toRepair));
+        cur.iRef->SetAttribute(AttrDamage, newHull);
+        if (hasArmor) {
+            float rest(toRepair - (hull - newHull));
+            float armor(cur.iRef->GetAttribute(AttrArmorDamage).get_float());
+            cur.iRef->SetAttribute(AttrArmorDamage, std::max(0.0f, armor - rest));
         }
     }
 

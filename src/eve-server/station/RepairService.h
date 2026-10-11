@@ -40,6 +40,13 @@ public:
 
     static void GetDamageReports(uint32 itemID, Inventory* pInv, PyList* list);
 
+    // hull damage, plus armor damage for ships and drones
+    static float GetItemDamage(InventoryItemRef iRef);
+    // isk per unit of damage (the costToRepairOneUnitOfDamage in damage reports)
+    static double GetRepairCostPerHP(InventoryItemRef iRef);
+    // is iRef owned by pClient (or their corp, in its office here) and in stationID (hangar, office, or inside a ship/container there)
+    static bool IsRepairableHere(Client* pClient, InventoryItemRef iRef, uint32 stationID);
+
 protected:
     PyResult UnasembleItems(PyCallArgs& call, PyDict* validIDsByStationID, PyList* skipChecks);
     BoundDispatcher* BindObject(Client* client, PyRep* bindParameters) override;
