@@ -784,9 +784,46 @@ PyResult Command_killallnpcs(Client* pClient, CommandDB* db, EVEServiceManager &
     return nullptr;
 }
 
+namespace {
+    // only=  names from CCP's /unspawn macros, and the generic group<N> / category<N>
+    bool ParseUnspawnFilter(const std::string& only, bool& isCategory, uint16& matchID) {
+        static const std::map<std::string, std::pair<bool, uint16>> s_filters = {
+            {"categoryDrone",                   {true,  EVEDB::invCategories::Drone}},
+            {"categoryEntity",                  {true,  EVEDB::invCategories::Entity}},
+            {"categoryShip",                    {true,  EVEDB::invCategories::Ship}},
+            {"groupWreck",                      {false, EVEDB::invGroups::Wreck}},
+            {"groupCargoContainer",             {false, EVEDB::invGroups::Cargo_Container}},
+            {"groupSecureCargoContainer",       {false, EVEDB::invGroups::Secure_Cargo_Container}},
+            {"groupAuditLogSecureContainer",    {false, EVEDB::invGroups::Audit_Log_Secure_Container}},
+            {"groupFreightContainer",           {false, EVEDB::invGroups::Freight_Container}}
+        };
+        auto itr = s_filters.find(only);
+        if (itr != s_filters.end()) {
+            isCategory = itr->second.first;
+            matchID = itr->second.second;
+            return true;
+        }
+        std::string number;
+        if (only.compare(0, 8, "category") == 0) {
+            isCategory = true;
+            number = only.substr(8);
+        } else if (only.compare(0, 5, "group") == 0) {
+            isCategory = false;
+            number = only.substr(5);
+        }
+        if (number.empty() or !IsNumber(number))
+            return false;
+        matchID = atoi(number.c_str());
+        return (matchID > 0);
+    }
+}
+
 PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
 #define DEFAULT_RANGE 500000
+    const char* usage("/unspawn usage:<br>  /unspawn [itemID]<br>/unspawn [range=meters] only=(groupWreck|groupCargoContainer|groupSecureCargoContainer|"
+            "groupAuditLogSecureContainer|groupFreightContainer|categoryDrone|categoryEntity|categoryShip|group&lt;N&gt;|category&lt;N&gt;)<br>"
+            "The default range is 500km.  Ships with a pilot are never removed.");
     if (!pClient->IsInSpace()) {
         throw CustomError ("You must be in space to unspawn things.");
     }
@@ -794,7 +831,8 @@ PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &serv
     if (pClient->GetShipSE() == nullptr) {
             throw CustomError ("/unspawn failed. You don't appear to have a ship?");
     }
-    int target_index = cmd_find_nth_noneq(args, 1);
+    // the command name is the first non-eq argument
+    int target_index = cmd_find_nth_noneq(args, 2);
     uint32 target = 0;
     if (target_index > 0) {
         if (!args.isNumber(target_index)) {
@@ -806,85 +844,74 @@ PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &serv
     std::string range_str = cmd_parse_eq_arg(args, "range=");
     std::string only_str = cmd_parse_eq_arg(args, "only=");
 
-    codelog(COMMAND__ERROR, "unspawn got: %s %s %u",
-            range_str.c_str(), only_str.c_str(), target);
+    _log(COMMAND__MESSAGE, "unspawn got: %s %s %u", range_str.c_str(), only_str.c_str(), target);
 
-    uint32 range = DEFAULT_RANGE;
+    double range = DEFAULT_RANGE;
 
     if (range_str.size() > 0) {
-        if (!IsNumber(range_str)) {
-            throw CustomError ("/unspawn with range=x must be a number");
+        if (!cmd_parse_distance(range_str, range) or (range <= 0)) {
+            throw CustomError ("/unspawn with range=x must be a distance");
         }
-        range = atoi(range_str.c_str());
     }
 
-    if ((range != DEFAULT_RANGE or
+    if ((range_str.size() > 0 or
             only_str.size() > 0) and
             target != 0) {
             throw CustomError ("/unspawn cannot be called with an explcit target and either range= or only=");
     }
 
     if (target != 0) {
-        InventoryItemRef item_ref = sItemFactory.GetItemRef(target);
         SystemEntity *sys_entity = pClient->SystemMgr()->GetSE(target);
         if (sys_entity == nullptr) {
             throw CustomError ("/unspawn failed.  Item %u not found.", target);
         }
+        if (sys_entity->IsStaticEntity())
+            throw CustomError ("/unspawn failed.  %s is a static object.", sys_entity->GetName());
+        if (sys_entity->HasPilot())
+            throw CustomError ("/unspawn failed.  %s has a pilot.", sys_entity->GetName());
 
-        pClient->SystemMgr()->RemoveEntity(sys_entity);
-        item_ref->Delete();
-        codelog(COMMAND__MESSAGE, "/unspawn called with single target successful");
-        return new PyBool(true);
+        std::string name(sys_entity->GetName());
+        sys_entity->Delete();
+        _log(COMMAND__MESSAGE, "/unspawn called with single target successful");
+        return new PyString("Removed " + name + ".");
     }
 
     if (only_str.size() == 0) {
-        throw CustomError ("/unspawn usage:<br>  /unspawn [itemID]<br>/unspawn only=category|group<br>If using only the default range is 10k.  You can set this by adding range=x in meters");
+        throw CustomError (usage);
     }
 
     bool is_category_match = false;
-    bool is_group_match = false;
     uint16 match_id = 0;
-
-    if (strcmp(only_str.c_str(), "categoryDrone") == 0) {
-        match_id = EVEDB::invCategories::Drone;
-        is_category_match = true;
-    } else if (strcmp(only_str.c_str(), "groupWreck") == 0) {
-        match_id = EVEDB::invGroups::Wreck;
-        is_group_match = true;
-    } else {
+    if (!ParseUnspawnFilter(only_str, is_category_match, match_id))
         throw CustomError ("only='%s' not a supported group or category", only_str.c_str());
-    }
-
-    SystemBubble *pBubble = pClient->GetShipSE()->SysBubble();
-    if (pBubble == nullptr) {
-        throw CustomError ("/unspawn failed.  You don't appear to be in a bubble.  Try /update");
-    }
 
     GPoint player_pos = pClient->GetShipSE()->GetPosition();
 
-    std::map< uint32, SystemEntity* > entMap;
-    pBubble->GetEntities(entMap);
-    for (auto cur : entMap) {
-        if (is_group_match and match_id != cur.second->GetGroupID()) {
-            codelog(COMMAND__ERROR, "m: g%d c%d skipping match_id %u groupID %u",
-                    is_group_match, is_category_match, match_id, cur.second->GetGroupID());
+    // the whole system, not just the bubble, so the range means what it says.  collect first, as deleting changes the map
+    std::vector<uint32> matches;
+    for (auto cur : pClient->SystemMgr()->GetEntities()) {
+        SystemEntity* pSE(cur.second);
+        if ((pSE == nullptr) or pSE->IsStaticEntity() or pSE->HasPilot())
             continue;
-        }
-        if (is_category_match and match_id != cur.second->GetCategoryID()) {
-            codelog(COMMAND__ERROR, "m: g%d c%d skipping match_id %u categoryID %u",
-                    is_group_match, is_category_match, match_id, cur.second->GetGroupID());
+        if (is_category_match ? (match_id != pSE->GetCategoryID()) : (match_id != pSE->GetGroupID()))
             continue;
-        }
+        if (player_pos.distance(pSE->GetPosition()) > range)
+            continue;
+        matches.push_back(cur.first);
+    }
 
-        if (player_pos.distance(cur.second->GetPosition()) > range)
+    uint32 count(0);
+    for (auto id : matches) {
+        SystemEntity* pSE(pClient->SystemMgr()->GetSE(id));
+        if (pSE == nullptr)
             continue;
-
-        cur.second->Delete();
+        pSE->Delete();
+        ++count;
     }
 
 #undef DEFAULT_RANGE
 
-    return new PyBool(true);
+    return new PyString("Removed " + std::to_string(count) + " objects.");
 }
 
 PyResult Command_location(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
@@ -1070,17 +1097,13 @@ PyResult Command_hop(Client* pClient, CommandDB* db, EVEServiceManager &services
     if (!pClient->IsInSpace())
         throw CustomError ("You must be in space to hop.");
 
+    // '/hop 10' 'km' is accepted too
     std::string arg(args.arg(1));
-    char* end(nullptr);
-    double distance(strtod(arg.c_str(), &end));
-    std::string unit(end);
-    if (unit.empty() and (args.argCount() > 2))
-        unit = args.arg(2);
-    if (EvE::icontains(unit, "au")) {
-        distance *= ONE_AU_IN_METERS;
-    } else if (EvE::icontains(unit, "km")) {
-        distance *= 1000;
-    }
+    if (args.argCount() > 2)
+        arg += args.arg(2);
+    double distance(0);
+    if (!cmd_parse_distance(arg, distance))
+        throw CustomError ("Correct Usage: /hop (distance)[m|km|au]");
     if ((distance <= 0) or (distance > (100 * ONE_AU_IN_METERS)))
         throw CustomError ("Distance must be between 0 and 100au");
 

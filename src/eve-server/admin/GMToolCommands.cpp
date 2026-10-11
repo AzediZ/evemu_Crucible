@@ -52,13 +52,9 @@
 #include "services/ServiceManager.h"
 
 namespace {
-    // a character by ID or name.  only online characters
+    // a character by ID, ship or name.  only online characters
     Client* FindCharacter(const Seperator& args, uint32 index) {
-        if (args.argCount() <= index)
-            return nullptr;
-        if (args.isNumber(index))
-            return sEntityList.FindClientByCharID(atoi(args.arg(index).c_str()));
-        return sEntityList.FindClientByName(args.arg(index).c_str());
+        return cmd_find_client(args, index, nullptr);
     }
 
     void GagCharacter(Client* pTarget, int64 minutes, const std::string& reason) {
@@ -204,6 +200,17 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
 {
     const char* usage("Correct Usage: /heat [hi|med|low|all] [percent] [me|charID]");
     Client* pTarget(pClient);
+    // /heat (me|charID) only shows that pilot's heat
+    bool show(false);
+    if (args.argCount() == 2) {
+        std::string rack(args.arg(1));
+        if ((rack == "me") or args.isNumber(1)) {
+            show = true;
+            pTarget = cmd_find_client(args, 1, pClient);
+            if (pTarget == nullptr)
+                throw CustomError ("Character %s is not online", rack.c_str());
+        }
+    }
     if ((args.argCount() > 3) and (args.arg(3) != "me")) {
         pTarget = FindCharacter(args, 3);
         if (pTarget == nullptr)
@@ -213,7 +220,7 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
         throw CustomError ("%s is not in space", pTarget->GetName());
     ShipItemRef sRef(pTarget->GetShip());
 
-    if (args.argCount() > 1) {
+    if ((args.argCount() > 1) and !show) {
         int8 first(0), last(2);
         std::string rack(args.arg(1));
         if (strcasecmp(rack.c_str(), "hi") == 0) {

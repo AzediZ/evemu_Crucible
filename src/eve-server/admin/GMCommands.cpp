@@ -51,6 +51,38 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "corporation/LPService.h"
 #include "corporation/CorporationDB.h"
+#include "admin/CommandHelper.h"
+#include "ship/Ship.h"
+#include "ship/modules/GenericModule.h"
+#include "ship/modules/ModuleManager.h"
+
+// owners of a spawned entity, by what it is and where
+static void SetSpawnOwner(Client* pClient, DBSystemDynamicEntity& entity)
+{
+    switch (entity.categoryID) {
+        case EVEDB::invCategories::Entity: {
+            // owned by system rats
+            entity.factionID = sDataMgr.GetRegionRatFaction(pClient->GetRegionID());
+            entity.allianceID = entity.factionID;
+            entity.corporationID = sDataMgr.GetFactionCorp(entity.factionID);
+            entity.ownerID = entity.corporationID;
+        } break;
+        case EVEDB::invCategories::Ship: {
+            // owned by calling char
+            entity.allianceID = pClient->GetAllianceID();
+            entity.corporationID = pClient->GetCorporationID();
+            entity.factionID = pClient->GetWarFactionID();
+            entity.ownerID = pClient->GetCharacterID();
+        } break;
+        default: {
+            //owned by system sov holder
+            entity.factionID = sDataMgr.GetRegionFaction(pClient->GetRegionID());
+            entity.allianceID = entity.factionID;
+            entity.corporationID = sDataMgr.GetFactionCorp(entity.factionID);
+            entity.ownerID = entity.corporationID;
+        } break;
+    }
+}
 
 PyResult Command_search(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
     if (args.argCount() < 2) {
@@ -161,17 +193,15 @@ PyResult Command_spawnn(Client* who, CommandDB* db, EVEServiceManager &services,
     ShipItemRef ship;
 
     // Updated(groove)
-    // "/spawnn" arguments:
-    // #1 = quantity ?
-    // #2 = some double value deviation
+    // "/spawnn" arguments:  the client's "WM: /Spawn this type" sends '/spawnN <qty> 4000 <typeID>'
+    // #1 = quantity
+    // #2 = spawn spread, meters from the caller
     // #3 = typeID
 
     if ((args.argCount() < 4) || (args.argCount() > 4))
     {
         throw CustomError ("LOL, we don't know the correct usage of /spawnn, sorry you're S.O.L., BUT it should have 4 arguments.");
     }
-
-    // Since we don't know what args 1 and 2 are, we don't care about them right now...
 
     if (!args.isNumber(3))
         throw CustomError ("Argument 3 should be an item type ID");
@@ -193,11 +223,16 @@ PyResult Command_spawnn(Client* who, CommandDB* db, EVEServiceManager &services,
         count = 1;
     if (count > 50)
         count = 50;
+    double spread(args.isNumber(2) ? strtod(args.arg(2).c_str(), nullptr) : 0.0);
     for (int spawned = 0; spawned < count; ++spawned) {
     GPoint loc(who->GetShipSE()->GetPosition());
-    // Calculate a random coordinate on the sphere centered on the player's position with
-    // a radius equal to the radius of the ship/celestial being spawned times 10 for really good measure of separation:
-    double radius = (actualRadius * 5.0) * (double)(MakeRandomInt(1, 3));     // Scale the distance from player that the object will spawn to between 10x and 15x the object's radius
+    double radius(spread);
+    if (radius <= 0)
+        // a radius equal to the radius of the ship/celestial being spawned times 5-15 for really good measure of separation:
+        radius = (actualRadius * 5.0) * (double)(MakeRandomInt(1, 3));
+    // keep clear of the caller's ship
+    if (radius < actualRadius + who->GetShipSE()->GetRadius())
+        radius = actualRadius + who->GetShipSE()->GetRadius();
     loc.MakeRandomPointOnSphere(radius);
 
     // Spawn the item:
@@ -221,11 +256,7 @@ PyResult Command_spawnn(Client* who, CommandDB* db, EVEServiceManager &services,
         entity.itemName = actualTypeName;
         entity.typeID = actualTypeID;
         entity.position = loc;
-        /** @todo need to get faction info here... */
-        entity.allianceID = 1;
-        entity.corporationID = 1;
-        entity.factionID = 1;
-        entity.ownerID = 1;
+        SetSpawnOwner(who, entity);
 
     // Actually do the spawn using SystemManager's BuildEntity:
     if (!who->SystemMgr()->BuildDynamicEntity(entity))
@@ -354,30 +385,7 @@ PyResult Command_spawn(Client* pClient, CommandDB* db, EVEServiceManager &servic
         entity.typeID = actualTypeID;
         entity.position = loc;
         // set owner data according to type and location
-        switch (actualCategoryID) {
-            case EVEDB::invCategories::Entity: {
-                // owned by system rats
-                entity.factionID = sDataMgr.GetRegionRatFaction(pClient->GetRegionID());
-                entity.allianceID = entity.factionID;
-                entity.corporationID = sDataMgr.GetFactionCorp(entity.factionID);
-                entity.ownerID = entity.corporationID;
-            } break;
-            case EVEDB::invCategories::Ship: {
-                // owned by calling char
-                entity.allianceID = pClient->GetAllianceID();
-                entity.corporationID = pClient->GetCorporationID();
-                entity.factionID = pClient->GetWarFactionID();
-                entity.ownerID = pClient->GetCharacterID();
-            } break;
-            default: {
-                //owned by system sov holder
-                entity.factionID = sDataMgr.GetRegionFaction(pClient->GetRegionID());
-                entity.allianceID = entity.factionID;
-                entity.corporationID = sDataMgr.GetFactionCorp(entity.factionID);
-                entity.ownerID = entity.corporationID;
-            } break;
-        }
-
+        SetSpawnOwner(pClient, entity);
 
         // Actually do the spawn using SystemManager's BuildEntity:
         if (!pClient->SystemMgr()->BuildDynamicEntity(entity)) {
@@ -421,75 +429,131 @@ PyResult Command_setbpattr(Client* who, CommandDB* db, EVEServiceManager &servic
     return new PyString("Properties modified.");
 }
 
+namespace {
+    std::string FormatAttrValue(EvilNumber value) {
+        char buf[64];
+        if (value.isInt()) {
+            snprintf(buf, sizeof(buf), "%lli", value.get_int());
+        } else {
+            snprintf(buf, sizeof(buf), "%g", value.get_double());
+        }
+        return buf;
+    }
+
+    // a number for an attribute.  whole numbers stay integers
+    bool ParseAttrValue(const std::string& text, EvilNumber& value) {
+        if (text.empty())
+            return false;
+        char* end(nullptr);
+        double d(strtod(text.c_str(), &end));
+        if ((end == text.c_str()) or (*end != '\0'))
+            return false;
+        if ((text.find_first_of(".eE") == std::string::npos) and (d >= -9.2e18) and (d <= 9.2e18)) {
+            value = EvilNumber(static_cast<int64>(strtoll(text.c_str(), nullptr, 10)));
+        } else {
+            value = EvilNumber(d);
+        }
+        return true;
+    }
+
+    /* sets a live attribute value, tells the owner's client, and refreshes anything that caches it.
+     * this is transient, like CCP's dogma tool:  the next full effects rebuild (undock, board, refit, relog) reloads the
+     *  attribute from the type and the db.  returns a note for the reply
+     */
+    std::string ApplyGMAttribute(Client* pClient, InventoryItemRef iRef, uint16 attrID, EvilNumber value)
+    {
+        iRef->SetAttribute(attrID, value, true);
+
+        std::string note;
+        uint8 catID(iRef->categoryID());
+        if ((catID == EVEDB::invCategories::Ship) or (catID == EVEDB::invCategories::Entity)
+        or  (catID == EVEDB::invCategories::Drone)) {
+            // the ball caches mass, agility, speed and warp data
+            SystemEntity* pSE(nullptr);
+            Client* pPilot(sEntityList.FindClientByCharID(iRef->ownerID()));
+            if ((pPilot != nullptr) and (pPilot->GetShipID() == iRef->itemID()) and pPilot->IsInSpace())
+                pSE = pPilot->GetShipSE();
+            if ((pSE == nullptr) and (pClient->SystemMgr() != nullptr))
+                pSE = pClient->SystemMgr()->GetSE(iRef->itemID());
+            if ((pSE != nullptr) and (pSE->DestinyMgr() != nullptr)
+            and (pSE->IsShipSE() or pSE->IsNPCSE() or pSE->IsDroneSE())) {
+                pSE->DestinyMgr()->UpdateShipVariables();
+                if (attrID == AttrMaxVelocity)
+                    pSE->DestinyMgr()->SetMaxVelocity(value.get_float());
+                note = "  Movement updated.";
+            }
+        } else if ((catID == EVEDB::invCategories::Module) or (catID == EVEDB::invCategories::Subsystem)
+               or  (catID == EVEDB::invCategories::Charge)) {
+            // a fitted module re-applies its pilot's skill bonuses.  a loaded charge is found by its slot
+            Client* pPilot(sEntityList.FindClientByCharID(iRef->ownerID()));
+            if ((pPilot != nullptr) and (pPilot->GetShipID() == iRef->locationID()) and (pPilot->GetShip().get() != nullptr)) {
+                ModuleManager* pModMgr(pPilot->GetShip()->GetModuleManager());
+                GenericModule* pMod(nullptr);
+                if (pModMgr != nullptr)
+                    pMod = (catID == EVEDB::invCategories::Charge ? pModMgr->GetModule(iRef->flag()) : pModMgr->GetModule(iRef->itemID()));
+                if (pMod != nullptr) {
+                    pMod->Update();
+                    note = "  Module updated (values its cycle caches may need a refit).";
+                }
+            }
+        }
+        return note + "  Resets on refit/undock.";
+    }
+
+    // the reply of /setattr and /dogma
+    std::string SetAttrReply(Client* pClient, CommandDB* db, InventoryItemRef iRef, uint16 attrID, EvilNumber value)
+    {
+        std::string old(iRef->HasAttribute(attrID) ? FormatAttrValue(iRef->GetAttribute(attrID)) : std::string("not set"));
+        std::string note(ApplyGMAttribute(pClient, iRef, attrID, value));
+        char buf[384];
+        snprintf(buf, sizeof(buf), "%s of %s (%u) set to %s (was %s).%s", db->GetAttributeName(attrID).c_str(), iRef->name(),
+                 iRef->itemID(), FormatAttrValue(value).c_str(), old.c_str(), note.c_str());
+        sLog.Yellow("Command", "%s: %s", pClient->GetName(), buf);
+        return buf;
+    }
+}
+
 PyResult Command_getattr(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    /** @todo update to new attrib system
-    if (args.argCount() < 3) {
-        throw CustomError ("Correct Usage: /getattr [itemID] [attributeID]");
+    if (args.argCount() < 3)
+        throw CustomError ("Correct Usage: /getattr (itemID|me|char) (attributeID|attributeName)");
+
+    InventoryItemRef iRef(cmd_find_item(who, args.arg(1)));
+    if (iRef.get() == nullptr)
+        throw CustomError ("Unable to find item %s", args.arg(1).c_str());
+    uint16 attrID(cmd_find_attribute(db, args.arg(2)));
+    if (attrID == 0)
+        throw CustomError ("Unknown attribute %s", args.arg(2).c_str());
+
+    std::string attrName(db->GetAttributeName(attrID));
+    std::string def(FormatAttrValue(iRef->GetDefaultAttribute(attrID)));
+    char buf[256];
+    if (!iRef->HasAttribute(attrID)) {
+        snprintf(buf, sizeof(buf), "%s(%u) of %s (%u): the item doesn't have it.  type default %s", attrName.c_str(), attrID,
+                 iRef->name(), iRef->itemID(), def.c_str());
+    } else {
+        snprintf(buf, sizeof(buf), "%s(%u) of %s (%u): current %s, type default %s", attrName.c_str(), attrID,
+                 iRef->name(), iRef->itemID(), FormatAttrValue(iRef->GetAttribute(attrID)).c_str(), def.c_str());
     }
-    if (!args.isNumber(1))
-        throw PyException(MakeCustomError("1st argument must be itemID (got %s).", args.arg(1).c_str()));
-    const uint32 itemID = atoi(args.arg(1).c_str());
-
-    if (!args.isNumber(2))
-        throw PyException(MakeCustomError("2nd argument must be attributeID (got %s).", args.arg(2).c_str()));
-    const ItemAttributeMgr::Attr attribute = (ItemAttributeMgr::Attr)atoi(args.arg(2).c_str());
-
-    InventoryItemRef item = sItemFactory.GetItemRef(itemID);
-    if (item.get() == nullptr)
-        throw PyException(MakeCustomError("Failed to load item %u.", itemID));
-    */
-    //return item->attributes.PyGet(attribute);
-    //return item->GetAttribute(attribute).GetPyObject();
-    return nullptr;
+    return new PyString(buf);
 }
 
 PyResult Command_setattr(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    throw CustomError ("disabled");
-    if (0) {
-    if (args.argCount() < 4) {
-        throw CustomError ("Correct Usage: /setattr [itemID] [attributeID] [value]");
-    }
+    if (args.argCount() < 4)
+        throw CustomError ("Correct Usage: /setattr (itemID|me|char) (attributeID|attributeName) (value)");
 
-    // Check for target (arg #1) for either a number or the string "myship":
-    int itemID = 0;
-    std::string target = "";
-    if (!args.isNumber(1))
-    {
-        target = args.arg(1);
-        if (target != "myship")
-            throw CustomError ("1st argument should be an entity ID ('myship'=current ship) (got %s).", args.arg(1).c_str());
+    InventoryItemRef iRef(cmd_find_item(who, args.arg(1)));
+    if (iRef.get() == nullptr)
+        throw CustomError ("Unable to find item %s", args.arg(1).c_str());
+    uint16 attrID(cmd_find_attribute(db, args.arg(2)));
+    if (attrID == 0)
+        throw CustomError ("Unknown attribute %s", args.arg(2).c_str());
+    EvilNumber value;
+    if (!ParseAttrValue(args.arg(3), value))
+        throw CustomError ("The value must be a number (got %s)", args.arg(3).c_str());
 
-        itemID = who->GetShipID();
-    }
-    else
-    {
-        // target (arg #1) is a number, so decode it and move on:
-        itemID = atoi(args.arg(1).c_str());
-    }
-
-    if (!args.isNumber(2))
-        throw CustomError ("2nd argument must be attributeID (got %s).", args.arg(2).c_str());
-    //const ItemAttributeMgr::Attr attribute = (ItemAttributeMgr::Attr)atoi(args.arg(2).c_str());
-
-    if (!args.isNumber(3))
-        throw CustomError ("3rd argument must be value (got %s).", args.arg(3).c_str());
-    //const double value = atof(args.arg(3).c_str());
-
-    if (itemID < minPlayerItem)
-        throw CustomError ("1st argument must be a valid 'entity' table itemID that MUST be larger >= 140000000. (got %s)", args.arg(1).c_str());
-
-    InventoryItemRef item = sItemFactory.GetItemRef(itemID);
-    if (item.get() == nullptr)
-        throw CustomError ("Failed to load item %u.", itemID);
-
-    //item->attributes.SetReal(attribute, value);
-    sLog.Warning("GMCommands: Command_setattr()", "This command will modify attribute and send change to client, but change does not take effect in client for some reason.");
-   // item->SetAttribute(attribute, (float)value);
-
-    return new PyString("Operation successful.");
-    }
+    return new PyString(SetAttrReply(who, db, iRef, attrID, value));
 }
 
 PyResult Command_fit(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
@@ -545,31 +609,14 @@ PyResult Command_giveallskills(Client* who, CommandDB* db, EVEServiceManager &se
     Client * pTarget = NULL;
 
     if (args.argCount() >= 2) {
-        if (args.isNumber(1)) {
-            ownerID = atoi(args.arg(1).c_str());
-            pTarget = sEntityList.FindClientByCharID(ownerID);
-            if (!pTarget)
-                throw CustomError ("ERROR: Cannot find character #%d", ownerID);
-            else
-                character = pTarget->GetChar();
-        } else if (args.arg(1) == "me") {
-            ownerID = who->GetCharacterID();
-            character = who->GetChar();
-            pTarget = who;
-        } else if (!args.isNumber(1)) {
-            throw CustomError ("The use of string based Character names for this command is not yet supported!  Use 'me' instead or the entityID of the character to which you wish to give skills.");
-            /*
-             *            const char *name = args.arg(1).c_str();
-             *            Client *target = sEntityList.FindCharacter(name);
-             *           if (target == NULL)
-             *                throw PyException(MakeCustomError("Cannot find Character by the name of %s", name));
-             *            ownerID = target->GetCharacterID();
-             *            character = target->GetChar();
-             */
-        } else
-            throw CustomError ("Argument 1 must be Character ID or Character Name ");
+        // me, a charID or a (quoted) name.  online characters only
+        pTarget = cmd_find_client(args, 1, who);
+        if (pTarget == nullptr)
+            throw CustomError ("Character %s is not online", args.arg(1).c_str());
+        ownerID = pTarget->GetCharacterID();
+        character = pTarget->GetChar();
     } else
-        throw CustomError ("Correct Usage: /giveallskills [Character Name or ID]");
+        throw CustomError ("Correct Usage: /giveallskills [me|charID|\"Character Name\"]");
 
     // Make sure character reference is not NULL before trying to use it:
     if (character.get()) {
@@ -595,7 +642,7 @@ PyResult Command_giveallskills(Client* who, CommandDB* db, EVEServiceManager &se
                 skill = sItemFactory.SpawnSkill(idata);
 
                 if (skill.get() == nullptr)
-                    throw CustomError ("Unable to create item of type %s.", skill->typeID());
+                    throw CustomError ("Unable to create item of type %u.", skillID);
 
                 skill->SetAttribute(AttrSkillLevel, level);
                 skill->SetAttribute(AttrSkillPoints, skill->GetSPForLevel(level));
@@ -637,28 +684,12 @@ PyResult Command_giveskill(Client* who, CommandDB* db, EVEServiceManager &servic
     Client *pTarget(nullptr);
 
     if (args.argCount() == 4) {
-        if (args.isNumber(1)) {
-            ownerID = atoi(args.arg(1).c_str());
-            pTarget = sEntityList.FindClientByCharID(ownerID);
-            if (pTarget == nullptr)
-                throw CustomError ("Character %u is not online.", ownerID);
-            character = pTarget->GetChar();
-        } else if (args.arg(1) == "me") {
-            ownerID = who->GetCharacterID();
-            character = who->GetChar();
-            pTarget = who;
-        } else if (!args.isNumber(1)) {
-            throw CustomError ("The use of string based Character names for this command is not yet supported!  Use 'me' instead or the entityID of the character to which you wish to give skills.");
-            /*
-            const char *name = args.arg(1).c_str();
-            pTarget = sEntityList.FindClientByName(name);
-            if (!pTarget)
-                throw PyException(MakeCustomError("Cannot find Character by the name of %s", name));
-            ownerID = pTarget->GetCharacterID();
-            character = pTarget->GetChar();
-            */
-        } else
-            throw CustomError ("Argument 1 must be Character ID or Character Name ");
+        // me, a charID or a (quoted) name.  online characters only
+        pTarget = cmd_find_client(args, 1, who);
+        if (pTarget == nullptr)
+            throw CustomError ("Character %s is not online", args.arg(1).c_str());
+        ownerID = pTarget->GetCharacterID();
+        character = pTarget->GetChar();
 
         if (!args.isNumber(2))
             throw CustomError ("Argument 2 must be type ID.");
@@ -671,7 +702,7 @@ PyResult Command_giveskill(Client* who, CommandDB* db, EVEServiceManager &servic
         if (level > EvESkill::MAXSKILLLEVEL)
             level = EvESkill::MAXSKILLLEVEL;
     } else
-        throw CustomError ("Correct Usage: .giveskill [me/CharacterID] [skillID] [level]");
+        throw CustomError ("Correct Usage: /giveskill [me|charID|\"Character Name\"] [skillID] [level]");
 
     // Make sure references are not NULL before trying to use them
     if ((pTarget == nullptr) or (character.get() == nullptr))
@@ -841,42 +872,28 @@ PyResult Command_repairmodules(Client* who, CommandDB* db, EVEServiceManager &se
 PyResult Command_dogma(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
     //"dogma" "140019878" "agility" "=" "0.2"
+    // the client's "Dogma / Edit attribute" and gmtools' AttributeInspector send this shape
 
     if (!(args.argCount() == 5)) {
-        throw CustomError ("Correct Usage: /dogma [itemID|me] [attributeName] = [value]");
-    }
-
-    // First argument could be both
-    if (args.isNumber(2)) {
-        throw CustomError ("/dogma Second argument must be a string");
+        throw CustomError ("Correct Usage: /dogma [itemID|me] [attributeName|attributeID] = [value]");
     }
 
     if (args.arg(3) != "=") {
         throw CustomError ("/dogma You didn't use an '=' in between your attribute name and value.");
     }
-    if (!args.isNumber(4)) {
+    EvilNumber value;
+    if (!ParseAttrValue(args.arg(4), value)) {
         throw CustomError ("/dogma The last argument must be a number");
     }
 
-    const char *attributeName = args.arg(2).c_str();
-    float attributeValue = atof(args.arg(4).c_str());
-
-    InventoryItemRef i;
-    if (args.arg(1) == "me") {
-        i = sItemFactory.GetItemRef(who->GetShip().get()->itemID());
-    } else {
-        i = sItemFactory.GetItemRef(atoi(args.arg(1).c_str()));
-    }
-    if (i.get() == nullptr)
+    InventoryItemRef iRef(cmd_find_item(who, args.arg(1)));
+    if (iRef.get() == nullptr)
         throw CustomError ("/dogma Unable to find item %s", args.arg(1).c_str());
-    uint32 attributeID(db->GetAttributeID(attributeName));
-    if (attributeID == 0)
-        throw CustomError ("/dogma Unknown attribute %s", attributeName);
+    uint16 attrID(cmd_find_attribute(db, args.arg(2)));
+    if (attrID == 0)
+        throw CustomError ("/dogma Unknown attribute %s", args.arg(2).c_str());
 
-    i->SetAttribute(attributeID, attributeValue);
-    /** @todo  for modules and ships, this will need to call some kind of 'reload' to reset the attrib mem object before new attrib takes affect.  */
-
-    return nullptr;
+    return new PyString(SetAttrReply(who, db, iRef, attrID, value));
 }
 
 PyResult Command_kick(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
@@ -948,12 +965,14 @@ PyResult Command_ban(Client* who, CommandDB* db, EVEServiceManager &services, co
 
 PyResult Command_unban(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
+    uint32 accountID(0);
+    std::string name;
     if (args.argCount() == 2) {
-        if (!args.isNumber(1)) {
-            const char *name = args.arg(1).c_str();
-            ServiceDB::SetAccountBanStatus(db->GetAccountID(name),false);
+        name = args.arg(1);
+        if (args.isNumber(1)) {
+            accountID = db->GetAccountIDByChar(atoi(args.arg(1).c_str()));
         } else {
-            throw CustomError ("Correct Usage: /ban [Character Name]");
+            accountID = db->GetAccountID(name);
         }
     }
     //support for characters with first and last names
@@ -961,13 +980,16 @@ PyResult Command_unban(Client* who, CommandDB* db, EVEServiceManager &services, 
         if (args.isHexNumber(1))
             throw CustomError ("Unknown arguments");
 
-        std::string name = args.arg(1) + " " + args.arg(2);
-        ServiceDB::SetAccountBanStatus(db->GetAccountID(name),false);
+        name = args.arg(1) + " " + args.arg(2);
+        accountID = db->GetAccountID(name);
     } else {
         throw CustomError ("Correct Usage: /unban [Character Name / Character ID]");
     }
 
-    return nullptr;
+    if (accountID == 0)
+        throw CustomError ("Cannot find character %s", name.c_str());
+    ServiceDB::SetAccountBanStatus(accountID, false);
+    return new PyString("Unbanned.");
 }
 
 PyResult Command_givelp(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
@@ -1005,8 +1027,8 @@ PyResult Command_givelp(Client* who, CommandDB* db, EVEServiceManager &services,
             throw CustomError ("Argument 3 should be a valid number");
         }
         LPService::AddLP(characterID, corporationID, amount);
-        std::string message = ("Added %i LP to char %i for corp %s." \
-                               ,amount , characterID, corpName);
+        std::string message("Added " + std::to_string(amount) + " LP to char " + std::to_string(characterID)
+                            + " for corp " + corpName + ".");
         return(new PyString(message));
     } else {
         throw CustomError ("Correct Usage: /givelp ['me'|<characterID>] [corporationID] [amount]");

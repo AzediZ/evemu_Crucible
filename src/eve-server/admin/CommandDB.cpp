@@ -195,19 +195,67 @@ int CommandDB::GetAccountID(std::string name) {
     if (!sDatabase.IsSafeString(name))
         return 0;
 
+    std::string escaped;
+    sDatabase.DoEscapeString(escaped, name);
+
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT accountID FROM chrCharacters WHERE name = '%s'", name.c_str())) {
+    if (!sDatabase.RunQuery(res, "SELECT accountID FROM chrCharacters WHERE characterName = '%s'", escaped.c_str())) {
         sLog.Error("CommandDB", "Failed to retrieve accountID for %s", name.c_str());
         return 0;
     }
 
     DBResultRow row;
     if (!res.GetRow(row)) {
-        sLog.Error("CommandDB", "Query Returned no results");
+        _log(COMMAND__MESSAGE, "GetAccountID: no character named %s", name.c_str());
         return 0;
     }
 
     return row.GetInt(0);
+}
+
+uint32 CommandDB::GetAccountIDByChar(uint32 charID) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT accountID FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return 0;
+    return row.GetUInt(0);
+}
+
+uint32 CommandDB::GetCharacterID(const std::string& name) {
+    if (name.empty() or !sDatabase.IsSafeString(name.c_str()))
+        return 0;
+
+    std::string escaped;
+    sDatabase.DoEscapeString(escaped, name);
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT characterID FROM chrCharacters WHERE characterName = '%s'", escaped.c_str())) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+std::string CommandDB::GetAttributeName(uint16 attributeID) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT attributeName FROM dgmAttributeTypes WHERE attributeID = %u", attributeID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return "";
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return "";
+    return row.GetText(0);
 }
 
 static std::array<uint32, 8> unpubSkills = {

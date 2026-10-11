@@ -29,7 +29,10 @@
 #include "Client.h"
 
 #include "admin/CommandDispatcher.h"
+#include "ship/Ship.h"
 #include "system/DestinyManager.h"
+
+#include <set>
 
 // command names are matched without case: the client sends some in mixed case (/spawnN)
 static std::string CommandKey(const std::string& name) {
@@ -54,16 +57,6 @@ CommandDispatcher::~CommandDispatcher() {
 
 PyResult CommandDispatcher::Execute( Client* from, const char* msg )
 {
-     /** @todo  fix this shit...
-    if (from->IsInSpace()) {
-        if (!from->DestinyMgr())
-            from->SendErrorMsg( "Internal Server Error.  Ref: ServerError 31110 " );
-        if (from->DestinyMgr()->IsWarping() && ((from->GetAccountRole() & Acct::Role::GML) != Acct::Role::GML)) {
-            sLog.Error( "CommandDispatcher", " Command Requested by %s while warping. --Access denied.", from->GetName() );
-            from->SendErrorMsg( "ServerError 31113 - Cannot Request Commands While Warping." );
-        }
-    } */
-
     Seperator sep( &msg[1] );
     if (!sep.argCount()) {
         //empty command, return list of commands
@@ -85,6 +78,19 @@ PyResult CommandDispatcher::Execute( Client* from, const char* msg )
     }
 
     CommandRecord* rec = itr->second;
+
+    /* commands that move balls or add them to the caller's bubble break a warp in progress.
+     *  this applies to everyone:  every slash user has GML.  /tr and /halt stay allowed, as they are the way out of a broken warp.
+     *  groups adding movement or spawn commands should add their key here
+     */
+    static const std::set<std::string> s_noWarpCommands = {"goto", "hop", "warpto", "bubblewarp",
+        "update", "addball", "addball2", "sendstate", "syncpos", "syncloc", "spawn", "spawnn", "entity",
+        "cloak", "pos", "sov"};
+    if (from->IsInSpace() and (from->GetShipSE() != nullptr) and (from->GetShipSE()->DestinyMgr() != nullptr)
+    and from->GetShipSE()->DestinyMgr()->IsWarping() and (s_noWarpCommands.find(itr->first) != s_noWarpCommands.end())) {
+        _log(COMMAND__MESSAGE, "Command '%s' requested by %s while warping.  Refused.", rec->command.c_str(), from->GetName());
+        throw CustomError ("You can't use /%s while warping.", rec->command.c_str());
+    }
 
     _log(COMMAND__INFO, "Request access to command '%s' with role %p for '%s' with role %p.",  rec->command.c_str(), rec->required_role, from->GetName(), from->GetAccountRole() );
     if ((from->GetAccountRole() & rec->required_role) != rec->required_role) {

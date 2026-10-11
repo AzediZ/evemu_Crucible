@@ -2,11 +2,11 @@
 
 
 COMMAND( spawnn, Acct::Role::ADMIN,
-         "(typeID) - Spawn an NPC with the specified type." )
+         "(count) (spread) (typeID) - spawns count of typeID within spread meters of you (the client's WM: /Spawn this type)" )
 COMMAND( spawn, Acct::Role::SPAWN,
          "(typeID) - Spawn an NPC with the specified type." )
 COMMAND( unspawn, Acct::Role::SPAWN,
-         "(itemID) - remove and delete itemID" )
+         "(itemID) | [range=meters] only=(groupWreck|categoryDrone|group<N>|category<N>|...) - remove and delete itemID, or everything of a group/category in range (default 500km)" )
 COMMAND( search, Acct::Role::VIP,
          "(text) - Search for items matching the specified query" )
 COMMAND( giveisk, Acct::Role::GMH,
@@ -16,15 +16,15 @@ COMMAND( pop, Acct::Role::ADMIN,
 COMMAND( setbpattr, Acct::Role::CONTENT,
          "(itemID) (copy) (materialLevel) (productivityLevel) (licensedProductionRunsRemaining) - Change blueprint's attributes." )
 COMMAND( getattr, Acct::Role::VIP,
-         "(itemID) (attributeID) - Retrieves attribute value." )
+         "(itemID|me|char) (attributeID|name) - shows an item's current and type default attribute value" )
 COMMAND( setattr, Acct::Role::CONTENT,
-         "(itemID) (attributeID) (value) - Sets attributeID of itemID to value." )
+         "(itemID|me|char) (attributeID|name) (value) - sets a live attribute value until the next refit/undock" )
 COMMAND( fit, Acct::Role::VIP,
         "(itemID) - Fits selected item to active ship." )
 COMMAND( giveallskills, Acct::Role::ADMIN,
-        "['me'|<characterID>] - gives ALL skills to designated character or self" )
+        "(me|charID|\"name\") - gives ALL skills to designated online character or self" )
 COMMAND( giveskill, Acct::Role::VIP,
-         "(skillID) (level) - gives skillID to specified level." )
+         "(me|charID|\"name\") (skillID) (level) - gives skillID to specified level." )
 COMMAND( online, Acct::Role::VIP,
         "(entityID) - online all modules on the ship of the entityID. entityID=me=>online my modules" )
 COMMAND( unload, Acct::Role::VIP,
@@ -34,7 +34,7 @@ COMMAND( repairmodules, Acct::Role::HEALSELF,
 COMMAND( giveskills, Acct::Role::ADMIN,
         "(itemID) - gives skills to character." )
 COMMAND( dogma, Acct::Role::ADMIN,
-        "(attribute) - change item attribute value" )
+        "(itemID|me) (attributeName|attributeID) = (value) - sets a live attribute value until the next refit/undock" )
 COMMAND( kick, Acct::Role::ADMIN,
         "(charName) - kicks [charName] from the server")
 COMMAND( ban, Acct::Role::ADMIN,

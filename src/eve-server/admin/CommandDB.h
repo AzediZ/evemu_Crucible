@@ -39,6 +39,12 @@ class CommandDB
                     uint32 &actualGroupID, uint32 &actualCategoryID, double &actualRadius);
     int GetAttributeID(const char *attributeName);
     int GetAccountID(std::string name);
+    // the account of a character (0 if unknown)
+    uint32 GetAccountIDByChar(uint32 charID);
+    // a character by exact name (the column's collation ignores case).  0 if unknown
+    uint32 GetCharacterID(const std::string& name);
+    // the dgmAttributeTypes name of an attribute (empty if unknown)
+    std::string GetAttributeName(uint16 attributeID);
     bool FullSkillList(std::vector<uint32> &skillList);
     static bool NotFullyLearnedSkillList(charSkillStates &skillList, uint32 charID);
     uint32_t GetStation(const char *name);
