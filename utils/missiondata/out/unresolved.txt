@@ -1,0 +1,646 @@
+4	Destroyer class	CargoDelivery2br PirateIntrusion1an PirateIntrusion2gu SerpentisExtravaganza3
+4	EW Cruisers	IntercepttheSaboteurs4sesa PirateInvasion3gu Recon4se ShadesOfGrey4mi
+4	Federation Praktor Hyperion	Fortress5Ga PersistentEnemy4caga Reclamation5ga SmashTheGallenteStockyard5ga
+4	Frigate class	Blockade2gu SeekandDestroy3sa SerpentisExtravaganza3 WorldsCollide1blan
+4	Hyperion	ExtractTheRenegade4 MassDrivers5ga PersistentEnemy4caga SmashTheGallenteStockyard5ga
+3	Alvi	RogueDroneHarassment2 SaveaMansCareer2 SilencetheInformant2
+3	Angel Overseer	WorldsCollide1ansa WorldsCollide1blan WorldsCollide4ansa
+3	Angel Spy	WorldsCollide4bran WorldsCollide4guse WorldsCollide4segu
+3	Assault Ships	CrushTheSebiestorStation5mi HiddenEnemyBase5mi Honor5br
+3	Battlecruisers	AttackoftheDrones4 PirateInvasion3gu SilencetheInformant4
+3	Blood Raider Spy	BloodRaiderSpies1br BloodRaiderSpies2 BloodRaiderSpies4
+3	Cruisers	AttackoftheDrones4 PirateInvasion3gu SilencetheInformant4
+3	Crusiers	DamselinDistress3 FriendlySpies3ga IntercepttheSaboteurs3am
+3	Decimator	BewareTheyLive3 PortaltoWar3 SootheTheSalvageBeast4
+3	Frigates	DrivingaWedge3 InfiltratedOutpost4 OperationWyrmSlayer5se
+2	Apis	DroneDetrius1 SaveaMansCareer2
+2	Battelcruiser	CodenameRedress5mi MassiveAttack4mi
+2	Crippler	InfiltratedOutpost4 SootheTheSalvageBeast4
+2	Crucifier	AmarrianTyrants2 AmarrianTyrants3
+2	Cruiser class	SeekandDestroy3sa SerpentisExtravaganza3
+2	Destoyers	PirateInvasion3se Score3an
+2	Drone Cruiser	MannarMiningColonyLevel3 NewFrontiers3
+2	Drone Cruisers	MannarMiningColonyLevel3 NewFrontiers3
+2	Drone Destroyer	MannarMiningColonyLevel3 NewFrontiers3
+2	Elder Corpii Disciple	BloodRaiderSpies3 SeekandDestroy3br
+2	General Strangelove	AmarrExcavators4 AmarrianTyrants3
+2	Guristas Spy	GuristaSpies3 GuristaSpies4
+2	Hapless Smuggler	HumbleBeginnings3 HumbleBeginnings4
+2	Imperial Templar	OpeningMoves2aman WhatSlaveryBegets5
+2	Lixa	DeadlySerious5ga OustTheClaimJumpers5ga
+2	Mercenary Frigates	BreakTheirWill1gu IdEgonicsInc3amca
+2	Mordu Sentry Gun	Uprising2mo Uprising3mo
+2	Mordu's Missile Battery	Uprising2mo Uprising3mo
+2	Named Battlecruiser	AngelExtragavanza3 DreadPirateScarlet4
+2	Praktor Hyperion	DeadlySerious5ga OustTheClaimJumpers5ga
+2	Repair Outpost	BreakTheirWill1an BreaktheirWill1br
+2	Sansha Spy	SanshaSpies1 SanshaSpies2
+2	Sansha's Berserker (named Sansha Spy	WorldsCollide4ansa WorldsCollide4saga
+2	Sansha's Overseer	WorldsCollide4ansa WorldsCollide4saga
+2	Scramble	Reclamation5ca SerpentisExtravaganza4
+2	Spider Drone I Web	DamselinDistress4 SerpentisExtravaganza4
+2	Thukker Captain's Wingman	TechnologicalSecrets2 TechnologicalSecrets3
+2	scram	AngelExtragavanza3 NavyArmada4ga
+2	scramble	MordusHeadhunters4 PirateSlaughter4gu
+2	web	NavyArmada4ga PirateSlaughter4gu
+1	"Convoy Guard Captain"	InterceptthePirateSmugglers3br
+1	"Decloaked" Federation battleships	DeadlySerious5ga
+1	"Infested station ruins". None of the structures gave loot	DroneDetrius1
+1	"Prison Warden"	InnocentsInTheCrossfire4gu
+1	"Space Port Guardian"	InterceptthePirateSmugglers3br
+1	1 Mercenary Lieutenant + 1 Mercenary Commander	DeadDrift2
+1	130K	Blockade2br
+1	190K	Blockade2br
+1	3 Battlecruisers	WildcatStrike4drones
+1	30-40km	SilencetheInformant3
+1	30-50km	SilencetheInformant3
+1	35-45 km	IntheMidstofDeadspace4p4
+1	37 km	BreaktheirWill1br
+1	38km	SilencetheInformant3
+1	39 km	BreakTheirWill1an
+1	42 km	BreaktheirWill1br
+1	5 Elite Cruisers	WildcatStrike4drones
+1	600	AngelExtragavanza4
+1	700	AngelExtragavanza4
+1	95K	Blockade2br
+1	A lot of ECM	IntheMidstofDeadspace4p5
+1	Aimon Kuzni	GuristaExtravaganza4
+1	Alvi- class drones	DroneDetrius1
+1	Alvior	SaveaMansCareer2
+1	Alvis	DroneDetrius1
+1	Amarr Cruise Missile Batteries --Each is a	LocationLocation5am
+1	Amarr Energy Neutralizer II	ForcesAmassing5am
+1	Amarr Energy Neutralizer IIIs	StrayAmarrCarrier5
+1	Amarr Energy Neutralizer IIs	StrayAmarrCarrier5
+1	Amarr Navy Jakars using Kinetic Cruise Missiles	IntheMidstofDeadspace4p1
+1	Amarr Pursuer	AnotherSlaveRescue3am
+1	Amarr Raider - consists of Types	ProbingQuestion3am
+1	Amarr Slaver	IdEgonicsInc3amca
+1	Amarr Tower Sentry III	WhatSlaveryBegets5
+1	Amarrian Guard	ForJustice1
+1	Amarrian Spy	ForJustice1
+1	Ammatar Navy Gamma I Support	Score4at
+1	Ammatar Navy Gamma II Support	Score4at
+1	Ammatar Navy frigates	AmmatarDetectiveSpotted
+1	Amore Veal	CargoDelivery3se
+1	Angel Assault Cruiser	BuzzKill4an
+1	Angel Assault Frigate	BuzzKill4an
+1	Angel Battleship	BuzzKill4an
+1	Angel Cartel	OpeningMoves2aman
+1	Angel Cruise Missile Battery Cataclysm Cruise Missile	AngelExtragavanza4
+1	Angel Frigate	BuzzKill4an
+1	Angel Harpy	AttackTheAngelHideout2an
+1	Angel Light Missile Battery Piranha Light Missile	AngelExtragavanza4
+1	Angel Medusa	AttackTheAngelHideout2an
+1	Angel Tower Sentry II	KidnappersStrike3
+1	Angel Viper (named Angel Spy	WorldsCollide4ansa
+1	Apoc hull	IdEgonicsInc3amca
+1	Apostle	WorldsCollide4bran
+1	Arika Tosch	GuristaExtravaganza4
+1	Asmodeus	SaveaMansCareer2
+1	Asteroid Colony: Unknown Loot	PirateInvasion3se
+1	Atron class miners	IllegalActivity3
+1	Auto-Aggro	CrystalDreamsShattered3
+1	Auxillary Power Array	BreaktheirWill1br
+1	BS Communication officer	PirateSlaughter4gu
+1	BS: Communications Officer	PirateSlaughter4gu
+1	Barren Asteroid: No Loot	PirateInvasion3se
+1	Battelship	SmugglerInterception4an
+1	Battle Cruiser - Imperial Avenger	ScoutItOut3am
+1	Battlecruiser -- State Shukuro Bajo x2	TombOfTheUnknownSoldiers4ca
+1	Battlecruiser class	SerpentisExtravaganza3
+1	Battlecrusier	Gatetonowhere4
+1	Battleship -- State Shukuro Shogun x2	TombOfTheUnknownSoldiers4ca
+1	Battleship -- State Shukuro Shogun x3	TombOfTheUnknownSoldiers4ca
+1	Battleship Draben Kuvakei Wrath Cruise Missile	Vengeance4sa
+1	Battleships	OperationWyrmSlayer5se
+1	Battleships - Gallente Strike Team	RacetrackRuckus4am
+1	Battleships Federation	OustTheClaimJumpers5ga
+1	Battleships Triggers Mission Completion	PrisonTransfer4ca
+1	Battleships Triggers Wave 2	PrisonTransfer4ca
+1	Battleships Triggers Wave 4	PrisonTransfer4ca
+1	Battleships Triggers Wave 6	PrisonTransfer4ca
+1	Beezebub	SaveaMansCareer2
+1	Bestowers	NewFrontiers3
+1	Blackbird class	CutThroatCompetition3
+1	Blood Raider Battleships	DesperateManeuvers4
+1	Blood Raider Heavy Missile Battery	RitualistRaid4
+1	Blood Raider Slaver	RogueSlaveTrader3
+1	Blood Spy	WorldsCollide4bran
+1	Bloodsworn Bodyguard	ForcetobeReckonedWith3br
+1	Bobcat	DownLegion3
+1	Bomber	SootheTheSalvageBeast4
+1	Broken Blue Crystal Aseroid: No Loot	PirateInvasion3se
+1	Broken Metallic Crystal Asteroid: No Loot	PirateInvasion3se
+1	Broken Orange Crystal Aseroid: No Loot	PirateInvasion3se
+1	CR	PirateSlaughter4an
+1	CS	LightsOut5ga
+1	Caldari Cruise Missile Batteries --Each is a	LocationLocation5ca
+1	Caldari Energy Neutralizer	Reclamation5ca
+1	Caldari Energy Neutralizer II	HiddenEnemyBase5ca
+1	Caldari Energy Neutralizer III	HiddenEnemyBase5ca
+1	Caldari Energy Neutralizer IIIs	StrayCaldariCarrier5
+1	Caldari Energy Vampire	Reclamation5ca
+1	Caldari Navy Delta II Support	MissingReporters3
+1	Caldari Navy Temuras (Raven	IntheMidstofDeadspace4p5
+1	Caldari Sentry Tower	DeadlyArrival2caam
+1	Caldari Stasis Tower Web speed multiplier of 0.665 each	HiddenEnemyBase5ca
+1	Caldari Tower Sentry III	Reclamation5ca
+1	Caldari Traitor	CostOfGreenerGrass2Gallente
+1	Caracal class	CutThroatCompetition3
+1	Cathedral Ruins	FortheBirds1
+1	Centum Controller - Centum Loyal Fiend	RogueSlaveTrader4
+1	Cerberus class	CutThroatCompetition3
+1	Cheetah	DownLegion3
+1	Chief Republic Frigates may web & scramble	IntercepttheSaboteurs4mi
+1	Cleaner	AttackTheAngelHideout2an
+1	Cloven Grey Asteroid: No Loot	PirateInvasion3se
+1	Cloven Red Asteroid: No Loot	PirateInvasion3se
+1	Colonel 'Bat' Guano	SerpentisShipBuilders4
+1	Colony	SmugglerInterception2sa
+1	Communication Officer	PirateSlaughter4gu
+1	Container	MouthyMerc4
+1	Convoy Guard Wingman	InterceptthePirateSmugglers3se
+1	Convoys	PirateBusiness2mi
+1	Core Chief Infantry - Cruiser	HiddenHope4se
+1	Core Defender - Frigate	HiddenHope4se
+1	Core Port Admiral - Battleship	HiddenHope4se
+1	Core Rear Admiral - Battleship	HiddenHope4se
+1	Core port admiral - Battleship	HiddenHope4se
+1	Corelatis	SerpentisExtravaganza3
+1	Corelatis Platoon Leader - Cruiser	HiddenHope4se
+1	Corelatis captain + Corelatis High Captain	DuoofDeath3se
+1	Coreli	SerpentisExtravaganza3
+1	Coreli Safeguard - Elite Frigate	HiddenHope4se
+1	Corelior	SerpentisExtravaganza3
+1	Corelum	SerpentisExtravaganza3
+1	Corelum Chief Defender - Cruiser	HiddenHope4se
+1	Corelum Chief Guard (Cruiser class	ShipyardTheft4se
+1	Corpii Collector (Lazerius	FlameofPeace1
+1	Corpior	CargoDelivery2br
+1	Corpior Spy	BloodRaiderSpies3
+1	Corporate Spy	EscapedSpy1ga
+1	Corpus Pope aka. Kubi Gayar	CargoDelivery4br
+1	Creator (Battleship	SootheTheSalvageBeast4
+1	Cruise Missile Battery triggers full room aggro	MySweetPrivateer3ga
+1	Cruisers (Imperial Justica	ForcesAmassing5am
+1	Cruisers - Gistum	StrikingDownTwoFliesWithOneSwing3an
+1	Cruisers - Mercenary Lietenant	BreakTheirWill3gu
+1	Cruisers - Pithium Nullifier	BreakTheirWill3gu
+1	Crusier	SilenceDeepasDeath3an
+1	DD	PirateSlaughter4an
+1	DED Soldier 2nd Class @ 35km	ConcordScoutSpotted1
+1	Damp	SerpentisShipBuilders4
+1	Dark Priest	WorldsCollide4bran
+1	Dark Shipyard: No Loot	PirateInvasion3se
+1	Death Dealer	SevensPrisonFacility3
+1	Death Lord	CaseofKidnapping4
+1	Decimators and Renders	DroneDetrius1
+1	Defeater (Cruiser	SootheTheSalvageBeast4
+1	Description reads "Caldari 425mm Railgun Sentry"	CoveringyourTracks4
+1	Destoyer	Recon2br
+1	Destroyers	DrivingaWedge3
+1	Destroyers Triggers Wave 3	PrisonTransfer4ca
+1	Destroyers Triggers Wave 5	PrisonTransfer4ca
+1	Devastator	InfiltratedOutpost4
+1	Dire Pithum Eraser - high thermal damage	InnocentsInTheCrossfire4gu
+1	Dirty Shipyard: drop nothing	Score1gu
+1	Divine Imperial Champion - has high Armour Repairing	ProbingQuestion3am
+1	Divine Imperial Justicar - has high Armour Repairing	ProbingQuestion3am
+1	Divine Imperials	HaltTheInvasion4am
+1	Do not attack Minmatar Diplomat	DrivingaWedge3
+1	Drone Battlecruiser	NewFrontiers3
+1	Drone Elite Frigate	NewFrontiers3
+1	Drone Energy Neutralizer Sentry II one each left	RogueSpy5
+1	Drone Energy Neutralizer Sentry III 40km below	RogueSpy5
+1	Drone Frigate	NewFrontiers3
+1	Drone Frigates	NewFrontiers3
+1	Drone Neutralizer Tower	NewFrontiers3
+1	Drone Sentry I	SilencetheInformant3
+1	Drone Sentry II	SilencetheInformant3
+1	Drone Watcher	PortaltoWar3
+1	Drone Watcher Post	PortaltoWar3
+1	Dune Conal	CargoDelivery4sa
+1	Dune Conal - Core Lord Admiral	CargoDelivery4se
+1	EM Forcefield	GuristaExtravaganza3
+1	EM damage	Recon4an
+1	EW Battleships	HaltTheInvasion4am
+1	EW Frigates	PirateInvasion3gu
+1	EW frigates	HaltTheInvasion4am
+1	EXP	DuoofDeath4an
+1	Eilte Frigate	Score4at
+1	Elder Corpii Friar	CargoDelivery4br
+1	Elder Corpum Sage - NOS	Recon2br
+1	Electronic Attack Frigates	MySweetPrivateer3ga
+1	Elite Federation	OustTheClaimJumpers5ga
+1	Elite Federation Diablic	LightsOut5ga
+1	Elite Federation cruiser	NavyArmada4ga
+1	Elite Federation frigates	NavyArmada4ga
+1	Elite Figate	CargoDelivery3br
+1	Elite Frigate	CargoDelivery2br
+1	Elite Frigate class	SeekandDestroy3br
+1	Elite Frigates	InfiltratedOutpost4
+1	Elite Frigates Elite Federation	OustTheClaimJumpers5ga
+1	Elite Frigs	CargoDelivery4br
+1	Energy Neutralizing towers	InnocentsInTheCrossfire4gu
+1	Enforcer	SilencetheInformant4
+1	Enviromental Terrorists aka Coreli Agent	FurrierFiasco1
+1	Environmental Terrorist aka Coreli Agent	FurrierFiasco1
+1	Environmental Terrorist aka Coreli Scout	FurrierFiasco1
+1	Ex-Elite Secret Agent - Kioran Jeraulek	SilencetheInformant4
+1	Excavator	AmarrExcavators4
+1	FF	PirateSlaughter4an
+1	Fanatic	WorldsCollide4bran
+1	Fast	IllegalActivity4
+1	Federation BS	EnemiesAbound4p1
+1	Federation Cruisers	LightsOut3ga
+1	Federation Frigate	EnemiesAbound4p1
+1	Federation Frigates	LightsOut3ga
+1	Federation Loras - 35KM	CommunicationsColdWar2ga
+1	Federation Navy Delta II Support	FoilTheMilitaryPreparations4Ga
+1	Federation Navy Midshipman III	CrowdControl4ga
+1	Federation Navy Orion's Wingman	EnemiesAbound4p3
+1	Federation Navy Sergeant I	CrowdControl4ga
+1	Federation Navy Sergeant II	CrowdControl4ga
+1	Federation Navy Sergeant III	CrowdControl4ga
+1	Federation Praktor Phanix( Spawn 1	PersistentEnemy4caga
+1	Federation Vocinus	UnauthorizedMilitaryPresence4ga
+1	Federation battlecruisers	NavyArmada4ga
+1	Federation battleships	NavyArmada4ga
+1	Federation cruisers	NavyArmada4ga
+1	Federation destroyers	NavyArmada4ga
+1	Federation frigates	NavyArmada4ga
+1	Ferox class	CutThroatCompetition3
+1	Flagship	DrivingaWedge3
+1	Flameburst missiles	IntheMidstofDeadspace4p5
+1	Flotilla Admiral	IntercepttheSaboteurs4sesa
+1	Follower	WorldsCollide4bran
+1	Forain	EscapedKiller1
+1	Franz Krealo	SerpentisExtravaganza3
+1	Frgiates	AvengeaFallenComrade1gu
+1	Frigate: Splinter	PersistentPests3rd
+1	Frigates (Environmental Terrorists aka Coreli Scout	FurrierFiasco1
+1	Frigates - 2km from warp in; instant agro	AvengeaFallenComrade2se
+1	Frigates - 40km. May contain a destroyer	AvengeaFallenComrade2se
+1	Frigates - Gistior	StrikingDownTwoFliesWithOneSwing3an
+1	Frigates - near habitat	AvengeaFallenComrade2se
+1	Frigates on warp in (30-40km	EnemiesAbound4p3
+1	Frigs	PirateInvasion3gu
+1	Galin Famis	SoftDrinkWars1
+1	Gallente	LaborOfLove2Ga
+1	Gallente BS	EnemiesAbound4p1
+1	Gallente Cruiser	EnemiesAbound4p1
+1	Gallente Frigate	EnemiesAbound4p1
+1	Gallente Nationalist	WhatsInAName1
+1	Gallente Navy BS	EnemiesAbound4p1
+1	Gallente Navy Cruiser	EnemiesAbound4p1
+1	Gallente Navy Frigate	EnemiesAbound4p1
+1	Gallente Navy Officer(Maulus	IllegalActivity3
+1	Gallente Navy cruiser	LasersSoftlyBeaming3ga
+1	Gallente Navy frigates	LasersSoftlyBeaming3ga
+1	Gallente Privateer	SaveMiners3ga
+1	Gallente Privateer Leader	SaveMiners3ga
+1	Gallente Sentry Towers	DeadlyArrival3gami
+1	Gallente Stasis Tower - 13KM	CommunicationsColdWar2ga
+1	Gallente Stasis Tower - 16KM	CommunicationsColdWar2ga
+1	Gallentean Guard	FortheBirds1
+1	Gallentean Terrorist	FortheBirds1
+1	Gallete Energy Neutralizer III	SmashTheGallenteStockyard5ga
+1	Gallete Energy Neutralizer III (after 2 minutes	SmashTheGallenteStockyard5ga
+1	Garin Kezmonu	AngelExtragavanza4
+1	Geeral Tash-Murkon	LasersSoftlyBeaming2
+1	Gist Malakim (EM torpedo	PirateSlaughter4an
+1	Gist Seraphim (EM	DuoofDeath4an
+1	Gistii	SeekandDestroy2an
+1	Gistior Something	PirateIntrusion1an
+1	Gladius	DownLegion3
+1	Guardian Chief	Assault4se
+1	Gurista	DreadPirateScarlet4
+1	Guristas Battleships	DesperateManeuvers4
+1	Guristas Cruise Missile Batteries Heavy Kinetic	DreadPirateScarlet4
+1	Guristas Officer	LambAmongstLions4
+1	Guristas Overseer	WorldsCollide1guan
+1	Guristas Spies	WorldsCollide4guse
+1	Gursitas Spies	GuristaSpies3
+1	HAC's	CutThroatCompetition3
+1	Heavy Missile Battery triggers full room aggro	MySweetPrivateer3ga
+1	Heavy Missile Launcher Batteries	StrikingDownTwoFliesWithOneSwing3an
+1	Herald	WorldsCollide4bran
+1	Hollow Asteroid: No Loot	PirateInvasion3se
+1	Hrakt	CodenameRedress5mi
+1	Hunter Kalesh	HeadHunterThreat2
+1	I and	SevensPrisonFacility3
+1	II	GuristaExtravaganza3
+1	Imperial Guard	IntheMidstofDeadspace4p4
+1	Imperial Security Captain	IntheMidstofDeadspace4p4
+1	Imperial Security Commander	IntheMidstofDeadspace4p4
+1	Imperial Security Officers	IntheMidstofDeadspace4p4
+1	Imperial Stargate	IntheMidstofDeadspace4p4
+1	Imperial Templar Dominator-"The Transmission-Ship"	AreYouReceiving4am
+1	Imperial Templar Tanakh	DiplomaticIncident4
+1	Imran	IntercepttheSaboteurs3am
+1	Infected Battleship	PatientZero4
+1	Infected Cruiser	PatientZero4
+1	Infected Frigate	PatientZero4
+1	Infecter	SootheTheSalvageBeast4
+1	Infestors and Splinters	DroneDetrius1
+1	Installation.. lots of hp	SmugglerInterception2sa
+1	Irmur Filara	CargoDelivery2an
+1	Iteron Mark V	DrivingaWedge3
+1	Ivan	CodenameRedress5mi
+1	Juggernauts	IntheMidstofDeadspace4p5
+1	Kanpaku (Ferox	IntheMidstofDeadspace4p5
+1	Katana	DownLegion3
+1	Kazem Tatha	CargoDelivery1br
+1	Kilm Redstock	HeirsFavoriteSlave1
+1	Krayek Sarpanti	SerpentisExtravaganza4
+1	Large Colldiable Structure	GuristaExtravaganza3
+1	Light Sentry	MassiveAttack3sa
+1	Lion	DownLegion3
+1	Lochos	OustTheClaimJumpers5ga
+1	Lochos(scrams	PersistentEnemy4caga
+1	Lone Pirate	FairPlay
+1	Malbreth	HeadHunterThreat3
+1	Malphas	SaveaMansCareer2
+1	Mammon	SaveaMansCareer2
+1	Mammoth	DrivingaWedge3
+1	Marauder	AttackoftheDrones4
+1	Matar	DeadlySerious5ga
+1	Matriarch	SootheTheSalvageBeast4
+1	Matriarch (Battleship	SootheTheSalvageBeast4
+1	Mentes	PersistentEnemy4caga
+1	Merc Frigate	StrikingDownTwoFliesWithOneSwing1br
+1	Merc Miners	NewFrontiers3
+1	Mercenary	CustomsInterdiction2ga
+1	Mercenary Battleship	IdEgonicsInc3amca
+1	Mercenary Cruiser	StrikingDownTwoFliesWithOneSwing3an
+1	Mercenary Cruisers	IdEgonicsInc3amca
+1	Mercenary Elite	CrystalDreamsShattered3am
+1	Mercenary Elite Frigates	KhanidNobleman4
+1	Mercenary Frigate	StrikingDownTwoFliesWithOneSwing3an
+1	Mercenary Overlord - Jericho Tezmar	SilencetheInformant4
+1	Mercenary Overlord - Roranok Nesmyrthas	SilencetheInformant4
+1	Mercenary Overlord - Yarl Uzbeki	SilencetheInformant4
+1	Mercenary Sentry Gun	Recon4
+1	Mercenary Thief	CarryingAIMEDs1
+1	Minmatar Cruise Battery	CodenameRedress5mi
+1	Minmatar Energy Neutralizer Towers	HiddenEnemyBase5mi
+1	Minmatar Escort	DarkAlliance3mi
+1	Minmatar Neut Tower III	CodenameRedress5mi
+1	Minmatar Tower Sentries	HiddenEnemyBase5mi
+1	Minmatar Transport	IntercepttheSaboteurs2mi
+1	Minmatar transport	IntercepttheSaboteurs2mi
+1	Missile Batteries	BreakTheirWill3br
+1	Mission Generic	SilencetheInformant2
+1	Mitylen Likk	CargoDelivery1an
+1	Mix of Arachula	SaveaMansCareer2
+1	Moa class	CutThroatCompetition3
+1	Mother-in-Law	AttackTheAngelHideout2an
+1	Named	SevensPrisonFacility3
+1	Named Battleship class	GuristaExtravaganza4
+1	Named Elite Cruiser	CargoDelivery3br
+1	Named Frigate	LostThatBet1
+1	Named Hunter	HeadHunterThreat3
+1	Named cruiser	SlaveMustBeReturned3
+1	Named informant Terak	SilencetheInformant3
+1	Nav Longa	DeadlySerious5ga
+1	Navy Delta Support	IllegalActivity4
+1	Needed to be killed	DrivingaWedge3
+1	Nephilin	Vengeance4an
+1	Neut Tower	DestroytheCaldariOutpost5
+1	Neutralizer Towers	WhatSlaveryBegets5
+1	Nihilist	WorldsCollide1guan
+1	Nuker Alvum - Bomber Alvum	AttackoftheDrones4
+1	Objective	SanshaSpies2
+1	Opux Luxary Yacht Level 1 (Chosen	FlameofPeace1
+1	Oracle	WorldsCollide4bran
+1	Orka	CodenameRedress5mi
+1	Pafi	CodenameRedress5mi
+1	Partially Constructed Megathron: No Loot	PirateInvasion3se
+1	Patriarch	SootheTheSalvageBeast4
+1	Patriarch (Battleship	SootheTheSalvageBeast4
+1	Personnel Transport	UnauthorizedMilitaryPresence1mo
+1	Phanti	DownLegion3
+1	Phantom	WorldsCollide4bran
+1	Phantom battlecruisers at 20Km away	DuoofDeath3br
+1	Pith Assassin	DeadlySerious5ga
+1	Pith Death Dealer	DeadlySerious5ga
+1	Pith Exterminator Jamming	GuristaExtravaganza4
+1	Pith-type	DeadlySerious5ga
+1	Pithi Arrogator 31km away (aggro below 30 km	ViolentExpulsion1gu
+1	Pithi Destructor (Frigate class	Score3gu
+1	Pithi Infiltrator enters the scene 40 km away (~60 sec. later	ViolentExpulsion1gu
+1	Pithi Sabetour	Blockade2gu
+1	Pithix roid 4500 units	PileofPithix3
+1	Pithum Cruisers	PirateInvasion3gu
+1	Pleasure Hub Guardian	DamselinDistress3
+1	Pleasure Hub Guardian - Mercenary Commmander	DamselinDistress4
+1	Pleasure Hub Guardian - Mercenary Corporal	DamselinDistress4
+1	Pleasure Hub Patroller	DamselinDistress3
+1	Pleasure Hub Sentinel - Mercenary Overlord	DamselinDistress4
+1	Pleasure Hub: Invulnerable	PirateInvasion3se
+1	Prak Nav Prae	DeadlySerious5ga
+1	Praktor Phalarika	MillionLittlePieces3ga
+1	Privateer Captain	MySweetPrivateer3ga
+1	Privateer Lance Corporal	MySweetPrivateer3ga
+1	Privateer Private	MySweetPrivateer3ga
+1	Privateer Sergeant	MySweetPrivateer3ga
+1	Privateer Specialist	MySweetPrivateer3ga
+1	Privateer Strikeforce	MySweetPrivateer3ga
+1	Prophet	WorldsCollide4bran
+1	Public Confidence Operative	FederalConfidence4
+1	Puma	DownLegion3
+1	Quadrier	AnAdvantageousCatastrophe4ga
+1	Queen	SootheTheSalvageBeast4
+1	Radur x2	FoxHunt1
+1	Raider	InfiltratedOutpost4
+1	Rear Admiral	IntercepttheSaboteurs4sesa
+1	Refueling Facility Guardian	FoxHunt1
+1	Render (Frigate	SootheTheSalvageBeast4
+1	Renders and Splinters	DroneDetrius1
+1	Renegate	PirateIntrusion2gu
+1	Repair Station's Point	BreakTheirWill1an
+1	Repair Station's Point Defense Battery	BreakTheirWill1gu
+1	Reprogrammed Mining Drone	WildcatStrike4drones
+1	Republic Fleet Industrial	LaborOfLove2Ga
+1	Republic Fleet industrials	LaborOfLove2Ga
+1	Republic Frigates	EscapedDissident1
+1	Republic Tribal frigates	HeirsFavoriteSlave1
+1	Ripped SuperStructure : No Loot	PirateInvasion3se
+1	Ripper	SaveaMansCareer2
+1	Rodal	CodenameRedress5mi
+1	Rogue Drone Colonel - Striker Alvatis	InfiltratedOutpost4
+1	Rogue Miners aka Rogue Pirates	ArtifactRecovery2
+1	Rogue Miners ake Rogue Pirate Grunts	ArtifactRecovery2
+1	Rook class	CutThroatCompetition3
+1	Saint 33	AngelExtragavanza4
+1	Sansha Overseer	WorldsCollide1ansa
+1	Sansha Sentry I	SanshaSpies2
+1	Sansha Slaver	RogueSlaveTrader4
+1	Sansha Slaver - Centum Loyal Hellhound	RogueSlaveTrader4
+1	Sansha's Spy - Centatis Devil	SanshaSpies4
+1	Sansha's Spy - Centatis Specter	SanshaSpies3
+1	Satori Kardun (Guristas general	GuristaExtravaganza3
+1	Scordite - 25k units	EnemiesAbound4p3
+1	Scourge	IntheMidstofDeadspace4p5
+1	Scourge missiles	IntheMidstofDeadspace4p5
+1	Scram	HiddenEnemyBase5ca
+1	Sentry Angel Tower I	AngelExtragavanza3
+1	Sentry Angel Tower II	AngelExtragavanza3
+1	Sentry Drone II	MissingConvoy3
+1	Serpentis	DreadPirateScarlet4
+1	Serpentis Battleships	DesperateManeuvers4
+1	Serpentis Cruise Missile Batteries 20km from initial warp in	SerpentisShipBuilders4
+1	Serpentis Cruise Missile Battery Heavy Thermal	DreadPirateScarlet4
+1	Serpentis Looters orbiting at 24km	SerpentisShipBuilders4
+1	Serpentis Sentry Gun 25km	ClosingtheGate1se
+1	Servant	ViolentExpulsion1se
+1	Seven Lookout - Mercenary Wingman	RightHandofZazzmatazz4
+1	Seven Macleari - Mercenary Overlord	RightHandofZazzmatazz4
+1	Seven Plebe	AfterTheSeven1
+1	Shadow Sage	WorldsCollide4bran
+1	Shadow's Goon - Mercenary Overlord	StoptheThief4
+1	Shadow's Grunt - Mercenary Commander	StoptheThief4
+1	Shadow's Wingman - Mercenary Wingman	StoptheThief4
+1	Shecon Pouta	CargoDelivery3br
+1	Shinai (Crow (?	IntheMidstofDeadspace4p5
+1	Shugo 30-35% Jamming for 20 seconds	Reclamation5ca
+1	Skani x2	FoxHunt1
+1	Solar Harvester - Dropped nothing	StoptheThief2
+1	Space-Port Guardian	InterceptthePirateSmugglers3se
+1	Spaceshuttle Wreck: No Loot	PirateInvasion3se
+1	Spider Drones web	AngelExtragavanza3
+1	Splinter	SaveaMansCareer2
+1	Starbase Major Assembly Array: Minerals & Alloys	PirateInvasion3se
+1	Starbase Stasis Tower {kill this first}	Blockade2sa
+1	Stasis Tower triggers full room aggro	MySweetPrivateer3ga
+1	State Frigates	VotingTrail2ca
+1	State Shikuro Ashigaru (Blackbird	IntheMidstofDeadspace4p5
+1	State Shukuro Turushima Jamming	Reclamation5ca
+1	State Tenno	NavyArmada4ca
+1	Static Caracal Navy Issue: No Loot	PirateInvasion3se
+1	Station Point Defence Battery	BreakTheirWill2an
+1	Stationary Badger II: No Loot	PirateInvasion3se
+1	Statsis Tower	SurpriseSurprise4miga
+1	Strain Infester	AttackoftheDrones4
+1	Suicide Squad	MiningMisappropriation4am
+1	Sukuuvestaa Battleship	TroopBuildUp5
+1	Sukuuvestaa Crane	TroopBuildUp5
+1	Sunder	InfiltratedOutpost4
+1	Suriage Web	HiddenEnemyBase5ca
+1	Suspicious	Vigilance2ga
+1	T2 Cruiser	Recon2an
+1	T2 cruisers	Recon2an
+1	T2 exp	IntercepttheSaboteurs4mi
+1	T2 frigates	Recon2an
+1	T2 therm hardeners	IntercepttheSaboteurs4mi
+1	Taibu State Tachi 27.5% Jam for 20 seconds	HiddenEnemyBase5ca
+1	Tendai (Blackbird	IntheMidstofDeadspace4p5
+1	Tendai 30-35% Jamming for 20 seconds	HiddenEnemyBase5ca
+1	Tendai 32.5% Jam for 20 seconds	HiddenEnemyBase5ca
+1	Terrorist	CrystalDreamsShattered3
+1	Terzam Tazzon	AngelExtragavanza3
+1	The Manager	Inspired4se
+1	Thief	FortheHonorofRouvenor1
+1	Thorn Rockets	IntheMidstofDeadspace4p5
+1	Thrasher	HeirsFavoriteSlave1
+1	Thukker Mercenary Fighters orbit @ 8k	TechnologicalSecrets2
+1	Thukker Mercenary Rookies orbit @ 700m	TechnologicalSecrets2
+1	Tiogo Kargaz - Gist Throne	AngelExtragavanza4
+1	Tower Sentry A	ScoutItOut3am
+1	Tower Sentry I	GuristaExtravaganza3
+1	Tower Sentrys	Vengeance4br
+1	Tracking Disruption	PotandKettle4
+1	Tranport Ships	IntercepttheSaboteurs3sase
+1	Tribal	Score2mi
+1	Tribal Jarkl	Assault4mi
+1	True Centii Servant (Sansha EM Damage to kill	SeekandDestroy1se
+1	UDI Elite Mercenary	PreliminaryStrike2
+1	UDI Junior Mercenary	PreliminaryStrike2
+1	Unidentified Spaceship	MysteriousSightings1se
+1	Upholder	WorldsCollide4bran
+1	Veld	PirateInvasion3gu
+1	Veldspar - 50k units	EnemiesAbound4p3
+1	Viral Infector	InfiltratedOutpost4
+1	Wakizashi Web	Reclamation5ca
+1	Walkway Debris: No Loot	PirateInvasion3se
+1	War General 7	AngelExtragavanza4
+1	War Installation: T1 modules	PirateInvasion3se
+1	Warlord 7	AngelExtragavanza4
+1	Webbers	IllegalActivity4
+1	Webs	IntheMidstofDeadspace4p5
+1	Worker Drone	Evolution4
+1	Worshipper x2	ViolentExpulsion1br
+1	X-Large booster)	IntercepttheSaboteurs4mi
+1	Yari (Kestrel	IntheMidstofDeadspace4p5
+1	Zen (Scorpion	IntheMidstofDeadspace4p5
+1	Zorenyen Zitil	CargoDelivery2br
+1	a Jaspet variant	PileofPithix3
+1	aggro	IntercepttheSaboteurs4am
+1	amarrian escort	GreaterGood1
+1	battleships total	IntercepttheSaboteurs4am
+1	bcs. All fittings were t1	InfestedRuins4
+1	caldari Sentry Tower	DeadlyArrival2caam
+1	cruiser - warps out as you enter	FortheHonorofRouvenor1
+1	cruiser size	PortaltoWar3
+1	didn't jam	PirateSlaughter4gu
+1	divine imperial	IntheMidstofDeadspace4p4
+1	elite fed libertus)	LightsOut5ga
+1	elite fed manica	LightsOut5ga
+1	elite fed matara	LightsOut5ga
+1	elite fed mentes	LightsOut5ga
+1	elite fed navis	LightsOut5ga
+1	elite fed phalarica	LightsOut5ga
+1	elite frig	PirateSlaughter4gu
+1	elite frigs	PirateSlaughter4gu
+1	enan	DeadlySerious5ga
+1	etc	BreakTheirWill3gu
+1	fed prak arx)	LightsOut5ga
+1	fed prak auxilia	LightsOut5ga
+1	fed prak hexeris	LightsOut5ga
+1	fed prak phanix	LightsOut5ga
+1	fed prak praeses	LightsOut5ga
+1	fires Thunderbolt heavy missiles	FoilTheMilitaryPreparations4Ca
+1	frigage	MoraleAndMorality3ga
+1	guristas	SmallMisunderstanding2Gu
+1	imperial security captain	IntheMidstofDeadspace4p4
+1	imperial templar	IntheMidstofDeadspace4p4
+1	invul field	InfestedRuins4
+1	jamming	PirateSlaughter4gu
+1	jamming!!	PirateSlaughter4gu
+1	kin direct damage + Exp cruise missiles	DuoofDeath4an
+1	large Veldspar asteroids	Blockade2br
+1	light	FortheHonorofRouvenor1
+1	light scout drones	FortheHonorofRouvenor1
+1	low HP	InnocentsInTheCrossfire4gu
+1	low neuting	InnocentsInTheCrossfire4gu
+1	may be battlecruisers when entering as BC?	PotandKettle4
+1	med drones	FortheHonorofRouvenor1
+1	merc leader	SoftDrinkWars1
+1	more on destruction of initial 2	SmashTheGallenteStockyard5ga
+1	named	SoftDrinkWars1
+1	or 2x Centum Loyal Execrator	Recon2sa
+1	or 4x Frigates	AthranExigency1
+1	or II	SevensPrisonFacility3
+1	orbit at 50-55km	AnAdvantageousCatastrophe4ga
+1	pds	InfestedRuins4
+1	random	SurpriseSurprise4
+1	rogue drone frigates	RovingRogueDrones1
+1	rogue drone swarms	RovingRogueDrones1
+1	rouge pirates	AngelStrike3
+1	spawns another sentry	CodenameRedress5mi
+1	target painting	DrivingaWedge3
+1	thermal damage	Recon4an
+1	tower sentry II	AngelStrike3
+1	tractor beams	InfestedRuins4
+1	turret	PortaltoWar3
+1	turrets	Kidnapping4
+1	typically quite strong jamming in this group	PirateInvasion3gu
+1	ultara in different combinations	SurpriseSurprise4
+1	unknown	LightsOutga1
+1	varies	PirateInvasion3gu
+1	you will fail the mission	DrivingaWedge3
+1	| Corpior Fanatic | 22	Blockade4br
+1	| Corpus Pope | 49	Blockade4br
+1	| Stasis Tower | - | - | 250 | 800	Blockade4br
+1	~15km from beacon.	MannarMiningColonyLevel3

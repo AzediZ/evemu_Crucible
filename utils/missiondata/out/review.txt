@@ -1,0 +1,450 @@
+  id  page                               lvl type    enemy            state  objective                confidence      notes
+    1 AWolfByTheEars5am                  L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=9 
+    2 AgainsttheEmpire3am                L3 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=3 
+    3 AirShow1                           L1 courier Rogue Drone      off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+    4 AlluringEmanations1                L1 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=3 
+    5 AlluringEmanations2                L2 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=1 
+    6 AlluringEmanations3                L3 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=2 
+    7 AlluringEmanations5                L5 enc     Rogue Drone      ON     KillTrigger Rogue Drone  pattern         pockets=1 npcs=13 
+    8 AmarrianTyrants2                   L2 enc     Amarr            ON     KillTrigger Imperial Nav pattern         pockets=1 npcs=2 
+    9 AmarrianTyrants3                   L3 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=2 
+   10 AmbushtheConvoy3                   L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=4 
+   11 AnAdvantageousCatastrophe4ga       L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=20 
+   12 AncientRoster1                     L1 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=2 
+   13 AngelCartelSpies3                  L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=2 
+   14 AngelCartelSpies4                  L4 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=5 
+   15 AngelExtragavanza3                 L3 enc     Angel Cartel     ON     KillAll                  default         pockets=7 npcs=30 
+   16 AngelExtragavanza4                 L4 enc     Angel Cartel     ON     KillAll                  default         pockets=7 npcs=48 
+   17 AngelStrike3                       L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=1 
+   18 AreYouReceiving4am                 L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=18 
+   19 ArisiteEnvy4                       L4 mining  Mercenary        ON     Mine Green Arisite       index           pockets=0 npcs=0 
+   20 Assault4gu                         L4 enc     Guristas         ON     KillAll                  default         pockets=4 npcs=14 
+   21 Assault4mi                         L4 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=21 
+   22 Assault4se                         L4 enc     Serpentis        ON     KillAll                  default         pockets=4 npcs=25 
+   23 AttackoftheDrones4                 L4 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=7 
+   24 AugumeneAllergen1am                L1 mining  Amarr            ON     Mine Augumene            index           pockets=0 npcs=0 
+   25 AvengeaFallenComrade2an            L2 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=5 
+   26 AvengeaFallenComrade2br            L2 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=5 
+   27 AvengeaFallenComrade2cc            L2 enc                      ON     KillAll                  default         pockets=1 npcs=4 
+   28 AvengeaFallenComrade2gu            L2 enc     Guristas         ON     KillAll                  explicit-killall pockets=1 npcs=7 
+   29 BetterWorld3                       L3 mining  Mercenary        ON     Mine Augumene            index           pockets=0 npcs=0 
+   30 BigSting5am                        L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=17 
+   31 BigSting5ca                        L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=17 
+   32 BlackMarketHub3                    L3 enc     Mercenary        ON     KillAll                  default         pockets=3 npcs=10 
+   33 Blockade2an                        L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=3 
+   34 Blockade2br                        L2 enc     Blood Raider     ON     KillTrigger Corpum Shado pattern         pockets=1 npcs=21 
+   35 Blockade2gu                        L2 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=20 
+   36 Blockade2sa                        L2 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=17 
+   37 Blockade2se                        L2 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=17 
+   38 Blockade3an                        L3 enc     Angel Cartel     ON     KillTrigger Gistatis Leg pattern         pockets=1 npcs=17 
+   39 Blockade3br                        L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=19 
+   40 Blockade3gu                        L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=19 
+   41 Blockade3sa                        L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=16 
+   42 Blockade3se                        L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=15 
+   43 Blockade4an                        L4 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=28 
+   44 Blockade4br                        L4 enc     Blood Raider     ON     KillTrigger Corpus Pope  pattern         pockets=2 npcs=30 
+   45 Blockade4dd                        L4 enc                      ON     KillAll                  default         pockets=1 npcs=7 
+   46 Blockade4sa                        L4 enc     Sansha's Nation  ON     KillTrigger Centus Tyran pattern         pockets=1 npcs=20 
+   47 Blockade4se                        L4 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=22 
+   48 BloodOfAngryMenThe4am              L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=5 
+   49 BloodRaiderSpies2                  L2 enc     Blood Raider     ON     KillAll                  default         pockets=1 npcs=4 
+   50 BloodRaiderSpies3                  L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=6 
+   51 BloodRaiderSpies4                  L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=7 
+   52 BountifulBandine                   L1 mining  Mercenary        ON     Mine Banidine            index           pockets=0 npcs=0 
+   53 BreakTheSlaveTrade2am              L2 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=5 
+   54 BreakTheirWill1gu                  L1 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=2 
+   55 BreakTheirWill3an                  L3 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=9 
+   56 BreakTheirWill3br                  L3 enc     Blood Raider     ON     KillAll                  default         pockets=1 npcs=6 
+   57 BreakTheirWill3gu                  L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=6 
+   58 BreakTheirWill3sa                  L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=13 
+   59 BreakTheirWill3se                  L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=9 
+   60 BreaktheirWill1br                  L1 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=6 
+   61 BreedingFacility5                  L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=10 
+   62 BuzzKill4an                        L4 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=4 
+   63 CaldariBeacons5                    L5 enc     Caldari          ON     DestroyStructure Subspac pattern         pockets=2 npcs=13 
+   64 CargoDelivery2an                   L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=6 
+   65 CargoDelivery2br                   L2 enc     Blood Raider     ON     KillAll                  default         pockets=1 npcs=5 
+   66 CargoDelivery3br                   L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=8 
+   67 CargoDelivery3se                   L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=8 
+   68 CargoDelivery4br                   L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=9 
+   69 CargoDelivery4sa                   L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=7 
+   70 CargoDelivery4se                   L4 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=7 
+   71 CaseofKidnapping4                  L4 enc     Mercenary        ON     KillAll                  default         pockets=5 npcs=20 
+   72 ChainReaction3ga                   L3 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=9 
+   73 Claimjumpers2                      L2 mining  Mercenary        ON     Mine Banidine            index           pockets=0 npcs=0 
+   74 CleaningHouse5sa                   L5 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=29 
+   75 CleansingFire5am                   L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=23 
+   76 ClearingaPath2ga                   L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+   77 CleartheTraderoute1                L1 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=4 
+   78 ClosingtheGate1se                  L1 enc     Serpentis        ON     KillAll                  explicit-killall pockets=3 npcs=7 
+   79 CodenameRedress5mi                 L5 enc     Minmatar         ON     KillAll                  default         pockets=4 npcs=17 
+   80 ComingRoundtheMountain             L3 mining  Mercenary        ON     Mine Augumene            index           pockets=0 npcs=0 
+   81 ConvoyAttack5am                    L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=7 
+   82 ConvoyAttack5ca                    L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=7 
+   83 ConvoyAttack5ga                    L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=2 
+   84 ConvoyAttack5mi                    L5 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=3 
+   85 CorporateRecords                   L1 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=1 
+   86 CostOfGreenerGrass2Gallente        L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=7 
+   87 CoveringyourTracks3                L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=5 
+   88 CoveringyourTracks4                L4 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=5 
+   89 CrowdControl4ga                    L4 enc     Gallente         ON     KillTrigger Mercenary Co pattern         pockets=2 npcs=17 
+   90 CrushTheSebiestorStation5mi        L5 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=13 
+   91 CrystalDreamsShattered3            L3 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=8 
+   92 CrystalDreamsShattered3am          L3 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=9 
+   93 DamselinDistress2                  L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=3 
+   94 DamselinDistress3                  L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=2 
+   95 DamselinDistress4                  L4 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=5 
+   96 DataMining2am                      L2 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=4 
+   97 DataMining2ca                      L2 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=7 
+   98 DeadDrift2                         L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=8 
+   99 DeadlyArrival2gami                 L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=7 
+  100 DeadlyArrival3caam                 L3 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=8 
+  101 DeadlyArrival3gami                 L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  102 DeadlySerious5ga                   L5 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=9 
+  103 DelvingIntoThePast2am              L2 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=1 
+  104 DesperateManeuvers4                L4 enc     Blood Raider     ON     KillAll                  default         pockets=1 npcs=1 
+  105 DestroyAmmatarBase5                L5 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=16 
+  106 DestroytheCaldariOutpost5          L5 enc     Caldari          ON     KillAll                  default         pockets=3 npcs=10 
+  107 DiplomaticIncident4                L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=8 
+  108 DisgruntledEmployee1               L1 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=3 
+  109 Dissidents4br                      L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=10 
+  110 DreadPirateScarlet4                L4 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=19 
+  111 DroneDetrius1                      L1 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=4 
+  112 DroneInfestation1                  L1 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=6 
+  113 DroneInfestation2                  L2 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=7 
+  114 DrugBust2se                        L2 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=5 
+  115 DuoofDeath3an                      L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=1 
+  116 DuoofDeath3gu                      L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=2 
+  117 DuoofDeath3sa                      L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=3 
+  118 DuoofDeath4br                      L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=4 
+  119 DuoofDeath4gu                      L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=3 
+  120 DuoofDeath4sa                      L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=4 
+  121 DuoofDeath4se                      L4 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=2 
+  122 EliminateStargatecampers3ded       L3 enc                      ON     KillAll                  default         pockets=1 npcs=2 
+  123 EliminateaPirateNuisance1sa        L1 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=4 
+  124 EliminatethePirateCampers3an       L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=2 
+  125 EliminatethePirateCampers3br       L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=6 
+  126 Elopement2ga                       L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=5 
+  127 EnemiesAbound4p1                   L4 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=12 
+  128 EnemiesAbound4p3                   L4 enc     Gallente         ON     KillAll                  default         pockets=4 npcs=21 
+  129 Evolution4                         L4 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=13 
+  130 ExploitedSensitivities4ga          L4 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=15 
+  131 ExtractTheRenegade4                L4 enc     Gallente         ON     KillAll                  default         pockets=3 npcs=7 
+  132 FallingNationComesCost3            L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=2 
+  133 FateofAngels5                      L5 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=16 
+  134 FatherAndSon3ga                    L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=3 
+  135 FederalConfidence4                 L4 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=5 
+  136 FlameofPeace1                      L1 enc     Blood Raider     ON     KillAll                  default         pockets=4 npcs=21 
+  137 FoilTheMilitaryPreparations3Mi     L3 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=7 
+  138 FoilTheMilitaryPreparations4Ca     L4 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=5 
+  139 FoilTheMilitaryPreparations4Ga     L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=5 
+  140 ForcesAmassing5am                  L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=10 
+  141 ForcetobeReckonedWith3an           L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=2 
+  142 ForcetobeReckonedWith3se           L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=3 
+  143 ForgottenOutposts4CaldariStateStor L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=3 
+  144 FortheBirds1                       L1 enc     Gallente         ON     KillAll                  default         pockets=4 npcs=7 
+  145 Fortress5Ga                        L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=12 
+  146 Fortress5am                        L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=13 
+  147 Fortress5ca                        L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=13 
+  148 Fortress5mi                        L5 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=15 
+  149 FoxHunt1                           L1 enc     Minmatar         ON     KillAll                  default         pockets=3 npcs=9 
+  150 FreedomAndCommerce1am              L1 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=2 
+  151 FriendlySpies3ga                   L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  152 GateBlitz3ga                       L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  153 Gatetonowhere4                     L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=12 
+  154 GeoditeandGemology4                L4 mining  Mercenary        ON     Mine Geodite             index           pockets=0 npcs=0 
+  155 GoneBerserk3                       L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=9 
+  156 GoneBerserk4                       L4 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=8 
+  157 GoodWord3                          L3 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=2 
+  158 GreaterGood1                       L1 enc     Amarr            ON     KillAll                  default         pockets=7 npcs=6 
+  159 GuristaExtravaganza3               L3 enc     Guristas         ON     KillAll                  default         pockets=6 npcs=27 
+  160 GuristaExtravaganza4               L4 enc     Guristas         ON     KillAll                  default         pockets=7 npcs=62 
+  161 GuristaSpies2                      L2 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=6 
+  162 GuristaSpies3                      L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=2 
+  163 GuristaSpies4                      L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=6 
+  164 GuristasStrike3                    L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=5 
+  165 HaltTheInvasion4am                 L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=6 
+  166 HaltTheInvasion4mi                 L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=5 
+  167 Heiress1                           L1 courier Mercenary        off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  168 HiddenEnemyBase5am                 L5 enc     Amarr            ON     KillAll                  default         pockets=7 npcs=22 
+  169 HiddenEnemyBase5ca                 L5 enc     Caldari          ON     KillAll                  default         pockets=7 npcs=15 
+  170 HiddenEnemyBase5mi                 L5 enc     Minmatar         ON     DestroyStructure Remote  pattern         pockets=6 npcs=13 
+  171 HiddenStash2an                     L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=3 
+  172 HiddenStash2br                     L2 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=3 
+  173 HiddenStash2gu                     L2 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=3 
+  174 HiddenStash2se                     L2 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=3 
+  175 Honor5an                           L5 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=16 
+  176 Honor5br                           L5 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=20 
+  177 Honor5gu                           L5 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=13 
+  178 Honor5se                           L5 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=14 
+  179 HumanCattle2                       L2 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=19 
+  180 IceInstallation4                   L4 mining  Rogue Drone      ON     Mine Crystalline Icicle  index           pockets=0 npcs=0 
+  181 IdEgonicsInc3amca                  L3 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=7 
+  182 IllegalActivity2ga                 L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  183 IllegalActivity4                   L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=2 
+  184 InTheShadowOfWar1                  L1 enc     Caldari          ON     KillAll                  default         pockets=3 npcs=10 
+  185 InfestedRuins4                     L4 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=10 
+  186 InfiltratedOutpost4                L4 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=14 
+  187 InnocentsInTheCrossfire4gu         L4 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=10 
+  188 InsorumHijacking4                  L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=8 
+  189 InsorumHijacking4storyline         L4 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=6 
+  190 Inspired4se                        L4 enc     Serpentis        ON     KillAll                  default         pockets=3 npcs=13 
+  191 IntakiAndMordusLegion3mo           L3 enc     Mordu's Legion   ON     KillAll                  default         pockets=1 npcs=1 
+  192 InterceptthePirateSmugglers3br     L3 enc     Blood Raider     ON     KillAll                  default         pockets=1 npcs=7 
+  193 InterceptthePirateSmugglers3se     L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=2 
+  194 IntercepttheSaboteurs2am           L2 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=15 
+  195 IntercepttheSaboteurs2mi           L2 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=10 
+  196 IntercepttheSaboteurs3am           L3 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=13 
+  197 IntercepttheSaboteurs3ca           L3 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=14 
+  198 IntercepttheSaboteurs3sase         L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=17 
+  199 IntercepttheSaboteurs4am           L4 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=20 
+  200 IntercepttheSaboteurs4br           L4 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=5 
+  201 IntercepttheSaboteurs4gu           L4 enc     Guristas         ON     KillAll                  default         pockets=4 npcs=17 
+  202 IntercepttheSaboteurs4mi           L4 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=1 
+  203 IntercepttheSaboteurs4sesa         L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=17 
+  204 InterstellarRailroad1mi            L1 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=1 
+  205 IntheMidstofDeadspace4p1           L4 enc     Amarr            ON     KillAll                  default         pockets=3 npcs=32 
+  206 IntheMidstofDeadspace4p3           L4 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=4 
+  207 IntheMidstofDeadspace4p4           L4 enc     Amarr            ON     KillAll                  default         pockets=3 npcs=17 
+  208 IntheMidstofDeadspace4p5           L4 enc     Khanid           ON     KillAll                  default         pockets=5 npcs=11 
+  209 JealousRivals4gu                   L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=8 
+  210 KhanidNobleman4                    L4 enc     Khanid           ON     KillAll                  default         pockets=1 npcs=12 
+  211 KidnappersStrike3                  L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=3 
+  212 Kidnapping4                        L4 enc     Mercenary        ON     KillAll                  default         pockets=5 npcs=22 
+  213 LaborOfLove2Ga                     L2 enc     Guristas         ON     KillAll                  default         pockets=3 npcs=3 
+  214 LaborOfWar1to3                     L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=3 
+  215 LambAmongstLions4                  L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=10 
+  216 LasersSoftlyBeaming2               L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=3 
+  217 LeftHook3ga                        L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  218 LettersFromDalamaid1               L1 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=1 
+  219 LiberateTheMiners5am               L5 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=19 
+  220 LiberateTheMiners5ca               L5 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=19 
+  221 LightsOut3ga                       L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=10 
+  222 LightsOut5ga                       L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  223 LightsOutga1                       L1 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=1 
+  224 LikeDronestoaCloud4                L4 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=8 
+  225 LocationLocation5am                L5 enc     Amarr            ON     KillTrigger Imperial Tem pattern         pockets=2 npcs=16 
+  226 LocationLocation5ca                L5 enc     Caldari          ON     KillTrigger State Shukur pattern         pockets=2 npcs=16 
+  227 Major1se                           L1 courier Serpentis        off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  228 MannarMiningColonyLevel3           L3 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=5 
+  229 MassDrivers5am                     L5 enc     Amarr            ON     KillAll                  default         pockets=3 npcs=15 
+  230 MassDrivers5ga                     L5 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=16 
+  231 MassiveAttack4am                   L4 enc     Amarr            ON     KillAll                  default         pockets=4 npcs=33 
+  232 MassiveAttack4mi                   L4 enc     Minmatar         ON     KillAll                  default         pockets=4 npcs=24 
+  233 MassiveAttack4sa                   L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=4 npcs=29 
+  234 MassiveAttack4se                   L4 enc     Serpentis        ON     KillAll                  default         pockets=5 npcs=20 
+  235 Matriarch4ansa                     L4 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=15 
+  236 MerciumBelt2                       L2 mining  Mercenary        ON     Mine Mercium             index           pockets=0 npcs=0 
+  237 MillionLittlePieces3ga             L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=11 
+  238 MinmatarPlot2mi                    L2 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=2 
+  239 MissingConvoy3                     L3 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=7 
+  240 MissingReporters3                  L3 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=4 
+  241 MissionOfMercy2                    L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=8 
+  242 MoraleAndMorality3ga               L3 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  243 MordusFolly4Mordus                 L4 enc     Mordu's Legion   ON     KillAll                  default         pockets=1 npcs=10 
+  244 MordusHeadhunters2                 L2 enc     Mordu's Legion   ON     KillAll                  default         pockets=2 npcs=8 
+  245 MordusHeadhunters3                 L3 enc     Mordu's Legion   ON     KillAll                  default         pockets=3 npcs=8 
+  246 MordusHeadhunters4                 L4 enc     Mordu's Legion   ON     KillAll                  default         pockets=3 npcs=33 
+  247 MordusHeadhunters5                 L5 enc     Mordu's Legion   ON     KillAll                  default         pockets=4 npcs=19 
+  248 MoteInTheEye5ga                    L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=17 
+  249 MotherLode4                        L4 mining  Mercenary        ON     Mine Polygypsum          index           pockets=0 npcs=0 
+  250 MurdererBroughttoJustice2          L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=2 
+  251 MySweetPrivateer3ga                L3 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=5 
+  252 MysteriousSightings1se             L1 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=1 
+  253 NavyArmada4ca                      L4 enc     Caldari          ON     KillAll                  default         pockets=3 npcs=40 
+  254 NewFrontiers3                      L3 enc     Rogue Drone      off    KillAll                  default         pockets=2 npcs=24 [later part of a chain] 
+  255 NewSlaves1                         L1 courier Minmatar         off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  256 NewVenture1                        L1 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=1 
+  257 NineTenthsOfTheWormhole4sa         L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=9 
+  258 NoExcuse3ga                        L3 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=3 
+  259 NoHonor2                           L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=3 
+  260 NotGneissatAll4                    L4 mining  Mercenary        ON     Mine Green Arisite       index           pockets=0 npcs=0 
+  261 OperationHamstring3                L3 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=3 
+  262 OperationWyrmSlayer5se             L5 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=7 
+  263 OperationWyrmsbane5se              L5 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=17 
+  264 OustTheClaimJumpers5ga             L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=11 
+  265 PatientZero4                       L4 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=8 
+  266 PersistentEnemy4caga               L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=8 
+  267 PersistentPests3                   L3 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=4 
+  268 PersistentPests3rd                 L3 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=2 
+  269 PickYourPoison3ammi                L3 enc     Amarr            ON     KillAll                  default         pockets=3 npcs=6 
+  270 PileofPithix3                      L3 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=7 
+  271 PirateBusiness1ga                  L1 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=3 
+  272 PirateBusiness2mi                  L2 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=4 
+  273 PirateBusiness3ca                  L3 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=1 
+  274 PirateBusiness4am                  L4 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=10 
+  275 PirateBusiness4mi                  L4 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=20 
+  276 PirateIntrusion1br                 L1 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=18 
+  277 PirateIntrusion2gu                 L2 enc     Guristas         ON     KillAll                  default         pockets=3 npcs=18 
+  278 PirateIntrusion2se                 L2 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=15 
+  279 PirateInvasion3gu                  L3 enc     Guristas         ON     KillAll                  default         pockets=5 npcs=11 
+  280 PirateInvasion3se                  L3 enc     Serpentis        ON     KillAll                  default         pockets=3 npcs=15 
+  281 PirateInvasion4an                  L4 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=11 
+  282 PirateInvasion4sa                  L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=11 
+  283 PirateNuisance1sa                  L1 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=4 
+  284 PirateRadio3                       L3 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=9 
+  285 PirateSlaughter4an                 L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=34 
+  286 PoliceIntrusion2ca                 L2 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=11 
+  287 PoliceIntrusion2mi                 L2 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=25 
+  288 PoliceInvasion4mi                  L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=24 
+  289 PortaltoWar3                       L3 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=5 
+  290 PostmodernPrimitives               L4 enc     Amarr            ON     KillAll                  default         pockets=4 npcs=15 
+  291 PreachingToTheMasses5am            L5 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=11 
+  292 PreliminaryStrike2                 L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=1 
+  293 PrisonBreak5cc                     L5 enc     Rogue Drone      ON     KillAll                  default         pockets=10 npcs=1 
+  294 ProbingQuestion3am                 L3 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=7 
+  295 PropagandaWar5ga                   L5 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=8 
+  296 QuotaSeason4                       L4 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=8 
+  297 RacetrackRuckus4am                 L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=1 
+  298 RancorousResearcher1               L1 courier Mercenary        off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  299 Reclamation5am                     L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=11 
+  300 Reclamation5ca                     L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=12 
+  301 Reclamation5ga                     L5 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=9 
+  302 Recon2an                           L2 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=10 
+  303 Recon2br                           L2 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=14 
+  304 Recon2gu                           L2 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=16 
+  305 Recon2sa                           L2 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=3 
+  306 Recon2se                           L2 enc     Serpentis        ON     KillAll                  default         pockets=3 npcs=16 
+  307 Recon4                             L4 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=5 
+  308 Recon4an                           L4 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=14 
+  309 Recon4br                           L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=12 
+  310 Recon4gu                           L4 enc     Guristas         ON     KillAll                  default         pockets=3 npcs=15 
+  311 Recon4sa                           L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=3 npcs=13 
+  312 Recon4se                           L4 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=7 
+  313 RecordCleaning4                    L4 enc     Mercenary        ON     KillAll                  default         pockets=5 npcs=13 
+  314 RecoverTheContainers5ca            L5 enc     Caldari          ON     KillAll                  default         pockets=5 npcs=42 
+  315 Retribution3Ca                     L3 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=5 
+  316 Retribution3an                     L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=7 
+  317 Retribution3gu                     L3 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=7 
+  318 Retribution3sa                     L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=12 
+  319 Retribution3se                     L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=8 
+  320 RightHandofZazzmatazz4             L4 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=6 
+  321 RitualistRaid4                     L4 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=11 
+  322 RogueDroneHarassment1              L1 enc     Rogue Drone      ON     KillAll                  default         pockets=3 npcs=12 
+  323 RogueDroneHarassment2              L2 enc     Rogue Drone      ON     KillAll                  default         pockets=3 npcs=5 
+  324 RogueDroneHarassment3              L3 enc     Rogue Drone      ON     KillAll                  default         pockets=3 npcs=14 
+  325 RogueDroneHarassment4              L4 enc     Rogue Drone      ON     KillAll                  default         pockets=3 npcs=19 
+  326 RogueSlaveTrader3                  L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=3 
+  327 RogueSlaveTrader4                  L4 enc     Sansha's Nation  ON     KillTrigger Centum Fiend pattern         pockets=3 npcs=14 
+  328 RogueSpy5                          L5 enc     Rogue Drone      ON     KillTrigger Matriarch Al pattern         pockets=2 npcs=14 
+  329 RoidRage2                          L2 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=4 
+  330 RovingRogueDrones1                 L1 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=5 
+  331 SanshaAcquisition5                 L5 enc     Sansha's Nation  ON     DestroyStructure Sansha' pattern         pockets=1 npcs=8 
+  332 SanshaOnTheHorizon5                L5 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=17 
+  333 SanshaSpies3                       L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=3 
+  334 SanshaSpies4                       L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=7 
+  335 SaveaMansCareer2                   L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=2 
+  336 Scavengers2ga                      L2 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=2 
+  337 Score1an                           L1 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=2 
+  338 Score1ga                           L1 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=9 
+  339 Score1gu                           L1 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=5 
+  340 Score2br                           L2 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=7 
+  341 Score2kk                           L2 enc     Khanid           ON     KillAll                  default         pockets=1 npcs=7 
+  342 Score2se                           L2 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=6 
+  343 Score3an                           L3 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=8 
+  344 Score3at                           L3 enc     Ammatar          ON     KillAll                  default         pockets=2 npcs=5 
+  345 Score3gu                           L3 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=14 
+  346 Score4at                           L4 enc     Ammatar          ON     KillAll                  default         pockets=3 npcs=14 
+  347 Score4mi                           L4 enc     Minmatar         ON     KillAll                  default         pockets=3 npcs=28 
+  348 Score4sa                           L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=4 npcs=20 
+  349 Score4se                           L4 enc     Serpentis        ON     KillAll                  default         pockets=3 npcs=18 
+  350 ScoutItOut3am                      L3 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=5 
+  351 SecretProjectX3                    L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=7 
+  352 SeekandDestroy2an                  L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=4 
+  353 SeekandDestroy2br                  L2 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=4 
+  354 SeekandDestroy2gu                  L2 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=2 
+  355 SeekandDestroy2sa                  L2 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=5 
+  356 SeekandDestroy3an                  L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=5 
+  357 SeekandDestroy3br                  L3 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=7 
+  358 SeekandDestroy3gu                  L3 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=5 
+  359 SeekandDestroy3sa                  L3 enc     Sansha's Nation  ON     KillAll                  default         pockets=3 npcs=8 
+  360 SeekandDestroy3se                  L3 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=5 
+  361 SerpentAndTheSlaves4sesa           L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=2 npcs=11 
+  362 SerpentisExtravaganza4             L4 enc     Serpentis        ON     KillAll                  default         pockets=4 npcs=30 
+  363 SerpentisShipBuilders4             L4 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=2 
+  364 SerpentisSpies2                    L2 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=6 
+  365 SerpentisSpies3                    L3 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=6 
+  366 SerpentisSpies4                    L4 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=6 
+  367 SevensBrothel2                     L2 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=4 
+  368 SevensPrisonFacility3              L3 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=2 
+  369 ShadesOfGrey4mi                    L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=5 
+  370 ShipyardTheft4an                   L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=20 
+  371 ShipyardTheft4br                   L4 enc     Blood Raider     ON     KillAll                  default         pockets=3 npcs=15 
+  372 ShipyardTheft4gu                   L4 enc     Guristas         ON     KillAll                  default         pockets=3 npcs=14 
+  373 ShipyardTheft4se                   L4 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=21 
+  374 SilenceDeepasDeath3an              L3 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=6 
+  375 SilencetheInformant2               L2 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=9 
+  376 SilencetheInformant3               L3 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=12 
+  377 SilencetheInformant4               L4 enc     Rogue Drone      ON     KillAll                  default         pockets=4 npcs=15 
+  378 SlaveMustBeReturned3               L3 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=5 
+  379 SmallArmory3                       L3 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=14 
+  380 SmashSupplier4am                   L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=10 
+  381 SmashTheGallenteStockyard5ga       L5 enc     Gallente         ON     KillAll                  default         pockets=3 npcs=15 
+  382 SmashTheShipyard4am                L4 enc     Amarr            ON     KillAll                  default         pockets=2 npcs=14 
+  383 SmugglerInterception1br            L1 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=9 
+  384 SmugglerInterception1se            L1 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=3 
+  385 SmugglerInterception2an            L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=8 
+  386 SmugglerInterception2sa            L2 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=5 
+  387 SmugglerInterception3gu            L3 enc     Guristas         ON     KillAll                  default         pockets=3 npcs=13 
+  388 SmugglerInterception3se            L3 enc     Serpentis        ON     KillAll                  default         pockets=2 npcs=10 
+  389 SmugglerInterception4an            L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=16 
+  390 SmugglerInterception4br            L4 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=17 
+  391 SootheTheSalvageBeast4             L4 enc     Rogue Drone      ON     KillAll                  default         pockets=1 npcs=2 
+  392 SpaceTelescope3                    L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=6 
+  393 SpyStash3an                        L3 enc     Angel Cartel     ON     KillAll                  default         pockets=2 npcs=12 
+  394 SpyStash3gu                        L3 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=10 
+  395 StayFrosty3                        L3 mining  Angel Cartel     ON     Mine Azure Ice           index           pockets=0 npcs=0 
+  396 StemTheFlow4gu                     L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=7 
+  397 StoptheThief3                      L3 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=3 
+  398 StoptheThief4                      L4 enc     Mercenary        ON     KillAll                  default         pockets=1 npcs=5 
+  399 StrayAmarrCarrier5                 L5 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=12 
+  400 StrayCaldariCarrier5               L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=12 
+  401 StrikingDownTwoFliesWithOneSwing1b L1 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=4 
+  402 StrikingDownTwoFliesWithOneSwing1g L1 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=3 
+  403 StrikingDownTwoFliesWithOneSwing1s L1 enc     Serpentis        ON     KillAll                  default         pockets=1 npcs=3 
+  404 SuccessComesataPrice3              L3 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=3 
+  405 SuntendiRecall1anca                L1 courier Angel Cartel     off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  406 SurpriseSurprise4                  L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=6 
+  407 SurpriseSurprise4miga              L4 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=7 
+  408 TechnologicalSecrets2              L2 enc     Thukker          ON     KillAll                  default         pockets=1 npcs=6 
+  409 TechnologicalSecrets3              L3 enc     Thukker          off    KillAll                  default         pockets=1 npcs=8 [later part of a chain] 
+  410 Terrorism2ca                       L2 enc     Caldari          ON     DestroyStructure Caldari pattern         pockets=1 npcs=3 
+  411 TombOfTheUnknownSoldiers4ca        L4 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=10 
+  412 TransportDuty3ca                   L3 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=7 
+  413 Trespassers3mi                     L3 enc     Minmatar         ON     KillAll                  default         pockets=2 npcs=5 
+  414 TrimmingTheFat2                    L2 enc     Caldari          ON     KillTrigger State Bushi  pattern         pockets=1 npcs=3 
+  415 TroopBuildUp5                      L5 enc     Caldari          ON     KillAll                  default         pockets=1 npcs=7 
+  416 UnauthorizedMilitaryPresence1gu    L1 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=12 
+  417 UnauthorizedMilitaryPresence2an    L2 enc     Angel Cartel     ON     KillAll                  default         pockets=1 npcs=9 
+  418 UnauthorizedMilitaryPresence2br    L2 enc     Blood Raider     ON     KillAll                  default         pockets=2 npcs=5 
+  419 UnauthorizedMilitaryPresence3gu    L3 enc     Guristas         ON     KillAll                  default         pockets=2 npcs=11 
+  420 UnauthorizedMilitaryPresence3se    L3 enc     Serpentis        ON     KillTrigger Serpentis Pe pattern         pockets=2 npcs=9 
+  421 UnauthorizedMilitaryPresence4an    L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=14 
+  422 UnauthorizedMilitaryPresence4br    L4 enc     Blood Raider     ON     KillAll                  default         pockets=5 npcs=14 
+  423 UnauthorizedMilitaryPresence4ca    L4 enc     Caldari          ON     KillAll                  default         pockets=2 npcs=26 
+  424 UnauthorizedMilitaryPresence4ga    L4 enc     Gallente         ON     KillAll                  default         pockets=2 npcs=14 
+  425 UnderSuspicion4gu                  L4 enc     Guristas         ON     KillAll                  default         pockets=1 npcs=9 
+  426 UnderstandingAugmene2              L2 mining  Mercenary        ON     Mine Augumene            index           pockets=1 npcs=0 
+  427 UndueAttention1ga                  L1 enc     Gallente         ON     KillAll                  default         pockets=1 npcs=6 
+  428 Uprising2mo                        L2 enc     Mordu's Legion   ON     KillAll                  default         pockets=5 npcs=22 
+  429 Uprising3mo                        L3 enc     Mordu's Legion   ON     KillAll                  default         pockets=6 npcs=23 
+  430 Vengeance4an                       L4 enc     Angel Cartel     ON     KillAll                  default         pockets=3 npcs=24 
+  431 Vengeance4br                       L4 enc     Blood Raider     ON     KillAll                  default         pockets=4 npcs=32 
+  432 Vengeance4gu                       L4 enc     Guristas         ON     KillAll                  default         pockets=5 npcs=26 
+  433 Vengeance4sa                       L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=4 npcs=19 
+  434 Vengeance4se                       L4 enc     Serpentis        ON     KillAll                  default         pockets=4 npcs=28 
+  435 VitocVector1anatam                 L1 courier Angel Cartel     off    KillAll                  default         pockets=0 npcs=0 [type 3] 
+  436 WarSituation4am                    L4 enc     Amarr            ON     KillAll                  default         pockets=1 npcs=3 
+  437 WarlordStrikes4mi                  L4 enc     Minmatar         ON     KillAll                  default         pockets=1 npcs=4 
+  438 WhatComesAroundGoesAround3         L3 enc     Mercenary        ON     KillAll                  default         pockets=2 npcs=2 
+  439 WhatSlaveryBegets5                 L5 enc     Amarr            ON     KillAll                  default         pockets=4 npcs=11 
+  440 WhatsInAName1                      L1 enc     Rogue Drone      ON     KillAll                  default         pockets=2 npcs=6 
+  441 WhispersIntheDark2                 L2 enc     Sansha's Nation  ON     KillAll                  default         pockets=1 npcs=4 
+  442 WorldsCollide1ansa                 L1 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=8 
+  443 WorldsCollide1blan                 L1 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=25 
+  444 WorldsCollide1guan                 L1 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=12 
+  445 WorldsCollide4ansa                 L4 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=28 
+  446 WorldsCollide4bran                 L4 enc     Angel Cartel     ON     KillAll                  default         pockets=4 npcs=12 
+  447 WorldsCollide4guse                 L4 enc     Guristas         ON     KillAll                  default         pockets=4 npcs=29 
+  448 WorldsCollide4saga                 L4 enc     Sansha's Nation  ON     KillAll                  default         pockets=4 npcs=29 
+  449 WorldsCollide4segu                 L4 enc     Guristas         ON     KillAll                  default         pockets=6 npcs=26 

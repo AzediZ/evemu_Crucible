@@ -1,0 +1,5 @@
+{
+ "Augmene": "Augumene",
+ "Bandine": "Banidine",
+ "_comment": "page name -> invTypes typeName (or typeID, or null to ignore)"
+}

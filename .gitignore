@@ -122,3 +122,8 @@ sql.tar.gz
 .idea
 CMakeSettings.json
 log.ini
+
+# eve-survival.org pages downloaded by utils/missiondata/fetch_wayback.py (not redistributed)
+utils/missiondata/cache/
+utils/missiondata/out/reports.json
+utils/missiondata/__pycache__/
