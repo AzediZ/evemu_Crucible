@@ -62,6 +62,7 @@ public:
 
     /* ActiveModule methods */
     virtual uint32      GetTargetID()           { return m_targetID; }
+    uint16              GetEffectID()           { return m_effectID; }
     SystemEntity*       GetTargetSE()           { return m_targetSE; }
 
     void                LaunchProbe();

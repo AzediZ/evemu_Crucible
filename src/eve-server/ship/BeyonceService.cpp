@@ -693,6 +693,11 @@ PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* ship
     } else if (pDestiny->IsModuleCloaked()) {
         throw UserError ("CantDockWhileCloaked");
     }
+    // siege, triage, cyno...  modules that can't be stopped early keep the ship in space
+    GenericModule* pBlocking(call.client->GetShip()->GetModuleManager()->GetActiveBlockingModule());
+    if (pBlocking != nullptr)
+        throw UserError ("CantDockWhileModuleActive")
+                .AddFormatValue ("moduleType", new PyInt (pBlocking->typeID ()));
     SystemManager* pSystem = call.client->SystemMgr();
     if (pSystem == nullptr) {
         codelog(CLIENT__ERROR, "%s: Client has no system manager.", call.client->GetName());
