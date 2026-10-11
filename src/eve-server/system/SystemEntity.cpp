@@ -324,13 +324,18 @@ bool BeltSE::LoadExtras() {
 
 StargateSE::StargateSE(InventoryItemRef self, EVEServiceManager &services, SystemManager* system)
 : StaticSystemEntity(self, services, system),
+m_jumps(nullptr),
 m_sbuSE(nullptr)
 {
+    m_destGates.clear();
 }
 
 // copy c'tor
 StargateSE::StargateSE(const StargateSE* oth)
-: StaticSystemEntity(oth->m_self, oth->m_services, oth->m_system)
+: StaticSystemEntity(oth->m_self, oth->m_services, oth->m_system),
+m_jumps(nullptr),
+m_sbuSE(oth->m_sbuSE),
+m_destGates(oth->m_destGates)
 {
     sLog.Error("SSE::gateSE()", "copy c'tor.");
     // wip
@@ -346,10 +351,17 @@ bool StargateSE::LoadExtras() {
     m_bubble->SetGate(true);
     _log(DESTINY__BUBBLE_DEBUG, "StargateSE::LoadExtras() - IsGate set to true for bubble %u.", m_bubble->GetID() );
     m_jumps = SystemDB::ListJumps(m_self->itemID());
+    m_destGates.clear();
+    SystemDB::GetJumpDestinations(m_self->itemID(), m_destGates);
     if (m_jumps != nullptr)
         return true;
 
     return false;
+}
+
+bool StargateSE::HasDestination(uint32 gateID) const
+{
+    return (std::find(m_destGates.begin(), m_destGates.end(), gateID) != m_destGates.end());
 }
 
 PyDict* StargateSE::MakeSlimItem() {

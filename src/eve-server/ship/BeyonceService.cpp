@@ -721,6 +721,31 @@ PyResult BeyonceBound::CmdTurboDock(PyCallArgs &call, PyInt* stationID, std::opt
 }
 
 PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, PyInt* toStargateID, PyInt* shipID) {
+    /* validate the jump before anything else:  the active ship, a gate in this system, that gate's destination,
+     *  and the client's own range test (menusvc: ball.surfaceDist <= const.maxStargateJumpingDistance)
+     */
+    if ((uint32)shipID->value() != call.client->GetShipID())
+        throw CustomError("Invalid ship.");
+    ShipSE* pShipSE = call.client->GetShipSE();
+    SystemManager* pSystem = call.client->SystemMgr();
+    if ((pShipSE == nullptr) or (pSystem == nullptr))
+        throw CustomError("You are not in space.");
+    SystemEntity* pGate = pSystem->GetSE(fromStargateID->value());
+    if ((pGate == nullptr) or !pGate->IsGateSE())
+        throw CustomError("That stargate is not in this system.");
+    if (!pGate->GetGateSE()->HasDestination(toStargateID->value()))
+        throw CustomError("That stargate does not lead there.");
+    double dist = pShipSE->GetPosition().distance(pGate->GetPosition()) - pShipSE->GetRadius() - pGate->GetRadius();
+    // allow one second of ship travel for client/server position skew
+    double allowance(0.0);
+    if (pShipSE->DestinyMgr() != nullptr)
+        allowance = pShipSE->DestinyMgr()->GetSpeed();
+    if (dist > maxStargateJumpingDistance + allowance)
+        throw UserError("TargetNotWithinRange")
+                .AddGroupName("targetGroupName", pGate->GetSelf()->groupID())
+                .AddFormatValue("desiredRange", new PyFloat(maxStargateJumpingDistance))
+                .AddFormatValue("actualDistance", new PyFloat(dist));
+
     // weapons timer and criminal lockdown
     sCrimeWatch.CheckDockOrJump(call.client, true);
     /*  jump system messages....
@@ -767,7 +792,6 @@ PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, 
         return PyStatic.NewNone();
     }
 
-    /** @todo  check distance from ship to gate */
     call.client->StargateJump(fromStargateID->value(), toStargateID->value());
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */

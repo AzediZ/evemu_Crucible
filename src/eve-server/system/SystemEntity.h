@@ -440,10 +440,14 @@ public:
     StructureSE* GetMySBU()                             { return m_sbuSE; }
     bool HasSBU()                                       { return (m_sbuSE != nullptr); }
     void SetSBU(StructureSE* pSE)                       { m_sbuSE = pSE; }
+    // true when gateID is a destination of this gate (mapJumps)
+    bool HasDestination(uint32 gateID) const;
+    const std::vector<uint32>& GetDestinations() const  { return m_destGates; }
 
 protected:
     PyRep*                      m_jumps;
     StructureSE*                m_sbuSE;
+    std::vector<uint32>         m_destGates;
 };
 
 

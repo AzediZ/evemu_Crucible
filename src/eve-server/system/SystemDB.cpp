@@ -55,6 +55,18 @@ PyObject* SystemDB::ListJumps(uint32 gateID) {
     return DBResultToRowset(res);
 }
 
+void SystemDB::GetJumpDestinations(uint32 gateID, std::vector<uint32>& into) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT celestialID FROM mapJumps WHERE stargateID=%u", gateID)) {
+        codelog(DATABASE__ERROR, "Error in GetJumpDestinations query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
 PyPackedRow* SystemDB::GetSolarSystemPackedRow(uint32 systemID) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,

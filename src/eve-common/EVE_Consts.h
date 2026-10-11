@@ -32,6 +32,7 @@ const int32 ITEM_DB_SAVE_TIMER_EXPIRY(10);
 static const float TIC_DURATION_IN_SECONDS(1000);       // not used yet
 
 static const uint32 minWarpDistance(130000);    // 130km here, client and live defined as 150km
+static const double maxStargateJumpingDistance(2500.0);    // client appConst.maxStargateJumpingDistance (surface distance)
 
 static const float onlineModInSpace(0.75);     // onling modules while NOT docked or using fitting services will take 75% of capacitor capacity.
 

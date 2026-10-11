@@ -46,6 +46,8 @@ class SystemDB
 public:
     PyObject* ListFactions();
     static PyObject* ListJumps(uint32 gateID);
+    // destination stargateIDs of gateID (mapJumps.celestialID)
+    static void GetJumpDestinations(uint32 gateID, std::vector<uint32>& into);
     static PyPackedRow* GetSolarSystemPackedRow(uint32 systemID);
 
     static bool GetWrecksToTypes(DBQueryResult& res);
