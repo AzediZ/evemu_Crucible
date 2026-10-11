@@ -23,87 +23,100 @@
     Author:        Reve
 */
 
-//work in progress
-
 #include "eve-server.h"
 
-
+#include "Client.h"
+#include "EntityList.h"
+#include "dungeon/DungeonDB.h"
 #include "dungeon/DungeonExplorationMgrService.h"
+#include "system/SystemManager.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
+
+/* the journal's expeditions (escalations):  journal.py GetExpeditions / ShowExpeditions / PopupDungeonDescription,
+ *  keeper.CanWarpToPathPlex and beyonce.CmdWarpToStuff('epinstance') warp to them
+ */
 
 DungeonExplorationMgrService::DungeonExplorationMgrService() :
     Service("dungeonExplorationMgr")
 {
     this->Add("GetMyEscalatingPathDetails", &DungeonExplorationMgrService::GetMyEscalatingPathDetails);
+    this->Add("DeleteExpiredPathStep", &DungeonExplorationMgrService::DeleteExpiredPathStep);
 }
 
 PyResult DungeonExplorationMgrService::GetMyEscalatingPathDetails(PyCallArgs &call) {
-    // cached response
-    /**00:51:32 L DungeonExplorationMgrService::Handle_GetMyEscalatingPathDetails(): size= 0
-     * 00:51:32 [SvcCall]   Call Arguments:
-     * 00:51:32 [SvcCall]       Tuple: Empty
-     * 00:51:32 [SvcCall]   Call Named Arguments:
-     * 00:51:32 [SvcCall]     Argument 'machoVersion':
-     * 00:51:32 [SvcCall]         Integer field: 1
-     *
-     * /client/script/ui/shared/neocom/journal.py(922) Load
-     * /client/script/ui/shared/neocom/journal.py(1502) ShowExpeditions
-     *        expeditionRowset = None
-     *        self = form.Journal object at 0x2ebcc490, name=journal, destroyed=False>
-     *        scrolllist = []
-     *        reload = 0
-     * TypeError: 'NoneType' object is not iterable
-     *
-     *
-     *    def ShowExpeditions(self, reload = 0):
-     *        expeditionRowset = sm.GetService('journal').GetExpeditions(force=reload)
-     *        self.ShowLoad()
-     *        try:
-     *            scrolllist = []
-     *            for expeditionData in expeditionRowset:
-     *                dungeonData = expeditionData.dungeon
-     *                destDungeonData = expeditionData.destDungeon
-     *                pathStep = expeditionData.pathStep
-     *                expiryTime = expeditionData.expiryTime
-     *                if destDungeonData is not None:
-     *                    jumps = sm.GetService('starmap').ShortestPath(dungeonData.solarSystemID, eve.session.solarsystemid2)
-     *                    jumps = jumps or []
-     *                    totaljumps = max(0, len(jumps) - 1)
-     *                    if dungeonData.solarSystemID is not None:
-     *                        solName = cfg.evelocations.Get(dungeonData.solarSystemID).name
-     *                    else:
-     *                        solName = localization.GetByLabel('UI/Common/Unknown')
-     *                    txt = localization.GetByMessageID(pathStep.journalEntryTemplateID)
-     *                    if len(txt) > MAX_COL_LENGTH:
-     *                        txt = txt[:MAX_COL_LENGTH] + '...'
-     *                    text = '<t>'.join(['      ',
-     *                     util.FmtDate(dungeonData.creationTime),
-     *                     solName,
-     *                     str(totaljumps),
-     *                     txt])
-     *                    expired = not expiryTime - blue.os.GetWallclockTime() > 0
-     *                    data = {'id': dungeonData.instanceID,
-     *                     'rec': expeditionData,
-     *                     'text': txt,
-     *                     'label': text,
-     *                     'hint': localization.GetByMessageID(pathStep.journalEntryTemplateID),
-     *                     'jumps': totaljumps,
-     *                     'expired': expired,
-     *                     'sort_' + localization.GetByLabel('UI/Journal/JournalWindow/Expeditions/HeaderExpiration'): expiryTime}
-     *                    scrolllist.append(listentry.Get('EscalatingPathLocationEntry', data))
-     *
+    /* a util.Rowset (iterated, and indexed by instanceID) of
+     *   instanceID, dungeon (KeyVal instanceID, solarSystemID, creationTime, dungeonNameID),
+     *   destDungeon (KeyVal dungeonID, dungeonNameID;  None hides the row), srcDungeon (KeyVal or None),
+     *   pathStep (KeyVal pathStepID, journalEntryTemplateID), expiryTime (wallclock FILETIME)
      */
-    sLog.White("DungeonExplorationMgrService::Handle_GetMyEscalatingPathDetails()",  "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
+    _log(DUNG__CALL, "DungeonExplorationMgrService::Handle_GetMyEscalatingPathDetails() size=%lu", call.tuple->size());
 
-    return PyStatic.NewNone();
+    auto nameID = [](uint32 dungeonID) -> PyRep* {
+        std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
+        if ((pDungeon.get() == nullptr) or (pDungeon->nameID == 0))
+            return PyStatic.NewNone();
+        return new PyInt(pDungeon->nameID);
+    };
+
+    PyList* header = new PyList();
+        header->AddItem(new PyString("instanceID"));
+        header->AddItem(new PyString("dungeon"));
+        header->AddItem(new PyString("destDungeon"));
+        header->AddItem(new PyString("srcDungeon"));
+        header->AddItem(new PyString("pathStep"));
+        header->AddItem(new PyString("expiryTime"));
+    PyList* lines = new PyList();
+
+    std::vector<EscalationRow> rows;
+    DungeonDB::GetEscalationsForChar(call.client->GetCharacterID(), rows);
+    for (auto& row : rows) {
+        PyDict* dungeon = new PyDict();
+            dungeon->SetItemString("instanceID", new PyInt(row.instanceID));
+            dungeon->SetItemString("solarSystemID", new PyInt(row.solarSystemID));
+            dungeon->SetItemString("creationTime", new PyLong(row.creationTime));
+            dungeon->SetItemString("dungeonNameID", nameID(row.destDungeonID));
+        PyDict* dest = new PyDict();
+            dest->SetItemString("dungeonID", new PyInt(row.destDungeonID));
+            dest->SetItemString("dungeonNameID", nameID(row.destDungeonID));
+        PyRep* src(PyStatic.NewNone());
+        if (row.srcDungeonID != 0) {
+            PyDict* srcDict = new PyDict();
+                srcDict->SetItemString("dungeonID", new PyInt(row.srcDungeonID));
+                srcDict->SetItemString("dungeonNameID", nameID(row.srcDungeonID));
+            src = new PyObject("util.KeyVal", srcDict);
+        }
+        PyDict* step = new PyDict();
+            step->SetItemString("pathStepID", new PyInt(row.escalationID));
+            step->SetItemString("journalEntryTemplateID", new PyInt(row.journalMessageID));
+        PyList* line = new PyList();
+            line->AddItem(new PyInt(row.instanceID));
+            line->AddItem(new PyObject("util.KeyVal", dungeon));
+            line->AddItem(new PyObject("util.KeyVal", dest));
+            line->AddItem(src);
+            line->AddItem(new PyObject("util.KeyVal", step));
+            line->AddItem(new PyLong(row.expiryTime));
+        lines->AddItem(line);
+    }
+
+    PyDict* args = new PyDict();
+        args->SetItemString("header", header);
+        args->SetItemString("RowClass", new PyToken("util.Row"));
+        args->SetItemString("lines", lines);
+    return new PyObject("util.Rowset", args);
 }
 
+PyResult DungeonExplorationMgrService::DeleteExpiredPathStep(PyCallArgs &call, PyInt* instanceID) {
+    // journal 'Remove' on an expedition (fire and forget)
+    _log(DUNG__CALL, "DungeonExplorationMgrService::Handle_DeleteExpiredPathStep() %u", instanceID->value());
 
-/**
-  dungeonTracking.GetEscalatingPathDungeonsEntered()
-  dungeonTracking.GetDistributionDungeonsEntered()
-        (OnDistributionDungeonEntered)
-sm.RemoteSvc('dungeonExplorationMgr').DeleteExpiredPathStep
+    EscalationRow row = EscalationRow();
+    if (!DungeonDB::GetEscalation(instanceID->value(), row) or (row.characterID != (uint32)call.client->GetCharacterID()))
+        return PyStatic.NewNone();
+    DungeonDB::SetEscalationState(row.instanceID, 3);
 
-
-*/
+    // a site nobody else has goes with the entry
+    SystemManager* pSystem(sEntityList.FindSystem(row.solarSystemID));
+    if (pSystem != nullptr)
+        pSystem->GetDungMgr()->OnEscalationRemoved(row.instanceID);
+    return PyStatic.NewNone();
+}

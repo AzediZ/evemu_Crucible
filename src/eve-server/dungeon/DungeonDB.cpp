@@ -386,3 +386,99 @@ void DungeonDB::GetEscalations(DBQueryResult& res)
         " FROM dunEscalations ORDER BY escalationID"))
         _log(DATABASE__ERROR, "Error in GetEscalations query: %s", res.error.c_str());
 }
+
+/* granted escalations (chrEscalations) */
+static const char* EscalationColumns = "instanceID, characterID, escalationID, srcDungeonID, destDungeonID, factionID, solarSystemID,"
+    " x, y, z, creationTime, expiryTime, journalMessageID, state";
+
+static void FillEscalationRow(DBResultRow& row, EscalationRow& into)
+{
+    into.instanceID = row.GetUInt(0);
+    into.characterID = row.GetUInt(1);
+    into.escalationID = row.GetUInt(2);
+    into.srcDungeonID = row.GetUInt(3);
+    into.destDungeonID = row.GetUInt(4);
+    into.factionID = row.GetUInt(5);
+    into.solarSystemID = row.GetUInt(6);
+    into.position = GPoint(row.GetDouble(7), row.GetDouble(8), row.GetDouble(9));
+    into.creationTime = row.GetInt64(10);
+    into.expiryTime = row.GetInt64(11);
+    into.journalMessageID = row.GetUInt(12);
+    into.state = row.GetUInt(13);
+}
+
+uint32 DungeonDB::InsertEscalation(const EscalationRow& row)
+{
+    DBerror err;
+    uint32 instanceID(0);
+    if (!sDatabase.RunQueryLID(err, instanceID,
+        "INSERT INTO chrEscalations (characterID, escalationID, srcDungeonID, destDungeonID, factionID, solarSystemID,"
+        " x, y, z, creationTime, expiryTime, journalMessageID, state)"
+        " VALUES (%u, %u, %u, %u, %u, %u, %f, %f, %f, %lli, %lli, %u, 0)",
+        row.characterID, row.escalationID, row.srcDungeonID, row.destDungeonID, row.factionID, row.solarSystemID,
+        row.position.x, row.position.y, row.position.z, row.creationTime, row.expiryTime, row.journalMessageID))
+    {
+        _log(DATABASE__ERROR, "InsertEscalation - unable to save the escalation of %u: %s", row.characterID, err.c_str());
+        return 0;
+    }
+    return instanceID;
+}
+
+bool DungeonDB::GetEscalation(uint32 instanceID, EscalationRow& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT %s FROM chrEscalations WHERE instanceID = %u", EscalationColumns, instanceID)) {
+        _log(DATABASE__ERROR, "Error in GetEscalation query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    FillEscalationRow(row, into);
+    return true;
+}
+
+void DungeonDB::GetEscalationsForSystem(uint32 systemID, int64 now, std::vector<EscalationRow>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT %s FROM chrEscalations WHERE solarSystemID = %u AND state < 2 AND expiryTime > %lli",
+        EscalationColumns, systemID, now))
+    {
+        _log(DATABASE__ERROR, "Error in GetEscalationsForSystem query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        EscalationRow esc = EscalationRow();
+        FillEscalationRow(row, esc);
+        into.push_back(esc);
+    }
+}
+
+void DungeonDB::GetEscalationsForChar(uint32 charID, std::vector<EscalationRow>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT %s FROM chrEscalations WHERE characterID = %u AND state < 3 ORDER BY creationTime",
+        EscalationColumns, charID))
+    {
+        _log(DATABASE__ERROR, "Error in GetEscalationsForChar query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        EscalationRow esc = EscalationRow();
+        FillEscalationRow(row, esc);
+        into.push_back(esc);
+    }
+}
+
+void DungeonDB::SetEscalationState(uint32 instanceID, uint8 state, int64 expiryTime/*0*/)
+{
+    DBerror err;
+    if (expiryTime != 0) {
+        sDatabase.RunQuery(err, "UPDATE chrEscalations SET state = %u, expiryTime = %lli WHERE instanceID = %u AND state < %u",
+                state, expiryTime, instanceID, state);
+    } else {
+        sDatabase.RunQuery(err, "UPDATE chrEscalations SET state = %u WHERE instanceID = %u AND state < %u", state, instanceID, state);
+    }
+}

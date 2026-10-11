@@ -34,6 +34,7 @@ public:
 
 protected:
     PyResult GetMyEscalatingPathDetails(PyCallArgs& call);
+    PyResult DeleteExpiredPathStep(PyCallArgs& call, PyInt* instanceID);
 };
 
 #endif

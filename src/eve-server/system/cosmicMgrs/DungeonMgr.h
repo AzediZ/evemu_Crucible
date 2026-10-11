@@ -201,6 +201,8 @@ public:
     void SpawnEscalation(uint32 escalationInstanceID);
     // the escalation's live instance (0 = not spawned here)
     uint32 GetEscalationInstance(uint32 escalationInstanceID);
+    // the pilot removed the journal entry (the site goes when nobody else has it)
+    void OnEscalationRemoved(uint32 escalationInstanceID);
 
 protected:
     ManagerDB m_db;
@@ -259,6 +261,7 @@ private:
         CosmicSignature sig;
         bool hasSignal = false;
         std::set<uint32> visitors;  // charIDs who entered (entered-notifications sent)
+        std::map<uint32, uint32> escalationOwners;  // escalation site:  chrEscalations.instanceID -> charID (fleet members may share it)
     };
     struct PendingTrigger {
         uint32 instanceID;

@@ -23,6 +23,8 @@
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
 #include "system/TargetManager.h"
+#include "fleet/FleetService.h"
+#include "map/MapData.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
@@ -2251,41 +2253,261 @@ void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
 
 /* escalations */
 
+namespace {
+    // the client's util.Row with header and line
+    PyObject* MakeRow(PyList* header, PyList* line)
+    {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("header", header);
+            dict->SetItemString("line", line);
+        return new PyObject("util.Row", dict);
+    }
+}
+
 void DungeonMgr::OnVisitor(Instance& inst, uint8 roomIdx, uint32 charID)
 {
-    inst.visitors.insert(charID);
+    // the first time a pilot enters a site that isn't on the overview, its system map gets a bracket for it
+    if ((roomIdx != 0) or !inst.visitors.insert(charID).second)
+        return;
+    bool escalation(inst.kind == Dungeon::Kind::Escalation);
+    if (!escalation and (inst.kind != Dungeon::Kind::Signature))
+        return;
+
+    if (escalation)
+        for (auto& cur : inst.escalationOwners)
+            if (cur.second == charID)
+                DungeonDB::SetEscalationState(cur.first, 1);
+
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    if (pClient == nullptr)
+        return;
+    PyList* header = new PyList();
+        header->AddItem(new PyString("instanceID"));
+        header->AddItem(new PyString("dungeonID"));
+        header->AddItem(new PyString("name"));
+        header->AddItem(new PyString("x"));
+        header->AddItem(new PyString("y"));
+        header->AddItem(new PyString("z"));
+    PyList* line = new PyList();
+        line->AddItem(new PyInt(inst.instanceID));
+        line->AddItem(new PyInt(inst.dungeon->dungeonID));
+        line->AddItem(new PyString(inst.name));
+        line->AddItem(new PyFloat(inst.rooms[0].origin.x));
+        line->AddItem(new PyFloat(inst.rooms[0].origin.y));
+        line->AddItem(new PyFloat(inst.rooms[0].origin.z));
+    PyTuple* payload = new PyTuple(1);
+        payload->SetItem(0, MakeRow(header, line));
+    pClient->SendNotification((escalation ? "OnEscalatingPathDungeonEntered" : "OnDistributionDungeonEntered"), "charid", payload, false);
 }
 
 void DungeonMgr::TryEscalate(Instance& inst, uint32 charID)
 {
+    if (!IsCharacterID(charID) or (inst.kind == Dungeon::Kind::Mission) or (inst.kind == Dungeon::Kind::Test))
+        return;
+    std::vector<const Dungeon::EscalationDef*> rules;
+    sDunDataMgr.GetEscalations(inst.dungeon->dungeonID, inst.dungeon->archetypeID, inst.dungeon->difficulty, rules);
+    float mySec(m_system->GetSystemSecurityRating());
+    for (auto pRule : rules) {
+        if (MakeRandomFloat() >= (pRule->chance * sConfig.dungeon.EscalationChance))
+            continue;
+
+        // where:  a k-space system within range (lower true sec if the rule says so) that has a fitting dungeon,
+        //  the faction's own region preferred
+        uint8 minDifficulty(std::max<int16>(0, inst.dungeon->difficulty + pRule->destDifficultyDelta));
+        std::vector<std::pair<uint32, uint8>> systems;
+        sMapData.GetSystemsWithinJumps(m_system->GetID(), pRule->maxJumps, systems);
+        std::vector<std::pair<uint32, uint32>> own, other;     // system, dungeon
+        for (auto& cur : systems) {
+            if ((cur.second < pRule->minJumps) or !IsKSpaceID(cur.first))
+                continue;
+            SystemData sysData = SystemData();
+            if (!sDataMgr.GetSystemData(cur.first, sysData))
+                continue;
+            if (pRule->lowerSecOnly and (sysData.securityRating > mySec))
+                continue;
+            uint32 dungeonID(pRule->destDungeonID);
+            if (dungeonID != 0) {
+                std::shared_ptr<const Dungeon::Dungeon> pDest(sDunDataMgr.GetDungeon(dungeonID));
+                if ((pDest.get() == nullptr) or (sysData.securityRating < pDest->minSec) or (sysData.securityRating > pDest->maxSec))
+                    continue;
+            } else {
+                dungeonID = sDunDataMgr.PickDungeon(pRule->destArchetypeID, inst.factionID, sysData.securityRating, minDifficulty);
+                if (dungeonID == 0)
+                    continue;
+            }
+            if (sDataMgr.GetRegionRatFaction(sysData.regionID) == inst.factionID) {
+                own.emplace_back(cur.first, dungeonID);
+            } else {
+                other.emplace_back(cur.first, dungeonID);
+            }
+        }
+        std::vector<std::pair<uint32, uint32>>& list = (own.empty() ? other : own);
+        if (list.empty()) {
+            _log(DUNG__MESSAGE, "DungeonMgr::TryEscalate() - rule %u of %s has no destination near %s(%u)",
+                    pRule->escalationID, inst.name.c_str(), m_system->GetName(), m_system->GetID());
+            continue;
+        }
+        std::pair<uint32, uint32> dest(list.at(std::min<size_t>(MakeRandomInt(0, list.size()), list.size() - 1)));
+
+        // the site position, inside the destination system
+        SystemData destData = SystemData();
+        sDataMgr.GetSystemData(dest.first, destData);
+        GPoint pos(sMapData.GetAnomalyPoint(dest.first));
+        double maxDist(destData.radius * 0.9);
+        if ((maxDist > 0) and (pos.length() > maxDist)) {
+            GVector dir(pos);
+            dir.normalize();
+            pos = dir * (maxDist * MakeRandomFloat(0.33, 1.0));
+        }
+
+        int64 now(Win32TimeNow());
+        EscalationRow row = EscalationRow();
+            row.characterID = charID;
+            row.escalationID = pRule->escalationID;
+            row.srcDungeonID = inst.dungeon->dungeonID;
+            row.destDungeonID = dest.second;
+            row.factionID = inst.factionID;
+            row.solarSystemID = dest.first;
+            row.position = pos;
+            row.creationTime = now;
+            row.expiryTime = now + ((pRule->expiryHours > 0 ? pRule->expiryHours : sConfig.dungeon.EscalationExpiry) * EvE::Time::Hour);
+            row.journalMessageID = pRule->journalMessageID;
+
+        // the pilot (and, if shared, the fleet members here) get the journal entry
+        std::vector<uint32> granted;
+        std::vector<uint32> chars(1, charID);
+        Client* pClient(sEntityList.FindClientByCharID(charID));
+        std::vector<Client*> fleet;
+        if ((pClient != nullptr) and pClient->InFleet())
+            fleet = sFltSvc.GetFleetClients(pClient->GetFleetID());
+        if (sConfig.dungeon.EscalationShareFleet)
+            for (auto pMember : fleet)
+                if ((pMember != pClient) and (pMember->GetSystemID() == m_system->GetID()))
+                    chars.push_back(pMember->GetCharacterID());
+        for (auto cur : chars) {
+            row.characterID = cur;
+            uint32 instanceID(DungeonDB::InsertEscalation(row));
+            if (instanceID == 0)
+                continue;
+            granted.push_back(instanceID);
+            Client* pOwner(sEntityList.FindClientByCharID(cur));
+            if (pOwner != nullptr) {
+                PyTuple* payload = new PyTuple(1);
+                    payload->SetItem(0, new PyInt(instanceID));
+                pOwner->SendNotification("OnEscalatingPathMessage", "charid", payload, false);
+            }
+        }
+        if (granted.empty())
+            return;
+
+        // the rest of the fleet hears about it
+        if (!sConfig.dungeon.EscalationShareFleet)
+            for (auto pMember : fleet) {
+                if (pMember == pClient)
+                    continue;
+                PyDict* step = new PyDict();
+                    step->SetItemString("journalEntryTemplateID", new PyInt(pRule->journalMessageID));
+                PyTuple* payload = new PyTuple(2);
+                    payload->SetItem(0, new PyInt(charID));
+                    payload->SetItem(1, new PyObject("util.KeyVal", step));
+                pMember->SendNotification("OnFleetEscalatingPathMessage", "charid", payload, false);
+            }
+
+        _log(DUNG__INFO, "DungeonMgr::TryEscalate() - %s(%u) escalates %s to dungeon %u in %u (%u entries)", (pClient != nullptr ? pClient->GetName() : "?"),
+                charID, inst.name.c_str(), dest.second, dest.first, granted.size());
+
+        // a loaded destination system makes the site now, others when they boot
+        SystemManager* pDest(sEntityList.FindSystem(dest.first));
+        if (pDest != nullptr)
+            for (auto instanceID : granted)
+                pDest->GetDungMgr()->SpawnEscalation(instanceID);
+        return;
+    }
 }
 
 void DungeonMgr::LoadEscalations()
 {
-}
-
-void DungeonMgr::OnEscalationCompleted(Instance& inst)
-{
+    std::vector<EscalationRow> rows;
+    DungeonDB::GetEscalationsForSystem(m_system->GetID(), Win32TimeNow(), rows);
+    for (auto& row : rows)
+        SpawnEscalation(row.instanceID);
 }
 
 void DungeonMgr::SpawnEscalation(uint32 escalationInstanceID)
 {
+    if (!m_initalized or (GetEscalationInstance(escalationInstanceID) != 0))
+        return;
+    EscalationRow row = EscalationRow();
+    if (!DungeonDB::GetEscalation(escalationInstanceID, row) or (row.solarSystemID != m_system->GetID()))
+        return;
+    int64 now(Win32TimeNow());
+    if ((row.state > 1) or (row.expiryTime <= now))
+        return;
+
+    // fleet members granted the same site share it
+    for (auto& cur : m_instances)
+        if ((cur.second.kind == Dungeon::Kind::Escalation) and (cur.second.dungeon->dungeonID == row.destDungeonID)
+        and !cur.second.rooms.empty() and (cur.second.rooms[0].origin.distance(row.position) < 1.0))
+        {
+            cur.second.escalationOwners[row.instanceID] = row.characterID;
+            return;
+        }
+
+    Dungeon::SpawnParams params;
+        params.dungeonID = row.destDungeonID;
+        params.factionID = row.factionID;
+        params.kind = Dungeon::Kind::Escalation;
+        params.usePosition = true;
+        params.position = row.position;
+        params.ownerID = row.characterID;
+        params.escalationID = row.instanceID;
+        params.lifetimeSec = static_cast<uint32>(std::max<int64>(1, (row.expiryTime - now) / EvE::Time::Second));
+    uint32 instanceID(SpawnInstance(params));
+    if (instanceID == 0)
+        return;
+    m_instances[instanceID].escalationOwners[row.instanceID] = row.characterID;
+}
+
+void DungeonMgr::OnEscalationCompleted(Instance& inst)
+{
+    // every journal entry of the site is done (it shows as expired until the pilot removes it)
+    int64 now(Win32TimeNow());
+    for (auto& cur : inst.escalationOwners) {
+        DungeonDB::SetEscalationState(cur.first, 2, now);
+        Client* pClient(sEntityList.FindClientByCharID(cur.second));
+        if (pClient != nullptr)
+            pClient->SendNotification("OnEscalatingPathChange", "charid", new PyTuple(0), false);
+    }
+}
+
+void DungeonMgr::OnEscalationRemoved(uint32 escalationInstanceID)
+{
+    // the pilot removed the journal entry.  nobody left to visit the site:  it goes
+    for (auto& cur : m_instances) {
+        if (cur.second.escalationOwners.erase(escalationInstanceID) == 0)
+            continue;
+        if (cur.second.escalationOwners.empty())
+            DespawnInstance(cur.first, false);
+        return;
+    }
 }
 
 uint32 DungeonMgr::GetEscalationInstance(uint32 escalationInstanceID)
 {
     for (auto& cur : m_instances)
-        if (cur.second.escalationID == escalationInstanceID)
+        if (cur.second.escalationOwners.find(escalationInstanceID) != cur.second.escalationOwners.end())
             return cur.first;
     return 0;
 }
 
 bool DungeonMgr::GetInstanceWarpIn(uint32 escalationInstanceID, uint32 charID, GPoint& into)
 {
-    for (auto& cur : m_instances)
-        if ((cur.second.escalationID == escalationInstanceID) and (cur.second.ownerID == charID) and !cur.second.rooms.empty()) {
-            into = cur.second.rooms[0].origin;
-            return true;
-        }
+    for (auto& cur : m_instances) {
+        auto itr = cur.second.escalationOwners.find(escalationInstanceID);
+        if ((itr == cur.second.escalationOwners.end()) or (itr->second != charID) or cur.second.rooms.empty())
+            continue;
+        into = cur.second.rooms[0].origin;
+        return true;
+    }
     return false;
 }

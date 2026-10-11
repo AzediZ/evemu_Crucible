@@ -79,21 +79,29 @@ PyResult KeeperService::GetLevelEditor(PyCallArgs &call)
 }
 
 PyResult KeeperService::CanWarpToPathPlex(PyCallArgs &call, PyInt* instanceID) {
-    /*
-                    resp = sm.RemoteSvc('keeper').CanWarpToPathPlex(node.rec.instanceID)
-                if resp:
-                    if resp is True:
-                        m.append((uiutil.MenuLabel('UI/Inflight/WarpToBookmark'), self.WarpToHiddenDungeon, (node.id, node)))
-                    else:
-                        mickey = sm.StartService('michelle')
-                        me = mickey.GetBall(eve.session.shipid)
-                        dist = (foo.Vector3(resp) - foo.Vector3(me.x, me.y, me.z)).Length()
-
-                        */
+    /*  journal expeditions menu (journal.py):
+     *      resp = sm.RemoteSvc('keeper').CanWarpToPathPlex(node.rec.instanceID)
+     *      True -> 'Warp to';  [x, y, z] -> 'Approach' when within minWarpDistance, else 'Warp to';  None -> nothing
+     */
     _log(DUNG__CALL,  "KeeperService::Handle_CanWarpToPathPlex  size: %lli", call.tuple->size());
     call.Dump(DUNG__CALL_DUMP);
 
-	return nullptr;
+    Client* pClient(call.client);
+    EscalationRow row = EscalationRow();
+    if (!DungeonDB::GetEscalation(instanceID->value(), row) or (row.characterID != (uint32)pClient->GetCharacterID()))
+        return PyStatic.NewNone();
+    if ((row.state > 1) or (row.expiryTime <= Win32TimeNow()) or (row.solarSystemID != pClient->GetSystemID()))
+        return PyStatic.NewNone();
+    if ((pClient->SystemMgr() == nullptr) or (pClient->SystemMgr()->GetDungMgr()->GetEscalationInstance(row.instanceID) == 0))
+        return PyStatic.NewNone();
+    if ((pClient->GetShipSE() == nullptr) or (pClient->GetShipSE()->GetPosition().distance(row.position) >= 150000.0))
+        return PyStatic.NewTrue();
+
+    PyList* pos = new PyList();
+        pos->AddItem(new PyFloat(row.position.x));
+        pos->AddItem(new PyFloat(row.position.y));
+        pos->AddItem(new PyFloat(row.position.z));
+    return pos;
 }
 
 PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID) {

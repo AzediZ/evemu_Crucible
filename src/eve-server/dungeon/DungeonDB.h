@@ -12,6 +12,22 @@
 #ifndef _DUNGEON_DATABASE_H
 #define _DUNGEON_DATABASE_H
 
+// a granted escalation (chrEscalations)
+struct EscalationRow {
+    uint32 instanceID;
+    uint32 characterID;
+    uint32 escalationID;
+    uint32 srcDungeonID;
+    uint32 destDungeonID;
+    uint32 factionID;
+    uint32 solarSystemID;
+    GPoint position;
+    int64 creationTime;
+    int64 expiryTime;
+    uint32 journalMessageID;
+    uint8 state;            // 0 granted, 1 entered, 2 completed, 3 removed by the player
+};
+
 class DungeonDB {
 public:
     DungeonDB()                                         { /* do nothing here */ }
@@ -51,6 +67,16 @@ public:
     static void GetGates(DBQueryResult& res, uint32 dungeonID = 0);
     static void GetLoot(DBQueryResult& res);
     static void GetEscalations(DBQueryResult& res);
+
+    // granted escalations
+    static uint32 InsertEscalation(const EscalationRow& row);
+    static bool GetEscalation(uint32 instanceID, EscalationRow& into);
+    // not completed/removed, not expired
+    static void GetEscalationsForSystem(uint32 systemID, int64 now, std::vector<EscalationRow>& into);
+    // everything the journal shows (not removed)
+    static void GetEscalationsForChar(uint32 charID, std::vector<EscalationRow>& into);
+    // expiryTime 0 keeps it.  entered (1) only replaces granted (0)
+    static void SetEscalationState(uint32 instanceID, uint8 state, int64 expiryTime = 0);
 
 protected:
 
