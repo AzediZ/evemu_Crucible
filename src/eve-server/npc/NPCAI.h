@@ -73,6 +73,8 @@ public:
     void OnEwarBy(SystemEntity* pSE);
     // a member of our spawn group was attacked by pSE.  we join in if we're idle
     void Aggro(SystemEntity* pSE);
+    // another sleeper was hurt by pSE (advanced ai only)
+    void ShareThreat(SystemEntity* pSE, float amount);
     // called from NPC::Killed()
     void OnKilled();
 
@@ -132,6 +134,16 @@ protected:
     void AlertGroup(SystemEntity* pAggressor);
     void ProcessDroneAggro();
 
+    /* advanced ai (types with AI_ShouldUseTargetSwitching: the sleepers) */
+    // (1 + threat) x how well the target's signature suits us.  drones that hurt us +25%
+    float Score(SystemEntity* pSE);
+    SystemEntity* ChooseAdvancedTarget(double range);
+    // threat decay, target switching, secondary (ewar) target
+    void ProcessAdvanced();
+    // NPCRemoteArmorRepair / NPCRemoteShieldBoost on friends
+    void ProcessRemoteRepairs();
+    void RemoteRepair(bool armor);
+
     /* movement */
     void StartWarpOutTimer();
     // maybe follow our last target through warp (<npc><WarpFollowChance>).  true if we went
@@ -158,9 +170,23 @@ private:
     bool m_useTargSwitching :1;
     bool m_useSecondTarget  :1;
     bool m_chaseFast        :1;
+    bool m_evasive          :1;
 
     float m_switchTargChance;   //fuzzy logic
-    uint16 m_preferedSigRadius;
+    float m_preferedSigRadius;
+    uint32 m_switchTime;    // ms between target re-evaluations (advanced ai)
+
+    // remote repair (advanced ai)
+    float m_rrAmount;
+    float m_rrChance;
+    float m_rrThreshold;
+    uint32 m_rrDuration;
+    uint8 m_rrMaxTargets;
+    float m_rsAmount;
+    float m_rsChance;
+    float m_rsThreshold;
+    uint32 m_rsDuration;
+    uint8 m_rsMaxTargets;
 
     //these attributes are cached to reduce access times. (much faster but uses more memory)
     uint8 m_maxAttackTargets;
@@ -188,6 +214,9 @@ private:
 
     uint32 m_primaryID;     // weapons target
     uint32 m_pendingAggroID;// someone who attacked us (or our group) while we were idle.  handled in Process()
+    uint32 m_secondaryID;   // advanced ai ewar target
+    uint32 m_switchToID;    // advanced ai: new primary once its lock completes
+    uint32 m_moveTargetID;  // what we follow/orbit
 
     float m_armorRepairDelayChance;
     float m_shieldBoosterDelayChance;
@@ -220,6 +249,10 @@ private:
     Timer m_chaseTimer;
     Timer m_droneAggroTimer;
     Timer m_leashTimer;
+    Timer m_switchTimer;
+    Timer m_threatDecayTimer;
+    Timer m_remoteArmorTimer;
+    Timer m_remoteShieldTimer;
 };
 
 /* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */
