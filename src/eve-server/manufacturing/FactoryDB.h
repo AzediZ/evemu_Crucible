@@ -77,6 +77,15 @@ public:
     // for calendar events
     static void SetJobEventID(const uint32 jobID, const uint32 eventID);
 
+    // structure (POS) assembly lines
+    // creates the lines of a structure (ramInstallationTypeContents) on first use, or sets the owner of existing ones
+    static bool EnsureStructureAssemblyLines(uint32 structureID, uint16 typeID, uint32 ownerID);
+    // offline structures pause their jobs (client shows 'Offline'), onlining resumes them with the lost time added
+    static void PauseJobsInContainer(uint32 containerID);
+    static void ResumeJobsInContainer(uint32 containerID);
+    static void GetActiveJobsInContainer(uint32 containerID, std::vector<EvERam::JobProperties>& into);
+    static bool UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConfig& data);
+
 };
 
 #endif  // EVE_MANUF_FACTORYDB_H

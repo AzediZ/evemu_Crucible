@@ -694,6 +694,7 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 case EVEDB::invGroups::Refining_Array:
                 case EVEDB::invGroups::Ship_Maintenance_Array:
                 case EVEDB::invGroups::Assembly_Array:
+                case EVEDB::invGroups::Mobile_Laboratory:
                 case EVEDB::invGroups::Shield_Hardening_Array:
                 case EVEDB::invGroups::Force_Field_Array:
                 case EVEDB::invGroups::Corporate_Hangar_Array:

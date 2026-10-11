@@ -33,6 +33,15 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void Init();
+    virtual void SetOnline();
+    virtual void SetOffline();
+    virtual void Killed(Damage &damage);
+
+    // assembly arrays and mobile laboratories with R.A.M. assembly lines
+    bool                        IsRamInstallation() const   { return m_ram; }
+
+private:
+    bool m_ram;
 
 
 };

@@ -100,6 +100,7 @@ namespace EvERam {
         int16 outputRuns;
         uint16 outputTypeID;
         uint16 installedItemTypeID;
+        uint32 jobID;
         uint32 itemID;
         uint32 ownerID;
         uint32 installerID;

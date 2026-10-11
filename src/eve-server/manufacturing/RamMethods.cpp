@@ -15,7 +15,10 @@
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/RamMethods.h"
 #include "pos/PosMgrDB.h"
+#include "pos/Structure.h"
 #include "station/StationDataMgr.h"
+#include "system/CalendarDB.h"
+#include "system/SystemManager.h"
 
 static const uint32 RAM_PRODUCTION_TIME_LIMIT = 60*60*24*30;   //30 days
 
@@ -213,6 +216,10 @@ void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob
         }
     }
 
+    // labs of other corps can't be used for copying
+    if ((args.activityID == EvERam::Activity::Copying) and (data.ownerID != corpID) and IsStructureLine(data.containerID))
+        throw UserError ("RamCannotCopyInPlayerLab");
+
     // check usage restriction.  corp and alliance restrictions allow either group
     uint8 groupMask(data.rMask & (EvERam::RestrictionMask::ByCorp | EvERam::RestrictionMask::ByAlliance));
     if (groupMask) {
@@ -317,15 +324,91 @@ void RamMethods::ItemLocationCheck(Client*const pClient, const Call_InstallJob& 
 
         if (installedItem->locationID() != (uint32)args.lineContainerID)
             throw UserError ("RamInstalledItemMustBeInShip");
+    } else if (IsStructureLine(args.lineContainerID)) {
+        // POS jobs are corp jobs on items in a hangar division of the array or lab
+        if (!args.isCorpJob) {
+            InventoryItemRef sRef(sItemFactory.GetItemRef(args.lineContainerID));
+            throw UserError ("RamInstalledItemBadLocationStructure")
+                    .AddFormatValue ("type", new PyInt (sRef.get() == nullptr ? 0 : sRef->typeID()));
+        }
+        if (installedItem->locationID() != (uint32)args.lineContainerID)
+            throw UserError ("RamInstalledItemMustBeInInstallation");
+        if (!IsHangarFlag(installedItem->flag()))
+            throw UserError ("RamInstalledItemInStructureNotInContainer");
     } else {
-        /* this will be POS assembly modules and Outpost checks
-        *  RamStationIsNotConstructed
-        *  RamInstalledItemMustBeInInstallation
-        *  RamInstalledItemBadLocationStructure
-        *  RamInstalledItemInStructureNotInContainer
-        *  RamInstalledItemInStructureUnknownLocation
-        */
-        throw UserError ("RamActivityInvalid");
+        // outposts are stations.  anything else is not an installation
+        throw UserError ("RamIsNotAnInstallation");
+    }
+}
+
+bool RamMethods::IsStructureLine(uint32 containerID)
+{
+    if ((containerID == 0) or sDataMgr.IsStation(containerID))
+        return false;
+    InventoryItemRef iRef(sItemFactory.GetItemRef(containerID));
+    if (iRef.get() == nullptr)
+        return false;
+    return ((iRef->groupID() == EVEDB::invGroups::Assembly_Array)
+         or (iRef->groupID() == EVEDB::invGroups::Mobile_Laboratory));
+}
+
+void RamMethods::StructureCheck(Client* const pClient, uint32 containerID)
+{
+    InventoryItemRef sRef(sItemFactory.GetItemRef(containerID));
+    if (sRef.get() == nullptr)
+        throw UserError ("RamNoSuchInstallation");
+    if (!IsSolarSystemID(sRef->locationID()))
+        throw UserError ("RamStructureNotInSpace")
+                .AddFormatValue ("type", new PyInt (sRef->typeID()));
+    // no remote jobs at structures
+    if (sRef->locationID() != pClient->GetSystemID())
+        throw UserError ("RamCannotContactFacility");
+
+    // the structure must be online.  its system is loaded, as the client is in it
+    bool online(false);
+    SystemManager* pSysMgr(pClient->SystemMgr());
+    SystemEntity* pSE(pSysMgr == nullptr ? nullptr : pSysMgr->GetSE(containerID));
+    if ((pSE != nullptr) and pSE->IsPOSSE()) {
+        online = pSE->GetPOSSE()->IsOnline();
+    } else {
+        int8 state(PosMgrDB::GetStructureState(containerID));
+        online = ((state == EVEPOS::StructureState::Online) or (state == EVEPOS::StructureState::Operating)
+               or (state == EVEPOS::StructureState::Vulnerable) or (state == EVEPOS::StructureState::Invulnerable));
+    }
+    if (!online)
+        throw UserError ("RamCannotContactFacility");
+}
+
+void RamMethods::TerminateStructureJobs(uint32 containerID, int8 status)
+{
+    std::vector<EvERam::JobProperties> jobs;
+    FactoryDB::GetActiveJobsInContainer(containerID, jobs);
+    for (auto cur : jobs) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.itemID));
+        if (status == EvERam::Status::Unanchor) {
+            // the installed item and whatever the job did not use up go back into the structure
+            uint16 typeID(iRef.get() != nullptr ? iRef->typeID() : cur.installedItemTypeID);
+            if (iRef.get() != nullptr)
+                iRef->Move(containerID, flagHangar, false);
+            std::vector<EvERam::RequiredItem> reqItems;
+            sDataMgr.GetRamReturns(typeID, cur.activity, reqItems);
+            for (auto item : reqItems) {
+                uint32 quantity = (item.quantity * cur.jobRuns * (1 - item.damagePerJob));
+                if (quantity == 0)
+                    quantity = 1;
+                ItemData idata(item.typeID, cur.ownerID, locTemp, flagNone, quantity);
+                InventoryItemRef rRef = sItemFactory.SpawnItem( idata );
+                if (rRef.get() != nullptr)
+                    rRef->Move(containerID, flagHangar, false);
+            }
+        } else if (iRef.get() != nullptr) {
+            // destroyed with the structure
+            iRef->Delete();
+        }
+
+        FactoryDB::CompleteJob(cur.jobID, status);
+        CalendarDB::DeleteEvent(cur.eventID);
+        _log(MANUF__MESSAGE, "Job %u in structure %u ended with status %i.", cur.jobID, containerID, status);
     }
 }
 
@@ -602,6 +685,16 @@ void RamMethods::ProductionTimeCheck(uint32 productionTime)
 
 void RamMethods::VerifyCompleteJob(const Call_CompleteJob &args, EvERam::JobProperties &data, Client* const pClient)
 {
+    // jobs in structures need the structure, in this solar system and online
+    if ((data.containerID != 0) and !sDataMgr.IsStation(data.containerID) and (data.containerID != pClient->GetShipID())) {
+        InventoryItemRef cRef(sItemFactory.GetItemRef(data.containerID));
+        if (cRef.get() == nullptr)
+            throw UserError ("RamNoSuchInstallation");
+        if ((cRef->groupID() == EVEDB::invGroups::Assembly_Array)
+        or  (cRef->groupID() == EVEDB::invGroups::Mobile_Laboratory))
+            StructureCheck(pClient, data.containerID);
+    }
+
     // this isnt entirely right....if job is installed in ship, receiver must be pilot in active ship to complete job.
     if (args.containerID == pClient->GetShipID())
         if (pClient->GetChar()->flag() != flagPilot)

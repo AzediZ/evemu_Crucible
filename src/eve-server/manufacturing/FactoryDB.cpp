@@ -22,6 +22,8 @@
 #include "eve-server.h"
 
 #include "EVEServerConfig.h"
+#include "StaticDataMgr.h"
+#include "../eve-common/EVE_POS.h"
 #include "character/Character.h"
 #include "manufacturing/FactoryDB.h"
 
@@ -374,24 +376,39 @@ PyRep *FactoryDB::AssemblyLinesSelectPrivate(const uint32 charID) {
     return DBResultToCRowset(res);
 }
 
-/** @todo  need to add check/query for POS assembly modules here */
 PyRep *FactoryDB::AssemblyLinesSelectCorporation(const uint32 corpID) {
     DBQueryResult res;
 
+    // stations owned by the corp (outposts), and the online assembly arrays and labs of the corp
     if (!sDatabase.RunQuery(res,
         "SELECT DISTINCT"
         " station.stationID AS containerID,"
         " station.stationTypeID AS containerTypeID,"
         " station.solarSystemID AS containerLocationID,"
         " station.assemblyLineTypeID,"
-        " station.quantity,"
+        " CAST(station.quantity AS SIGNED) AS quantity,"
         " station.ownerID,"
-        " line.activityID"
+        " types.activityID"
         " FROM ramAssemblyLineStations AS station"
-        " LEFT JOIN ramAssemblyLines AS line ON station.stationID = line.containerID AND station.assemblyLineTypeID = line.assemblyLineTypeID AND station.ownerID = line.ownerID"
+        " LEFT JOIN ramAssemblyLineTypes AS types ON station.assemblyLineTypeID = types.assemblyLineTypeID"
         " WHERE station.ownerID = %u"
-        " AND (line.restrictionMask & %u) = %u",
-        corpID, EvERam::RestrictionMask::ByCorp, EvERam::RestrictionMask::ByCorp))
+        " UNION ALL"
+        " SELECT"
+        " line.containerID,"
+        " e.typeID AS containerTypeID,"
+        " e.locationID AS containerLocationID,"
+        " line.assemblyLineTypeID,"
+        " CAST(COUNT(line.assemblyLineID) AS SIGNED) AS quantity,"
+        " line.ownerID,"
+        " line.activityID"
+        " FROM ramAssemblyLines AS line"
+        " JOIN entity AS e ON e.itemID = line.containerID"
+        " JOIN posStructureData AS pos ON pos.itemID = line.containerID"
+        " WHERE line.ownerID = %u"
+        " AND pos.state IN (%u, %u, %u, %u)"
+        " GROUP BY line.containerID, e.typeID, e.locationID, line.assemblyLineTypeID, line.ownerID, line.activityID",
+        corpID, corpID, EVEPOS::StructureState::Online, EVEPOS::StructureState::Operating,
+        EVEPOS::StructureState::Vulnerable, EVEPOS::StructureState::Invulnerable))
     {
         _log(DATABASE__ERROR, "Failed to query corporation assembly lines for corp %u: %s.", corpID, res.error.c_str());
         return nullptr;
@@ -400,7 +417,6 @@ PyRep *FactoryDB::AssemblyLinesSelectCorporation(const uint32 corpID) {
     return DBResultToCRowset(res);
 }
 
-/** @todo  need to add check/query for POS assembly modules here */
 PyRep *FactoryDB::AssemblyLinesSelectAlliance(const int32 allianceID) {
     DBQueryResult res;
 
@@ -413,26 +429,47 @@ PyRep *FactoryDB::AssemblyLinesSelectAlliance(const int32 allianceID) {
     //     job.typeId as assemblyLineTypeId,
     //     COUNT(job.containerId) as quantity,
     //     station.corporationId as ownerId
-    //     FROM industrySlots AS job 
+    //     FROM industrySlots AS job
     //         JOIN evemu.staStations AS station ON station.stationId = job.containerId
     //         JOIN evemu.crpCorporation AS corp ON corp.corporationId = station.corporationId
     //     GROUP BY job.containerId, job.typeId;
 
+    // alliance-restricted station lines and online assembly arrays and labs of alliance corps
     if (!sDatabase.RunQuery(res,
         "SELECT DISTINCT"
         " station.stationID AS containerID,"
         " station.stationTypeID AS containerTypeID,"
         " station.solarSystemID AS containerLocationID,"
         " station.assemblyLineTypeID,"
-        " station.quantity,"
+        " CAST(station.quantity AS SIGNED) AS quantity,"
         " station.ownerID,"
         " line.activityID"
         " FROM ramAssemblyLineStations AS station"
         " LEFT JOIN crpCorporation AS crp ON station.ownerID = crp.corporationID"
         " LEFT JOIN ramAssemblyLines AS line ON station.stationID = line.containerID AND station.assemblyLineTypeID = line.assemblyLineTypeID AND station.ownerID = line.ownerID"
         " WHERE crp.allianceID = %u"
-        " AND (line.restrictionMask & %u) = %u",
-        allianceID, EvERam::RestrictionMask::ByAlliance, EvERam::RestrictionMask::ByAlliance))
+        " AND (line.restrictionMask & %u) = %u"
+        " UNION ALL"
+        " SELECT"
+        " line.containerID,"
+        " e.typeID AS containerTypeID,"
+        " e.locationID AS containerLocationID,"
+        " line.assemblyLineTypeID,"
+        " CAST(COUNT(line.assemblyLineID) AS SIGNED) AS quantity,"
+        " line.ownerID,"
+        " line.activityID"
+        " FROM ramAssemblyLines AS line"
+        " JOIN entity AS e ON e.itemID = line.containerID"
+        " JOIN posStructureData AS pos ON pos.itemID = line.containerID"
+        " JOIN crpCorporation AS crp ON crp.corporationID = line.ownerID"
+        " WHERE crp.allianceID = %u"
+        " AND (line.restrictionMask & %u) = %u"
+        " AND pos.state IN (%u, %u, %u, %u)"
+        " GROUP BY line.containerID, e.typeID, e.locationID, line.assemblyLineTypeID, line.ownerID, line.activityID",
+        allianceID, EvERam::RestrictionMask::ByAlliance, EvERam::RestrictionMask::ByAlliance,
+        allianceID, EvERam::RestrictionMask::ByAlliance, EvERam::RestrictionMask::ByAlliance,
+        EVEPOS::StructureState::Online, EVEPOS::StructureState::Operating,
+        EVEPOS::StructureState::Vulnerable, EVEPOS::StructureState::Invulnerable))
     {
         _log(DATABASE__ERROR, "Failed to query alliance assembly lines for alliance %u: %s.", allianceID, res.error.c_str());
         return nullptr;
@@ -441,7 +478,6 @@ PyRep *FactoryDB::AssemblyLinesSelectAlliance(const int32 allianceID) {
     return DBResultToCRowset(res);
 }
 
-/** @todo  need to add check/query for POS assembly modules here */
 PyRep *FactoryDB::AssemblyLinesGet(const uint32 containerID) {
     DBQueryResult res;
 
@@ -474,7 +510,6 @@ PyRep *FactoryDB::AssemblyLinesGet(const uint32 containerID) {
     return DBResultToCRowset(res);
 }
 
-/** @todo  need to add check/query for POS assembly modules here */
 bool FactoryDB::GetAssemblyLineProperties(const uint32 assemblyLineID, Character* pChar, Rsp_InstallJob& into, bool isCorpJob/*false*/) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
@@ -551,7 +586,6 @@ bool FactoryDB::GetAssemblyLineProperties(const uint32 assemblyLineID, Character
     return true;
 }
 
-/** @todo  need to add check/query for POS assembly modules here */
 bool FactoryDB::GetAssemblyLineRestrictions(const int32 assemblyLineID, EvERam::LineRestrictions &data) {
     DBQueryResult res;
 
@@ -686,6 +720,7 @@ uint32 FactoryDB::CountResearchJobs(const uint32 installerID) {
 }
 
 bool FactoryDB::GetJobProperties(const uint32 jobID, EvERam::JobProperties &data) {
+    data.jobID = jobID;
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT job.installedItemID, job.ownerID, job.outputFlag, job.runs, job.licensedProductionRuns,"
@@ -840,4 +875,149 @@ bool FactoryDB::IsRecyclable(const uint16 typeID) {
     }
 
     return (res.ColumnCount() > 0);
+}
+
+bool FactoryDB::EnsureStructureAssemblyLines(uint32 structureID, uint16 typeID, uint32 ownerID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM ramAssemblyLines WHERE containerID = %u", structureID)) {
+        _log(DATABASE__ERROR, "Failed to count assembly lines of structure %u: %s", structureID, res.error.c_str());
+        return false;
+    }
+
+    DBerror err;
+    DBResultRow row;
+    if (res.GetRow(row) and (row.GetUInt(0) > 0)) {
+        // lines exist.  they belong to the structure's corp
+        if (!sDatabase.RunQuery(err, "UPDATE ramAssemblyLines SET ownerID = %u WHERE containerID = %u", ownerID, structureID)) {
+            _log(DATABASE__ERROR, "Failed to update owner of assembly lines of structure %u: %s", structureID, err.c_str());
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<std::pair<uint8, uint8>> contents;
+    if (!sDataMgr.GetInstallationContents(typeID, contents))
+        return false;
+
+    /* new lines are free and usable by the owner corp only.  the corp configures them (UpdateAssemblyLineConfigurations) */
+    std::ostringstream values;
+    bool first(true);
+    for (auto cur : contents)
+        for (uint8 i = 0; i < cur.second; ++i) {
+            if (!first)
+                values << ",";
+            first = false;
+            values << "(" << (uint16)cur.first << ", " << structureID << ", 0, 0, 0, 0, " << (uint16)EvERam::RestrictionMask::ByCorp
+                   << ", 0, 0, -10, -10, -10, 10, 10, " << ownerID << ", " << (uint16)sDataMgr.GetAssemblyLineActivity(cur.first) << ")";
+        }
+    if (first)
+        return false;
+
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO ramAssemblyLines"
+        " (assemblyLineTypeID, containerID, nextFreeTime, UIGroupingID, costInstall, costPerHour, restrictionMask,"
+        " discountPerGoodStandingPoint, surchargePerBadStandingPoint, minimumStanding, minimumCharSecurity, minimumCorpSecurity,"
+        " maximumCharSecurity, maximumCorpSecurity, ownerID, activityID)"
+        " VALUES %s", values.str().c_str()))
+    {
+        _log(DATABASE__ERROR, "Failed to create assembly lines of structure %u: %s", structureID, err.c_str());
+        return false;
+    }
+
+    _log(MANUF__MESSAGE, "Created assembly lines for structure %u (type %u, owner %u).", structureID, typeID, ownerID);
+    return true;
+}
+
+void FactoryDB::PauseJobsInContainer(uint32 containerID)
+{
+    DBerror err;
+    double now(GetFileTimeNow());
+    if (!sDatabase.RunQuery(err,
+        "UPDATE ramJobs AS job"
+        " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+        " SET job.pauseProductionTime = %.0f"
+        " WHERE line.containerID = %u AND job.completedStatusID = 0"
+        " AND job.pauseProductionTime IS NULL AND job.endProductionTime > %.0f",
+        now, containerID, now))
+        _log(DATABASE__ERROR, "Failed to pause jobs in container %u: %s", containerID, err.c_str());
+}
+
+void FactoryDB::ResumeJobsInContainer(uint32 containerID)
+{
+    DBerror err;
+    double now(GetFileTimeNow());
+    // jobs are moved on by the time they were paused (the order of multi-table assignments is not guaranteed, so two steps)
+    if (!sDatabase.RunQuery(err,
+        "UPDATE ramJobs AS job"
+        " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+        " SET job.beginProductionTime = IF(job.beginProductionTime > job.pauseProductionTime,"
+        "         job.beginProductionTime + (%.0f - job.pauseProductionTime), job.beginProductionTime),"
+        "     job.endProductionTime = job.endProductionTime + (%.0f - job.pauseProductionTime)"
+        " WHERE line.containerID = %u AND job.completedStatusID = 0"
+        " AND job.pauseProductionTime IS NOT NULL AND job.pauseProductionTime < %.0f",
+        now, now, containerID, now))
+    {
+        _log(DATABASE__ERROR, "Failed to move jobs in container %u: %s", containerID, err.c_str());
+        return;
+    }
+    if (!sDatabase.RunQuery(err,
+        "UPDATE ramJobs AS job"
+        " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+        " SET job.pauseProductionTime = NULL"
+        " WHERE line.containerID = %u AND job.completedStatusID = 0 AND job.pauseProductionTime IS NOT NULL",
+        containerID))
+    {
+        _log(DATABASE__ERROR, "Failed to resume jobs in container %u: %s", containerID, err.c_str());
+        return;
+    }
+    // lines are free when their last job ends
+    if (!sDatabase.RunQuery(err,
+        "UPDATE ramAssemblyLines AS line"
+        " SET line.nextFreeTime = COALESCE((SELECT MAX(job.endProductionTime) FROM ramJobs AS job"
+        "     WHERE job.assemblyLineID = line.assemblyLineID AND job.completedStatusID = 0), 0)"
+        " WHERE line.containerID = %u",
+        containerID))
+        _log(DATABASE__ERROR, "Failed to update next free time of lines in container %u: %s", containerID, err.c_str());
+}
+
+void FactoryDB::GetActiveJobsInContainer(uint32 containerID, std::vector<EvERam::JobProperties>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT job.jobID FROM ramJobs AS job"
+        " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+        " WHERE line.containerID = %u AND job.completedStatusID = 0",
+        containerID))
+    {
+        _log(DATABASE__ERROR, "Failed to query jobs in container %u: %s", containerID, res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        EvERam::JobProperties data = EvERam::JobProperties();
+        if (GetJobProperties(row.GetUInt(0), data))
+            into.push_back(data);
+    }
+}
+
+bool FactoryDB::UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConfig& data)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "UPDATE ramAssemblyLines SET"
+        " UIGroupingID = 0, costInstall = %f, costPerHour = %f, restrictionMask = %u,"
+        " discountPerGoodStandingPoint = %f, surchargePerBadStandingPoint = %f, minimumStanding = %f,"
+        " minimumCharSecurity = %f, minimumCorpSecurity = %f, maximumCharSecurity = %f, maximumCorpSecurity = %f"
+        " WHERE assemblyLineID = %u",
+        data.costInstall, data.costPerHour, data.restrictionMask,
+        data.discountPerGoodStandingPoint, data.surchargePerBadStandingPoint, data.minimumStanding,
+        data.minimumCharSecurity, data.minimumCorpSecurity, data.maximumCharSecurity, data.maximumCorpSecurity,
+        assemblyLineID))
+    {
+        _log(DATABASE__ERROR, "Failed to update assembly line %u: %s", assemblyLineID, err.c_str());
+        return false;
+    }
+    return true;
 }

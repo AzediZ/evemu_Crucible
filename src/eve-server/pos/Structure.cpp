@@ -34,7 +34,9 @@
 #include "pos/sovStructures/SBU.h"
 #include "pos/sovStructures/IHub.h"
 #include "pos/JumpBridge.h"
+#include "pos/Array.h"
 #include "pos/Structure.h"
+#include "manufacturing/RamMethods.h"
 #include "system/Container.h"
 #include "system/Damage.h"
 #include "system/SystemManager.h"
@@ -752,6 +754,10 @@ void StructureSE::PullAnchor()
 {
     if (m_data.state > EVEPOS::StructureState::Anchored)
         return; // make error here?
+
+    // R.A.M. jobs of assembly arrays and labs end; their items go back into the structure
+    if (IsArraySE() and GetArraySE()->IsRamInstallation())
+        sRamMthd.TerminateStructureJobs(m_data.itemID, EvERam::Status::Unanchor);
 
     /** @todo  check for other modules changing state...only allow one at a time */
 

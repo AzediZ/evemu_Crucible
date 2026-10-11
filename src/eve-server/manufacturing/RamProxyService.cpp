@@ -169,8 +169,13 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     if (args.activityID == EvERam::Activity::Invention)
         args.runs = 1;
 
+    // POS arrays and labs must be in this system and online
+    bool structureLine(sRamMthd.IsStructureLine(args.lineContainerID));
+    if (structureLine)
+        sRamMthd.StructureCheck(pClient, args.lineContainerID);
+
     // check assy line activity
-    sRamMthd.ActivityCheck(pClient, args, installedItem);
+    sRamMthd.ActivityCheck(pClient, args, installedItem, structureLine);
     BlueprintRef bpRef = BlueprintRef::StaticCast(installedItem);
 
     // check permissions
@@ -188,13 +193,40 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     /* decode the bill of materials location and decide where the results go
      *  personal jobs:  [[locationID, charID, flag]]  or [[flagNone]] when no materials are needed
      *  corp jobs in stations:  [[stationID, ownerStation, 0], [officeFolderID, corpID, flagHangar], [officeID, corpID, flag]]
+     *  corp jobs in structures:  [[structureID, corpID, flag]]  (everything stays in the structure's hangar divisions)
      */
     PathElement bomLocPath;
     bomLocPath.locationID = 0;
     bomLocPath.ownerID = ownerID;
     bomLocPath.flagID = flagNone;
     uint32 outputLocationID(args.lineContainerID);
-    if (args.isCorpJob) {
+    if (structureLine) {
+        uint32 structureID(args.lineContainerID);
+        // check bp location access
+        sRamMthd.HangarRolesCheck(pClient, structureID, installedItem->flag());
+
+        if (args.bomLocPath->size() > 0) {
+            PyRep* pRep(args.bomLocPath->GetItem(args.bomLocPath->size() - 1));
+            if ((pRep != nullptr) and pRep->IsList() and (pRep->AsList()->size() == 3)) {
+                PathElement bomPath;
+                if (!bomPath.Decode(pRep)) {
+                    _log(SERVICE__ERROR, "Failed to decode structure BOM path.");
+                    return nullptr;
+                }
+                if ((uint32)bomPath.locationID != structureID)
+                    throw UserError ("RamInstalledItemMustBeInInstallation");
+                if (!IsHangarFlag(bomPath.flagID))
+                    throw UserError ("RamInstalledItemInStructureNotInContainer");
+                sRamMthd.HangarRolesCheck(pClient, structureID, bomPath.flagID);
+                bomLocPath.locationID   = structureID;
+                bomLocPath.flagID       = bomPath.flagID;
+            }
+        }
+
+        outputLocationID = structureID;
+        if (!IsHangarFlag(args.outputFlag))
+            args.outputFlag = flagHangar;
+    } else if (args.isCorpJob) {
         uint32 stationID(args.lineContainerID);
         uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID, ownerID));
         if (officeID == 0)
@@ -302,8 +334,13 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
 
     // job location data
     uint32 locationID(args.lineContainerID), solarSystemID(pClient->GetSystemID());
-    if (sDataMgr.IsStation(locationID))
+    if (sDataMgr.IsStation(locationID)) {
         solarSystemID = sDataMgr.GetStationSystem(locationID);
+    } else if (structureLine) {
+        InventoryItemRef sRef(sItemFactory.GetItemRef(locationID));
+        if (sRef.get() != nullptr)
+            solarSystemID = sRef->locationID();
+    }
 
     // the quote the client authorized must still be good.  the client's figure is never charged
     double cost(rsp.cost);
@@ -638,8 +675,70 @@ PyResult RamProxyService::UpdateAssemblyLineConfigurations(PyCallArgs &call, PyR
     _log(MANUF__DUMP, "RamProxyService::Handle_UpdateAssemblyLineConfigurations() - size=%lli", call.tuple->size());
     call.Dump(MANUF__DUMP);
 
-    //RamConfigAssemblyLinesAccessDenied
-    //RamConfigAssemblyLinesInsuficientAccess
+    /* installationLocationData = [[locationID, locationGroupID], path, [containerID]]
+     * rowset = dbutil.CRowset of the AssemblyLinesGet rows with the new settings  */
+    uint32 containerID(0);
+    if ((installationLocationData != nullptr) and installationLocationData->IsList()) {
+        PyList* list(installationLocationData->AsList());
+        if ((list->size() > 2) and list->GetItem(2)->IsList() and (list->GetItem(2)->AsList()->size() > 0))
+            containerID = PyRep::IntegerValueU32(list->GetItem(2)->AsList()->GetItem(0));
+    }
+    if (containerID == 0) {
+        _log(SERVICE__ERROR, "%s: Failed to decode installation of UpdateAssemblyLineConfigurations.", GetName());
+        return PyStatic.NewNone();
+    }
 
-    return nullptr;
+    // the client asks for the station manager role
+    int64 roles(call.client->GetCorpRole());
+    if (((roles & Corp::Role::Director) != Corp::Role::Director)
+    and ((roles & Corp::Role::StationManager) != Corp::Role::StationManager))
+        throw UserError ("RamConfigAssemblyLinesInsuficientAccess");
+
+    if ((rowset == nullptr) or !rowset->IsObjectEx()) {
+        _log(SERVICE__ERROR, "%s: UpdateAssemblyLineConfigurations rowset is not a CRowset.", GetName());
+        return PyStatic.NewNone();
+    }
+
+    uint32 corpID(call.client->GetCorporationID());
+    PyList& rows(rowset->AsObjectEx()->list());
+    std::vector<std::pair<uint32, EvERam::LineConfig>> updates;
+    for (PyList::const_iterator itr = rows.begin(); itr != rows.end(); ++itr) {
+        if (!(*itr)->IsPackedRow())
+            continue;
+        PyPackedRow* row((*itr)->AsPackedRow());
+        DBRowDescriptor* header(row->header());
+        uint32 count(header->ColumnCount());
+        auto field = [&](const char* name) -> PyRep* {
+            uint32 idx(header->FindColumn(name));
+            return (idx < count ? row->GetField(idx) : nullptr);
+        };
+
+        uint32 lineID(PyRep::IntegerValueU32(field("assemblyLineID")));
+        EvERam::LineRestrictions line = EvERam::LineRestrictions();
+        if ((lineID == 0) or !FactoryDB::GetAssemblyLineRestrictions(lineID, line))
+            throw UserError ("RamConfigAssemblyLinesAccessDenied");
+        // only lines of the client's corp in this installation
+        if ((line.ownerID != corpID) or (line.containerID != containerID))
+            throw UserError ("RamConfigAssemblyLinesAccessDenied");
+
+        EvERam::LineConfig data = EvERam::LineConfig();
+        data.restrictionMask                = PyRep::IntegerValueU32(field("restrictionMask")) & 15;
+        data.costInstall                    = EvE::max(PyRep::FloatValue(field("costInstall")), 0.0);
+        data.costPerHour                    = EvE::max(PyRep::FloatValue(field("costPerHour")), 0.0);
+        data.discountPerGoodStandingPoint   = EvE::min(EvE::max(PyRep::FloatValue(field("discountPerGoodStandingPoint")), 0.0), 10.0);
+        data.surchargePerBadStandingPoint   = EvE::min(EvE::max(PyRep::FloatValue(field("surchargePerBadStandingPoint")), 0.0), 10.0);
+        data.minimumStanding                = EvE::min(EvE::max(PyRep::FloatValue(field("minimumStanding")), -10.0), 10.0);
+        data.minimumCharSecurity            = EvE::min(EvE::max(PyRep::FloatValue(field("minimumCharSecurity")), -10.0), 10.0);
+        data.maximumCharSecurity            = EvE::min(EvE::max(PyRep::FloatValue(field("maximumCharSecurity")), -10.0), 10.0);
+        data.minimumCorpSecurity            = EvE::min(EvE::max(PyRep::FloatValue(field("minimumCorpSecurity")), -10.0), 10.0);
+        data.maximumCorpSecurity            = EvE::min(EvE::max(PyRep::FloatValue(field("maximumCorpSecurity")), -10.0), 10.0);
+        updates.push_back(std::make_pair(lineID, data));
+    }
+
+    // nothing is changed unless every line passed
+    for (auto cur : updates)
+        FactoryDB::UpdateAssemblyLine(cur.first, cur.second);
+
+    _log(MANUF__INFO, "%s(%u) updated %lu assembly lines in %u.", call.client->GetName(), call.client->GetCharacterID(), updates.size(), containerID);
+    return PyStatic.NewNone();
 }

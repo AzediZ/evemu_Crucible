@@ -31,6 +31,14 @@ public:
     void ItemOwnerCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef iRef);
     void ItemLocationCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef installedItem);
 
+    /* structure (POS) installations:  assembly arrays and mobile laboratories */
+    // the container is an assembly array or mobile laboratory (not a station)
+    bool IsStructureLine(uint32 containerID);
+    // the structure must be in space, in the client's solar system and online (throws)
+    void StructureCheck(Client* const pClient, uint32 containerID);
+    // ends the jobs of a structure that is unanchored (items go back into the structure) or destroyed (items are lost)
+    void TerminateStructureJobs(uint32 containerID, int8 status);
+
     // corp roles the client holds at locationID (hq, base or other, with rolesAtAll).  directors hold every role
     int64 GetLocationRoles(Client* const pClient, uint32 locationID);
     // verify the take role of a corp hangar division at locationID (station or structure)
