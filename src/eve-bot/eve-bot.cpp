@@ -12,9 +12,13 @@
  *   assemble <shipItemID>             assemble a ship in the station hangar
  *   board <shipItemID>                make that (docked) ship the active ship
  *   movetobay <shipID> <itemID> <qty>  move a stack from the hangar into that docked ship's drone bay
+ *   moveto <shipID> <itemID> <qty> <flag>  the same into any hold or slot (5 cargo, 27-34 high slots)
  *   undock                            undock the active ship and wait for the ballpark
  *   stop                              stop the ship
  *   lock <targetID>                   lock a target (drones only engage targets you have locked)
+ *   dogma <method> [args...]          a call on the dogma location manager (in space).  args: whole numbers are
+ *                                     ints, other numbers floats, u:text is a unicode string, [1,2,3] a list of
+ *                                     ints, none is None.  e.g. dogma LinkWeapons $ship $launcher1 $launcher2
  *   launch <itemID> <qty>             launch drones from the drone bay (one Drop call, like dragging a stack)
  *   drones <command> [targetID]       entity command on every drone we have in space:
  *                                     engage, returnhome, returnbay, abandon, reconnect
@@ -734,7 +738,7 @@ int main(int argc, char* argv[]) {
         if (eq != std::string::npos)
             vars[a.substr(0, eq)] = a.substr(eq + 1);
     }
-    std::string ship, oidShip, oidEntity, oidBeyonce, last;
+    std::string ship, oidShip, oidEntity, oidBeyonce, oidDogma, last;
     std::string line;
     while (std::getline(script, line)) {
         size_t hash = line.find('#');
@@ -849,8 +853,12 @@ int main(int argc, char* argv[]) {
                 ship = w[1];
             }
             bot.Pump(1);
-        } else if (cmd == "movetobay") {
-            // movetobay <shipID> <itemID> <qty>
+        } else if ((cmd == "movetobay") or (cmd == "moveto")) {
+            // movetobay <shipID> <itemID> <qty>   (drone bay)
+            // moveto <shipID> <itemID> <qty> <flag>   (any hold or slot: 5 cargo, 27-34 high slots...)
+            int32 flag(87);
+            if ((cmd == "moveto") and (w.size() > 4))
+                flag = std::atoi(w[4].c_str());
             int64 shipID = std::atoll(w[1].c_str());
             w.erase(w.begin() + 1);
             PyTuple* bp = new PyTuple(2);
@@ -866,7 +874,7 @@ int main(int argc, char* argv[]) {
             args->SetItem(0, new PyInt(std::atoi(w[1].c_str())));
             args->SetItem(1, new PyInt((int32)bot.Session("stationid")));
             PyDict* kw = new PyDict();
-            kw->SetItemString("flag", new PyInt(87));
+            kw->SetItemString("flag", new PyInt(flag));
             kw->SetItemString("qty", new PyInt(std::atoi(w[2].c_str())));
             bot.Call("", oidShipInv, "Add", args, kw);
             bot.Pump(0.5);
@@ -907,6 +915,39 @@ int main(int argc, char* argv[]) {
             bot.Call("beyonce", "", "GetFormations", new PyTuple(0));
         } else if (cmd == "stop") {
             bot.Call("", oidBeyonce, "CmdStop", new PyTuple(0));
+        } else if (cmd == "dogma") {
+            if (oidDogma.empty()) {
+                PyTuple* bp = new PyTuple(2);
+                bp->SetItem(0, new PyInt((int32)bot.Session("solarsystemid")));
+                bp->SetItem(1, new PyInt(5));
+                oidDogma = bot.Bind("dogmaIM", bp);
+            }
+            PyTuple* args = new PyTuple(w.size() - 2);
+            for (size_t i = 2; i < w.size(); ++i) {
+                const std::string& a = w[i];
+                PyRep* v(nullptr);
+                if (a == "none") {
+                    v = PyStatic.NewNone();
+                } else if (a.compare(0, 2, "u:") == 0) {
+                    v = new PyWString(a.substr(2));
+                } else if ((a.size() >= 2) and (a.front() == '[') and (a.back() == ']')) {
+                    PyList* list = new PyList();
+                    std::stringstream ss(a.substr(1, a.size() - 2));
+                    std::string item;
+                    while (std::getline(ss, item, ','))
+                        if (!item.empty())
+                            list->AddItem(new PyInt(std::atoi(item.c_str())));
+                    v = list;
+                } else if (a.find_first_not_of("-0123456789") == std::string::npos) {
+                    v = new PyInt(std::atoi(a.c_str()));
+                } else if (a.find_first_not_of("-0123456789.") == std::string::npos) {
+                    v = new PyFloat(std::atof(a.c_str()));
+                } else {
+                    v = new PyString(a);
+                }
+                args->SetItem(i - 2, v);
+            }
+            bot.Call("", oidDogma, w[1], args);
         } else if (cmd == "lock") {
             // dogma location manager for the solar system (groupID 5), as the client binds it in space
             PyTuple* bp = new PyTuple(2);
