@@ -17,7 +17,9 @@ Fix on top of Renn's movement:
 
 ## Drones
 
-Renn's drone implementation (player control of drones and fighters: engage, mine, return, guard, assist, abandon, reconnect and delegate). Drones only engage targets the pilot has locked, as in Crucible. These fixes are on top of it:
+Renn's drone implementation (player control of drones and fighters: engage, mine, return, guard, assist, abandon, reconnect and delegate). Drones only engage targets the pilot has locked, as in Crucible.
+
+We had written our own player drone and fighter control first, on 10 October 2026. It was built on EVEmu's old movement code. When we adopted Renn's movement rewrite, we switched to his drone implementation too, because it is built on the new movement. The two were written independently. These fixes are ours, on top of Renn's drones:
 
 - **Drones no longer vanish when they return to the bay.** A returning drone joined the stack of the same type in the bay. If every drone of that type had been launched, the only "stack" was the drone itself, and merging it into itself deleted it. This hit both Return to Drone Bay and Scoop to Drone Bay. The fix is in `InventoryItem::MergeTypesInCargo()`, so mining, probes and loot that use it are protected too.
 - **Light drones reach their orbit and the bay.** The client brakes hard within one second's travel of its goal, so a Warrior at 5 km/s crawled the last kilometre or two at a few m/s. Drones now fly at full speed while far away and step their speed down as they close in. Fast drones break orbit to chase only once well outside it.
