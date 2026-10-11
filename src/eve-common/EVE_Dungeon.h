@@ -19,7 +19,20 @@ namespace Dungeon {
             Anomaly         = 7, // non-rated dungeon that isnt required to scan with probes
             Unrated         = 8, // non-rated dungeon  no waves, possible escalation to complex
             Escalation      = 9, // new dungeon from previous site. very limited access
-            Rated           = 10 // DED rated dungeon
+            Rated           = 10,// DED rated dungeon
+            Incursion       = 11 // incursion site (server-only archetype)
+        };
+    }
+
+    // what a live dungeon instance is for (DungeonMgr::SpawnInstance)
+    namespace Kind {
+        enum {
+            Anomaly         = 1, // combat anomaly (scanner, no probes)
+            Signature       = 2, // probe-scanned site
+            Mission         = 3, // private agent mission site
+            Incursion       = 4, // incursion site
+            Escalation      = 5, // private escalation (journal only)
+            Test            = 6  // dungeon editor playtest
         };
     }
 
@@ -100,7 +113,9 @@ namespace Dungeon {
                 SupressAllRespawn = 42,
                 GrantGroupRewardLimitedRestrictions = 45,
                 OpenTutorial = 46,
-                SpawnShip = 47
+                SpawnShip = 47,
+                // server-only: roll this dungeon's escalations for the triggering character
+                Escalate = 100
             };
         }
     }
@@ -145,21 +160,13 @@ namespace Dungeon {
             FacWarLoyaltyPointsGranted = 48
         };
     }
-    /* POD structure entries for dungeon data */
-
-
-
-    // These structures are for dungeons which are not yet spawned (managed by dunDataMgr)
-    
-    // Tags for dungeon multi-index container
-    struct DungeonsByID {};
-    struct DungeonsByArchetype {};
+    /* POD structure entries for dungeon data (static, managed by DungeonDataMgr) */
 
     struct RoomObject {
         uint32 objectID;
         uint32 roomID;
-        uint16 typeID;
-        uint16 groupID;
+        uint32 typeID;
+        uint32 groupID;     // dungeon editor group (dunGroups), not invGroups
         double x;
         double y;
         double z;
@@ -169,13 +176,106 @@ namespace Dungeon {
         double radius;
     };
 
+    // one group of npcs (a wave) in a room
+    struct SpawnGroupDef {
+        uint32 spawnGroupID;
+        uint32 roomID;
+        uint8 waveNumber;
+        uint8 spawnMode;        // SpawnMode::*
+        uint8 npcClassType;     // npcSpawnClass.type (0 = types list)
+        uint8 npcClassSub;      // npcSpawnClass.sub
+        uint32 factionID;       // 0 = instance faction
+        double x;
+        double y;
+        double z;
+        double spread;
+        bool warpIn;
+        bool isOverseer;
+        uint32 lootGroupID;
+        std::vector<std::pair<uint32, uint32>> types;   // typeID, quantity
+    };
+    namespace SpawnMode {
+        enum {
+            RoomCreated     = 0,
+            RoomEntered     = 1,
+            TriggerOnly     = 2
+        };
+    }
+
+    struct EventDef {
+        uint32 eventID;
+        uint32 triggerID;
+        int32 sequence;
+        uint16 eventType;       // Event::Trigger::*
+        uint32 delaySeconds;
+        uint32 spawnGroupID;
+        uint32 objectID;
+        uint8 messageType;      // Event::Msg::*
+        uint32 messageID;
+        std::string messageText;
+        uint32 typeID;
+        int32 quantity;
+        double value;
+        uint32 counterID;
+    };
+
+    struct TriggerDef {
+        uint32 triggerID;
+        uint32 roomID;
+        uint16 triggerType;     // Trigger::*
+        uint32 spawnGroupID;    // source group
+        uint32 objectID;        // source object
+        double value;
+        uint32 counterID;
+        bool repeatable;
+        std::vector<EventDef> events;   // sorted by sequence
+    };
+
+    struct GateDef {
+        uint32 objectID;
+        uint32 destRoomID;      // 0 = next room
+        bool locked;
+        bool requireClear;
+        uint32 keyTypeID;
+        uint32 keyQuantity;
+        bool keyConsumed;
+        uint32 skillTypeID;
+        uint8 skillLevel;
+        std::vector<uint32> allowedGroups;
+        std::vector<uint32> deniedGroups;
+        std::string musicUrl;
+    };
+
+    struct LootEntry {
+        uint32 typeID;
+        uint32 minQty;
+        uint32 maxQty;
+        double chance;
+    };
+
+    struct EscalationDef {
+        uint32 escalationID;
+        uint32 srcDungeonID;
+        uint8 srcArchetypeID;
+        uint8 srcMinDifficulty;
+        uint32 destDungeonID;
+        uint8 destArchetypeID;
+        int8 destDifficultyDelta;
+        double chance;
+        uint8 minJumps;
+        uint8 maxJumps;
+        bool lowerSecOnly;
+        uint32 expiryHours;
+        uint32 journalMessageID;
+    };
+
     struct Room {
-        uint16 roomID;
+        uint32 roomID;
         std::string roomName;
+        GPoint arrival;                         // acceleration gate arrival point, relative to the room origin
         std::vector<RoomObject> objects;
-        int16 x;
-        int16 y;
-        int16 z;
+        std::vector<SpawnGroupDef> groups;
+        std::vector<TriggerDef> triggers;
     };
 
     struct Dungeon {
@@ -184,18 +284,15 @@ namespace Dungeon {
         uint8 status;
         uint32 factionID;
         uint8 archetypeID;
-        std::map<uint16, Room> rooms;
-    };
-
-    // These structures are used for dungeons which are actually spawned in space
-    struct LiveRoom {
-        GPoint position;
-        std::vector<uint32> items;
-    };
-    struct LiveDungeon {
-        uint32 systemID;
-        uint32 anomalyID;
-        std::map<uint16, LiveRoom> rooms;
+        uint32 nameID;                          // client localization messageID of the name (0 = none)
+        uint8 difficulty;
+        float minSec;
+        float maxSec;
+        uint32 weight;
+        uint32 lifetimeHours;
+        bool hasCompletionEvent;                // some trigger completes the dungeon (else: all groups destroyed)
+        std::vector<uint32> roomOrder;          // roomIDs ascending.  index 0 is the entry room
+        std::map<uint32, Room> rooms;
     };
 }
 

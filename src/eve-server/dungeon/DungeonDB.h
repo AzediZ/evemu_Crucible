@@ -40,6 +40,18 @@ public:
     static void DeleteTemplate(uint32 templateID);
     static uint32 CreateTemplate(std::string templateName, std::string templateDescription, uint32 roomID);
 
+    // dungeon engine static data, for DungeonDataMgr.  dungeonID 0 = all dungeons
+    static void GetDungeonRows(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetRoomRows(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetObjectRows(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetSpawnGroups(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetSpawnGroupTypes(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetTriggers(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetTriggerEvents(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetGates(DBQueryResult& res, uint32 dungeonID = 0);
+    static void GetLoot(DBQueryResult& res);
+    static void GetEscalations(DBQueryResult& res);
+
 protected:
 
 private:

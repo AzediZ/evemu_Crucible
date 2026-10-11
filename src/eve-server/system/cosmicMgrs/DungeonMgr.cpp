@@ -29,15 +29,49 @@ Multi-room dungeons have each room with acceleration gate pointing to next room 
 
 
 DungeonDataMgr::DungeonDataMgr()
-    : m_dungeonID(0)
 {
     m_dungeons.clear();
 }
 
 int DungeonDataMgr::Initialize()
 {
+    double start = GetTimeMSeconds();
     // Loads all dungeons from database upon server initialisation
-    Populate();
+    Load(0);
+
+    DBQueryResult res;
+    DBResultRow row;
+    DungeonDB::GetLoot(res);
+    while (res.GetRow(row)) {
+        Dungeon::LootEntry entry = Dungeon::LootEntry();
+            entry.typeID = row.GetUInt(1);
+            entry.minQty = row.GetUInt(2);
+            entry.maxQty = row.GetUInt(3);
+            entry.chance = row.GetDouble(4);
+        m_loot.emplace(row.GetUInt(0), entry);
+    }
+
+    DungeonDB::GetEscalations(res);
+    while (res.GetRow(row)) {
+        Dungeon::EscalationDef esc = Dungeon::EscalationDef();
+            esc.escalationID = row.GetUInt(0);
+            esc.srcDungeonID = row.GetUInt(1);
+            esc.srcArchetypeID = row.GetUInt(2);
+            esc.srcMinDifficulty = row.GetUInt(3);
+            esc.destDungeonID = row.GetUInt(4);
+            esc.destArchetypeID = row.GetUInt(5);
+            esc.destDifficultyDelta = row.GetInt(6);
+            esc.chance = row.GetDouble(7);
+            esc.minJumps = row.GetUInt(8);
+            esc.maxJumps = row.GetUInt(9);
+            esc.lowerSecOnly = row.GetBool(10);
+            esc.expiryHours = row.GetUInt(11);
+            esc.journalMessageID = row.GetUInt(12);
+        m_escalations.push_back(esc);
+    }
+
+    sLog.Cyan("       DunDataMgr", "%lu dungeons, %lu gates, %lu loot entries and %lu escalation rules loaded in %.3fms.",
+              m_dungeons.size(), m_gates.size(), m_loot.size(), m_escalations.size(), (GetTimeMSeconds() - start));
     sLog.Blue("       DunDataMgr", "Dungeon Data Manager Initialized.");
     return 1;
 }
@@ -45,180 +79,370 @@ int DungeonDataMgr::Initialize()
 void DungeonDataMgr::UpdateDungeon(uint32 dungeonID)
 {
     _log(DUNG__INFO, "UpdateDungeon() - Updating dungeon %u's object in DataMgr...", dungeonID);
-    // Get dungeon from DB by dungeonID
-    DBQueryResult *res = new DBQueryResult();
-    DBResultRow row;
-    DungeonDB::GetAllDungeonDataByDungeonID(*res, dungeonID);
+    Load(dungeonID);
+}
 
-    // Multi-index view by dungeonID
-    auto &byDungeonID = m_dungeons.get<Dungeon::DungeonsByID>();
-
-    // Update a dungeon's in-memory object
-    auto it = byDungeonID.find(dungeonID);
-    if (it != byDungeonID.end()) {
-        // Dungeon already exists, update in-memory object
-        byDungeonID.erase(dungeonID);
-
-        if (res->GetRowCount() > 0) {
-            while (res->GetRow(row))
-            {
-                CreateDungeon(row);
-                FillObject(row);
-            }
-        } else {
-            _log(DUNG__ERROR, "UpdateDungeon() - Failed to find dungeon %u in database. This should never happen.", dungeonID);
-        }
-
-    } else {
-        _log(DUNG__ERROR, "UpdateDungeon() - Failed to find dungeon %u's object in DataMgr. This should never happen.", dungeonID);
+void DungeonDataMgr::ParseGroupList(const std::string& csv, std::vector<uint32>& into)
+{
+    std::stringstream ss(csv);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        int32 groupID = atoi(item.c_str());
+        if (groupID > 0)
+            into.push_back(groupID);
     }
-    SafeDelete(res);
+}
+
+void DungeonDataMgr::Load(uint32 dungeonID)
+{
+    // forget what we had (live instances keep their own copy through the shared pointer)
+    if (dungeonID == 0) {
+        m_dungeons.clear();
+        m_byArchetype.clear();
+        m_gateDungeon.clear();
+        m_gates.clear();
+    } else {
+        m_dungeons.erase(dungeonID);
+        for (auto itr = m_byArchetype.begin(); itr != m_byArchetype.end(); )
+            itr = ((itr->second == dungeonID) ? m_byArchetype.erase(itr) : ++itr);
+        for (auto itr = m_gateDungeon.begin(); itr != m_gateDungeon.end(); ) {
+            if (itr->second == dungeonID) {
+                m_gates.erase(itr->first);
+                itr = m_gateDungeon.erase(itr);
+            } else {
+                ++itr;
+            }
+        }
+    }
+
+    DBQueryResult res;
+    DBResultRow row;
+    DungeonDB::GetDungeonRows(res, dungeonID);
+    while (res.GetRow(row)) {
+        std::shared_ptr<Dungeon::Dungeon> dData(new Dungeon::Dungeon());
+            dData->dungeonID = row.GetUInt(0);
+            dData->name = row.GetText(1);
+            dData->status = row.GetUInt(2);
+            dData->factionID = row.GetUInt(3);
+            dData->archetypeID = row.GetUInt(4);
+            dData->nameID = row.GetUInt(5);
+            dData->difficulty = row.GetUInt(6);
+            dData->minSec = row.GetFloat(7);
+            dData->maxSec = row.GetFloat(8);
+            dData->weight = (row.GetInt(9) > 0 ? row.GetInt(9) : 0);
+            dData->lifetimeHours = row.GetUInt(10);
+            dData->hasCompletionEvent = false;
+        m_dungeons[dData->dungeonID] = dData;
+    }
+
+    // rooms (ascending roomID, room index 0 is the entry room)
+    std::map<uint32, Dungeon::Room*> rooms;
+    DungeonDB::GetRoomRows(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = m_dungeons.find(row.GetUInt(2));
+        if (itr == m_dungeons.end())
+            continue;
+        Dungeon::Room& room = itr->second->rooms[row.GetUInt(0)];
+            room.roomID = row.GetUInt(0);
+            room.roomName = row.GetText(1);
+            room.arrival = GPoint(row.GetDouble(3), row.GetDouble(4), row.GetDouble(5));
+        itr->second->roomOrder.push_back(room.roomID);
+        rooms[room.roomID] = &room;
+    }
+
+    DungeonDB::GetObjectRows(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = rooms.find(row.GetUInt(1));
+        if (itr == rooms.end())
+            continue;
+        Dungeon::RoomObject oData = Dungeon::RoomObject();
+            oData.objectID = row.GetUInt(0);
+            oData.roomID = row.GetUInt(1);
+            oData.typeID = row.GetUInt(2);
+            oData.groupID = row.GetUInt(3);
+            oData.x = row.GetDouble(4);
+            oData.y = row.GetDouble(5);
+            oData.z = row.GetDouble(6);
+            oData.yaw = row.GetDouble(7);
+            oData.pitch = row.GetDouble(8);
+            oData.roll = row.GetDouble(9);
+            oData.radius = row.GetDouble(10);
+        itr->second->objects.push_back(oData);
+    }
+
+    DungeonDB::GetSpawnGroups(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = rooms.find(row.GetUInt(1));
+        if (itr == rooms.end())
+            continue;
+        Dungeon::SpawnGroupDef group = Dungeon::SpawnGroupDef();
+            group.spawnGroupID = row.GetUInt(0);
+            group.roomID = row.GetUInt(1);
+            group.waveNumber = row.GetUInt(2);
+            group.spawnMode = row.GetUInt(3);
+            group.npcClassType = row.GetUInt(4);
+            group.npcClassSub = row.GetUInt(5);
+            group.factionID = row.GetUInt(6);
+            group.x = row.GetDouble(7);
+            group.y = row.GetDouble(8);
+            group.z = row.GetDouble(9);
+            group.spread = row.GetDouble(10);
+            group.warpIn = row.GetBool(11);
+            group.isOverseer = row.GetBool(12);
+            group.lootGroupID = row.GetUInt(13);
+        itr->second->groups.push_back(group);
+    }
+    // the group vectors are complete now, so pointers into them stay valid
+    std::map<uint32, Dungeon::SpawnGroupDef*> groups;
+    for (auto& cur : rooms)
+        for (auto& group : cur.second->groups)
+            groups[group.spawnGroupID] = &group;
+
+    DungeonDB::GetSpawnGroupTypes(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = groups.find(row.GetUInt(0));
+        if (itr == groups.end())
+            continue;
+        itr->second->types.emplace_back(row.GetUInt(1), (row.GetInt(2) > 0 ? row.GetInt(2) : 1));
+    }
+
+    DungeonDB::GetTriggers(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = rooms.find(row.GetUInt(1));
+        if (itr == rooms.end())
+            continue;
+        Dungeon::TriggerDef trigger = Dungeon::TriggerDef();
+            trigger.triggerID = row.GetUInt(0);
+            trigger.roomID = row.GetUInt(1);
+            trigger.triggerType = row.GetUInt(2);
+            trigger.spawnGroupID = row.GetUInt(3);
+            trigger.objectID = row.GetUInt(4);
+            trigger.value = row.GetDouble(5);
+            trigger.counterID = row.GetUInt(6);
+            trigger.repeatable = row.GetBool(7);
+        itr->second->triggers.push_back(trigger);
+    }
+    std::map<uint32, Dungeon::TriggerDef*> triggers;
+    for (auto& cur : rooms)
+        for (auto& trigger : cur.second->triggers)
+            triggers[trigger.triggerID] = &trigger;
+
+    // events come sorted by trigger and sequence
+    DungeonDB::GetTriggerEvents(res, dungeonID);
+    while (res.GetRow(row)) {
+        auto itr = triggers.find(row.GetUInt(1));
+        if (itr == triggers.end())
+            continue;
+        Dungeon::EventDef event = Dungeon::EventDef();
+            event.eventID = row.GetUInt(0);
+            event.triggerID = row.GetUInt(1);
+            event.sequence = row.GetInt(2);
+            event.eventType = row.GetUInt(3);
+            event.delaySeconds = (row.GetInt(4) > 0 ? row.GetInt(4) : 0);
+            event.spawnGroupID = row.GetUInt(5);
+            event.objectID = row.GetUInt(6);
+            event.messageType = row.GetUInt(7);
+            event.messageID = row.GetUInt(8);
+            event.messageText = row.GetText(9);
+            event.typeID = row.GetUInt(10);
+            event.quantity = row.GetInt(11);
+            event.value = row.GetDouble(12);
+            event.counterID = row.GetUInt(13);
+        itr->second->events.push_back(event);
+    }
+
+    DungeonDB::GetGates(res, dungeonID);
+    while (res.GetRow(row)) {
+        Dungeon::GateDef gate = Dungeon::GateDef();
+            gate.objectID = row.GetUInt(0);
+            gate.destRoomID = row.GetUInt(1);
+            gate.locked = row.GetBool(2);
+            gate.requireClear = row.GetBool(3);
+            gate.keyTypeID = row.GetUInt(4);
+            gate.keyQuantity = (row.GetInt(5) > 0 ? row.GetInt(5) : 1);
+            gate.keyConsumed = row.GetBool(6);
+            gate.skillTypeID = row.GetUInt(7);
+            gate.skillLevel = row.GetUInt(8);
+            ParseGroupList(row.GetText(9), gate.allowedGroups);
+            ParseGroupList(row.GetText(10), gate.deniedGroups);
+            gate.musicUrl = row.GetText(11);
+        m_gates[gate.objectID] = gate;
+    }
+
+    // per-dungeon bookkeeping
+    for (auto& cur : m_dungeons) {
+        if ((dungeonID != 0) and (cur.first != dungeonID))
+            continue;
+        m_byArchetype.emplace(cur.second->archetypeID, cur.first);
+        for (auto& room : cur.second->rooms) {
+            for (auto& object : room.second.objects)
+                if (m_gates.find(object.objectID) != m_gates.end())
+                    m_gateDungeon[object.objectID] = cur.first;
+            for (auto& trigger : room.second.triggers)
+                for (auto& event : trigger.events)
+                    if (event.eventType == Dungeon::Event::Trigger::DungeonCompletion)
+                        cur.second->hasCompletionEvent = true;
+        }
+    }
+
+    _log(DUNG__INFO, "DungeonDataMgr::Load(%u) - %lu dungeons loaded.", dungeonID, m_dungeons.size());
 }
 
 void DungeonDataMgr::GetRandomDungeon(Dungeon::Dungeon& dungeon, uint8 archetype) {
-    // Get the index for the archetype ID
-    auto& archetypeIndex = m_dungeons.get<Dungeon::DungeonsByArchetype>();
-    // Get the range of all dungeons with the specified archetype ID
-    auto range = archetypeIndex.equal_range(archetype);
-    // Calculate the number of dungeons in the range
+    auto range = m_byArchetype.equal_range(archetype);
     uint32 count = std::distance(range.first, range.second);
     // If there are no dungeons with the specified archetype, return an empty dungeon
     if (count == 0) {
-        dungeon.dungeonID = 0;
-        dungeon.rooms.clear();
+        dungeon = Dungeon::Dungeon();
         _log(DUNG__WARNING, "GetRandomDungeon() - no dungeon with archetype %u", archetype);
         return;
     }
-    // Generate a random number within the range of the number of dungeons
-    uint32 randomIndex = rand() % count;
-    // Get the iterator to the random dungeon
     auto it = range.first;
-    std::advance(it, randomIndex);
-    // Assign the selected dungeon to the output parameter
-    dungeon = *it;
+    std::advance(it, MakeRandomInt(0, count - 1));
+    GetDungeon(dungeon, it->second);
 }
 
 void DungeonDataMgr::GetDungeon(Dungeon::Dungeon& dungeon, uint32 dungeonID) {
-    // Multi-index view by dungeonID
-    auto &byDungeonID = m_dungeons.get<Dungeon::DungeonsByID>();
-
-    auto it = byDungeonID.find(dungeonID);
-        if (it != byDungeonID.end())
-        {
-            dungeon = *it;
-        } else {
-            dungeon.dungeonID = 0;
-            dungeon.rooms.clear();
-            _log(DUNG__ERROR, "GetDungeon() - Failed to find dungeon with id %u", dungeonID);
-        }
-}
-
-void DungeonDataMgr::Populate()
-{
-    // Populate dungeon datasets from DB
-    double start = GetTimeMSeconds();
-    DBQueryResult *res = new DBQueryResult();
-    DBResultRow row;
-
-    // Multi-index view by dungeonID
-    auto &byDungeonID = m_dungeons.get<Dungeon::DungeonsByID>();
-
-    DungeonDB::GetAllDungeonData(*res);
-    while (res->GetRow(row))
-    {
-        CreateDungeon(row);
-        FillObject(row);
-    }
-
-    sLog.Cyan("       DunDataMgr", "%lu Dungeon data sets loaded in %.3fms.",
-              byDungeonID.size(), (GetTimeMSeconds() - start));
-
-    //cleanup
-    SafeDelete(res);
-}
-
-void DungeonDataMgr::CreateDungeon(DBResultRow row) {
-    // Multi-index view by dungeonID
-    auto &byDungeonID = m_dungeons.get<Dungeon::DungeonsByID>();
-
-    // Check if dungeon already exists for this object
-    auto it = byDungeonID.find(row.GetUInt(0));
-    if (it != byDungeonID.end()) {
-        Dungeon::Dungeon dData = *it;
-        // Check if room already exists for this object
-        if (dData.rooms.find(row.GetUInt(5)) == dData.rooms.end()) {
-            // Create new room
-            Dungeon::Room rData;
-            rData.roomID = row.GetUInt(5);
-            dData.rooms.insert({rData.roomID, rData});
-
-            // Replace record in container
-            byDungeonID.erase(dData.dungeonID);
-            byDungeonID.insert(dData);
-        }
+    auto it = m_dungeons.find(dungeonID);
+    if (it != m_dungeons.end()) {
+        dungeon = *it->second;
     } else {
-        // Create dungeon and room
-        Dungeon::Dungeon dData;
-        Dungeon::Room rData;
-        rData.roomID = row.GetUInt(5);
-        dData.rooms.insert({rData.roomID, rData});
-        dData.dungeonID = row.GetUInt(0);
-        byDungeonID.insert(dData);
+        dungeon = Dungeon::Dungeon();
+        _log(DUNG__ERROR, "GetDungeon() - Failed to find dungeon with id %u", dungeonID);
     }
 }
 
-void DungeonDataMgr::FillObject(DBResultRow row) {
-    /*    if (!sDatabase.RunQuery(res, "SELECT dunDungeons.dungeonID "
-    "dungeonName, dungeonStatus, factionID, archetypeID, "
-    "dunRooms.roomID, dunRooms.roomName, objectID, typeID, groupID, "
-    "x, y, z, yaw, pitch, roll, radius "
-    "FROM ((dunDungeons "
-    "INNER JOIN dunRooms ON dunDungeons.dungeonID = dunRooms.dungeonID) "
-    "INNER JOIN dunRoomObjects ON dunRooms.roomID = dunRoomObjects.roomID)"))*/
+std::shared_ptr<const Dungeon::Dungeon> DungeonDataMgr::GetDungeon(uint32 dungeonID)
+{
+    auto it = m_dungeons.find(dungeonID);
+    if (it != m_dungeons.end())
+        return it->second;
+    return nullptr;
+}
 
-    // Multi-index view used for inserting
-    auto &byDungeonID = m_dungeons.get<Dungeon::DungeonsByID>();
-
-    auto it = byDungeonID.find(row.GetUInt(0));
-    if (it != byDungeonID.end()) {
-        Dungeon::Dungeon dData = *it;
-
-        // Populate all data for the dungeon and room
-        dData.name = row.GetText(1);
-        dData.status = row.GetUInt(2);
-        dData.factionID = row.GetUInt(3);
-        dData.archetypeID = row.GetUInt(4);
-        dData.rooms[row.GetUInt(5)].roomID = row.GetUInt(5);
-        dData.rooms[row.GetUInt(5)].roomName = row.GetText(6);
-
-        // a room without objects (LEFT JOIN)
-        if (row.IsNull(7)) {
-            byDungeonID.erase(dData.dungeonID);
-            byDungeonID.insert(dData);
-            return;
+uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty/*0*/)
+{
+    std::vector<std::pair<uint32, double>> exact, generic;
+    auto range = m_byArchetype.equal_range(archetype);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        auto dItr = m_dungeons.find(itr->second);
+        if (dItr == m_dungeons.end())
+            continue;
+        const Dungeon::Dungeon& dun = *dItr->second;
+        if ((dun.weight == 0) or dun.rooms.empty())
+            continue;
+        if ((trueSec < dun.minSec) or (trueSec > dun.maxSec))
+            continue;
+        if (dun.difficulty < minDifficulty)
+            continue;
+        double weight(dun.weight);
+        if (trueSec < 0.0f) {
+            // null sec bands (CCP Greyscale, Mar 2011):  the hard sites concentrate in the low true sec systems
+            if (dun.difficulty >= 4) {
+                weight *= (1.0 + 4.0 * -trueSec);
+            } else if ((dun.difficulty > 0) and (dun.difficulty <= 2)) {
+                weight *= (1.0 + 4.0 * (1.0 + trueSec));
+            }
         }
-
-        // Add the object to the room
-        Dungeon::RoomObject oData;
-        oData.objectID = row.GetUInt(7);
-        oData.typeID = row.GetUInt(8);
-        oData.groupID = row.GetUInt(9);
-        oData.x = row.GetInt(10);
-        oData.y = row.GetInt(11);
-        oData.z = row.GetInt(12);
-        oData.yaw = row.GetInt(13);
-        oData.pitch = row.GetInt(14);
-        oData.roll = row.GetInt(15);
-        oData.radius = row.GetInt(16);
-        dData.rooms[row.GetUInt(5)].objects.push_back(oData);
-
-        // Replace item in container
-        byDungeonID.erase(dData.dungeonID);
-        byDungeonID.insert(dData);
-    } 
-    else {
-        _log(DUNG__ERROR, "FillObject() - Failed to find dungeon %u's object in DataMgr. This should never happen.", row.GetUInt(0));
+        if ((factionID == 0) or (dun.factionID == factionID)) {
+            exact.emplace_back(dun.dungeonID, weight);
+        } else if (dun.factionID == 0) {
+            generic.emplace_back(dun.dungeonID, weight);
+        }
     }
+
+    std::vector<std::pair<uint32, double>>& list = (exact.empty() ? generic : exact);
+    double total(0.0);
+    for (auto& cur : list)
+        total += cur.second;
+    if (total <= 0.0)
+        return 0;
+    double roll(MakeRandomFloat(0.0, total));
+    for (auto& cur : list) {
+        if (roll < cur.second)
+            return cur.first;
+        roll -= cur.second;
+    }
+    return list.back().first;
+}
+
+const Dungeon::GateDef* DungeonDataMgr::GetGate(uint32 objectID)
+{
+    auto itr = m_gates.find(objectID);
+    if (itr == m_gates.end())
+        return nullptr;
+    return &itr->second;
+}
+
+void DungeonDataMgr::GetLoot(uint32 lootGroupID, std::vector<Dungeon::LootEntry>& into)
+{
+    auto range = m_loot.equal_range(lootGroupID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
+}
+
+void DungeonDataMgr::GetEscalations(uint32 dungeonID, uint8 archetype, uint8 difficulty, std::vector<const Dungeon::EscalationDef*>& into)
+{
+    for (auto& cur : m_escalations) {
+        if (cur.srcDungeonID != 0) {
+            if (cur.srcDungeonID == dungeonID)
+                into.push_back(&cur);
+        } else if ((cur.srcArchetypeID != 0) and (cur.srcArchetypeID == archetype) and (difficulty >= cur.srcMinDifficulty)) {
+            into.push_back(&cur);
+        }
+    }
+}
+
+bool DungeonDataMgr::IsCapitalGroup(uint32 groupID)
+{
+    switch (groupID) {
+        case EVEDB::invGroups::Titan:
+        case EVEDB::invGroups::Dreadnought:
+        case EVEDB::invGroups::Freighter:
+        case EVEDB::invGroups::Carrier:
+        case EVEDB::invGroups::Supercarrier:
+        case EVEDB::invGroups::CapitalIndustrialShip:
+        case EVEDB::invGroups::JumpFreighter:
+            return true;
+    }
+    return false;
+}
+
+void DungeonDataMgr::GetShipRestrictions(uint32 dungeonID, std::vector<uint32>& allowedGroups, std::vector<uint32>& deniedGroups)
+{
+    std::set<uint32> allowed, denied;
+    for (auto& cur : m_gateDungeon) {
+        if (cur.second != dungeonID)
+            continue;
+        auto itr = m_gates.find(cur.first);
+        if (itr == m_gates.end())
+            continue;
+        allowed.insert(itr->second.allowedGroups.begin(), itr->second.allowedGroups.end());
+        denied.insert(itr->second.deniedGroups.begin(), itr->second.deniedGroups.end());
+    }
+    // capitals can't use acceleration gates, so only single-room dungeons are open to them
+    auto dItr = m_dungeons.find(dungeonID);
+    if ((dItr == m_dungeons.end()) or (dItr->second->roomOrder.size() > 1)) {
+        denied.insert(EVEDB::invGroups::Titan);
+        denied.insert(EVEDB::invGroups::Dreadnought);
+        denied.insert(EVEDB::invGroups::Freighter);
+        denied.insert(EVEDB::invGroups::Carrier);
+        denied.insert(EVEDB::invGroups::Supercarrier);
+        denied.insert(EVEDB::invGroups::CapitalIndustrialShip);
+        denied.insert(EVEDB::invGroups::JumpFreighter);
+    }
+    for (auto cur : allowed)
+        if (denied.find(cur) == denied.end())
+            allowedGroups.push_back(cur);
+    deniedGroups.insert(deniedGroups.end(), denied.begin(), denied.end());
+}
+
+std::string DungeonDataMgr::GetDisplayName(const Dungeon::Dungeon& dungeon, uint32 factionID)
+{
+    // generated dungeon names already carry their faction
+    if (!dungeon.name.empty())
+        return dungeon.name;
+    return GetDungeonType(dungeon.archetypeID);
 }
 
 const char* DungeonDataMgr::GetDungeonType(int8 typeID)
@@ -235,6 +459,7 @@ const char* DungeonDataMgr::GetDungeonType(int8 typeID)
         case Dungeon::Type::Unrated:        return "Unrated";
         case Dungeon::Type::Escalation:     return "Escalation";
         case Dungeon::Type::Wormhole:       return "Wormhole";
+        case Dungeon::Type::Incursion:      return "Incursion";
         default:                            return "Invalid";
     }
 }
@@ -343,14 +568,14 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
         _log(COSMIC_MGR__TRACE, "DungeonMgr::Create() - %s using dungeonID %u", sig.sigName.c_str(), dData.dungeonID);
 
         // Create the new live dungeon
-        Dungeon::LiveDungeon newDungeon;
+        LiveDungeon newDungeon;
         newDungeon.anomalyID = iRef->itemID();
         newDungeon.systemID = m_system->GetID();
 
         // Iterate through rooms and handle item spawning for each room
         uint16 roomCounter = 0;
         for (auto const& room : dData.rooms) {
-            Dungeon::LiveRoom newRoom;
+            LiveRoom newRoom;
             // Set room position
             // Handle first room differently as it will be at the origin point of signature
             if (roomCounter == 0) {

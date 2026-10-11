@@ -297,3 +297,92 @@ uint32 DungeonDB::CreateTemplate(std::string templateName, std::string templateD
 
     return templateID;
 }
+
+/* dungeon engine static data.  rooms are joined to filter by dungeon */
+static std::string DungeonFilter(uint32 dungeonID, const char* column)
+{
+    if (dungeonID == 0)
+        return "";
+    return std::string(" WHERE ") + column + " = " + std::to_string(dungeonID);
+}
+
+void DungeonDB::GetDungeonRows(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT dungeonID, dungeonName, dungeonStatus, factionID, archetypeID,"
+        " COALESCE(dungeonNameID, 0), difficulty, minSecurity, maxSecurity, spawnWeight, lifetimeHours"
+        " FROM dunDungeons%s", DungeonFilter(dungeonID, "dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetDungeonRows query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetRoomRows(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT roomID, roomName, dungeonID, arrivalX, arrivalY, arrivalZ"
+        " FROM dunRooms%s ORDER BY dungeonID, roomID", DungeonFilter(dungeonID, "dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetRoomRows query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetObjectRows(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT o.objectID, o.roomID, o.typeID, o.groupID, o.x, o.y, o.z, o.yaw, o.pitch, o.roll, o.radius, r.dungeonID"
+        " FROM dunRoomObjects AS o INNER JOIN dunRooms AS r ON r.roomID = o.roomID%s ORDER BY o.objectID",
+        DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetObjectRows query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetSpawnGroups(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT g.spawnGroupID, g.roomID, g.waveNumber, g.spawnMode, g.npcClassType, g.npcClassSub,"
+        " g.factionID, g.x, g.y, g.z, g.spread, g.warpIn, g.isOverseer, g.lootGroupID, r.dungeonID"
+        " FROM dunSpawnGroups AS g INNER JOIN dunRooms AS r ON r.roomID = g.roomID%s ORDER BY g.spawnGroupID",
+        DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetSpawnGroups query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetSpawnGroupTypes(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT t.spawnGroupID, t.typeID, t.quantity"
+        " FROM dunSpawnGroupTypes AS t INNER JOIN dunSpawnGroups AS g ON g.spawnGroupID = t.spawnGroupID"
+        " INNER JOIN dunRooms AS r ON r.roomID = g.roomID%s", DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetSpawnGroupTypes query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetTriggers(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT t.triggerID, t.roomID, t.triggerType, t.spawnGroupID, t.objectID, t.value, t.counterID, t.repeatable"
+        " FROM dunTriggers AS t INNER JOIN dunRooms AS r ON r.roomID = t.roomID%s ORDER BY t.triggerID",
+        DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetTriggers query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetTriggerEvents(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT e.eventID, e.triggerID, e.sequence, e.eventType, e.delaySeconds, e.spawnGroupID, e.objectID,"
+        " e.messageType, e.messageID, e.messageText, e.typeID, e.quantity, e.value, e.counterID"
+        " FROM dunTriggerEvents AS e INNER JOIN dunTriggers AS t ON t.triggerID = e.triggerID"
+        " INNER JOIN dunRooms AS r ON r.roomID = t.roomID%s ORDER BY e.triggerID, e.sequence, e.eventID",
+        DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetTriggerEvents query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetGates(DBQueryResult& res, uint32 dungeonID/*0*/)
+{
+    if (!sDatabase.RunQuery(res, "SELECT g.objectID, g.destRoomID, g.locked, g.requireClear, g.keyTypeID, g.keyQuantity, g.keyConsumed,"
+        " g.skillTypeID, g.skillLevel, g.allowedGroups, g.deniedGroups, g.musicUrl"
+        " FROM dunGates AS g INNER JOIN dunRoomObjects AS o ON o.objectID = g.objectID"
+        " INNER JOIN dunRooms AS r ON r.roomID = o.roomID%s", DungeonFilter(dungeonID, "r.dungeonID").c_str()))
+        _log(DATABASE__ERROR, "Error in GetGates query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetLoot(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT lootGroupID, typeID, minQty, maxQty, chance FROM dunLoot"))
+        _log(DATABASE__ERROR, "Error in GetLoot query: %s", res.error.c_str());
+}
+
+void DungeonDB::GetEscalations(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT escalationID, srcDungeonID, srcArchetypeID, srcMinDifficulty, destDungeonID, destArchetypeID,"
+        " destDifficultyDelta, chance, minJumps, maxJumps, lowerSecOnly, expiryHours, journalMessageID"
+        " FROM dunEscalations ORDER BY escalationID"))
+        _log(DATABASE__ERROR, "Error in GetEscalations query: %s", res.error.c_str());
+}
