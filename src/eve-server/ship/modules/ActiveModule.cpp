@@ -42,6 +42,7 @@ m_needsTarget(false),
 m_targetID(0),
 m_reactivateAt(0),
 m_effectID(0),
+m_fieldActive(false),
 m_Stop(true),
 m_heating(false)
 {
@@ -389,6 +390,19 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         Clear();
         throw CustomError ("Your %s doesn't seem to be loaded.", m_modRef->name());
     }
+    // warp disruption field generator: a loaded script makes it a targeted point, otherwise it's a sphere around us
+    if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
+        if (IsScriptedDisruptor()) {
+            if (!IsValidTarget(targetID)) {
+                Clear();
+                throw UserError ("DeniedActivateTargetNotPresent");
+            }
+        } else {
+            // a locked target never turns the sphere into an attack
+            targetID = 0;
+            m_shipRef->ClearTargetRef();
+        }
+    }
     if (IsValidTarget(targetID)) {
         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
@@ -493,6 +507,10 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         case EVEDB::invGroups::Stasis_Web: {
             if (m_targetSE != nullptr)
                 m_targetSE->DestinyMgr()->WebbedMe(m_modRef, true);
+        } break;
+        case EVEDB::invGroups::Warp_Disrupt_Field_Generator: {
+            if (m_targetSE == nullptr)
+                StartDisruptField();
         } break;
     }
     /*def OnSpecialFX
@@ -735,6 +753,15 @@ uint32 ActiveModule::DoCycle() {
             LaunchInterdictionSphere();
             m_repeat = 1;
         } break;
+        case EVEDB::invGroups::Warp_Disrupt_Field_Generator: {
+            /* focused script: infinite strength point (warpScrambleStrengthHidden 100), renewed every cycle.
+             *   kept in the target's ewar state (it ends when we stop, die, dock or leave), which also sends the overview icon.
+             *   sphere mode: the field is registered on activation (StartDisruptField) and moves with the ship
+             */
+            if (m_targetSE != nullptr)
+                m_targetSE->GetEwar(true)->Apply(m_shipRef->itemID(), Ewar::Scramble, GetAttribute(AttrDuration).get_uint32() + 1000,
+                        GetAttribute(AttrWarpScrambleStrengthHidden).get_float(), 0.0f, InventoryItemRef(nullptr), itemID());
+        } break;
         // these neither require nor consume charges
         case EVEDB::invGroups::Salvager:    //working
         case EVEDB::invGroups::Target_Painter:  // working
@@ -769,7 +796,6 @@ uint32 ActiveModule::DoCycle() {
         case EVEDB::invGroups::Super_Weapon:
         case EVEDB::invGroups::Jump_Portal_Generator:
         case EVEDB::invGroups::Remote_ECM_Burst:
-        case EVEDB::invGroups::Warp_Disrupt_Field_Generator:
         case EVEDB::invGroups::Smart_Bomb:
         case EVEDB::invGroups::ECM_Burst: {
         } break;
@@ -850,6 +876,11 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
         case EVEDB::invGroups::Stasis_Web: {
             if (m_targetSE != nullptr)
                 m_targetSE->DestinyMgr()->WebbedMe(m_modRef, false);
+        } break;
+        case EVEDB::invGroups::Warp_Disrupt_Field_Generator: {
+            StopDisruptField();
+            if ((m_targetSE != nullptr) and (m_targetSE->GetEwar() != nullptr))
+                m_targetSE->GetEwar()->Remove(m_shipRef->itemID(), Ewar::Scramble, itemID());
         } break;
         case EVEDB::invGroups::Survey_Scanner: {
             if (abort) {
@@ -1280,7 +1311,8 @@ bool ActiveModule::CanActivate() {
             case Energy_Destabilizer: {
                 range = GetAttribute(AttrEnergyDestabilizationRange).get_float();
             } break;
-            case Warp_Scrambler: {
+            case Warp_Scrambler:
+            case Warp_Disrupt_Field_Generator: {    // focused script (+50% range)
                 range = GetAttribute(AttrWarpScrambleRange).get_float();
             } break;
             case ECM: {
@@ -1382,8 +1414,24 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
 
     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
     uint32 timeLeft(GetRemainingCycleTimeMS());
+    bool isOffensive(sFxDataMgr.isOffensive(m_effectID));
+    PyRep* graphicInfo(nullptr);
+    if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
+        if (IsValidTarget(m_targetID) and IsScriptedDisruptor()) {
+            // the focused point shows as its script's effect (effects.WarpScramble -> tactical's WarpScrambledBy messages).
+            //  m_effectID stays warpDisruptSphere, so the module button keeps showing active
+            uint16 fxID(m_chargeRef->type().GetDefaultEffect());
+            guidStr = sFxDataMgr.GetEffectGuid(fxID);
+            isOffensive = sFxDataMgr.isOffensive(fxID);
+        } else {
+            // WarpDisruptFieldGenerating.py sizes the sphere from graphicInfo.range (else the type's base range, without hull bonuses)
+            PyDict* dict = new PyDict();
+                dict->SetItemString("range", new PyFloat(GetAttribute(AttrWarpScrambleRange).get_double()));
+            graphicInfo = new PyObject("util.KeyVal", dict);
+        }
+    }
 
-    if (m_destinyMgr != nullptr)
+    if (m_destinyMgr != nullptr) {
         m_destinyMgr->SendSpecialEffect(
                 m_shipRef->itemID(),
                 m_modRef->itemID(),
@@ -1391,11 +1439,15 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
                 IsValidTarget(m_targetID) ? m_targetID : m_shipRef->itemID(),
                 chgTypeID,
                 guidStr,
-                sFxDataMgr.isOffensive(m_effectID),
+                isOffensive,
                 active,         // start    - if (start = 0) THEN remove effect
                 active,         // active   - if (start and active) THEN starting ONE-SHOT event of (duration)  (dunno what 'ONE-SHOT event' is)
                 timeLeft,       // duration in ms
-                m_repeat);      // repeat   - if (repeat > 0) THEN starting REPEAT event  ELSE (repeat == 0) THEN starting TOGGLE event
+                m_repeat,       // repeat   - if (repeat > 0) THEN starting REPEAT event  ELSE (repeat == 0) THEN starting TOGGLE event
+                graphicInfo);
+    } else {
+        PySafeDecRef(graphicInfo);
+    }
 
 
     // Create Destiny Updates and GFx
@@ -1654,6 +1706,134 @@ void ActiveModule::LaunchInterdictionSphere()
 
     // Reduce ammo charge by 1 unit:
     ConsumeCharge();
+}
+
+bool ActiveModule::IsScriptedDisruptor()
+{
+    return ((groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator)
+        and (m_chargeRef.get() != nullptr)
+        and (m_chargeRef->groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Script));
+}
+
+void ActiveModule::StartDisruptField()
+{
+    if (m_fieldActive)
+        return;
+    ShipSE* pShipSE(m_shipRef->HasPilot() ? m_shipRef->GetPilot()->GetShipSE() : nullptr);
+    if ((pShipSE == nullptr) or (pShipSE->SystemMgr() == nullptr))
+        return;
+
+    FieldPenalties(true);
+    // the field is centred on (and moves with) the ship.  messages name the HIC's hull
+    pShipSE->SystemMgr()->GetInterdictionMgr()->AddField(pShipSE, GetAttribute(AttrWarpScrambleRange).get_double(),
+            Interdiction::Source::Generator, m_shipRef->typeID());
+    m_fieldActive = true;
+}
+
+void ActiveModule::StopDisruptField()
+{
+    if (!m_fieldActive)
+        return;
+    m_fieldActive = false;
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient != nullptr) and (pClient->SystemMgr() != nullptr))
+        pClient->SystemMgr()->GetInterdictionMgr()->RemoveField(m_shipRef->itemID());
+    // a docked ship's attributes were already reset (undocking rebuilds them), so only undo the penalties in space
+    if ((pClient != nullptr) and pClient->IsInSpace()) {
+        FieldPenalties(false);
+    } else {
+        m_fieldPropDeltas.clear();
+    }
+}
+
+void ActiveModule::FieldPenalties(bool add)
+{
+    /* "increases its signature radius and agility whilst penalizing the velocity bonus of any afterburner or microwarpdrive modules.
+     *   It also prevents any friendly remote effects from being rendered to the parent ship."
+     * every change here is undone exactly: multiplications are divided out again, additions subtracted.
+     */
+    Client* pClient(m_shipRef->GetPilot());
+    if (pClient == nullptr)
+        return;
+
+    fxData data = fxData();
+        data.action = FX::Action::Invalid;
+        data.srcRef = m_modRef;
+        data.fxSrc = FX::Source::Self;
+        data.targLoc = FX::Target::Ship;
+    std::vector<fxData> mods;
+    // signature radius +50%
+    data.math = FX::Math::PostPercent;
+    data.targAttr = AttrSignatureRadius;
+    data.srcAttr = AttrSignatureRadiusBonus;
+    mods.push_back(data);
+    // mass -80% (agility)
+    data.targAttr = AttrMass;
+    data.srcAttr = AttrMassBonusPercentage;
+    mods.push_back(data);
+    // no remote assistance (checked by value on the target)
+    data.math = FX::Math::ModAdd;
+    data.targAttr = AttrDisallowAssistance;
+    data.srcAttr = AttrDisallowAssistance;
+    mods.push_back(data);
+    // the prop mods' mass addition shrinks with the hull, or switching them during the field would leave the mass wrong
+    data.math = FX::Math::PostPercent;
+    data.fxSrc = FX::Source::Group;
+    data.targAttr = AttrMassAddition;
+    data.srcAttr = AttrMassBonusPercentage;
+    data.grpID = EVEDB::invGroups::Afterburner;
+    mods.push_back(data);
+    data.grpID = EVEDB::invGroups::Microwarpdrive;
+    mods.push_back(data);
+
+    for (auto& cur : mods) {
+        if (add) {
+            m_modRef->AddModifier(cur);
+        } else {
+            m_modRef->RemoveModifier(cur);
+        }
+    }
+
+    /* prop mod velocity bonus -90%.
+     *   prop mods multiply the ship's maxVelocity by speedBoostFactorCalc2 (1 + speedFactor%) while they run, so the field takes
+     *   90% of the bonus part off that value.  a prop mod already running gets its multiplier on the ship swapped too.
+     *   (the -80% thrust penalty is part of the same reduction: this server's prop formula doesn't use thrust or mass)
+     */
+    double factor(-GetAttribute(AttrSpeedFactorBonus).get_double() / 100.0);   // 0.9
+    double maxVelocity(m_shipRef->GetAttribute(AttrMaxVelocity).get_double());
+    std::vector<InventoryItemRef> modules;
+    m_shipRef->GetModuleManager()->GetModuleListOfRefsAsc(modules);
+    for (auto modRef : modules) {
+        if ((modRef->groupID() != EVEDB::invGroups::Afterburner) and (modRef->groupID() != EVEDB::invGroups::Microwarpdrive))
+            continue;
+        double calc(modRef->GetAttribute(AttrSpeedBoostFactorCalc2).get_double());
+        double newCalc(calc);
+        if (add) {
+            double delta((calc - 1.0) * factor);
+            m_fieldPropDeltas[modRef->itemID()] = delta;
+            newCalc = calc - delta;
+        } else {
+            std::map<uint32, double>::iterator itr = m_fieldPropDeltas.find(modRef->itemID());
+            if (itr == m_fieldPropDeltas.end())
+                continue;
+            newCalc = calc + itr->second;
+        }
+        if ((calc <= 0) or (newCalc <= 0))
+            continue;
+        modRef->SetAttribute(AttrSpeedBoostFactorCalc2, newCalc, true);
+        GenericModule* pMod(m_shipRef->GetModuleManager()->GetModule(modRef->itemID()));
+        if ((pMod != nullptr) and pMod->IsActive())
+            maxVelocity *= (newCalc / calc);
+    }
+    if (!add)
+        m_fieldPropDeltas.clear();
+    m_shipRef->SetAttribute(AttrMaxVelocity, maxVelocity, true);
+
+    sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), true);
+
+    // resend mass, agility and speed
+    if ((pClient->GetShipSE() != nullptr) and (pClient->GetShipSE()->DestinyMgr() != nullptr))
+        pClient->GetShipSE()->DestinyMgr()->SpeedBoost(!add);
 }
 
 void ActiveModule::LaunchSnowBall()

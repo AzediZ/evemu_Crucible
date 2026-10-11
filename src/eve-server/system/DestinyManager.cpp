@@ -2004,6 +2004,14 @@ void DestinyManager::SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 
                                        uint32 chargeTypeID, std::string guid, bool isOffensive, bool start,
                                        bool isActive, int32 duration, uint32 repeat, int32 graphicInfo/*0*/) const
 {
+    SendSpecialEffect(entityID, moduleID, moduleTypeID, targetID, chargeTypeID, guid, isOffensive, start, isActive, duration, repeat,
+                      (graphicInfo == 0 ? nullptr : static_cast<PyRep*>(new PyInt(graphicInfo))));
+}
+
+void DestinyManager::SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 moduleTypeID, uint32 targetID,
+                                       uint32 chargeTypeID, std::string guid, bool isOffensive, bool start,
+                                       bool isActive, int32 duration, uint32 repeat, PyRep* graphicInfo) const
+{
     OnSpecialFX14 effect;
         effect.entityID = entityID;
         effect.moduleID = moduleID;
@@ -2017,7 +2025,7 @@ void DestinyManager::SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 
         effect.duration = duration;
         effect.repeat = repeat;
         effect.startTime = GetFileTimeNow();
-        effect.graphicInfo = (graphicInfo == 0 ? PyStatic.NewNone() : new PyInt(graphicInfo));
+        effect.graphicInfo = (graphicInfo == nullptr ? PyStatic.NewNone() : graphicInfo);
     PyTuple *up = effect.Encode();
     SendSingleDestinyUpdate(&up);   // consumed
 }

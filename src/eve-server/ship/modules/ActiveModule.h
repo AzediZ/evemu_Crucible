@@ -70,6 +70,10 @@ public:
     void                LaunchSnowBall();
     void                LaunchInterdictionSphere();
 
+    /* warp disruption field generator (HIC).  without a script it projects a warp disruption sphere around the ship;
+     *  with the focused warp disruption script it is a targeted point of infinite strength */
+    bool                IsScriptedDisruptor();
+
     /* new effects processing code and updates */
     void                ApplyEffect(int8 state, bool active=false);
     /* common method for all modules that have a visual effect when active */
@@ -124,6 +128,13 @@ protected:
 private:
     Timer               m_timer;
     Timer               m_reloadTimer;
+
+    /* warp disruption field generator, sphere mode */
+    void                StartDisruptField();
+    void                StopDisruptField();
+    void                FieldPenalties(bool add);       // signature radius, mass and prop mod penalties, no remote assistance
+    bool                m_fieldActive;
+    std::map<uint32, double> m_fieldPropDeltas;         // prop module itemID -> speedBoostFactorCalc2 taken off while the field is up
 
 };
 
