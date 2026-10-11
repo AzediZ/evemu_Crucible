@@ -35,3 +35,26 @@ void ScanningDB::GetScanResults(DBQueryResult &res) {
         _log(DATABASE__ERROR, "Error in GetScanResults query: %s", res.error.c_str());
         }
 }
+
+bool ScanningDB::GetContainerFamilies(DBQueryResult &res) {
+    if (!sDatabase.RunQuery(res, "SELECT typeID, familyID, factionPrefix FROM expContainerFamily")) {
+        _log(DATABASE__ERROR, "Error in GetContainerFamilies query: %s", res.error.c_str());
+        return false;
+    }
+    return true;
+}
+
+bool ScanningDB::GetContainerLoot(DBQueryResult &res) {
+    if (!sDatabase.RunQuery(res,
+        "SELECT familyID, itemGroupID, itemTypeID, namePattern, chance, minQty, maxQty, isCopy"
+        " FROM expContainerLoot ORDER BY familyID, lootID")) {
+        _log(DATABASE__ERROR, "Error in GetContainerLoot query: %s", res.error.c_str());
+        return false;
+    }
+    return true;
+}
+
+void ScanningDB::GetPublishedTypesInGroup(uint16 groupID, DBQueryResult &res) {
+    if (!sDatabase.RunQuery(res, "SELECT typeID, typeName FROM invTypes WHERE groupID = %u AND published = 1", groupID))
+        _log(DATABASE__ERROR, "Error in GetPublishedTypesInGroup query: %s", res.error.c_str());
+}

@@ -880,7 +880,9 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
     // installed upgrades are a permanent fixture of their hub
     if ((cRef.get() != nullptr) and (cRef->typeID() == EVEDB::invTypes::InfrastructureHub))
         throw CustomError("Infrastructure upgrades cannot be removed once installed.");
-    if (cRef->groupID() == EVEDB::invGroups::Cargo_Container && sDataMgr.IsSolarSystem(cRef->locationID())) {
+    if ((cRef.get() != nullptr)
+    and ((cRef->groupID() == EVEDB::invGroups::Cargo_Container) or (cRef->groupID() == EVEDB::invGroups::Spawn_Container))
+    and sDataMgr.IsSolarSystem(cRef->locationID())) {
         GVector direction (cRef->position(), pClient->GetShip()->position());
         float maxDistance(2500.0f);
         if (cRef->HasAttribute (AttrMaxOperationalDistance) == true)

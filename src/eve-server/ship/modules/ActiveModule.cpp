@@ -927,24 +927,6 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
             // Send results.
             m_shipRef->GetPilot()->QueueDestinyEvent(&result);
         } break;
-        //case EVEDB::invGroups::Data_Miner:
-        // some data containers will pop after successful access.  currently incomplete
-        case EVEDB::invGroups::Salvager: {
-            if (m_targetSE == nullptr)
-                break;
-            if (IsSuccess()) {
-                _log(MODULE__DEBUG, "%s - DeactivateCycle() - Salvage successful.  deleting target %s.", m_modRef->name(), m_targetSE->GetName());
-                m_targMgr->RemoveTarget(m_targetSE);
-                //m_targMgr->OnTarget(m_targetSE, TargMgr::Mode::Lost, TargMgr::Msg::Destroyed);
-                // just in case other modules are targeting this object, let them know it was destroyed.
-                if (m_targetSE->TargetMgr() != nullptr) {
-                    m_targetSE->TargetMgr()->RemoveTargetModule(this);
-                    m_targetSE->TargetMgr()->Destroyed();
-                }
-                m_targetSE->Delete();
-                SafeDelete(m_targetSE);
-            }
-        } break;
         /*
         case EVEDB::invGroups::Warp_Scrambler: {
             if (m_targetSE != nullptr)
@@ -976,6 +958,9 @@ void ActiveModule::ProcessActiveCycle() {
             return;
     }
 
+    // the cycle ran to its end
+    CycleComplete();
+
     if (m_Stop) {
         SetModuleState(Module::State::Deactivating);
     }
@@ -988,6 +973,10 @@ void ActiveModule::ProcessActiveCycle() {
     CrimeCheck();
     UpdateCycleHeat(true);
     SetTimer(DoCycle());
+}
+
+void ActiveModule::CycleComplete()
+{
 }
 
 void ActiveModule::SetTimer(uint32 time) {
@@ -1344,6 +1333,7 @@ bool ActiveModule::CanActivate() {
             case Shield_Disruptor:      // no modules in this group
             case Stasis_Web:
             case Salvager:
+            case Data_Miner:
             case Strip_Miner:
             case Mining_Laser:
             case Target_Painter:
@@ -1494,18 +1484,10 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
         shipEff.startTime = (abort ? (abortTime / EvE::Time::Second) : shipEff.timeNow - (timeLeft * EvE::Time::Second));
         shipEff.duration = (abort ? 2000 : timeLeft);  // duration in seconds
         shipEff.repeat = m_repeat;
-        // will need to check and update for data miners here  (any other cases?)
-        if ((groupID() == EVEDB::invGroups::Salvager) and IsSuccess()) {
-            // Create Destiny Updates:
-            PyTuple* type = new PyTuple(2);
-                type->SetItem(0, new PyInt(4));
-                type->SetItem(1, new PyInt(m_targetSE->GetTypeID()));
-            PyDict* dict = new PyDict;
-                dict->SetItemString("type", type);
-            PyTuple* tuple = new PyTuple(2);
-                tuple->SetItem(0, new PyString("SalvagingSuccess"));
-                tuple->SetItem(1, dict);
-            shipEff.error = tuple;
+        // results shown as the effect stops (salvagers and data miners:  SalvagingSuccess, LockedContainerOpened...)
+        PyTuple* stopMsg(active ? nullptr : TakeStopMessage());
+        if (stopMsg != nullptr) {
+            shipEff.error = stopMsg;
         } else if (m_needsTarget and (m_targetSE == nullptr)) {
             /*   these both give client warning -  [no messageID: 258855]
             if (IsValidTarget(m_targetID)) {

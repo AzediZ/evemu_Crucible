@@ -192,6 +192,17 @@ PyResult InventoryBound::RemoveChargeToCargo(PyCallArgs &call, PyTuple* chargeIn
     return PyStatic.NewNone();
 }
 
+/* exploration site containers can't be looted until they're hacked/analyzed/salvaged */
+static void CheckLockedContainer(Client* pClient, InventoryItemRef iRef)
+{
+    if ((pClient == nullptr) or !pClient->IsInSpace() or (pClient->SystemMgr() == nullptr))
+        return;
+    SystemEntity* pSE(pClient->SystemMgr()->GetSE(iRef->locationID()));
+    if ((pSE == nullptr) or !pSE->IsContainerSE() or !pSE->GetContSE()->IsLocked())
+        return;
+    throw UserError("LockedContainerInaccessible").AddFormatValue("typeID", new PyInt(pSE->GetTypeID()));
+}
+
 /* Crucible can flagging: taking from another player's can or wreck in empire space, without the right to, flags you
  *  to the owner's corporation (or the owner, in an npc corp) for 15 minutes.  it's not a crime.  the client's rules
  *  (consider.ConfirmTakeFromContainer): secure containers, our own, our corp's, fleet loot and abandoned wrecks are free
@@ -271,6 +282,7 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
         }
 
         if (pInv->ValidateAddItem(destItem->flag(), srcItem)) {
+            CheckLockedContainer(call.client, srcItem);
             CheckTheft(call.client, srcItem);
             destItem->Merge( srcItem, qty, true );
         }
@@ -531,8 +543,10 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
         }
 
         // taking it out of someone else's can or wreck
-        if (iRef->locationID() != m_itemID)
+        if (iRef->locationID() != m_itemID) {
+            CheckLockedContainer(pClient, iRef);
             CheckTheft(pClient, iRef);
+        }
 
         fromFlag = iRef->flag();
 

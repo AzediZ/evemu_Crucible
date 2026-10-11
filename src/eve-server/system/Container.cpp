@@ -37,6 +37,8 @@
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
+#include "exploration/Exploration.h"
 #include "pos/Structure.h"
 
 
@@ -175,6 +177,13 @@ void CargoContainer::RemoveItem(InventoryItemRef iRef)
 
     InventoryItem::RemoveItem(iRef);
 
+    // dungeon trigger:  loot taken from a site container
+    if ((groupID() == EVEDB::invGroups::Spawn_Container) and (mySE != nullptr) and (mySE->SystemMgr() != nullptr)) {
+        Client* pClient(sItemFactory.GetUsingClient());
+        mySE->SystemMgr()->GetDungMgr()->OnObjectEvent(m_itemID, Dungeon::Trigger::ItemRemovedFromSpawnContainer,
+                (pClient != nullptr ? pClient->GetCharacterID() : 0), iRef->typeID());
+    }
+
     if (m_isAnchored)
         return;
 
@@ -241,6 +250,8 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
  m_contRef(self),
  m_deleteTimer(0),
  m_global(false),
+ m_locked(false),
+ m_lootGenerated(false),
  m_shieldCharge(0),
  m_armorDamage(0),
  m_hullDamage(0)
@@ -256,7 +267,12 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
     m_corpID = data.corporationID;
     m_ownerID = data.ownerID;
 
-    if (!sDataMgr.IsStation(m_self->locationID())) { // should NEVER be true (SE object in station???)
+    // exploration site containers are locked until hacked/analyzed/salvaged.  their site decides how long they live
+    m_locked = sExplorationMgr.IsLockedType(m_self->typeID());
+
+    if (m_self->groupID() == EVEDB::invGroups::Spawn_Container) {
+        ;
+    } else if (!sDataMgr.IsStation(m_self->locationID())) { // should NEVER be true (SE object in station???)
         if (m_self->typeID() == EVEDB::invTypes::PlanetaryLaunchContainer) {
             m_deleteTimer.Start(5 *24 *60 *60 *1000);  //5d timer for PI launch.  should probably get this saved value from planet launches
         } else {
@@ -452,6 +468,7 @@ WreckSE::WreckSE(WreckContainerRef self, EVEServiceManager &services, SystemMana
 : DynamicSystemEntity(self, services, system),
 m_deleteTimer(sConfig.rates.WorldDecay *60 *1000),
 m_abandoned(false),
+m_salvageDone(false),
 m_contRef(self),
 m_launchedByID(0)
 {

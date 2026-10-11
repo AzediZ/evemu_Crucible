@@ -36,6 +36,12 @@ class ScanningDB
 
       void GetScanResults(DBQueryResult &res);
 
+      // exploration site containers (F11).  false if the tables are missing (db without the migration)
+      static bool GetContainerFamilies(DBQueryResult &res);
+      static bool GetContainerLoot(DBQueryResult &res);
+      // typeID, typeName of the published types of this group
+      static void GetPublishedTypesInGroup(uint16 groupID, DBQueryResult &res);
+
   private:
 
 };

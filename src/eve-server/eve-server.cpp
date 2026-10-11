@@ -104,6 +104,7 @@
 // entity service (player drones)
 #include "npc/EntityService.h"
 // exploration services
+#include "exploration/Exploration.h"
 #include "exploration/ScanMgrService.h"
 // faction services
 #include "faction/FactionWarMgrService.h"
@@ -811,6 +812,8 @@ int main( int argc, char* argv[] )
     sMapData.Initialize();
     std::printf("\n");     // spacer
     sDunDataMgr.Initialize();
+    std::printf("\n");     // spacer
+    sExplorationMgr.Initialize();
     std::printf("\n");     // spacer
     sPlanetDataMgr.Initialize();
     std::printf("\n");     // spacer

@@ -47,6 +47,11 @@ public:
      *  for modules that perform action on each DoCycle(), they will override this call in their class implementation
      */
     virtual uint32      DoCycle();
+    /* called once for every cycle that runs to its end (the last one too), before the module stops or starts its next
+     *  cycle.  never on an aborted cycle.  results that come at the end of a cycle (scanners, data miners) go here */
+    virtual void        CycleComplete();
+    /* client message (key, args) shown when the effect stops (OnGodmaShipEffect error), e.g. SalvagingSuccess.  caller owns it */
+    virtual PyTuple*    TakeStopMessage()               { return nullptr; }
 
     /* functions to be handled in derived classes as needed */
     virtual void        Update();  // this is used to set char mods on active modules created before pilot entered ship

@@ -36,6 +36,7 @@
 #include "inventory/InventoryBound.h"
 #include "station/StationDataMgr.h"
 #include "station/StationOffice.h"
+#include "system/Container.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
 
@@ -141,6 +142,19 @@ PyResult InvBrokerBound::GetInventoryFromId(PyCallArgs &call, PyInt* inventoryID
     }
 
     // this can send locationID as named arg.  not sure if we need it, possible test cases (usually stationID)
+
+    // exploration site containers open after they're hacked/analyzed/salvaged
+    if ((iRef->groupID() == EVEDB::invGroups::Spawn_Container) and call.client->IsInSpace() and (call.client->SystemMgr() != nullptr)) {
+        SystemEntity* pSE(call.client->SystemMgr()->GetSE(iRef->itemID()));
+        if ((pSE != nullptr) and pSE->IsContainerSE() and pSE->GetContSE()->IsLocked())
+            throw UserError("LockedContainerInaccessible").AddFormatValue("typeID", new PyInt(iRef->typeID()));
+        GVector direction(iRef->position(), call.client->GetShip()->position());
+        float maxDistance(2500.0f);
+        if (iRef->HasAttribute(AttrMaxOperationalDistance))
+            maxDistance = iRef->GetAttribute(AttrMaxOperationalDistance).get_float();
+        if (direction.length() > maxDistance)
+            throw UserError("NotCloseEnoughToOpen").AddAmount("maxdist", maxDistance);
+    }
 
     // use container's owner as ownerID
     uint32 ownerID = iRef->ownerID();

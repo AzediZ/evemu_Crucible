@@ -1,9 +1,9 @@
-
  /**
   * @name Prospector.h
   *   prospector module class (salvage, hacking, data mining)
   * @Author:         Allan
   * @date:   11 August 2016   -UD/RW 12 April 2017  -UD/RW 10 February 2018
+  * @update: F11 - Crucible per-cycle roll on site containers and wrecks
   */
 
 #ifndef _EVE_SHIP_MODULES_PROSPECTOR_MODULE_H_
@@ -12,11 +12,19 @@
 #include "ship/modules/ActiveModule.h"
 
 
+/* Codebreakers and Analyzers (Data_Miner) and Salvagers.  Crucible (pre-Odyssey) rules:
+ *  - a locked site container (spawn container with accessDifficulty) needs the module whose skill is the container's
+ *    requiredSkill1 (Hacking, Archaeology or Salvaging) at the container's requiredSkill1Level.  salvagers also salvage wrecks.
+ *  - chance per cycle (%) = target accessDifficulty + module accessDifficultyBonus (skills x5/level, rigs, implants via dogma).
+ *    one roll at the end of each cycle.  a chance <= 0 can't be attempted.
+ *  - success opens the container for everyone (its loot is made then) or salvages the wreck, and the module stops.
+ *  - failure keeps cycling.  dungeon triggers (hacking/archaeology/salvaging success/failure) go to the site.
+ */
 class Prospector: public ActiveModule
 {
 public:
     Prospector(ModuleItemRef mRef, ShipItemRef sRef);
-    virtual ~Prospector()                               { /* do nothing here */ }
+    virtual ~Prospector();
 
     virtual Prospector*         GetProspectModule()     { return this; }
     virtual bool        IsProspectModule() const        { return true; }
@@ -26,36 +34,56 @@ public:
 
     /* ActiveModule overrides */
     virtual void Activate(uint16 effectID, uint32 targetID=0, int16 repeat=0);
-    uint32 DoCycle();
-    // this is a check for those active modules that need it (mining, weapons) and overridden as needed
+    // target checks with the client's messages.  throws
     virtual bool CanActivate();
+    // the roll at the end of each cycle
+    virtual void CycleComplete();
+    // the success message rides on the effect stop (OnGodmaShipEffect error)
+    virtual PyTuple* TakeStopMessage();
 
-    virtual bool IsSuccess()                            { return m_success; }
-
-    // this is to avoid problems when module timer hits after target destroyed.  may need to do more here.
-    void TargetDestroyed()                              { m_success = false; }
+    // the target went away while we work on it (another salvager got it, it was shot, it despawned)
+    void TargetDestroyed();
 
 protected:
-    void SendFailure();
-    void CheckSuccess();
-    void DropSalvage();
-    void DropItems();
+    void CheckTarget();
+    // chance in % for the current target
+    int16 GetChance();
+    void OnContainerSuccess();
+    void OnSalvageSuccess();
+    // EVEDB::invGroups::Salvager module rolling on a wreck
+    bool IsSalvaging()                                  { return (m_salvager and (m_targetSE != nullptr) and m_targetSE->IsWreckSE()); }
+    // dungeon trigger for this module's skill
+    void SendTrigger(uint32 itemID, bool success);
 
-    bool m_success :1;
-    bool m_firstRun :1;
+    // OnRemoteMessage to the pilot (in-cycle messages)
+    void SendRemote(const char* key, PyDict* args);
+    // old style {type} argument:  (UE_TYPEID, typeID)
+    PyDict* TypeArg(uint16 typeID);
+    // new style {[item]typeID.name} argument:  raw typeID
+    PyDict* ItemArg(uint16 typeID);
+
     bool m_salvager :1;
     bool m_dataMiner :1;
+    bool m_targetGone :1;
 
-    int8 m_accessChance;    // target chance (base chance)
+    uint16 m_targetTypeID;
+
+    PyTuple* m_stopMsg;
 
 private:
-    Character* pChar;
-
     EVEItemFlags m_holdFlag;
 };
 
 #endif  //_EVE_SHIP_MODULES_PROSPECTOR_MODULE_H_
 
+
+/*
+{'messageKey': 'LockedContainerOpened'}         Sie haben erfolgreich auf {[item]typeID.name} zugegriffen.  (You successfully access the {[item]typeID.name}.)
+{'messageKey': 'LockedContainerNotOpened'}      Your attempt to access the {[item]typeID.name} failed this time.
+{'messageKey': 'LockedContainerOpenedAlready'}  No further tools are needed to access the {[item]typeID.name}.
+{'messageKey': 'LockedContainerTooComplex'}     The {[item]typeID.name} is too complex for you to gather anything of value.
+{'messageKey': 'LockedContainerInaccessible'}   You cannot access the {[item]typeID.name} without specialized equipment.
+*/
 
 /*
 {'messageKey': 'SalvageTooMuchLoot', 'dataID': 17879586, 'suppressable': False, 'bodyID': 258062, 'messageType': 'info', 'urlAudio': '', 'urlIcon': '', 'titleID': 258061, 'messageID': 2311}

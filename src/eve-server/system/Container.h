@@ -164,12 +164,21 @@ public:
 
     void SetGlobal(bool set=false)                      { m_global = set; }
 
+    /* exploration site containers (locked spawn containers).  a hacked/analyzed/salvaged one is open for everyone.
+     *  the lock is not saved:  containers relock on restart (their loot stays) */
+    bool IsLocked()                                     { return m_locked; }
+    void Unlock()                                       { m_locked = false; }
+    bool IsLootGenerated()                              { return m_lootGenerated; }
+    void SetLootGenerated()                             { m_lootGenerated = true; }
+
 protected:
     CargoContainerRef m_contRef;
 
     Timer m_deleteTimer;
 
     bool m_global;      // for making bubble centers global
+    bool m_locked;
+    bool m_lootGenerated;
 
     double m_shieldCharge;
     double m_armorDamage;
@@ -261,6 +270,9 @@ public:
 
     /* specific functions handled in this class. */
     void Salvaged()                                     { m_contRef->Salvaged(); }
+    // a salvager got this wreck (other salvagers on it get SalvagingTooLate)
+    void SetSalvageDone()                               { m_salvageDone = true; }
+    bool IsSalvageDone()                                { return m_salvageDone; }
     void SetLaunchedByID(uint32 launcherID=0)           { m_launchedByID = launcherID; }
     uint32 GetLaunchedByID()                            { return m_launchedByID; }
     bool IsEmpty()                                      { return m_contRef->IsEmpty(); }
@@ -275,6 +287,7 @@ protected:
 
 private:
     bool m_abandoned;
+    bool m_salvageDone;
 
 };
 
