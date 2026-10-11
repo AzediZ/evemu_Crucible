@@ -742,8 +742,7 @@ int main( int argc, char* argv[] )
     newSvcMgr.Register(new DogmaIMService(newSvcMgr));
     newSvcMgr.Register(new CorpRegistryService(newSvcMgr));
 
-    // keep a reference to cache in the old manager so it still works
-    // TODO: REMOVE ONCE THE CHANGES ARE DONE
+    // EntityList needs the service manager to boot SystemManagers (not temporary)
     sEntityList.SetService(&newSvcMgr);
     std::printf("\n");     // spacer
 

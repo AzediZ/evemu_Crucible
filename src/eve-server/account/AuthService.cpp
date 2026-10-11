@@ -44,7 +44,7 @@ PyResult AuthService::Ping(PyCallArgs &call) {
 
 PyResult AuthService::GetPostAuthenticationMessage(PyCallArgs &call)
 {
-    if (sConfig.account.loginMessage.empty())
+    if (!sConfig.world.loginMsg or sConfig.account.loginMessage.empty())
         return PyStatic.NewNone();
 
     PyDict* args = new PyDict;

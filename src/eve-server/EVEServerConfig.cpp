@@ -45,8 +45,9 @@ EVEServerConfig::EVEServerConfig()
 
     // server
     server.TraderJoe = false;//N
-    server.maxPlayers = 500;//N
+    server.maxPlayers = 500;    // max authenticated sessions; 0 = unlimited.  VIP/GM roles bypass, others get a logon queue position
     server.BulkDataOD = false;
+    server.BulkDataAutoVersion = true;  // derive the bulk data changeID from table checksums
     server.NoobShipCheck = true;
     server.ServerSleepTime = 10 /*ms*/;
     server.idleSleepTime = 1000;
@@ -65,17 +66,17 @@ EVEServerConfig::EVEServerConfig()
     server.CargoMassAdditive = false;
 
     // world
-    world.chatLogs = false;//N
-    world.globalChat = true;//N
+    world.chatLogs = false;     // append every chat channel message to <logDir>/chat_YYYY-MM-DD.log  (F23)
+    world.globalChat = true;    // create the server-wide static public channels at startup  (F23)
     world.gridUnload = true;
     world.gridUnloadTime = 300 /*s*/; // 5 mins
-    world.loginInfo = false;//N
-    world.loginMsg = false;//N
+    world.loginInfo = true;     // send the server info MOTD into local on login
+    world.loginMsg = true;      // show account.loginMessage after authentication
     world.saveOnMove = false;
     world.saveOnUpdate = false;
     world.shootRoids = false;
     world.shootWrecks = false;
-    world.mailDelay = 5;//N
+    world.mailDelay = 5;        // min seconds between eve mails sent by one character; 0 = off  (F23)
     world.StationDockDelay = 4 /*s*/;
     world.apWarptoDistance = 15000;
     world.shipBoardDistance = 300;
@@ -96,8 +97,8 @@ EVEServerConfig::EVEServerConfig()
     rates.medalCreateCost = 5000000;
     rates.WorldDecay = 120 /*m*/;
     rates.NPCDecay = 90 /*m*/;
-    rates.DropItem = 1;//N
-    rates.DropMoney = 1.0;//N
+    rates.DropItem = 1;         // integer multiplier on npc/structure loot quantities
+    rates.DropMoney = 1.0;      // multiplier on agent mission isk reward and bonus  (F12)
     rates.DropSalvage = 1;//P
     rates.RepairCost = 1.0;
     rates.ShipRepairModifier = 0.0000075;
@@ -120,7 +121,7 @@ EVEServerConfig::EVEServerConfig()
     market.OldPriceLimit = 10;
     market.NewPriceLimit = 10;
     market.HistoryUpdateTime = 6/*h*/;
-    market.UseOrderRange = true;//N
+    market.UseOrderRange = true;    // immediate buy/sell honours the order's range when matching; false = station-only  (F17)
     market.DeleteOldTransactions = false;
     market.salesTax = 1.0f;
     market.OrderModificationDelay = 300;
@@ -154,7 +155,7 @@ EVEServerConfig::EVEServerConfig()
     npc.IdleWander = false;
     npc.WarpOut = 600 /*s*/;
     npc.WarpFollowChance = 0.15;
-    npc.ThreatRadius = 1.0;//N
+    npc.ThreatRadius = 1.0;     // npcs only switch to targets within ThreatRadius x maxTargetRange  (F06)
     npc.RoamingSpawns = false;
     npc.StaticSpawns = false;
     npc.RoamingTimer = 900 /*s*/;
@@ -283,7 +284,7 @@ EVEServerConfig::EVEServerConfig()
     net.imageServer = "localhost";
     net.imageServerPort = 26001;
 
-    // threads  -not implemented
+    // threads  -parsed, ignored: the server main loop is single-threaded by design
     threads.ConsoleThreads = 1;//P
     threads.DatabaseThreads = 2;//N
     threads.ImageServerThreads = 1;//N
@@ -349,6 +350,7 @@ bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
     AddValueParser( "maxPlayers",           server.maxPlayers );
     AddValueParser( "NoobShipCheck",        server.NoobShipCheck );
     AddValueParser( "BulkDataOD",           server.BulkDataOD );
+    AddValueParser( "BulkDataAutoVersion",  server.BulkDataAutoVersion );
     AddValueParser( "ServerSleepTime",      server.ServerSleepTime );
     AddValueParser( "idleSleepTime",        server.idleSleepTime );
     AddValueParser( "MaxThreadReport",      server.MaxThreadReport );
@@ -371,6 +373,7 @@ bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
     RemoveParser( "maxPlayers" );
     RemoveParser( "NoobShipCheck" );
     RemoveParser( "BulkDataOD" );
+    RemoveParser( "BulkDataAutoVersion" );
     RemoveParser( "ServerSleepTime" );
     RemoveParser( "idleSleepTime" );
     RemoveParser( "MaxThreadReport" );

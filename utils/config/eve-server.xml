@@ -43,13 +43,14 @@ boolean can use either 0/1 OR true/false.
         <NoobShipCheck>true</NoobShipCheck><!-- bool  -check for ship in hangar when docking in a pod -->
         <ServerSleepTime>10</ServerSleepTime><!-- ms -->
         <StackTrace>false</StackTrace><!-- bool  -(en/dis)ables sending StackTrace on client errors -->
-        <maxPlayers>250</maxPlayers>
+        <maxPlayers>250</maxPlayers><!-- max authenticated sessions (incl. character select).  0 = unlimited.  VIP/GM accounts bypass, others get a logon queue position -->
         <idleSleepTime>1000</idleSleepTime><!-- in ms (1 sec default) -->
         <processTic>1.0</processTic><!-- used to slow down server process tics.  <1.0 is faster, >1.0 slower -->
         <MaxThreadReport>10</MaxThreadReport>
         <UseMarketBot>false</UseMarketBot><!-- this is coded in eve gate.  not needed here -->
         <DisableIGB>false</DisableIGB>
         <BulkDataOD>true</BulkDataOD>  <!-- bool  -OD = OnDemand.  false loads data on server startup.  true loads data on first call -->
+        <BulkDataAutoVersion>true</BulkDataAutoVersion><!-- bool  -derive the bulk data version from table checksums, so clients refetch dogma data after a db change.  false uses the compiled-in version -->
         <ModuleAutoOff>true</ModuleAutoOff><!-- bool  - automatically deactivate rr-type module when target is full -->
         <ModuleDamageChance>0.1</ModuleDamageChance>  <!-- chance to apply damage to random modules when shields are depleted -->
         <UnloadOnLinkAll>true</UnloadOnLinkAll>  <!-- bool - unload weapons and link when LinkAll button pressed -->
@@ -69,12 +70,11 @@ boolean can use either 0/1 OR true/false.
         <!-- no longer used -->
         <gridUnload>true</gridUnload><!-- bool -->
         <gridUnloadTime>300</gridUnloadTime><!-- in seconds (5 min default)-->
-        <!-- not implemented yet -->
-        <chatLogs>false</chatLogs><!-- bool -->
-        <globalChat>true</globalChat><!-- bool -->
-        <loginInfo>true</loginInfo><!-- bool -->
-        <loginMsg>true</loginMsg><!-- bool -->
-        <mailDelay>5</mailDelay>
+        <chatLogs>false</chatLogs><!-- bool  -append every chat channel message to <logDir>/chat_YYYY-MM-DD.log -->
+        <globalChat>true</globalChat><!-- bool  -create the server-wide public channels (Help, Rookie Help, language channels) at startup.  false = only local/corp/alliance/fleet/private -->
+        <loginInfo>true</loginInfo><!-- bool  -send the server info MOTD into local on login -->
+        <loginMsg>true</loginMsg><!-- bool  -show account/loginMessage after authentication -->
+        <mailDelay>5</mailDelay><!-- seconds  -minimum time between eve mails sent by one character (anti-spam).  0 = off -->
         <apWarptoDistance>15000</apWarptoDistance><!-- in meters - sets autopilot warp stop distance from object (15km default)-->
         <saveOnMove>true</saveOnMove><!-- bool - save items when Move()'d -->
         <saveOnUpdate>true</saveOnUpdate><!-- bool - save items when values or attributes updated -->
@@ -99,9 +99,8 @@ boolean can use either 0/1 OR true/false.
         <WebUpdate>15</WebUpdate><!-- save current server status in db.  in minutes  15m default -->
         <!-- salvage max items -->
         <DropSalvage>1</DropSalvage><!--  only used if != 1 -->
-        <!-- these rates are not implemented yet -->
-        <DropItem>1</DropItem><!--  only used if != 1 -->
-        <DropMoney>1.0</DropMoney><!--  only used if != 1.0 -->
+        <DropItem>1</DropItem><!-- integer multiplier on npc/structure loot quantities.  only used if > 1 -->
+        <DropMoney>1.0</DropMoney><!-- multiplier on agent mission isk reward and bonus.  only used if != 1.0 -->
         <!-- for repair system -->
         <RepairCost>1.0</RepairCost><!--  only used if != 1.0 -->
         <!-- corp tax variables. -->
@@ -126,7 +125,7 @@ boolean can use either 0/1 OR true/false.
         <OldPriceLimit>10</OldPriceLimit><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
         <NewPriceLimit>10</NewPriceLimit><!-- integer  - number of orders to return (lower = less bandwidth)  default: 10  limit: 256 -->
         <HistoryUpdateTime>8</HistoryUpdateTime><!-- integer  - time in hours to update market price histories  default:6 -->
-        <UseOrderRange>true</UseOrderRange><!-- bool  - default: true  -->
+        <UseOrderRange>true</UseOrderRange><!-- bool  - immediate buy/sell honours the order's range (station/system/jumps/region) when matching.  false = station-only match  default: true  -->
         <DeleteOldTransactions>false</DeleteOldTransactions><!-- bool  - delete transactions from db older than 3 days  default: false  -->
         <SalesTax>1.0</SalesTax><!-- float - the sales tax percentage -->
         <OrderModificationDelay>300</OrderModificationDelay><!-- integer - seconds between modifications of one market order (Crucible: 300).  0 disables -->
@@ -168,11 +167,11 @@ boolean can use either 0/1 OR true/false.
         <RatFaction>0</RatFaction><!-- force spawn to this faction if !=0 -->
         <LootDropChance>0.85</LootDropChance><!-- % chance for NPC to drop loot.  75% default -->
         <UseDamageMultiplier>true</UseDamageMultiplier><!-- bool  - use the damage multiplier in npc data -->
-        <!-- the next 4 are not implemented yet -->
+        <!-- WarpFollowChance is not implemented yet -->
         <WarpFollowChance>0.15</WarpFollowChance><!-- chance for npc to follow warping player (15% default) -->
         <TargetPod>false</TargetPod><!-- bool   npc target/attack pod -->
         <TargetPodSec>0</TargetPodSec><!-- npc target/attack pod in truSec lower than this  -->
-        <ThreatRadius>1.0</ThreatRadius> <!-- used in conjunction with npc ai target switching -->
+        <ThreatRadius>1.0</ThreatRadius> <!-- multiplier on an npc's targeting range when it re-evaluates targets.  npcs only switch to targets within ThreatRadius x maxTargetRange -->
     </npc>
 
     <standings><!-- these are in percent. do not modify.  not fully debugged -->
@@ -272,7 +271,7 @@ boolean can use either 0/1 OR true/false.
         <SentryRange>150000</SentryRange><!-- meters -->
     </crime>
 
-    <threads><!-- not implemented yet -->
+    <threads><!-- ignored.  the server main loop is single-threaded by design; these are parsed for compatibility only -->
         <NetworkThreads>2</NetworkThreads>
         <DatabaseThreads>2</DatabaseThreads>
         <WorldThreads>2</WorldThreads>

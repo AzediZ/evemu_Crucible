@@ -50,6 +50,7 @@ public:
         bool TraderJoe;
         bool DisableIGB;
         bool BulkDataOD;
+        bool BulkDataAutoVersion;
         bool NoobShipCheck;
         bool ModuleAutoOff;
         bool UnloadOnLinkAll;

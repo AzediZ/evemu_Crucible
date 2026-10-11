@@ -358,7 +358,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
     m_ship->SetShipCapacitorLevel(1.0);
 
     // send MOTD and server data to 'local' chat channel
-    this->m_lsc->SendServerMOTD(this);
+    if (sConfig.world.loginInfo)
+        this->m_lsc->SendServerMOTD(this);
 
     return (m_loaded = true);
 }

@@ -209,6 +209,8 @@ void SystemEntity::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 o
         }
         if (quantity == 0)
             quantity = 1;
+        if (sConfig.rates.DropItem > 1)
+            quantity *= sConfig.rates.DropItem;
 
         ItemData iLoot(itr->itemID, owner, wreckRef->itemID(), flagNone, quantity);
         wreckRef->AddItem(sItemFactory.SpawnItem(iLoot));
