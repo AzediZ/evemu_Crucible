@@ -136,6 +136,7 @@ void ContainerSecurity::CheckOpen(Client* pClient, InventoryItemRef cRef)
         return;
     if (HasEntered(cRef->itemID(), pClient->GetCharacterID(), Inv::SecPassword::General))
         return;
+    m_asked[pClient->GetCharacterID()] = cRef->itemID();
     throw UserError("SCGeneralPasswordRequired");
 }
 
@@ -221,6 +222,13 @@ void ContainerSecurity::SetPassword(Client* pClient, InventoryItemRef cRef, uint
 void ContainerSecurity::EnterPassword(Client* pClient, InventoryItemRef cRef, uint8 which, PyRep* password)
 {
     // a wrong password isn't an error:  the client retries the call it was asked for, which asks again
+    if (!IsSecure(cRef) and (which == Inv::SecPassword::General)) {
+        /* taking something out of a container into another inventory asks for the source container's password,
+         *  but the client enters it on the inventory it called (the destination) */
+        std::map<uint32, uint32>::iterator itr = m_asked.find(pClient->GetCharacterID());
+        if (itr != m_asked.end())
+            cRef = sItemFactory.GetItemRefFromID(itr->second, false);
+    }
     if (!IsSecure(cRef))
         return;
     uint32 contID(cRef->itemID());
@@ -357,4 +365,5 @@ void ContainerSecurity::ForgetCharacter(uint32 charID)
             ++itr;
         }
     }
+    m_asked.erase(charID);
 }

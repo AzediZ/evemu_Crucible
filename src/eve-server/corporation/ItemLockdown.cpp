@@ -88,14 +88,19 @@ void ItemLockdown::Unlock(uint32 corpID, uint32 itemID)
     if (!IsLocked(itemID))
         throw UserError("CrpLockedItemNotFound");
 
-    // the station it was locked in
+    // the station it was locked in.  only the corp that locked it can unlock it
     uint32 stationID(0);
+    bool found(false);
     DBQueryResult res;
     if (sDatabase.RunQuery(res, "SELECT locationID FROM crpLockedItems WHERE itemID = %u AND ownerID = %u", itemID, corpID)) {
         DBResultRow row;
-        if (res.GetRow(row))
+        if (res.GetRow(row)) {
             stationID = row.GetUInt(0);
+            found = true;
+        }
     }
+    if (!found)
+        throw UserError("CrpLockedItemNotFound");
 
     CorporationDB::RemoveLockedItem(itemID);
     s_locked.erase(itemID);

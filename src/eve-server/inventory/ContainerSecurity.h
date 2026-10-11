@@ -105,6 +105,7 @@ private:
 
     std::map<uint32, SecData> m_cache;                      // contID/data.  lazily loaded; no row = no passwords
     std::map<uint32, std::map<uint32, uint8>> m_entered;    // contID/(charID/password kinds entered)
+    std::map<uint32, uint32> m_asked;                       // charID/contID last asked for its general password (see EnterPassword)
 };
 
 //Singleton
