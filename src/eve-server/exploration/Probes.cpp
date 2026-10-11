@@ -283,6 +283,10 @@ bool ProbeSE::ProcessTic()
                 // the ship it was returning to is gone.  the probe stays in space, lost
                 if (m_client != nullptr)
                     m_client->SendRemoteMessage("ScannerProbeShipLeftReturnAborted");
+                // Abandon() leaves the scan's maps alone (Scan::AbandonProbes iterates them).  drop out of them here,
+                //  or the scan keeps a pointer to us after we expire
+                if (m_scan != nullptr)
+                    m_scan->RemoveProbe(this);
                 Abandon();
                 return true;
             }

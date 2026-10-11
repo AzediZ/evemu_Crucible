@@ -141,6 +141,10 @@ PyResult ScanBound::RequestScans(PyCallArgs& call, std::optional <PyDict*> probe
     _log(SCAN__TRACE, "ScanBound::Handle_RequestScans() - size=%lli", call.tuple->size());
     call.Dump(SCAN__DUMP);
 
+    // the bound scanner outlives a dock (no ship ball then)
+    if (!m_client->IsInSpace() or (m_client->GetShipSE() == nullptr))
+        throw CustomError("You must be in space to use the scanner.");
+
     DestinyManager* pDestiny = m_client->GetShipSE()->DestinyMgr();
     if (pDestiny == nullptr) {
         codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
