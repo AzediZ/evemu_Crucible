@@ -74,6 +74,11 @@ public:
     void SaveLinkLevel(uint32 linkID, uint8 level);
     void SaveCommandCenter(uint32 pinID, uint32 charID, uint32 planetID, uint32 typeID, double latitude, double longitude);
     static void GetExtractorsForPlanet(uint32 planetID, DBQueryResult& res);
+    // pinID, typeID, ownerID, latitude, longitude of every command center on the planet
+    static void GetCommandPinsForPlanet(uint32 planetID, DBQueryResult& res);
+    // pinID, typeID, ownerID, latitude, longitude  and  endpoint1, endpoint2 of a character's colony on the planet
+    static void GetNetworkForOwner(uint32 planetID, uint32 charID, DBQueryResult& pins, DBQueryResult& links);
+    static uint32 GetLaunchOwner(uint32 itemID);
 
     void SaveLaunch(uint32 contID, uint32 charID, uint32 systemID, uint32 planetID, GPoint& pos);
     static void DeleteLaunch(uint32 contID);

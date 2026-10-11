@@ -209,6 +209,43 @@ void PlanetDB::GetExtractorsForPlanet(uint32 planetID, DBQueryResult& res)
     _log(DATABASE__RESULTS, "GetExtractorsForPlanet returned %lu items", res.GetRowCount());
 }
 
+void PlanetDB::GetCommandPinsForPlanet(uint32 planetID, DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+        "SELECT pinID, typeID, charID, latitude, longitude"
+        " FROM piCCPin WHERE planetID = %u", planetID))
+        _log(DATABASE__ERROR, "Error in GetCommandPinsForPlanet Query: %s", res.error.c_str());
+}
+
+void PlanetDB::GetNetworkForOwner(uint32 planetID, uint32 charID, DBQueryResult& pins, DBQueryResult& links)
+{
+    if (!sDatabase.RunQuery(pins,
+        "SELECT p.pinID, p.typeID, p.ownerID, p.latitude, p.longitude"
+        " FROM piPins AS p"
+        " JOIN piCCPin AS cc ON cc.pinID = p.ccPinID"
+        " WHERE cc.planetID = %u AND cc.charID = %u", planetID, charID))
+        _log(DATABASE__ERROR, "Error in GetNetworkForOwner Query: %s", pins.error.c_str());
+    if (!sDatabase.RunQuery(links,
+        "SELECT LEAST(l.endpoint1, l.endpoint2), GREATEST(l.endpoint1, l.endpoint2)"
+        " FROM piLinks AS l"
+        " JOIN piCCPin AS cc ON cc.pinID = l.ccPinID"
+        " WHERE cc.planetID = %u AND cc.charID = %u", planetID, charID))
+        _log(DATABASE__ERROR, "Error in GetNetworkForOwner Query: %s", links.error.c_str());
+}
+
+uint32 PlanetDB::GetLaunchOwner(uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT charID FROM piLaunches WHERE itemID = %u", itemID)) {
+        _log(DATABASE__ERROR, "Error in GetLaunchOwner query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
 bool PlanetDB::LoadColony(uint32 charID, uint32 planetID, PI_CCPin* ccPin)
 {
     DBQueryResult res;

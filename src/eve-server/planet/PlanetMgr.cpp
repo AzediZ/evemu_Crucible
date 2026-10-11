@@ -149,7 +149,7 @@ bool PlanetMgr::CreatePin(UUNCommand& nc) {
                 m_client->SendErrorMsg("Internal Server Error.  Ref: ServerError 04508.");
                 return true;
             }
-            m_colony->CreateCommandPin(uunccc.pinID, uunccc.typeID, uunccc.latitude, uunccc.longitude);
+            m_colony->CreateCommandPin(m_client, uunccc.pinID, uunccc.typeID, uunccc.latitude, uunccc.longitude);
             if (m_planet->GetCustomsOffice() == nullptr)
                 m_planet->CreateCustomsOffice();
             return false;
@@ -232,7 +232,7 @@ bool PlanetMgr::CreatePin(UUNCommand& nc) {
         return true;
     }
 
-    m_colony->CreatePin(groupID, uuncsp.pinID2, uuncsp.typeID, uuncsp.latitude, uuncsp.longitude);
+    m_colony->CreatePin(m_client, groupID, uuncsp.pinID2, uuncsp.typeID, uuncsp.latitude, uuncsp.longitude);
 
     //take the money, send wallet blink event record the transaction in their journal.
     std::string reason = "DESC:  ";

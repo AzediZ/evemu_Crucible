@@ -59,8 +59,9 @@ public:
     PyRep*                      GetPlanetResourceInfo();
     PyRep*                      GetExtractorsForPlanet(int32 planetID);
 
-    void                        AbandonColony(Colony* pColony);
-    Colony*                     GetColony(Client* pClient);
+    void                        AbandonColony(Client* pClient, Colony* pColony);
+    // loads the character's colony on this planet on first use.  colonies are owned by the planet
+    Colony*                     GetColony(uint32 charID);
 
     bool                        HasCOSE()               { return pCO != nullptr; }
     void                        CreateCustomsOffice();

@@ -72,33 +72,38 @@ BoundDispatcher* PlanetMgrService::BindObject(Client *client, PyRep* bindParamet
     }
 
     uint32 planetID = bindParameters->AsInt()->value();
-    auto it = this->m_instances.find (planetID);
+    // the colony on a planet is per character, so is the bound object
+    std::pair<uint32, uint32> key = std::make_pair(planetID, client->GetCharacterID());
+    auto it = this->m_instances.find (key);
 
     if (it != this->m_instances.end ())
         return it->second;
 
     StaticData sData = StaticData();
-    sDataMgr.GetStaticInfo(planetID, sData);
+    if (!sDataMgr.GetStaticInfo(planetID, sData) or (sData.systemID == 0)) {
+        _log(SERVICE__ERROR, "%s Service: %u is not a planetID", GetName().c_str(), planetID);
+        return nullptr;
+    }
     SystemManager* pSysMgr = sEntityList.FindOrBootSystem(sData.systemID);
     if (pSysMgr == nullptr) {
         client->SendErrorMsg("system boot failure");
         return nullptr;
     }
     SystemEntity* pSE = pSysMgr->GetSE(sData.itemID);
-    if (!pSE->IsPlanetSE()) {
+    if ((pSE == nullptr) or !pSE->IsPlanetSE()) {
         _log(SERVICE__ERROR, "%s Service: itemID is not planetID or planet not found", GetName().c_str());
         return nullptr;
     }
 
-    PlanetMgrBound* bound = new PlanetMgrBound(this->GetServiceManager (), *this, client, pSE->GetPlanetSE());
+    PlanetMgrBound* bound = new PlanetMgrBound(this->GetServiceManager (), *this, planetID, sData.systemID, client->GetCharacterID());
 
-    this->m_instances.insert_or_assign (planetID, bound);
+    this->m_instances.insert_or_assign (key, bound);
 
     return bound;
 }
 
 void PlanetMgrService::BoundReleased (PlanetMgrBound* bound) {
-    auto it = this->m_instances.find (bound->GetPlanetID());
+    auto it = this->m_instances.find (bound->GetKey());
 
     if (it == this->m_instances.end ())
         return;
@@ -122,23 +127,21 @@ PyResult PlanetMgrService::GetPlanet(PyCallArgs& call, PyInt* planetID) {
 }
 
 PyResult PlanetMgrService::DeleteLaunch(PyCallArgs& call, PyInt* launchID) {
-    //sm.RemoteSvc('planetMgr').DeleteLaunch
-    _log(PLANET__DEBUG, "PlanetMgrService::Handle_DeleteLaunch() size=%lli", call.tuple->size());
-    call.Dump(PLANET__DUMP);
+    //sm.RemoteSvc('planetMgr').DeleteLaunch(launchID)  -  'Remove' in the journal's launch list.
+    // launchID is the container's itemID (GetMyLaunchesDetails).  this only removes the journal entry; a container still in space stays.
+    if (PlanetDB::GetLaunchOwner(launchID->value()) != call.client->GetCharacterID())
+        return nullptr;
 
+    PlanetDB::DeleteLaunch(launchID->value());
     return nullptr;
 }
 
-PlanetMgrBound::PlanetMgrBound (EVEServiceManager& mgr, PlanetMgrService& parent, Client* client, PlanetSE* planet) :
+PlanetMgrBound::PlanetMgrBound (EVEServiceManager& mgr, PlanetMgrService& parent, uint32 planetID, uint32 systemID, uint32 charID) :
     EVEBoundObject(mgr, parent),
-    m_planet(planet)
+    m_planetID(planetID),
+    m_systemID(systemID),
+    m_charID(charID)
 {
-    m_colony = planet->GetColony(client);
-
-    m_colony->Init();
-
-    m_planetMgr = new PlanetMgr(client, planet, m_colony);
-
     this->Add("GetPlanetInfo", &PlanetMgrBound::GetPlanetInfo);
     this->Add("GetPlanetResourceInfo", &PlanetMgrBound::GetPlanetResourceInfo);
     this->Add("GetCommandPinsForPlanet", &PlanetMgrBound::GetCommandPinsForPlanet);
@@ -159,13 +162,33 @@ PlanetMgrBound::PlanetMgrBound (EVEServiceManager& mgr, PlanetMgrService& parent
     this->Add("GMRunDepletionSim", &PlanetMgrBound::GMRunDepletionSim);
 }
 
+PlanetSE* PlanetMgrBound::GetPlanetSE()
+{
+    SystemManager* pSysMgr(sEntityList.FindOrBootSystem(m_systemID));
+    SystemEntity* pSE(pSysMgr == nullptr ? nullptr : pSysMgr->GetSE(m_planetID));
+    if ((pSE == nullptr) or (pSE->GetPlanetSE() == nullptr))
+        throw CustomError ("Planet not available");
+    return pSE->GetPlanetSE();
+}
+
+Colony* PlanetMgrBound::GetColony()
+{
+    return GetPlanetSE()->GetColony(m_charID);
+}
+
+void PlanetMgrBound::CheckCaller(Client* pClient)
+{
+    if (pClient->GetCharacterID() != m_charID)
+        throw CustomError ("This planet view belongs to another character.");
+}
+
 PyResult PlanetMgrBound::GetPlanetResourceInfo(PyCallArgs &call) {
     if (!sConfig.cosmic.PIEnabled) {
         call.client->SendErrorMsg("The PI system is currently disabled.");
         return nullptr;
     }
 
-    return m_planet->GetPlanetResourceInfo();
+    return GetPlanetSE()->GetPlanetResourceInfo();
 }
 
 PyResult PlanetMgrBound::GetPlanetInfo(PyCallArgs &call) {
@@ -175,15 +198,16 @@ PyResult PlanetMgrBound::GetPlanetInfo(PyCallArgs &call) {
     }
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GetPlanetInfo() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
+    CheckCaller(call.client);
 
-    PyRep* res = m_planet->GetPlanetInfo(m_colony);
+    PyRep* res = GetPlanetSE()->GetPlanetInfo(GetColony());
         res->Dump(PLANET__RES_DUMP, "    ");
 
     return res;
 }
 
 PyResult PlanetMgrBound::GetExtractorsForPlanet(PyCallArgs &call, PyInt* planetID) {
-    return m_planet->GetExtractorsForPlanet(planetID->value());
+    return GetPlanetSE()->GetExtractorsForPlanet(m_planetID);
 }
 
 PyResult PlanetMgrBound::UserUpdateNetwork(PyCallArgs &call, PyList* commandList) {
@@ -193,8 +217,11 @@ PyResult PlanetMgrBound::UserUpdateNetwork(PyCallArgs &call, PyList* commandList
     }
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_UserUpdateNetwork() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
+    CheckCaller(call.client);
 
-    return m_planetMgr->UpdateNetwork(commandList);
+    PlanetSE* pPlanet(GetPlanetSE());
+    PlanetMgr mgr(call.client, pPlanet, pPlanet->GetColony(m_charID));
+    return mgr.UpdateNetwork(commandList);
 }
 
 PyResult PlanetMgrBound::GetProgramResultInfo(PyCallArgs &call, PyInt* ecuID, PyInt* typeID, PyList* heads, PyFloat* headRadius) {
@@ -226,7 +253,8 @@ PyResult PlanetMgrBound::GetProgramResultInfo(PyCallArgs &call, PyInt* ecuID, Py
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GetProgramResultInfo() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
      */
-    return sPIDataMgr.GetProgramResultInfo(m_colony, ecuID->value(), typeID->value(), heads, headRadius->value());
+    CheckCaller(call.client);
+    return sPIDataMgr.GetProgramResultInfo(GetColony(), ecuID->value(), typeID->value(), heads, headRadius->value());
 }
 
 PyResult PlanetMgrBound::GetResourceData(PyCallArgs &call, PyObject* info) {
@@ -265,15 +293,17 @@ PyResult PlanetMgrBound::GetResourceData(PyCallArgs &call, PyObject* info) {
         return nullptr;
     }
 
-    return m_planet->GetResourceData(dict);
+    return GetPlanetSE()->GetResourceData(dict);
 }
 
 //01:52:23 [PlanetDebug] PlanetMgrBound::Handle_UserAbandonPlanet() size=0
 PyResult PlanetMgrBound::UserAbandonPlanet(PyCallArgs &call) {
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_UserAbandonPlanet() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
+    CheckCaller(call.client);
 
-    m_planet->AbandonColony(m_colony);
+    PlanetSE* pPlanet(GetPlanetSE());
+    pPlanet->AbandonColony(call.client, pPlanet->GetColony(m_charID));
 
     return nullptr;
 }
@@ -303,12 +333,17 @@ PyResult PlanetMgrBound::UserLaunchCommodities(PyCallArgs &call, PyInt* commandP
 eve-server: /usr/local/src/eve/EVEmu/src/eve-common/python/PyRep.h:141: PyInt* PyRep::AsInt(): Assertion `IsInt()' failed.
      */
     //dict->Dump(PLANET__DUMP, "   ");
+    CheckCaller(call.client);
     std::map<uint16, uint32> items;
     PyDict::const_iterator itr = commoditiesToLaunch->begin();
-    for (; itr != commoditiesToLaunch->end(); ++itr)
-        items.insert(std::pair<uint16, uint32>(PyRep::IntegerValue(itr->first), PyRep::IntegerValue(itr->second)));
+    for (; itr != commoditiesToLaunch->end(); ++itr) {
+        // quantities may arrive as floats
+        int64 qty = itr->second->IsFloat() ? (int64)itr->second->AsFloat()->value() : PyRep::IntegerValue(itr->second);
+        if (qty > 0)
+            items[PyRep::IntegerValue(itr->first)] = (uint32)qty;
+    }
 
-    return m_colony->LaunchCommodities(commandPinID->value(), items);
+    return GetColony()->LaunchCommodities(call.client, commandPinID->value(), items);
 }
 
 PyResult PlanetMgrBound::UserTransferCommodities(PyCallArgs &call, PyList* path, PyDict* commodities) {
@@ -333,12 +368,18 @@ PyResult PlanetMgrBound::UserTransferCommodities(PyCallArgs &call, PyList* path,
         15:19:15 [PlanetCallDump]         [ 1]   [ 1] Value: Integer field: 44400
         */
 
+    CheckCaller(call.client);
+    if (path->size() < 2)
+        throw UserError("CreateRouteTooShort");
     std::map<uint16, uint32> items;
     PyDict::const_iterator itr = commodities->begin();
-    for (; itr != commodities->end(); ++itr)
-        items.insert(std::pair<uint16, uint32>(PyRep::IntegerValue(itr->first), PyRep::IntegerValue(itr->second)));
+    for (; itr != commodities->end(); ++itr) {
+        int64 qty = itr->second->IsFloat() ? (int64)itr->second->AsFloat()->value() : PyRep::IntegerValue(itr->second);
+        if (qty > 0)
+            items[PyRep::IntegerValue(itr->first)] = (uint32)qty;
+    }
 
-    return m_colony->TransferCommodities(PyRep::IntegerValue(path->items.front()), PyRep::IntegerValue(path->items.back()), items);
+    return GetColony()->TransferCommodities(call.client, PyRep::IntegerValue(path->items.front()), PyRep::IntegerValue(path->items.back()), items);
 }
 
 
@@ -356,8 +397,21 @@ PyResult PlanetMgrBound::GetCommandPinsForPlanet(PyCallArgs &call, PyInt* planet
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GetCommandPinsForPlanet() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
 
-    // returns empty dict if none
-    return new PyDict();
+    // {charID: KeyVal(pinID, typeID, ownerID, latitude, longitude)}  (otherPinManager.RenderCommandCentersOfOtherCharacters)
+    DBQueryResult res;
+    PlanetDB::GetCommandPinsForPlanet(m_planetID, res);
+    PyDict* dict = new PyDict();
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PyDict* args = new PyDict();
+            args->SetItemString("pinID", new PyInt(row.GetInt(0)));
+            args->SetItemString("typeID", new PyInt(row.GetInt(1)));
+            args->SetItemString("ownerID", new PyInt(row.GetInt(2)));
+            args->SetItemString("latitude", new PyFloat(row.GetDouble(3)));
+            args->SetItemString("longitude", new PyFloat(row.GetDouble(4)));
+        dict->SetItem(new PyInt(row.GetInt(2)), new PyObject("util.KeyVal", args));
+    }
+    return dict;
 }
 
 PyResult PlanetMgrBound::GetFullNetworkForOwner(PyCallArgs &call, PyInt* planetID, PyInt* characterID) {
@@ -366,8 +420,33 @@ PyResult PlanetMgrBound::GetFullNetworkForOwner(PyCallArgs &call, PyInt* planetI
     _log(PLANET__DEBUG, "PlanetMgrBound::Handle_GetFullNetworkForOwner() size=%lli", call.tuple->size());
     call.Dump(PLANET__DUMP);
 
-    // returns empty dict if none
-    return new PyDict();
+    // pins, links = GetFullNetworkForOwner(planetID, charID)   (otherPinManager.RenderOtherCharactersNetwork)
+    //   pins are KeyVal(pinID, typeID, ownerID, latitude, longitude), links are (endpoint1, endpoint2)
+    //   other characters' pins are public in the planet view, but only on the bound planet
+    DBQueryResult pins, links;
+    PlanetDB::GetNetworkForOwner(m_planetID, characterID->value(), pins, links);
+    PyList* pinList = new PyList();
+    DBResultRow row;
+    while (pins.GetRow(row)) {
+        PyDict* args = new PyDict();
+            args->SetItemString("pinID", new PyInt(row.GetInt(0)));
+            args->SetItemString("typeID", new PyInt(row.GetInt(1)));
+            args->SetItemString("ownerID", new PyInt(row.GetInt(2)));
+            args->SetItemString("latitude", new PyFloat(row.GetDouble(3)));
+            args->SetItemString("longitude", new PyFloat(row.GetDouble(4)));
+        pinList->AddItem(new PyObject("util.KeyVal", args));
+    }
+    PyList* linkList = new PyList();
+    while (links.GetRow(row)) {
+        PyTuple* link = new PyTuple(2);
+            link->SetItem(0, new PyInt(row.GetInt(0)));
+            link->SetItem(1, new PyInt(row.GetInt(1)));
+        linkList->AddItem(link);
+    }
+    PyTuple* res = new PyTuple(2);
+        res->SetItem(0, pinList);
+        res->SetItem(1, linkList);
+    return res;
 }
 
 PyResult PlanetMgrBound::GMAddCommodity(PyCallArgs &call, PyInt* pinID, PyInt* typeID, PyInt* quantity) {

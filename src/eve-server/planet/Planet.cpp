@@ -253,21 +253,23 @@ PyRep* PlanetSE::GetExtractorsForPlanet(int32 planetID) {
     return list;
 }
 
-Colony* PlanetSE::GetColony(Client* pClient)
+Colony* PlanetSE::GetColony(uint32 charID)
 {
-    std::map<uint32, Colony*>::const_iterator itr = m_colonies.find(pClient->GetCharacterID());
+    std::map<uint32, Colony*>::const_iterator itr = m_colonies.find(charID);
     if (itr != m_colonies.end())
         return itr->second;
-    Colony* pColony = new Colony(m_services, pClient, this);
-    m_colonies[pClient->GetCharacterID()] = pColony;
+    Colony* pColony = new Colony(m_services, charID, this);
+    pColony->Init();
+    m_colonies[charID] = pColony;
 
     return pColony;
 }
 
-void PlanetSE::AbandonColony(Colony* pColony)
+void PlanetSE::AbandonColony(Client* pClient, Colony* pColony)
 {
-    pColony->AbandonColony();
+    pColony->AbandonColony(pClient);
     m_colonies.erase(pColony->GetOwner());
+    SafeDelete(pColony);
 }
 
 void PlanetSE::CreateCustomsOffice()

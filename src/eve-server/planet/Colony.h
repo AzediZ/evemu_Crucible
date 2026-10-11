@@ -35,10 +35,12 @@
 class PlanetSE;
 class SystemEntity;
 class PlanetMgr;
+class CustomsSE;
 
 class Colony {
 public:
-    Colony(EVEServiceManager& mgr, Client* pClient, SystemEntity* pSE);
+    // a colony belongs to a character, not to a session.  calls that need the acting client take it as a parameter.
+    Colony(EVEServiceManager& mgr, uint32 ownerID, PlanetSE* pSE);
     ~Colony();
 
     void Init();
@@ -48,7 +50,7 @@ public:
     void Update(bool updateTimes=false);
     void Shutdown();
     void UpdatePlantPins(uint32 pinID=0);  // for saving current data from runtime plantPin to saved colonyPin
-    void AbandonColony();
+    void AbandonColony(Client* pClient);
 
     void Process();
     void ProcessECUs(bool& save);
@@ -56,15 +58,15 @@ public:
 
     void RemovePin(uint32 pinID);
     void RemoveLink(uint32 src, uint32 dest);
-    void RemoveRoute(uint16 routeID);
+    void RemoveRoute(uint32 routeID);
 
     void UpgradeLink(uint32 src, uint32 dest, uint8 level);
     void UpgradeCommandCenter(uint32 pinID, int8 level);
 
-    void CreatePin(uint32 groupID, uint32 pinID, uint32 typeID, double latitude, double longitude);
+    void CreatePin(Client* pClient, uint32 groupID, uint32 pinID, uint32 typeID, double latitude, double longitude);
     void CreateLink(uint32 src, uint32 dest, uint16 level);
     void CreateRoute(uint16 routeID, uint32 typeID, uint32 qty, PyList* path);
-    void CreateCommandPin(uint32 itemID, uint32 typeID, double latitude, double longitude);
+    void CreateCommandPin(Client* pClient, uint32 itemID, uint32 typeID, double latitude, double longitude);
 
     void AddExtractorHead(uint32 ecuID, uint16 headID, double latitude, double longitude);
     void MoveExtractorHead(uint32 ecuID, uint16 headID, double latitude, double longitude);
@@ -74,8 +76,8 @@ public:
     void SetSchematic(uint32 pinID, uint8 schematicID=0);
     void SetProgramResults(uint32 ecuID, uint16 typeID, uint16 numCycles, float headRadius, float cycleTime, uint32 qtyPerCycle);
 
-    PyRep* LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items);
-    void PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importItems, std::map< uint32, uint16 > exportItems, double taxRate);
+    PyRep* LaunchCommodities(Client* pClient, uint32 pinID, std::map< uint16, uint32 >& items);
+    void PlanetXfer(Client* pClient, CustomsSE* pCO, uint32 spaceportID, std::map< uint32, uint32 > importItems, std::map< uint32, uint32 > exportItems, double taxRate);
 
     void PrioritizeRoute(uint16 routeID, uint8 priority);
 
@@ -85,7 +87,7 @@ public:
     PyTuple* GetPins();
     PyTuple* GetLinks();
     PyTuple* GetRoutes();
-    PyDict* TransferCommodities(uint32 srcID, uint32 destID, std::map< uint16, uint32 > items);
+    PyRep* TransferCommodities(Client* pClient, uint32 srcID, uint32 destID, std::map< uint16, uint32 > items);
 
     bool HasColony()                                    { return (ccPin->ccPinID ? true : false); }
 
@@ -96,7 +98,7 @@ private:
     EVEServiceManager& m_svcMgr;
     PlanetSE* m_pSE;
     PI_CCPin* ccPin;
-    Client* m_client;
+    uint32 m_ownerID;
 
     Timer m_colonyTimer;
 

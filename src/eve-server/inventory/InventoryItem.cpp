@@ -604,12 +604,11 @@ void InventoryItem::Delete()
 
 void InventoryItem::ToVirtual(uint32 locationID)
 {
-    InventoryItemRef iRef = sItemFactory.GetItemContainerRef(m_itemID, false);
-    if (iRef.get() != nullptr) {
-        // verify this gets inventory containing item before trying to manipulate
-        //Inventory* pInv = iRef->GetMyInventory();
-        if (pInventory != nullptr)  // this isnt right...this item wont be in it's own inventory
-            pInventory->RemoveItem(InventoryItemRef(this));
+    // take this item out of the inventory of the container holding it
+    if (IsValidLocationID(m_data.locationID)) {
+        InventoryItemRef iRef = sItemFactory.GetItemRef(m_data.locationID);
+        if ((iRef.get() != nullptr) and (iRef->GetMyInventory() != nullptr))
+            iRef->GetMyInventory()->RemoveItem(InventoryItemRef(this));
     }
     if (pAttributeMap != nullptr)   // should never be null, but just in case
         pAttributeMap->Delete();

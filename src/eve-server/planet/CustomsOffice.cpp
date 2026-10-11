@@ -51,7 +51,8 @@ m_system(system)
     m_oData = EVEPOS::OrbitalData();
 
     m_oData.planetID = atoi(m_self->customInfo().c_str());
-    m_planetSE = m_system->GetPlanet(m_oData.planetID)->GetPlanetSE();
+    SystemEntity* pPlanet(m_oData.planetID ? m_system->GetPlanet(m_oData.planetID) : nullptr);
+    m_planetSE = (pPlanet == nullptr ? nullptr : pPlanet->GetPlanetSE());
 
     sRef->SetMySE(this);
 
@@ -116,7 +117,7 @@ void CustomsSE::InitData()
      *  +roll is counterclockwise from y 0
      */
     GPoint pos(m_self->position());
-    GPoint targ(m_planetSE->GetPosition());
+    GPoint targ(m_planetSE == nullptr ? pos : m_planetSE->GetPosition());
     float z = targ.z - pos.z;   // rise on z axis
     float x = targ.x - pos.x;    // run on x axis
     float y = targ.y - pos.y;   // rise on y axis

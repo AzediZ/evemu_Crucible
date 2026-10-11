@@ -106,10 +106,10 @@ P3             60,000 ISK
 P4          1,200,000 ISK
 */
 
-Colony::Colony(EVEServiceManager& mgr, Client* pClient, SystemEntity* pSE)
+Colony::Colony(EVEServiceManager& mgr, uint32 ownerID, PlanetSE* pSE)
 :m_svcMgr(mgr),
-m_client(pClient),
-m_pSE(pSE->GetPlanetSE()),
+m_pSE(pSE),
+m_ownerID(ownerID),
 m_colonyTimer(0)
 {
     ccPin = new PI_CCPin();
@@ -125,7 +125,7 @@ m_colonyTimer(0)
     m_colonyID = 0;
     m_procTime = 0; // process check.  init to zero and stores last proc time, which is lastRunTime in command center
     tempPinIDs.clear();
-    _log(COLONY__DEBUG, "Colony::Colony() c'tor called for %s(%u) by %s(%u)", pSE->GetName(), pSE->GetID(), pClient->GetName(), pClient->GetCharacterID());
+    _log(COLONY__DEBUG, "Colony::Colony() c'tor called for %s(%u) owner %u", pSE->GetName(), pSE->GetID(), ownerID);
 }
 
 Colony::~Colony()
@@ -145,7 +145,7 @@ void Colony::Init()
         return;
 
     // check for and load colony if the char has one on this planet
-    if (m_db.LoadColony(m_client->GetCharacterID(), m_pSE->GetID(), ccPin)) {
+    if (m_db.LoadColony(m_ownerID, m_pSE->GetID(), ccPin)) {
         m_colonyID = ccPin->ccPinID;
         Load();
     }
@@ -220,7 +220,7 @@ void Colony::Process()
         //  this is part of clever code to avoid db hits on every update.
         //  this method will check for updated contents and save to db as needed.
         std::map<uint32, PI_Pin>::iterator itr;
-        for (auto cur : ccPin->pins)
+        for (auto& cur : ccPin->pins)
             if (cur.second.update) {
                 m_db.RemoveContents(cur.first);
                 m_db.SavePinContents(m_colonyID, cur.first, cur.second.contents);
@@ -247,13 +247,13 @@ void Colony::Process()
 
 uint32 Colony::GetOwner()
 {
-    return m_client->GetCharacterID();
+    return m_ownerID;
 }
 
 void Colony::LoadPlants()
 {
     bool update = false;
-    for (auto cur: ccPin->pins) {
+    for (auto& cur: ccPin->pins) {
         // set proc time on load
         if (cur.second.isCommandCenter) {
             m_procTime = cur.second.lastRunTime;
@@ -336,7 +336,7 @@ void Colony::UpdatePlantPins(uint32 pinID/*0*/)
     m_db.UpdatePins(pinID, ccPin);
 }
 
-void Colony::AbandonColony()
+void Colony::AbandonColony(Client* pClient)
 {
     /** @todo  go thru entire pinMap and delete each itemRef to remove pin/link contents from db. */
     for (auto cur : ccPin->pins) {
@@ -349,26 +349,27 @@ void Colony::AbandonColony()
         sItemFactory.RemoveItem(cur.first);
     }
     InventoryItemRef iRef = sItemFactory.GetItemRef(m_colonyID);
-    iRef->Delete();
-    m_db.DeleteColony(m_colonyID, m_pSE->GetID(), m_client->GetCharacterID());
+    if (iRef.get() != nullptr)
+        iRef->Delete();
+    m_db.DeleteColony(m_colonyID, m_pSE->GetID(), m_ownerID);
     SafeDelete(ccPin);
     ccPin = new PI_CCPin();
     m_colonyID = 0;
     m_colonyTimer.Disable();
 }
 
-void Colony::CreateCommandPin(uint32 itemID, uint32 typeID, double latitude, double longitude) {
+void Colony::CreateCommandPin(Client* pClient, uint32 itemID, uint32 typeID, double latitude, double longitude) {
     m_colonyID = itemID;
     ccPin->ccPinID = itemID;
-    m_db.SaveCommandCenter(itemID, m_client->GetCharacterID(), m_pSE->GetID(), typeID, latitude, longitude);
-    m_db.AddPlanetForChar(m_pSE->SystemMgr()->GetID(), m_pSE->GetID(), m_client->GetCharacterID(), m_colonyID, m_pSE->GetTypeID());
+    m_db.SaveCommandCenter(itemID, m_ownerID, m_pSE->GetID(), typeID, latitude, longitude);
+    m_db.AddPlanetForChar(m_pSE->SystemMgr()->GetID(), m_pSE->GetID(), m_ownerID, m_colonyID, m_pSE->GetTypeID());
     ccPin->level = PI::Pin::Level0;
     m_procTime = GetFileTimeNow();
-    CreatePin(EVEDB::invGroups::Command_Centers, itemID, typeID, latitude, longitude);
+    CreatePin(pClient, EVEDB::invGroups::Command_Centers, itemID, typeID, latitude, longitude);
     m_db.SavePins(ccPin);
 }
 
-void Colony::CreatePin(uint32 groupID, uint32 pinID, uint32 typeID, double latitude, double longitude) {
+void Colony::CreatePin(Client* pClient, uint32 groupID, uint32 pinID, uint32 typeID, double latitude, double longitude) {
     /** @todo will have to write code for effects and checks for pg/cpu/m3/etc for all of these.  */
     // maybe not...client checks before sending command
     using namespace EVEDB::invGroups;
@@ -376,17 +377,19 @@ void Colony::CreatePin(uint32 groupID, uint32 pinID, uint32 typeID, double latit
     InventoryItemRef iRef(nullptr);
     if (groupID == Command_Centers) {
         iRef = sItemFactory.GetItemRef(m_colonyID);
+        if (iRef.get() == nullptr)
+            throw UserError("CannotBuildCommandPin");
         if (iRef->quantity() > 1) {
             // check for stack of CC items, and split as needed
-            ItemData data(typeID, m_client->GetCharacterID(), locTemp, flagNone, iRef->quantity() -1);
+            ItemData data(typeID, m_ownerID, locTemp, flagNone, iRef->quantity() -1);
             InventoryItemRef iRef2 = sItemFactory.SpawnItem(data);
-            iRef2->Move(m_client->GetShipID(), flagCargoHold);
+            iRef2->Move(pClient->GetShipID(), flagCargoHold);
             iRef->SetQuantity(1);
         }
-        m_client->GetShip()->RemoveItem(iRef);
+        pClient->GetShip()->RemoveItem(iRef);
     } else {
         // type, owner, location, flag, qty
-        ItemData data(typeID, m_client->GetCharacterID(), m_pSE->GetID(), flagNone, 1);
+        ItemData data(typeID, m_ownerID, m_pSE->GetID(), flagNone, 1);
         iRef = sItemFactory.SpawnItem(data);
 
         /*  this shit doesnt work....changes arent sent to client.  not sure why
@@ -394,18 +397,18 @@ void Colony::CreatePin(uint32 groupID, uint32 pinID, uint32 typeID, double latit
         m_cpu = iRef->GetAttribute(AttrCpuLoad).get_int();
         if (groupID != Planetary_Links) {
             // reset pg/cpu needs based on char skills for all modules (ex links)
-            m_pg *= (1 - ( 0.05f * (m_client->GetChar()->GetSkillLevel(EvESkill::Engineering, true))));               // 5% decrease in need
-            m_pg *= (1 - ( 0.01f * (m_client->GetChar()->GetSkillLevel(EvESkill::EnergyManagement, true))));          // 1% decrease in need
-            m_pg *= (1 - ( 0.01f * (m_client->GetChar()->GetSkillLevel(EvESkill::CommandCenterUpgrades, true))));     // 1% decrease in need
-            m_pg *= (1 - ( 0.01f * (m_client->GetChar()->GetSkillLevel(EvESkill::EnergySystemsOperation, true))));    // 1% decrease in need
+            m_pg *= (1 - ( 0.05f * (pClient->GetChar()->GetSkillLevel(EvESkill::Engineering, true))));               // 5% decrease in need
+            m_pg *= (1 - ( 0.01f * (pClient->GetChar()->GetSkillLevel(EvESkill::EnergyManagement, true))));          // 1% decrease in need
+            m_pg *= (1 - ( 0.01f * (pClient->GetChar()->GetSkillLevel(EvESkill::CommandCenterUpgrades, true))));     // 1% decrease in need
+            m_pg *= (1 - ( 0.01f * (pClient->GetChar()->GetSkillLevel(EvESkill::EnergySystemsOperation, true))));    // 1% decrease in need
 
-            m_cpu *= (1 - ( 0.05f * (m_client->GetChar()->GetSkillLevel(EvESkill::Electronics, true))));              // 5% decrease in need
-            m_cpu *= (1 - ( 0.01f * (m_client->GetChar()->GetSkillLevel(EvESkill::CommandCenterUpgrades, true))));    // 1% decrease in need
+            m_cpu *= (1 - ( 0.05f * (pClient->GetChar()->GetSkillLevel(EvESkill::Electronics, true))));              // 5% decrease in need
+            m_cpu *= (1 - ( 0.01f * (pClient->GetChar()->GetSkillLevel(EvESkill::CommandCenterUpgrades, true))));    // 1% decrease in need
         } */
     }
 
     pin.typeID = typeID;
-    pin.ownerID = m_client->GetCharacterID();
+    pin.ownerID = m_ownerID;
     pin.latitude = latitude;
     pin.longitude = longitude;
     pin.state = PI::Pin::State::Idle;
@@ -483,7 +486,7 @@ void Colony::CreateLink(uint32 src, uint32 dest, uint16 level) {
         if (itr != tempPinIDs.end())
             dest = itr->second;
     }
-    ItemData data(2280, m_client->GetCharacterID(), locTemp, flagNone, 1);
+    ItemData data(2280, m_ownerID, locTemp, flagNone, 1);
     InventoryItemRef iRef = sItemFactory.SpawnItem(data);
     iRef->Move(m_pSE->GetID(), flagPlanetSurface, true);
     iRef->SaveItem();
@@ -602,8 +605,8 @@ void Colony::UpgradeLink(uint32 src, uint32 dest, uint8 level)
 {
     std::map<uint32, PI_Link>::iterator itr = ccPin->links.begin();
     for (; itr != ccPin->links.end(); ++itr)
-        if (itr->second.endpoint1 == src)
-            if (itr->second.endpoint2 == dest) {
+        if (((itr->second.endpoint1 == src) and (itr->second.endpoint2 == dest))
+        or  ((itr->second.endpoint1 == dest) and (itr->second.endpoint2 == src))) {
                 itr->second.level = level;
                 m_db.SaveLinks(ccPin);
                 return;
@@ -683,8 +686,8 @@ void Colony::RemoveLink(uint32 src, uint32 dest)
 {
     std::map<uint32, PI_Link>::iterator itr = ccPin->links.begin();
     for (; itr != ccPin->links.end(); ++itr)
-        if (itr->second.endpoint1 == src)
-            if (itr->second.endpoint2 == dest) {
+        if (((itr->second.endpoint1 == src) and (itr->second.endpoint2 == dest))
+        or  ((itr->second.endpoint1 == dest) and (itr->second.endpoint2 == src))) {
                 _log(COLONY__INFO, "Colony::RemoveLink() - Removing linkID %u - src: %u, dest: %u", itr->first, src, dest);
                 m_db.RemoveLink(itr->first);
                 ccPin->links.erase(itr);
@@ -692,9 +695,11 @@ void Colony::RemoveLink(uint32 src, uint32 dest)
             }
 }
 
-void Colony::RemoveRoute(uint16 routeID)
+void Colony::RemoveRoute(uint32 routeID)
 {
     std::map<uint16, PI_Route>::iterator routeItr = ccPin->routes.find(routeID);
+    if (routeItr == ccPin->routes.end())
+        throw UserError("RouteDoesNotExist");
     m_srcRoutes.erase(routeItr->second.srcPinID);
     m_destRoutes.erase(routeItr->second.destPinID);
     ccPin->routes.erase(routeID);
@@ -806,8 +811,12 @@ void Colony::InstallProgram(uint32 ecuID, uint16 typeID, float headRadius, Plane
         return;
     }
     if (typeID < 1) {
-        // uninstall program
-        itr->second = PI_Pin();
+        // uninstall program.  only the program goes; the pin keeps its position, owner and heads
+        itr->second.programType = 0;
+        itr->second.qtyPerCycle = 0;
+        itr->second.expiryTime = 0;
+        itr->second.installTime = 0;
+        itr->second.state = PI::Pin::State::Idle;
         // reset extraction quantity in ecu attrib.  this doesnt check for invalid item
         sItemFactory.GetItemRef(ecuID)->ResetAttribute(AttrPinExtractionQuantity);
         return;
@@ -862,21 +871,17 @@ void Colony::SetProgramResults(uint32 ecuID, uint16 typeID, uint16 numCycles, fl
  * {'FullPath': u'UI/Messages', 'messageID': 256795, 'label': u'CreateRouteCommodityProductionTooSmallBody'}(u"You are unable to create this shipping route as the route's origin would not produce enough {typeName} to fulfill all of its existing routes, in addition to the new one.", None, {u'{typeName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName'}})
  * {'FullPath': u'UI/Messages', 'messageID': 256796, 'label': u'CreateRouteCommodityNotProducedBody'}(u"You are unable to create a shipping route for {typeName}, as it is not produced at the route's origin.", None, {u'{typeName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName'}})
  */
-PyDict* Colony::TransferCommodities(uint32 srcID, uint32 destID, std::map< uint16, uint32 > items)
+PyRep* Colony::TransferCommodities(Client* pClient, uint32 srcID, uint32 destID, std::map< uint16, uint32 > items)
 {
     std::map<uint32, PI_Pin>::iterator src = ccPin->pins.find(srcID);
     if (src == ccPin->pins.end()) {
         _log(COLONY__ERROR, "Colony::TransferCommodities() - srcPin %u not found in ccPin.pins map", srcID);
-        if (m_client->CanThrow())
-            throw CustomError ("Source not found.");
-        return nullptr; // make error and exit.
+        throw UserError("RouteFailedValidationPinDoesNotExist");
     }
     std::map<uint32, PI_Pin>::iterator dest = ccPin->pins.find(destID);
     if (dest == ccPin->pins.end()) {
         _log(COLONY__ERROR, "Colony::TransferCommodities() - destPin %u not found in ccPin.pins map", destID);
-        if (m_client->CanThrow())
-            throw CustomError ("Destination not found.");
-        return nullptr; // make error and exit.
+        throw UserError("RouteFailedValidationPinDoesNotExist");
     }
     /*{'FullPath': u'UI/Messages', 'messageID': 256630, 'label': u'ExpeditedTransferNotEnoughSpaceBody'}(u'There is not enough space at the transfer destination for the selected commodities.', None, None)
      * {'FullPath': u'UI/Messages', 'messageID': 256775, 'label': u'CannotPutMissionItemInCargolinkBody'}(u'You cannot store the {typeName} in a planetary customs facility, as it an agent has issued a special embargo for this particular item.', None, {u'{typeName}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'typeName'}})
@@ -911,11 +916,11 @@ PyDict* Colony::TransferCommodities(uint32 srcID, uint32 destID, std::map< uint1
     m_db.SaveContents(ccPin);
 
     // simTime = time to stop (currentSimTime), sourceRunTime = lastRunTime
-    PyDict* args = new PyDict();
-    /** @todo this needs to be updated to use process times (for next cycle end) */
-    args->SetItemString("simTime", new PyLong(GetFileTimeNow() + (EvE::Time::Minute * 15)));  // arbitrary 15 minute run time
-    src->second.lastRunTime = 0; //m_procTime;
-    args->SetItemString("sourceRunTime", new PyLong(m_procTime));
+    // simTime, sourceRunTime = UserTransferCommodities(path, commodities)
+    PyTuple* args = new PyTuple(2);
+    args->SetItem(0, new PyLong(m_procTime));
+    src->second.lastRunTime = m_procTime;
+    args->SetItem(1, new PyLong(src->second.lastRunTime));
 
     /*
      * def GetExpeditedTransferTime(linkBandwidth, commodities):
@@ -925,7 +930,7 @@ PyDict* Colony::TransferCommodities(uint32 srcID, uint32 destID, std::map< uint1
     return args;
 }
 
-PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items)
+PyRep* Colony::LaunchCommodities(Client* pClient, uint32 pinID, std::map< uint16, uint32 >& items)
 {
     // this will export items from CC to jetcan in space.
     // launchpad (Spaceport) xfers items to/from customs office
@@ -942,24 +947,21 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
     GPoint location(pSysMgr->GetSE(m_pSE->GetID())->GetPosition());
     location.MakeRandomPointOnSphere(m_pSE->GetRadius() + 2000000);   //2000km orbit for launch can
     ItemData canData(EVEDB::invTypes::PlanetaryLaunchContainer,
-                    m_client->GetCharacterID(),  // owner is Character
+                    m_ownerID,  // owner is Character
                     pSysMgr->GetID(),
                     flagNone,
                     "PI Commodities Container",
                     location);
 
     CargoContainerRef contRef = sItemFactory.SpawnCargoContainer(canData);
-    if (contRef.get() == nullptr) {
-        contRef->Delete();
-        if (m_client->CanThrow())
-            throw CustomError ("Unable to spawn item of type %u.", EVEDB::invTypes::PlanetaryLaunchContainer);
-    }
+    if (contRef.get() == nullptr)
+        throw CustomError ("Unable to spawn item of type %u.", EVEDB::invTypes::PlanetaryLaunchContainer);
 
     FactionData data = FactionData();
-        data.allianceID = m_client->GetAllianceID();
-        data.corporationID = m_client->GetCorporationID();
-        data.factionID = m_client->GetWarFactionID();
-        data.ownerID = m_client->GetCharacterID();
+        data.allianceID = pClient->GetAllianceID();
+        data.corporationID = pClient->GetCorporationID();
+        data.factionID = pClient->GetWarFactionID();
+        data.ownerID = m_ownerID;
     // create new container SE
     ContainerSE* cSE = new ContainerSE(contRef, m_svcMgr, pSysMgr, data);
     contRef->SetMySE(cSE);      // item-to-entity internal interface
@@ -994,7 +996,7 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
             case 3:     cost += (  900.00 * cur.second);    break;
             case 4:     cost += (75000.00 * cur.second);    break;
         }
-        ItemData iData(cur.first, m_client->GetCharacterID(), locTemp, flagNone, cur.second);
+        ItemData iData(cur.first, m_ownerID, locTemp, flagNone, cur.second);
         InventoryItemRef iRef = sItemFactory.SpawnItem(iData);
         if (iRef.get() == nullptr)
             continue;
@@ -1004,8 +1006,8 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
             iRef->SaveItem();
             ++count;
         } else {
-            _log(COLONY__WARNING, "%s: PI Commodity Container %u is full.", m_client->GetName(), contRef->itemID());
-            m_client->SendErrorMsg("Your Commodity Container is full.  Some items were not transferred.");
+            _log(COLONY__WARNING, "%s: PI Commodity Container %u is full.", pClient->GetName(), contRef->itemID());
+            pClient->SendErrorMsg("Your Commodity Container is full.  Some items were not transferred.");
             break;
         }
     }
@@ -1019,7 +1021,7 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
     pin->second.lastLaunchTime = GetFileTimeNow();
 
     // third - create db entry for launch
-    m_db.SaveLaunch(contRef->itemID(), m_client->GetCharacterID(), pSysMgr->GetID(), m_pSE->GetID(), location);
+    m_db.SaveLaunch(contRef->itemID(), m_ownerID, pSysMgr->GetID(), m_pSE->GetID(), location);
 
     // update colony
     Update(true);   // must update and save CC's lastLaunchTime here
@@ -1035,7 +1037,7 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
         reason += m_pSE->GetName();
 
         AccountService::TransferFunds(
-            m_client->GetCharacterID(),
+            m_ownerID,
             corpCONCORD,  // pSysMgr->GetSovHolder(),
             cost,
             reason.c_str(),
@@ -1048,24 +1050,18 @@ PyRep* Colony::LaunchCommodities(uint32 pinID, std::map< uint16, uint32 >& items
     return new PyLong(pin->second.lastLaunchTime);
 }
 
-void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importItems, std::map< uint32, uint16 > exportItems, double taxRate) {
+void Colony::PlanetXfer(Client* pClient, CustomsSE* pCO, uint32 spaceportID, std::map< uint32, uint32 > importItems, std::map< uint32, uint32 > exportItems, double taxRate) {
     // import is from CO to planet.  export is from planet to CO
     // this method will make the transfer of items from real to virtual and back as necessary
 
     std::map<uint32, PI_Pin>::iterator pin = ccPin->pins.find(spaceportID);
     if (pin == ccPin->pins.end()) {
         _log(COLONY__ERROR, "Colony::PlanetXfer() - pinID %u not found in ccPin.pins map", spaceportID);
-        if (m_client->CanThrow())
-            throw CustomError ("Your SpacePort on %s was not found.  Ref: ServerError xxxxx.", m_pSE->GetName());
-
-        return;
+        throw CustomError ("Your SpacePort on %s was not found.", m_pSE->GetName());
     }
 
     if (pin->second.lastLaunchTime > GetFileTimeNow() + 30 * EvE::Time::Second) { // launch cycle time is 60s
-        if (m_client->CanThrow())
-            throw CustomError ("Your Launch crew on %s is still recovering from the last launch.", m_pSE->GetName());
-
-        return;
+        throw CustomError ("Your Launch crew on %s is still recovering from the last launch.", m_pSE->GetName());
     }
 
     uint8 toColony = 0, fromColony = 0;
@@ -1080,6 +1076,11 @@ void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importIte
             _log(COLONY__ERROR, "Colony::PlanetXfer():import - itemRef for id %u not found in ItemFactory", cur.first);
             continue;   // should never happen
         }
+        // only the caller's own items, from this office's hangar, and no more than the stack holds
+        if ((iRef->ownerID() != m_ownerID) or (iRef->locationID() != pCO->GetID()) or (iRef->flag() != flagHangar))
+            throw CustomError ("You can only import your own items from this customs office.");
+        if ((cur.second < 1) or (cur.second > iRef->quantity()))
+            throw CustomError ("You do not have %u %s in this customs office.", cur.second, iRef->name());
 
         itr = pin->second.contents.find(iRef->typeID());
         /** @todo  check for available capy and adjust qty accordingly.
@@ -1098,14 +1099,19 @@ void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importIte
             case 3:     cost += (  300.00 * cur.second);    break;
             case 4:     cost += (25000.00 * cur.second);    break;
         }
-        iRef->ToVirtual(spaceportID);
+        if (cur.second < iRef->quantity()) {
+            // split the stack:  only the imported part goes to the planet
+            iRef->SetQuantity(iRef->quantity() - cur.second, true);
+        } else {
+            iRef->ToVirtual(spaceportID);
+        }
         ++toColony;
     }
 
     if (toColony)
         if (is_log_enabled(COLONY__TRACE))
             _log(COLONY__TRACE, "Colony::PlanetXfer() - Imported %u items from customs office %u to spaceport %u", \
-                            toColony, m_pSE->GetCustomsOffice()->GetID(), spaceportID);
+                            toColony, pCO->GetID(), spaceportID);
 
     if (cost) {
         //take the money, send wallet blink event record the transaction in their journal.
@@ -1113,8 +1119,8 @@ void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importIte
         reason += m_pSE->GetName();
 
         AccountService::TransferFunds(
-            m_client->GetCharacterID(),
-            m_pSE->GetCustomsOffice()->GetOwnerID(),
+            m_ownerID,
+            pCO->GetOwnerID(),
             cost,
             reason.c_str(),
             Journal::EntryType::PlanetaryImportTax,
@@ -1149,16 +1155,16 @@ void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importIte
             case 4:     cost += (50000.00 * cur.second);    break;
         }
         // xfer virtual item to real
-        ItemData iData(cur.first, m_client->GetCharacterID(), locTemp, flagNone, cur.second);
+        ItemData iData(cur.first, m_ownerID, locTemp, flagNone, cur.second);
         InventoryItemRef iRef = sItemFactory.SpawnItem(iData);
-        iRef->Move(m_pSE->GetCustomsOffice()->GetID(), flagHangar, true);
+        iRef->Move(pCO->GetID(), flagHangar, true);
         ++fromColony;
     }
 
     if (fromColony)
         if (is_log_enabled(COLONY__TRACE))
             _log(COLONY__TRACE, "Colony::PlanetXfer() - Exported %u items from spaceport %u to customs office %u", \
-                        fromColony, spaceportID, m_pSE->GetCustomsOffice()->GetID());
+                        fromColony, spaceportID, pCO->GetID());
 
     if (cost) {
         //take the money, send wallet blink event record the transaction in their journal.
@@ -1166,8 +1172,8 @@ void Colony::PlanetXfer(uint32 spaceportID, std::map< uint32, uint16 > importIte
         reason += m_pSE->GetName();
 
         AccountService::TransferFunds(
-            m_client->GetCharacterID(),
-            m_pSE->GetCustomsOffice()->GetOwnerID(),
+            m_ownerID,
+            pCO->GetOwnerID(),
             cost,
             reason.c_str(),
             Journal::EntryType::PlanetaryExportTax,
@@ -1322,7 +1328,7 @@ PyRep* Colony::GetColony()
         for (auto cur : tempECUs) {
             std::map<uint32, PI_Pin>::iterator itr = ccPin->pins.find(cur);
             if (itr != ccPin->pins.end()) {
-                m_db.SaveHeads(m_colonyID, m_client->GetCharacterID(), cur, itr->second.heads);
+                m_db.SaveHeads(m_colonyID, m_ownerID, cur, itr->second.heads);
             } else {
                 _log(COLONY__ERROR, "Colony::GetColony()::SaveHeads() - headID %u not found in ccPin.pins map", cur);
             }
@@ -1392,11 +1398,11 @@ void Colony::ProcessECUs(bool& updateTimes)
 {
     /** @todo  this needs complete review/overhaul...many errors here */
     double delta = 0;
-    uint16 cycles = 0, quantity = 0, amount = 0, count = 0;
+    uint32 cycles = 0, quantity = 0, amount = 0, count = 0;
     std::map<uint16, uint32>::iterator itemItr;
     std::map<uint32, PI_Pin>::iterator destPin;
     std::map<uint32, PI_Plant>::iterator plant;
-    for (auto ecu : ccPin->pins) {
+    for (auto& ecu : ccPin->pins) {
         if (!ecu.second.isECU)
             continue;
 
@@ -1437,17 +1443,19 @@ void Colony::ProcessECUs(bool& updateTimes)
         if (is_log_enabled(COLONY__DEBUG))
             _log(COLONY__DEBUG, "Colony::ProcessECUs() - ECU pin %u - begin processing with %u cycles (%0.2f / %0.2f)", \
                     ecu.first, cycles, delta, (ecu.second.cycleTime / EvE::Time::Hour));
-        auto destRouteItr = m_destRoutes.equal_range(plant->first);  // sum ting wong
-        for (auto it = destRouteItr.first; it != destRouteItr.second; ++it) {
+        // routes leaving this ecu
+        auto srcRouteItr = m_srcRoutes.equal_range(ecu.first);
+        for (auto it = srcRouteItr.first; it != srcRouteItr.second; ++it) {
+            amount = 0;
             // verify this route begins at this pin.
             //if (it->second.srcPinID != ecu.first)
             //    continue;
 
             // second - update current contents per route movement as noted above (there are no stored contents to update in the ECU)
             // get route destination pin and update qty
-            destPin = ccPin->pins.find(it->first);
+            destPin = ccPin->pins.find(it->second.destPinID);
             if (destPin == ccPin->pins.end()) {
-                _log(COLONY__ERROR, "Colony::ProcessECUs() - Dest pinID %u not found in ccPin.pins map", it->first);
+                _log(COLONY__ERROR, "Colony::ProcessECUs() - Dest pinID %u not found in ccPin.pins map", it->second.destPinID);
                 continue;
             }
             //  loop thru cycles to apply diminishing returns
@@ -1548,7 +1556,6 @@ void Colony::ProcessPlants(bool& updateTimes)
             std::map<uint32, PI_Plant>::iterator plant = ccPin->plants.find(it->second);
             if (plant == ccPin->plants.end()) {
                 _log(COLONY__ERROR, "Colony::ProcessPlants() - Plant %u not found in ccPin.pins map", it->second);
-                it = m_plantMap.erase(it);
                 continue;
             }
             // plant pin found.  begin basic data integrity  checks

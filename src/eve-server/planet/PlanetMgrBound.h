@@ -49,16 +49,18 @@ protected:
     PyResult DeleteLaunch(PyCallArgs& call, PyInt* launchID);
 
 private:
-    std::map<uint32, PlanetMgrBound*> m_instances;
+    // (planetID, charID) - every character gets its own bound object (and colony) for a planet
+    std::map<std::pair<uint32, uint32>, PlanetMgrBound*> m_instances;
 };
 
 
 class PlanetMgrBound : public EVEBoundObject <PlanetMgrBound>
 {
 public:
-    PlanetMgrBound(EVEServiceManager& mgr, PlanetMgrService& parent, Client* client, PlanetSE* planet);
+    PlanetMgrBound(EVEServiceManager& mgr, PlanetMgrService& parent, uint32 planetID, uint32 systemID, uint32 charID);
 
-    uint32 GetPlanetID () { return this->m_planet->GetID(); }
+    uint32 GetPlanetID ()                               { return m_planetID; }
+    std::pair<uint32, uint32> GetKey()                  { return std::make_pair(m_planetID, m_charID); }
 
 protected:
     PyResult GetPlanetResourceInfo(PyCallArgs& call);
@@ -90,8 +92,14 @@ protected:
         */
 
 protected:
-    Colony* m_colony;
-    PlanetSE* m_planet;
-    PlanetMgr* m_planetMgr;
+    // the planet and colony are looked up on every call; the system may have been unloaded since the bind
+    PlanetSE* GetPlanetSE();
+    Colony* GetColony();
+    // only the character that bound this object may use it
+    void CheckCaller(Client* pClient);
+
+    uint32 m_planetID;
+    uint32 m_systemID;
+    uint32 m_charID;
 };
 #endif  // EVEMU_PLANET_PLANETMGR_BOUND_H_

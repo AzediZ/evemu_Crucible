@@ -161,7 +161,7 @@ PyResult InventoryBound::ImportExportWithPlanet(PyCallArgs &call, PyInt* spacepo
         return nullptr;
     }
 
-    std::map<uint32, uint16> importItems, exportItems;
+    std::map<uint32, uint32> importItems, exportItems;
     for (PyDict::const_iterator itr = importData->begin(); itr != importData->end(); ++itr)
         importItems[PyRep::IntegerValueU32(itr->first)] = PyRep::IntegerValue(itr->second);
 
@@ -170,8 +170,12 @@ PyResult InventoryBound::ImportExportWithPlanet(PyCallArgs &call, PyInt* spacepo
 
     // ok, so from here, we need to get officeRef->officeSE->planet->colony to make xfer....crazy shit
     StructureItemRef sRef = StructureItemRef::StaticCast(m_self);
-    Colony* pColony = sRef->GetMySE()->GetCOSE()->GetPlanetSE()->GetColony(call.client);
-    pColony->PlanetXfer(spaceportPinID->value(), importItems, exportItems, taxRate->value());
+    SystemEntity* pSE(sRef->GetMySE());
+    CustomsSE* pCO(pSE == nullptr ? nullptr : pSE->GetCOSE());
+    if ((pCO == nullptr) or (pCO->GetPlanetSE() == nullptr))
+        throw CustomError ("This customs office is not serving a planet.");
+    Colony* pColony = pCO->GetPlanetSE()->GetColony(call.client->GetCharacterID());
+    pColony->PlanetXfer(call.client, pCO, spaceportPinID->value(), importItems, exportItems, taxRate->value());
 
     return nullptr;
 }
