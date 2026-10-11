@@ -187,6 +187,7 @@ static const char* const SRV_CONFIG_FILE = EVEMU_ROOT "/etc/eve-server.xml";
 
 static void SetupSignals();
 static void CatchSignal( int sig_num );
+static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher);
 
 static volatile bool m_run = true;
 
@@ -907,12 +908,13 @@ int main( int argc, char* argv[] )
         sEntityList.Process();
 
         /*  process console commands, if any, and check for 'exit' command */
-        m_run = sConsole.Process();
+        if (!sConsole.Process())
+            m_run = false;
 
         /* do the stuff for thread sleeping */
         start = GetTickCount() - start;
         if (m_sleepTime > start)
-            std::this_thread::sleep_for(std::chrono::milliseconds(start));
+            std::this_thread::sleep_for(std::chrono::milliseconds(m_sleepTime - start));
     }
 
     /*
@@ -920,58 +922,7 @@ int main( int argc, char* argv[] )
      *  at this point, server has been killed, and these are cleanup methods below here
      */
 
-    /** @todo  update this to have a ShutDown() method, with these items.
-     * also look into calling it when a signal is caught, for cleanup.
-     * @note  these are order-dependent...
-     */
-    sLog.Warning("   ServerShutdown", "Main loop has stopped." );
-    sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
-    if (!sConsole.IsDbError())
-        ServiceDB::SetServerOnlineStatus(false);
-    /* stop TCP listener */
-    tcps.Close();
-    sLog.Warning("   ServerShutdown", "TCP listener stopped." );
-    /* stop Image Server */
-    sImageServer.Stop();
-    sLog.Warning("   ServerShutdown", "Image Server stopped." );
-    /* Close the MarketMgr */
-    sMktMgr.Close();
-    /* Close the bulk data manager */
-    sBulkDB.Close();
-    /* Close the station data manager */
-    stDataMgr.Close();
-    /* Close the map data manager */
-    sMapData.Close();
-    /* Close the static data manager */
-    sDataMgr.Close();
-    /* Close the statistics manager */
-    sStatMgr.Close();
-    /* Close the standings manager */
-    sStandingMgr.Close();
-    sLog.Warning("   ServerShutdown", "Saving Items." );
-    if (!sConsole.IsDbError())
-        sItemFactory.SaveItems();
-    /* Close the entity list */
-    sEntityList.Close();
-    /* Shut down the Item system */
-    sLog.Warning("   ServerShutdown", "Shutting down Item Factory." );
-    sItemFactory.Close();
-    /* Close the bubble manager */
-    sBubbleMgr.clear();
-    /* Close the command dispatcher */
-    command_dispatcher.Close();
-    /* Stop Console Command Interpreter */
-    //sConsole.Stop();
-    /* close the db handler */
-    sLog.Warning("   ServerShutdown", "Closing DataBase Connection." );
-    sDatabase.Close();
-    /** @todo  the thread system is only implemented for tcp connections at this time. */
-    sLog.Warning("   ServerShutdown", "Shutting down Thread Manager." );
-    /* join open threads */
-    sThread.EndThreads();
-    sLog.Warning("   ServerShutdown", "EVEmu is Offline.");
-    /* close logfile */
-    log_close_logfile();
+    ServerShutdown(tcps, command_dispatcher);
     exit(EXIT_SUCCESS);
 }
 
@@ -1024,54 +975,61 @@ static void CatchSignal( int sig_num )
     sLog.Error( "    Signal System", "Caught signal: %d", sig_num );
     if (sConfig.debug.StackTrace)
         EvE::traceStack();
-    //SafeSave();
-    m_run = false;
-    //CleanUp();
+    /* first signal:  take the normal halt path on the next main loop pass (clients logged out as a shutdown, items saved)
+     * second signal while already halting:  just leave the loop
+     */
+    if (sConsole.IsShutdown())
+        m_run = false;
+    else
+        sConsole.HaltServer();
 }
 
-static void CleanUp() {
+static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher)
+{
+    /* every shutdown path ends here (console 'x', /shutdown, scheduled shutdown, signals)
+     * @note  these are order-dependent...
+     */
     sLog.Warning("   ServerShutdown", "Main loop has stopped." );
     sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
     if (!sConsole.IsDbError())
         ServiceDB::SetServerOnlineStatus(false);
     /* stop TCP listener */
-    //tcps.Close();
+    tcps.Close();
     sLog.Warning("   ServerShutdown", "TCP listener stopped." );
     /* stop Image Server */
     sImageServer.Stop();
     sLog.Warning("   ServerShutdown", "Image Server stopped." );
+    /* log out all clients (no-op when the halt path already did it) */
+    if (!sConsole.IsDbError())
+        sEntityList.Shutdown();
     /* Close the MarketMgr */
-    sLog.Warning("   ServerShutdown", "Shutting down Market Manager." );
     sMktMgr.Close();
+    /* Close the sovereignty data manager (saves anything changed before shutdown) */
+    svDataMgr.Close();
     /* Close the bulk data manager */
-    sLog.Warning("   ServerShutdown", "Closing the BulkData Manager." );
     sBulkDB.Close();
     /* Close the station data manager */
-    sLog.Warning("   ServerShutdown", "Closing the StationData Manager." );
     stDataMgr.Close();
+    /* Close the map data manager */
+    sMapData.Close();
     /* Close the static data manager */
-    sLog.Warning("   ServerShutdown", "Closing the StaticData Manager." );
     sDataMgr.Close();
+    /* Close the statistics manager */
     sStatMgr.Close();
+    /* Close the standings manager */
     sStandingMgr.Close();
     sLog.Warning("   ServerShutdown", "Saving Items." );
     if (!sConsole.IsDbError())
         sItemFactory.SaveItems();
     /* Close the entity list */
-    sLog.Warning("   ServerShutdown", "Closing the Entity List." );
     sEntityList.Close();
-    /* Close the service manager */
-    sLog.Warning("   ServerShutdown", "Closing the Services Manager." );
-    //pyServMgr.Close();
     /* Shut down the Item system */
     sLog.Warning("   ServerShutdown", "Shutting down Item Factory." );
     sItemFactory.Close();
-    sLog.Warning("   ServerShutdown", "Closing the Bubble Manager." );
+    /* Close the bubble manager */
     sBubbleMgr.clear();
     /* Close the command dispatcher */
-    //command_dispatcher.Close();
-    /* Stop Console Command Interpreter */
-    //sConsole.Stop();
+    command_dispatcher.Close();
     /* close the db handler */
     sLog.Warning("   ServerShutdown", "Closing DataBase Connection." );
     sDatabase.Close();

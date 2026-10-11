@@ -487,10 +487,43 @@ PyResult Command_halt(Client* pClient, CommandDB* db, EVEServiceManager &service
 }
 
 PyResult Command_shutdown(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
-    /* ingame command to immediatly save loaded items and halt server.
+    /* ingame command to save loaded items and halt server.
+     *  /shutdown                    halt now
+     *  /shutdown <minutes> [reason] announced shutdown (OnClusterShutdownInitiated)
+     *  /shutdown cancel             cancel the announced shutdown
      */
-    sConsole.HaltServer();
-    return nullptr;
+    if (args.argCount() < 2) {
+        sConsole.HaltServer();
+        return nullptr;
+    }
+
+    std::string first(args.arg(1));
+    for (auto& c : first)
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    if (first == "cancel") {
+        if (!sConsole.CancelShutdown(""))
+            return new PyString("No shutdown is scheduled.");
+        return new PyString("Shutdown cancelled.");
+    }
+    if (!args.isNumber(1))
+        throw CustomError("Usage: /shutdown [minutes [reason] | cancel]");
+
+    uint32 minutes(atoi(first.c_str()));
+    if (minutes == 0) {
+        sConsole.HaltServer();
+        return nullptr;
+    }
+    std::string reason;
+    for (size_t i = 2; i < args.argCount(); ++i) {
+        if (!reason.empty())
+            reason += " ";
+        reason += args.arg(i);
+    }
+    sConsole.ScheduleShutdown(minutes * 60, reason);
+    std::string reply("Shutdown scheduled in ");
+    reply += std::to_string(minutes);
+    reply += " minutes.";
+    return new PyString(reply);
 }
 
 PyResult Command_beltlist(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {

@@ -65,6 +65,13 @@ class ConsoleCommand
     // 'hear all':  echo every chat message to the console
     bool HearAll() const                                { return m_hearAll; }
 
+    // announced shutdown (OnClusterShutdownInitiated now, at 15, 5 and 1 minute(s) left), then HaltServer()
+    void ScheduleShutdown(uint32 seconds, const std::string& reason);
+    // returns false when no shutdown was scheduled
+    bool CancelShutdown(const std::string& reason);
+    bool IsShutdownScheduled()                          { return m_shutdownAt > 0; }
+    int64 GetShutdownTime()                             { return m_shutdownAt; }
+
 private:
     // we do not own any of these...
     CommandDispatcher* pCommand;
@@ -76,6 +83,15 @@ private:
     bool m_haltServer;
     bool m_dbError;
     bool m_hearAll;
+
+    uint8 m_shutdownStage;          // announcements sent so far (0 = initial only, 3 = 1 minute warning sent)
+    int64 m_shutdownAt;             // filetime.  0 = none scheduled
+    std::string m_shutdownReason;
+
+    void ProcessScheduledShutdown();
+    void AnnounceShutdown();
+    // handles 'x', 'x <minutes> [reason]' and 'x cancel'.  returns false to stop the main loop
+    bool ExitCommand(const std::string& args);
 
     bool HandleCommand(const char* buf);
     void SaveAll();

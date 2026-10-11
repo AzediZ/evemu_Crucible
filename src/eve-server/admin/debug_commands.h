@@ -19,7 +19,7 @@
  COMMAND( shipvars, Acct::Role::GMH,
           " - shows other current destiny variables")
  COMMAND( shutdown, Acct::Role::GMH,
-          " - save all items, kick all connections, and halt server. immediate command." )
+          "[minutes [reason] | cancel] - no args: save all items, kick all connections, and halt server now.  minutes: announced shutdown.  cancel: cancel it." )
  COMMAND( beltlist, Acct::Role::PLAYER,
           " - list all roids in current belt's inventory." )
  COMMAND( inventory, Acct::Role::PROGRAMMER,

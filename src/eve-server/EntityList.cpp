@@ -96,15 +96,23 @@ void EntityList::Initialize() {
 }
 
 void EntityList::Shutdown() {
-    /** @todo finish this....
-     * halt server called from admin client. (gm command ingame)
-     * call d'tor on all connected clients
+    /* halt server (console 'x', /shutdown, a scheduled shutdown or a signal).
+     * sConsole.IsShutdown() is true here, so clients take the shutdown logout path (no ship left in space).
      * server run loop will exit after control is returned from this function, which will clean up remaining items.
      */
-    for (auto cur : m_clients)
+    if (m_clients.empty())
+        return;
+
+    sLog.Warning("   ServerShutdown", "Logging out %lu clients.", m_clients.size());
+    for (auto cur : m_clients) {
+        if (cur->GetUserID() > 0)
+            cur->SendNotifyMsg("The server is shutting down.");
         SafeDelete(cur);
+    }
 
     m_clients.clear();
+    m_players.clear();
+    m_corpMembers.clear();
 }
 
 void EntityList::Close()

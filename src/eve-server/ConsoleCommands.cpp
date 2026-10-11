@@ -55,7 +55,10 @@ ConsoleCommand::ConsoleCommand()
   tv(timeval()),
   m_haltServer(false),
   m_dbError(false),
-  m_hearAll(false)
+  m_hearAll(false),
+  m_shutdownStage(0),
+  m_shutdownAt(0),
+  m_shutdownReason("")
 {
 }
 
@@ -81,6 +84,8 @@ void ConsoleCommand::Initialize(CommandDispatcher* cd, EVEServiceManager* svc)
 }
 
 bool ConsoleCommand::Process() {
+    ProcessScheduledShutdown();
+
     if (m_haltServer) {
         if (!m_dbError)
             sEntityList.Shutdown();
@@ -104,6 +109,128 @@ bool ConsoleCommand::Process() {
     m_inputToProcess.clear();
     
     return continueRunning;
+}
+
+void ConsoleCommand::ScheduleShutdown(uint32 seconds, const std::string& reason)
+{
+    m_shutdownAt = GetFileTimeNow() + (seconds * EvE::Time::Second);
+    m_shutdownReason = (reason.empty() ? "Server maintenance" : reason);
+    // skip the announcements that are already past
+    if (seconds > 15 * 60)
+        m_shutdownStage = 0;
+    else if (seconds > 5 * 60)
+        m_shutdownStage = 1;
+    else if (seconds > 60)
+        m_shutdownStage = 2;
+    else
+        m_shutdownStage = 3;
+
+    sLog.Warning("  EVEmu", "Shutdown scheduled in %u seconds:  %s", seconds, m_shutdownReason.c_str());
+    AnnounceShutdown();
+}
+
+bool ConsoleCommand::CancelShutdown(const std::string& reason)
+{
+    if (m_shutdownAt == 0)
+        return false;
+
+    m_shutdownAt = 0;
+    m_shutdownStage = 0;
+    m_shutdownReason.clear();
+    std::string msg(reason.empty() ? "The scheduled shutdown has been cancelled." : reason);
+    sLog.Warning("  EVEmu", "Scheduled shutdown cancelled:  %s", msg.c_str());
+
+    std::vector<Client*> list;
+    sEntityList.GetClients(list);
+    for (auto cur : list) {
+        PyTuple* tuple = new PyTuple(1);
+            tuple->SetItem(0, new PyString(msg));
+        cur->SendNotification("OnClusterShutdownCancelled", "clientID", &tuple, false);
+    }
+    return true;
+}
+
+void ConsoleCommand::AnnounceShutdown()
+{
+    int64 left = m_shutdownAt - GetFileTimeNow();
+    uint32 minutes = (uint32)((left + EvE::Time::Minute - 1) / EvE::Time::Minute);
+    if (minutes < 1)
+        minutes = 1;
+    char msg[512];
+    snprintf(msg, sizeof(msg), "The server will shut down in %u minute%s (%s).", minutes, (minutes == 1 ? "" : "s"), m_shutdownReason.c_str());
+    sLog.Warning("  EVEmu", "%s", msg);
+
+    // gameui.OnClusterShutdownInitiated(msg, when):  'when' drives the client's own 5 minute countdown in local
+    std::vector<Client*> list;
+    sEntityList.GetClients(list);
+    for (auto cur : list) {
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, new PyString(msg));
+            tuple->SetItem(1, new PyLong(m_shutdownAt));
+        cur->SendNotification("OnClusterShutdownInitiated", "clientID", &tuple, false);
+    }
+}
+
+void ConsoleCommand::ProcessScheduledShutdown()
+{
+    if ((m_shutdownAt == 0) or m_haltServer)
+        return;
+
+    int64 left = m_shutdownAt - GetFileTimeNow();
+    if (left <= 0) {
+        sLog.Warning("  EVEmu", "Scheduled shutdown:  %s", m_shutdownReason.c_str());
+        m_shutdownAt = 0;
+        HaltServer();
+        return;
+    }
+
+    static const int64 notices[3] = { 15 * EvE::Time::Minute, 5 * EvE::Time::Minute, EvE::Time::Minute };
+    bool announce(false);
+    while ((m_shutdownStage < 3) and (left <= notices[m_shutdownStage])) {
+        ++m_shutdownStage;
+        announce = true;
+    }
+    if (announce)
+        AnnounceShutdown();
+}
+
+bool ConsoleCommand::ExitCommand(const std::string& args)
+{
+    if (args.empty()) {
+        sLog.Warning("  EVEmu", "EXIT called.  Breaking out of Main Loop.");
+        m_haltServer = true;
+        return false;
+    }
+
+    Seperator sep(args.c_str());
+    std::string first(sep.arg(0));
+    for (auto& c : first)
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    if (first == "cancel") {
+        if (!CancelShutdown(""))
+            sLog.Warning("  EVEmu", "No shutdown is scheduled.");
+        return true;
+    }
+    if (!sep.isNumber(0)) {
+        sLog.Error("  EVEmu", "Usage:  exit | exit <minutes> [reason] | exit cancel");
+        return true;
+    }
+
+    uint32 minutes(atoi(first.c_str()));
+    std::string reason;
+    size_t pos(args.find_first_of(" 	"));
+    if (pos != std::string::npos) {
+        pos = args.find_first_not_of(" 	", pos);
+        if (pos != std::string::npos)
+            reason = args.substr(pos);
+    }
+    if (minutes == 0) {
+        sLog.Warning("  EVEmu", "EXIT called.  Breaking out of Main Loop.");
+        m_haltServer = true;
+        return false;
+    }
+    ScheduleShutdown(minutes * 60, reason);
+    return true;
 }
 
 namespace {
@@ -158,9 +285,7 @@ bool ConsoleCommand::HandleCommand(const char* buf)
     }
 
     if (cmd == 'x') {
-        sLog.Warning("  EVEmu", "EXIT called.  Breaking out of Main Loop.");
-        m_haltServer = true;
-        return false;
+        return ExitCommand(args);
     }
     else if (cmd == 'h') {
         sLog.Green("  EVEmu", "Current Console Commands and Descriptions (type the word or its letter): ");
@@ -168,6 +293,7 @@ bool ConsoleCommand::HandleCommand(const char* buf)
         sLog.Warning("           (h)elp", " Displays this dialog.");
         sLog.Warning("          h(e)llo", " Displays the 'Hello World' message.");
         sLog.Warning("           e(x)it", " Exits the server, saving all loaded items and loging out all connected clients.");
+        sLog.Warning("                 ", "  'exit <minutes> [reason]' schedules an announced shutdown.  'exit cancel' cancels it.");
         sLog.Warning("        (c)lients", " Displays connected clients, showing account, character, and ip.");
         sLog.Warning("         (s)tatus", " Displays Server's System Status, showing threads, memory, and cpu time.");
         sLog.Warning("        (v)ersion", " Displays server version.");
