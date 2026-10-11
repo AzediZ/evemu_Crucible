@@ -357,6 +357,187 @@ Inventory* RamMethods::GetBOMInventory(const PathElement& bomLocation)
     return pInv;
 }
 
+bool RamMethods::HasJobInput(const PathElement& bomLocation, uint32 ownerID, uint16 typeID, uint32 qty/*1*/)
+{
+    if (typeID == 0)
+        return true;
+    Inventory* pInv(GetBOMInventory(bomLocation));
+    if (pInv == nullptr)
+        return false;
+    return (pInv->GetTypeQtyForOwner(typeID, (EVEItemFlags)bomLocation.flagID, ownerID) >= qty);
+}
+
+void RamMethods::TakeJobInput(const PathElement& bomLocation, uint32 ownerID, uint16 typeID, uint32 qty/*1*/)
+{
+    if (typeID == 0)
+        return;
+    std::vector<InventoryItemRef> taken;
+    Inventory* pInv(GetBOMInventory(bomLocation));
+    if ((pInv == nullptr) or !pInv->TakeTypeQtyForOwner(typeID, (EVEItemFlags)bomLocation.flagID, ownerID, qty, taken))
+        throw UserError ("RamNeedMoreForJob")
+                .AddFormatValue ("item", new PyInt (typeID));
+    for (auto iRef : taken)
+        iRef->Delete();
+}
+
+int32 RamMethods::GetKeyValInt(PyRep* kv, const char* key)
+{
+    if ((kv == nullptr) or kv->IsNone())
+        return 0;
+    PyRep* pArgs(kv);
+    if (kv->IsObject())
+        pArgs = kv->AsObject()->arguments();
+    if ((pArgs == nullptr) or !pArgs->IsDict())
+        return 0;
+    PyRep* pRep(pArgs->AsDict()->GetItemString(key));
+    if ((pRep == nullptr) or pRep->IsNone())
+        return 0;
+    return (int32)PyRep::IntegerValue(pRep);
+}
+
+void RamMethods::GetInventionOutputs(BlueprintRef t1Ref, std::vector<uint16>& bpTypeIDs)
+{
+    // the client lists the blueprints of the product's variations with meta level 5
+    std::vector<uint16> children;
+    sDataMgr.GetMetaChildren(t1Ref->productTypeID(), 0, children);
+    for (auto cur : children) {
+        const ItemType* pType(sItemFactory.GetType(cur));
+        if (pType == nullptr)
+            continue;
+        if (pType->GetAttribute(AttrMetaLevel).get_int() != 5)
+            continue;
+        uint16 bpTypeID(sDataMgr.GetBlueprintTypeForProduct(cur));
+        if (bpTypeID != 0)
+            bpTypeIDs.push_back(bpTypeID);
+    }
+}
+
+void RamMethods::GetInventionData(Client* const pClient, std::map<std::string, PyRep*>& byname, BlueprintRef t1Ref,
+                                  const std::vector< EvERam::RequiredItem >& reqItems, EvERam::InventionData& into)
+{
+    // inventionItems = util.KeyVal(baseItemType, decryptorType, outputType), inventionOutputItemID = outputType
+    PyRep* pItems(nullptr);
+    std::map<std::string, PyRep*>::iterator itr = byname.find("inventionItems");
+    if (itr != byname.end())
+        pItems = itr->second;
+    uint16 outputBpTypeID(GetKeyValInt(pItems, "outputType"));
+    if (outputBpTypeID == 0) {
+        itr = byname.find("inventionOutputItemID");
+        if ((itr != byname.end()) and !itr->second->IsNone())
+            outputBpTypeID = PyRep::IntegerValueU32(itr->second);
+    }
+    into.baseItemTypeID = GetKeyValInt(pItems, "baseItemType");
+    into.decryptorTypeID = GetKeyValInt(pItems, "decryptorType");
+
+    // output
+    std::vector<uint16> outputs;
+    GetInventionOutputs(t1Ref, outputs);
+    if (outputs.empty())
+        throw UserError ("RamInventionNoOutput");
+    if ((outputBpTypeID == 0) and (outputs.size() == 1))
+        outputBpTypeID = outputs.front();
+    if (std::find(outputs.begin(), outputs.end(), outputBpTypeID) == outputs.end())
+        throw UserError ("RamInventionNoOutput");
+
+    // the base chance is the T2 blueprint's chanceOfRE (40% modules/ammo, 30% frigates..., 0 = not inventable)
+    EvERam::bpTypeData outData = EvERam::bpTypeData();
+    sDataMgr.GetBpTypeData(outputBpTypeID, outData);
+    if (outData.chanceOfRE <= 0)
+        throw UserError ("ProductionInventionFailure")
+                .AddFormatValue ("type", new PyInt (outputBpTypeID));
+    into.outputBpTypeID = outputBpTypeID;
+
+    // optional base item:  the T1 product or one of its meta 1-4 variations
+    into.metaLevel = 0;
+    if (into.baseItemTypeID != 0) {
+        const ItemType* pType(sItemFactory.GetType(into.baseItemTypeID));
+        if (pType == nullptr)
+            throw UserError ("RamInventionSourceMetaLevelTooHigh")
+                    .AddFormatValue ("item", new PyInt (into.baseItemTypeID));
+        int32 metaLevel(pType->GetAttribute(AttrMetaLevel).get_int());
+        if (((into.baseItemTypeID != t1Ref->productTypeID()) and (sDataMgr.GetMetaParent(into.baseItemTypeID) != t1Ref->productTypeID()))
+        or (metaLevel > 4))
+            throw UserError ("RamInventionSourceMetaLevelTooHigh")
+                    .AddFormatValue ("item", new PyInt (into.baseItemTypeID));
+        into.metaLevel = (metaLevel < 0 ? 0 : metaLevel);
+    }
+
+    // data interface (encryption skill, decryptor group) and the two datacores (science skills)
+    Character* pChar(pClient->GetChar().get());
+    uint8 encLevel(0), dcLevel[2] = {0, 0}, dcCount(0);
+    uint16 decryptorGroupID(0);
+    for (auto cur : reqItems) {
+        if (cur.isSkill)
+            continue;
+        const ItemType* pType(sItemFactory.GetType(cur.typeID));
+        if (pType == nullptr)
+            continue;
+        if (pType->groupID() == EVEDB::invGroups::Data_Interfaces) {
+            encLevel = pChar->GetSkillLevel(pType->GetAttribute(AttrRequiredSkill1).get_uint32());
+            decryptorGroupID = pType->GetAttribute(AttrDecryptorID).get_uint32();
+        } else if ((pType->groupID() == EVEDB::invGroups::Datacores) and (dcCount < 2)) {
+            dcLevel[dcCount++] = pChar->GetSkillLevel(pType->GetAttribute(AttrRequiredSkill1).get_uint32());
+        }
+    }
+
+    // optional decryptor of the group the data interface takes
+    float decChance(1.0f);
+    int16 decRuns(0);
+    int8 decME(0), decPE(0);
+    if (into.decryptorTypeID != 0) {
+        const ItemType* pType(sItemFactory.GetType(into.decryptorTypeID));
+        if ((pType == nullptr) or (pType->groupID() != decryptorGroupID))
+            throw UserError ("RamInventionWrongDecryptor")
+                    .AddFormatValue ("groupName", new PyString (decryptorGroupID ? sDataMgr.GetGroupName(decryptorGroupID) : "Decryptor"));
+        if (pType->HasAttribute(AttrInventionPropabilityMultiplier))
+            decChance = pType->GetAttribute(AttrInventionPropabilityMultiplier).get_float();
+        decME = pType->GetAttribute(AttrInventionMEModifier).get_int();
+        decPE = pType->GetAttribute(AttrInventionPEModifier).get_int();
+        decRuns = pType->GetAttribute(AttrInventionMaxRunModifier).get_int();
+    }
+
+    float chance(EvEMath::RAM::InventionChance(outData.chanceOfRE, encLevel, dcLevel[0], dcLevel[1], into.metaLevel, decChance));
+    chance *= sConfig.ram.InventChance;
+    into.chance = EvE::min(EvE::max(chance, 0.0f), 1.0f);
+
+    into.outputRuns = EvEMath::RAM::InventionRuns(t1Ref->runs(), t1Ref->type().maxProductionLimit(), outData.maxProductionLimit, decRuns);
+    into.outputME = EvERam::BaseInventionME + decME;
+    into.outputPE = EvERam::BaseInventionPE + decPE;
+
+    _log(MANUF__INFO, "Invention of %u from %s: chance %.3f (base %.2f, enc %u, dc %u/%u, meta %i, decryptor %.2f), %i runs, ME %i, PE %i",
+         outputBpTypeID, t1Ref->name(), into.chance, outData.chanceOfRE, encLevel, dcLevel[0], dcLevel[1], into.metaLevel, decChance,
+         into.outputRuns, into.outputME, into.outputPE);
+}
+
+const char* RamMethods::GetInventionResultLabel(bool success, float chance)
+{
+    // flavour text only.  the better the chance, the more relaxed the text
+    if (success) {
+        if (chance >= 0.8f)
+            return "UI/ScienceAndIndustry/Invention/InventionResultSuccessCouldDoInSleep";
+        if (chance >= 0.6f)
+            return "UI/ScienceAndIndustry/Invention/InventionResultSuccessSuitedToYourTalets";
+        if (chance >= 0.45f)
+            return "UI/ScienceAndIndustry/Invention/InventionResultSuccessDidntTaxTooMuch";
+        if (chance >= 0.3f)
+            return "UI/ScienceAndIndustry/Invention/InventionResultSuccessFarFromCertain";
+        return "UI/ScienceAndIndustry/Invention/InventionResultSuccessCantCountOnIt";
+    }
+    if (chance >= 0.8f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedSuccessAtFingertips";
+    if (chance >= 0.6f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedFeltGoodAboutIt";
+    if (chance >= 0.45f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedRequiresAFewTries";
+    if (chance >= 0.3f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedRequiresHardWork";
+    if (chance >= 0.15f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedRequiresLuck";
+    if (chance >= 0.05f)
+        return "UI/ScienceAndIndustry/Invention/InventionResultFailedNeverClose";
+    return "UI/ScienceAndIndustry/Invention/InventionResultFailedImpossible";
+}
+
 uint32 RamMethods::GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs)
 {
     if (item.isSkill)

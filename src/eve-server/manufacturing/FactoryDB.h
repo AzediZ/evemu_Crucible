@@ -46,6 +46,9 @@ public:
     static void GetRAMMaterials(DBQueryResult& res);
     static void GetBlueprintType(DBQueryResult& res);
     static void GetRAMRequirements(DBQueryResult& res);
+    static void GetMetaTypes(DBQueryResult& res);
+    static void GetInstallationContents(DBQueryResult& res);
+    static void GetAssemblyLineTypes(DBQueryResult& res);
 
     // InstallJob stuff
     static bool GetAssemblyLineProperties(const uint32 assemblyLineID, Character *pChar, Rsp_InstallJob &into, bool isCorpJob=false);
@@ -68,7 +71,6 @@ public:
 
     static uint32 CountManufacturingJobs(const uint32 installerID);
     static uint32 CountResearchJobs(const uint32 installerID);
-    static uint32 GetTech2Blueprint(const uint32 blueprintTypeID);
 
     static int64 GetNextFreeTime(const uint32 assemblyLineID);
 

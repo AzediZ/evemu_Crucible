@@ -106,6 +106,24 @@ void FactoryDB::GetRAMRequirements(DBQueryResult& res)
         codelog(DATABASE__ERROR, "Error in GetRAMRequirements query: %s", res.error.c_str());
 }
 
+void FactoryDB::GetMetaTypes(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT typeID, parentTypeID, metaGroupID FROM invMetaTypes"))
+        codelog(DATABASE__ERROR, "Error in GetMetaTypes query: %s", res.error.c_str());
+}
+
+void FactoryDB::GetInstallationContents(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT installationTypeID, assemblyLineTypeID, quantity FROM ramInstallationTypeContents"))
+        codelog(DATABASE__ERROR, "Error in GetInstallationContents query: %s", res.error.c_str());
+}
+
+void FactoryDB::GetAssemblyLineTypes(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res, "SELECT assemblyLineTypeID, activityID FROM ramAssemblyLineTypes"))
+        codelog(DATABASE__ERROR, "Error in GetAssemblyLineTypes query: %s", res.error.c_str());
+}
+
 void FactoryDB::SetJobEventID(const uint32 jobID, const uint32 eventID)
 {
     DBerror err;
@@ -723,21 +741,6 @@ bool FactoryDB::CompleteJob(const uint32 jobID, const int8 completedStatus) {
     }
 
     return true;
-}
-
-uint32 FactoryDB::GetTech2Blueprint(const uint32 blueprintTypeID) {
-    DBQueryResult res;
-
-    if (!sDatabase.RunQuery(res, "SELECT blueprintTypeID FROM invBlueprintTypes WHERE parentBlueprintTypeID = %u", blueprintTypeID)) {
-        _log(DATABASE__ERROR, "Unable to get T2 type for type ID %u: %s", blueprintTypeID, res.error.c_str());
-        return 0;
-    }
-
-    DBResultRow row;
-    if (!res.GetRow(row))
-        return 0;
-
-    return row.GetUInt(0);
 }
 
 int64 FactoryDB::GetNextFreeTime(const uint32 assemblyLineID) {

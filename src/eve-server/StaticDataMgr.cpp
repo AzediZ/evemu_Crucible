@@ -124,6 +124,11 @@ void StaticDataMgr::Clear()
     m_oreBySecClass.clear();
     m_LootGroupTypeMap.clear();
     m_WrecksToTypesMap.clear();
+    m_productToBp.clear();
+    m_metaChildren.clear();
+    m_metaParent.clear();
+    m_ramInstContents.clear();
+    m_ramLineActivity.clear();
 
     PySafeDecRef(m_keyMap);
     PySafeDecRef(m_agents);
@@ -498,10 +503,34 @@ void StaticDataMgr::Populate()
             bpTypeData.catID                    = (row.IsNull(14) ? 0 : row.GetInt(14));
         m_bpTypeData.emplace(row.GetInt(0), bpTypeData);
         m_bpProductData.emplace(row.GetInt(2), bpTypeData);
+        if (bpTypeData.productTypeID > 0)
+            m_productToBp.emplace(bpTypeData.productTypeID, row.GetInt(0));
     }
     for (auto cur : m_bpTypeData)
         m_bpMatlData[cur.first] = SetBPMatlType(cur.second.catID, cur.first, cur.second.productTypeID);
     sLog.Cyan("    StaticDataMgr", "%lu BP Type defs loaded in %.3fms.", m_bpTypeData.size(), (GetTimeMSeconds() - startTime));
+
+    startTime = GetTimeMSeconds();
+    FactoryDB::GetMetaTypes(*res);
+    while (res->GetRow(row)) {
+        //SELECT typeID, parentTypeID, metaGroupID FROM invMetaTypes
+        uint16 parentID(row.IsNull(1) ? 0 : row.GetUInt(1));
+        if (parentID == 0)
+            continue;
+        m_metaChildren.emplace(parentID, std::make_pair((uint16)row.GetUInt(0), (uint8)(row.IsNull(2) ? 0 : row.GetUInt(2))));
+        m_metaParent.emplace(row.GetUInt(0), parentID);
+    }
+    FactoryDB::GetInstallationContents(*res);
+    while (res->GetRow(row)) {
+        //SELECT installationTypeID, assemblyLineTypeID, quantity FROM ramInstallationTypeContents
+        m_ramInstContents.emplace(row.GetUInt(0), std::make_pair((uint8)row.GetUInt(1), (uint8)(row.IsNull(2) ? 0 : row.GetUInt(2))));
+    }
+    FactoryDB::GetAssemblyLineTypes(*res);
+    while (res->GetRow(row)) {
+        //SELECT assemblyLineTypeID, activityID FROM ramAssemblyLineTypes
+        m_ramLineActivity.emplace(row.GetUInt(0), (uint8)(row.IsNull(1) ? 0 : row.GetUInt(1)));
+    }
+    sLog.Cyan("    StaticDataMgr", "%lu meta type and %lu R.A.M. installation defs loaded in %.3fms.", m_metaParent.size(), m_ramInstContents.size(), (GetTimeMSeconds() - startTime));
 
     startTime = GetTimeMSeconds();
     ManagerDB::GetMoonResouces(*res);
@@ -1009,6 +1038,46 @@ bool StaticDataMgr::GetBpDataForItem(uint16 typeID, EvERam::bpTypeData& tData)
     return false;
 }
 
+uint16 StaticDataMgr::GetBlueprintTypeForProduct(uint16 productTypeID)
+{
+    std::map<uint16, uint16>::iterator itr = m_productToBp.find(productTypeID);
+    if (itr != m_productToBp.end())
+        return itr->second;
+    return 0;
+}
+
+void StaticDataMgr::GetMetaChildren(uint16 parentTypeID, uint8 metaGroupID, std::vector<uint16>& into)
+{
+    auto range = m_metaChildren.equal_range(parentTypeID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        if ((metaGroupID == 0) or (itr->second.second == metaGroupID))
+            into.push_back(itr->second.first);
+}
+
+uint16 StaticDataMgr::GetMetaParent(uint16 typeID)
+{
+    std::map<uint16, uint16>::iterator itr = m_metaParent.find(typeID);
+    if (itr != m_metaParent.end())
+        return itr->second;
+    return 0;
+}
+
+bool StaticDataMgr::GetInstallationContents(uint16 installationTypeID, std::vector<std::pair<uint8, uint8>>& into)
+{
+    auto range = m_ramInstContents.equal_range(installationTypeID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
+    return !into.empty();
+}
+
+uint8 StaticDataMgr::GetAssemblyLineActivity(uint8 assemblyLineTypeID)
+{
+    std::map<uint8, uint8>::iterator itr = m_ramLineActivity.find(assemblyLineTypeID);
+    if (itr != m_ramLineActivity.end())
+        return itr->second;
+    return 0;
+}
+
 bool StaticDataMgr::IsRecyclable(uint16 typeID)
 {
     std::map<uint16, Inv::TypeData>::iterator itr = m_typeData.find(typeID);
@@ -1029,7 +1098,7 @@ void StaticDataMgr::GetRamReturns(uint16 typeID, int8 activityID, std::vector< E
 {
     auto itr = m_ramReq.equal_range(typeID);
     for (auto it = itr.first; it != itr.second; ++it)
-        if ((it->second.activityID == activityID) and (it->second.extra) and !(IsSkillTypeID(it->second.requiredTypeID))) {
+        if ((it->second.activityID == activityID) and (it->second.damagePerJob < 1) and !(IsSkillTypeID(it->second.requiredTypeID))) {
             EvERam::RequiredItem data = EvERam::RequiredItem();
             data.typeID = it->second.requiredTypeID;
             data.quantity = it->second.quantity;

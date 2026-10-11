@@ -165,9 +165,9 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     if (installedItem->locationID() == locRAMItems)
         throw UserError ("RamBlueprintAlreadyInstalled");
 
-    /** @todo  invention is not supported yet */
+    // invention takes the whole T1 copy for one run
     if (args.activityID == EvERam::Activity::Invention)
-        throw UserError ("RamActivityInvalid");
+        args.runs = 1;
 
     // check assy line activity
     sRamMthd.ActivityCheck(pClient, args, installedItem);
@@ -268,11 +268,20 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     std::vector<EvERam::RequiredItem> reqItems;
     sDataMgr.GetRamRequiredItems(installedItem->typeID(), (int8)args.activityID, reqItems);
 
+    // invention output, chance and optional inputs
+    EvERam::InventionData invData = EvERam::InventionData();
+    if (args.activityID == EvERam::Activity::Invention)
+        sRamMthd.GetInventionData(pClient, call.byname, bpRef, reqItems, invData);
+
     // quoteOnly is sent for all jobs before installation to approve price and timeframe
     if (PyRep::IntegerValueU32(call.byname["quoteOnly"])) {
         _log(MANUF__INFO, "quoteOnly = true");
         sRamMthd.EncodeBillOfMaterials(reqItems, rsp.materialMultiplier, rsp.charMaterialMultiplier, args.runs, rsp.bom);
         sRamMthd.EncodeMissingMaterials(reqItems, bomLocPath, ownerID, pClient, rsp.materialMultiplier, rsp.charMaterialMultiplier, args.runs, rsp.missingMaterials);
+        if (!sRamMthd.HasJobInput(bomLocPath, ownerID, invData.baseItemTypeID))
+            rsp.missingMaterials[invData.baseItemTypeID] = new PyInt(1);
+        if (!sRamMthd.HasJobInput(bomLocPath, ownerID, invData.decryptorTypeID))
+            rsp.missingMaterials[invData.decryptorTypeID] = new PyInt(1);
 
         // this value is halved in client code. (removed in client update patch 5Nov20)
         //rsp.charTimeMultiplier *= 2;
@@ -281,6 +290,12 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
 
     // verify installer has skills and all needed materials are present in proper location
     sRamMthd.MaterialSkillsCheck(pClient, args.runs, bomLocPath, ownerID, rsp, reqItems);
+    if (!sRamMthd.HasJobInput(bomLocPath, ownerID, invData.baseItemTypeID))
+        throw UserError ("RamNeedMoreForJob")
+                .AddFormatValue ("item", new PyInt (invData.baseItemTypeID));
+    if (!sRamMthd.HasJobInput(bomLocPath, ownerID, invData.decryptorTypeID))
+        throw UserError ("RamNeedMoreForJob")
+                .AddFormatValue ("item", new PyInt (invData.decryptorTypeID));
 
     // at this point, it is a real job installation.  check everything else
     sRamMthd.ProductionTimeCheck(rsp.productionTime);
@@ -346,7 +361,8 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     }
 
     uint32 jobID = FactoryDB::InstallJob(ownerID, pClient->GetCharacterID(), args, beginTime, beginTime + rsp.productionTime * EvE::Time::Second,
-                                         solarSystemID, outputLocationID, containerTypeID, installedItem->typeID());
+                                         solarSystemID, outputLocationID, containerTypeID, installedItem->typeID(),
+                                         (args.activityID == EvERam::Activity::Invention ? &invData : nullptr));
 
     if (jobID < 1) {
         _log(MANUF__ERROR, "Could not InstallJob for %s using %s", pClient->GetName(), installedItem->name());
@@ -358,10 +374,12 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     installedItem->ChangeSingleton(true);
     installedItem->Move(locRAMItems, flagFactoryBlueprint, true);
 
-    // take required items
+    // take required items (and the optional invention inputs)
     sRamMthd.ConsumeMaterials(args.runs, bomLocPath, ownerID, rsp, reqItems);
+    sRamMthd.TakeJobInput(bomLocPath, ownerID, invData.baseItemTypeID);
+    sRamMthd.TakeJobInput(bomLocPath, ownerID, invData.decryptorTypeID);
 
-    // update runs and do other shit where applicable
+    // update runs and do other shit where applicable.  an invented copy is used up whole at delivery
     if ((args.activityID == EvERam::Activity::Manufacturing) and !bpRef->infinite())
         bpRef->UpdateRuns(-args.runs);
 
@@ -425,6 +443,18 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
                 description += "<color=yellow>";
                 description += bpRef->itemName();
                 description += "</color> will be made.";
+            } break;
+            case EvERam::Activity::Invention: {
+                const ItemType* pType(sItemFactory.GetType(invData.outputBpTypeID));
+                description += "This job has a <color=yellow>";
+                description += std::to_string((int32)round(invData.chance * 100));
+                description += "%</color> chance to produce a <color=green>";
+                description += std::to_string(invData.outputRuns);
+                description += "</color> run <color=green>";
+                description += (pType == nullptr ? "Unknown" : pType->name());
+                description += "</color> from the <color=yellow>";
+                description += bpRef->itemName();
+                description += "</color>.";
             } break;
                 // others are not used (or shouldnt be)
         }
@@ -562,8 +592,34 @@ PyResult RamProxyService::CompleteJob(PyCallArgs &call, PyRep* info, PyRep* jobI
             bpRef->Move(outputLocationID, data.outputFlag, true);
         } break;
 
+        case EvERam::Activity::Invention: {
+            // the roll is made at delivery with the chance fixed at installation.  the T1 copy is used up either way
+            bool success(MakeRandomFloat(0, 1) < data.successChance);
+            installedItem->Delete();
+
+            uint32 outputItemID(0);
+            if (success) {
+                BlueprintRef copyRef = Blueprint::SpawnCopy(data.outputTypeID, data.ownerID, outputLocationID, data.outputFlag,
+                                                            data.outputRuns, data.outputME, data.outputPE);
+                if (copyRef.get() != nullptr)
+                    outputItemID = copyRef->itemID();
+            }
+
+            //  client shows RamInventionJobSucceeded / RamInventionJobFailed with the text of messageLabel
+            PyDict* dict = new PyDict();
+                dict->SetItemString("messageLabel", new PyString(sRamMthd.GetInventionResultLabel(success, data.successChance)));
+                dict->SetItemString("jobCompletedSuccessfully", new PyBool(success));
+            if (success) {
+                dict->SetItemString("outputME", new PyInt(data.outputME));
+                dict->SetItemString("outputPE", new PyInt(data.outputPE));
+                dict->SetItemString("outputRuns", new PyInt(data.outputRuns));
+                dict->SetItemString("outputTypeID", new PyInt(data.outputTypeID));
+                dict->SetItemString("outputItemID", new PyInt(outputItemID));
+            }
+            return new PyObject("util.KeyVal", dict);
+        } break;
+
         /* unsupported */
-        case EvERam::Activity::Invention:
         case EvERam::Activity::ReverseEngineering:
         /* depreciated */
         case EvERam::Activity::ResearchTech:

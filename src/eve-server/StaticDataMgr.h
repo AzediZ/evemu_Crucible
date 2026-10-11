@@ -125,6 +125,15 @@ public:
     PyDict*             GetBPMatlData(uint16 typeID);   //this is called on EVERY "show info" of a blueprint
     void                GetBpTypeData(uint16 typeID, EvERam::bpTypeData& tData);
     bool                GetBpDataForItem(uint16 typeID, EvERam::bpTypeData& tData);
+    // blueprint type that builds productTypeID (0 if none)
+    uint16              GetBlueprintTypeForProduct(uint16 productTypeID);
+    // invMetaTypes:  variations of parentTypeID (metaGroupID 0 = any) and the parent of a variation (0 if none)
+    void                GetMetaChildren(uint16 parentTypeID, uint8 metaGroupID, std::vector<uint16>& into);
+    uint16              GetMetaParent(uint16 typeID);
+    // R.A.M. installations:  assembly line types and counts of a structure type (ramInstallationTypeContents)
+    bool                GetInstallationContents(uint16 installationTypeID, std::vector<std::pair<uint8, uint8>>& into);
+    // activity of an assembly line type (ramAssemblyLineTypes)
+    uint8               GetAssemblyLineActivity(uint8 assemblyLineTypeID);
 
     uint32              GetFactionCorp(uint32 factionID);
     uint32              GetCorpFaction(uint32 corpID);
@@ -238,6 +247,15 @@ private:
     std::map<uint16, std::string>                       m_commodities;      // typeID/name
     std::map<uint16, std::string>                       m_miscCommodities;  // typeID/name
     std::map<uint16, EvERam::bpTypeData>                m_bpProductData;    // productTypeID/data
+    std::map<uint16, uint16>                            m_productToBp;      // productTypeID/blueprintTypeID
+
+    /* invMetaTypes */
+    std::multimap<uint16, std::pair<uint16, uint8>>     m_metaChildren;     // parentTypeID/(typeID, metaGroupID)
+    std::map<uint16, uint16>                            m_metaParent;       // typeID/parentTypeID
+
+    /* R.A.M. installations */
+    std::multimap<uint16, std::pair<uint8, uint8>>      m_ramInstContents;  // installationTypeID/(assemblyLineTypeID, quantity)
+    std::map<uint8, uint8>                              m_ramLineActivity;  // assemblyLineTypeID/activityID
 };
 
 //Singleton

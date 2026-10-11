@@ -52,6 +52,21 @@ public:
 
     // inventory of the job's bill of materials location (loads its contents).  null when there is none
     Inventory* GetBOMInventory(const PathElement& bomLocation);
+    // single extra inputs (invention base item and decryptor) at the bill of materials location
+    bool HasJobInput(const PathElement& bomLocation, uint32 ownerID, uint16 typeID, uint32 qty = 1);
+    void TakeJobInput(const PathElement& bomLocation, uint32 ownerID, uint16 typeID, uint32 qty = 1);
+
+    // int value of a util.KeyVal (or dict) argument entry.  0 for None or missing
+    static int32 GetKeyValInt(PyRep* kv, const char* key);
+
+    /* invention */
+    // T2 blueprint types the T1 blueprint can be invented into (the client's output list:  meta level 5 variations of the product)
+    void GetInventionOutputs(BlueprintRef t1Ref, std::vector<uint16>& bpTypeIDs);
+    // verify the invention inputs from the client (inventionItems, inventionOutputItemID) and work out the job's output
+    void GetInventionData(Client* const pClient, std::map<std::string, PyRep*>& byname, BlueprintRef t1Ref,
+                          const std::vector< EvERam::RequiredItem >& reqItems, EvERam::InventionData& into);
+    // localization label of the result text the client shows for a finished invention job
+    const char* GetInventionResultLabel(bool success, float chance);
 
     void GetAdjustedRamRequiredMaterials();
     const char* GetActivityName(int8 activityID);
