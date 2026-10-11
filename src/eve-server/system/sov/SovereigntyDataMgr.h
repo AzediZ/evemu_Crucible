@@ -42,6 +42,35 @@ namespace DevIndex {
 }
 
 namespace Sov {
+    namespace Upgrade {
+        // military/industrial upgrade chains, levels 1..5
+        enum Family : uint8 {
+            PirateDetection = 0,    // combat anomalies
+            Entrapment,             // DED complexes
+            QuantumFlux,            // wormholes
+            OreProspecting,         // gravimetric sites
+            SurveyNetworks,         // radar/magnetometric sites
+            FamilyCount
+        };
+        // strategic upgrades
+        enum : uint16 {
+            CynosuralSuppression        = 2001,
+            CynosuralNavigation         = 2008,
+            SupercapitalConstruction    = 2009,
+            AdvancedLogisticsNetwork    = 32422
+        };
+    }
+
+    // why an upgrade can't be installed / stay online
+    enum class UpgradeBlock : uint8 {
+        None,
+        DevIndex,               // military/industrial index too low
+        SovTime,                // system not held long enough
+        MissingRequired,        // required upgrade not installed and online
+        Blocking,               // a blocking upgrade is installed
+        Outpost                 // needs an upgraded outpost (not supported)
+    };
+
     namespace AudioEvent {
         // const.sovAudioEvent*  (OnSovereigntyAudioEvent)
         enum : uint8 {
@@ -113,6 +142,31 @@ public:
     // OnSovereigntyAudioEvent to the online members of allianceID.  consumes textParams
     void SendAudioEvent(uint32 allianceID, uint8 eventID, PyDict* textParams);
 
+    /* infrastructure hub upgrades */
+    /* checks typeID's index, strategic and required/blocking upgrade requirements in systemID.
+     *  installed:  typeID/online of the upgrades in the hub.  otherTypeID is set to the required or blocking upgrade
+     *  blocking upgrades only count for installs
+     */
+    Sov::UpgradeBlock CheckUpgradeRequirements(uint32 systemID, uint16 typeID, const std::map<uint16, bool>& installed,
+                                               bool forInstall, uint16& otherTypeID);
+    // highest online level of an upgrade family, 0 if none
+    uint8 GetActiveUpgradeLevel(uint32 systemID, uint8 family);
+    bool HasActiveUpgrade(uint32 systemID, uint16 typeID);
+    // an upgrade was added to hubID's inventory; the hub's SE refreshes the flags on its next tic
+    void MarkUpgradesDirty(uint32 hubID)                { m_upgradeDirty.insert(hubID); }
+    bool TakeUpgradesDirty(uint32 hubID)                { return (m_upgradeDirty.erase(hubID) > 0); }
+    // sets hubID's upgrades online/offline from the current requirements and hub state
+    void RefreshUpgrades(uint32 systemID, uint32 hubID);
+    // every online hub (hourly, after decay)
+    void RefreshAllUpgrades();
+    // the hub is gone:  upgrades are destroyed with it
+    void RemoveHub(uint32 systemID, uint32 hubID);
+    // clear a system's beacon/jammer only if it is still this structure
+    void ClearSystemBeaconID(uint32 systemID, uint32 beaconID);
+    void ClearSystemJammerID(uint32 systemID, uint32 jammerID);
+    // systemID/{online cyno generator count} for map.GetBeaconCount
+    void GetBeaconCounts(std::map<uint32, uint32>& counts);
+
 protected:
     void Populate();
     void LoadDevIndices();
@@ -124,6 +178,9 @@ private:
     void Decay(DevIndexData& data, int64 now, bool hourly);
 
     std::unordered_map<uint32, DevIndexData> m_devIndex;    // systemID/data
+    std::map<uint32, std::set<uint16>> m_activeUpgrades;     // systemID/online upgrade typeIDs
+    std::set<uint32> m_upgradeDirty;                        // hubIDs
+    void LoadActiveUpgrades();
 
     //Multi-index container for sov data
     typedef boost::multi_index_container<

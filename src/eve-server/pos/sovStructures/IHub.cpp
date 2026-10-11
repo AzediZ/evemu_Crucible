@@ -53,6 +53,10 @@ void IHubSE::Init()
 void IHubSE::Process()
 {
     StructureSE::Process();
+
+    // upgrades installed since the last tic
+    if (svDataMgr.TakeUpgradesDirty(m_data.itemID))
+        svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
 }
 
 void IHubSE::SetOnline()
@@ -60,11 +64,39 @@ void IHubSE::SetOnline()
     _log(SOV__DEBUG, "Onlining IHub... Updating claim'd hubID.");
     StructureSE::SetOnline();
     svDataMgr.UpdateSystemHubID(m_self->locationID(), m_self->itemID());
+    svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
 }
 
 void IHubSE::SetOffline()
 {
     _log(SOV__DEBUG, "Offlining IHub... Resetting claim's hubID.");
-    svDataMgr.UpdateSystemHubID(m_self->locationID(), 0);
+    if (svDataMgr.GetSovereigntyData(m_system->GetID()).hubID == m_data.itemID)
+        svDataMgr.UpdateSystemHubID(m_self->locationID(), 0);
+    svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
     StructureSE::SetOffline();
+}
+
+void IHubSE::OnRemovedFromSpace(bool killed)
+{
+    StructureSE::OnRemovedFromSpace(killed);
+
+    uint32 allianceID(svDataMgr.GetSystemAllianceID(m_system->GetID()));
+    // upgrades are destroyed with the hub
+    svDataMgr.RemoveHub(m_system->GetID(), m_data.itemID);
+
+    if (killed and (allianceID > 0)) {
+        // 'The Infrastructure Hub belonging to {owner} has been destroyed'
+        PyDict* params = new PyDict();
+            params->SetItemString("owner", new PyString(sDataMgr.GetOwnerName(allianceID)));
+        svDataMgr.SendAudioEvent(allianceID, Sov::AudioEvent::HubDestroyed, params);
+    }
+}
+
+bool IHubSE::IsInvul()
+{
+    // an online hub can only be attacked once sovereignty blockade units have the system contested
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+    if ((sovData.claimID > 0) and (sovData.hubID == m_data.itemID))
+        return (sovData.contested == 0);
+    return StructureSE::IsInvul();
 }

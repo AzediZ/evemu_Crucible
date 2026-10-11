@@ -56,8 +56,19 @@ void TCUSE::SetOnline()
 
     StructureSE::SetOnline();
 
+    // an online hub of the claiming alliance serves the new claim
+    uint32 hubID(0);
+    for (auto cur : m_system->GetOperationalStatics()) {
+        if ((cur.second == nullptr) or !cur.second->IsIHubSE())
+            continue;
+        StructureSE* pHub(cur.second->GetPOSSE());
+        if (pHub->IsOnline() and (pHub->GetAllianceID() == m_allyID))
+            hubID = pHub->GetID();
+    }
+
     SovereigntyData sovData = SovereigntyData();
         sovData.solarSystemID = m_system->GetID();
+        sovData.hubID = hubID;
         sovData.regionID = m_system->GetRegionID();
         sovData.constellationID = m_system->GetConstellationID();
         sovData.corporationID = m_corpID;
@@ -141,6 +152,33 @@ void TCUSE::DropClaim()
             _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s(%u)", cur->GetName(), cur->GetCharID());
         }
     }
+}
+
+void TCUSE::OnRemovedFromSpace(bool killed)
+{
+    StructureSE::OnRemovedFromSpace(killed);
+
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+    if ((sovData.claimID == 0) or (sovData.claimStructureID != m_data.itemID))
+        return;
+
+    DropClaim();
+
+    if (killed) {
+        // 'The Territorial Claim Unit has been destroyed - {owner} of {alliance} has lost sovereignty'
+        PyDict* params = new PyDict();
+            params->SetItemString("owner", new PyString(sDataMgr.GetOwnerName(sovData.corporationID)));
+            params->SetItemString("alliance", new PyString(sDataMgr.GetOwnerName(sovData.allianceID)));
+        svDataMgr.SendAudioEvent(sovData.allianceID, Sov::AudioEvent::FlagDestroyed, params);
+    }
+}
+
+bool TCUSE::IsInvul()
+{
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+    if ((sovData.claimID > 0) and (sovData.claimStructureID == m_data.itemID))
+        return (sovData.contested == 0);
+    return StructureSE::IsInvul();
 }
 
 void TCUSE::Process()

@@ -31,6 +31,9 @@ public:
     virtual void                Process();
     virtual void                SetOnline();
     virtual void                SetOffline();
+    virtual void                OnRemovedFromSpace(bool killed);
+    // only shootable while the system is contested
+    virtual bool                IsInvul();
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();

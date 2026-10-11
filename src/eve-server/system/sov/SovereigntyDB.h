@@ -48,6 +48,8 @@ public:
     // solarSystemID, militaryPoints, industrialPoints, militaryIncreasing, industrialIncreasing, lastDecayTime
     static void LoadDevIndices(DBQueryResult& res);
     static void SaveDevIndex(const DevIndexData& data);
+    // locationID (hubID), typeID of online upgrades in the given hubs
+    static void GetActiveUpgrades(DBQueryResult& res, const std::string& hubIDs);
 
     /* recent sovereignty activity (map.GetRecentSovActivity).  stationID 0 = system sov; 0 owners are stored as NULL
      *  gain:  oldOwnerID 0.  loss:  ownerID 0.  outpost capture:  both set

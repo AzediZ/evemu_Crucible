@@ -227,15 +227,9 @@ void Inventory::AddItem(InventoryItemRef iRef) {
         m_contentsByFlag.emplace(iRef->flag(), iRef);
     }
 
-    // Apply iHub upgrades
-    if (m_self->typeID() == EVEDB::invTypes::InfrastructureHub) {
-        _log(SOV__DEBUG, "Applying system upgrade %s to system %s...", iRef->name(), m_self->name());
-
-        // For now, all we need to do is mark the upgrade active,
-        // but in the future upgrades for military and resource harvesting
-        // will need to be 'activated' here
-        iRef->SetFlag(EVEItemFlags::flagStructureActive, true);
-    }
+    // iHub upgrades go online/offline outside of the insert (the hub's SE refreshes them on its next tic)
+    if (m_self->typeID() == EVEDB::invTypes::InfrastructureHub)
+        svDataMgr.MarkUpgradesDirty(m_myID);
 }
 
 void Inventory::RemoveItem(InventoryItemRef iRef) {
@@ -794,52 +788,73 @@ float Inventory::GetCapacity(EVEItemFlags flag) const {
     return 0.0f;
 }
 
-// Validate an IHub Upgrade and trigger it's activation
+// Validate an IHub Upgrade install.  the client checks the same rules (sovSvc.CanInstallUpgrade) and uses these messages
 bool Inventory::ValidateIHubUpgrade(InventoryItemRef iRef) const {
-    // Get days since claim for strategic development index
-    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_self->locationID());
-    double daysSinceClaim = (GetFileTimeNow() - sovData.claimTime) / Win32Time_Day;
+    if (iRef->categoryID() != EVEDB::invCategories::StructureUpgrade)
+        throw UserError("SovInvalidHubUpgrade");
 
-    // Get client who currently owns the item
+    uint32 systemID(m_self->locationID());
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(systemID);
+    // the claim's hubID is only set while the hub is online
+    if ((sovData.claimID == 0) or (sovData.hubID != m_myID))
+        throw UserError("CanNotInstallHubNotOnline");
+
     Client* pClient(sItemFactory.GetUsingClient());
-    //Client* pClient = sEntityList.FindClientByCharID(iRef->ownerID());
+    if (pClient == nullptr)
+        throw UserError("CanNotInstallHubTooFarAway");
+    if ((pClient->IsDocked()) or (pClient->GetLocationID() != systemID) or (pClient->SystemMgr() == nullptr))
+        throw UserError("CanNotInstallHubTooFarAway");
+    SystemEntity* pHub(pClient->SystemMgr()->GetSE(m_myID));
+    SystemEntity* pShip(pClient->GetShipSE());
+    if ((pHub == nullptr) or (pShip == nullptr))
+        throw UserError("CanNotInstallHubTooFarAway");
+    if ((pShip->DistanceTo2(pHub) - pShip->GetRadius() - pHub->GetRadius()) > maxConfigureDistance)
+        throw UserError("CanNotInstallHubTooFarAway");
 
-    switch (iRef->typeID()) {
-        case EVEDB::invTypes::UpgCynosuralNavigation:
-            if (daysSinceClaim > 2.0f) {
-                break;
-            } else {
-                _log(INV__WARNING, "Inventory::ValidateIHubUpgrade() - Upgrade %s requires a higher development index.", iRef->name());
-                throw CustomError("%s requires a development index of 2", iRef->name());
-            }
+    if ((uint32)pClient->GetAllianceID() != sovData.allianceID)
+        throw CustomError("You must be a member of the alliance holding sovereignty in this system to install upgrades.");
+
+    std::map<uint16, bool> installed;
+    std::map<uint32, InventoryItemRef>::const_iterator itr = mContents.begin();
+    for (; itr != mContents.end(); ++itr)
+        installed[itr->second->typeID()] = (itr->second->flag() == flagStructureActive);
+
+    if (installed.find(iRef->typeID()) != installed.end())
+        throw UserError("UpgradeAlreadyExists").AddTypeName("type", iRef->typeID());
+    if (iRef->quantity() > 1)
+        throw CustomError("Upgrades are installed one at a time.  Split one %s off the stack first.", iRef->name());
+
+    uint16 otherTypeID(0);
+    switch (svDataMgr.CheckUpgradeRequirements(systemID, iRef->typeID(), installed, true, otherTypeID)) {
+        case Sov::UpgradeBlock::None:
             break;
-        case EVEDB::invTypes::UpgCynosuralSuppression:
-        case EVEDB::invTypes::UpgAdvancedLogisticsNetwork:
-            if (daysSinceClaim > 3.0f) {
-                break;
-            } else {
-                _log(INV__WARNING, "Inventory::ValidateIHubUpgrade() - Upgrade %s requires a higher development index.", iRef->name());
-                throw CustomError("%s requires a development index of 3", iRef->name());
-            }
-            break;
-        default:
-            _log(INV__WARNING, "Inventory::ValidateIHubUpgrade() - Upgrade %s is not supported currently.", iRef->name());
-            throw CustomError("%s is not currently supported.", iRef->name());
-    }
-    if (m_self->GetMyInventory()->ContainsItem(iRef->itemID())) {
-        _log(INV__WARNING, "Inventory::ValidateIHubUpgrade() - Upgrade %s is already installed.", iRef->name());
-        throw CustomError("%s is already installed.", iRef->name());
+        case Sov::UpgradeBlock::DevIndex:
+            throw UserError("CanNotInstallMissingDevelopmentIdx");
+        case Sov::UpgradeBlock::SovTime:
+            throw UserError("CanNotInstallSovNotClaimedLongEnough");
+        case Sov::UpgradeBlock::MissingRequired: {
+            const ItemType* pType(sItemFactory.GetType(otherTypeID));
+            throw UserError("CanNotInstallMissingRequiredUpgrade")
+                    .AddFormatValue("upgradeName", new PyString(pType == nullptr ? "Unknown" : pType->name()));
+        }
+        case Sov::UpgradeBlock::Blocking: {
+            const ItemType* pType(sItemFactory.GetType(otherTypeID));
+            throw UserError("CanNotInstallBlockingUpgrade")
+                    .AddFormatValue("upgradeName", new PyString(pType == nullptr ? "Unknown" : pType->name()));
+        }
+        case Sov::UpgradeBlock::Outpost:
+            throw UserError("CanNotInstallOutpostNotUpgraded")
+                    .AddFormatValue("upgradeLevel", new PyInt(iRef->GetAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel).get_int()));
     }
 
-    // If we didn't hit anything above, it must be okay to insert item
+    _log(SOV__INFO, "Inventory::ValidateIHubUpgrade() - %s is installing %s in hub %u", pClient->GetName(), iRef->name(), m_myID);
     return true;
 }
 
 bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
 {
     if (m_self->typeID() == EVEDB::invTypes::InfrastructureHub)
-        if (iRef->categoryID() == EVEDB::invCategories::StructureUpgrade)
-            return ValidateIHubUpgrade(iRef);
+        return ValidateIHubUpgrade(iRef);
 
     // i dont think we need to check shit in stations...yet
     if (m_self->categoryID() == EVEDB::invCategories::Station)
@@ -862,6 +877,9 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
 
     // check if where the item is coming from was a cargo container
     InventoryItemRef cRef = sItemFactory.GetItemRef(iRef->locationID());
+    // installed upgrades are a permanent fixture of their hub
+    if ((cRef.get() != nullptr) and (cRef->typeID() == EVEDB::invTypes::InfrastructureHub))
+        throw CustomError("Infrastructure upgrades cannot be removed once installed.");
     if (cRef->groupID() == EVEDB::invGroups::Cargo_Container && sDataMgr.IsSolarSystem(cRef->locationID())) {
         GVector direction (cRef->position(), pClient->GetShip()->position());
         float maxDistance(2500.0f);

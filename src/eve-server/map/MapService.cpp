@@ -86,7 +86,27 @@ PyResult MapService::GetMyExtraMapInfo(PyCallArgs &call)
 
 PyResult MapService::GetBeaconCount(PyCallArgs &call)
 {
-    return MapDB::GetDynamicData(2, 24);
+    // {solarSystemID: (cyno fields on ships, online cyno generator arrays)}
+    PyRep* rep = MapDB::GetDynamicData(2, 24);
+    if ((rep == nullptr) or !rep->IsDict())
+        return rep;
+
+    // structure counts come from the sovereignty data (mapDynamicData only tracks ship cynos)
+    PyDict* dict = rep->AsDict();
+    std::map<uint32, uint32> counts;
+    svDataMgr.GetBeaconCounts(counts);
+    for (auto cur : counts) {
+        PyInt* key = new PyInt(cur.first);
+        int32 modules(0);
+        PyRep* old = dict->GetItem(key);
+        if ((old != nullptr) and old->IsTuple() and old->AsTuple()->GetItem(0)->IsInt())
+            modules = old->AsTuple()->GetItem(0)->AsInt()->value();
+        PyTuple* inner = new PyTuple(2);
+            inner->SetItem(0, new PyInt(modules));
+            inner->SetItem(1, new PyInt(cur.second));
+        dict->SetItem(key, inner);
+    }
+    return dict;
 }
 
 PyResult MapService::GetStationExtraInfo(PyCallArgs &call)

@@ -141,6 +141,10 @@ public:
     virtual void                Init();
     virtual void                InitData();
     virtual void                Scoop();
+    /* the structure is leaving space (killed or scooped).  clears what the system knows about it
+     *  structure-removal paths (unanchor completion, reinforcement-destroyed, ...) must call this too
+     */
+    virtual void                OnRemovedFromSpace(bool killed);
 
     /* virtual functions to be overridden in derived classes */
     virtual void     MissileLaunched(Missile* pMissile) { /* Do nothing here */ }
@@ -196,6 +200,13 @@ public:
     bool                        IsReinforced()          { return (m_data.state == EVEPOS::StructureState::Reinforced); }
 
     void                        SendSlimUpdate();
+
+    // online and usable (online, operating, vulnerable or invulnerable; not reinforced)
+    bool                        IsOnline();
+    /* sovereignty rules for structures that need an infrastructure upgrade (anchoringRequiresSovUpgrade1) and for
+     *  infrastructure hubs.  throws the client's CantAnchor* / CantOnline* errors
+     */
+    void                        CheckSovRequirements(bool online);
 
 protected:
     void                        SendEffectUpdate(int16 effectID, bool active);

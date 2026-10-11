@@ -161,3 +161,13 @@ void SovereigntyDB::SaveDevIndex(const DevIndexData& data)
         codelog(SOV__ERROR, "Error saving dev index for %u: %s", data.systemID, err.c_str());
     }
 }
+
+void SovereigntyDB::GetActiveUpgrades(DBQueryResult& res, const std::string& hubIDs)
+{
+    if (!sDatabase.RunQuery(res,
+            "SELECT locationID, typeID FROM entity WHERE locationID IN (%s) AND flag = %u",
+            hubIDs.c_str(), (uint32)flagStructureActive))
+    {
+        codelog(SOV__ERROR, "Error in GetActiveUpgrades query: %s", res.error.c_str());
+    }
+}

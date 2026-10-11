@@ -462,6 +462,7 @@ void StructureSE::Init()
 
 void StructureSE::Scoop()
 {
+    OnRemovedFromSpace(false);
     m_db.DeleteData(m_data.itemID);
     m_data = EVEPOS::StructureData();
 
@@ -633,33 +634,16 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
     // this is incomplete.  there may be client error msgs (havent looked or found)
     // these errors should throw instead of return.
 
-    // Check for required sovereignty upgrades for certain structures
-    if ((m_generator) or (m_jammer) or (m_bridge)) {
-        SovereigntyData sovData = svDataMgr.GetSovereigntyData(pClient->GetLocationID());
-        InventoryItemRef ihubRef = sItemFactory.GetItemRef(sovData.hubID);
-        uint32 upgType = m_self->GetAttribute(EveAttrEnum::AttranchoringRequiresSovUpgrade1).get_int();
-
-        if (!ihubRef->GetMyInventory()->ContainsTypeQty(upgType,1)) {
-            pClient->SendErrorMsg("This module requires %s to be installed in the Infrastructure Hub.",
-            sItemFactory.GetType(upgType)->name().c_str());
-            return;
-        }
-
-        if ((m_generator) && m_db.HasBridge(pClient->GetLocationID()))
-        {
-            pClient->SendErrorMsg("This module cannot be anchored as the system already contains a Jump Bridge.");
-            return;
-        }
-
-        if ((m_generator) && (sovData.jammerID != 0)) {
-            pClient->SendErrorMsg("This module cannot be anchored as the system is currently being jammed.");
-            return;
-        }
-
-        if ((m_jammer) && (sovData.beaconID != 0)) {
-            pClient->SendErrorMsg("This module cannot be anchored as the system currently has an active beacon.");
-            return;
-        }
+    // Check for required sovereignty and upgrades for certain structures
+    CheckSovRequirements(false);
+    if ((m_generator) or (m_jammer)) {
+        SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+        if ((m_generator) and m_db.HasBridge(m_system->GetID()))
+            throw CustomError("The %s cannot be anchored as the system already contains a Jump Bridge.", m_self->name());
+        if ((m_generator) and (sovData.jammerID != 0))
+            throw CustomError("The %s cannot be anchored as the system is currently being jammed.", m_self->name());
+        if ((m_jammer) and (sovData.beaconID != 0))
+            throw CustomError("The %s cannot be anchored as the system currently has an active beacon.", m_self->name());
     }
 
     if (m_tower)
@@ -814,6 +798,9 @@ void StructureSE::Activate(int32 effectID)
 
     // check effectID, check current state, check current timer, set new state, update timer
 
+    // sovereignty and infrastructure upgrade requirements
+    CheckSovRequirements(true);
+
     if (m_tower)
     {
         // if tower, check fuel quantity for onlining
@@ -903,12 +890,63 @@ void StructureSE::SetOffline()
     m_self->SetFlag(flagStructureInactive);
     if (m_module)
         m_towerSE->OfflineModule(this);
-    if (m_generator) {
-        svDataMgr.UpdateSystemBeaconID(m_self->locationID(),0);
+    if (m_generator)
+        svDataMgr.ClearSystemBeaconID(m_self->locationID(), m_data.itemID);
+    if (m_jammer)
+        svDataMgr.ClearSystemJammerID(m_self->locationID(), m_data.itemID);
+}
+
+bool StructureSE::IsOnline()
+{
+    switch (m_data.state) {
+        case EVEPOS::StructureState::Online:
+        case EVEPOS::StructureState::Operating:
+        case EVEPOS::StructureState::Vulnerable:
+        case EVEPOS::StructureState::Invulnerable:
+            return true;
     }
-    if (m_jammer) {
-        svDataMgr.UpdateSystemJammerID(m_self->locationID(),0);
+    return false;
+}
+
+void StructureSE::CheckSovRequirements(bool online)
+{
+    uint32 upgradeID(0);
+    if (online and m_self->HasAttribute(AttronliningRequiresSovUpgrade1))
+        upgradeID = m_self->GetAttribute(AttronliningRequiresSovUpgrade1).get_uint32();
+    if ((upgradeID == 0) and m_self->HasAttribute(AttranchoringRequiresSovUpgrade1))
+        upgradeID = m_self->GetAttribute(AttranchoringRequiresSovUpgrade1).get_uint32();
+    if ((upgradeID == 0) and !m_ihub)
+        return;
+
+    uint32 systemID(m_system->GetID());
+    // starbase modules that list an upgrade (capital ship arrays) only need it where sovereignty can be held
+    if (!m_generator and !m_jammer and !m_bridge and !m_ihub and !svDataMgr.IsClaimable(systemID))
+        return;
+
+    SovereigntyData sovData = svDataMgr.GetSovereigntyData(systemID);
+    if ((sovData.claimID == 0) or (m_allyID == 0) or (sovData.allianceID != (uint32)m_allyID))
+        throw UserError(online ? "CantOnlineNotSovereign" : "CantAnchorNotSovereign")
+                .AddFormatValue("structure", new PyString(m_self->itemName()));
+
+    if (m_ihub or (upgradeID == 0))
+        return;
+
+    if (sovData.hubID == 0)
+        throw UserError(online ? "CantOnlineNoInfrastructureHub" : "CantAnchorNoInfrastructureHub");
+
+    if (!svDataMgr.HasActiveUpgrade(systemID, upgradeID)) {
+        const ItemType* pType(sItemFactory.GetType(upgradeID));
+        throw UserError(online ? "CantOnlineMissingUpgrade" : "CantAnchorMissingUpgrade")
+                .AddFormatValue("needs", new PyString(pType == nullptr ? "Unknown" : pType->name()));
     }
+}
+
+void StructureSE::OnRemovedFromSpace(bool killed)
+{
+    if (m_generator)
+        svDataMgr.ClearSystemBeaconID(m_self->locationID(), m_data.itemID);
+    if (m_jammer)
+        svDataMgr.ClearSystemJammerID(m_self->locationID(), m_data.itemID);
 }
 
 void StructureSE::SetInvulnerable()
@@ -1245,6 +1283,8 @@ void StructureSE::Killed(Damage &damage)
 {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
+
+    OnRemovedFromSpace(true);
 
     if (m_tower)
         m_bubble->SetTowerSE(nullptr);

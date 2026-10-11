@@ -16,6 +16,8 @@
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "Client.h"
+#include "inventory/Inventory.h"
+#include "inventory/ItemFactory.h"
 
 uint8 DevIndex::LevelForPoints(int64 points)
 {
@@ -55,6 +57,7 @@ int SovereigntyDataMgr::Initialize()
 {
     Populate();
     LoadDevIndices();
+    LoadActiveUpgrades();
     sLog.Blue("       SovDataMgr", "Sovereignty Data Manager Initialized.");
     return 1;
 }
@@ -71,6 +74,8 @@ void SovereigntyDataMgr::Clear()
 {
     m_sovData.clear();
     m_devIndex.clear();
+    m_activeUpgrades.clear();
+    m_upgradeDirty.clear();
 }
 
 void SovereigntyDataMgr::ReadRow(DBResultRow& row, SovereigntyData& sData)
@@ -368,6 +373,10 @@ void SovereigntyDataMgr::AddSovClaim(SovereigntyData data)
     }
 
     UpdateClaim(data.solarSystemID);
+
+    // a hub online in the system serves the new claim
+    if (data.hubID > 0)
+        RefreshUpgrades(data.solarSystemID, data.hubID);
 }
 
 void SovereigntyDataMgr::MarkContested(uint32 systemID, bool contested)
@@ -390,8 +399,13 @@ void SovereigntyDataMgr::RemoveSovClaim(uint32 systemID)
     _log(SOV__DEBUG, "RemoveSovClaim() - Claim for %u removed from DB...", systemID);
 
     //Remove claim from container
+    uint32 hubID = GetSovereigntyData(systemID).hubID;
     auto &bySolar = m_sovData.get<SovDataBySolarSystem>();
     bySolar.erase(systemID);
+
+    // upgrades need sovereignty
+    if (hubID > 0)
+        RefreshUpgrades(systemID, hubID);
 }
 
 void SovereigntyDataMgr::UpdateSystemHubID(uint32 systemID, uint32 hubID)
@@ -528,6 +542,9 @@ void SovereigntyDataMgr::Process()
     int64 now = GetFileTimeNow();
     for (auto& cur : m_devIndex)
         Decay(cur.second, now, true);
+
+    // upgrades follow the indices
+    RefreshAllUpgrades();
 }
 
 void SovereigntyDataMgr::SaveDevIndices()
@@ -638,4 +655,205 @@ void SovereigntyDataMgr::SendAudioEvent(uint32 allianceID, uint8 eventID, PyDict
 
     _log(SOV__DEBUG, "SendAudioEvent() - event %u to %lu members of alliance %u", eventID, cset.size(), allianceID);
     sEntityList.Multicast(cset, "OnSovereigntyAudioEvent", "clientID", &tuple);
+}
+
+/* infrastructure hub upgrades */
+static const uint16 s_upgradeChains[Sov::Upgrade::FamilyCount][5] = {
+    {2026, 2027, 2028, 2029, 2030},     // Pirate Detection Array
+    {2031, 2034, 2035, 2036, 2037},     // Entrapment Array
+    {2058, 2059, 2060, 2061, 2062},     // Quantum Flux Generator
+    {2040, 2041, 2042, 2043, 2044},     // Ore Prospecting Array
+    {2053, 2054, 2055, 2056, 2057}      // Survey Networks
+};
+
+void SovereigntyDataMgr::LoadActiveUpgrades()
+{
+    // online upgrades straight from the db, so unloaded systems don't load their hubs
+    std::map<uint32, uint32> hubs;  // hubID/systemID
+    for (auto& cur : m_sovData.get<SovDataBySolarSystem>())
+        if (cur.hubID > 0)
+            hubs[cur.hubID] = cur.solarSystemID;
+    if (hubs.empty())
+        return;
+
+    std::string ids;
+    for (auto& cur : hubs) {
+        if (!ids.empty())
+            ids += ",";
+        ids += std::to_string(cur.first);
+    }
+
+    DBQueryResult res;
+    DBResultRow row;
+    SovereigntyDB::GetActiveUpgrades(res, ids);
+    while (res.GetRow(row))
+        m_activeUpgrades[hubs[row.GetUInt(0)]].insert(row.GetUInt(1));
+
+    sLog.Cyan("       SovDataMgr", "%lu systems with online infrastructure upgrades.", m_activeUpgrades.size());
+}
+
+Sov::UpgradeBlock SovereigntyDataMgr::CheckUpgradeRequirements(uint32 systemID, uint16 typeID,
+                                    const std::map<uint16, bool>& installed, bool forInstall, uint16& otherTypeID)
+{
+    // same order as the client's sovSvc.CanInstallUpgrade()
+    otherTypeID = 0;
+    const ItemType* pType = sItemFactory.GetType(typeID);
+    if (pType == nullptr)
+        return Sov::UpgradeBlock::MissingRequired;
+
+    if (pType->HasAttribute(AttrdevIndexMilitary))
+        if (pType->GetAttribute(AttrdevIndexMilitary).get_int() > GetMilitaryLevel(systemID))
+            return Sov::UpgradeBlock::DevIndex;
+    if (pType->HasAttribute(AttrdevIndexIndustrial))
+        if (pType->GetAttribute(AttrdevIndexIndustrial).get_int() > GetIndustrialLevel(systemID))
+            return Sov::UpgradeBlock::DevIndex;
+    if (pType->HasAttribute(AttrdevIndexSovereignty))
+        if (pType->GetAttribute(AttrdevIndexSovereignty).get_int() > GetStrategicLevel(systemID))
+            return Sov::UpgradeBlock::SovTime;
+
+    if (pType->HasAttribute(AttrsovUpgradeRequiredUpgradeID)) {
+        uint16 reqID = pType->GetAttribute(AttrsovUpgradeRequiredUpgradeID).get_uint32();
+        if (reqID > 0) {
+            std::map<uint16, bool>::const_iterator itr = installed.find(reqID);
+            if ((itr == installed.end()) or !itr->second) {
+                otherTypeID = reqID;
+                return Sov::UpgradeBlock::MissingRequired;
+            }
+        }
+    }
+    if (forInstall and pType->HasAttribute(AttrsovUpgradeBlockingUpgradeID)) {
+        uint16 blockID = pType->GetAttribute(AttrsovUpgradeBlockingUpgradeID).get_uint32();
+        if ((blockID > 0) and (installed.find(blockID) != installed.end())) {
+            otherTypeID = blockID;
+            return Sov::UpgradeBlock::Blocking;
+        }
+    }
+
+    // outpost upgrades are not supported.  no Crucible infrastructure upgrade uses this
+    if (pType->HasAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel))
+        if (pType->GetAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel).get_int() > 0)
+            return Sov::UpgradeBlock::Outpost;
+
+    return Sov::UpgradeBlock::None;
+}
+
+uint8 SovereigntyDataMgr::GetActiveUpgradeLevel(uint32 systemID, uint8 family)
+{
+    if (family >= Sov::Upgrade::FamilyCount)
+        return 0;
+    std::map<uint32, std::set<uint16>>::iterator itr = m_activeUpgrades.find(systemID);
+    if (itr == m_activeUpgrades.end())
+        return 0;
+    for (uint8 level = 5; level > 0; --level)
+        if (itr->second.find(s_upgradeChains[family][level - 1]) != itr->second.end())
+            return level;
+    return 0;
+}
+
+bool SovereigntyDataMgr::HasActiveUpgrade(uint32 systemID, uint16 typeID)
+{
+    std::map<uint32, std::set<uint16>>::iterator itr = m_activeUpgrades.find(systemID);
+    if (itr == m_activeUpgrades.end())
+        return false;
+    return (itr->second.find(typeID) != itr->second.end());
+}
+
+void SovereigntyDataMgr::RefreshUpgrades(uint32 systemID, uint32 hubID)
+{
+    InventoryItemRef hubRef = sItemFactory.GetItemRef(hubID);
+    if ((hubRef.get() == nullptr) or (hubRef->GetMyInventory() == nullptr)) {
+        m_activeUpgrades.erase(systemID);
+        return;
+    }
+
+    // upgrades work while the hub is online for the system's sovereign
+    SovereigntyData sovData = GetSovereigntyData(systemID);
+    bool hubOnline((sovData.claimID > 0) and (sovData.hubID == hubID));
+
+    Inventory* pInv = hubRef->GetMyInventory();
+    pInv->LoadContents();
+    std::map<uint32, InventoryItemRef> contents;
+    pInv->GetInventoryMap(contents);
+
+    // lower levels of a chain have lower typeIDs, so walking by typeID settles requirements first
+    std::map<uint16, InventoryItemRef> upgrades;
+    std::map<uint16, bool> installed;
+    for (auto& cur : contents) {
+        if (cur.second->categoryID() != EVEDB::invCategories::StructureUpgrade)
+            continue;
+        upgrades.emplace(cur.second->typeID(), cur.second);
+        installed[cur.second->typeID()] = (cur.second->flag() == flagStructureActive);
+    }
+
+    std::set<uint16> active;
+    uint16 otherTypeID(0);
+    for (auto& cur : upgrades) {
+        bool online(hubOnline and (CheckUpgradeRequirements(systemID, cur.first, installed, false, otherTypeID) == Sov::UpgradeBlock::None));
+        installed[cur.first] = online;
+        if (online)
+            active.insert(cur.first);
+        EVEItemFlags flag(online ? flagStructureActive : flagStructureInactive);
+        if (cur.second->flag() != flag) {
+            _log(SOV__INFO, "RefreshUpgrades() - %s in %u is now %s", cur.second->name(), systemID, (online ? "online" : "offline"));
+            cur.second->SetFlag(flag, true);
+        }
+    }
+    if (active.empty()) {
+        m_activeUpgrades.erase(systemID);
+    } else {
+        m_activeUpgrades[systemID] = active;
+    }
+
+    /** @todo F13: push the anomaly/signature bonuses to a loaded system's AnomalyMgr here
+     *  (SetUpgradeBonus(GetActiveUpgradeLevel(systemID, PirateDetection), GetActiveUpgradeLevel(systemID, SurveyNetworks)))
+     */
+}
+
+void SovereigntyDataMgr::RefreshAllUpgrades()
+{
+    std::vector<std::pair<uint32, uint32>> hubs;
+    for (auto& cur : m_sovData.get<SovDataBySolarSystem>())
+        if (cur.hubID > 0)
+            hubs.push_back(std::make_pair(cur.solarSystemID, cur.hubID));
+    for (auto& cur : hubs)
+        RefreshUpgrades(cur.first, cur.second);
+}
+
+void SovereigntyDataMgr::RemoveHub(uint32 systemID, uint32 hubID)
+{
+    if (GetSovereigntyData(systemID).hubID == hubID)
+        UpdateSystemHubID(systemID, 0);
+    m_activeUpgrades.erase(systemID);
+    m_upgradeDirty.erase(hubID);
+
+    // installed upgrades are a permanent fixture of the hub and go with it
+    InventoryItemRef hubRef = sItemFactory.GetItemRef(hubID);
+    if ((hubRef.get() == nullptr) or (hubRef->GetMyInventory() == nullptr))
+        return;
+    hubRef->GetMyInventory()->LoadContents();
+    std::map<uint32, InventoryItemRef> contents;
+    hubRef->GetMyInventory()->GetInventoryMap(contents);
+    for (auto& cur : contents) {
+        _log(SOV__INFO, "RemoveHub() - destroying %s(%u) with hub %u", cur.second->name(), cur.first, hubID);
+        cur.second->Delete();
+    }
+}
+
+void SovereigntyDataMgr::ClearSystemBeaconID(uint32 systemID, uint32 beaconID)
+{
+    if (GetSovereigntyData(systemID).beaconID == beaconID)
+        UpdateSystemBeaconID(systemID, 0);
+}
+
+void SovereigntyDataMgr::ClearSystemJammerID(uint32 systemID, uint32 jammerID)
+{
+    if (GetSovereigntyData(systemID).jammerID == jammerID)
+        UpdateSystemJammerID(systemID, 0);
+}
+
+void SovereigntyDataMgr::GetBeaconCounts(std::map<uint32, uint32>& counts)
+{
+    for (auto& cur : m_sovData.get<SovDataBySolarSystem>())
+        if (cur.beaconID > 0)
+            ++counts[cur.solarSystemID];
 }
