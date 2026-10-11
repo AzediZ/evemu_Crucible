@@ -146,16 +146,32 @@ public:
     void RemoveResist(uint16 type, float amount)        { /* do nothing here */ }
 
     // resource methods
-    void OnlineModule(StructureSE* pSE)                 { /* do nothing here */ }
-    void OfflineModule(StructureSE* pSE)                { /* do nothing here */ }
+    void OnlineModule(StructureSE* pSE)                 { RecalcLoad(); }
+    void OfflineModule(StructureSE* pSE)                { RecalcLoad(); }
+    // power and cpu used by the structures that are online or onlining
+    void RecalcLoad();
+    bool HasPG(float amount);
+    bool HasCPU(float amount);
+    float GetPGLoad()                                   { RecalcLoad(); return m_pgUsed; }
+    float GetCPULoad()                                  { RecalcLoad(); return m_cpuUsed; }
 
-    // not coded yet
-    bool HasPG(float amount)                            { return true; }
-    // not coded yet
-    bool HasCPU(float amount)                           { return true; }
+    /* fuel cycle */
+    // one hour of tower life (fuel, reinforcement end, moon processes, notifications, calendar)
+    void ProcessCycle(int64 cycleTime);
+    // takes one hour of every online resource from the fuel bay.  false (nothing taken) when anything is short
+    bool ConsumeFuelCycle();
+    // removes qty units of typeID from a bay
+    void TakeResource(uint16 typeID, EVEItemFlags flag, uint32 qty);
+    // full hours of fuel in the bay after the current one (UINT32_MAX when the tower needs none)
+    uint32 FuelHoursLeft();
+    // the tower and its structures go offline now
+    void GoOffline(bool outOfFuel);
+    // the fuel expiry event in the corp calendar (showInCalendar)
+    void UpdateFuelCalendar();
 
-    float GetPGLoad()                                   { return m_pg; }
-    float GetCPULoad()                                  { return m_cpu; }
+    /* bays:  fuel bay (flagNone) and strontium bay (flagSecondaryStorage) */
+    virtual void ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag);
+    virtual void ValidateRemoveItem(Client* pClient, InventoryItemRef iRef);
 
 protected:
     EVEPOS::TowerData m_tdata;
@@ -165,6 +181,13 @@ protected:
 
 private:
     void CreateForceField();
+    // replays the hours missed while the system was unloaded
+    void CatchUp();
+
+    bool m_catchUp;         // catch up on the first tic after loading
+    bool m_replaying;       // replaying missed hours (saves once at the end)
+    float m_pgUsed;
+    float m_cpuUsed;
 
     bool m_hasShield;
 

@@ -1231,35 +1231,10 @@ namespace {
         if (!pInv->ContentsLoaded())
             pInv->LoadContents();
 
-        SystemManager* pSystem(pSE->SystemMgr());
-        float security(pSystem->GetSystemSecurityRating());
-        SystemData sData = SystemData();
-        sDataMgr.GetSystemData(pSystem->GetID(), sData);
-        uint32 factionID(sData.factionID);
-        if (factionID == 0)
-            factionID = sDataMgr.GetRegionFaction(pSystem->GetRegionID());
-
-        // purpose 1 -> fuel bay (the tower's main inventory), purpose 4 -> strontium bay
+        // what the tower burns here:  purpose 1 -> fuel bay (the tower's main inventory), purpose 4 -> strontium bay
         std::map<uint16, uint32> need[2];
-        DBQueryResult res;
-        PosMgrDB pDB;
-        pDB.GetControlTowerFuelRequirements(res);
-        DBResultRow row;
-        while (res.GetRow(row)) {
-            if (row.GetUInt(0) != tRef->typeID())
-                continue;
-            if (!row.IsNull(4) and (security < row.GetDouble(4)))
-                continue;
-            if (!row.IsNull(5) and (row.GetUInt(5) != factionID))
-                continue;
-            // wormhole-only rows
-            if (!row.IsNull(6) and !IsWSpaceID(pSystem->GetID()))
-                continue;
-            uint8 purpose(row.GetUInt(2));
-            if ((purpose != 1) and (purpose != 4))
-                continue;
-            need[purpose == 1 ? 0 : 1][row.GetUInt(1)] += row.GetUInt(3);
-        }
+        TowerSE::GetFuelRequirements(tRef->typeID(), pSE->SystemMgr()->GetID(),
+                                     (IsAlliance(pSE->GetAllianceID()) ? pSE->GetAllianceID() : 0), need[0], need[1]);
         if (need[0].empty() and need[1].empty())
             throw CustomError ("No fuel requirements for %s (type %u)", tRef->name(), tRef->typeID());
 

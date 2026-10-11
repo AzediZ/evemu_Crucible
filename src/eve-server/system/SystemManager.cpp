@@ -2130,6 +2130,10 @@ bool SystemManager::SafeToUnload()
     if (m_law->IsBusy() and !sConsole.IsShutdown())
         return false;
     for (auto cur: GetEntities() ) {
+        // starbases run in real time (fuel, reinforcement, moon mining):  systems with online towers stay loaded
+        if (sConfig.pos.KeepTowerSystemsLoaded and !sConsole.IsShutdown()
+        and cur.second->IsTowerSE() and cur.second->GetTowerSE()->IsPowered())
+            return false;
         //If there are any ongoing operations by operational static structures, we don't want to unload the system until this is complete
         if (cur.second->IsPOSSE()) {
             if ((cur.second->GetPOSSE()->GetProcState() == EVEPOS::ProcState::Unanchoring) or

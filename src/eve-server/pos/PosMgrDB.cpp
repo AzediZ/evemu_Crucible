@@ -54,6 +54,25 @@ PyRep* PosMgrDB::GetCorpControlTowers(uint32 corpID)
     return DBResultToCRowset(res);
 }
 
+void PosMgrDB::GetActiveTowerSystems(std::vector<uint32>& into)
+{
+    // onlining, reinforced and online towers in space
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT DISTINCT e.locationID FROM entity AS e"
+            " JOIN posStructureData AS s ON s.itemID = e.itemID"
+            " JOIN invTypes AS t ON t.typeID = e.typeID"
+            " WHERE t.groupID = %u AND s.state >= %i AND e.locationID BETWEEN 30000000 AND 32000000",
+            EVEDB::invGroups::Control_Tower, EVEPOS::StructureState::Onlining))
+    {
+        codelog(DATABASE__ERROR, "Error in GetActiveTowerSystems query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
 void PosMgrDB::GetControlTowerFuelRequirements(DBQueryResult& res) {
     if (!sDatabase.RunQuery(res,
             "SELECT controlTowerTypeID, resourceTypeID, purpose, quantity, minSecurityLevel, factionID, wormholeClassID"

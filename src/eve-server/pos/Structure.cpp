@@ -981,6 +981,54 @@ bool StructureSE::IsOnline()
     return false;
 }
 
+float StructureSE::GetShieldFraction()
+{
+    float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+    if (capacity <= 0.0f)
+        return 1.0f;
+    return (m_self->GetAttribute(AttrShieldCharge).get_float() / capacity);
+}
+
+void StructureSE::ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag)
+{
+    if ((pClient == nullptr) or !IsStarbaseStructure())
+        return;
+    if (!IsAnchored())
+        throw UserError("CannotPlaceInUnanchoredStructure")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()));
+    // the tower's bays have their own rules (TowerSE)
+    if (m_tower)
+        return;
+    if (!CanUseAccess(pClient, EVEPOS::Usage::View))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("The starbase's access settings don't let you put items into this structure."));
+    // an offline structure of a tower that is reinforced (or could be) is locked
+    if (!IsPowered() and (m_towerSE != nullptr)
+    and (m_towerSE->IsReinforced() or (m_towerSE->IsPowered() and (m_towerSE->GetShieldFraction() < EVEPOS::ShieldFluctuationLevel))))
+        throw UserError("CannotPlaceInOfflineStructure")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()));
+}
+
+void StructureSE::ValidateRemoveItem(Client* pClient, InventoryItemRef iRef)
+{
+    if ((pClient == nullptr) or !IsStarbaseStructure())
+        return;
+    if (!IsAnchored())
+        throw UserError("CannotRemoveFromUnanchoredStructure")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()));
+    if (m_tower)
+        return;
+    if (!CanUseAccess(pClient, EVEPOS::Usage::Take))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("The starbase's access settings don't let you take items from this structure."));
+    if (!IsPowered() and (m_towerSE != nullptr)
+    and (m_towerSE->IsReinforced() or (m_towerSE->IsPowered() and (m_towerSE->GetShieldFraction() < EVEPOS::ShieldFluctuationLevel))))
+        throw UserError("CannotRemoveFromOfflineStructure")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()));
+}
+
 bool StructureSE::HasRole(Client* pClient, int64 role)
 {
     if (pClient == nullptr)
@@ -1166,7 +1214,7 @@ TowerSE* StructureSE::CheckAnchorRules(Client* pClient, const GPoint& pos)
 
     if (m_tower) {
         GPoint towerPos(GetPosition());
-        if (sConfig.pos.ConcordAnchorRestriction and (secLevel >= 0.8f))
+        if (sConfig.pos.ConcordAnchorRestriction and ((secLevel + 0.001f) >= 0.8f))
             throw UserError("CantAnchorConcordRestriction").AddFormatValue("security", new PyFloat(secLevel));
 
         // exactly one moon in reach
@@ -1275,7 +1323,7 @@ TowerSE* StructureSE::CheckAnchorRules(Client* pClient, const GPoint& pos)
     // CONCORD 'public resource consent' (moon mining and reactions only below 0.5, ...)
     EvilNumber value(EvilZero);
     if (sConfig.pos.ConcordAnchorRestriction and m_self->HasAttribute(AttrAnchoringSecurityLevelMax, value))
-        if (secLevel >= value.get_float())
+        if ((secLevel + 0.001f) >= value.get_float())
             throw UserError("CantAnchorStructureRestrictionSpecific")
                     .AddFormatValue("type", new PyInt(typeID))
                     .AddFormatValue("high", new PyFloat(value.get_float()))

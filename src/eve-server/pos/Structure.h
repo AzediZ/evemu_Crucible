@@ -206,6 +206,14 @@ public:
     // sets the control tower of a module (anchoring near another tower, orphaning)
     void                        SetControlTower(TowerSE* pTower);
     int32                       GetProvisionTypeID()    { return m_data.provisionTypeID; }
+    // shield charge / capacity
+    float                       GetShieldFraction();
+
+    /* starbase inventory rules, from InventoryBound::MoveItems.  they throw the client's errors
+     *  add:  anchored, view/put access, offline structures of a weak tower are locked.  remove:  the same with take access
+     */
+    virtual void                ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag);
+    virtual void                ValidateRemoveItem(Client* pClient, InventoryItemRef iRef);
     int8                        GetState() const        { return m_data.state; }
     int8                        GetProcState()          { return m_procState; }
     int8                        GetStatus()             { return m_data.status; }

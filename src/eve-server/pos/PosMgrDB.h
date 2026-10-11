@@ -40,6 +40,8 @@ public:
     static bool GetContactStanding(uint32 ownerID, uint32 contactID, float& standing);
 
     void GetControlTowerFuelRequirements(DBQueryResult& res);
+    // solar systems with control towers that are onlining, online or reinforced
+    static void GetActiveTowerSystems(std::vector<uint32>& into);
 
     // pos data methods
     void DeleteData(uint32 itemID);

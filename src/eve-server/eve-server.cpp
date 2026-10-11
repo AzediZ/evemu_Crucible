@@ -829,6 +829,15 @@ int main( int argc, char* argv[] )
     MapDB::SystemStartup();
     sLog.Green("       ServerInit", "Dynamic System Data Reset.");
 
+    // starbases run in real time:  systems with online control towers are loaded now and stay loaded
+    if (sConfig.pos.KeepTowerSystemsLoaded) {
+        std::vector<uint32> towerSystems;
+        PosMgrDB::GetActiveTowerSystems(towerSystems);
+        for (auto cur : towerSystems)
+            sEntityList.FindOrBootSystem(cur);
+        sLog.Green("       ServerInit", "%u Systems with online Control Towers loaded.", (uint32)towerSystems.size());
+    }
+
     //sLog.Warning("server init", "Adding NPC Market Orders.");
     //NPCMarket::CreateNPCMarketFromFile("/etc/npcMarket.xml");
 

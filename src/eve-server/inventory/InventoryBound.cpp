@@ -573,6 +573,14 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
         } break;
     }
 
+    // starbase structure rules for what goes in (bays, access, reinforced and offline locks)
+    StructureSE* pDestPOS(nullptr);
+    if (m_self->categoryID() == EVEDB::invCategories::Structure) {
+        SystemEntity* pSE(StructureItemRef::StaticCast(m_self)->GetMySE());
+        if ((pSE != nullptr) and pSE->IsPOSSE())
+            pDestPOS = pSE->GetPOSSE();
+    }
+
     EVEItemFlags fromFlag(flagNone);
     EVEItemFlags origFlag(toFlag);
     InventoryItemRef iRef(nullptr);
@@ -590,9 +598,11 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             continue;
         }
 
-        // may we take it from where it is?
+        // may we take it from where it is?  may it go into this starbase structure?
         try {
             CheckSourceAccess(pClient, iRef, m_itemID, toFlag);
+            if ((pDestPOS != nullptr) and ((iRef->locationID() != m_itemID) or (iRef->flag() != toFlag)))
+                pDestPOS->ValidateAddItem(pClient, iRef, toFlag);
         } catch (...) {
             sItemFactory.UnsetUsingClient();
             throw;
@@ -684,6 +694,9 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
 
         uint32 fromLocationID(iRef->locationID());
         if (donating) {
+            // starbase bays have capacities (an overfilled tower keeps working but takes nothing more)
+            if (pDestPOS != nullptr)
+                pInventory->ValidateAddItem(toFlag, iRef);  // this will throw if it fails
             iRef->Donate(m_ownerID, m_itemID, toFlag);
             LogContainerMove(pClient, iRef, fromLocationID, m_itemID);
             continue;
@@ -1047,6 +1060,12 @@ void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, u
             throw UserError("CrpItemIsLocked");
         // a password protected container
         sContSec.CheckOpen(pClient, srcRef);
+        // starbase structure rules for what comes out (bays, access, reinforced and offline locks)
+        if (srcRef->categoryID() == EVEDB::invCategories::Structure) {
+            SystemEntity* pSE(StructureItemRef::StaticCast(srcRef)->GetMySE());
+            if ((pSE != nullptr) and pSE->IsPOSSE())
+                pSE->GetPOSSE()->ValidateRemoveItem(pClient, iRef);
+        }
         // the contents of a container held in a contract (owned by the system until the contract ends)
         if ((srcRef->ownerID() == ownerSystem) and IsPlayerItem(srcRef->itemID())
         and !sDataMgr.IsSolarSystem(srcRef->locationID()))

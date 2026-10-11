@@ -29,6 +29,8 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/CalendarDB.h"
+#include "../eve-common/EVE_Calendar.h"
 
 /** @todo (Allan) this class needs more research to finish
  * see pics in ::GamePC/G/games/EvE/misc/POS
@@ -105,7 +107,11 @@
 
 TowerSE::TowerSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& fData)
 : StructureSE(structure, services, system, fData),
-m_pShieldSE(nullptr)
+m_pShieldSE(nullptr),
+m_catchUp(false),
+m_replaying(false),
+m_pgUsed(0.0f),
+m_cpuUsed(0.0f)
 {
     m_hasShield = false;
     m_structs.clear();
@@ -145,6 +151,9 @@ void TowerSE::Init()
     // towers saved before standingOwnerID was kept
     if (m_tdata.standingOwnerID == 0)
         m_tdata.standingOwnerID = m_corpID;
+
+    // an online tower catches up on its first tic (its structures aren't all initialized yet)
+    m_catchUp = IsPowered();
 
     // if password is already set and tower online, then we can online (create) the forcefield
     m_harmonic = m_tdata.harmonic;
@@ -376,6 +385,13 @@ void TowerSE::Process()
 {
     /* called by EntityList::Process on every loop */
 
+    // after a (re)load, once every structure of the system is initialized:  the hours missed while unloaded
+    if (m_catchUp) {
+        m_catchUp = false;
+        if (IsPowered())
+            CatchUp();
+    }
+
     // starbase charter checks for empire space
 
     // tower-specific tests here
@@ -397,37 +413,28 @@ void TowerSE::Process()
 
 void TowerSE::SetOnline()
 {
-    //StructureSE::SetOnline();
+    // onlining is done:  the first hour of fuel is burned now (the bay may have been emptied while onlining)
+    if (!ConsumeFuelCycle()) {
+        _log(POS__MESSAGE, "TowerSE::SetOnline() - %s(%u) has no fuel left to come online.", GetName(), m_data.itemID);
+        m_data.state = EVEPOS::StructureState::Online;     // so ForceOffline() takes it down
+        GoOffline(true);
+        return;
+    }
 
+    // online state, flag, hourly timer (posControlTowerPeriod), effect
+    StructureSE::SetOnline();
     m_data.timestamp = GetFileTimeNow();
-    m_self->SetFlag(flagStructureActive);
-    m_procState = EVEPOS::ProcState::Online;
-    m_data.state = EVEPOS::StructureState::Online;
     m_harmonic = EVEPOS::Harmonic::Online;
     m_tdata.harmonic = m_harmonic;
-    SetTimer(m_self->GetAttribute(AttrOnliningDelay).get_int());
+    m_tdata.lastCycle = m_data.timestamp;
 
     if ((m_harmonic > EVEPOS::Harmonic::Offline)
     and (!m_tdata.password.empty()))
         CreateForceField();
 
-    SendSlimUpdate();
-    m_destiny->SendSpecialEffect(m_self->itemID(),m_self->itemID(),m_self->typeID(),0,0,"effects.StructureOnline",0,1,1,-1,0);
-
+    UpdateFuelCalendar();
     m_db.UpdateBaseData(m_data);
-
-    /** @todo determine fuel supply and make calendar event for expiration
-
-    std::string title = "Expiration of Tower fuel";
-
-    std::string description = "The Control Tower ";
-    description += ** get tower name here **;
-    description += " in ";
-    description += ** get tower location name here **;
-    description += " will exhaust it's current fuel supply at this time.";      // change this to eve datetime?
-    CalendarDB::SaveSystemEvent(call.client->GetCorporationID(), [towerID here?], expiryTime,
-                                Calendar::AutoEvent::PosFuel, title, description, true);
-     */
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
 }
 
 void TowerSE::SetOffline()
@@ -446,26 +453,251 @@ void TowerSE::SetOffline()
         cur.second->ForceOffline();
 
     StructureSE::SetOffline();
+    // no fuel expiry while offline
+    UpdateFuelCalendar();
     m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
 }
 
 
 void TowerSE::Online()
 {
-    // structure online, but not operating
-    // take resources or whatever needs to be done
-    /*
-     * 1031    controlTowerSize    3   NULL
-     *
-     * POS fuel usage per hour
-     *  Fuel blocks    s:10   m:20   l:40
-     */
+    // an hour of tower life (posControlTowerPeriod)
+    ProcessCycle(GetFileTimeNow());
 
-    // if fuel has run out, start reinforced mode.
+    // next hour, unless the tower went offline
+    if (m_procState == EVEPOS::ProcState::Online)
+        StructureSE::Online();
+}
 
+void TowerSE::ProcessCycle(int64 cycleTime)
+{
+    // fuel blocks (and charters):  all of them or the tower goes offline
+    if (!ConsumeFuelCycle()) {
+        GoOffline(true);
+        return;
+    }
 
-    // reset timers
-    StructureSE::Online();
+    m_tdata.lastCycle = cycleTime;
+    // replayed hours save once at the end
+    if (m_replaying)
+        return;
+    UpdateFuelCalendar();
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+}
+
+void TowerSE::CatchUp()
+{
+    // the hours missed while the tower's system was not loaded (downtime), up to pos.MaxCatchUpCycles
+    int64 now(GetFileTimeNow());
+    int64 period(m_self->GetAttribute(AttrPosControlTowerPeriod).get_int() * (EvE::Time::Second / 1000));
+    if (period < EvE::Time::Minute)
+        period = EvE::Time::Hour;
+
+    if (m_tdata.lastCycle < 1) {
+        // online before cycles were kept:  start counting now
+        m_tdata.lastCycle = now;
+        m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    }
+
+    int64 missed((now - m_tdata.lastCycle) / period);
+    if (missed > sConfig.pos.MaxCatchUpCycles) {
+        _log(POS__MESSAGE, "TowerSE::CatchUp() - %s(%u) missed %lli cycles, replaying the last %u.", GetName(), m_data.itemID, missed, sConfig.pos.MaxCatchUpCycles);
+        m_tdata.lastCycle += (missed - sConfig.pos.MaxCatchUpCycles) * period;
+        missed = sConfig.pos.MaxCatchUpCycles;
+    }
+    int64 replayed(0);
+    m_replaying = true;
+    while ((replayed < missed) and IsPowered()) {
+        ProcessCycle(m_tdata.lastCycle + period);
+        ++replayed;
+    }
+    m_replaying = false;
+    UpdateFuelCalendar();
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    if (replayed > 0)
+        _log(POS__MESSAGE, "TowerSE::CatchUp() - %s(%u) replayed %lli hourly cycles.", GetName(), m_data.itemID, replayed);
+
+    // the rest of the current hour
+    if (IsPowered()) {
+        int64 left((m_tdata.lastCycle + period - now) / (EvE::Time::Second / 1000));
+        m_procState = EVEPOS::ProcState::Online;
+        SetTimer(left > 0 ? (uint32)left : 1);
+    }
+}
+
+bool TowerSE::ConsumeFuelCycle()
+{
+    std::map<uint16, uint32> online, strontium;
+    GetFuelRequirements(GetTypeID(), m_system->GetID(), (IsAlliance(m_allyID) ? m_allyID : 0), online, strontium);
+    for (auto cur : online)
+        if (CountResource(cur.first, flagNone) < cur.second)
+            return false;
+    for (auto cur : online)
+        TakeResource(cur.first, flagNone, cur.second);
+    return true;
+}
+
+void TowerSE::TakeResource(uint16 typeID, EVEItemFlags flag, uint32 qty)
+{
+    std::vector<InventoryItemRef> items;
+    m_self->GetMyInventory()->GetItemsByFlag(flag, items);
+    for (auto cur : items) {
+        if (qty == 0)
+            break;
+        if ((cur->typeID() != typeID) or cur->isSingleton())
+            continue;
+        if (cur->quantity() > qty) {
+            cur->AlterQuantity(-((int32)qty), true);
+            qty = 0;
+        } else {
+            qty -= cur->quantity();
+            // removes the stack
+            cur->SetQuantity(0, true, true);
+        }
+    }
+    if (qty > 0)
+        _log(POS__WARNING, "TowerSE::TakeResource() - %s(%u) was %u units of %u short", GetName(), m_data.itemID, qty, typeID);
+}
+
+uint32 TowerSE::FuelHoursLeft()
+{
+    // full hours the fuel bay holds after the current one (the client's 'time left' is the same floor)
+    std::map<uint16, uint32> online, strontium;
+    GetFuelRequirements(GetTypeID(), m_system->GetID(), (IsAlliance(m_allyID) ? m_allyID : 0), online, strontium);
+    uint32 hours(UINT32_MAX);
+    for (auto cur : online) {
+        uint32 have(CountResource(cur.first, flagNone) / cur.second);
+        if (have < hours)
+            hours = have;
+    }
+    return hours;
+}
+
+void TowerSE::GoOffline(bool outOfFuel)
+{
+    // the tower and everything it powers go offline at once:  force field down, harmonic offline
+    ForceOffline();
+    m_tdata.lastCycle = 0;
+    UpdateFuelCalendar();
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+    if (outOfFuel)
+        _log(POS__MESSAGE, "TowerSE::GoOffline() - %s(%u) in %s ran out of fuel.", GetName(), m_data.itemID, m_system->GetName());
+}
+
+void TowerSE::UpdateFuelCalendar()
+{
+    // a corp calendar event at the fuel expiry, moved when the expiry moves by more than an hour
+    uint32 hours(0);
+    if (m_tdata.showInCalendar and IsPowered())
+        hours = FuelHoursLeft();
+    if ((hours == 0) or (hours == UINT32_MAX)) {
+        if (m_tdata.fuelEventID != 0) {
+            CalendarDB::DeleteEvent(m_tdata.fuelEventID);
+            m_tdata.fuelEventID = 0;
+            m_tdata.fuelExpiry = 0;
+            m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+        }
+        return;
+    }
+
+    // this hour is paid for, then 'hours' more
+    int64 base(m_tdata.lastCycle > 0 ? m_tdata.lastCycle : GetFileTimeNow());
+    int64 expiry(base + (hours + 1) * EvE::Time::Hour);
+    if ((m_tdata.fuelEventID != 0) and (std::llabs(expiry - m_tdata.fuelExpiry) <= EvE::Time::Hour))
+        return;
+
+    if (m_tdata.fuelEventID != 0)
+        CalendarDB::DeleteEvent(m_tdata.fuelEventID);
+
+    std::string title("Expiration of Tower fuel");
+    std::string description("The Control Tower ");
+    description += m_self->itemName();
+    description += " at ";
+    description += (m_moonSE == nullptr ? m_system->GetName() : m_moonSE->GetName());
+    description += " will exhaust its current fuel supply at this time.";
+    m_tdata.fuelEventID = CalendarDB::SaveSystemEvent(m_corpID, m_corpID, expiry, Calendar::AutoEvent::PosFuel, title, description, true);
+    m_tdata.fuelExpiry = expiry;
+    m_db.UpdateTowerRuntime(m_data.itemID, m_tdata);
+}
+
+void TowerSE::RecalcLoad()
+{
+    // power and cpu of the structures that are online or onlining
+    m_pgUsed = 0.0f;
+    m_cpuUsed = 0.0f;
+    for (auto cur : m_structs) {
+        if (!cur.second->IsPowered() and (cur.second->GetState() != EVEPOS::StructureState::Onlining))
+            continue;
+        m_pgUsed += cur.second->GetSelf()->GetAttribute(AttrPower).get_float();
+        m_cpuUsed += cur.second->GetSelf()->GetAttribute(AttrCpu).get_float();
+    }
+}
+
+bool TowerSE::HasPG(float amount)
+{
+    RecalcLoad();
+    return ((m_pgUsed + amount) <= (m_self->GetAttribute(AttrPowerOutput).get_float() + 0.001f));
+}
+
+bool TowerSE::HasCPU(float amount)
+{
+    RecalcLoad();
+    return ((m_cpuUsed + amount) <= (m_self->GetAttribute(AttrCpuOutput).get_float() + 0.001f));
+}
+
+void TowerSE::ValidateAddItem(Client* pClient, InventoryItemRef iRef, EVEItemFlags toFlag)
+{
+    StructureSE::ValidateAddItem(pClient, iRef, toFlag);
+    if (pClient == nullptr)
+        return;
+    // fuel technicians and starbase managers fill the bays
+    if (!HasRole(pClient, Corp::Role::StarbaseCaretaker | Corp::Role::StarbaseConfig)) {
+        if ((uint32)pClient->GetCorporationID() != m_corpID)
+            throw UserError("CantConfigureNotInRightCorp");
+        throw UserError("CantConfigureCorpStarbaseOrCaretakerRoleLacking");
+    }
+    if (IsReinforced() or (IsPowered() and (GetShieldFraction() < EVEPOS::ShieldFluctuationLevel)))
+        throw UserError("CannotPlaceInLowShieldTower")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()))
+                .AddFormatValue("level", new PyInt((int32)(EVEPOS::ShieldFluctuationLevel * 100)));
+
+    // the fuel bay takes this tower's fuel (purpose 1), the strontium bay its reinforcement fuel (purpose 4)
+    uint8 purpose(0);
+    if (toFlag == flagNone) {
+        purpose = EVEPOS::Purpose::Online;
+    } else if (toFlag == flagSecondaryStorage) {
+        purpose = EVEPOS::Purpose::Reinforce;
+    } else {
+        throw CustomError ("Control towers only have a fuel bay and a strontium bay.");
+    }
+    std::vector<EVEPOS::TowerResource> rows;
+    sDataMgr.GetTowerResources(GetTypeID(), rows);
+    for (auto cur : rows)
+        if ((cur.purpose == purpose) and (cur.typeID == iRef->typeID()))
+            return;
+    if (purpose == EVEPOS::Purpose::Online)
+        throw UserError("CannotPlaceTypeInFuelBay").AddTypeName("type", iRef->typeID());
+    throw UserError("CannotPlaceTypeInStructure")
+            .AddFormatValue("container", new PyInt(GetTypeID()))
+            .AddFormatValue("type", new PyInt(iRef->typeID()));
+}
+
+void TowerSE::ValidateRemoveItem(Client* pClient, InventoryItemRef iRef)
+{
+    StructureSE::ValidateRemoveItem(pClient, iRef);
+    if (pClient == nullptr)
+        return;
+    if (!HasRole(pClient, Corp::Role::StarbaseCaretaker | Corp::Role::StarbaseConfig)) {
+        if ((uint32)pClient->GetCorporationID() != m_corpID)
+            throw UserError("CantConfigureNotInRightCorp");
+        throw UserError("CantConfigureCorpStarbaseOrCaretakerRoleLacking");
+    }
+    if (IsReinforced() or (IsPowered() and (GetShieldFraction() < EVEPOS::ShieldFluctuationLevel)))
+        throw UserError("CannotRemoveFromLowShieldTower")
+                .AddFormatValue("item", new PyInt(iRef->typeID()))
+                .AddFormatValue("type", new PyInt(GetTypeID()))
+                .AddFormatValue("level", new PyInt((int32)(EVEPOS::ShieldFluctuationLevel * 100)));
 }
 
 void TowerSE::Operating()
