@@ -265,7 +265,6 @@ EVEServerConfig::EVEServerConfig()
 
     // testing
     testing.EnableDrones = false;
-    testing.ShipHeat = false;
 
     // debug
     debug.BeanCount = false;
@@ -964,12 +963,10 @@ bool EVEServerConfig::ProcessDebug(const TiXmlElement* ele)
 
 bool EVEServerConfig::ProcessTesting(const TiXmlElement* ele)
 {
-    AddValueParser( "ShipHeat",             testing.ShipHeat );
     AddValueParser( "EnableDrones",         testing.EnableDrones);
 
     const bool result = ParseElementChildren( ele );
 
-    RemoveParser( "ShipHeat" );
     RemoveParser( "EnableDrones" );
 
     return result;

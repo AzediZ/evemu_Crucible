@@ -368,7 +368,6 @@ public:
 
     // From <testing>
     struct {
-        bool ShipHeat;
         bool EnableDrones;
     } testing;
 
