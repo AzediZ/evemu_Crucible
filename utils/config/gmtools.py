@@ -11,7 +11,11 @@ What it adds:
     /commands in chat and several built-in GM menu entries (/load, /create, /spawn, /fit...) fail.
   - form.AttributeInspector, used by the built-in "GM: Inspect Attributes" menu entry.
   - svc.insider: an "EVEmu Insider" window with common GM actions (neocom: Toggle Insider).
-  - an "EVEmu GM Tools" submenu next to "GM / WM Extras" on characters, items and objects in space.
+  - an "EVEmu GM Tools" submenu next to "GM / WM Extras" on characters, items and objects in space,
+    including CONCORD testing (/crime) and rack heat (/heat).
+  - insider.HealRemove(groupID), which the client's benchmark script uses to clear wrecks.
+  - a stub 'dna' module, so "GM / WM Extras" on ships works (the client imports it for CCP's Copycat tool,
+    which EVEmu doesn't have).
 
 Everything here ends up as a slash command handled by the server (see src/eve-server/admin).
 """
@@ -209,6 +213,14 @@ def CharacterEntries(charID):
         None,
         ('Destroy ship...', KillShip, (charID,)),
         UnkillableMenu(who),
+        ('Commit crime (CONCORD test)', Slash, ('/crime %s' % who,)),
+        ('Heat', [
+            ('Show', Slash, ('/heat %s' % who,)),
+            ('Cool all racks', Slash, ('/heat all 0 %s' % who,)),
+            ('All racks to 50 percent', Slash, ('/heat all 50 %s' % who,)),
+            ('All racks to 90 percent', Slash, ('/heat all 90 %s' % who,)),
+            ('Burn out (100 percent)', Slash, ('/heat all 100 %s' % who,)),
+        ]),
     ]
     if not me:
         m += [
@@ -264,6 +276,8 @@ def ItemEntries(itemID, typeID, slimItem=None):
             m.append(UnkillableMenu(itemID))
         if cat in (const.categoryShip, const.categoryEntity, const.categoryDrone):
             m.append(('Unspawn', Slash, ('/unspawn %d' % itemID,)))
+            # the server maps a piloted ship to its pilot
+            m.append(('Make criminal (CONCORD test)', Slash, ('/crime %d' % itemID,)))
         m.append(('Go here', Slash, ('/tr me %d' % itemID,)))
     elif itemID:
         m.append(('Repair', Slash, ('/heal %d' % itemID,)))
@@ -441,15 +455,18 @@ class EvemuInsider(service.Service):
         Load()
 
     def HealRemove(self, groupID=None, *args):
-        # the benchmark script uses this to clear wrecks.  not supported
-        pass
+        # the benchmark script clears wrecks with this.  removes everything of that group within 500km.
+        # RemoteSvc directly, not Slash(), so the benchmark doesn't get a popup
+        if groupID is None:
+            groupID = const.groupWreck
+        sm.RemoteSvc('slash').SlashCmd('/unspawn range=500000 only=group%d' % groupID)
 
 
 class EvemuInsiderWindow(uicls.Window):
     __guid__ = 'form.EvemuInsiderWindow'
     default_windowID = 'EvemuInsiderWindow'
     default_width = 260
-    default_height = 330
+    default_height = 380
     default_minSize = (220, 200)
 
     def ApplyAttributes(self, attributes):
@@ -465,6 +482,8 @@ class EvemuInsiderWindow(uicls.Window):
             ('Online my modules', lambda: Slash('/online me')),
             ('Translocate...', GoToSystem),
             ('Kill NPCs in bubble', lambda: Slash('/killallnpcs')),
+            ('Commit crime (CONCORD test)', lambda: Slash('/crime me')),
+            ('Cool my racks', lambda: Slash('/heat all 0 me')),
             ('Dev window', lambda: form.DevWindow.Open()),
             ('Reload GM tools', Load),
         ]
@@ -481,7 +500,24 @@ class EvemuInsiderWindow(uicls.Window):
 #  registration
 # ------------------------------------------------------------------------------------------------
 
+def InstallDnaStub():
+    """The client's GM menu does 'import dna' on ships (CCP's Copycat fitting tool, menusvc GetGMMenu) and only
+    catches RuntimeError.  Without a module the whole "GM / WM Extras" menu fails on ships."""
+    import sys
+    if 'dna' in sys.modules:
+        return
+    dna = types.ModuleType('dna')
+
+    class Ship(object):
+        def ImportFromShip(self, *args, **kwargs):
+            raise RuntimeError('Copycat is not supported on EVEmu')
+
+    dna.Ship = Ship
+    sys.modules['dna'] = dna
+
+
 def Install():
+    InstallDnaStub()
     nasty.nasty.RegisterNamedObject(AttributeInspector, 'form', 'AttributeInspector', SOURCE_NAME, globals())
     nasty.nasty.RegisterNamedObject(EvemuInsiderWindow, 'form', 'EvemuInsiderWindow', SOURCE_NAME, globals())
     for name, cls in (('slash', EvemuSlash), ('insider', EvemuInsider)):
