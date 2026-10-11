@@ -32,6 +32,7 @@
 
 
 class CRowSet;
+class Client;
 
 /* this class is content management for items that can contain other items */
 class Inventory
@@ -105,6 +106,11 @@ public:
 
     /* for station shit */
     void GetInvForOwner(uint32 ownerID, std::vector<InventoryItemRef> &items);
+
+    /* corp hangar take rules (the client's CheckIfInHangarOrCorpHangarAndCanTake):  Directors always;
+     *  deliveries (flagCorpMarket) with Accountant or Trader;  office divisions with HangarCanTake<n> at the station,
+     *  and also ContainerCanTake<n> when taking out of a corp container sitting in division <n> */
+    static bool CanTakeFromCorpHangar(Client* pClient, uint32 stationID, EVEItemFlags flag, bool fromContainer=false);
 
     /* for debug command */
     void GetCargoList(std::multimap<uint8, InventoryItemRef> &cargoMap);     // returns map of cargoFlag:iRef from mContents

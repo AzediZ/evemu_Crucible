@@ -32,6 +32,7 @@
 #include "EntityList.h"
 
 #include "StaticDataMgr.h"
+#include "character/CharacterDB.h"
 #include "inventory/InvBrokerService.h"
 #include "inventory/InventoryBound.h"
 #include "station/StationDataMgr.h"
@@ -234,7 +235,10 @@ PyResult InvBrokerBound::GetInventoryFromId(PyCallArgs &call, PyInt* inventoryID
         } break;
         case EVEDB::invCategories::Celestial: {
             switch (iRef->groupID ()) {
-                case EVEDB::invGroups::Cargo_Container: {
+                case EVEDB::invGroups::Cargo_Container:
+                case EVEDB::invGroups::Secure_Cargo_Container:
+                case EVEDB::invGroups::Audit_Log_Secure_Container:
+                case EVEDB::invGroups::Freight_Container: {
                     flag = flagNone;
                     // only check distance if the item is in space and not in a station
                     if (sDataMgr.IsSolarSystem(iRef->locationID())) {
@@ -448,25 +452,60 @@ PyResult InvBrokerBound::TrashItems(PyCallArgs &call, PyList* itemIDs, PyInt* lo
  */
 
 PyResult InvBrokerBound::AssembleCargoContainer(PyCallArgs &call, PyInt* itemID, PyNone* none, PyFloat* zero) {
-    /* invMgr.AssembleCargoContainer(invItem.itemID, None, 0.0)
-     *
-     * 14:37:46 [BindDump]   Call Arguments:
-     * 14:37:46 [BindDump]       Tuple: 3 elements
-     * 14:37:46 [BindDump]         [ 0] Integer field: 140000489
-     * 14:37:46 [BindDump]         [ 1] (None)
-     * 14:37:46 [BindDump]         [ 2] Real field: 0.000000
-     *
-     * 14:37:46 L InvBrokerBound::Handle_AssembleCargoContainer(): [00msize= 3
-     * 14:37:46 [InvMsg]   Call Arguments:
-     * 14:37:46 [InvMsg]       Tuple: 3 elements
-     * 14:37:46 [InvMsg]         [ 0] Integer field: 140000489
-     * 14:37:46 [InvMsg]         [ 1] (None)
-     * 14:37:46 [InvMsg]         [ 2] Real field: 0.000000
-     */
+    // invMgr.AssembleCargoContainer(invItem.itemID, None, 0.0)
+    InventoryItemRef iRef = sItemFactory.GetItemRef(itemID->value());
+    if (iRef.get() == nullptr)
+        throw UserError("CrpLockedItemNotFound");
 
-    sLog.Warning( "InvBrokerBound::Handle_AssembleCargoContainer()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
+    switch (iRef->groupID()) {
+        case EVEDB::invGroups::Cargo_Container:
+        case EVEDB::invGroups::Secure_Cargo_Container:
+        case EVEDB::invGroups::Audit_Log_Secure_Container:
+        case EVEDB::invGroups::Freight_Container:
+            break;
+        default:
+            throw CustomError("That can't be assembled.");
+    }
+    if (iRef->typeID() == EVEDB::invTypes::PlasticWrap)
+        throw CustomError("That can't be assembled.");
+    if (iRef->isSingleton())
+        throw CustomError("That container is already assembled.");
 
+    // in our station's item hangar, or our corp's office there
+    Client* pClient(call.client);
+    uint32 stationID(pClient->GetStationID());
+    if (!pClient->IsDocked() or !sDataMgr.IsStation(stationID))
+        throw UserError("CanOnlyDoInStations");
+    uint32 officeID(IsPlayerCorp(pClient->GetCorporationID()) ? stDataMgr.GetOfficeIDForCorp(stationID, pClient->GetCorporationID()) : 0);
+    bool inHangar((iRef->locationID() == stationID) and (iRef->flag() == flagHangar));
+    bool inOffice((officeID != 0) and (iRef->locationID() == officeID) and IsHangarFlag(iRef->flag()));
+    if (!inHangar and !inOffice)
+        throw UserError("CanOnlyDoInStations");
+
+    if (iRef->ownerID() == pClient->GetCharacterID()) {
+        if (!inHangar)
+            throw UserError("CantDoThatWithSomeoneElsesStuff");
+    } else if ((iRef->ownerID() == pClient->GetCorporationID()) and inOffice) {
+        if (!Inventory::CanTakeFromCorpHangar(pClient, stationID, iRef->flag()))
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from that hangar division."));
+    } else {
+        throw UserError("CantDoThatWithSomeoneElsesStuff");
+    }
+
+    sItemFactory.SetUsingClient(pClient);
+    if (iRef->quantity() > 1) {
+        InventoryItemRef sRef = iRef->Split(1, true);
+        if (sRef.get() == nullptr) {
+            sItemFactory.UnsetUsingClient();
+            throw CustomError("Unable to assemble the %s.", iRef->name());
+        }
+        iRef = sRef;
+    }
+    iRef->ChangeSingleton(true, true);
+    iRef->SaveItem();
+    sItemFactory.UnsetUsingClient();
+
+    _log(INV__MESSAGE, "IBB::AssembleCargoContainer() - %s assembled %s(%u)", pClient->GetName(), iRef->name(), iRef->itemID());
     return nullptr;
 }
 
@@ -484,60 +523,161 @@ PyResult InvBrokerBound::TakeOutTrash(PyCallArgs& call, PyList* itemIDs) {
     return nullptr;
 }
 
-PyResult InvBrokerBound::SplitStack(PyCallArgs &call, PyInt* locationID, PyInt* itemID, PyInt* quantity, PyInt* ownerID) {
-    //
-    /*
-    18:22:26 W InvBrokerBound::Handle_SplitStack(): size= 4
-    18:22:26 [InvDump]   Call Arguments:
-    18:22:26 [InvDump]      Tuple: 4 elements
-    18:22:26 [InvDump]       [ 0]    Integer: 60014140          << locationID
-    18:22:26 [InvDump]       [ 1]    Integer: 140024213         << itemID to split
-    18:22:26 [InvDump]       [ 2]    Integer: 100               << qty to take
-    18:22:26 [InvDump]       [ 3]    Integer: 98000001          << ownerID (corpID)
-    */
+/* corp operations from the station hangar and the corp assets window.  the items never leave the station */
 
-    sLog.Warning( "InvBrokerBound::Handle_SplitStack()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
+static void GetIntList(PyList* list, std::vector<uint32>& into)
+{
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        if ((*itr)->IsInt())
+            into.push_back(PyRep::IntegerValueU32(*itr));
+}
 
+/* a corp item in an office division (or the deliveries hangar) of stationID that the caller may take out.  throws the client's errors */
+static InventoryItemRef GetCorpHangarItem(Client* pClient, uint32 itemID, uint32 stationID, uint32 officeID, bool splitting)
+{
+    InventoryItemRef iRef = sItemFactory.GetItemRef(itemID);
+    if (iRef.get() == nullptr)
+        throw UserError("CrpLockedItemNotFound");
+
+    uint32 corpID(pClient->GetCorporationID());
+    if ((iRef->ownerID() != corpID) or !IsPlayerCorp(corpID))
+        throw UserError("CannotDeliverNonCorp");
+
+    bool inOffice((officeID != 0) and (iRef->locationID() == officeID) and IsHangarFlag(iRef->flag()));
+    bool inDeliveries((iRef->locationID() == stationID) and (iRef->flag() == flagCorpMarket));
+    if (!inOffice and !inDeliveries) {
+        if (splitting)
+            throw UserError("CannotSplitStackNotInHangar");
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("That item is not in a corporation hangar of this station."));
+    }
+
+    if (!Inventory::CanTakeFromCorpHangar(pClient, stationID, iRef->flag()))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from that hangar division."));
+
+    return iRef;
+}
+
+// splits qty off a corp stack (left in its place).  throws ConSplitStackIllegalQty
+static InventoryItemRef SplitCorpStack(InventoryItemRef iRef, int32 qty)
+{
+    if (iRef->isSingleton() or (qty < 1) or (qty >= iRef->quantity()))
+        throw UserError("ConSplitStackIllegalQty");
+    InventoryItemRef sRef = iRef->Split(qty, true);
+    if (sRef.get() == nullptr)
+        throw UserError("ConSplitStackIllegalQty");
+    return sRef;
+}
+
+PyResult InvBrokerBound::SplitStack(PyCallArgs &call, PyInt* stationID, PyInt* itemID, PyInt* quantity, PyInt* ownerID) {
+    // invMgr.SplitStack(stationID, invItem.itemID, qty, invItem.ownerID)   (corp items in a corp hangar the user can take from)
+    uint32 corpID(call.client->GetCorporationID());
+    if (((uint32)ownerID->value() != corpID) or !IsPlayerCorp(corpID))
+        throw UserError("CannotSplitStackNotInHangar");
+    uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID->value(), corpID));
+
+    InventoryItemRef iRef = GetCorpHangarItem(call.client, itemID->value(), stationID->value(), officeID, true);
+    sItemFactory.SetUsingClient(call.client);
+    try {
+        SplitCorpStack(iRef, quantity->value());
+    } catch (...) {
+        sItemFactory.UnsetUsingClient();
+        throw;
+    }
+    sItemFactory.UnsetUsingClient();
     return nullptr;
 }
 
-PyResult InvBrokerBound::DeliverToCorpHangar(PyCallArgs &call, PyInt* officeID, PyInt* locationID, PyInt* itemsToDeliver, std::optional <PyInt*> quantity, PyInt* ownerID, PyInt* destinationFlag) {
-    //
-    /*
-    18:11:51 W InvBrokerBound::Handle_DeliverToCorpHangar(): size= 6
-    18:11:51 [InvDump]   Call Arguments:
-    18:11:51 [InvDump]      Tuple: 6 elements
-    18:11:51 [InvDump]       [ 0]    Integer: 100000000         << officeID
-    18:11:51 [InvDump]       [ 1]    Integer: 60014140          << locationID
-    18:11:51 [InvDump]       [ 2]   List: 1 elements            << items to deliver
-    18:11:51 [InvDump]       [ 2]   [ 0]    Integer: 140024211  << itemID
-    18:11:51 [InvDump]       [ 3]       None                    << u/k
-    18:11:51 [InvDump]       [ 4]    Integer: 98000001          << ownerID (corpID)
-    18:11:51 [InvDump]       [ 5]    Integer: 119               << destination flagID
-    */
+PyResult InvBrokerBound::DeliverToCorpHangar(PyCallArgs &call, PyInt* fromID, PyInt* stationID, PyList* itemIDs, std::optional <PyInt*> quantity, PyInt* ownerID, PyInt* destinationFlag) {
+    // invMgr.DeliverToCorpHangar(fromID, stationID, itemIDs, qty, ownerID, deliverToFlag)
+    //  fromID is the items' location (an office, or the station for deliveries).  qty only for a single (shift-split) stack
+    EVEItemFlags toFlag((EVEItemFlags)destinationFlag->value());
+    if (!IsHangarFlag(toFlag))
+        throw CustomError("That is not a corporation hangar division.");
 
-    sLog.Warning( "InvBrokerBound::Handle_DeliverToCorpHangar()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
+    uint32 corpID(call.client->GetCorporationID());
+    if (((uint32)ownerID->value() != corpID) or !IsPlayerCorp(corpID))
+        throw UserError("CannotDeliverNonCorp");
+    uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID->value(), corpID));
+    if (officeID == 0)
+        throw UserError("OpenCorpHangarNoHangar");
+
+    std::vector<uint32> ids;
+    GetIntList(itemIDs, ids);
+
+    // check everything first
+    std::vector<InventoryItemRef> items;
+    for (auto cur : ids) {
+        InventoryItemRef iRef = GetCorpHangarItem(call.client, cur, stationID->value(), officeID, false);
+        if (iRef->locationID() != (uint32)fromID->value())
+            throw UserError("ItemsMustBeInSameHangar");
+        items.push_back(iRef);
+    }
+    if (items.empty())
+        return nullptr;
+
+    sItemFactory.SetUsingClient(call.client);
+    try {
+        if (quantity.has_value() and (items.size() == 1) and (quantity.value()->value() < items[0]->quantity()))
+            items[0] = SplitCorpStack(items[0], quantity.value()->value());
+        for (auto cur : items) {
+            if ((cur->locationID() == officeID) and (cur->flag() == toFlag))
+                continue;
+            cur->Move(officeID, toFlag, true);
+        }
+    } catch (...) {
+        sItemFactory.UnsetUsingClient();
+        throw;
+    }
+    sItemFactory.UnsetUsingClient();
 
     return nullptr;
 }
 
 PyResult InvBrokerBound::DeliverToCorpMember(PyCallArgs &call, PyInt* corporationMemberID, PyInt* stationID, PyList* itemIDs, std::optional <PyInt*> quantity, PyInt* ownerID) {
-    //
-    /*
-    18:49:06 W InvBrokerBound::Handle_DeliverToCorpMember(): size= 5
-    18:49:06 [InvDump]   Call Arguments:
-    18:49:06 [InvDump]      Tuple: 5 elements
-    18:49:06 [InvDump]       [ 0]    Integer: 90000000          << member charID
-    18:49:06 [InvDump]       [ 1]    Integer: 60014140          << locationID
-    18:49:06 [InvDump]       [ 2]   List: 1 elements            << items to deliver
-    18:49:06 [InvDump]       [ 2]   [ 0]    Integer: 140024205  << itemID
-    18:49:06 [InvDump]       [ 3]       None                    << u/k
-    18:49:06 [InvDump]       [ 4]    Integer: 98000001          << ownerID (corpID)
-    */
-    sLog.Warning( "InvBrokerBound::Handle_DeliverToCorpMember()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
+    // invMgr.DeliverToCorpMember(corporationMemberID, stationID, itemIDs, qty, ownerID)
+    //  the items go to the member's item hangar in that station and become the member's
+    uint32 corpID(call.client->GetCorporationID());
+    if (((uint32)ownerID->value() != corpID) or !IsPlayerCorp(corpID))
+        throw UserError("CannotDeliverNonCorp");
+
+    uint32 memberID(corporationMemberID->value());
+    uint32 memberCorpID(0);
+    if (IsCharacterID(memberID)) {
+        Client* pMember(sEntityList.FindClientByCharID(memberID));
+        memberCorpID = ((pMember != nullptr) ? pMember->GetCorporationID() : CharacterDB::GetCorpID(memberID));
+    }
+    if (memberCorpID != corpID)
+        throw UserError("CrpCharNotInThisCorp");
+
+    uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID->value(), corpID));
+
+    std::vector<uint32> ids;
+    GetIntList(itemIDs, ids);
+
+    std::vector<InventoryItemRef> items;
+    uint32 fromID(0);
+    for (auto cur : ids) {
+        InventoryItemRef iRef = GetCorpHangarItem(call.client, cur, stationID->value(), officeID, false);
+        if (fromID == 0)
+            fromID = iRef->locationID();
+        if (iRef->locationID() != fromID)
+            throw UserError("ItemsMustBeInSameHangar");
+        items.push_back(iRef);
+    }
+    if (items.empty())
+        return nullptr;
+
+    sItemFactory.SetUsingClient(call.client);
+    try {
+        if (quantity.has_value() and (items.size() == 1) and (quantity.value()->value() < items[0]->quantity()))
+            items[0] = SplitCorpStack(items[0], quantity.value()->value());
+        for (auto cur : items)
+            cur->Donate(memberID, stationID->value(), flagHangar, true);
+    } catch (...) {
+        sItemFactory.UnsetUsingClient();
+        throw;
+    }
+    sItemFactory.UnsetUsingClient();
 
     return nullptr;
 }

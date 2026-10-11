@@ -71,6 +71,9 @@ protected:
 
     // the flag an item added to this inventory gets (audit log containers keep their contents locked or unlocked)
     EVEItemFlags ResolveAddFlag(uint16 toFlag) const;
+    /* may pClient take iRef out of where it is now (to toLocationID/toFlag)?  courier packages, locked items, secure
+     *  containers and corp hangar division roles.  throws the client's errors */
+    void CheckSourceAccess(Client* pClient, InventoryItemRef iRef, uint32 toLocationID, EVEItemFlags toFlag);
 
     PyRep* MoveItems(Client* pClient, std::vector< int32 >& items, EVEItemFlags toFlag, int32 quantity, bool manyFlags, float capacity);
 };

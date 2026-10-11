@@ -205,6 +205,20 @@ namespace Corp {
         return 0;
     }
 
+    // take role for a corp-owned container sitting in a corp hangar division, by the container's flag.  0 for other flags
+    inline int64_t ContainerTakeRole(int32_t flag) {
+        switch (flag) {
+            case 4:     return Role::ContainerCanTake1;
+            case 116:   return Role::ContainerCanTake2;
+            case 117:   return Role::ContainerCanTake3;
+            case 118:   return Role::ContainerCanTake4;
+            case 119:   return Role::ContainerCanTake5;
+            case 120:   return Role::ContainerCanTake6;
+            case 121:   return Role::ContainerCanTake7;
+        }
+        return 0;
+    }
+
     // take role for a corp wallet division by account key (1000..1006).  0 for other keys
     inline int64_t AccountTakeRole(int32_t key) {
         switch (key) {

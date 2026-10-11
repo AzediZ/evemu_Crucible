@@ -469,6 +469,26 @@ void Inventory::GetInvForOwner(uint32 ownerID, std::vector< InventoryItemRef >& 
             items.push_back(cur.second);
 }
 
+bool Inventory::CanTakeFromCorpHangar(Client* pClient, uint32 stationID, EVEItemFlags flag, bool fromContainer/*false*/)
+{
+    if (pClient == nullptr)
+        return false;
+    int64 roles(pClient->GetCorpRolesAtLocation(stationID));
+    if ((roles & Corp::Role::Director) == Corp::Role::Director)
+        return true;
+    if (flag == flagCorpMarket)
+        return ((roles & (Corp::Role::Accountant | Corp::Role::Trader)) != 0);
+    int64 takeRole(Corp::HangarTakeRole(flag));
+    if ((takeRole == 0) or ((roles & takeRole) == 0))
+        return false;
+    if (fromContainer) {
+        int64 contRole(Corp::ContainerTakeRole(flag));
+        if ((contRole == 0) or ((roles & contRole) == 0))
+            return false;
+    }
+    return true;
+}
+
 InventoryItemRef Inventory::FindFirstByFlag(EVEItemFlags flag) const {
     for (auto cur : mContents)
         if (cur.second->flag() == flag)

@@ -281,6 +281,17 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
             continue;
         }
 
+        // may we take it from where it is, and put it there?
+        try {
+            InventoryItemRef destCont = sItemFactory.GetItemRefFromID(destItem->locationID(), false);
+            if ((destCont.get() != nullptr) and (destCont->typeID() == EVEDB::invTypes::PlasticWrap))
+                throw CustomError("You can't put items into a courier package.");
+            CheckSourceAccess(call.client, srcItem, destItem->locationID(), destItem->flag());
+        } catch (...) {
+            sItemFactory.UnsetUsingClient();
+            throw;
+        }
+
         if (pInv->ValidateAddItem(destItem->flag(), srcItem)) {
             CheckLockedContainer(call.client, srcItem);
             CheckTheft(call.client, srcItem);
@@ -427,6 +438,10 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
     bool donating = false, ship = false, customs = false;
     int32 origQty = quantity;
 
+    // courier packages are sealed until broken
+    if (m_self->typeID() == EVEDB::invTypes::PlasticWrap)
+        throw CustomError("You can't put items into a courier package.");
+
     // we will need to check *this for specific item-moving rules
     switch (m_self->categoryID()) {
         // specific container-type categories that may move items in/out
@@ -532,6 +547,14 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
         if (iRef.get() == nullptr) {
             _log(INV__ERROR, "IB::MoveItems() - item %i not found.  continuing.", (*itr));
             continue;
+        }
+
+        // may we take it from where it is?
+        try {
+            CheckSourceAccess(pClient, iRef, m_itemID, toFlag);
+        } catch (...) {
+            sItemFactory.UnsetUsingClient();
+            throw;
         }
 
         if (iRef->typeID() == EVEDB::invTypes::Bookmark) {
@@ -950,6 +973,56 @@ void InventoryBound::GMTakeOutTrash(Client* pClient, uint32 hangarID, PyList* it
         _log(INV__MESSAGE, "IB::GMTakeOutTrash() - %s deleted %s(%u) owned by %u in %u", \
                 pClient->GetName(), iRef->name(), iRef->itemID(), iRef->ownerID(), hangarID);
         iRef->Delete();
+    }
+}
+
+void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, uint32 toLocationID, EVEItemFlags toFlag)
+{
+    // rearranging in place
+    if ((iRef->locationID() == toLocationID) and (iRef->flag() == toFlag))
+        return;
+
+    // what the item is in now (not loaded for stations and systems)
+    InventoryItemRef srcRef = sItemFactory.GetItemRefFromID(iRef->locationID(), false);
+    if ((srcRef.get() == nullptr) and (IsPlayerItem(iRef->locationID()) or IsOfficeID(iRef->locationID())))
+        srcRef = sItemFactory.GetItemRef(iRef->locationID());
+
+    if (srcRef.get() != nullptr) {
+        // an unbroken courier package keeps its contents
+        if (srcRef->typeID() == EVEDB::invTypes::PlasticWrap)
+            throw CustomError("You must break the courier package before you can take anything out of it.");
+        // locked audit log container contents stay until they are unlocked
+        if ((iRef->flag() == flagLocked) and (srcRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container))
+            throw UserError("CrpItemIsLocked");
+    }
+
+    // corp hangar division take roles
+    uint32 corpID(pClient->GetCorporationID());
+    if (!IsPlayerCorp(corpID))
+        return;
+
+    if (iRef->ownerID() == corpID) {
+        // an office division floor.  the office is in the station
+        if (IsOfficeID(iRef->locationID()) and (srcRef.get() != nullptr)) {
+            if (!Inventory::CanTakeFromCorpHangar(pClient, srcRef->locationID(), iRef->flag()))
+                throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from that hangar division."));
+            return;
+        }
+        // the deliveries hangar
+        if (sDataMgr.IsStation(iRef->locationID()) and (iRef->flag() == flagCorpMarket)) {
+            if (!Inventory::CanTakeFromCorpHangar(pClient, iRef->locationID(), flagCorpMarket))
+                throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role Accountant or Trader."));
+            return;
+        }
+    }
+
+    // a corp container sitting in an office division
+    if ((srcRef.get() != nullptr) and (srcRef->ownerID() == corpID)
+    and (srcRef->categoryID() == EVEDB::invCategories::Celestial) and IsOfficeID(srcRef->locationID())) {
+        InventoryItemRef officeRef = sItemFactory.GetItemRef(srcRef->locationID());
+        if ((officeRef.get() != nullptr)
+        and !Inventory::CanTakeFromCorpHangar(pClient, officeRef->locationID(), srcRef->flag(), true))
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You do not have the role to take items from containers in that hangar division."));
     }
 }
 
