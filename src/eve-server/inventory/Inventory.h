@@ -45,6 +45,8 @@ public:
     void Unload();  // used by stations and solar systems for item saving and unloading
     void AddItem(InventoryItemRef iRef);
     void RemoveItem(InventoryItemRef iRef);
+    // re-files a contained item in the flag map after its flag changed in place (InventoryItem::SetFlag)
+    void UpdateFlag(InventoryItemRef iRef, EVEItemFlags oldFlag);
     void DeleteContents();
     // returns map of mContents
     void GetInventoryMap(std::map<uint32, InventoryItemRef> &invMap);
@@ -74,6 +76,10 @@ public:
     bool TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out);
 
     float GetCapacity(EVEItemFlags flag) const;
+    // true when every flag of this flag's pool shares one capacity (the client's IsFlagCapacityLocationWide)
+    bool IsCapacityLocationWide(EVEItemFlags flag) const;
+    // both flags draw from the same shared capacity (hangar divisions, or a container's none/locked/unlocked)
+    static bool SameCapacityPool(EVEItemFlags a, EVEItemFlags b);
     float GetStoredVolume(EVEItemFlags flag, bool combined=true) const;
     float GetCorpHangerCapyUsed() const;
     float GetRemainingCapacity(EVEItemFlags flag) const { return GetCapacity( flag ) - GetStoredVolume( flag ); }
@@ -118,6 +124,11 @@ private:
     std::map<EVEItemFlags, double> m_itemsByFlag;
 
     std::vector<InventoryItemRef> SortVector(std::vector<InventoryItemRef> &itemVec);
+    // flag map key of an item.  for characters, ALL skills are filed under flagSkill
+    uint8 FlagKey(InventoryItemRef iRef) const;
+    uint8 FlagKey(InventoryItemRef iRef, EVEItemFlags flag) const;
+    bool EraseFlagEntry(uint32 itemID, uint8 key);
+    bool EraseFlagEntryAnyKey(uint32 itemID);
     std::map<uint32, InventoryItemRef> mContents;        // itemID/ItemRef
     std::multimap<uint8, InventoryItemRef> m_contentsByFlag;  // flagID/ItemRef
 };

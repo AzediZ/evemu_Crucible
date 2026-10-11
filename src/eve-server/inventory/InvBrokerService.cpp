@@ -479,10 +479,8 @@ PyResult InvBrokerBound::BreakPlasticWrap(PyCallArgs &call) {
 }
 
 PyResult InvBrokerBound::TakeOutTrash(PyCallArgs& call, PyList* itemIDs) {
-    //self.invCache.GetInventory(const.containerHangar).TakeOutTrash([ invItem.itemID for invItem in invItems ])
-    sLog.Warning( "InvBrokerBound::Handle_TakeOutTrash()", "size=%lu", call.tuple->size());
-    call.Dump(INV__DUMP);
-
+    // the client sends this to the station hangar's inventory (InventoryBound); kept for the same call on the broker
+    InventoryBound::GMTakeOutTrash(call.client, m_locationID, itemIDs);
     return nullptr;
 }
 

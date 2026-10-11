@@ -1005,6 +1005,13 @@ bool InventoryItem::SetFlag(EVEItemFlags flag, bool notify/*false*/) {
     EVEItemFlags old_flag = m_data.flag;
     m_data.flag = flag;
 
+    // re-file us in our container's flag map (only if it's loaded; this doesn't load anything)
+    if (!sConsole.IsShutdown()) {
+        InventoryItemRef locRef = sItemFactory.GetItemRefFromID(m_data.locationID, false);
+        if ((locRef.get() != nullptr) and (locRef->GetMyInventory() != nullptr))
+            locRef->GetMyInventory()->UpdateFlag(InventoryItemRef(this), old_flag);
+    }
+
     ItemDB::UpdateLocation(m_itemID, m_data.locationID, m_data.flag);
 
     if (notify) {

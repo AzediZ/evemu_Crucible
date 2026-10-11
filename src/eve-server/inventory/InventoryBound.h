@@ -35,6 +35,9 @@ class InventoryBound : public EVEBoundObject <InventoryBound>
 public:
     InventoryBound(EVEServiceManager &mgr, BoundServiceParent<InventoryBound>& parent, InventoryItemRef item, EVEItemFlags flag, uint32 ownerID,  bool passive);
 
+    // GM menu 'take out trash':  deletes the listed items lying in hangarID's item hangar
+    static void GMTakeOutTrash(Client* pClient, uint32 hangarID, PyList* itemIDs);
+
 protected:
     PyResult GetItem(PyCallArgs& call);
     PyResult StripFitting(PyCallArgs& call);
@@ -48,7 +51,7 @@ protected:
     PyResult MultiAdd(PyCallArgs& call, PyList* itemIDs, PyInt* containerID);
     PyResult List(PyCallArgs& call, std::optional <PyInt*> listFlag);
     PyResult CreateBookmarkVouchers(PyCallArgs& call, PyList* bookmarkIDs, PyInt* flag, PyBool* isMove);
-    PyResult TakeOutTrash(PyCallArgs& call, PyInt* itemIDs);
+    PyResult TakeOutTrash(PyCallArgs& call, PyList* itemIDs);
     PyResult SetPassword(PyCallArgs& call, PyInt* which, PyString* newPassword, PyString* oldPassword);
     PyResult ListDroneBay(PyCallArgs& call);
     PyResult RunRefiningProcess(PyCallArgs& call);
@@ -65,6 +68,9 @@ protected:
     InventoryItemRef m_self;
 
     std::vector< int32 > CatSortItems(std::vector< InventoryItemRef >& itemVec);
+
+    // the flag an item added to this inventory gets (audit log containers keep their contents locked or unlocked)
+    EVEItemFlags ResolveAddFlag(uint16 toFlag) const;
 
     PyRep* MoveItems(Client* pClient, std::vector< int32 >& items, EVEItemFlags toFlag, int32 quantity, bool manyFlags, float capacity);
 };

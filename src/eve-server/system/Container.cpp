@@ -187,6 +187,17 @@ void CargoContainer::RemoveItem(InventoryItemRef iRef)
     if (m_isAnchored)
         return;
 
+    // an opened (emptied) courier package goes away wherever it is
+    if (typeID() == EVEDB::invTypes::PlasticWrap) {
+        if (pInventory->IsEmpty())
+            Delete();
+        return;
+    }
+
+    // containers in station hangars and holds stay, even when empty
+    if (!sDataMgr.IsSolarSystem(locationID()))
+        return;
+
     if (pInventory->IsEmpty()) {
         switch (typeID()) {
         case EVEDB::invTypes::CargoContainer:

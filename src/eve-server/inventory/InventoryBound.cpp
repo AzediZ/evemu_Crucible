@@ -307,14 +307,11 @@ PyResult InventoryBound::Add(PyCallArgs &call, PyInt* itemID, PyInt* containerID
     uint16 toFlag = m_flag;
     if (call.byname.find("flag") != call.byname.end())
         toFlag = PyRep::IntegerValueU32(call.byname.find("flag")->second);
-    if (toFlag == flagLocked) {
-        // corp role 'equip config' can move locked items (per client)
-        _log(INV__ERROR, "IB::Handle_Add() - item %i from %i sent flagLocked.  continuing but this needs to be fixed.", \
-                itemID->value(), containerID->value());
-        toFlag = flagCargoHold;
-    }
+    toFlag = ResolveAddFlag(toFlag);
 
     InventoryItemRef iRef = sItemFactory.GetItemRef(itemID->value());
+    if (iRef.get() == nullptr)
+        return nullptr;
 
     bool moveStack = false;
     int32 quantity = 0;
@@ -385,6 +382,7 @@ PyResult InventoryBound::MultiAdd(PyCallArgs &call, PyList* itemIDs, PyInt* cont
     uint16 toFlag = m_flag;
     if (call.byname.find("flag") != call.byname.end())
         toFlag = PyRep::IntegerValueU32(call.byname.find("flag")->second);
+    toFlag = ResolveAddFlag(toFlag);
 
     int32 quantity = 1;
     if (call.byname.find("qty") != call.byname.end())
@@ -926,12 +924,47 @@ PyResult InventoryBound::CreateBookmarkVouchers(PyCallArgs &call, PyList* bookma
  * @note   these do absolutely nothing at this time....
  */
 
-PyResult InventoryBound::TakeOutTrash(PyCallArgs &call, PyInt* itemIDs) {
-    //TakeOutTrash([ invItem.itemID for invItem in invItems ])
-    sLog.Error("IB::TakeOutTrash", "Character '%s', self: '%s'(%u)", call.client->GetName(), m_self->name(), m_itemID);
+PyResult InventoryBound::TakeOutTrash(PyCallArgs &call, PyList* itemIDs) {
+    // GM menu:  invCache.GetInventory(const.containerHangar).TakeOutTrash([ invItem.itemID for invItem in invItems ])
     _log(INV__MESSAGE, "%s Calling InventoryBound::TakeOutTrash() for %s(%u)", call.client->GetName(), m_self->name(), m_itemID);
-    call.Dump(INV__DUMP);
+    GMTakeOutTrash(call.client, m_itemID, itemIDs);
     return nullptr;
+}
+
+void InventoryBound::GMTakeOutTrash(Client* pClient, uint32 hangarID, PyList* itemIDs)
+{
+    if ((pClient->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::WORLDMOD)) == 0)
+        throw UserError("PermissionDenied");
+
+    for (PyList::const_iterator itr = itemIDs->begin(); itr != itemIDs->end(); ++itr) {
+        if (!(*itr)->IsInt())
+            continue;
+        InventoryItemRef iRef = sItemFactory.GetItemRef(PyRep::IntegerValueU32(*itr));
+        if (iRef.get() == nullptr)
+            continue;
+        // only what lies on the hangar floor here.  never the active ship
+        if ((iRef->locationID() != hangarID) or (iRef->flag() != flagHangar) or (iRef->itemID() == pClient->GetShipID()))
+            continue;
+        if (iRef->IsShipItem() and ShipItemRef::StaticCast(iRef)->HasPilot())
+            continue;
+        _log(INV__MESSAGE, "IB::GMTakeOutTrash() - %s deleted %s(%u) owned by %u in %u", \
+                pClient->GetName(), iRef->name(), iRef->itemID(), iRef->ownerID(), hangarID);
+        iRef->Delete();
+    }
+}
+
+EVEItemFlags InventoryBound::ResolveAddFlag(uint16 toFlag) const
+{
+    // audit log containers hold their contents locked or unlocked.  the client sends its lock default (flagLocked when unset)
+    if (m_self->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container) {
+        if ((toFlag == flagLocked) or (toFlag == flagUnlocked))
+            return (EVEItemFlags)toFlag;
+        return flagLocked;
+    }
+    // locked/unlocked only exist in audit log containers
+    if ((toFlag == flagLocked) or (toFlag == flagUnlocked))
+        return m_flag;
+    return (EVEItemFlags)toFlag;
 }
 
 PyResult InventoryBound::SetPassword(PyCallArgs &call, PyInt* which, PyString* newPassword, PyString* oldPassword) {

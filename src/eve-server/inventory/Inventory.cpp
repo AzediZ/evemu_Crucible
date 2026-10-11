@@ -203,29 +203,19 @@ void Inventory::AddItem(InventoryItemRef iRef) {
     if (iRef.get() == nullptr)
         return;
 
-    std::map<uint32, InventoryItemRef>::iterator itr = mContents.find(iRef->itemID());
-    std::pair <std::map<uint32, InventoryItemRef>::iterator, bool > test;
-    if (itr == mContents.end())
-        test = mContents.emplace(iRef->itemID(), iRef);
-
-    if (test.second) {
+    std::pair<std::map<uint32, InventoryItemRef>::iterator, bool> res = mContents.emplace(iRef->itemID(), iRef);
+    if (res.second) {
         _log(INV__TRACE, "Inventory::AddItem() - Updated %s(%u) to contain (%u) %s(%u) in %s.", \
                 m_self->name(), m_myID, iRef->quantity(), iRef->name(), iRef->itemID(), sDataMgr.GetFlagName(iRef->flag()));
     } else {
         _log(INV__TRACE, "Inventory::AddItem() - %s(%u) already contains %s(%u) in %s.", \
                 m_self->name(), m_myID, iRef->name(), iRef->itemID(), sDataMgr.GetFlagName(iRef->flag()));
+        // already here (moved between flags of this container), possibly filed under its old flag
+        res.first->second = iRef;
+        EraseFlagEntryAnyKey(iRef->itemID());
     }
 
-    // need to find and remove skill in training flag here for proper skill search
-    if (IsCharacterID(m_myID)) {
-        if (iRef->categoryID() == EVEDB::invCategories::Skill) {
-            m_contentsByFlag.emplace(flagSkill, iRef);
-        } else {
-            m_contentsByFlag.emplace(iRef->flag(), iRef);
-        }
-    } else {
-        m_contentsByFlag.emplace(iRef->flag(), iRef);
-    }
+    m_contentsByFlag.emplace(FlagKey(iRef), iRef);
 
     // iHub upgrades go online/offline outside of the insert (the hub's SE refreshes them on its next tic)
     if (m_self->typeID() == EVEDB::invTypes::InfrastructureHub)
@@ -247,19 +237,73 @@ void Inventory::RemoveItem(InventoryItemRef iRef) {
                 m_self->name(), m_myID, iRef->name(), iRef->itemID(), sDataMgr.GetFlagName(iRef->flag()));
     }
 
-    /** @todo @note  this isnt working right, and im not sure why yet...  */
-    auto range = m_contentsByFlag.equal_range(iRef->flag());
-    for (auto cur = range.first; cur != range.second; ++cur) {
-        if (cur->second == iRef) {
-            m_contentsByFlag.erase(cur);
-            _log(INV__TRACE, "Inventory::RemoveItem(2) - %s(%u) removed from %s(%u) flagMap at %s.", \
-                    iRef->name(), iRef->itemID(), m_self->name(), m_myID, sDataMgr.GetFlagName(iRef->flag()));
-            return;
-        }
+    if (EraseFlagEntry(iRef->itemID(), FlagKey(iRef))) {
+        _log(INV__TRACE, "Inventory::RemoveItem(2) - %s(%u) removed from %s(%u) flagMap at %s.", \
+                iRef->name(), iRef->itemID(), m_self->name(), m_myID, sDataMgr.GetFlagName(iRef->flag()));
+        return;
+    }
+
+    // filed under another flag (its flag changed while it was here)
+    if (EraseFlagEntryAnyKey(iRef->itemID())) {
+        _log(INV__TRACE, "Inventory::RemoveItem(2) - %s(%u) removed from %s(%u) flagMap under a stale flag.", \
+                iRef->name(), iRef->itemID(), m_self->name(), m_myID);
+        return;
     }
 
     _log(INV__WARNING,"Inventory::RemoveItem(2) - %s(%u) flagMap does not contain %s(%u) in %s.", \
             m_self->name(), m_myID, iRef->name(), iRef->itemID(), sDataMgr.GetFlagName(iRef->flag()));
+}
+
+void Inventory::UpdateFlag(InventoryItemRef iRef, EVEItemFlags oldFlag)
+{
+    if (iRef.get() == nullptr)
+        return;
+    if (!ContainsItem(iRef->itemID()))
+        return;
+
+    if (!EraseFlagEntry(iRef->itemID(), FlagKey(iRef, oldFlag)))
+        EraseFlagEntryAnyKey(iRef->itemID());
+    m_contentsByFlag.emplace(FlagKey(iRef), iRef);
+}
+
+uint8 Inventory::FlagKey(InventoryItemRef iRef) const
+{
+    return FlagKey(iRef, iRef->flag());
+}
+
+uint8 Inventory::FlagKey(InventoryItemRef iRef, EVEItemFlags flag) const
+{
+    // skills are kept under flagSkill (not flagSkillInTraining) for proper skill search
+    if (IsCharacterID(m_myID) and (iRef->categoryID() == EVEDB::invCategories::Skill))
+        return flagSkill;
+    return flag;
+}
+
+bool Inventory::EraseFlagEntry(uint32 itemID, uint8 key)
+{
+    auto range = m_contentsByFlag.equal_range(key);
+    for (auto cur = range.first; cur != range.second; ++cur) {
+        if (cur->second->itemID() == itemID) {
+            m_contentsByFlag.erase(cur);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Inventory::EraseFlagEntryAnyKey(uint32 itemID)
+{
+    bool found(false);
+    auto cur = m_contentsByFlag.begin();
+    while (cur != m_contentsByFlag.end()) {
+        if (cur->second->itemID() == itemID) {
+            cur = m_contentsByFlag.erase(cur);
+            found = true;
+        } else {
+            ++cur;
+        }
+    }
+    return found;
 }
 
 void Inventory::DeleteContents()
@@ -696,9 +740,9 @@ void Inventory::StackAll(EVEItemFlags locFlag, uint32 ownerID/*0*/)
 float Inventory::GetStoredVolume(EVEItemFlags flag, bool combined/*true*/) const
 {
     float totalVolume(0.0f);
-    if (IsHangarFlag(flag) and combined) {
+    if (combined and (IsHangarFlag(flag) or IsCapacityLocationWide(flag))) {
         for (auto cur : mContents)
-            if (IsHangarFlag(cur.second->flag()))
+            if (SameCapacityPool(cur.second->flag(), flag))
                 totalVolume += cur.second->quantity() * cur.second->GetAttribute(AttrVolume).get_float();
     } else {
         auto range = m_contentsByFlag.equal_range(flag);
@@ -727,10 +771,7 @@ bool Inventory::HasAvailableSpace(EVEItemFlags flag, InventoryItemRef iRef) cons
 
 float Inventory::GetCapacity(EVEItemFlags flag) const {
     // added hangar capy for all hangar types
-    // are we missing any hangar types here?  POS types?  yes...see next line
-    /** @todo  finish these for POS */
-    //   IsFlagCapacityLocationWide   item.groupID in (const.groupCorporateHangarArray, const.groupAssemblyArray, const.groupMobileLaboratory):
-
+    //  POS hangar arrays share one capacity over all divisions, as ships with corp hangars (IsCapacityLocationWide)
     switch (flag) {
         case flagOffice:
         case flagProperty:
@@ -738,7 +779,10 @@ float Inventory::GetCapacity(EVEItemFlags flag) const {
         case flagImpounded:
         case flagCorpMarket:                    return maxHangarCapy;
         case flagNone:
-        case flagCargoHold:                     return m_self->GetAttribute(AttrCapacity).get_float();
+        case flagCargoHold:
+        // audit log secure container contents are locked or unlocked, in the container's one hold
+        case flagLocked:
+        case flagUnlocked:                      return m_self->GetAttribute(AttrCapacity).get_float();
         case flagDroneBay:                      return m_self->GetAttribute(AttrDroneCapacity).get_float();
         case flagShipHangar:                    return m_self->GetAttribute(AttrShipMaintenanceBayCapacity).get_float();
         case flagSecondaryStorage:              return m_self->GetAttribute(AttrSecondaryCapacity).get_float();
@@ -772,6 +816,9 @@ float Inventory::GetCapacity(EVEItemFlags flag) const {
             //for ship, this is TOTAL capy for all corp hangars (they share capy)
             if (m_self->HasAttribute(AttrHasCorporateHangars))
                 return m_self->GetAttribute(AttrCorporateHangarCapacity).get_float();
+            // pos hangar arrays:  TOTAL capy for all divisions
+            if (IsCapacityLocationWide(flag))
+                return m_self->GetAttribute(AttrCapacity).get_float();
         } break;
         case flagHangar: {
             if (sDataMgr.IsStation(m_myID))
@@ -786,6 +833,44 @@ float Inventory::GetCapacity(EVEItemFlags flag) const {
     _log(INV__WARNING, "Inventory::GetCapacity() - Unsupported flag %s(%u) called for %s(%u)", \
                 sDataMgr.GetFlagName(flag), flag, m_self->name(), m_myID);
     return 0.0f;
+}
+
+bool Inventory::IsCapacityLocationWide(EVEItemFlags flag) const
+{
+    // the client's invCache IsFlagCapacityLocationWide, plus a container's (audit log) locked/unlocked flags
+    if (IsHangarFlag(flag)) {
+        if (m_self->HasAttribute(AttrHasCorporateHangars))
+            return true;
+        switch (m_self->groupID()) {
+            case EVEDB::invGroups::Corporate_Hangar_Array:
+            case EVEDB::invGroups::Assembly_Array:
+            case EVEDB::invGroups::Mobile_Laboratory:
+                return true;
+        }
+        return false;
+    }
+
+    if ((flag == flagNone) or (flag == flagLocked) or (flag == flagUnlocked)) {
+        switch (m_self->groupID()) {
+            case EVEDB::invGroups::Cargo_Container:
+            case EVEDB::invGroups::Secure_Cargo_Container:
+            case EVEDB::invGroups::Audit_Log_Secure_Container:
+            case EVEDB::invGroups::Freight_Container:
+            case EVEDB::invGroups::Spawn_Container:
+                return true;
+        }
+    }
+    return false;
+}
+
+bool Inventory::SameCapacityPool(EVEItemFlags a, EVEItemFlags b)
+{
+    if (IsHangarFlag(a) and IsHangarFlag(b))
+        return true;
+    if (((a == flagNone) or (a == flagLocked) or (a == flagUnlocked))
+    and ((b == flagNone) or (b == flagLocked) or (b == flagUnlocked)))
+        return true;
+    return (a == b);
 }
 
 // Validate an IHub Upgrade install.  the client checks the same rules (sovSvc.CanInstallUpgrade) and uses these messages
@@ -908,7 +993,7 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
      */
     if (m_self->itemID() == iRef->locationID())
         if ((flag == iRef->flag())
-        or  (IsHangarFlag(flag) and IsHangarFlag(iRef->flag()))) {
+        or  SameCapacityPool(flag, iRef->flag())) {
             // possible item split.  will have to molest the shit outta this one to verify nullablity of exploits
             capacity += totalVolume;
             _log(INV__CAPY, "Inventory::ValidateAddItem() - flag() %s (%u) == iRef->flag() %s (%u) - test capacity changed to %.2f",
