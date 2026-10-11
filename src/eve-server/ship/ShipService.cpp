@@ -30,6 +30,7 @@
 
 #include "EVEServerConfig.h"
 #include "npc/Drone.h"
+#include "npc/LawEnforcement.h"
 #include "planet/CustomsOffice.h"
 #include "planet/Moon.h"
 #include "pos/Structure.h"
@@ -150,8 +151,9 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
         throw UserError ("ScoopObjectGone").AddFormatValue("target", new PyString("The ship"));
     ShipSE* pNewShipSE(pNewSE->GetShipSE());
 
-    // an empty pod in space, or a ship somebody is flying
-    if ((pNewShipSE->GetTypeID() == itemTypeCapsule) or pNewShipSE->HasPilot())
+    // an empty pod in space, or a ship somebody is flying (a logged off pilot's ship left in space is still theirs)
+    if ((pNewShipSE->GetTypeID() == itemTypeCapsule) or pNewShipSE->HasPilot()
+    or  (pSystem->GetLaw()->GetLoggedOffOwner(pNewShipSE->GetID()) != 0))
         throw UserError ("ShipAlreadyHasPilot");
 
     // a pod climbing into a ship isn't switching ships (as far as CONCORD's evidence rule goes)
@@ -473,13 +475,12 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
     call.Dump(SHIP__INFO);
 
     Client* pClient = call.client;
-    PyDict* dict = new PyDict();
     SystemManager* pSystem = pClient->SystemMgr();
     ShipSE* pShipSE(pClient->GetShipSE());
     ShipItemRef shipRef(pClient->GetShip());
     if (!pClient->IsInSpace() or (pSystem == nullptr) or (pShipSE == nullptr) or (shipRef.get() == nullptr)) {
         _log(SERVICE__ERROR, "%s: Trying to drop items when not in space!", pClient->GetName());
-        return dict;
+        return new PyDict();
     }
     ShipItem* pShip(shipRef.get());     // the drone rules below use the active ship
 
@@ -503,6 +504,7 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                 throw UserError ("LaunchCPWarning");
         }
 
+    PyDict* dict = new PyDict();
     bool shipDrop(false);
     double radius(pShipSE->GetRadius());
     for (PyList::const_iterator itr = PyToDropList->begin(); itr != PyToDropList->end(); ++itr) {
@@ -1365,7 +1367,7 @@ PyResult ShipBound::ScoopToSMA(PyCallArgs &call, PyInt* objectID) {
     or  (pSE->GetSelf()->groupID() == EVEDB::invGroups::Capsule) or (pSE == pMyShipSE))
         throw UserError ("CantScoopThat")
                 .AddFormatValue("targetGroup", new PyString(sDataMgr.GetGroupName(pSE->GetSelf()->groupID())));
-    if (pSE->HasPilot())
+    if (pSE->HasPilot() or (pSystem->GetLaw()->GetLoggedOffOwner(pSE->GetID()) != 0))
         throw UserError ("ShipAlreadyHasPilot");
 
     // our own ships, or abandoned ones nobody has locked
