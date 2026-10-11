@@ -27,6 +27,8 @@
 #include "system/SystemBubble.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "admin/CommandHelper.h"
+#include "fleet/FleetService.h"
+#include "station/StationDataMgr.h"
 #include "pos/Structure.h"
 #include "tables/invGroups.h"
 #include "tables/invCategories.h"
@@ -96,405 +98,426 @@ static PyResult UpdateBubble(Client *pClient) {
  * ('/tr %d' % locationID)
  * ('/tr me me offset=%d,%d,%d' % (int(v.x), int(v.y), int(v.z)))
  * ('/tr %d me noblock' % charID)       << used to group-move all players in <chat>
+ *
+ *  /tr <who> [<where>] [offset=x,y,z | offset=randvec(<dist>)] [noblock]
+ *  /tr <where>                          (who = me)
+ *  /tr [<who>] <systemID> x y z
+ *  /tr help
  */
-/* {'messageKey': 'LocationNameInvalid', 'dataID': 17882829, 'suppressable': False, 'bodyID': 259279, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1112}
- * {'messageKey': 'LocationNameInvalidBannedWord', 'dataID': 17882832, 'suppressable': False, 'bodyID': 259280, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1113}
- * {'messageKey': 'LocationNameInvalidFirstChar', 'dataID': 17882835, 'suppressable': False, 'bodyID': 259281, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1114}
- * {'messageKey': 'LocationNameInvalidLastChar', 'dataID': 17882838, 'suppressable': False, 'bodyID': 259282, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1115}
- * {'messageKey': 'LocationNameInvalidMaxLength', 'dataID': 17882841, 'suppressable': False, 'bodyID': 259283, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1116}
- * {'messageKey': 'LocationNameInvalidMaxSpaces', 'dataID': 17882844, 'suppressable': False, 'bodyID': 259284, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1117}
- * {'messageKey': 'LocationNameInvalidMinLength', 'dataID': 17882847, 'suppressable': False, 'bodyID': 259285, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1118}
- * {'messageKey': 'LocationNameInvalidSomeChar', 'dataID': 17882850, 'suppressable': False, 'bodyID': 259286, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1119}
- * {'messageKey': 'LocationNameInvalidTaken', 'dataID': 17882853, 'suppressable': False, 'bodyID': 259287, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 1120}
- */
-/** @todo this is a good start, but will need a bit more logic to idiot-proof and finish  */
-PyResult Command_tr(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
-    // i dont expect this to be used very often, so a bit of bloat is acceptable
+namespace {
+    struct TrDestination {
+        uint32 locationID = 0;
+        GPoint pt = NULL_ORIGIN;
+        std::string name;
+    };
 
-    if (pClient == nullptr) // should never hit,
-        throw CustomError ("Translocate: Invalid Caller - Client sent NULL.");
+    // the radius of a pilot's ship, docked or not
+    double TrShipRadius(Client* pClient) {
+        if (pClient->GetShipSE() != nullptr)
+            return pClient->GetShipSE()->GetRadius();
+        if (pClient->GetShip().get() != nullptr)
+            return pClient->GetShip()->radius();
+        return 50;
+    }
 
-    if (args.argCount() < 2)
-        throw CustomError ("Translocate: Missing Arguments (use '.tr help' for usage)");
-
-    Client* pOtherClient(nullptr);
-    const char* Help = "help";  // many uses.  avoid creating temp objects for every test
-    bool me = false, item = false, player = false, fleet = false;
-    GPoint pt(NULL_ORIGIN);
-    int locationID = 0, myLocationID = pClient->GetLocationID();
-
-    if (args.argCount() == 2) { // single arg - help, locationID, {invalid}
-        if (args.isNumber(1)) {
-            // tr <me> to locationID
-            locationID = atoi(args.arg(1).c_str());
-        } else if (strcmp(args.arg(1).c_str(), Help) == 0) {
-            //  {.tr help}  will display the following list of options in notification window
-            std::ostringstream str; // for 'help' printing
-            str << ".tr [required first arg] [optional second arg] [optional third arg] [optional fourth arg]<br>"; //120
-            str << "1st arg = help|me|fleet|player name|shipID|itemID|locationID<br>"; //45
-            str << "2nd arg = help|me|fleet|home|last|shipID|itemID|locationID|x coord|moon|planet<br>";  //85
-            str << "3ed arg = me|fleet|home|last|shipID|itemID|locationID|y coords|moon|planet <br>"; //80
-            str << "4th arg = fleet|home|last|shipID|itemID|locationID|z coords|moon|planet <br>"; //77
-            str << "typical use is .tr locationID<br>";  //35
-            str << "<br>As there are too many options to explain in this msg, a full usage list can be found on our forums.<br>";  //105
-            int size = 500;
-            char* reply = Memory::Allocator::NewArray<char>(&sAllocators.tickAllocator, size);
-            snprintf(reply, size, str.str().c_str());
-            pClient->SendInfoModalMsg(reply);
-            return nullptr;
-        } else {
-            // tr <me> to <locationName>?
-            // this hits db directly, so test for possible sql injection code
-            for (const auto cur : badCharsSearch)
-                if (EvE::icontains(args.arg(1), cur))
-                    throw CustomError ("Location contains invalid characters");
-            locationID = db->GetSolarSystem(args.arg(1).c_str());
-            if (!sDataMgr.IsSolarSystem(locationID)) {
-                locationID = db->GetStation(args.arg(1).c_str());
-                if (!sDataMgr.IsStation(locationID))
-                    throw CustomError ("Translocate: Name Argument is neither SolarSystem nor StationName");
-            }
+    // a point next to a pilot: their station, or 100m off their ship's hull
+    bool TrNextTo(Client* pTarget, Client* pSubject, TrDestination& dest) {
+        if (pTarget->IsDocked()) {
+            dest.locationID = pTarget->GetLocationID();
+            dest.name = stDataMgr.GetStationName(dest.locationID);
+            return true;
         }
-    } else if (args.argCount() == 3) {  // 2 args - me, player, ship, item, fleet, {invalid} : help, home, last, ship, location, moon, planet, {invalid}
-        // test for 'help' command
-        if ((strcmp(args.arg(1).c_str(), Help) == 0)
-        or (strcmp(args.arg(2).c_str(), Help) == 0))
-            throw CustomError ("Translocate: Invalid Arguments - 'help' not avalible for this command.");
+        if (!pTarget->IsInSpace() or (pTarget->GetShipSE() == nullptr))
+            return false;
+        dest.locationID = pTarget->GetSystemID();
+        dest.pt = pTarget->GetShipSE()->GetPosition();
+        if (pTarget != pSubject)
+            dest.pt.MakeRandomPointOnSphere(100 + TrShipRadius(pTarget) + TrShipRadius(pSubject));
+        dest.name = std::string(pTarget->GetName()) + " in " + sDataMgr.GetSystemName(dest.locationID);
+        return true;
+    }
 
-            // decode first arg  -- me, shipID, charID, playerName, itemID {invalid}
-        if (args.isNumber(1)) {     // charID, shipID, {invalid}
-            int objectID = atoi(args.arg(1).c_str());
-            if (IsCharacterID(objectID)) {
-                pOtherClient = sEntityList.FindClientByCharID(objectID);
-            } else if (IsPlayerItem(objectID)) {
-                // get object's ownerID...this is rather powerful.
-                InventoryItemRef iRef = sItemFactory.GetItemRef(objectID);
-                if (iRef.get() == nullptr)
-                    throw CustomError ("Translocate: Invalid Arguments - target object was not found.");
-                pOtherClient = sEntityList.FindClientByCharID(iRef->ownerID());
-            } else if (IsNPC(objectID)) {
-                throw CustomError ("Translocate: Invalid Object - You really wanna relocate an NPC?");
-            } else
-                throw CustomError ("Translocate: Invalid Object - %i is neither a character nor a ship", objectID);
-        } else if (strcmp(args.arg(1).c_str(), "me") == 0) {
-            // tr <me> to ?
-            //  pClient doesnt change.  do nothing here
-            me = true;
-        } else if (strcmp(args.arg(1).c_str(), "ship") == 0) {
-            // tr <ship|ship owner> to ?
-            item = true;
-        } else if (strcmp(args.arg(1).c_str(), "item") == 0) {
-            // tr me to item
-            item = true;
-        } else if (strcmp(args.arg(1).c_str(), "fleet") == 0) {
-            // tr <my fleet> to ?
-            fleet = true;
-            // not sure how im gonna do this one yet....
-            if (!pClient->InFleet())
-                throw CustomError ("Translocate: Fleet Move - You are not in a fleet.");
-            throw CustomError ("Translocate: Fleet Move - This command is currently incomplete.");
+    // a point off an object of this radius
+    void TrOffHull(TrDestination& dest, double radius, Client* pSubject) {
+        dest.pt.MakeRandomPointOnSphere(radius + 500 + TrShipRadius(pSubject));
+    }
+
+    /* who to move:  me, fleet (every online member of your fleet), a charID, a ship or item (its owner) or a name.
+     *  only online pilots.  throws when there is nobody
+     */
+    void TrResolveSubjects(Client* self, const Seperator& args, size_t idx, std::vector<Client*>& out) {
+        const std::string& arg = args.arg(idx);
+        if (arg == "me") {
+            out.push_back(self);
+        } else if (arg == "fleet") {
+            if (!self->InFleet())
+                throw CustomError ("Translocate: You are not in a fleet.");
+            out = sFltSvc.GetFleetClients(self->GetFleetID());
         } else {
-            // check for player name
-            pOtherClient = sEntityList.FindClientByName(args.arg(1).c_str());
-            if (pOtherClient == nullptr)
-                throw CustomError ("Translocate: Bad Name - %s is not online or is not a valid player name", args.arg(1).c_str());
-        }
-        // decode second arg    -- me, fleet, home, last, location, moon, planet, {invalid}
-        if (args.isNumber(2)) {
-            // tr <me|ship|player|fleet> to <locationID>
-            locationID = atoi(args.arg(2).c_str());
-        } else if (strcmp(args.arg(2).c_str(), "me") == 0) {
-            // tr <me|ship|player|fleet> to me
-            //  pClient doesnt change.  do nothing here
-            me = true;
-            locationID = myLocationID;  // this wont do anything if used as ".tr me me"
-        } else if (strcmp(args.arg(2).c_str(), "home") == 0) {
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet 'home'...yet.");
-            locationID = pClient->GetCloneStationID();
-        } else if (strcmp(args.arg(2).c_str(), "ship") == 0) {
-            // tr <me|ship|player|fleet> to <ship|ship owner>
-            if (item)
-                throw CustomError ("Translocate: Ship Move - You cannot tr one ship to another ship...yet.");
-            item = true;
-        } else if (strcmp(args.arg(2).c_str(), "last") == 0) {
-            // last station <me|player> was docked in
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet to last docked station...yet.");
-            // if called with <player name>, <charID>, or <shipID>, then uses that char's (or owner's) last docked station
-            if (pOtherClient != nullptr)
-                locationID = pOtherClient->GetDockStationID();
-            else
-                locationID = pClient->GetDockStationID();
-        } else if (strcmp(args.arg(2).c_str(), "moon") == 0) {
-            // random moon in <me|player> current system
-            pt = sMapData.GetRandPointOnMoon(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else if (strcmp(args.arg(2).c_str(), "planet") == 0) {
-            // random planet in <me|player> current system
-            pt = sMapData.GetRandPointOnPlanet(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else {
-            if (me) {
-                // tr me to <locationName>?
-                // this hits db directly, so test for possible sql injection code
-                for (const auto cur : badCharsSearch)
-                    if (EvE::icontains(args.arg(1), cur))
-                        throw CustomError ("Location contains invalid characters");
-                    locationID = db->GetSolarSystem(args.arg(1).c_str());
-                if (!sDataMgr.IsSolarSystem(locationID)) {
-                    locationID = db->GetStation(args.arg(1).c_str());
-                    if (!sDataMgr.IsStation(locationID))
-                        throw CustomError ("Translocate: Name Argument is neither SolarSystem nor StationName");
+            Client* pClient(cmd_find_client(args, idx, self));
+            if (pClient == nullptr) {
+                // a ship or item that isn't loaded:  its owner
+                if (args.isNumber(idx)) {
+                    uint32 id(strtoul(arg.c_str(), nullptr, 10));
+                    if (IsPlayerItem(id)) {
+                        InventoryItemRef iRef(sItemFactory.GetItemRef(id));
+                        if ((iRef.get() != nullptr) and IsCharacterID(iRef->ownerID()))
+                            pClient = sEntityList.FindClientByCharID(iRef->ownerID());
+                    }
                 }
-            } else {
-                // what are we missing?
-                throw CustomError ("Translocate: Missing Arguments");
             }
+            if (pClient == nullptr)
+                throw CustomError ("Translocate: %s is not online", arg.c_str());
+            out.push_back(pClient);
         }
-    } else if (args.argCount() == 4) { // 3 args - me, player, ship,  coords, {invalid} : me, home, last, location, {invalid} : last, moon, planet, {invalid}
-        // test for 'help' command
-        if ((strcmp(args.arg(1).c_str(), Help) == 0)
-        or (strcmp(args.arg(2).c_str(), Help) == 0)
-        or (strcmp(args.arg(3).c_str(), Help) == 0))
-            throw CustomError ("Translocate: Invalid Arguments - 'help' not avalible for this command.");
-
-        // check for coords
-        if ((args.isNumber(1))
-        and (args.isNumber(2))
-        and (args.isNumber(3)))
-            throw CustomError ("Translocate: Coords in current system - Use '.goto {x,y,z}' instead of this.");
-
-        // decode first arg  -- me, shipID, charID, playerName, {invalid}
-        if (args.isNumber(1)) {
-            int objectID = atoi(args.arg(1).c_str());
-            if (IsCharacterID(objectID)) {
-                pOtherClient = sEntityList.FindClientByCharID(objectID);
-            } else if (IsPlayerItem(objectID)) {
-                // get object's ownerID
-                pOtherClient = sEntityList.FindClientByCharID(objectID);
-            } else
-                throw CustomError ("Translocate: Invalid Object - %i is neither a character nor a ship", objectID);
-        } else if (strcmp(args.arg(1).c_str(), "me") == 0) {
-            // tr <me> to ?
-            //  pClient doesnt change.  do nothing here
-            me = true;
-        } else if (strcmp(args.arg(1).c_str(), "fleet") == 0) {
-            // tr <my fleet> to ?
-            fleet = true;
-        } else {
-            // this is either player name or invalid arg
-            throw CustomError ("Translocate: Invalid Arguments - searching by player name is incomplete at this time.");
-        }
-
-        // decode second arg    -- me, fleet, home, last, location, moon, planet, {invalid}
-        if (args.isNumber(2)) {
-            locationID = atoi(args.arg(2).c_str());
-        } else if (strcmp(args.arg(2).c_str(), "fleet") == 0) {
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet to 'fleet'.");
-            // tr <my|player> fleet to last, moon, planet, {invalid}
-            fleet = true;
-        } else if (strcmp(args.arg(2).c_str(), "me") == 0) {
-            // tr <player|fleet> to me
-            me = true;
-            locationID = myLocationID;
-        } else if (strcmp(args.arg(2).c_str(), "ship") == 0) {
-            // tr <me|ship|player|fleet> to <ship|ship owner>
-            if (item)
-                throw CustomError ("Translocate: Ship Move - You cannot tr one ship to another ship...yet.");
-            item = true;
-        } else if (strcmp(args.arg(2).c_str(), "home") == 0) {
-            // tr <player|fleet> to <my|players> home
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet 'home'...yet.");
-            locationID = pClient->GetCloneStationID();
-        } else if (strcmp(args.arg(2).c_str(), "last") == 0) {
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet to last docked station...yet.");
-            //  tr <player> me last -- tr <player> to my last docked station
-            // last station client was docked in
-            // if called with <player name> then uses that char's last station
-            if (pOtherClient != nullptr)
-                locationID = pOtherClient->GetDockStationID();
-            else
-                locationID = pClient->GetDockStationID();
-        } else if (strcmp(args.arg(2).c_str(), "moon") == 0) {
-            // random moon in client current system
-            pt = sMapData.GetRandPointOnMoon(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else if (strcmp(args.arg(2).c_str(), "planet") == 0) {
-            // random planet in client current system
-            pt = sMapData.GetRandPointOnPlanet(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else {
-            // what are we missing?
-            throw CustomError ("Translocate: Invalid Arguments");
-        }
-
-        // decode third arg     - last, moon, planet, {invalid}
-        if (args.isNumber(3)) {
-            // sending destination as itemID?
-            locationID = atoi(args.arg(2).c_str());
-        } else if (strcmp(args.arg(3).c_str(), "last") == 0) {
-            if (fleet)
-                throw CustomError ("Translocate: Fleet Move - You cannot tr a fleet to last docked station...yet.");
-            //  tr <player> me last -- tr <player> to my last docked station
-            // last station client was docked in
-            // if called with <player name> then uses that char's last station
-            if (pOtherClient != nullptr)
-                locationID = pOtherClient->GetDockStationID();
-            else
-                locationID = pClient->GetDockStationID();
-        } else if (strcmp(args.arg(3).c_str(), "moon") == 0) {
-            // random moon in client current system
-            pt = sMapData.GetRandPointOnMoon(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else if (strcmp(args.arg(3).c_str(), "planet") == 0) {
-            // random planet in client current system
-            pt = sMapData.GetRandPointOnPlanet(pOtherClient == nullptr ? pClient->GetSystemID() : pOtherClient->GetSystemID());
-            //throw CustomError ("Translocate: This option is Incomplete");
-        } else {
-            // what are we missing?
-            throw CustomError ("Translocate: Invalid Arguments");
-        }
-
-    } else if (args.argCount() == 5) { // 4 args - me, player, ship,  coords, {invalid} : me, home, last, location, {invalid} : moon, planet, {invalid}
-        // test for 'help' command
-        if ((strcmp(args.arg(1).c_str(), Help) == 0)
-        or (strcmp(args.arg(2).c_str(), Help) == 0)
-        or (strcmp(args.arg(3).c_str(), Help) == 0)
-        or (strcmp(args.arg(4).c_str(), Help) == 0))
-            throw CustomError ("Translocate: Invalid Arguments - 'help' not avalible for this command.");
-
-        // check for coords
-        if ((args.isNumber(1))
-        and (args.isNumber(2))
-        and (args.isNumber(3))
-        and (args.isNumber(4))) {
-            // pClient is caller, args are systemID and coords (assumed)
-            locationID = atoi(args.arg(1).c_str());
-            if (!sDataMgr.IsSolarSystem(locationID))
-                throw CustomError ("Translocate: Invalid Arguments - locationID %u is not a SolarSystemID.", locationID);
-            pt = GPoint(atoi(args.arg(2).c_str()), atoi(args.arg(3).c_str()), atoi(args.arg(4).c_str()));
-
-            pClient->JumpOutEffect(locationID);
-            pClient->MoveToLocation(locationID, pt);
-            pClient->JumpInEffect();
-
-            return nullptr;
-        }
-
-        throw CustomError ("Translocate: 4 args - This command is currently incomplete.");
-    } else if (args.argCount() == 6) { // 5 args - me, player, ship, {invalid} : me, home, last, location,  coords, {invalid} : moon, planet, {invalid}
-        // test for 'help' command
-        if ((strcmp(args.arg(1).c_str(), Help) == 0)
-        or (strcmp(args.arg(2).c_str(), Help) == 0)
-        or (strcmp(args.arg(3).c_str(), Help) == 0)
-        or (strcmp(args.arg(4).c_str(), Help) == 0)
-        or (strcmp(args.arg(5).c_str(), Help) == 0))
-            throw CustomError ("Translocate: Invalid Arguments - 'help' not avalible for this command.");
-
-        throw CustomError ("Translocate: 5 args - This command is currently incomplete.");
-    } else {
-        throw CustomError ("Translocate: Too Many Arguments");
+        if (out.empty())
+            throw CustomError ("Translocate: nobody to move");
     }
 
-    if (fleet) {
-        // this will take a lil bit of doing....
-        throw CustomError ("Translocate: Fleet Move - This command is currently incomplete.");
-    }
-
-    if (IsPlayerItem(locationID)) {
-        // locationID is sent as player item.  this can be any celestial object, ship, pos, jetcan, wreck, etc.
-        // this will take a lil bit of doing to get booleans right.
-        InventoryItemRef iRef = sItemFactory.GetItemRef(locationID);
-        if (item) { // tr to ship/item location
-            pt = iRef->position();
-            locationID = iRef->locationID();
-        } else { // tr to ship/item owner location
-            Client* pClient2(sEntityList.FindClientByCharID(iRef->ownerID()));
-            if (pClient2 == nullptr) {
-                pt = iRef->position();
-                locationID = iRef->locationID();
-            } else if (pClient2->IsDocked()) {
-                pt = NULL_ORIGIN;
-                locationID = pClient2->GetLocationID();
-            } else {
-                pt = pClient2->GetShipSE()->GetPosition();
-                pt.MakeRandomPointOnSphere(100 + pClient->GetShipSE()->GetRadius() + pClient2->GetShipSE()->GetRadius());
-                locationID = pClient2->GetSystemID();
-            }
-        }
-    } else if (IsCelestialID(locationID) || IsStargateID(locationID) || IsSolarSystemID(locationID)) {
-        // This section of code primarily governs the behavior of clicking
-        // "TR me here" in the in-game client menus, for things like asteroid
-        // belts, planets, stargates, etc.
-
-        // As of 2024-09-15, translocating is overall still a bit buggy. When
-        // switching solar systems, the client may sometimes be unable to
-        // navigate even though the position may be fine upon next login. Could
-        // this be solvable by calling UpdateBubble()?
-
+    // a celestial, stargate or solar system, from mapDenormalize
+    bool TrMapItem(uint32 itemID, Client* pSubject, TrDestination& dest) {
         DBQueryResult res;
         DBResultRow row;
-
-        if (!sDatabase.RunQuery(res, "SELECT solarSystemID, x,y,z FROM mapDenormalize WHERE itemID = %i LIMIT 1;", locationID)) {
+        if (IsSolarSystemID(itemID)) {
+            // next to the sun, not in it
+            if (!sDataMgr.IsSolarSystem(itemID))
+                return false;
+            dest.locationID = itemID;
+            dest.pt = NULL_ORIGIN;
+            dest.name = sDataMgr.GetSystemName(itemID);
+            double radius(0);
+            if (sDatabase.RunQuery(res, "SELECT radius FROM mapDenormalize WHERE solarSystemID = %u AND groupID = %u LIMIT 1",
+                                   itemID, EVEDB::invGroups::Sun) and res.GetRow(row) and !row.IsNull(0))
+                radius = row.GetDouble(0);
+            TrOffHull(dest, radius, pSubject);
+            return true;
+        }
+        if (!sDatabase.RunQuery(res, "SELECT solarSystemID, x, y, z, radius, itemName FROM mapDenormalize WHERE itemID = %u LIMIT 1", itemID)) {
             codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            throw CustomError ("Translocate: Unable to find celestial location %i", locationID);
+            throw CustomError ("Translocate: Unable to find celestial location %u", itemID);
         }
-
-        if (!res.GetRow(row)) {
-            throw CustomError("Translocate: No data for celestial location %i", locationID);
-        }
-
-        if (pClient->IsDocked()) {
-            pClient->UndockFromStation();
-        }
-
-        if (IsSolarSystemID(locationID)) {
-            // translocate to the solar system's star directly
-            pt.x = 0;
-            pt.y = 0;
-            pt.z = 0;
-        } else {
-            locationID = row.GetInt(0);
-            pt.x = row.GetDouble(1);
-            pt.y = row.GetDouble(2);
-            pt.z = row.GetDouble(3);
-        }
-    } else if (!sDataMgr.IsStation(locationID) and !sDataMgr.IsSolarSystem(locationID)) {
-        // connect to dataMgrs for location verification
-        throw CustomError ("Translocate: Invalid Location %i", locationID);
+        if (!res.GetRow(row))
+            throw CustomError ("Translocate: No data for celestial location %u", itemID);
+        dest.locationID = row.GetUInt(0);
+        dest.pt = GPoint(row.GetDouble(1), row.GetDouble(2), row.GetDouble(3));
+        dest.name = row.IsNull(5) ? std::to_string(itemID) : row.GetText(5);
+        // asteroid belts have no real radius; planets, moons and gates do
+        TrOffHull(dest, row.IsNull(4) ? 0 : row.GetDouble(4), pSubject);
+        return true;
     }
 
-    if (pOtherClient != nullptr) {
-        pOtherClient->JumpOutEffect(pOtherClient->GetLocationID());
-        pOtherClient->MoveToLocation(locationID, pt);
-        pOtherClient->JumpInEffect();
-        if (pOtherClient->IsInSpace()) {
-            pOtherClient->GetShipSE()->DestinyMgr()->Stop();
-            UpdateBubble(pOtherClient);
+    /* where to:  me, home, last, moon, planet, a charID (online), a stationID, a solar system, celestial or stargate,
+     *  anything in space in your system or the subject's (NPCs, asteroids, drones, wrecks, structures, dungeon objects),
+     *  a player item (its position, its station, or its owner's location), or a name (pilot, solar system, station)
+     */
+    void TrResolveDestination(Client* self, Client* pSubject, CommandDB* db, const Seperator& args, size_t idx, TrDestination& dest) {
+        const std::string& arg = args.arg(idx);
+        if (arg == "me") {
+            if (!TrNextTo(self, pSubject, dest))
+                throw CustomError ("Translocate: you are neither docked nor in space");
+            return;
+        } else if (arg == "home") {
+            dest.locationID = pSubject->GetCloneStationID();
+            if (!sDataMgr.IsStation(dest.locationID))
+                throw CustomError ("Translocate: %s has no home station", pSubject->GetName());
+            dest.name = stDataMgr.GetStationName(dest.locationID);
+            return;
+        } else if (arg == "last") {
+            dest.locationID = pSubject->GetDockStationID();
+            if (!sDataMgr.IsStation(dest.locationID))
+                throw CustomError ("Translocate: %s hasn't docked anywhere yet", pSubject->GetName());
+            dest.name = stDataMgr.GetStationName(dest.locationID);
+            return;
+        } else if ((arg == "moon") or (arg == "planet")) {
+            dest.locationID = pSubject->GetSystemID();
+            dest.pt = (arg == "moon" ? sMapData.GetRandPointOnMoon(dest.locationID) : sMapData.GetRandPointOnPlanet(dest.locationID));
+            dest.name = std::string("a random ") + arg + " in " + sDataMgr.GetSystemName(dest.locationID);
+            return;
         }
 
-        // translocating can interrupt the login warp bubble, leaving the
-        // player unable to do anything
-        pOtherClient->SetLoginWarpComplete();
-    } else {
-        pClient->JumpOutEffect(myLocationID);
+        if (args.isNumber(idx)) {
+            uint32 id(strtoul(arg.c_str(), nullptr, 10));
+            if (IsCharacterID(id)) {
+                Client* pTarget(sEntityList.FindClientByCharID(id));
+                if (pTarget == nullptr)
+                    throw CustomError ("Translocate: character %u is not online", id);
+                if (!TrNextTo(pTarget, pSubject, dest))
+                    throw CustomError ("Translocate: %s is neither docked nor in space", pTarget->GetName());
+                return;
+            }
+            if (IsStationID(id)) {
+                if (!sDataMgr.IsStation(id))
+                    throw CustomError ("Translocate: Invalid Location %u", id);
+                dest.locationID = id;
+                dest.name = stDataMgr.GetStationName(id);
+                return;
+            }
+            if (IsRegionID(id) or IsConstellationID(id)) {
+                // the starmap's 'TR me here!' on a region or constellation:  a random system in it
+                DBQueryResult res;
+                DBResultRow row;
+                if (!sDatabase.RunQuery(res, "SELECT solarSystemID FROM mapSolarSystems WHERE %s = %u ORDER BY RAND() LIMIT 1",
+                                        (IsRegionID(id) ? "regionID" : "constellationID"), id) or !res.GetRow(row))
+                    throw CustomError ("Translocate: Invalid Location %u", id);
+                id = row.GetUInt(0);
+            }
+            if (IsSolarSystemID(id) or IsCelestialID(id) or IsStargateID(id)) {
+                if (!TrMapItem(id, pSubject, dest))
+                    throw CustomError ("Translocate: Invalid Location %u", id);
+                return;
+            }
+            // anything in space here:  NPCs, asteroids, drones, wrecks, structures, ships
+            SystemEntity* pSE(nullptr);
+            if (self->SystemMgr() != nullptr)
+                pSE = self->SystemMgr()->GetSE(id);
+            if ((pSE == nullptr) and (pSubject->SystemMgr() != nullptr))
+                pSE = pSubject->SystemMgr()->GetSE(id);
+            if (pSE != nullptr) {
+                dest.locationID = pSE->SystemMgr()->GetID();
+                dest.pt = pSE->GetPosition();
+                dest.name = std::string(pSE->GetName()) + " in " + sDataMgr.GetSystemName(dest.locationID);
+                TrOffHull(dest, pSE->GetRadius(), pSubject);
+                return;
+            }
+            if (IsPlayerItem(id)) {
+                InventoryItemRef iRef(sItemFactory.GetItemRef(id));
+                if (iRef.get() == nullptr)
+                    throw CustomError ("Translocate: item %u was not found", id);
+                if (sDataMgr.IsSolarSystem(iRef->locationID())) {
+                    dest.locationID = iRef->locationID();
+                    dest.pt = iRef->position();
+                    dest.name = std::string(iRef->name()) + " in " + sDataMgr.GetSystemName(dest.locationID);
+                    TrOffHull(dest, iRef->radius(), pSubject);
+                    return;
+                }
+                if (sDataMgr.IsStation(iRef->locationID())) {
+                    dest.locationID = iRef->locationID();
+                    dest.name = stDataMgr.GetStationName(dest.locationID);
+                    return;
+                }
+                // in a container, hangar or ship:  where its owner is
+                Client* pOwner(sEntityList.FindClientByCharID(iRef->ownerID()));
+                if ((pOwner != nullptr) and TrNextTo(pOwner, pSubject, dest))
+                    return;
+                throw CustomError ("Translocate: %s (%u) is inside something, and its owner is not online", iRef->name(), id);
+            }
+            throw CustomError ("Translocate: %u is not a location, a pilot, or anything in space in your system", id);
+        }
+
+        // a name:  an online pilot, then a solar system, then a station
+        Client* pTarget(cmd_find_client(args, idx, self));
+        if (pTarget != nullptr) {
+            if (!TrNextTo(pTarget, pSubject, dest))
+                throw CustomError ("Translocate: %s is neither docked nor in space", pTarget->GetName());
+            return;
+        }
+        // this hits db directly, so test for possible sql injection code
+        for (const auto cur : badCharsSearch)
+            if (EvE::icontains(arg, cur))
+                throw CustomError ("Location contains invalid characters");
+        uint32 locationID(db->GetSolarSystem(arg.c_str()));
+        if (sDataMgr.IsSolarSystem(locationID)) {
+            if (!TrMapItem(locationID, pSubject, dest))
+                throw CustomError ("Translocate: Invalid Location %u", locationID);
+            return;
+        }
+        locationID = db->GetStation(arg.c_str());
+        if (!sDataMgr.IsStation(locationID))
+            throw CustomError ("Translocate: %s is neither an online pilot, a solar system nor a station name", arg.c_str());
+        dest.locationID = locationID;
+        dest.name = stDataMgr.GetStationName(locationID);
+    }
+
+    // offset=x,y,z (meters) or offset=randvec(<distance>).  false when there is no offset
+    bool TrParseOffset(const Seperator& args, GVector& offset) {
+        std::string text(cmd_parse_eq_arg(args, "offset="));
+        if (text.empty())
+            return false;
+        if (text.compare(0, 8, "randvec(") == 0) {
+            size_t end(text.find(')'));
+            double distance(0);
+            if ((end == std::string::npos) or !cmd_parse_distance(text.substr(8, end - 8), distance))
+                throw CustomError ("Translocate: bad offset %s.  Use offset=randvec(100km)", text.c_str());
+            GPoint random(NULL_ORIGIN);
+            random.MakeRandomPointOnSphere(distance);
+            offset = random;
+            return true;
+        }
+        double v[3];
+        size_t start(0);
+        for (int i = 0; i < 3; ++i) {
+            size_t comma(text.find(',', start));
+            std::string part(text.substr(start, (comma == std::string::npos ? std::string::npos : comma - start)));
+            char* end(nullptr);
+            v[i] = strtod(part.c_str(), &end);
+            if (part.empty() or (*end != '\0') or ((i < 2) and (comma == std::string::npos)) or ((i == 2) and (comma != std::string::npos)))
+                throw CustomError ("Translocate: bad offset %s.  Use offset=x,y,z in meters", text.c_str());
+            start = comma + 1;
+        }
+        offset = GVector(v[0], v[1], v[2]);
+        return true;
+    }
+
+    // moves one pilot.  returns false (and tells the caller why) when the pilot can't be moved now
+    bool TrMove(Client* self, Client* pClient, uint32 locationID, const GPoint& pt) {
+        if (pClient->IsSessionChange()) {
+            self->SendNotifyMsg("Translocate: %s has a session change active.  Wait %u seconds and try again.",
+                                pClient->GetName(), pClient->GetSessionChangeTime());
+            return false;
+        }
+        bool undocked(false);
+        if (pClient->IsDocked() and sDataMgr.IsSolarSystem(locationID)) {
+            pClient->UndockFromStation();
+            undocked = true;
+        }
+        pClient->JumpOutEffect(pClient->GetLocationID());
         pClient->MoveToLocation(locationID, pt);
         pClient->JumpInEffect();
-        if (pClient->IsInSpace()) {
+        if (pClient->IsInSpace() and (pClient->GetShipSE() != nullptr)) {
             pClient->GetShipSE()->DestinyMgr()->Stop();
-            UpdateBubble(pClient);
+            // an undock sends its own state.  so does a session change, which would refuse the update anyway
+            if (!undocked and !pClient->IsSessionChange())
+                UpdateBubble(pClient);
         }
 
         // translocating can interrupt the login warp bubble, leaving the
         // player unable to do anything
         pClient->SetLoginWarpComplete();
+        return true;
+    }
+}
+
+PyResult Command_tr(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
+    if (pClient == nullptr) // should never hit,
+        throw CustomError ("Translocate: Invalid Caller - Client sent NULL.");
+
+    // the plain (non key=value) arguments after the command.  noblock is accepted and ignored
+    std::vector<size_t> plain;
+    for (size_t i = 1; i < args.argCount(); ++i) {
+        if (args.arg(i).find('=') != std::string::npos)
+            continue;
+        if (args.arg(i) == "noblock")
+            continue;
+        plain.push_back(i);
     }
 
-    return nullptr;
+    if ((plain.size() == 1) and (args.arg(plain[0]) == "help")) {
+        std::ostringstream str;
+        str << "/tr (who) [where] [offset=x,y,z | offset=randvec(distance)] [noblock]<br>";
+        str << "/tr (where) moves you.  /tr [who] (systemID) x y z moves to coordinates<br><br>";
+        str << "who = me | fleet (your fleet's online pilots) | charID | shipID or itemID (its owner) | \"pilot name\"<br>";
+        str << "where = me | home | last | moon | planet | charID | stationID | solarSystemID | celestialID | stargateID |"
+               " itemID (anything in space in your system, or a player item) | \"pilot, system or station name\"<br>";
+        str << "offset moves that far from the destination (meters, or randvec(100km|3au)).  with no 'where' it moves within the system<br>";
+        str << "NPCs and other objects are found only in your system or the pilot's.  only online pilots can be moved<br>";
+        pClient->SendInfoModalMsg(str.str().c_str());
+        return nullptr;
+    }
+
+    GVector offset(NULL_ORIGIN);
+    bool hasOffset(TrParseOffset(args, offset));
+
+    size_t whoIdx(0), whereIdx(0);
+    bool coords(false), self(false);
+    // [who] systemID x y z
+    auto isCoords = [&](size_t first) {
+        if ((plain.size() != first + 4) or !args.isNumber(plain[first]))
+            return false;
+        for (size_t i = first + 1; i < plain.size(); ++i) {
+            char* end(nullptr);
+            const std::string& text = args.arg(plain[i]);
+            strtod(text.c_str(), &end);
+            if (text.empty() or (*end != '\0'))
+                return false;
+        }
+        return IsSolarSystemID(strtoul(args.arg(plain[first]).c_str(), nullptr, 10));
+    };
+    if (isCoords(0)) {
+        self = true;
+        coords = true;
+    } else if (isCoords(1)) {
+        whoIdx = plain[0];
+        coords = true;
+    } else if (plain.empty()) {
+        if (!hasOffset)
+            throw CustomError ("Translocate: Missing Arguments (use '/tr help' for usage)");
+        self = true;
+    } else if (plain.size() == 1) {
+        // '/tr me offset=...' moves within the system.  otherwise the one argument is where to go
+        if (hasOffset and ((args.arg(plain[0]) == "me") or (args.arg(plain[0]) == "fleet"))) {
+            whoIdx = plain[0];
+        } else {
+            self = true;
+            whereIdx = plain[0];
+        }
+    } else if (plain.size() == 2) {
+        whoIdx = plain[0];
+        whereIdx = plain[1];
+    } else {
+        throw CustomError ("Translocate: Too Many Arguments (use '/tr help' for usage)");
+    }
+
+    std::vector<Client*> subjects;
+    if (self) {
+        subjects.push_back(pClient);
+    } else {
+        TrResolveSubjects(pClient, args, whoIdx, subjects);
+    }
+
+    uint32 moved(0);
+    std::string lastName;
+    for (auto pSubject : subjects) {
+        TrDestination dest;
+        if (coords) {
+            size_t first(plain.size() - 4);
+            dest.locationID = strtoul(args.arg(plain[first]).c_str(), nullptr, 10);
+            if (!sDataMgr.IsSolarSystem(dest.locationID))
+                throw CustomError ("Translocate: Invalid Arguments - locationID %u is not a SolarSystemID.", dest.locationID);
+            dest.pt = GPoint(strtod(args.arg(plain[first + 1]).c_str(), nullptr), strtod(args.arg(plain[first + 2]).c_str(), nullptr),
+                             strtod(args.arg(plain[first + 3]).c_str(), nullptr));
+            dest.name = sDataMgr.GetSystemName(dest.locationID);
+        } else if (whereIdx == 0) {
+            // offset from where the pilot is now
+            if (!pSubject->IsInSpace() or (pSubject->GetShipSE() == nullptr)) {
+                pClient->SendNotifyMsg("Translocate: %s is docked.  An offset alone moves pilots in space", pSubject->GetName());
+                continue;
+            }
+            dest.locationID = pSubject->GetSystemID();
+            dest.pt = pSubject->GetShipSE()->GetPosition();
+            dest.name = sDataMgr.GetSystemName(dest.locationID);
+        } else {
+            // the caller going to 'me' only makes sense with an offset
+            if ((pSubject == pClient) and (args.arg(whereIdx) == "me")) {
+                if (!hasOffset)
+                    continue;
+                if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+                    throw CustomError ("Translocate: an offset needs a destination in space");
+                dest.locationID = pClient->GetSystemID();
+                dest.pt = pClient->GetShipSE()->GetPosition();
+                dest.name = sDataMgr.GetSystemName(dest.locationID);
+            } else {
+                TrResolveDestination(pClient, pSubject, db, args, whereIdx, dest);
+            }
+        }
+        if (hasOffset) {
+            if (!sDataMgr.IsSolarSystem(dest.locationID))
+                throw CustomError ("Translocate: an offset needs a destination in space, not %s", dest.name.c_str());
+            dest.pt += offset;
+        }
+        if (!sDataMgr.IsStation(dest.locationID) and !sDataMgr.IsSolarSystem(dest.locationID))
+            throw CustomError ("Translocate: Invalid Location %u", dest.locationID);
+
+        if (TrMove(pClient, pSubject, dest.locationID, dest.pt)) {
+            ++moved;
+            lastName = dest.name;
+        }
+    }
+
+    if (moved == 0)
+        return new PyString("Nobody was moved.");
+    if (moved == 1)
+        return new PyString("Moved " + std::string(subjects.size() == 1 ? subjects[0]->GetName() : "1 pilot") + " to " + lastName + ".");
+    return new PyString("Moved " + std::to_string(moved) + " pilots to " + lastName + ".");
 }
 
 static PyResult generic_createitem(Client *pClient, CommandDB *db, EVEServiceManager &services, const Seperator &args) {

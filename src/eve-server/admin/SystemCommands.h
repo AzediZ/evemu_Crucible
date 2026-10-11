@@ -11,7 +11,7 @@ COMMAND( goto, Acct::Role::VIP,
 COMMAND( translocate, Acct::Role::VIP,
          "(entityID) - Translocate to the specified entity" )
 COMMAND( tr, Acct::Role::VIP,
-         "(who) (entityID) - Translocate the specified person to the specified entity" )
+         "(who) [where] [offset=x,y,z|offset=randvec(dist)] - translocate; '/tr help' for details" )
 COMMAND( halt, Acct::Role::VIP,
          "- Immediately stops ship, setting Destiny::State = dstball_halt.")
 COMMAND( location, Acct::Role::PLAYER,
