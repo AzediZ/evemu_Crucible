@@ -23,14 +23,12 @@
     Author:        Luck, caytchen
 */
 
-#ifndef MAIL_MGR_SERIVCE_H
+#ifndef MAIL_MGR_SERVICE_H
 #define MAIL_MGR_SERVICE_H
 
 #include "services/Service.h"
 #include "mail/MailDB.h"
 #include "Client.h"
-
-class MailDB;
 
 class MailMgrService : public Service <MailMgrService>
 {
@@ -40,35 +38,39 @@ public:
 protected:
     MailDB m_db;
 
-    PyResult SendMail(PyCallArgs& call, PyList* toCharacterIDs, std::optional<PyInt*> listID, std::optional<PyInt*> toCorpOrAllianceID, PyWString* title, PyWString* body, PyBool* isReplyTo, PyBool* isForwardedFrom);
+    PyResult SendMail(PyCallArgs& call, PyList* toCharacterIDs, PyRep* toListID, PyRep* toCorpOrAllianceID, PyRep* title, PyRep* body, PyRep* isReplyTo, PyRep* isForwardedFrom);
     PyResult PrimeOwners(PyCallArgs& call, PyList* ownerIDs);
-    PyResult SyncMail(PyCallArgs& call, std::optional<PyInt*> first, std::optional<PyInt*> second);
+    PyResult SyncMail(PyCallArgs& call, PyRep* first, PyRep* last);
     PyResult GetMailHeaders(PyCallArgs& call, PyList* messageIDs);
+    PyResult GetBody(PyCallArgs& call, PyInt* messageID, PyRep* isUnread);
+
     PyResult MoveToTrash(PyCallArgs& call, PyList* messageIDs);
     PyResult MoveFromTrash(PyCallArgs& call, PyList* messageIDs);
     PyResult MarkAsUnread(PyCallArgs& call, PyList* messageIDs);
     PyResult MarkAsRead(PyCallArgs& call, PyList* messageIDs);
     PyResult MoveAllToTrash(PyCallArgs& call);
-    PyResult MoveToTrashByLabel(PyCallArgs& call, PyInt* labelID);
+    PyResult MoveToTrashByLabel(PyCallArgs& call, PyRep* labelID);
     PyResult MoveToTrashByList(PyCallArgs& call, PyInt* listID);
     PyResult MarkAllAsUnread(PyCallArgs& call);
-    PyResult MarkAsUnreadByLabel(PyCallArgs& call, PyInt* labelID);
-    PyResult MarkAsUnreadByList(PyCallArgs& call, PyList* messageIDs);
+    PyResult MarkAsUnreadByLabel(PyCallArgs& call, PyRep* labelID);
+    PyResult MarkAsUnreadByList(PyCallArgs& call, PyInt* listID);
     PyResult MarkAllAsRead(PyCallArgs& call);
-    PyResult MarkAsReadByLabel(PyCallArgs& call, PyInt* labelID);
+    PyResult MarkAsReadByLabel(PyCallArgs& call, PyRep* labelID);
     PyResult MarkAsReadByList(PyCallArgs& call, PyInt* listID);
     PyResult MoveAllFromTrash(PyCallArgs& call);
     PyResult EmptyTrash(PyCallArgs& call);
     PyResult DeleteMail(PyCallArgs& call, PyList* messageIDs);
-    PyResult GetBody(PyCallArgs& call, PyInt* messageID, PyBool* isUnread);
-    PyResult AssignLabels(PyCallArgs& call, PyList* messageIDs, PyInt* labelID);
-    PyResult RemoveLabels(PyCallArgs& call, PyList* messageIDs, PyInt* labelID);
 
-    // implemented
     PyResult GetLabels(PyCallArgs& call);
-    PyResult EditLabel(PyCallArgs& call, PyInt* labelID, PyWString* name, std::optional<PyInt*> color);
-    PyResult CreateLabel(PyCallArgs& call, PyWString* name, std::optional<PyInt*> color);
-    PyResult DeleteLabel(PyCallArgs& call, PyInt* labelID);
+    PyResult EditLabel(PyCallArgs& call, PyRep* labelID, PyRep* name, PyRep* color);
+    PyResult CreateLabel(PyCallArgs& call, PyRep* name, std::optional<PyRep*> color);
+    PyResult DeleteLabel(PyCallArgs& call, PyRep* labelID);
+    PyResult AssignLabels(PyCallArgs& call, PyList* messageIDs, PyRep* labelID);
+    PyResult RemoveLabels(PyCallArgs& call, PyList* messageIDs, PyRep* labelID);
+
+private:
+    // mailDelay: last send time per character
+    static std::map<uint32, int64> s_lastSent;
 };
 
 

@@ -25,9 +25,17 @@
 
 #include "eve-server.h"
 
-
-#include "mail/MailMgrService.h"
 #include "EVE_Mail.h"
+#include "mail/MailMgr.h"
+#include "mail/MailMgrService.h"
+
+/* eve mail (mail window).  all calls work on the caller's own mail only.
+ *  headers:  messageID, senderID, toCharacterIDs ("1,2,3"), toListID|None, toCorpOrAllianceID|None, title, sentDate
+ *  status:   messageID, statusMask (mailStatusMask*), labelMask (mailLabel* + custom label bits)
+ *  bodies are zlib compressed utf-8
+ */
+
+std::map<uint32, int64> MailMgrService::s_lastSent;
 
 MailMgrService::MailMgrService() :
     Service("mailMgr", eAccessLevel_Character)
@@ -36,6 +44,7 @@ MailMgrService::MailMgrService() :
     this->Add("PrimeOwners", &MailMgrService::PrimeOwners);
     this->Add("SyncMail", &MailMgrService::SyncMail);
     this->Add("GetMailHeaders", &MailMgrService::GetMailHeaders);
+    this->Add("GetBody", &MailMgrService::GetBody);
     this->Add("MoveToTrash", &MailMgrService::MoveToTrash);
     this->Add("MoveFromTrash", &MailMgrService::MoveFromTrash);
     this->Add("MarkAsUnread", &MailMgrService::MarkAsUnread);
@@ -52,341 +61,339 @@ MailMgrService::MailMgrService() :
     this->Add("MoveAllFromTrash", &MailMgrService::MoveAllFromTrash);
     this->Add("EmptyTrash", &MailMgrService::EmptyTrash);
     this->Add("DeleteMail", &MailMgrService::DeleteMail);
-    this->Add("GetBody", &MailMgrService::GetBody);
-    this->Add("AssignLabels", &MailMgrService::AssignLabels);
-    this->Add("RemoveLabels", &MailMgrService::RemoveLabels);
-
-    // implemented
     this->Add("GetLabels", &MailMgrService::GetLabels);
     this->Add("EditLabel", &MailMgrService::EditLabel);
     this->Add("CreateLabel", &MailMgrService::CreateLabel);
     this->Add("DeleteLabel", &MailMgrService::DeleteLabel);
+    this->Add("AssignLabels", &MailMgrService::AssignLabels);
+    this->Add("RemoveLabels", &MailMgrService::RemoveLabels);
 }
 
-PyResult MailMgrService::SendMail(PyCallArgs &call, PyList* toCharacterIDs, std::optional<PyInt*> listID, std::optional<PyInt*> toCorpOrAllianceID, PyWString* title, PyWString* body, PyBool* isReplyTo, PyBool* isForwardedFrom)
+// integer elements of a list of ids (anything else is skipped)
+static void GetIDs(PyList* list, std::vector<int32>& into)
 {
-    std::vector<int32> characters;
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        if ((*itr)->IsInt() or (*itr)->IsLong())
+            into.push_back(PyRep::IntegerValue(*itr));
+}
 
-    PyList::const_iterator list_2_cur = toCharacterIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != toCharacterIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_SendMail failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
+// None or 0 = no value
+static int64 OptionalInt(PyRep* rep)
+{
+    if ((rep == nullptr) or rep->IsNone())
+        return 0;
+    return PyRep::IntegerValue(rep);
+}
 
-        const PyInt* t = (*list_2_cur)->AsInt();
-        characters.push_back(t->value());
+PyResult MailMgrService::SendMail(PyCallArgs &call, PyList* toCharacterIDs, PyRep* toListID, PyRep* toCorpOrAllianceID, PyRep* title, PyRep* body, PyRep* isReplyTo, PyRep* isForwardedFrom)
+{
+    // the client sends this thru util.CSPAChargedAction; CSPA charges (ContactCostNotApproved) are not implemented
+    uint32 charID = call.client->GetCharacterID();
+
+    int64 now = (int64)GetFileTimeNow();
+    if (sConfig.world.mailDelay > 0) {
+        std::map<uint32, int64>::iterator itr = s_lastSent.find(charID);
+        if ((itr != s_lastSent.end()) and (now - itr->second < sConfig.world.mailDelay * Win32Time_Second))
+            throw CustomError("You can only send one EVE mail every %u seconds.", (uint32)sConfig.world.mailDelay);
     }
 
-    int sender = call.client->GetCharacterID();
-    return new PyInt(
-        m_db.SendMail(
-            sender, characters,
-            listID.has_value() ? listID.value()->value() : -1,
-            toCorpOrAllianceID.has_value() ? toCorpOrAllianceID.value()->value() : -1,
-            title->content(), body->content(),
-            isReplyTo->value(),
-            isForwardedFrom->value()
-        )
-    );
+    std::vector<int32> ids, toChars;
+    GetIDs(toCharacterIDs, ids);
+    if (ids.size() > mailMaxRecipients)
+        throw UserError("EvemailMaxRecipients")
+                .AddFormatValue("max", new PyInt(mailMaxRecipients))
+                .AddFormatValue("name", new PyString(""));
+    // agents, npcs and other non-characters can't get mail
+    for (auto cur : ids)
+        if (IsCharacterID(cur))
+            toChars.push_back(cur);
+
+    int32 listID = (int32)OptionalInt(toListID);
+    int32 corpOrAllianceID = (int32)OptionalInt(toCorpOrAllianceID);
+    if ((listID > 0) and (corpOrAllianceID > 0))
+        throw UserError("EvemailMaxListOrCorp")
+                .AddFormatValue("name", new PyString(""))
+                .AddFormatValue("groupName", new PyString(""));
+
+    if (corpOrAllianceID > 0) {
+        if (IsCorp(corpOrAllianceID)) {
+            if (corpOrAllianceID != call.client->GetCorporationID())
+                throw UserError("EvemailCantSendToOtherCorp");
+            if (IsNPCCorp(corpOrAllianceID))
+                throw UserError("EvemailCantSendToNPCCorp");
+        } else if (IsAlliance(corpOrAllianceID)) {
+            if (corpOrAllianceID != call.client->GetAllianceID())
+                throw UserError("EvemailCantSendToOtherAlliance");
+            if ((call.client->GetCorpRole() & Corp::Role::ChatManager) != Corp::Role::ChatManager)
+                throw UserError("EvemailCantSendToAllianceNoRole");
+        } else {
+            throw UserError("EvemailSendingFailed");
+        }
+    }
+
+    if (listID > 0) {
+        std::vector<uint32> members;
+        MailDB::GetListMemberIDs(listID, members);
+        if (std::find(members.begin(), members.end(), charID) == members.end())
+            throw UserError("EveMailCanOnlySendToOwnMailinglists");
+    }
+
+    if (toChars.empty() and (listID == 0) and (corpOrAllianceID == 0))
+        throw UserError("EveMailNoCharFound").AddFormatValue("name", new PyString(""));
+
+    std::string subject = PyRep::StringContent(title);
+    if (subject.find_first_not_of(" \t\r\n") == std::string::npos)
+        throw UserError("NoSubject");
+    MailMgr::TruncateUtf8(subject, mailMaxSubjectSize);
+    std::string text = PyRep::StringContent(body);
+    MailMgr::TruncateUtf8(text, mailMaxTaggedBodySize);
+
+    uint32 messageID = MailMgr::SendMail(charID, toChars, listID, corpOrAllianceID, subject, text, 0, charID);
+    if (messageID == 0)
+        throw UserError("EvemailSendingFailed");
+
+    // the client marks the original mail locally (mailSvc.SendMail)
+    int32 replyTo = (int32)OptionalInt(isReplyTo);
+    if (replyTo > 0) {
+        std::vector<int32> orig(1, replyTo);
+        MailDB::SetStatusBits(charID, orig, mailStatusMaskReplied, true);
+    }
+    int32 forwardedFrom = (int32)OptionalInt(isForwardedFrom);
+    if (forwardedFrom > 0) {
+        std::vector<int32> orig(1, forwardedFrom);
+        MailDB::SetStatusBits(charID, orig, mailStatusMaskForwarded, true);
+    }
+
+    s_lastSent[charID] = now;
+    return new PyInt(messageID);
 }
 
 PyResult MailMgrService::PrimeOwners(PyCallArgs &call, PyList* ownerIDs)
 {
     std::vector<int32> owners;
-
-    PyList::const_iterator list_2_cur = ownerIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != ownerIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_SendMail failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        owners.push_back(t->value());
-    }
+    GetIDs(ownerIDs, owners);
     return ServiceDB::PrimeOwners(owners);
 }
 
-PyResult MailMgrService::SyncMail(PyCallArgs &call, std::optional<PyInt*> first, std::optional<PyInt*> second)
+PyResult MailMgrService::SyncMail(PyCallArgs &call, PyRep* first, PyRep* last)
 {
-    int firstId = 0, secondId = 0;
+    // first/last are the lowest/highest messageIDs the client has cached (None, 0 when it has none).
+    //  newMail = every header above `last`; anything older the client is missing is fetched with GetMailHeaders
+    uint32 lastID = (uint32)OptionalInt(last);
+    uint32 charID = call.client->GetCharacterID();
 
-    if (first.has_value() && second.has_value())
-    {
-        // referring to a mail id range
-        int firstId = first.value()->value(), secondId = second.value()->value();
-    }
-
-    PyDict* dummy = new PyDict;
-    dummy->SetItemString("oldMail", PyStatic.NewNone());
-    dummy->SetItemString("newMail", m_db.GetNewMail(call.client->GetCharacterID()));
-    dummy->SetItemString("mailStatus", m_db.GetMailStatus(call.client->GetCharacterID()));
-    return new PyObject("util.KeyVal", dummy);
-}
-
-PyResult MailMgrService::AssignLabels(PyCallArgs &call, PyList* messageIDs, PyInt* labelID)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    m_db.ApplyLabels(messageIds, labelID->value());
-
-    return nullptr;
-}
-
-PyResult MailMgrService::CreateLabel(PyCallArgs &call, PyWString* name, std::optional<PyInt*> color)
-{
-    uint32 ret;
-    if (m_db.CreateLabel(call.client->GetCharacterID(), name->content(), color.has_value() ? color.value()->value() : -1, ret))
-        return new PyInt(ret);
-    return nullptr;
-}
-
-PyResult MailMgrService::DeleteLabel(PyCallArgs &call, PyInt* labelID)
-{
-    m_db.DeleteLabel(call.client->GetCharacterID(), labelID->value());
-
-    return nullptr;
-}
-
-PyResult MailMgrService::DeleteMail(PyCallArgs &call, PyList* messageIDs)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    for (int i = 0; i < messageIds.size(); i++) {
-        int32 messageID = messageIds[i];
-        m_db.DeleteMail(messageID);
-    }
-
-    return nullptr;
-}
-
-PyResult MailMgrService::EditLabel(PyCallArgs &call, PyInt* labelID, PyWString* name, std::optional<PyInt*> color)
-{
-    m_db.EditLabel(call.client->GetCharacterID(), labelID->value(), name->content(), color.has_value() ? color.value()->value() : -1);
-    return nullptr;
-}
-
-PyResult MailMgrService::EmptyTrash(PyCallArgs &call)
-{
-    // @TODO: TEST
-    m_db.EmptyTrash(call.client->GetCharacterID());
-    return nullptr;
-}
-
-PyResult MailMgrService::GetBody(PyCallArgs &call, PyInt* messageID, PyBool* isUnread)
-{
-    if (!isUnread->value()) {
-        m_db.SetMailUnread(messageID->value());
-    } else {
-        m_db.SetMailRead(messageID->value());
-    }
-
-    return m_db.GetMailBody(messageID->value());
-}
-
-PyResult MailMgrService::GetLabels(PyCallArgs &call)
-{
-    return m_db.GetLabels(call.client->GetCharacterID());
+    PyDict* dict = new PyDict();
+        dict->SetItemString("newMail", MailDB::GetMailHeaders(charID, lastID));
+        dict->SetItemString("oldMail", PyStatic.NewNone());
+        dict->SetItemString("mailStatus", MailDB::GetMailStatus(charID));
+    return new PyObject("util.KeyVal", dict);
 }
 
 PyResult MailMgrService::GetMailHeaders(PyCallArgs &call, PyList* messageIDs)
 {
-    // @TODO: Stub
-    // contains message ids
-    return nullptr;
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    return MailDB::GetMailHeadersByIDs(call.client->GetCharacterID(), ids);
 }
 
-PyResult MailMgrService::MarkAllAsRead(PyCallArgs &call)
+PyResult MailMgrService::GetBody(PyCallArgs &call, PyInt* messageID, PyRep* isUnread)
 {
-    m_db.MarkAllAsRead(call.client->GetCharacterID());
+    uint32 charID = call.client->GetCharacterID();
+    PyString* body = MailDB::GetMailBody(charID, messageID->value());
+    if (body == nullptr)
+        return PyStatic.NewNone();
 
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAllAsUnread(PyCallArgs &call)
-{
-    m_db.MarkAllAsUnread(call.client->GetCharacterID());
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsRead(PyCallArgs &call, PyList* messageIDs)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
+    if (isUnread->IsBool() ? isUnread->AsBool()->value() : (OptionalInt(isUnread) != 0)) {
+        std::vector<int32> ids(1, messageID->value());
+        MailDB::SetStatusBits(charID, ids, mailStatusMaskRead, true);
     }
-
-    m_db.SetMailsRead(messageIds);
-
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsReadByLabel(PyCallArgs &call, PyInt* labelID)
-{
-    m_db.MarkAllAsReadByLabel(call.client->GetCharacterID(), labelID->value());
-
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsReadByList(PyCallArgs &call, PyInt* listID)
-{
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsUnread(PyCallArgs &call, PyList* messageIDs)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    m_db.SetMailsUnread(messageIds);
-
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsUnreadByLabel(PyCallArgs &call, PyInt* labelID)
-{
-    m_db.MarkAllAsUnreadByLabel(call.client->GetCharacterID(), labelID->value());
-
-    return nullptr;
-}
-
-PyResult MailMgrService::MarkAsUnreadByList(PyCallArgs &call, PyList* messageIDs)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    return nullptr;
-}
-
-PyResult MailMgrService::MoveAllFromTrash(PyCallArgs &call)
-{
-    m_db.MoveAllFromTrash(call.client->GetCharacterID());
-    return nullptr;
-}
-
-PyResult MailMgrService::MoveAllToTrash(PyCallArgs &call)
-{
-    m_db.MoveAllToTrash(call.client->GetCharacterID());
-    return nullptr;
-}
-
-PyResult MailMgrService::MoveFromTrash(PyCallArgs &call, PyList* messageIDs)
-{
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    m_db.RemoveStatusMasks(messageIds, mailStatusMaskTrashed);
-
-    return nullptr;
+    return body;
 }
 
 PyResult MailMgrService::MoveToTrash(PyCallArgs &call, PyList* messageIDs)
 {
-    std::vector<int32> messageIds;
-
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
-
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
-    }
-
-    m_db.ApplyStatusMasks(messageIds, mailStatusMaskTrashed);
-
-    return nullptr;
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetStatusBits(call.client->GetCharacterID(), ids, mailStatusMaskTrashed, true);
+    return PyStatic.NewNone();
 }
 
-PyResult MailMgrService::MoveToTrashByLabel(PyCallArgs &call, PyInt* labelID)
+PyResult MailMgrService::MoveFromTrash(PyCallArgs &call, PyList* messageIDs)
 {
-    return nullptr;
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetStatusBits(call.client->GetCharacterID(), ids, mailStatusMaskTrashed, false);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MarkAsUnread(PyCallArgs &call, PyList* messageIDs)
+{
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetStatusBits(call.client->GetCharacterID(), ids, mailStatusMaskRead, false);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MarkAsRead(PyCallArgs &call, PyList* messageIDs)
+{
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetStatusBits(call.client->GetCharacterID(), ids, mailStatusMaskRead, true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MoveAllToTrash(PyCallArgs &call)
+{
+    MailDB::SetStatusBitsAll(call.client->GetCharacterID(), mailStatusMaskTrashed, true, false);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MoveAllFromTrash(PyCallArgs &call)
+{
+    MailDB::SetStatusBitsAll(call.client->GetCharacterID(), mailStatusMaskTrashed, false, false);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MoveToTrashByLabel(PyCallArgs &call, PyRep* labelID)
+{
+    MailDB::SetStatusBitsByLabel(call.client->GetCharacterID(), OptionalInt(labelID), mailStatusMaskTrashed, true, false);
+    return PyStatic.NewNone();
 }
 
 PyResult MailMgrService::MoveToTrashByList(PyCallArgs &call, PyInt* listID)
 {
-    return nullptr;
+    MailDB::SetStatusBitsByList(call.client->GetCharacterID(), listID->value(), mailStatusMaskTrashed, true, false);
+    return PyStatic.NewNone();
 }
 
-PyResult MailMgrService::RemoveLabels(PyCallArgs &call, PyList* messageIDs, PyInt* labelID)
+PyResult MailMgrService::MarkAllAsRead(PyCallArgs &call)
 {
-    std::vector<int32> messageIds;
+    // the client only marks mail outside the trash
+    MailDB::SetStatusBitsAll(call.client->GetCharacterID(), mailStatusMaskRead, true, true);
+    return PyStatic.NewNone();
+}
 
-    PyList::const_iterator list_2_cur = messageIDs->begin();
-    for (size_t list_2_index(0); list_2_cur != messageIDs->end(); ++list_2_cur, ++list_2_index) {
-        if (!(*list_2_cur)->IsInt()) {
-            _log(XMLP__DECODE_ERROR, "Decode Call_AssignLabels failed: Element %u in list list_2 is not an integer: %s", list_2_index, (*list_2_cur)->TypeString());
-            return nullptr;
-        }
+PyResult MailMgrService::MarkAllAsUnread(PyCallArgs &call)
+{
+    MailDB::SetStatusBitsAll(call.client->GetCharacterID(), mailStatusMaskRead, false, true);
+    return PyStatic.NewNone();
+}
 
-        const PyInt* t = (*list_2_cur)->AsInt();
-        messageIds.push_back(t->value());
+PyResult MailMgrService::MarkAsReadByLabel(PyCallArgs &call, PyRep* labelID)
+{
+    MailDB::SetStatusBitsByLabel(call.client->GetCharacterID(), OptionalInt(labelID), mailStatusMaskRead, true, true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MarkAsUnreadByLabel(PyCallArgs &call, PyRep* labelID)
+{
+    MailDB::SetStatusBitsByLabel(call.client->GetCharacterID(), OptionalInt(labelID), mailStatusMaskRead, false, true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MarkAsReadByList(PyCallArgs &call, PyInt* listID)
+{
+    MailDB::SetStatusBitsByList(call.client->GetCharacterID(), listID->value(), mailStatusMaskRead, true, true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::MarkAsUnreadByList(PyCallArgs &call, PyInt* listID)
+{
+    MailDB::SetStatusBitsByList(call.client->GetCharacterID(), listID->value(), mailStatusMaskRead, false, true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::EmptyTrash(PyCallArgs &call)
+{
+    MailDB::EmptyTrash(call.client->GetCharacterID());
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::DeleteMail(PyCallArgs &call, PyList* messageIDs)
+{
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::DeleteMail(call.client->GetCharacterID(), ids);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::GetLabels(PyCallArgs &call)
+{
+    return MailDB::GetLabels(call.client->GetCharacterID());
+}
+
+PyResult MailMgrService::CreateLabel(PyCallArgs &call, PyRep* name, std::optional<PyRep*> color)
+{
+    uint32 charID = call.client->GetCharacterID();
+    std::string labelName = PyRep::StringContent(name);
+    if (labelName.empty())
+        throw UserError("MailLabelMustProvideName");
+    MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+    if (MailDB::LabelNameExists(charID, labelName))
+        throw UserError("MailLabelNameExists");
+    if (MailDB::GetLabelCount(charID) >= mailMaxNumLabels)
+        throw CustomError("You cannot have more than %u labels.", (uint32)mailMaxNumLabels);
+
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    uint32 labelID = MailDB::CreateLabel(charID, labelName, hasColor ? &colorVal : nullptr);
+    if (labelID == 0)
+        throw CustomError("You cannot have more than %u labels.", (uint32)mailMaxNumLabels);
+    return new PyInt(labelID);
+}
+
+PyResult MailMgrService::EditLabel(PyCallArgs &call, PyRep* labelID, PyRep* name, PyRep* color)
+{
+    // None = unchanged.  the system labels (inbox, sent, corp, alliance) can only be renamed client side
+    uint32 id = (uint32)OptionalInt(labelID);
+    if ((id == 0) or ((id & mailLabelsSystem) != 0))
+        return PyStatic.NewNone();
+
+    uint32 charID = call.client->GetCharacterID();
+    std::string labelName;
+    bool hasName = !name->IsNone();
+    if (hasName) {
+        labelName = PyRep::StringContent(name);
+        if (labelName.empty())
+            throw UserError("MailLabelMustProvideName");
+        MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+        if (MailDB::LabelNameExists(charID, labelName, id))
+            throw UserError("MailLabelNameExists");
     }
+    int32 colorVal(0);
+    bool hasColor = !color->IsNone();
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color);
 
-    m_db.RemoveLabels(messageIds, labelID->value());
+    MailDB::EditLabel(charID, id, hasName ? &labelName : nullptr, hasColor ? &colorVal : nullptr);
+    return PyStatic.NewNone();
+}
 
-    return nullptr;
+PyResult MailMgrService::DeleteLabel(PyCallArgs &call, PyRep* labelID)
+{
+    uint32 id = (uint32)OptionalInt(labelID);
+    if ((id == 0) or ((id & mailLabelsSystem) != 0))
+        return PyStatic.NewNone();
+    MailDB::DeleteLabel(call.client->GetCharacterID(), id);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::AssignLabels(PyCallArgs &call, PyList* messageIDs, PyRep* labelID)
+{
+    // labelID may be a sum of label bits (new mail with several labels)
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetLabelBits(call.client->GetCharacterID(), ids, OptionalInt(labelID), true);
+    return PyStatic.NewNone();
+}
+
+PyResult MailMgrService::RemoveLabels(PyCallArgs &call, PyList* messageIDs, PyRep* labelID)
+{
+    std::vector<int32> ids;
+    GetIDs(messageIDs, ids);
+    MailDB::SetLabelBits(call.client->GetCharacterID(), ids, OptionalInt(labelID), false);
+    return PyStatic.NewNone();
 }

@@ -31,6 +31,7 @@
 #include "ConsoleCommands.h"
 #include "admin/CommandDispatcher.h"
 #include "admin/SlashService.h"
+#include "mail/MailMgr.h"
 #include "chat/LSCService.h"
 #include "fleet/FleetService.h"
 #include "services/ServiceManager.h"
@@ -1464,39 +1465,9 @@ PyResult LSCService::Page(PyCallArgs &call, PyList* recipientIDs, PyRep* subject
 
 //stuck here to be close to related functionality
 void LSCService::SendMail(uint32 sender, const std::vector<int32> &recipients, const std::string &subject, const std::string &content) {
-    NotifyOnMessage notify;
-    std::set<uint32> successful_recipients;
-
-    notify.subject = subject;
-    notify.sentTime = Win32TimeNow();
-    notify.senderID = sender;
-
-    // there's attachmentID and messageID... does this means a single message can contain multiple attachments?
-    // eg. text/plain and text/html? we should be watching for this at reading mails...
-    // created should be creation time. But Win32TimeNow returns int64, and is stored as bigint(20),
-    // so change in the db is needed
-    std::vector<int32>::const_iterator cur, end;
-    cur = recipients.begin();
-    end = recipients.end();
-
-    for(; cur != end; cur++) {
-        uint32 messageID = m_db.StoreMail(sender, *cur, subject.c_str(), content.c_str(), notify.sentTime);
-        if (messageID == 0) {
-            _log(SERVICE__ERROR, "Failed to store message from %u for recipient %u", sender, *cur);
-            continue;
-        }
-        //TODO: supposed to have a different messageID in each notify I suspect..
-        notify.messageID = messageID;
-
-        _log(SERVICE__MESSAGE, "Delivered message from %u to recipient %u", sender, *cur);
-        //record this person in the 'delivered to' list:
-        notify.recipients.push_back(*cur);
-        successful_recipients.insert(*cur);
-    }
-
-    //now, send a notification to each successful recipient
-    PyTuple *answer = notify.Encode();
-    sEntityList.Multicast(successful_recipients, "OnMessage", "*multicastID", &answer, false);
+    // server generated mail goes to the eve mail window (mailMgr).  the pre-Apocrypha eveMail/OnMessage
+    //  path is not read by the Crucible client
+    MailMgr::SendMail(sender, recipients, 0, 0, subject, content);
 }
 
 

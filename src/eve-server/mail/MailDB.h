@@ -35,35 +35,56 @@ class CRowSet;
 class MailDB : public ServiceDB
 {
 public:
-    PyRep* GetLabels(int characterID) const;
+    /* eve mail.  one mailMessage row per mail, one mailStatus row (statusMask, labelMask) per character that has it.
+     * every per-character query is scoped to that character.  labelIDs are the client's label bits (1 << bit)
+     */
+    // status rows (messageID, statusMask, labelMask) of all the char's mail
+    static PyRep* GetMailStatus(uint32 charID);
+    // header rows (messageID, senderID, toCharacterIDs, toListID, toCorpOrAllianceID, title, sentDate) the char has a status row for
+    //  minID: only messageID > minID (0 = all)
+    static PyRep* GetMailHeaders(uint32 charID, uint32 minID);
+    static PyRep* GetMailHeadersByIDs(uint32 charID, const std::vector<int32>& ids);
+    // compressed body (PyString), only when the char has the mail.  nullptr otherwise
+    static PyString* GetMailBody(uint32 charID, uint32 messageID);
 
-    PyString* GetMailBody(int id) const;
+    // set (or clear) statusMask bits
+    static void SetStatusBits(uint32 charID, const std::vector<int32>& ids, uint32 mask, bool set);
+    static void SetStatusBitsAll(uint32 charID, uint32 mask, bool set, bool skipTrashed);
+    // mails having all bits of labelMask
+    static void SetStatusBitsByLabel(uint32 charID, int64 labelMask, uint32 mask, bool set, bool skipTrashed);
+    static void SetStatusBitsByList(uint32 charID, uint32 listID, uint32 mask, bool set, bool skipTrashed);
+    // set (or clear) labelMask bits
+    static void SetLabelBits(uint32 charID, const std::vector<int32>& ids, int64 labelMask, bool set);
 
-    void SetMailUnread(int id);
-    void SetMailRead(int id);
-    void SetMailsUnread(std::vector<int32> ids);
-    void SetMailsRead(std::vector<int32> ids);
-    void MarkAllAsRead(uint32 characterID);
-    void MarkAllAsUnread(uint32 characterID);
+    // removes the char's status rows (and messages nobody has any more)
+    static void DeleteMail(uint32 charID, const std::vector<int32>& ids);
+    static void EmptyTrash(uint32 charID);
+    static void PurgeOrphanMessages();
 
-    bool CreateLabel(int characterID, const std::string& name, int32 color, uint32& newID) const;
-    void DeleteLabel(int characterID, int labelID) const;
-    void EditLabel(int characterID, int labelID, const std::string& name, int32 color) const;
-    void ApplyLabel(int32 messageID, int labelID);
-    void ApplyLabels(std::vector<int32> messageIDs, int labelID);
+    // delivery.  returns messageID, 0 on failure.  0 list/corp ids are stored as NULL
+    static uint32 InsertMessage(uint32 senderID, const std::string& toCharacterIDs, uint32 toListID, uint32 toCorpOrAllianceID,
+                                const std::string& title, const std::string& compressedBody, int64 sentDate);
+    struct StatusRow {
+        uint32 charID;
+        uint32 statusMask;
+        uint32 labelMask;
+    };
+    static bool InsertStatusRows(uint32 messageID, const std::vector<StatusRow>& rows);
+    // the ids of `ids` that are existing characters
+    static void GetExistingCharacters(const std::vector<int32>& ids, std::vector<int32>& into);
+    static void GetListMemberIDs(uint32 listID, std::vector<uint32>& into);
+    static uint32 GetUnreadCount(uint32 charID);
 
-    void MarkAllAsReadByLabel(uint32 characterID, int labelID);
-    void MarkAllAsUnreadByLabel(uint32 characterID, int labelID);
-    void RemoveLabels(std::vector<int32> messageIDs, int labelID);
-    
-    void DeleteMail(int32 messageID);
-
-    void EmptyTrash(uint32 characterID);
-    void MoveAllFromTrash(uint32 characterID);
-    void MoveAllToTrash(uint32 characterID);
-    void MoveFromTrash(int32 messageID);
-    void MoveToTrash(int32 messageID);
-    void MoveToTrashByLabel(int32 characterID, int32 labelID); 
+    // labels (mailLabel; bit 4..30, the system labels 1/2/4/8 are client side)
+    static PyRep* GetLabels(uint32 charID);
+    static uint32 GetLabelCount(uint32 charID);
+    static bool LabelNameExists(uint32 charID, const std::string& name, uint32 skipLabelID = 0);
+    // returns labelID (1 << bit), 0 when no bit is free
+    static uint32 CreateLabel(uint32 charID, const std::string& name, const int32* color);
+    // null = unchanged
+    static void EditLabel(uint32 charID, uint32 labelID, const std::string* name, const int32* color);
+    // also clears the label from the char's mail
+    static void DeleteLabel(uint32 charID, uint32 labelID);
 
     // Mailing list
 
@@ -96,22 +117,6 @@ public:
     
     
 
-    // Helpers
-
-    void ApplyStatusMasks(std::vector<int32> messageIDs, int mask);
-    void RemoveStatusMasks(std::vector<int32> messageIDs, int mask);
-    void ApplyStatusMask(int32 messageID, int mask);
-    void RemoveStatusMask(int32 messageID, int mask);
-
-    void ApplyLabelMask(int32 messageID, int mask);
-    void ApplyLabelMasks(std::vector<int32> messageIDs, int mask);
-    void RemoveLabelMask(int32 messageID, int mask);
-    void RemoveLabelMasks(std::vector<int32> messageIDs, int mask);
-
-    int SendMail(int sender, std::vector<int>& toCharacterIDs, int toListID, int toCorpOrAllianceID, const std::string& title, const std::string& body, int isReplyTo, int isForwardedFrom);
-    PyRep* GetNewMail(int charId);
-    PyRep* GetMailStatus(int charId);
-
     // Notifications (chrNotifications)
     // returns notificationID, 0 on failure
     static uint32 StoreNotification(uint32 receiverID, uint16 typeID, uint32 senderID, int64 created, const std::string& yaml);
@@ -126,7 +131,7 @@ public:
     static void GetAllianceMembersWithRoles(uint32 allianceID, int64 roleMask, std::vector<uint32>& into);
 
 protected:
-    static int BitFromLabelID(int id);
+    static int BitFromLabelID(uint32 id);
 };
 
 #endif

@@ -23,571 +23,408 @@
     Author:        caytchen, groove
 */
 
-// @TODO(groove) check characterIDs while doing moves to prevent
-// client trickery
 #include "eve-server.h"
 
 #include "mail/MailDB.h"
 #include "EVE_Mail.h"
 
 
-PyRep* MailDB::GetMailStatus(int charId)
+namespace {
+// ",1,2,3" -> used inside "IN (0%s)".  integers only
+std::string IDList(const std::vector<int32>& ids, size_t first = 0, size_t count = std::string::npos)
+{
+    std::ostringstream str;
+    for (size_t i = first; (i < ids.size()) and (i - first < count); ++i)
+        str << "," << ids[i];
+    return str.str();
+}
+
+// DBcore::RunQuery(DBQueryResult&) formats into a 4k buffer; keep id lists well below it
+const size_t maxIDsPerQuery = 300;
+
+const char* SetBits(bool set)
+{
+    return (set ? "|" : "& ~");
+}
+}
+
+PyRep* MailDB::GetMailStatus(uint32 charID)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-                            " SELECT messageID, statusMask, labelMask "
-                            " FROM mailStatus"
-                            " WHERE characterID = %u" , charId)) {
-        codelog(DATABASE__ERROR, " Failed to get mail status" );
-        return nullptr;
-    }
+            "SELECT messageID, statusMask, labelMask FROM mailStatus WHERE characterID = %u", charID))
+        codelog(DATABASE__ERROR, "Failed to get mail status for %u: %s", charID, res.error.c_str());
     return DBResultToCRowset(res);
 }
 
-PyRep* MailDB::GetNewMail(int charId)
+PyRep* MailDB::GetMailHeaders(uint32 charID, uint32 minID)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-                            " SELECT m.messageID, m.senderID, m.toCharacterIDs, m.toListID, "
-                            "   m.toCorpOrAllianceID, m.title, m.sentDate FROM mailStatus AS s"
-                            "  LEFT JOIN mailMessage AS m USING (messageID) "
-                            "  WHERE s.characterID = %u" , charId))
-        return nullptr;
+            "SELECT m.messageID, m.senderID, m.toCharacterIDs, m.toListID, m.toCorpOrAllianceID, m.title, m.sentDate"
+            " FROM mailStatus AS s"
+            " JOIN mailMessage AS m USING (messageID)"
+            " WHERE s.characterID = %u AND m.messageID > %u", charID, minID))
+        codelog(DATABASE__ERROR, "Failed to get mail headers for %u: %s", charID, res.error.c_str());
     return DBResultToCRowset(res);
 }
 
-int MailDB::SendMail(int sender, std::vector<int>& toCharacterIDs, int toListID, int toCorpOrAllianceID, const std::string& title, const std::string& body, int isReplyTo, int isForwardedFrom)
+PyRep* MailDB::GetMailHeadersByIDs(uint32 charID, const std::vector<int32>& ids)
 {
-    // build a string with ',' seperated char ids
-    std::string toStr;
-    for (size_t i = 0; i < toCharacterIDs.size(); i++)
-    {
-        toStr += std::to_string(toCharacterIDs[i]);
-        // only add ',' when this isn't the last ID
-        if (i != (toCharacterIDs.size() - 1))
-            toStr += " ," ;
-    }
-
-    // sanitize these ids
-    if (toListID == -1)
-        toListID = 0;
-    if (toCorpOrAllianceID == -1)
-        toCorpOrAllianceID = 0;
-
-    // compress the body
-    Buffer bodyCompressed;
-    Buffer bodyInput(body.begin(), body.end());
-    DeflateData(bodyInput, bodyCompressed);
-
-    // ugh - buffer doesn't give us the actual buffer.. what the?
-    std::string bodyCompressedStr(bodyCompressed.begin<char>(), bodyCompressed.end<char>());
-
-    // escape it to not break the query with special characters
-    std::string bodyEscaped;
-    sDatabase.DoEscapeString(bodyEscaped, bodyCompressedStr);
-
-    // default label is 1 = Inbox
-    const int defaultLabel = 1;
-
-    // TODO(groove): Maybe do checks to see if we're allowed to send mails to
-    // whereever it's going
-    DBerror err;
-    uint32 messageID;
-
-    if (!sDatabase.RunQueryLID(err, messageID,
-                               " INSERT INTO mailMessage "
-                               " (senderID, toCharacterIDs, toListID, toCorpOrAllianceID, "
-                               " title, body, sentDate) "
-                               " VALUES (%u, '%s', %d, %d, '%s', '%s', %"  PRIu64 " )" ,
-                               sender, toStr.c_str(), toListID, toCorpOrAllianceID, title.c_str(),
-                               bodyEscaped.c_str(), Win32TimeNow()))
-    {
-        codelog(DATABASE__ERROR, " Failed to insert mailMessage" );
-        // TODO: Why returning false always?
-    }
-
-    if (toCharacterIDs.size() > 0) {
-        for (int i = 0; i < toCharacterIDs.size(); i++) {
-            uint32 id = toCharacterIDs[i];
-            if (!sDatabase.RunQuery(err,
-                                    " INSERT INTO mailStatus "
-                                    " (messageID, characterID, statusMask, labelMask)"
-                                    " VALUES (%u, %u, %u, %u)" , messageID, id, 0, mailLabelInbox))
-            {
-                codelog(DATABASE__ERROR, " Failed to insert mailStatus for character ids" );
-                return 0;
-            }
-        }
-    }
-
-    if (toListID > 0) {
+    PyObjectEx* rowset(nullptr);
+    size_t i(0);
+    do {
         DBQueryResult res;
         if (!sDatabase.RunQuery(res,
-                                " SELECT characterID FROM mailListUsers "
-                                " WHERE listID = %u" , toListID))
-        {
-            codelog(DATABASE__ERROR, " Failed to get mailing list members" );
-            return 0;
-        }
-        DBResultRow row;
-        while (res.GetRow(row))
-        {
-            uint32 id = row.GetInt(0);
-            if (!sDatabase.RunQuery(err,
-                                    " INSERT INTO mailStatus "
-                                    " (messageID, characterID, statusMask, labelMask)"
-                                    " VALUES (%u, %u, %u, %u)" , messageID, id, 0, mailLabelInbox))
-            {
-                codelog(DATABASE__ERROR, " Failed to insert mailStatus for character ids" );
-                return 0;
-            }
-        }
-    }
-    // TODO(groove) corp/alliance mails
+                "SELECT m.messageID, m.senderID, m.toCharacterIDs, m.toListID, m.toCorpOrAllianceID, m.title, m.sentDate"
+                " FROM mailStatus AS s"
+                " JOIN mailMessage AS m USING (messageID)"
+                " WHERE s.characterID = %u AND m.messageID IN (0%s)",
+                charID, IDList(ids, i, maxIDsPerQuery).c_str()))
+            codelog(DATABASE__ERROR, "Failed to get mail headers for %u: %s", charID, res.error.c_str());
 
-    return messageID;
+        if (rowset == nullptr) {
+            rowset = DBResultToCRowset(res);
+        } else {
+            DBResultRow row;
+            while (res.GetRow(row))
+                FillPackedRow(row, ((CRowSet*)rowset)->NewRow());
+        }
+        i += maxIDsPerQuery;
+    } while (i < ids.size());
+
+    return rowset;
 }
 
-PyString* MailDB::GetMailBody(int id) const
+PyString* MailDB::GetMailBody(uint32 charID, uint32 messageID)
 {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res, " SELECT body FROM mailMessage WHERE messageID = %u" , id))
+    if (!sDatabase.RunQuery(res,
+            "SELECT m.body FROM mailMessage AS m"
+            " JOIN mailStatus AS s USING (messageID)"
+            " WHERE s.characterID = %u AND m.messageID = %u", charID, messageID))
+    {
+        codelog(DATABASE__ERROR, "Failed to get mail body %u for %u: %s", messageID, charID, res.error.c_str());
         return nullptr;
-    if (res.GetRowCount() <= 0)
-        return nullptr;
+    }
 
     DBResultRow row;
-    if (!res.GetRow(row) || row.IsNull(0))
+    if (!res.GetRow(row) or row.IsNull(0))
         return nullptr;
 
     return new PyString(row.GetText(0), row.ColumnLength(0));
 }
 
-void MailDB::SetMailUnread(int id)
-{
-    RemoveStatusMask(id, mailStatusMaskRead);
-}
-
-void MailDB::SetMailRead(int id)
-{
-    ApplyStatusMask(id, mailStatusMaskRead);
-}
-
-void MailDB::SetMailsUnread(std::vector<int32> ids)
-{
-    RemoveStatusMasks(ids, mailStatusMaskRead);
-}
-
-void MailDB::SetMailsRead(std::vector<int32> ids)
-{
-    ApplyStatusMasks(ids, mailStatusMaskRead);
-}
-
-void MailDB::MarkAllAsUnread(uint32 characterID)
+void MailDB::SetStatusBits(uint32 charID, const std::vector<int32>& ids, uint32 mask, bool set)
 {
     DBerror err;
-
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " SET statusMask = statusMask & ~%u "
-                            " WHERE toCharacterIDs LIKE '%%%u%%'" , mailStatusMaskRead, characterID)) {
-        codelog(DATABASE__ERROR, " Failed to mark all as read" );
-        return;
-    }
+    for (size_t i = 0; i < ids.size(); i += maxIDsPerQuery)
+        if (!sDatabase.RunQuery(err,
+                "UPDATE mailStatus SET statusMask = statusMask %s %u"
+                " WHERE characterID = %u AND messageID IN (0%s)",
+                SetBits(set), mask, charID, IDList(ids, i, maxIDsPerQuery).c_str()))
+            codelog(DATABASE__ERROR, "Failed to update mail status for %u: %s", charID, err.c_str());
 }
 
-
-void MailDB::MarkAllAsRead(uint32 characterID)
+void MailDB::SetStatusBitsAll(uint32 charID, uint32 mask, bool set, bool skipTrashed)
 {
     DBerror err;
-
     if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " SET statusMask = statusMask | %u "
-                            " WHERE toCharacterIDs LIKE '%%%u%%'" , mailStatusMaskRead, characterID)) {
-        codelog(DATABASE__ERROR, " Failed to mark all as read" );
-        return;
-    }
+            "UPDATE mailStatus SET statusMask = statusMask %s %u"
+            " WHERE characterID = %u%s",
+            SetBits(set), mask, charID, (skipTrashed ? " AND (statusMask & 8) = 0" : "")))
+        codelog(DATABASE__ERROR, "Failed to update mail status for %u: %s", charID, err.c_str());
 }
 
-void MailDB::MarkAllAsUnreadByLabel(uint32 characterID, int labelID)
+void MailDB::SetStatusBitsByLabel(uint32 charID, int64 labelMask, uint32 mask, bool set, bool skipTrashed)
 {
-    int bit = BitFromLabelID(labelID);
     DBerror err;
-
     if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage SET "
-                            " statusMask = statusMask & ~%u "
-                            " WHERE toCharacterIDs LIKE '%%%u%%' "
-                            " AND (labelMask & (1 << %u)) > 0" , characterID, bit))
+            "UPDATE mailStatus SET statusMask = statusMask %s %u"
+            " WHERE characterID = %u AND (labelMask & %lli) = %lli%s",
+            SetBits(set), mask, charID, labelMask, labelMask, (skipTrashed ? " AND (statusMask & 8) = 0" : "")))
+        codelog(DATABASE__ERROR, "Failed to update mail status by label for %u: %s", charID, err.c_str());
+}
+
+void MailDB::SetStatusBitsByList(uint32 charID, uint32 listID, uint32 mask, bool set, bool skipTrashed)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailStatus AS s"
+            " JOIN mailMessage AS m USING (messageID)"
+            " SET s.statusMask = s.statusMask %s %u"
+            " WHERE s.characterID = %u AND m.toListID = %u%s",
+            SetBits(set), mask, charID, listID, (skipTrashed ? " AND (s.statusMask & 8) = 0" : "")))
+        codelog(DATABASE__ERROR, "Failed to update mail status by list for %u: %s", charID, err.c_str());
+}
+
+void MailDB::SetLabelBits(uint32 charID, const std::vector<int32>& ids, int64 labelMask, bool set)
+{
+    DBerror err;
+    for (size_t i = 0; i < ids.size(); i += maxIDsPerQuery)
+        if (!sDatabase.RunQuery(err,
+                "UPDATE mailStatus SET labelMask = labelMask %s %lli"
+                " WHERE characterID = %u AND messageID IN (0%s)",
+                SetBits(set), labelMask, charID, IDList(ids, i, maxIDsPerQuery).c_str()))
+            codelog(DATABASE__ERROR, "Failed to update mail labels for %u: %s", charID, err.c_str());
+}
+
+void MailDB::DeleteMail(uint32 charID, const std::vector<int32>& ids)
+{
+    DBerror err;
+    for (size_t i = 0; i < ids.size(); i += maxIDsPerQuery)
+        if (!sDatabase.RunQuery(err,
+                "DELETE FROM mailStatus WHERE characterID = %u AND messageID IN (0%s)",
+                charID, IDList(ids, i, maxIDsPerQuery).c_str()))
+            codelog(DATABASE__ERROR, "Failed to delete mail for %u: %s", charID, err.c_str());
+    PurgeOrphanMessages();
+}
+
+void MailDB::EmptyTrash(uint32 charID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM mailStatus WHERE characterID = %u AND (statusMask & %u) <> 0",
+            charID, mailStatusMaskTrashed))
+        codelog(DATABASE__ERROR, "Failed to empty trash for %u: %s", charID, err.c_str());
+    PurgeOrphanMessages();
+}
+
+void MailDB::PurgeOrphanMessages()
+{
+    // a message is kept as long as anybody still has it
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE m FROM mailMessage AS m"
+            " LEFT JOIN mailStatus AS s USING (messageID)"
+            " WHERE s.messageID IS NULL"))
+        codelog(DATABASE__ERROR, "Failed to purge mail messages: %s", err.c_str());
+}
+
+uint32 MailDB::InsertMessage(uint32 senderID, const std::string& toCharacterIDs, uint32 toListID, uint32 toCorpOrAllianceID,
+                             const std::string& title, const std::string& compressedBody, int64 sentDate)
+{
+    std::string titleEsc, bodyEsc;
+    sDatabase.DoEscapeString(titleEsc, title);
+    sDatabase.DoEscapeString(bodyEsc, compressedBody);
+
+    std::string listStr("NULL"), corpStr("NULL");
+    if (toListID > 0)
+        listStr = std::to_string(toListID);
+    if (toCorpOrAllianceID > 0)
+        corpStr = std::to_string(toCorpOrAllianceID);
+
+    DBerror err;
+    uint32 messageID(0);
+    if (!sDatabase.RunQueryLID(err, messageID,
+            "INSERT INTO mailMessage (senderID, toCharacterIDs, toListID, toCorpOrAllianceID, title, body, sentDate)"
+            " VALUES (%u, '%s', %s, %s, '%s', '%s', %lli)",
+            senderID, toCharacterIDs.c_str(), listStr.c_str(), corpStr.c_str(), titleEsc.c_str(), bodyEsc.c_str(), sentDate))
     {
-        codelog(DATABASE__ERROR, " Failed to mark all as read by label" );
-        return;
+        codelog(DATABASE__ERROR, "Failed to insert mail message from %u: %s", senderID, err.c_str());
+        return 0;
     }
+    return messageID;
 }
 
-
-void MailDB::MarkAllAsReadByLabel(uint32 characterID, int labelID)
-{
-    int bit = BitFromLabelID(labelID);
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " SET statusMask = statusMask | %u "
-                            " WHERE toCharacterIDs LIKE '%%%u%%' "
-                            " AND (labelMask & (1 << %u)) > 0" , characterID, bit))
-    {
-        codelog(DATABASE__ERROR, " Failed to mark all as read by label" );
-        return;
-    }
-}
-
-void MailDB::RemoveLabels(std::vector<int32> messageIDs, int labelID)
+bool MailDB::InsertStatusRows(uint32 messageID, const std::vector<StatusRow>& rows)
 {
     DBerror err;
-
-    if (messageIDs.size() == 0) {
-        return;
+    for (size_t i = 0; i < rows.size(); i += 500) {
+        std::ostringstream query;
+        query << "INSERT IGNORE INTO mailStatus (messageID, characterID, statusMask, labelMask) VALUES ";
+        for (size_t j = i; (j < rows.size()) and (j < i + 500); ++j) {
+            if (j > i)
+                query << ",";
+            query << "(" << messageID << "," << rows[j].charID << "," << rows[j].statusMask << "," << rows[j].labelMask << ")";
+        }
+        if (!sDatabase.RunQuery(err, "%s", query.str().c_str())) {
+            codelog(DATABASE__ERROR, "Failed to insert mail status rows for message %u: %s", messageID, err.c_str());
+            return false;
+        }
     }
-
-    int bit = BitFromLabelID(labelID);
-    std::ostringstream query;
-    query << " UPDATE mailMessage SET labelMask = labelMask & ~(1 << "  << bit << " ) " ;
-
-    query << " WHERE (labelMask & (1 << "  << bit << " )) > 0 AND (" ;
-    query << " messageID = "  << messageIDs[0];
-
-    for (int i = 1; i < messageIDs.size(); i++) {
-        query << "  OR messageID = "  << messageIDs[i];
-    }
-
-    query << " )" ;
-    _log(DATABASE__ERROR, query.str().c_str());
-
-
-    if (!sDatabase.RunQuery(err, query.str().c_str()))
-    {
-        codelog(DATABASE__ERROR, " Failed to delete labels" );
-        return;
-    }
+    return true;
 }
 
-void MailDB::ApplyLabels(std::vector<int32> messageIDs, int labelID)
+void MailDB::GetExistingCharacters(const std::vector<int32>& ids, std::vector<int32>& into)
 {
-    int bit = BitFromLabelID(labelID);
-    ApplyLabelMasks(messageIDs, (1 << bit));
+    for (size_t i = 0; i < ids.size(); i += maxIDsPerQuery) {
+        DBQueryResult res;
+        if (!sDatabase.RunQuery(res,
+                "SELECT characterID FROM chrCharacters WHERE characterID IN (0%s)",
+                IDList(ids, i, maxIDsPerQuery).c_str()))
+        {
+            codelog(DATABASE__ERROR, "Failed to look up characters: %s", res.error.c_str());
+            continue;
+        }
+        DBResultRow row;
+        while (res.GetRow(row))
+            into.push_back(row.GetInt(0));
+    }
 }
 
-PyRep* MailDB::GetLabels(int characterID) const
+void MailDB::GetListMemberIDs(uint32 listID, std::vector<uint32>& into)
 {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res, " SELECT bit, name, color FROM mailLabel WHERE ownerID = %u" , characterID))
-        return nullptr;
-
-    PyDict* ret = new PyDict();
-
+    if (!sDatabase.RunQuery(res, "SELECT characterID FROM mailListUsers WHERE listID = %u", listID)) {
+        codelog(DATABASE__ERROR, "Failed to get members of mailing list %u: %s", listID, res.error.c_str());
+        return;
+    }
     DBResultRow row;
     while (res.GetRow(row))
-    {
-        MailLabel label;
-        label.id = (int)pow((float)2, row.GetInt(0));
-        label.name = row.GetText(1);
-        label.color = row.GetInt(2);
+        into.push_back(row.GetUInt(0));
+}
 
-        ret->SetItem(new PyInt(label.id), label.Encode());
+uint32 MailDB::GetUnreadCount(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT COUNT(*) FROM mailStatus WHERE characterID = %u AND (statusMask & %u) = 0",
+            charID, mailStatusMaskRead | mailStatusMaskTrashed))
+    {
+        codelog(DATABASE__ERROR, "Failed to count unread mail for %u: %s", charID, res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+PyRep* MailDB::GetLabels(uint32 charID)
+{
+    // dict labelID -> KeyVal(labelID, name, color).  the client adds the system labels itself
+    PyDict* ret = new PyDict();
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT bit, name, color FROM mailLabel WHERE ownerID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Failed to get mail labels for %u: %s", charID, res.error.c_str());
+        return ret;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        uint32 bit = row.GetUInt(0);
+        if (bit > 30)
+            continue;
+        int32 labelID = (int32)(1u << bit);
+        PyDict* dict = new PyDict();
+            dict->SetItemString("labelID", new PyInt(labelID));
+            dict->SetItemString("name", new PyWString(row.GetText(1), row.ColumnLength(1)));
+            dict->SetItemString("color", row.IsNull(2) ? PyStatic.NewNone() : new PyInt(row.GetInt(2)));
+        ret->SetItem(new PyInt(labelID), new PyObject("util.KeyVal", dict));
     }
 
     return ret;
 }
 
-bool MailDB::CreateLabel(int characterID, const std::string& name, int32 color, uint32& newID) const
+uint32 MailDB::GetLabelCount(uint32 charID)
 {
-    // we need to get the next free bit index; can't avoid a SELECT
     DBQueryResult res;
-    sDatabase.RunQuery(res, " SELECT bit FROM mailLabel WHERE ownerID = %u ORDER BY bit DESC LIMIT 1" , characterID);
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM mailLabel WHERE ownerID = %u", charID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
 
-    // 6 is a guessed default; there are some hardcoded labels that we don't have the details on yet
-    int bit = 6;
+bool MailDB::LabelNameExists(uint32 charID, const std::string& name, uint32 skipLabelID/*0*/)
+{
+    std::string nameEsc;
+    sDatabase.DoEscapeString(nameEsc, name);
 
-    if (res.GetRowCount() > 0)
-    {
-        DBResultRow row;
-        res.GetRow(row);
-        // we want the next one, not the current one, so +1
-        bit = row.GetInt(0) + 1;
-    }
-
-    DBerror error;
-    if (!sDatabase.RunQuery(error, " INSERT INTO mailLabel (bit, name, color, ownerID) VALUES (%u, '%s', %u, %u)" , bit, name.c_str(), color, characterID))
-    {
-        codelog(DATABASE__ERROR, " Failed to insert new mail label into database" );
-        // since this is an out parameter, make sure we assign this even in case of an error
-        newID = 0;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT bit FROM mailLabel WHERE ownerID = %u AND name = '%s'", charID, nameEsc.c_str()))
         return false;
-    }
 
-    // the client wants the power of 2, not the bitset index
-    newID = (uint32)pow((float)2, bit);
-    return true;
+    DBResultRow row;
+    while (res.GetRow(row))
+        if ((skipLabelID == 0) or (row.GetInt(0) != BitFromLabelID(skipLabelID)))
+            return true;
+    return false;
 }
 
-void MailDB::DeleteLabel(int characterID, int labelID) const
+uint32 MailDB::CreateLabel(uint32 charID, const std::string& name, const int32* color)
 {
-    int bit = BitFromLabelID(labelID);
+    // lowest free bit above the system labels (inbox, sent, corp, alliance = bits 0..3)
+    std::set<uint32> used;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT bit FROM mailLabel WHERE ownerID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Failed to get mail labels for %u: %s", charID, res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        used.insert(row.GetUInt(0));
+
+    uint32 bit(4);
+    while ((bit <= 30) and (used.find(bit) != used.end()))
+        ++bit;
+    if (bit > 30)
+        return 0;
+
+    std::string nameEsc;
+    sDatabase.DoEscapeString(nameEsc, name);
+    std::string colorStr("NULL");
+    if (color != nullptr)
+        colorStr = std::to_string(*color);
+
     DBerror err;
     if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " SET labelMask = labelMask & ~(1 << ~%u) "
-                            " WHERE (labelMask & (1 << %u)) > 0 "
-                            " AND toCharacterIDs LIKE '%%%u%%';" , bit, bit, characterID))
+            "INSERT INTO mailLabel (bit, name, color, ownerID) VALUES (%u, '%s', %s, %u)",
+            bit, nameEsc.c_str(), colorStr.c_str(), charID))
     {
-        codelog(DATABASE__ERROR, " Failed to delete label" );
-        return;
+        codelog(DATABASE__ERROR, "Failed to create mail label for %u: %s", charID, err.c_str());
+        return 0;
     }
 
-    sDatabase.RunQuery(err,
-                       " DELETE FROM mailLabel "
-                       " WHERE ownerID = %u AND bit = %u;" , characterID, bit);
+    return (1u << bit);
 }
 
-void MailDB::EditLabel(int characterID, int labelID, const std::string& name, int32 color) const
+void MailDB::EditLabel(uint32 charID, uint32 labelID, const std::string* name, const int32* color)
 {
-    int bit = BitFromLabelID(labelID);
-
-    DBerror error;
-    if (name.length() == 0) {
-        sDatabase.RunQuery(error, " UPDATE mailLabel SET color = %u WHERE bit = %u AND ownerID = %u" , color, bit, characterID);
-    } else if (color == -1) {
-        sDatabase.RunQuery(error, " UPDATE mailLabel SET name = '%s' WHERE bit = %u AND ownerID = %u" , name.c_str(), bit, characterID);
-    } else {
-        sDatabase.RunQuery(error, " UPDATE mailLabel SET name = '%s', color = %u WHERE bit = %u AND ownerID = %u" , name.c_str(), color, bit, characterID);
-    }
-}
-
-void MailDB::ApplyLabel(int32 messageID, int labelID)
-{
-    int bit = BitFromLabelID(labelID);
-    ApplyLabelMask(messageID, (1 << bit));
-}
-
-void MailDB::DeleteMail(int32 messageID)
-{
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err, "DELETE FROM mailStatus WHERE messageID = %u;", messageID))
-        codelog(DATABASE__ERROR, " Failed to delete mail" );
-}
-
-void MailDB::EmptyTrash(uint32 characterID)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " DELETE FROM mailMessage "
-                            " WHERE senderID = %u "
-                            " AND (statusMask & %u) > 0;" , characterID, mailStatusMaskTrashed)) {
-        codelog(DATABASE__ERROR, " Failed to deleted trash mails" );
-    }
-}
-
-void MailDB::MoveAllFromTrash(uint32 characterID)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " WHERE senderID = %u "
-                            " SET statusMask = statusMask | %u" , characterID, mailStatusMaskTrashed)) {
-        codelog(DATABASE__ERROR, " Failed to move all from trash" );
-    }
-}
-
-void MailDB::MoveAllToTrash(uint32 characterID)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " WHERE characterID LIKE  '%%%u%%' "
-                            " SET statusMask = statusMask & ~%u" , characterID, mailStatusMaskTrashed)) {
-        codelog(DATABASE__ERROR, " Failed to move message to trash" );
-    }
-}
-
-void MailDB::MoveToTrash(int32 messageID)
-{
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " WHERE messageID = %u "
-                            " SET statusMask = statusMask | %u" , messageID, mailStatusMaskTrashed)) {
-        codelog(DATABASE__ERROR, " Failed to move message to trash" );
-    }
-}
-
-void MailDB::MoveToTrashByLabel(int32 characterID, int32 labelID)
-{
-    int bit = BitFromLabelID(labelID);
-
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailMessage "
-                            " SET labelMask = -1 "
-                            " WHERE toCharacterIDs LIKE '%%%u%%' "
-                            " AND (labelMask & (1 << %u)) > 0" , characterID, bit))
-    {
-        codelog(DATABASE__ERROR, " Failed to move message to trash by label" );
-    }
-}
-
-void MailDB::ApplyStatusMasks(std::vector<int32> messageIDs, int mask)
-{
-    if (messageIDs.size() == 0) {
-        return;
-    }
-
-    std::ostringstream query;
-
-    query << " UPDATE mailStatus SET statusMask = statusMask | "  << mask << "  WHERE " ;
-    query << " messageID = "  << messageIDs[0];
-    for (int i = 1; i < messageIDs.size(); i++) {
-        query << "  OR messageID = "  << messageIDs[i];
-    }
-
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err, query.str().c_str())) {
-        codelog(DATABASE__ERROR, " Failed apply status mask" );
-    }
-}
-
-void MailDB::RemoveStatusMasks(std::vector<int32> messageIDs, int mask)
-{
-    if (messageIDs.size() == 0) {
-        return;
-    }
-
-    std::ostringstream query;
-
-    query << " UPDATE mailStatus SET statusMask = statusMask & ~"  << mask << "  WHERE " ;
-    query << " messageID = "  << messageIDs[0];
-    for (int i = 1; i < messageIDs.size(); i++) {
-        query << "  OR messageID = "  << messageIDs[i];
-    }
-
-    DBerror err;
-
-    if (!sDatabase.RunQuery(err, query.str().c_str())) {
-        codelog(DATABASE__ERROR, " Failed to remove status mask" );
-    }
-}
-
-void MailDB::ApplyStatusMask(int32 messageID, int mask)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailStatus "
-                            " SET statusMask = statusMask | %u "
-                            " WHERE messageID = %u" , mask, messageID)) {
-        codelog(DATABASE__ERROR, " Failed to apply status mask" );
-    }
-}
-
-
-void MailDB::RemoveStatusMask(int32 messageID, int mask)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailStatus "
-                            " SET statusMask = statusMask & ~%u "
-                            " WHERE messageID = %u" , mask, messageID)) {
-        codelog(DATABASE__ERROR, " Failed to remove status mask" );
-    }
-}
-
-
-void MailDB::ApplyLabelMask(int32 messageID, int mask)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailStatus "
-                            " SET labelMask = (labelMask | %u) "
-                            " WHERE messageID = %u;" , mask, messageID))
-    {
-        codelog(DATABASE__ERROR, " Failed to apply label mask to message" );
-    }
-}
-
-void MailDB::RemoveLabelMask(int32 messageID, int mask)
-{
-    DBerror err;
-    if (!sDatabase.RunQuery(err,
-                            " UPDATE mailStatus "
-                            " SET labelMask = (labelMask & ~%u) "
-                            " WHERE messageID = %u;" , mask, messageID))
-    {
-        codelog(DATABASE__ERROR, " Failed to apply label mask to message" );
-    }
-}
-
-void MailDB::ApplyLabelMasks(std::vector<int32> messageIDs, int mask)
-{
-    DBerror err;
-
-    if (messageIDs.size() == 0)
+    if ((name == nullptr) and (color == nullptr))
         return;
 
-    std::ostringstream query;
-    query << " UPDATE mailStatus SET labelMask = labelMask | "  << mask << "  " ;
-
-    query << " WHERE messageID = "  << messageIDs[0];
-
-    for (int i = 1; i < messageIDs.size(); i++)
-        query << "  OR messageID = "  << messageIDs[i];
-
-    _log(DATABASE__ERROR, query.str().c_str());
-
-
-    if (!sDatabase.RunQuery(err, query.str().c_str())) {
-        codelog(DATABASE__ERROR, " Failed to apply labels" );
-        return;
+    std::ostringstream set;
+    if (name != nullptr) {
+        std::string nameEsc;
+        sDatabase.DoEscapeString(nameEsc, *name);
+        set << "name = '" << nameEsc << "'";
     }
+    if (color != nullptr) {
+        if (name != nullptr)
+            set << ", ";
+        set << "color = " << *color;
+    }
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailLabel SET %s WHERE ownerID = %u AND bit = %u",
+            set.str().c_str(), charID, BitFromLabelID(labelID)))
+        codelog(DATABASE__ERROR, "Failed to edit mail label for %u: %s", charID, err.c_str());
 }
 
-void MailDB::RemoveLabelMasks(std::vector<int32> messageIDs, int mask)
+void MailDB::DeleteLabel(uint32 charID, uint32 labelID)
 {
     DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "UPDATE mailStatus SET labelMask = labelMask & ~%u WHERE characterID = %u",
+            labelID, charID))
+        codelog(DATABASE__ERROR, "Failed to clear mail label for %u: %s", charID, err.c_str());
 
-    if (messageIDs.size() == 0)
-        return;
-
-    std::ostringstream query;
-    query << " UPDATE mailStatus SET labelMask = labelMask & ~"  << mask << "  " ;
-
-    query << " WHERE messageID = "  << messageIDs[0];
-
-    for (int i = 1; i < messageIDs.size(); i++)
-        query << "  OR messageID = "  << messageIDs[i];
-
-    _log(DATABASE__ERROR, query.str().c_str());
-
-
-    if (!sDatabase.RunQuery(err, query.str().c_str())) {
-        codelog(DATABASE__ERROR, " Failed to apply labels" );
-        return;
-    }
+    if (!sDatabase.RunQuery(err,
+            "DELETE FROM mailLabel WHERE ownerID = %u AND bit = %u", charID, BitFromLabelID(labelID)))
+        codelog(DATABASE__ERROR, "Failed to delete mail label for %u: %s", charID, err.c_str());
 }
 
-
-int MailDB::BitFromLabelID(int id)
+int MailDB::BitFromLabelID(uint32 id)
 {
-    // lets hope the compiler can do this better; I guess it still beats a floating point log, though
-    for (int i = 0; i < (sizeof(int)*8); i++)
-        if ((id & (1 << i)) > 0)
+    for (int i = 0; i < 32; ++i)
+        if ((id & (1u << i)) != 0)
             return i;
-
-    // This just gets rid of a warning, code execution should never reach here.
-    sLog.Error(" MailDB::BitFromLabelID" , " ERROR: Could not get bit." );
     return 0;
 }
 
@@ -777,11 +614,6 @@ void MailDB::MailingListClearEntityAccess(int32 entity, int32 listID)
 }
 
 void MailDB::MailingListSetEntityAccess(int32 entity, int32 access, int32 listID)
-{
-    // not used yet.
-}
-
-void MailDB::MoveFromTrash(int32 messageID)
 {
     // not used yet.
 }
