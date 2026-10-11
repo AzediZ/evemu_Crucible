@@ -395,6 +395,7 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/EntityService.h"
      "${TARGET_INCLUDE_DIR}/npc/NPC.h"
      "${TARGET_INCLUDE_DIR}/npc/NPCAI.h"
+     "${TARGET_INCLUDE_DIR}/npc/NPCEwar.h"
      "${TARGET_INCLUDE_DIR}/npc/Sentry.h"
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h")
 SET( npc_SOURCE
@@ -405,6 +406,7 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/EntityService.cpp"
      "${TARGET_SOURCE_DIR}/npc/NPC.cpp"
      "${TARGET_SOURCE_DIR}/npc/NPCAI.cpp"
+     "${TARGET_SOURCE_DIR}/npc/NPCEwar.cpp"
      "${TARGET_SOURCE_DIR}/npc/Sentry.cpp"
      "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp" )
 

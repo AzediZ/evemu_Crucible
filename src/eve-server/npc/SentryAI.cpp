@@ -19,6 +19,8 @@
 #include "system/CrimeWatch.h"
 #include "npc/Drone.h"
 #include "npc/NPC.h"
+#include "npc/NPCAI.h"
+#include "npc/NPCEwar.h"
 #include "EVEServerConfig.h"
 
 SentryAI::SentryAI(Sentry* who)
@@ -27,18 +29,23 @@ m_npc(who),
 m_mainAttackTimer(1000),
 m_processTimer(5000),         //arbitrary.
 m_beginFindTarget(5000),      //arbitrary.
-m_warpScramblerTimer(5000),   //arbitrary.
-m_webifierTimer(5000)         //arbitrary.
+m_missileTimer(0),
+m_ewar(nullptr)
 {
-    m_webifierTimer.Disable();      //not implemented yet
     m_beginFindTarget.Disable();    //arbitrary.
     m_mainAttackTimer.Disable();    //waiting till engaged
-    m_warpScramblerTimer.Disable(); //not implemented yet
 
-    m_webber = false;
-    m_warpScram = false;
+    m_ewarChecked = false;
 
     m_damageMultiplier = who->GetSelf()->GetAttribute(AttrDamageMultiplier).get_int();
+
+    // missile sentries
+    m_missileTypeID = 0;
+    m_launcherCycleTime = who->GetSelf()->GetAttribute(AttrMissileLaunchDuration).get_uint32();
+    if (m_launcherCycleTime > 100)
+        m_missileTypeID = who->GetSelf()->GetAttribute(AttrEntityMissileTypeID).get_uint32();
+    if (m_missileTypeID == 0)
+        m_launcherCycleTime = 0;
 
     /* set npc ship speeds and distances */
     m_sigRadius = who->GetSelf()->GetAttribute(AttrSignatureRadius).get_int();
@@ -84,7 +91,32 @@ m_webifierTimer(5000)         //arbitrary.
     }
 }
 
+SentryAI::~SentryAI()
+{
+    SafeDelete(m_ewar);
+}
+
+void SentryAI::OnKilled()
+{
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
+}
+
 void SentryAI::Process() {
+    if (!m_ewarChecked) {
+        // gate and station guns never use ewar.  LawEnforcement sets that role after we're made
+        m_ewarChecked = true;
+        if (sConfig.npc.UseEwar and !m_npc->IsLawSentry()) {
+            m_ewar = new NPCEwar(m_npc);
+            if (!m_ewar->HasAny())
+                SafeDelete(m_ewar);
+        }
+    }
+
+    // ewar keeps its own timers, so it runs every tick while we're fighting
+    if ((m_ewar != nullptr) and (m_state == State::Engaged))
+        m_ewar->Process(m_npc->TargetMgr()->GetFirstTarget(true));
+
     if ((!m_processTimer.Check()) or (!m_npc->SysBubble()->HasPlayers()))
         return;
 
@@ -105,29 +137,11 @@ void SentryAI::Process() {
                 }
                 break;
             }
-            // The parameter proximityRange (154) tells us how far we "see" (npc's dont have this, but drones do)
+            // pirate and deadspace sentries open fire on the nearest ship in sight
             if (m_beginFindTarget.Check()) {
-                std::vector<Client*> clientVec;
-                clientVec.clear();
-                DestinyManager* pDestiny(nullptr);
-                m_npc->SysBubble()->GetPlayers(clientVec); // what about player drones?  yes...later
-                for (auto cur : clientVec) {
-                    /** @todo  this needs work
-                    if (cur->IsLogin() or cur->IsInvul() or cur->InPod())
-                        continue;
-                    if (!cur->GetShipTarget())
-                        continue;
-                    if ((!cur->GetShipTarget()->DestinyMgr()) or (!cur->GetShipTarget()->SysBubble()))    // this shouldnt be needed, but whatever...
-                        continue;
-                    pDestiny = cur->GetShipTarget()->DestinyMgr();
-                    if (pDestiny->IsCloaked() or pDestiny->IsWarping())
-                        continue;
-                    if (m_npc->GetPosition().distance(cur->GetShipTarget()->GetPosition()) > m_sightRange)
-                        continue;
-                    Target(cur->GetShipTarget());
-                    */
-                    return;
-                }
+                SystemEntity* pTarget(FindTarget());
+                if (pTarget != nullptr)
+                    Target(pTarget);
             } else {
                 if (!m_beginFindTarget.Enabled())
                     m_beginFindTarget.Start(m_attackSpeed);  //find target is based on npc attack speed.
@@ -168,10 +182,11 @@ void SentryAI::SetIdle() {
     m_npc->GetName(), m_npc->GetID());
     m_state = State::Idle;
 
-    m_webifierTimer.Disable();
     m_beginFindTarget.Disable();
     m_mainAttackTimer.Disable();
-    m_warpScramblerTimer.Disable();
+    m_missileTimer.Disable();
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
 }
 
 void SentryAI::SetEngaged(SystemEntity* pTarget) {
@@ -196,7 +211,7 @@ void SentryAI::CheckDistance(SystemEntity* pTarget)
 {
     double dist = m_npc->GetPosition().distance(pTarget->GetPosition());
     if ((dist > m_sightRange) and (!m_npc->TargetMgr()->IsTargetedBy(pTarget))) {
-        _log(NPC__AI_TRACE, "%s(%u): CheckDistance: %s(%u) is too far away (%u).  Return to Idle.", \
+        _log(NPC__AI_TRACE, "%s(%u): CheckDistance: %s(%u) is too far away (%.0fm).  Return to Idle.", \
                 m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID(), dist);
         if (m_state != State::Idle) {
             // target is no longer in npc's "sight range" and is NOT targeting this npc.  unlock target and return to idle.
@@ -211,8 +226,21 @@ void SentryAI::CheckDistance(SystemEntity* pTarget)
 
     if (!m_mainAttackTimer.Enabled())
         m_mainAttackTimer.Start(m_attackSpeed);
+    if (!m_missileTimer.Enabled() and (m_launcherCycleTime > 0))
+        m_missileTimer.Start(m_launcherCycleTime);
 
+    uint32 targetID(pTarget->GetID());
     Attack(pTarget);
+
+    // the attack may have destroyed or dropped the target
+    if ((m_state == State::Idle) or !m_missileTimer.Check())
+        return;
+    pTarget = m_npc->SystemMgr()->GetSE(targetID);
+    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->DestinyMgr() == nullptr) or pTarget->DestinyMgr()->IsCloaked())
+        return;
+    if (!m_npc->TargetMgr()->CanAttack())
+        return;
+    LaunchEntityMissile(m_npc, m_npc->GetSelf(), m_missileTypeID, pTarget);
 }
 
 void SentryAI::ClearTarget(SystemEntity* pTarget) {
@@ -403,6 +431,35 @@ bool SentryAI::IsLawTarget(SystemEntity* pTarget)
     if (m_npc->GetPosition().distance(pTarget->GetPosition()) > sConfig.crime.SentryRange)
         return false;
     return (sCrimeWatch.IsCriminal(charID) or sCrimeWatch.IsFlaggedTo(charID, m_npc->GetSelf()->ownerID()));
+}
+
+SystemEntity* SentryAI::FindTarget()
+{
+    std::vector<Client*> clientVec;
+    m_npc->SysBubble()->GetPlayers(clientVec);
+    SystemEntity* pTarget(nullptr);
+    double nearest(m_sightRange);
+    for (auto cur : clientVec) {
+        if (cur->IsInvul() or (cur->GetShipSE() == nullptr))
+            continue;
+        if (cur->InPod()) {
+            if (!sConfig.npc.TargetPod)
+                continue;
+            if (m_npc->SystemMgr()->GetSystemSecurityRating() > sConfig.npc.TargetPodSec)
+                continue;
+        }
+        DestinyManager* pDestiny(cur->GetShipSE()->DestinyMgr());
+        if ((pDestiny == nullptr) or pDestiny->IsCloaked() or pDestiny->IsWarping())
+            continue;
+        if (cur->GetShipSE()->SysBubble() != m_npc->SysBubble())
+            continue;
+        double distance(m_npc->GetPosition().distance(cur->GetShipSE()->GetPosition()));
+        if (distance > nearest)
+            continue;
+        nearest = distance;
+        pTarget = cur->GetShipSE();
+    }
+    return pTarget;
 }
 
 SystemEntity* SentryAI::FindLawTarget()

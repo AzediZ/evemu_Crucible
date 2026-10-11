@@ -44,6 +44,7 @@
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/LawEnforcement.h"
+#include "npc/NPCEwar.h"
 #include "ship/Missile.h"
 #include "system/DestinyManager.h"
 #include "system/Damage.h"
@@ -61,12 +62,10 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_shieldBoosterTimer(0),
   m_armorRepairTimer(0),
   m_beginFindTarget(0),
-  m_warpScramblerTimer(0),
-  m_webifierTimer(0),
   m_missileTypeID(0),
-  m_webber(false),
-  m_warpScram(false),
-  m_isWandering(false)
+  m_isWandering(false),
+  m_ewarChecked(false),
+  m_ewar(nullptr)
 {
     assert(m_self.get() != nullptr);
     m_damageMultiplier = m_self->GetAttribute(AttrDamageMultiplier).get_float();
@@ -204,57 +203,12 @@ NPCAIMgr::NPCAIMgr(NPC* who)
         m_switchTargChance = 0;
     }
 
-    if (m_self->HasAttribute(AttrWarpScrambleRange)) {
-        m_warpScramRange = m_self->GetAttribute(AttrWarpScrambleRange).get_float();
-    } else {
-        m_warpScramRange = 0;
-    }
-    if (m_self->HasAttribute(AttrEntityWarpScrambleChance)) {
-        m_warpScramChance = 1.0 - m_self->GetAttribute(AttrEntityWarpScrambleChance).get_float();
-    } else {
-        m_warpScramChance = 0;
-    }
-
-    /*
-    AttrWarpScrambleRange = 103,
-    AttrWarpScrambleStrength = 105,
-    AttrEntityWarpScrambleChance = 504,
-    AttrWarpScrambleDuration = 505,
-    AttrModifyTargetSpeedRange = 514
-    */
-
     /*
     AttrEntityEquipmentMin = 456,
     AttrEntityEquipmentMax = 457,
     */
 
-    /*
-    AttrEntityTargetJam = 928,
-    AttrEntityTargetJamDuration = 929,
-    AttrEntityTargetJamDurationChance = 930,    // npcActivationChanceAttributeID in dgmEffects
-    AttrEntityCapacitorDrainDurationChance = 931,   // npcActivationChanceAttributeID in dgmEffects
-    AttrEntitySensorDampenDurationChance = 932,   // npcActivationChanceAttributeID in dgmEffects
-    AttrEntityTrackingDisruptDurationChance = 933,   // npcActivationChanceAttributeID in dgmEffects
-    AttrEntityTargetPaintDurationChance = 935,   // npcActivationChanceAttributeID in dgmEffects
-    AttrEntityTargetJamMaxRange = 936,
-    AttrEntityCapacitorDrainMaxRange = 937,
-    AttrEntitySensorDampenMaxRange = 938,
-    AttrEntityTrackingDisruptMaxRange = 940,
-    AttrEntityTargetPaintMaxRange = 941,
-    AttrEntityCapacitorDrainDuration = 942,
-    AttrEntitySensorDampenDuration = 943,
-    AttrEntityTrackingDisruptDuration = 944,
-    AttrEntityTargetPaintDuration = 945,
-    AttrEntityCapacitorDrainAmount = 946,
-    AttrEntitySensorDampenMultiplier = 947,
-    AttrEntityTrackingDisruptMultiplier = 948,
-    AttrEntityTargetPaintMultiplier = 949,
-    AttrEntitySensorDampenFallOff = 950,
-    AttrEntityTrackingDisruptFallOff = 951,
-    AttrEntityCapacitorFallOff = 952,
-    AttrEntityTargetJamFallOff = 953,
-    AttrEntityTargetPaintFallOff = 954,
-    */
+    // ewar (scram, web, jam, neut, damp, td, paint) is in NPCEwar.  it's made on the first Process(), after LawEnforcement set our role
 
     // does this need to be running if there are no players in bubble?
     //  yes...npcs will warp out when no targets in sight range, but need a process tic to do that.
@@ -264,7 +218,22 @@ NPCAIMgr::NPCAIMgr(NPC* who)
     //    AttrEntityGroupRespawnChance = 640,
 }
 
+NPCAIMgr::~NPCAIMgr()
+{
+    SafeDelete(m_ewar);
+}
+
 void NPCAIMgr::Process() {
+    if (!m_ewarChecked) {
+        // law enforcement doesn't use the ewar on its type (CONCORD has its own tackle in LawEnforcement)
+        m_ewarChecked = true;
+        if (sConfig.npc.UseEwar and !m_npc->IsLawEnforcer()) {
+            m_ewar = new NPCEwar(m_npc);
+            if (!m_ewar->HasAny())
+                SafeDelete(m_ewar);
+        }
+    }
+
     if (m_destiny->IsWarping())
         return;
 
@@ -351,7 +320,17 @@ void NPCAIMgr::Process() {
                 ClearTarget(pSE);
                 return;
             }
+            uint32 targetID(pSE->GetID());
             CheckDistance(pSE);
+            // the attack may have destroyed or dropped the target
+            if (IsIdle())
+                break;
+            pSE = m_npc->SystemMgr()->GetSE(targetID);
+            if ((pSE == nullptr) or pSE->IsDead())
+                break;
+            // ewar needs a completed lock
+            if (m_ewar != nullptr)
+                m_ewar->Process(m_npc->TargetMgr()->GetTarget(targetID, true));
             if (m_missileTimer.Check())
                 LaunchMissile(m_missileTypeID, pSE);
         } break;
@@ -477,10 +456,10 @@ void NPCAIMgr::SetIdle() {
 
     // repair timers keep running until we're whole (they stop themselves)
     m_missileTimer.Disable();
-    m_webifierTimer.Disable();
     m_beginFindTarget.Disable();
     m_mainAttackTimer.Disable();
-    m_warpScramblerTimer.Disable();
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
 
     SystemBubble* pBubble = m_npc->SysBubble();
     //disallow warpout if anomaly, incursion or mission rat
@@ -792,31 +771,36 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
 
 void NPCAIMgr::LaunchMissile(uint16 typeID, SystemEntity* pSE)
 {
-    if (typeID == 0)
+    LaunchEntityMissile(m_npc, m_self, typeID, pSE);
+}
+
+void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget)
+{
+    if ((typeID == 0) or (pLauncher == nullptr) or (pTarget == nullptr))
         return;
     // Actually Launch a missile, creating a new Destiny object for it
     // ItemData( uint32 _typeID, uint32 _ownerID, uint32 _locationID, EVEItemFlags _flag, const char *_name = "", \
               const GPoint &_position = NULL_ORIGIN, const char *_customInfo = "", bool _contraband = false);
-    ItemData idata(typeID, m_npc->GetID(), m_npc->GetLocationID(), flagMissile, "NPC Missile", m_npc->GetPosition());
+    ItemData idata(typeID, pLauncher->GetID(), pLauncher->GetLocationID(), flagMissile, "NPC Missile", pLauncher->GetPosition());
     InventoryItemRef missileRef = sItemFactory.SpawnItem(idata);
     if (missileRef.get() == nullptr)
         return;  // make error here
 
     // modify missile based on npc attribs
-    if (m_self->HasAttribute(AttrMissileEntityVelocityMultiplier))
-        missileRef->MultiplyAttribute(AttrMaxVelocity, m_self->GetAttribute(AttrMissileEntityVelocityMultiplier));
-    if (m_self->HasAttribute(AttrMissileEntityFlightTimeMultiplier))    // this may be wrong
-        missileRef->MultiplyAttribute(AttrExplosionDelay, m_self->GetAttribute(AttrMissileEntityFlightTimeMultiplier));
-    if (m_self->HasAttribute(AttrMissileEntityAoeVelocityMultiplier))
-        missileRef->MultiplyAttribute(AttrAoeVelocity, m_self->GetAttribute(AttrMissileEntityAoeVelocityMultiplier));
-    if (m_self->HasAttribute(AttrMissileEntityAoeCloudSizeMultiplier))
-        missileRef->MultiplyAttribute(AttrAoeCloudSize, m_self->GetAttribute(AttrMissileEntityAoeCloudSizeMultiplier));
-    if (m_self->HasAttribute(AttrMissileEntityAoeFalloffMultiplier))
-        missileRef->MultiplyAttribute(AttrAoeFalloff, m_self->GetAttribute(AttrMissileEntityAoeFalloffMultiplier));
+    if (self->HasAttribute(AttrMissileEntityVelocityMultiplier))
+        missileRef->MultiplyAttribute(AttrMaxVelocity, self->GetAttribute(AttrMissileEntityVelocityMultiplier));
+    if (self->HasAttribute(AttrMissileEntityFlightTimeMultiplier))    // this may be wrong
+        missileRef->MultiplyAttribute(AttrExplosionDelay, self->GetAttribute(AttrMissileEntityFlightTimeMultiplier));
+    if (self->HasAttribute(AttrMissileEntityAoeVelocityMultiplier))
+        missileRef->MultiplyAttribute(AttrAoeVelocity, self->GetAttribute(AttrMissileEntityAoeVelocityMultiplier));
+    if (self->HasAttribute(AttrMissileEntityAoeCloudSizeMultiplier))
+        missileRef->MultiplyAttribute(AttrAoeCloudSize, self->GetAttribute(AttrMissileEntityAoeCloudSizeMultiplier));
+    if (self->HasAttribute(AttrMissileEntityAoeFalloffMultiplier))
+        missileRef->MultiplyAttribute(AttrAoeFalloff, self->GetAttribute(AttrMissileEntityAoeFalloffMultiplier));
 
-    SystemManager* pSystem = m_npc->SystemMgr();
-    // Missile(InventoryItemRef self, PyServiceMgr &services, SystemManager* system, InventoryItemRef module, SystemEntity* target, ShipItem* ship);
-    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(),  pSystem, m_self, pSE, m_npc);
+    SystemManager* pSystem = pLauncher->SystemMgr();
+    // Missile(InventoryItemRef self, PyServiceMgr &services, SystemManager* system, InventoryItemRef module, SystemEntity* target, SystemEntity* launcher);
+    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(),  pSystem, self, pTarget, pLauncher);
     if (pMissile == nullptr)
         return; // make error here
     // the missile flies itself (see DestinyManager).  it hits when its path reaches the target
@@ -825,7 +809,7 @@ void NPCAIMgr::LaunchMissile(uint16 typeID, SystemEntity* pSE)
 
     // tell target a missile has been launched at them.. (defender missile trigger for ship, tower, pos, npc, others?)
     if (typeID != 265)  // but only if it's NOT a defender missile
-        pSE->MissileLaunched(pMissile);
+        pTarget->MissileLaunched(pMissile);
 }
 
 void NPCAIMgr::MissileLaunched(Missile* pMissile)
@@ -858,6 +842,12 @@ float NPCAIMgr::GetTargetTime()
         }
     }
     return targetTime;
+}
+
+void NPCAIMgr::OnKilled()
+{
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
 }
 
 void NPCAIMgr::DisableRepTimers(bool shield/*true*/, bool armor/*true*/)

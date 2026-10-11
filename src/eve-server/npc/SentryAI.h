@@ -11,6 +11,7 @@
 #include "ship/modules/TurretFormulas.h"
 #include "system/SystemEntity.h"
 
+class NPCEwar;
 class Sentry;
 class SystemEntity;
 class Timer;
@@ -26,7 +27,7 @@ protected:
 
 public:
     SentryAI(Sentry *who);
-    ~SentryAI()                                         { /* do nothing here */ }
+    ~SentryAI();
 
     void Process();
 
@@ -38,6 +39,9 @@ public:
     void ClearAllTargets();
 
     void DisableRepTimers();
+
+    // called from Sentry::Killed()
+    void OnKilled();
 
     // public methods to enable calls from other classes (namely, TurretFormulas.cpp)
     bool IsIdle()                                       { return (m_state == State::Idle); }
@@ -58,6 +62,8 @@ protected:
 
     double GetTargetTime();
 
+    // other sentries: the nearest player ship in sight
+    SystemEntity* FindTarget();
     // law sentries: a pilot (or their drone) with a global criminal countdown, or flagged to our owner
     SystemEntity* FindLawTarget();
     bool IsLawTarget(SystemEntity* pTarget);
@@ -67,8 +73,7 @@ protected:
     std::string GetStateName(State name);
 
 private:
-    bool m_webber : 1;
-    bool m_warpScram : 1;
+    bool m_ewarChecked : 1;
     bool m_useSigRadius : 1;
     bool m_useTargSwitching : 1;
     bool m_useSecondTarget : 1;
@@ -79,6 +84,8 @@ private:
     uint16 m_targetRange;   // max targeting range  default: m_maxAttackRange (unused)
     uint16 m_optimalRange;
     uint16 m_damageMultiplier;
+    uint16 m_missileTypeID;
+    uint32 m_launcherCycleTime;
 
     uint32 m_sigRadius;
     uint32 m_falloff;// distance past maximum range at which accuracy has fallen by half
@@ -88,14 +95,14 @@ private:
     double m_trackingSpeed;
 
     Sentry* m_npc;
+    NPCEwar* m_ewar;            // we own this.  non-law sentries with ewar only
 
     TurretFormulas m_formula;
 
     Timer m_processTimer;
     Timer m_mainAttackTimer;
     Timer m_beginFindTarget;
-    Timer m_warpScramblerTimer;
-    Timer m_webifierTimer;
+    Timer m_missileTimer;
 };
 
 #endif

@@ -47,6 +47,7 @@ namespace NPCAI {
 }
 
 class NPC;
+class NPCEwar;
 class SystemEntity;
 class Timer;
 class EvilNumber;
@@ -55,7 +56,7 @@ class NPCAIMgr {
 protected:
 public:
     NPCAIMgr(NPC *who);
-    ~NPCAIMgr()                                         { /* do nothing here */ }
+    ~NPCAIMgr();
 
     // this is called from NPC::Process() which is called from SystemManager::Process()
     void Process();
@@ -68,6 +69,8 @@ public:
 
     // called from SystemEntity::ApplyDamage() when we take damage and survive
     void OnDamaged(SystemEntity* pSE, float amount);
+    // called from NPC::Killed()
+    void OnKilled();
 
     // public methods to enable calls from other classes (namely, TurretFormulas.cpp)
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
@@ -107,9 +110,8 @@ protected:
     std::string GetStateName(int8 stateID);
 
 private:
-    bool m_webber           :1;
-    bool m_warpScram        :1;
     bool m_isWandering      :1;
+    bool m_ewarChecked      :1;
     bool m_useSigRadius     :1;
     bool m_useTargSwitching :1;
     bool m_useSecondTarget  :1;
@@ -137,9 +139,7 @@ private:
     uint32 m_flyRange;  // npc tries to stay at this distance from active target    default:500
     uint32 m_sightRange;
     uint32 m_maxAttackRange;// max firing range   default:15000
-    uint32 m_warpScramRange;
 
-    float m_warpScramChance;
     float m_armorRepairDelayChance;
     float m_shieldBoosterDelayChance;
 
@@ -147,6 +147,7 @@ private:
     float m_damageMultiplier;
 
     NPC* m_npc;
+    NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (or we're law enforcement)
     DestinyManager* m_destiny;
     InventoryItemRef m_self;
 
@@ -159,8 +160,9 @@ private:
     Timer m_armorRepairTimer;
     Timer m_beginFindTarget;
     Timer m_warpOutTimer;
-    Timer m_warpScramblerTimer;
-    Timer m_webifierTimer;
 };
+
+/* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */
+void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget);
 
 #endif

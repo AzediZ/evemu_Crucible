@@ -97,6 +97,7 @@ public:
     uint16 GetDefaultEffect() const                     { return m_defaultFxID; }
 
     bool HasEffect(uint16 effectID) const;
+    bool HasEffects() const                             { return !m_stateFxMap.empty(); }
 
     // load method
     static ItemType* Load( uint16 typeID);

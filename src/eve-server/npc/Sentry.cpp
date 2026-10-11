@@ -137,6 +137,9 @@ void Sentry::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
 
+    // our ewar ends with us
+    m_AI->OnKilled();
+
     uint32 killerID = 0;
     Client* pClient(nullptr);
     SystemEntity* killer = damage.srcSE;

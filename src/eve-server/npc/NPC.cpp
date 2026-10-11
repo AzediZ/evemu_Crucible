@@ -246,6 +246,9 @@ void NPC::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
 
+    // our ewar ends with us
+    m_AI->OnKilled();
+
     //notify our spawn manager that we are gone.
     if ((m_spawnMgr != nullptr) and (m_self.get() != nullptr))
         m_spawnMgr->SpawnKilled(m_bubble, m_self->itemID());
