@@ -165,8 +165,8 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     if (installedItem->locationID() == locRAMItems)
         throw UserError ("RamBlueprintAlreadyInstalled");
 
-    // invention takes the whole T1 copy for one run
-    if (args.activityID == EvERam::Activity::Invention)
+    // invention takes the whole T1 copy and reverse engineering the relic, for one run
+    if ((args.activityID == EvERam::Activity::Invention) or (args.activityID == EvERam::Activity::ReverseEngineering))
         args.runs = 1;
 
     // POS arrays and labs must be in this system and online
@@ -176,7 +176,10 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
 
     // check assy line activity
     sRamMthd.ActivityCheck(pClient, args, installedItem, structureLine);
-    BlueprintRef bpRef = BlueprintRef::StaticCast(installedItem);
+    // everything but reverse engineering (relics) installs a blueprint
+    BlueprintRef bpRef(nullptr);
+    if (installedItem->categoryID() == EVEDB::invCategories::Blueprint)
+        bpRef = BlueprintRef::StaticCast(installedItem);
 
     // check permissions
     EvERam::LineRestrictions lineData = EvERam::LineRestrictions();
@@ -302,8 +305,11 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
 
     // invention output, chance and optional inputs
     EvERam::InventionData invData = EvERam::InventionData();
-    if (args.activityID == EvERam::Activity::Invention)
+    if (args.activityID == EvERam::Activity::Invention) {
         sRamMthd.GetInventionData(pClient, call.byname, bpRef, reqItems, invData);
+    } else if (args.activityID == EvERam::Activity::ReverseEngineering) {
+        sRamMthd.GetReverseEngineeringData(pClient, call.byname, installedItem, reqItems, invData);
+    }
 
     // quoteOnly is sent for all jobs before installation to approve price and timeframe
     if (PyRep::IntegerValueU32(call.byname["quoteOnly"])) {
@@ -393,13 +399,14 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
             throw UserError ("RamActivityRequiresABlueprint");
         }
         installedItem = iRef;
-        bpRef = BlueprintRef::StaticCast(installedItem);
+        if (bpRef.get() != nullptr)
+            bpRef = BlueprintRef::StaticCast(installedItem);
         args.bpItemID = installedItem->itemID();
     }
 
     uint32 jobID = FactoryDB::InstallJob(ownerID, pClient->GetCharacterID(), args, beginTime, beginTime + rsp.productionTime * EvE::Time::Second,
                                          solarSystemID, outputLocationID, containerTypeID, installedItem->typeID(),
-                                         (args.activityID == EvERam::Activity::Invention ? &invData : nullptr));
+                                         (invData.outputBpTypeID ? &invData : nullptr));
 
     if (jobID < 1) {
         _log(MANUF__ERROR, "Could not InstallJob for %s using %s", pClient->GetName(), installedItem->name());
@@ -408,7 +415,8 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     }
 
     // unpackage bpo and move to factory
-    installedItem->ChangeSingleton(true);
+    if (bpRef.get() != nullptr)
+        installedItem->ChangeSingleton(true);
     installedItem->Move(locRAMItems, flagFactoryBlueprint, true);
 
     // take required items (and the optional invention inputs)
@@ -417,7 +425,7 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     sRamMthd.TakeJobInput(bomLocPath, ownerID, invData.decryptorTypeID);
 
     // update runs and do other shit where applicable.  an invented copy is used up whole at delivery
-    if ((args.activityID == EvERam::Activity::Manufacturing) and !bpRef->infinite())
+    if ((args.activityID == EvERam::Activity::Manufacturing) and (bpRef.get() != nullptr) and !bpRef->infinite())
         bpRef->UpdateRuns(-args.runs);
 
     if (sConfig.ram.AutoEvent) {
@@ -441,6 +449,7 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
         description += locationName;
 
         description += " is scheduled to complete at the time noted.<br><br>";
+        if ((bpRef.get() != nullptr) or (args.activityID == EvERam::Activity::ReverseEngineering))
         switch (args.activityID) {
             case EvERam::Activity::Manufacturing: {
                 description += "This job is for <color=red>";
@@ -481,6 +490,7 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
                 description += bpRef->itemName();
                 description += "</color> will be made.";
             } break;
+            case EvERam::Activity::ReverseEngineering:
             case EvERam::Activity::Invention: {
                 const ItemType* pType(sItemFactory.GetType(invData.outputBpTypeID));
                 description += "This job has a <color=yellow>";
@@ -490,7 +500,7 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
                 description += "</color> run <color=green>";
                 description += (pType == nullptr ? "Unknown" : pType->name());
                 description += "</color> from the <color=yellow>";
-                description += bpRef->itemName();
+                description += installedItem->itemName();
                 description += "</color>.";
             } break;
                 // others are not used (or shouldnt be)
@@ -601,6 +611,36 @@ PyResult RamProxyService::CompleteJob(PyCallArgs &call, PyRep* info, PyRep* jobI
         return PyStatic.NewNone();
     }
 
+    if (data.activity == EvERam::Activity::ReverseEngineering) {
+        // the roll is made at delivery with the chance fixed at installation.  the relic is used up either way
+        bool success(MakeRandomFloat(0, 1) < data.successChance);
+        installedItem->Delete();
+
+        PyDict* msgArgs = new PyDict();
+        std::string msgKey("ReverseEngineeringTaskFailed");
+        if (success) {
+            Blueprint::SpawnCopy(data.outputTypeID, data.ownerID, outputLocationID, data.outputFlag, data.outputRuns, data.outputME, data.outputPE);
+            const ItemType* pType(sItemFactory.GetType(data.outputTypeID));
+            msgKey = "ReverseEngineeringSuccessWithBlueprint";
+            msgArgs->SetItemString("runs", new PyInt(data.outputRuns));
+            msgArgs->SetItemString("blueprintName", new PyString(pType == nullptr ? "Blueprint" : pType->name()));
+        }
+
+        //  client calls eve.Message(result.message.msg, result.message.args)
+        PyDict* msg = new PyDict();
+            msg->SetItemString("msg", new PyString(msgKey));
+            msg->SetItemString("args", msgArgs);
+        PyDict* dict = new PyDict();
+            dict->SetItemString("message", new PyObject("util.KeyVal", msg));
+        return new PyObject("util.KeyVal", dict);
+    }
+
+    if (installedItem->categoryID() != EVEDB::invCategories::Blueprint) {
+        _log(MANUF__ERROR, "CompleteJob() - installed item %s(%u) of job %u is not a blueprint.", installedItem->name(), data.itemID, args.jobID);
+        installedItem->Move(outputLocationID, data.outputFlag, true);
+        return PyStatic.NewNone();
+    }
+
     BlueprintRef bpRef = BlueprintRef::StaticCast( installedItem );
     switch(data.activity) {
         case EvERam::Activity::Manufacturing: {
@@ -656,8 +696,6 @@ PyResult RamProxyService::CompleteJob(PyCallArgs &call, PyRep* info, PyRep* jobI
             return new PyObject("util.KeyVal", dict);
         } break;
 
-        /* unsupported */
-        case EvERam::Activity::ReverseEngineering:
         /* depreciated */
         case EvERam::Activity::ResearchTech:
         case EvERam::Activity::Duplicating:

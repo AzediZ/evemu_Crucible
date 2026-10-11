@@ -129,6 +129,7 @@ void StaticDataMgr::Clear()
     m_metaParent.clear();
     m_ramInstContents.clear();
     m_ramLineActivity.clear();
+    m_t3Blueprints.clear();
 
     PySafeDecRef(m_keyMap);
     PySafeDecRef(m_agents);
@@ -1076,6 +1077,24 @@ uint8 StaticDataMgr::GetAssemblyLineActivity(uint8 assemblyLineTypeID)
     if (itr != m_ramLineActivity.end())
         return itr->second;
     return 0;
+}
+
+void StaticDataMgr::GetT3BlueprintsForProductGroup(uint16 productGroupID, uint8 raceID, std::vector<uint16>& into)
+{
+    if (m_t3Blueprints.empty()) {
+        for (auto cur : m_bpTypeData) {
+            if ((cur.second.techLevel != 3) or (cur.second.productTypeID == 0))
+                continue;
+            std::map<uint16, Inv::TypeData>::iterator itr = m_typeData.find(cur.second.productTypeID);
+            if (itr == m_typeData.end())
+                continue;
+            m_t3Blueprints.emplace(((uint32)itr->second.groupID << 8) | itr->second.race, cur.first);
+        }
+    }
+
+    auto range = m_t3Blueprints.equal_range(((uint32)productGroupID << 8) | raceID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
 }
 
 bool StaticDataMgr::IsRecyclable(uint16 typeID)

@@ -52,9 +52,12 @@ void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& arg
         throw UserError ("RamAssemblyLineHasNoActivity");
 
     if (args.activityID == EvERam::Activity::ReverseEngineering) {
-        // reverse engineering is only done in experimental laboratories and caldari research outposts
-        sLog.Error("RAM::InstallJob()", "Unsupported Activity %u sent by %s(%u).", args.activityID, pClient->GetName(), pClient->GetCharacterID());
-        throw UserError ("RamActivityInvalid");
+        // reverse engineering (experimental laboratories and caldari research outposts) takes an ancient relic
+        if (iRef->categoryID() != EVEDB::invCategories::AncientRelics)
+            throw UserError ("RamActivityRequiresABlueprint");
+        if (!FactoryDB::IsProducableBy(args.AssemblyLineID, &iRef->type(), structureLine))
+            throw UserError ("RamBadEndProductForActivity");
+        return;
     }
 
     // everything else needs a blueprint
@@ -592,6 +595,85 @@ void RamMethods::GetInventionData(Client* const pClient, std::map<std::string, P
          into.outputRuns, into.outputME, into.outputPE);
 }
 
+void RamMethods::GetReverseEngineeringData(Client* const pClient, std::map<std::string, PyRep*>& byname, InventoryItemRef relicRef,
+                                           const std::vector< EvERam::RequiredItem >& reqItems, EvERam::InventionData& into)
+{
+    // inventionItems = util.KeyVal(decryptorType, outputType = decryptorType).  the hybrid decryptor is required
+    PyRep* pItems(nullptr);
+    std::map<std::string, PyRep*>::iterator itr = byname.find("inventionItems");
+    if (itr != byname.end())
+        pItems = itr->second;
+    into.decryptorTypeID = GetKeyValInt(pItems, "decryptorType");
+    const ItemType* pDecryptor(into.decryptorTypeID ? sItemFactory.GetType(into.decryptorTypeID) : nullptr);
+    if ((pDecryptor == nullptr) or (pDecryptor->groupID() != EVEDB::invGroups::Hybrid_Decryptors))
+        throw UserError ("RamRevEngNoDecryptors");
+    into.baseItemTypeID = 0;
+    into.metaLevel = 0;
+
+    // the base chance is the relic's chanceOfRE (intact 40%, malfunctioning 30%, wrecked 20%)
+    EvERam::bpTypeData relicData = EvERam::bpTypeData();
+    sDataMgr.GetBpTypeData(relicRef->typeID(), relicData);
+    if (relicData.chanceOfRE <= 0)
+        throw UserError ("ProductionInventionFailure")
+                .AddFormatValue ("type", new PyInt (relicRef->typeID()));
+
+    // the decryptor's race decides the race of the T3 blueprint
+    into.outputBpTypeID = PickReverseEngineeringOutput(relicRef->groupID(), pDecryptor->race());
+    if (into.outputBpTypeID == 0)
+        throw UserError ("RamNoKnownOutputType");
+
+    // datacore skills
+    Character* pChar(pClient->GetChar().get());
+    uint8 dcLevel[2] = {0, 0}, dcCount(0);
+    for (auto cur : reqItems) {
+        if (cur.isSkill or (dcCount > 1))
+            continue;
+        const ItemType* pType(sItemFactory.GetType(cur.typeID));
+        if ((pType != nullptr) and (pType->groupID() == EVEDB::invGroups::Datacores))
+            dcLevel[dcCount++] = pChar->GetSkillLevel(pType->GetAttribute(AttrRequiredSkill1).get_uint32());
+    }
+
+    float chance(EvEMath::RAM::ReverseEngineeringChance(relicData.chanceOfRE, pChar->GetSkillLevel(EvESkill::ReverseEngineering), dcLevel[0], dcLevel[1]));
+    chance *= sConfig.ram.ReChance;
+    into.chance = EvE::min(EvE::max(chance, 0.0f), 1.0f);
+
+    // intact relics give 20 runs, malfunctioning 10, wrecked 3
+    if (relicData.chanceOfRE >= 0.4f) {
+        into.outputRuns = 20;
+    } else if (relicData.chanceOfRE >= 0.3f) {
+        into.outputRuns = 10;
+    } else {
+        into.outputRuns = 3;
+    }
+    into.outputME = EvERam::BaseInventionME;
+    into.outputPE = EvERam::BaseInventionPE;
+
+    _log(MANUF__INFO, "Reverse engineering of %s into %u: chance %.3f (base %.2f, dc %u/%u), %i runs",
+         relicRef->name(), into.outputBpTypeID, into.chance, relicData.chanceOfRE, dcLevel[0], dcLevel[1], into.outputRuns);
+}
+
+uint16 RamMethods::PickReverseEngineeringOutput(uint16 relicGroupID, uint8 raceID)
+{
+    // relic kind -> product group of the T3 blueprint
+    uint16 productGroupID(0);
+    switch (relicGroupID) {
+        case 997:   productGroupID = EVEDB::invGroups::StrategicCruiser;    break;  // hull sections
+        case 971:   productGroupID = 957;   break;  // thruster sections -> propulsion systems
+        case 990:   productGroupID = 955;   break;  // electromechanical -> electronic systems
+        case 991:   productGroupID = 956;   break;  // weapon subroutines -> offensive systems
+        case 992:   productGroupID = 958;   break;  // power cores -> engineering systems
+        case 993:   productGroupID = 954;   break;  // armor nanobots -> defensive systems
+        default:
+            return 0;
+    }
+
+    std::vector<uint16> bpTypes;
+    sDataMgr.GetT3BlueprintsForProductGroup(productGroupID, raceID, bpTypes);
+    if (bpTypes.empty())
+        return 0;
+    return bpTypes[MakeRandomInt(0, bpTypes.size() - 1)];
+}
+
 const char* RamMethods::GetInventionResultLabel(bool success, float chance)
 {
     // flavour text only.  the better the chance, the more relaxed the text
@@ -728,13 +810,23 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
     into.charTimeMultiplier = 1.0;
     into.charMaterialMultiplier = 1.0;
 
-    BlueprintRef bpRef(nullptr);
-    if (iRef->categoryID() == EVEDB::invCategories::Blueprint)
-        bpRef = BlueprintRef::StaticCast(iRef);
-    if (bpRef.get() == nullptr)
-        return false;
-
     const ItemType* pType(nullptr);
+    BlueprintRef bpRef(nullptr);
+    if (args.activityID == EvERam::Activity::ReverseEngineering) {
+        // base time is the relic's researchTechTime (1 hour)
+        pType = &iRef->type();
+        EvERam::bpTypeData relicData = EvERam::bpTypeData();
+        sDataMgr.GetBpTypeData(iRef->typeID(), relicData);
+        FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
+        into.productionTime = (relicData.researchTechTime ? relicData.researchTechTime : 3600) * into.timeMultiplier;
+        into.productionTime *= sConfig.ram.ReTime;
+    } else if (iRef->categoryID() == EVEDB::invCategories::Blueprint) {
+        bpRef = BlueprintRef::StaticCast(iRef);
+    } else {
+        return false;
+    }
+
+    if (bpRef.get() != nullptr)
     switch(args.activityID) {
         case EvERam::Activity::Manufacturing: {
             into.charMaterialMultiplier = EvE::max(1.0f, pChar->GetAttribute (AttrManufactureCostMultiplier).get_float ());

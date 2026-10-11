@@ -134,6 +134,8 @@ public:
     bool                GetInstallationContents(uint16 installationTypeID, std::vector<std::pair<uint8, uint8>>& into);
     // activity of an assembly line type (ramAssemblyLineTypes)
     uint8               GetAssemblyLineActivity(uint8 assemblyLineTypeID);
+    // tech 3 blueprint types whose product is of productGroupID and raceID (reverse engineering outputs)
+    void                GetT3BlueprintsForProductGroup(uint16 productGroupID, uint8 raceID, std::vector<uint16>& into);
 
     uint32              GetFactionCorp(uint32 factionID);
     uint32              GetCorpFaction(uint32 corpID);
@@ -256,6 +258,7 @@ private:
     /* R.A.M. installations */
     std::multimap<uint16, std::pair<uint8, uint8>>      m_ramInstContents;  // installationTypeID/(assemblyLineTypeID, quantity)
     std::map<uint8, uint8>                              m_ramLineActivity;  // assemblyLineTypeID/activityID
+    std::multimap<uint32, uint16>                       m_t3Blueprints;     // (productGroupID << 8 | raceID)/blueprintTypeID, built on first use
 };
 
 //Singleton

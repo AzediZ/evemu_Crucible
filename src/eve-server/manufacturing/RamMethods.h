@@ -76,6 +76,13 @@ public:
     // localization label of the result text the client shows for a finished invention job
     const char* GetInventionResultLabel(bool success, float chance);
 
+    /* reverse engineering */
+    // verify the reverse engineering inputs (relic, hybrid decryptor) and work out chance and output
+    void GetReverseEngineeringData(Client* const pClient, std::map<std::string, PyRep*>& byname, InventoryItemRef relicRef,
+                                   const std::vector< EvERam::RequiredItem >& reqItems, EvERam::InventionData& into);
+    // a T3 blueprint for the relic's kind and the decryptor's race (random when several match).  0 if none
+    uint16 PickReverseEngineeringOutput(uint16 relicGroupID, uint8 raceID);
+
     void GetAdjustedRamRequiredMaterials();
     const char* GetActivityName(int8 activityID);
 };
