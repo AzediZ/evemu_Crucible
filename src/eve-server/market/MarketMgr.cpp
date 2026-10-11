@@ -227,8 +227,11 @@ PyRep *MarketMgr::GetOldPriceHistory(uint32 regionID, uint32 typeID) {
 }
 
 void MarketMgr::SendOnOwnOrderChanged(Client* pClient, uint32 orderID, uint8 action, bool isCorp/*false*/, PyRep* order/*nullptr*/) {
-    if (pClient == nullptr)
+    if (pClient == nullptr) {
+        // order is consumed (owner offline)
+        PySafeDecRef(order);
         return;
+    }
     Notify_OnOwnOrderChanged ooc;
     if (order != nullptr) {
         ooc.order = order;

@@ -341,6 +341,17 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         data.contraband = false;   // does this need to check region/system?  yes
         data.jumps = 1;     // not sure if this is used....
 
+        // broker fee uses the standings of the order's station owner
+        double fee = GetBrokerFee(call.client, stationID->value(), money);
+        _log(MARKET__DEBUG, "PlaceCharOrder(buy) - %s: Escrow: %.2f, Fee: %.2f", useCorp->value() ?"Corp":"Player", money, fee);
+
+        // the fee and escrow are taken after the order is stored (they reference its orderID).  check the wallet first,
+        //  so an unpaid order is never left behind (cancelling it would refund escrow that was never paid)
+        if (!useCorp->value() and (call.client->GetBalance() < (fee + money)))
+            throw UserError("NotEnoughMoney")
+                    .AddISK("amount", fee + money)
+                    .AddISK("balance", call.client->GetBalance());
+
         // create buy order
         uint32 orderID(MarketDB::StoreOrder(data));
         if (orderID == 0) {
@@ -351,17 +362,19 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
 
         std::string reason = "DESC:  Setting up buy order in ";
         reason += stDataMgr.GetStationName(stationID->value()).c_str();
-        // broker fee uses the standings of the order's station owner
-        double fee = GetBrokerFee(call.client, stationID->value(), money);
-        _log(MARKET__DEBUG, "PlaceCharOrder(buy) - %s: Escrow: %.2f, Fee: %.2f", useCorp->value() ?"Corp":"Player", money, fee);
 
-        // take monies and record actions
-        if (useCorp->value()) {
-            AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey, Account::KeyType::Cash, call.client);
-            AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow, call.client);
-        } else {
-            AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey);
-            AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow);
+        // take monies and record actions.  if either transfer fails, the order must go
+        try {
+            if (useCorp->value()) {
+                AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey, Account::KeyType::Cash, call.client);
+                AccountService::TransferFunds(call.client->GetCorporationID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow, call.client);
+            } else {
+                AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), fee, reason.c_str(), Journal::EntryType::Brokerfee, orderID, accountKey);
+                AccountService::TransferFunds(call.client->GetCharacterID(), stDataMgr.GetOwnerID(stationID->value()), money, reason.c_str(), Journal::EntryType::MarketEscrow, orderID, accountKey, Account::KeyType::Escrow);
+            }
+        } catch (...) {
+            MarketDB::DeleteOrder(orderID);
+            throw;
         }
 
         //send notification of new order...
@@ -706,6 +719,14 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
     /* pre-Citadel rule: modifying an order costs the broker fee on the change in order value (minimum 100 ISK).
      *  this is taken first and throws if the wallet is short; nothing has changed at that point. */
     double fee = GetBrokerFee(call.client, oInfo.stationID, fabs(priceNew - oInfo.price) * oInfo.quantity);
+    // a raised buy order also needs the extra escrow.  check both, so the fee isn't taken when the escrow can't be
+    double needed(fee);
+    if (oInfo.isBuy and (priceNew > oInfo.price))
+        needed += (priceNew - oInfo.price) * oInfo.quantity;
+    if (!oInfo.isCorp and (call.client->GetBalance() < needed))
+        throw UserError("NotEnoughMoney")
+                .AddISK("amount", needed)
+                .AddISK("balance", call.client->GetBalance());
     AccountService::TransferFunds(walletOwnerID, stationOwnerID, fee, reason.c_str(), Journal::EntryType::Brokerfee, oInfo.orderID, accountKey, Account::KeyType::Cash, call.client);
 
     // buy orders hold price * volRemaining in escrow.  move the difference
