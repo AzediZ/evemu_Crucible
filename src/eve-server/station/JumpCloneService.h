@@ -44,10 +44,33 @@ public:
 
     // OnJumpCloneCacheInvalidated to charID (when online), and OnStationJumpCloneCacheInvalidated(stationID, charID) for stationID
     static void InvalidateClientCaches(uint32 charID, uint32 stationID = 0);
+    // OnShipJumpCloneCacheInvalidated(shipID, charID) to the pilot of shipID (when online and in it)
+    static void InvalidateShipCache(uint32 shipID, uint32 charID);
+    /* destroys every jump clone at locationID (a ship that died, a lost station) and tells the owners:
+     *  JumpCloneDeleted2 with destroyerID, or JumpCloneDeleted1 when destroyerID is 0 */
+    static void DestroyClonesAt(uint32 locationID, uint32 destroyerID);
+    static void DestroyClone(uint32 jumpCloneID, uint32 destroyerID);
+
+    /* ship clone installation offers (Clone Vat Bay).  one per pilot; a character is in one offer at most */
+    struct ShipCloneOffer {
+        uint32 pilotID;
+        uint32 targetID;
+        uint32 shipID;
+        bool accepted;
+    };
+    // the offer charID is in (as pilot or target), nullptr if none.  offers of characters gone offline are dropped first
+    ShipCloneOffer* FindOffer(uint32 charID);
+    void AddOffer(const ShipCloneOffer& offer)          { m_offers[offer.pilotID] = offer; }
+    void RemoveOffer(uint32 pilotID)                    { m_offers.erase(pilotID); }
+    // OnShipJumpCloneInstallationOffered/Done/Canceled((pilotID, targetID, shipID, None)) to charID
+    static void SendOfferNotification(const char* notifyType, uint32 charID, const ShipCloneOffer& offer);
 
 protected:
     //overloaded in order to support bound objects:
     BoundDispatcher* BindObject(Client *client, PyRep* bindParameters) override;
+
+private:
+    std::map<uint32, ShipCloneOffer> m_offers;          // pilotID -> offer
 };
 
 class JumpCloneBound : public EVEBoundObject <JumpCloneBound>

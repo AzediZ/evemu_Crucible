@@ -46,6 +46,7 @@
 #include "system/CrimeWatch.h"
 #include "npc/LawEnforcement.h"
 #include "character/CharacterDB.h"
+#include "station/JumpCloneService.h"
 #include "StaticDataMgr.h"
 
 /*
@@ -698,6 +699,8 @@ void ShipSE::Killed(Damage &fatal_blow) {
         // since Crucible, ships destroyed by CONCORD aren't insured
         if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
             PayInsurance();
+        // jump clones in a ship's Clone Vat Bay die with it  (F15)
+        JumpCloneService::DestroyClonesAt(m_self->itemID(), killerID);
 
         m_destiny->SendJettisonPacket();
 
@@ -879,6 +882,8 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
     // since Crucible, ships destroyed by CONCORD aren't insured
     if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
         PayInsurance();
+    // jump clones in a ship's Clone Vat Bay die with it  (F15)
+    JumpCloneService::DestroyClonesAt(m_self->itemID(), killerID);
     m_destiny->SendJettisonPacket();
 
     // half of what was aboard survives, rigs never do

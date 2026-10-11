@@ -371,6 +371,14 @@ bool ReprocessingServiceBound::ValidateItem(Client* pClient, InventoryItemRef iR
         error = "The requested item is not yours.";
     }
 
+    // a ship with jump clones in its Clone Vat Bay can't be reprocessed  (F15)
+    if (error.empty() and (iRef->categoryID() == EVEDB::invCategories::Ship) and (CharacterDB::CountJumpClonesAtLocation(iRef->itemID()) > 0)) {
+        if (throwOnError)
+            throw UserError("ReprocessingFailedShipHasJumpClones")
+                    .AddTypeName("what", iRef->typeID());
+        error = "Ships with jump clones installed can't be reprocessed.";
+    }
+
     // ships and containers must be empty (contents would be orphaned)
     if (error.empty() and (iRef->GetMyInventory() != nullptr)) {
         iRef->GetMyInventory()->LoadContents();

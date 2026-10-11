@@ -25,6 +25,7 @@
 
 #include "eve-server.h"
 
+#include "EVE_Mail.h"
 #include "EVE_Station.h"
 
 #include "EntityList.h"
@@ -32,6 +33,7 @@
 #include "account/AccountService.h"
 #include "character/Character.h"
 #include "character/CharacterDB.h"
+#include "mail/NotificationMgr.h"
 #include "pos/PosMgrDB.h"
 #include "standing/StandingDB.h"
 #include "station/JumpCloneService.h"
@@ -65,6 +67,98 @@ void JumpCloneService::InvalidateClientCaches(uint32 charID, uint32 stationID/*0
         tmp->SetItem(0, new PyInt(stationID));
         tmp->SetItem(1, new PyInt(charID));
     pClient->SendNotification("OnStationJumpCloneCacheInvalidated", "charid", &tmp, false);
+}
+
+void JumpCloneService::InvalidateShipCache(uint32 shipID, uint32 charID)
+{
+    ShipItemRef sRef(sItemFactory.GetShipRef(shipID));
+    if ((sRef.get() == nullptr) or !sRef->HasPilot() or (sRef->GetPilot()->GetShipID() != shipID))
+        return;
+    PyTuple* tmp = new PyTuple(2);
+        tmp->SetItem(0, new PyInt(shipID));
+        tmp->SetItem(1, new PyInt(charID));
+    sRef->GetPilot()->SendNotification("OnShipJumpCloneCacheInvalidated", "charid", &tmp, false);
+}
+
+void JumpCloneService::DestroyClone(uint32 jumpCloneID, uint32 destroyerID)
+{
+    uint32 ownerID(0), locationID(0), locationOwnerID(0);
+    if (!CharacterDB::GetJumpClone(jumpCloneID, ownerID, locationID, locationOwnerID))
+        return;
+    std::vector<uint16> implants;
+    CharacterDB::GetJumpCloneImplantTypes(jumpCloneID, implants);
+    CharacterDB::DeleteJumpClone(jumpCloneID);
+
+    // "the jump clone ... was destroyed, along with these implants"  (notificationUtil ParamJumpCloneDeleted1/2Notification)
+    PyList* typeIDs = new PyList();
+    for (auto type : implants)
+        typeIDs->AddItem(new PyInt(type));
+    PyDict* data = new PyDict();
+        data->SetItemString("locationID", new PyInt(locationID));
+        data->SetItemString("locationOwnerID", new PyInt(locationOwnerID));
+        data->SetItemString("typeIDs", typeIDs);
+    if (destroyerID != 0)
+        data->SetItemString("destroyerID", new PyInt(destroyerID));
+    NotificationMgr::Send(ownerID, (destroyerID != 0) ? Notify::Types::JumpCloneDeleted2 : Notify::Types::JumpCloneDeleted1,
+            (destroyerID != 0) ? destroyerID : locationOwnerID, data);
+    InvalidateClientCaches(ownerID);
+    _log(CHARACTER__INFO, "Jump clone %u of %u in %u destroyed by %u.", jumpCloneID, ownerID, locationID, destroyerID);
+}
+
+void JumpCloneService::DestroyClonesAt(uint32 locationID, uint32 destroyerID)
+{
+    std::vector<uint32> cloneIDs;
+    CharacterDB::GetJumpCloneIDsAtLocation(locationID, cloneIDs);
+    for (auto cur : cloneIDs)
+        DestroyClone(cur, destroyerID);
+}
+
+JumpCloneService::ShipCloneOffer* JumpCloneService::FindOffer(uint32 charID)
+{
+    // offers of characters that went offline (or left the ship) are dropped
+    std::map<uint32, ShipCloneOffer>::iterator itr = m_offers.begin();
+    while (itr != m_offers.end()) {
+        Client* pPilot(sEntityList.FindClientByCharID(itr->second.pilotID));
+        if ((pPilot == nullptr) or (sEntityList.FindClientByCharID(itr->second.targetID) == nullptr)
+        or (pPilot->GetShipID() != itr->second.shipID)) {
+            itr = m_offers.erase(itr);
+        } else {
+            ++itr;
+        }
+    }
+    for (auto& cur : m_offers)
+        if ((cur.second.pilotID == charID) or (cur.second.targetID == charID))
+            return &cur.second;
+    return nullptr;
+}
+
+void JumpCloneService::SendOfferNotification(const char* notifyType, uint32 charID, const ShipCloneOffer& offer)
+{
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    if (pClient == nullptr)
+        return;
+    // one positional arg:  args = (offeringCharID, targetCharID, shipID, b)
+    PyTuple* args = new PyTuple(4);
+        args->SetItem(0, new PyInt(offer.pilotID));
+        args->SetItem(1, new PyInt(offer.targetID));
+        args->SetItem(2, new PyInt(offer.shipID));
+        args->SetItem(3, PyStatic.NewNone());
+    PyTuple* tmp = new PyTuple(1);
+        tmp->SetItem(0, args);
+    pClient->SendNotification(notifyType, "charid", &tmp, false);
+}
+
+// the ship pClient pilots in space, if it can take ship clones and its Clone Vat Bay is active.  throws the client's errors
+static ShipItemRef GetCloneShip(Client* pClient)
+{
+    if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr))
+        throw UserError("JumpShipLacksCloneSupport");
+    ShipItemRef sRef(pClient->GetShip());
+    if (sRef->GetAttribute(AttrMaxJumpClones) < EvilOne)
+        throw UserError("JumpShipLacksCloneSupport");
+    if (sRef->GetModuleManager()->GetActiveModuleByGroup(EVEDB::invGroups::Clone_Vat_Bay) == nullptr)
+        throw UserError("JumpShipLacksActiveCloneVatBay");
+    return sRef;
 }
 
 JumpCloneBound::JumpCloneBound (EVEServiceManager& mgr, JumpCloneService& parent, uint32 locationID) :
@@ -157,6 +251,8 @@ PyResult JumpCloneBound::InstallCloneInStation(PyCallArgs &call) {
         throw UserError("NotAtStation");
     CharacterRef cRef(pClient->GetChar());
     uint32 charID(pClient->GetCharacterID()), stationID(pClient->GetStationID());
+    if (m_svc.FindOffer(charID) != nullptr)
+        throw UserError("JumpNoStationCloneWhenDoingShipOne");
     StationData stData = StationData();
     stDataMgr.GetStationData(stationID, stData);
     if ((stData.serviceMask & Station::JumpCloneFacility) == 0)
@@ -236,26 +332,140 @@ PyResult JumpCloneBound::DestroyInstalledClone(PyCallArgs &call, PyInt* cloneID)
             throw UserError("JumpCantDestroyCloneInOthersShip");
     }
 
+    if (ownerID != charID) {
+        // the owner learns who did it (JumpCloneDeleted2)
+        JumpCloneService::DestroyClone(cloneID->value(), charID);
+        JumpCloneService::InvalidateShipCache(locationID, ownerID);
+        return nullptr;
+    }
+
     CharacterDB::DeleteJumpClone(cloneID->value());
-    _log(CHARACTER__INFO, "%s(%u) destroyed jump clone %u of %u in %u.", pClient->GetName(), charID, cloneID->value(), ownerID, locationID);
+    _log(CHARACTER__INFO, "%s(%u) destroyed jump clone %u in %u.", pClient->GetName(), charID, cloneID->value(), locationID);
 
     JumpCloneService::InvalidateClientCaches(ownerID, sDataMgr.IsStation(locationID) ? locationID : 0);
+    if (!sDataMgr.IsStation(locationID))
+        JumpCloneService::InvalidateShipCache(locationID, ownerID);
     return nullptr;
 }
 
 PyResult JumpCloneBound::OfferShipCloneInstallation(PyCallArgs &call, PyInt* characterID) {
-    //    OfferShipCloneInstallation(charID)  //offeringCharID, targetCharID, shipID, b (b=unknown)
-    throw UserError("JumpShipLacksCloneSupport");
+    /* OfferShipCloneInstallation(charID): the pilot of a ship with an active Clone Vat Bay (titans, Rorqual) offers a clone
+     *  installation to a pilot nearby, who gets OnShipJumpCloneInstallationOffered and accepts (paying the fee) or cancels
+     */
+    Client* pClient(call.client);
+    uint32 pilotID(pClient->GetCharacterID()), targetID(characterID->value());
+    ShipItemRef sRef(GetCloneShip(pClient));
+    uint32 maxClones(sRef->GetAttribute(AttrMaxJumpClones).get_uint32());
+    uint32 count(CharacterDB::CountJumpClonesAtLocation(sRef->itemID()));
+    if (count >= maxClones)
+        throw UserError("JumpShipStoringMaxClones")
+                .AddAmount("have", count)
+                .AddAmount("max", maxClones);
+
+    Client* pTarget(sEntityList.FindClientByCharID(targetID));
+    if ((pTarget == nullptr) or (targetID == pilotID) or !pTarget->IsInSpace() or (pTarget->GetShipSE() == nullptr)
+    or (pTarget->GetSystemID() != pClient->GetSystemID()))
+        throw UserError("JumpInstalleeNotPresent");
+    // surface distance
+    double maxDistance(sRef->GetAttribute(AttrMaxOperationalDistance).get_double());
+    double distance(pClient->GetShipSE()->GetPosition().distance(pTarget->GetShipSE()->GetPosition())
+            - pClient->GetShipSE()->GetRadius() - pTarget->GetShipSE()->GetRadius());
+    if (distance > maxDistance)
+        throw UserError("JumpInstalleeTooDistant")
+                .AddFormatValue("distance", new PyInt((int32)maxDistance));
+    uint32 jumpCloneID(0);
+    if (CharacterDB::GetJumpCloneAt(targetID, sRef->itemID(), jumpCloneID))
+        throw UserError("JumpOtherAlreadyHasShipClone")
+                .AddFormatValue("other", new PyInt(targetID));
+    JumpCloneService::ShipCloneOffer* pOffer(m_svc.FindOffer(pilotID));
+    if (pOffer != nullptr)
+        throw UserError("JumpNoShipCloneWhenDoingShipOne")
+                .AddFormatValue("other", new PyInt((pOffer->pilotID == pilotID) ? pOffer->targetID : pOffer->pilotID));
+    if (m_svc.FindOffer(targetID) != nullptr)
+        throw UserError("JumpNoShipCloneForBusyChar")
+                .AddFormatValue("other", new PyInt(targetID));
+
+    JumpCloneService::ShipCloneOffer offer = JumpCloneService::ShipCloneOffer();
+        offer.pilotID = pilotID;
+        offer.targetID = targetID;
+        offer.shipID = sRef->itemID();
+        offer.accepted = false;
+    m_svc.AddOffer(offer);
+    JumpCloneService::SendOfferNotification("OnShipJumpCloneInstallationOffered", targetID, offer);
+    return nullptr;
 }
 
 PyResult JumpCloneBound::AcceptShipCloneInstallation(PyCallArgs &call) {
-    //lm.AcceptShipCloneInstallation()
-    throw UserError("JumpShipCloneInstallAcceptWTF");
+    // lm.AcceptShipCloneInstallation(), after JumpCloneInstallationOffered {offerer, shipname, costs}
+    Client* pClient(call.client);
+    uint32 charID(pClient->GetCharacterID());
+    JumpCloneService::ShipCloneOffer* pOffer(m_svc.FindOffer(charID));
+    if ((pOffer == nullptr) or (pOffer->targetID != charID))
+        throw UserError("JumpShipCloneInstallAcceptWTF");
+    if (pOffer->accepted)
+        throw UserError("JumpShipCloneInstallAcceptTooLate");
+    JumpCloneService::ShipCloneOffer offer(*pOffer);
+
+    // anything failing from here ends the offer for both sides
+    try {
+        uint32 maxClones(pClient->GetChar()->GetSkillLevel(EvESkill::InfomorphPsychology));
+        if (maxClones == 0)
+            throw UserError("JumpCharStoringMaxClonesNone");
+        uint32 count(CharacterDB::CountJumpClones(charID));
+        if (count >= maxClones)
+            throw UserError("JumpCharStoringMaxClones")
+                    .AddAmount("have", count)
+                    .AddAmount("max", maxClones);
+        Client* pPilot(sEntityList.FindClientByCharID(offer.pilotID));
+        if (pPilot == nullptr)
+            throw UserError("JumpShipCloneInstallAcceptWTF");
+        ShipItemRef sRef(GetCloneShip(pPilot));
+        uint32 shipMax(sRef->GetAttribute(AttrMaxJumpClones).get_uint32());
+        uint32 shipCount(CharacterDB::CountJumpClonesAtLocation(offer.shipID));
+        if (shipCount >= shipMax)
+            throw UserError("JumpShipStoringMaxClones")
+                    .AddAmount("have", shipCount)
+                    .AddAmount("max", shipMax);
+
+        pOffer->accepted = true;
+        // the fee goes to the pilot of the ship
+        std::string reason("DESC: Jump clone installation in ");
+        reason += sRef->itemName();
+        AccountService::TransferFunds(charID, offer.pilotID, sConfig.character.jumpCloneCost, reason.c_str(),
+                Journal::EntryType::JumpCloneInstallationFee, offer.shipID, Account::KeyType::Cash);
+    } catch (...) {
+        m_svc.RemoveOffer(offer.pilotID);
+        JumpCloneService::SendOfferNotification("OnShipJumpCloneInstallationCanceled", offer.pilotID, offer);
+        throw;
+    }
+
+    std::vector<uint16> none;
+    CharacterDB::AddJumpClone(charID, offer.shipID, offer.pilotID, none);
+    m_svc.RemoveOffer(offer.pilotID);
+    _log(CHARACTER__INFO, "%s(%u) installed a jump clone in ship %u of %u.", pClient->GetName(), charID, offer.shipID, offer.pilotID);
+
+    JumpCloneService::SendOfferNotification("OnShipJumpCloneInstallationDone", offer.pilotID, offer);
+    JumpCloneService::SendOfferNotification("OnShipJumpCloneInstallationDone", charID, offer);
+    JumpCloneService::InvalidateShipCache(offer.shipID, charID);
+    JumpCloneService::InvalidateClientCaches(charID);
+    return nullptr;
 }
 
 PyResult JumpCloneBound::CancelShipCloneInstallation(PyCallArgs &call) {
-    //lm.CancelShipCloneInstallation()
-    throw UserError("JumpShipCloneInstallCancelWTF");
+    /* lm.CancelShipCloneInstallation(), from either side.  the other side's client calls it again on the
+     *  OnShipJumpCloneInstallationCanceled it gets, and ignores the WTF error
+     */
+    uint32 charID(call.client->GetCharacterID());
+    JumpCloneService::ShipCloneOffer* pOffer(m_svc.FindOffer(charID));
+    if (pOffer == nullptr)
+        throw UserError("JumpShipCloneInstallCancelWTF");
+    if (pOffer->accepted)
+        throw UserError("JumpShipCloneInstallCancelTooLate");
+    JumpCloneService::ShipCloneOffer offer(*pOffer);
+    m_svc.RemoveOffer(offer.pilotID);
+    JumpCloneService::SendOfferNotification("OnShipJumpCloneInstallationCanceled",
+            (offer.pilotID == charID) ? offer.targetID : offer.pilotID, offer);
+    return nullptr;
 }
 
 PyResult JumpCloneBound::CloneJump(PyCallArgs &call, PyInt* destLocationID, std::optional<PyBool*> okWithLosingClone) {
@@ -283,22 +493,37 @@ PyResult JumpCloneBound::CloneJump(PyCallArgs &call, PyInt* destLocationID, std:
         throw UserError("JumpNoCloneAtDestination");
     if (destID == stationID)
         throw UserError("JumpDestinationInvalid");
+    bool ok(okWithLosingClone.has_value() and okWithLosingClone.value()->value());
+    ShipSE* pDestShip(nullptr);
     if (!sDataMgr.IsStation(destID)) {
-        if (IsPlayerItem(destID))
+        if (!IsPlayerItem(destID))
+            throw UserError("JumpDestinationInvalid");
+        // a ship clone: the ship must be in space with its pilot and an active Clone Vat Bay
+        ShipItemRef sRef(sItemFactory.GetShipRef(destID));
+        if ((sRef.get() == nullptr) or !sRef->HasPilot())
             throw UserError("JumpDestinationNotWilling");
-        throw UserError("JumpDestinationInvalid");
+        Client* pPilot(sRef->GetPilot());
+        if ((pPilot->GetShipID() != destID) or !pPilot->IsInSpace() or (pPilot->GetShipSE() == nullptr)
+        or (sRef->GetModuleManager()->GetActiveModuleByGroup(EVEDB::invGroups::Clone_Vat_Bay) == nullptr))
+            throw UserError("JumpDestinationNotWilling");
+        if (IsWSpaceID(pPilot->GetSystemID()))
+            throw UserError("JumpDestinationIsWormholeSpace");
+        pDestShip = pPilot->GetShipSE();
     }
 
     // our clone already here has to go, as this body takes its place
     uint32 originCloneID(0);
     if (CharacterDB::GetJumpCloneAt(charID, stationID, originCloneID)) {
-        if (!okWithLosingClone.has_value() or !okWithLosingClone.value()->value()) {
+        if (!ok) {
             std::vector<uint16> lost;
             CharacterDB::GetJumpCloneImplantTypes(originCloneID, lost);
             throw UserError(lost.empty() ? "JumpCheckWillLoseExistingClone" : "JumpCheckWillLoseExistingCloneAndImplants");
         }
         CharacterDB::DeleteJumpClone(originCloneID);
     }
+    // into a ship we wake up in a pod in space
+    if ((pDestShip != nullptr) and !ok)
+        throw UserError("JumpCheckIntoShip");
 
     // swap bodies
     std::vector<uint16> mine, theirs;
@@ -312,9 +537,15 @@ PyResult JumpCloneBound::CloneJump(PyCallArgs &call, PyInt* destLocationID, std:
     _log(CHARACTER__INFO, "%s(%u) clone jumped from %u to %u (%u implants left behind, %u implants found).", \
             pClient->GetName(), charID, stationID, destID, (uint32)mine.size(), (uint32)theirs.size());
 
-    pClient->CloneJumpToStation(destID);
+    if (pDestShip != nullptr) {
+        pClient->CloneJumpToShip(pDestShip);
+        JumpCloneService::InvalidateShipCache(destID, charID);
+    } else {
+        pClient->CloneJumpToStation(destID);
+    }
 
     JumpCloneService::InvalidateClientCaches(charID, stationID);
-    JumpCloneService::InvalidateClientCaches(charID, destID);
+    if (pDestShip == nullptr)
+        JumpCloneService::InvalidateClientCaches(charID, destID);
     return nullptr;
 }

@@ -1417,6 +1417,37 @@ void Client::CloneJumpToStation(uint32 stationID)
     m_char->SaveCharacter();
 }
 
+void Client::CloneJumpToShip(ShipSE* pTargetShip)
+{
+    /* like CloneJumpToStation, but we wake up ejected into a capsule in space next to the ship (JumpCheckIntoShip) */
+    m_autoPilot = false;
+    uint32 systemID(pTargetShip->SystemMgr()->GetID());
+    GPoint position(pTargetShip->GetPosition());
+    position.MakeRandomPointOnSphere(pTargetShip->GetRadius() + MakeRandomInt(100, 500));
+
+    ShipItemRef oldShip(m_ship), oldPod(m_pod);
+    if (oldShip->typeID() != itemTypeCapsule) {
+        char ci[45];
+        snprintf(ci, sizeof(ci), "Inactive: %s(%u)", GetName(), m_char->itemID());
+        oldShip->SetCustomInfo(ci);
+        oldShip->GetModuleManager()->CharacterLeavingShip();
+    }
+    oldShip->SetPlayer(nullptr);
+    oldShip->SaveShip();
+
+    // same system: MoveToLocation only takes us off the station's guest list when the system changes
+    if (IsDocked() and (m_systemData.systemID == systemID))
+        CharNoLongerInStation();
+
+    CreateNewPod();
+    SetShip(m_pod);
+    if ((oldPod.get() != nullptr) and (oldPod->itemID() != m_pod->itemID()))
+        oldPod->Delete();
+
+    MoveToLocation(systemID, position);
+    m_char->SaveCharacter();
+}
+
 void Client::ReleaseScan(bool notify/*false*/)
 {
     m_scanTimer.Disable();
