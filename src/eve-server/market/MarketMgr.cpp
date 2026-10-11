@@ -22,6 +22,7 @@
 #include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
 #include "inventory/InventoryItem.h"
+#include "inventory/ItemType.h"
 #include "map/MapData.h"
 #include "market/MarketMgr.h"
 #include "station/StationDataMgr.h"
@@ -80,7 +81,8 @@ bool Market::RangeCovers(int32 orderRange, uint32 orderStationID, uint32 targetS
 MarketMgr::MarketMgr()
 : m_cache(nullptr),
 m_marketGroups(nullptr),
-m_historyDay(0)
+m_historyDay(0),
+m_indexReady(false)
 {
 }
 
@@ -128,6 +130,8 @@ void MarketMgr::Process()
 
     if (NeedsUpdate())
         UpdatePriceHistory();
+    if (!m_indexReady)
+        UpdateMaterialIndex();
 }
 
 void MarketMgr::SystemStartup(SolarSystemData& data)
@@ -170,6 +174,139 @@ void MarketMgr::UpdatePriceHistory()
         MarketDB::DeleteTransactionsBefore(oldest);
 
     _log(MARKET__MESSAGE, "UpdatePriceHistory - rolled up %u days in %.3fms.", count, (GetTimeMSeconds() - start));
+
+    // insurance values follow the market daily
+    UpdateMaterialIndex();
+}
+
+void MarketMgr::UpdateMaterialIndex()
+{
+    double start = GetTimeMSeconds();
+    m_indexReady = true;
+
+    // the materials (and extra components, eg. T1 hulls of T2 ships) used to build ships.  collected once
+    if (m_indexTypes.empty()) {
+        std::map<uint16, Inv::TypeData> ships;
+        MarketDB::GetShipIDs(ships);
+        for (auto cur : ships) {
+            std::vector<EvERam::RamMaterials> matls;
+            sDataMgr.GetRamMaterials(cur.first, matls);
+            for (auto& matl : matls)
+                m_indexTypes.insert(matl.materialTypeID);
+            uint16 bpTypeID(sDataMgr.GetBlueprintTypeForProduct(cur.first));
+            if (bpTypeID == 0)
+                continue;
+            std::vector<EvERam::RamRequirements> reqs;
+            sDataMgr.GetRamRequirements(bpTypeID, reqs);
+            for (auto& req : reqs)
+                if ((req.activityID == EvERam::Activity::Manufacturing) and (req.damagePerJob > 0) and !sDataMgr.IsSkillTypeID(req.requiredTypeID))
+                    m_indexTypes.insert(req.requiredTypeID);
+        }
+    }
+
+    m_materialIndex.clear();
+    m_insuranceValue.clear();
+    if (!sConfig.market.InsuranceUseMaterialIndex or m_indexTypes.empty())
+        return;
+
+    std::string types;
+    for (auto cur : m_indexTypes)
+        types += std::to_string(cur) + ",";
+    types.pop_back();
+
+    // sell side rows (one per trade) of the window, per type cheapest first
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT typeID, price, quantity FROM mktTransactions"
+        " WHERE transactionType = 0 AND transactionDate > %lli AND typeID IN (%s)"
+        " ORDER BY typeID, price",
+        GetFileTimeNow() - (EvE::Time::Day * sConfig.market.InsuranceIndexDays), types.c_str()))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    std::map<uint16, std::vector<std::pair<double, uint32>>> trades;
+    DBResultRow row;
+    while (res.GetRow(row))
+        trades[row.GetUInt(0)].push_back(std::make_pair(row.GetDouble(1), row.GetUInt(2)));
+
+    // trimmed mean:  the cheapest and dearest 10% of the trades are dropped, the rest weighted by quantity
+    for (auto& cur : trades) {
+        size_t count(cur.second.size());
+        if (count < sConfig.market.InsuranceIndexMinTrades)
+            continue;
+        size_t trim(count / 10);
+        double value(0.0), qty(0.0);
+        for (size_t i = trim; i < count - trim; ++i) {
+            value += cur.second[i].first * cur.second[i].second;
+            qty += cur.second[i].second;
+        }
+        if (qty > 0)
+            m_materialIndex[cur.first] = value / qty;
+    }
+
+    _log(MARKET__MESSAGE, "UpdateMaterialIndex - %u of %u materials priced from the market in %.3fms.",
+            (uint32)m_materialIndex.size(), (uint32)m_indexTypes.size(), (GetTimeMSeconds() - start));
+}
+
+double MarketMgr::GetMaterialIndexPrice(uint16 typeID)
+{
+    std::map<uint16, double>::const_iterator itr = m_materialIndex.find(typeID);
+    if (itr != m_materialIndex.end())
+        return itr->second;
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if (pType == nullptr)
+        return 0.0;
+    return pType->basePrice();
+}
+
+double MarketMgr::GetInsuranceValue(uint16 shipTypeID)
+{
+    const ItemType* pType(sItemFactory.GetType(shipTypeID));
+    if ((pType == nullptr) or (pType->categoryID() != EVEDB::invCategories::Ship))
+        return 0.0;
+    // rookie ships and capsules can't be insured
+    if ((pType->groupID() == EVEDB::invGroups::Rookieship) or (pType->groupID() == EVEDB::invGroups::Capsule))
+        return 0.0;
+    if (!sConfig.market.InsuranceUseMaterialIndex)
+        return pType->basePrice();
+
+    if (!m_indexReady)
+        UpdateMaterialIndex();
+    std::map<uint16, double>::const_iterator itr = m_insuranceValue.find(shipTypeID);
+    if (itr != m_insuranceValue.end())
+        return itr->second;
+
+    // materials of the ship, plus the components a blueprint consumes (T2 components, the T1 hull)
+    double value(0.0);
+    std::vector<EvERam::RamMaterials> matls;
+    sDataMgr.GetRamMaterials(shipTypeID, matls);
+    for (auto& matl : matls)
+        value += matl.quantity * GetMaterialIndexPrice(matl.materialTypeID);
+    uint16 bpTypeID(sDataMgr.GetBlueprintTypeForProduct(shipTypeID));
+    if (bpTypeID != 0) {
+        std::vector<EvERam::RamRequirements> reqs;
+        sDataMgr.GetRamRequirements(bpTypeID, reqs);
+        for (auto& req : reqs)
+            if ((req.activityID == EvERam::Activity::Manufacturing) and (req.damagePerJob > 0) and !sDataMgr.IsSkillTypeID(req.requiredTypeID))
+                value += req.quantity * req.damagePerJob * GetMaterialIndexPrice(req.requiredTypeID);
+    }
+    if (value <= 0.0)
+        value = pType->basePrice();
+
+    // ship type multiplier (CCP never published theirs)
+    EvERam::bpTypeData bpData = EvERam::bpTypeData();
+    if (pType->groupID() == EVEDB::invGroups::StrategicCruiser) {
+        value *= sConfig.market.InsuranceMultiplierT3;
+    } else if (sDataMgr.GetBpDataForItem(shipTypeID, bpData) and (bpData.techLevel == 2)) {
+        value *= sConfig.market.InsuranceMultiplierT2;
+    } else {
+        value *= sConfig.market.InsuranceMultiplierT1;
+    }
+
+    m_insuranceValue[shipTypeID] = value;
+    return value;
 }
 
     /*DBColumnTypeMap colmap;

@@ -104,6 +104,14 @@ public:
     void UpdateMineralPrice();
     void GetCruPrices();
 
+    /* insurance value (Tyrannis dynamic insurance):  the ship's build materials at their market index price, times the
+     *  config multiplier of its tech level.  0 for rookie ships, capsules and non-ships */
+    double GetInsuranceValue(uint16 shipTypeID);
+    // trimmed mean sell price of a ship build material over market.InsuranceIndexDays, or its base price
+    double GetMaterialIndexPrice(uint16 typeID);
+    // rebuilds the material index from the transactions (daily, with the price history)
+    void UpdateMaterialIndex();
+
     static int64 GetMidnight()                          { int64 now(GetFileTimeNow()); return now - (now % EvE::Time::Day); }
 
 protected:
@@ -125,6 +133,10 @@ private:
 
     std::map<uint32, int64> m_orderModified;    // orderID/time of last modification
     std::map<std::string, int64> m_historyCacheDay; // history cache name/day it was built for
+    std::set<uint16> m_indexTypes;                  // ship build materials
+    std::map<uint16, double> m_materialIndex;       // typeID/market index price
+    std::map<uint16, double> m_insuranceValue;      // ship typeID/insurance value (memo, cleared with the index)
+    bool m_indexReady;
 
     // markets are regional.  there are 66 regions.
     // market orders are stored as {regionID/typeID}

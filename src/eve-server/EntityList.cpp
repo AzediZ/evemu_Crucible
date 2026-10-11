@@ -37,6 +37,7 @@
 #include "agents/Agent.h"
 #include "exploration/Exploration.h"
 #include "exploration/Probes.h"
+#include "station/InsuranceService.h"
 #include "map/MapDB.h"
 #include "market/MarketMgr.h"
 #include "market/MarketBotMgr.h"
@@ -291,6 +292,7 @@ void EntityList::Process() {
             if (m_minutes % 60 == 0) { // ~1h
                 MapDB::ManipulateTimeData();
                 svDataMgr.Process();    // development index decay
+                InsuranceService::ProcessExpiry();  // insurance expiry notifications
             }
         }
 

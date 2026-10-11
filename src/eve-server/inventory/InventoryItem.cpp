@@ -36,6 +36,7 @@
 #include "effects/EffectsProcessor.h"
 #include "exploration/Probes.h"
 #include "manufacturing/Blueprint.h"
+#include "ship/ShipDB.h"
 #include "pos/Structure.h"
 #include "ship/Ship.h"
 #include "ship/modules/ModuleItem.h"
@@ -701,6 +702,10 @@ void InventoryItem::Donate(uint32 new_owner/*ownerSystem*/, uint32 new_location/
     m_data.ownerID = new_owner;
     m_data.locationID = new_location;
 
+    // a ship given away loses its personal insurance
+    if ((new_owner != old_owner) and (m_type.categoryID() == EVEDB::invCategories::Ship))
+        ShipDB::OnShipOwnerChanged(m_itemID, new_owner);
+
     if ((old_location != m_data.locationID) // diff container
     or ((old_location == m_data.locationID) // or same container
         and (old_flag != m_data.flag))) {   //  but different flag
@@ -1046,6 +1051,10 @@ void InventoryItem::ChangeOwner(uint32 new_owner, bool notify/*false*/) {
 
     uint32 old_owner = m_data.ownerID;
     m_data.ownerID = new_owner;
+
+    // a ship given away loses its personal insurance
+    if (m_type.categoryID() == EVEDB::invCategories::Ship)
+        ShipDB::OnShipOwnerChanged(m_itemID, new_owner);
 
     if (sConfig.world.saveOnUpdate)
         SaveItem();

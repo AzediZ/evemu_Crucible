@@ -38,11 +38,15 @@ public:
 
     void BoundReleased (InsuranceBound* bound) override;
 
+    // ~1h.  InsuranceExpiration notifications, old rows removed
+    static void ProcessExpiry();
+
 protected:
     ShipDB m_db;
 
     PyResult GetContractForShip(PyCallArgs& call, PyInt* shipID);
     PyResult GetInsurancePrice(PyCallArgs& call, PyInt* typeID);
+    PyResult GetContracts(PyCallArgs& call, std::optional<PyRep*> isCorporation);
 
     BoundDispatcher* BindObject(Client *client, PyRep* bindParameters);
 };
@@ -50,17 +54,17 @@ protected:
 class InsuranceBound : public EVEBoundObject <InsuranceBound>
 {
 public:
-    InsuranceBound(EVEServiceManager& mgr, InsuranceService& parent, ShipDB* db);
+    InsuranceBound(EVEServiceManager& mgr, InsuranceService& parent, ShipDB* db, uint32 stationID);
 
 protected:
-    PyResult InsureShip(PyCallArgs& call, PyInt* shipID, PyFloat* amount, std::optional<PyInt*> isCorporation);
+    PyResult InsureShip(PyCallArgs& call, PyInt* shipID, PyRep* amount, std::optional<PyRep*> isCorporation);
     PyResult UnInsureShip(PyCallArgs& call, PyInt* shipID);
     PyResult GetContracts(PyCallArgs& call, std::optional<PyRep*> isCorporation);
     PyResult GetInsurancePrice(PyCallArgs& call, PyInt* typeID);
 
 protected:
     ShipDB* m_db;
-    LSCService* m_lsc;
+    uint32 m_stationID;
 };
 
 #endif

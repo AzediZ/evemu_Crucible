@@ -39,17 +39,32 @@ class ShipDB
 {
 public:
     // insurance functions  -allan  21Jul14
+    struct InsuranceRow {
+        bool isCorp;
+        uint16 typeID;
+        uint32 shipID;
+        uint32 ownerID;         // character, or the corp for corp insurance
+        float fraction;         // 0.5 .. 1.0
+        int64 startDate;
+        int64 endDate;
+        std::string shipName;
+    };
     PyRep *GetInsuranceByShipID(uint32 shipID);
     PyRep *GetInsuranceByOwnerID(uint32 ownerID);
-    bool InsertInsuranceByShipID(uint32 shipID, std::string name, uint32 ownerID, float level, double payOut, bool isCorpItem = false, uint8 numWeeks = 12);
-	static void DeleteInsuranceByShipID(uint32 shipID);
+    static bool InsertInsurance(uint32 shipID, uint16 typeID, const std::string& name, uint32 ownerID, bool isCorpItem, float fraction, double payOut, uint8 numWeeks = 12);
+    static void DeleteInsuranceByShipID(uint32 shipID);
+    static bool GetInsurance(uint32 shipID, InsuranceRow& into);
+    // contracts that ended before 'now' and weren't announced yet
+    static void GetExpiredInsurance(int64 now, std::vector<InsuranceRow>& into);
+    static void SetExpiryNotified(uint32 shipID);
+    // expired rows are kept a while to report "expired" when the ship dies
+    static void DeleteInsuranceEndedBefore(int64 time);
     // -1 not insured, 0 personal insurance, 1 corp insurance
     static int8 GetInsuranceKind(uint32 shipID);
-    // ends a ship's insurance (contract, trade, corp transfer...)
+    // ends a ship's insurance (contract, trade, owner change...)
     static void VoidInsurance(uint32 shipID);
-
-    // the insurance contract's payout, or the default payout for an uninsured ship (isDefault set)
-    double GetShipInsurancePayout(uint32 shipID, uint16 typeID, bool& isDefault);
+    // a ship changed owner:  personal insurance ends (corp insurance is checked at the loss)
+    static void OnShipOwnerChanged(uint32 shipID, uint32 newOwnerID);
 
     bool IsShipInsured(uint32 shipID);
 

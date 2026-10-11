@@ -11,6 +11,7 @@
 #include "inventory/Inventory.h"
 #include "mail/NotificationMgr.h"
 #include "npc/Drone.h"
+#include "market/MarketMgr.h"
 #include "ship/Ship.h"
 #include "packets/DogmaIM.h"
 #include "ship/modules/GenericModule.h"
@@ -2832,35 +2833,80 @@ void ShipSE::DamageRandModule(float chance) {
 }
 
 void ShipSE::PayInsurance() {
-    if (m_self->groupID() == EVEDB::invGroups::Rookieship) {
-        return;
+    // rookie ships and capsules have no insurance value
+    double value(sMktMgr.GetInsuranceValue(m_self->typeID()));
+
+    ShipDB::InsuranceRow row = ShipDB::InsuranceRow();
+    bool insured(ShipDB::GetInsurance(m_self->itemID(), row));
+    ShipDB::DeleteInsuranceByShipID(m_self->itemID());
+
+    // the pilot's corp decides corp insurance (void when the ship dies in someone else's hands)
+    uint32 pilotCorpID(0);
+    if (m_shipRef->HasPilot())
+        pilotCorpID = m_shipRef->GetPilot()->GetCorporationID();
+
+    // an insured ship pays its coverage of the value at the time of the loss.  an invalid contract (not the owner any more,
+    //  expired, no value) is reported and the ship gets the default payout like an uninsured one
+    double fraction(sConfig.market.InsuranceDefaultPayout);
+    bool isDefault(true);
+    uint32 payeeID(m_ownerID);
+    if (insured) {
+        int8 reason(0);
+        if (value <= 0) {
+            reason = 3;
+        } else if (row.endDate < GetFileTimeNow()) {
+            reason = 2;
+        } else if (row.isCorp ? (m_shipRef->HasPilot() ? (pilotCorpID != row.ownerID) : (m_ownerID != row.ownerID)) : (m_ownerID != row.ownerID)) {
+            reason = 1;
+        }
+
+        if (reason == 0) {
+            fraction = row.fraction;
+            isDefault = false;
+            payeeID = row.ownerID;
+        } else {
+            // Notifications/bodyInsuranceInvalid
+            PyDict* data = new PyDict();
+                data->SetItemString("shipID", new PyInt(m_self->itemID()));
+                data->SetItemString("typeID", new PyInt(m_self->typeID()));
+                data->SetItemString("startDate", new PyLong(row.startDate));
+                data->SetItemString("endDate", new PyLong(row.endDate));
+                data->SetItemString("reason", new PyInt(reason));
+                data->SetItemString("ownerID", new PyInt(m_ownerID));
+            if (row.isCorp) {
+                NotificationMgr::SendToCorp(row.ownerID, Corp::Role::Accountant | Corp::Role::JuniorAccountant, Notify::Types::InsuranceInvalidated, corpSCC, data);
+            } else if (IsCharacterID(row.ownerID)) {
+                NotificationMgr::Send(row.ownerID, Notify::Types::InsuranceInvalidated, corpSCC, data);
+            } else {
+                PyDecRef(data);
+            }
+        }
     }
+
+    double payout(std::round(value * fraction * 100.0) / 100.0);
+    if ((payout <= 0) or (!IsCharacterID(payeeID) and !IsPlayerCorp(payeeID)))
+        return;
 
     std::string reason = "Insurance payment for loss of the ship ";
     reason += m_self->itemName();
-
-    // an uninsured ship gets the default payout (40% of its insurance value)
-    bool isDefault(false);
-    double payout(m_db.GetShipInsurancePayout(m_self->itemID(), m_self->typeID(), isDefault));
-    if (payout > 0)
-        AccountService::TransferFunds(
-            corpSCC,
-            m_ownerID,
-            payout,
-            reason,
-            Journal::EntryType::Insurance,
-            m_self->typeID()
-        );
-
-    ShipDB::DeleteInsuranceByShipID(m_self->itemID());
+    AccountService::TransferFunds(
+        corpSCC,
+        payeeID,
+        payout,
+        reason,
+        Journal::EntryType::Insurance,
+        m_self->typeID()
+    );
 
     // the payout notification (Notifications/bodyInsurancePayout).  'payout' set adds the default payout text
-    if ((payout > 0) and IsCharacterID(m_ownerID)) {
-        PyDict* data = new PyDict();
-            data->SetItemString("itemID", new PyInt(m_self->itemID()));
-            data->SetItemString("amount", new PyFloat(payout));
-            data->SetItemString("payout", new PyInt(isDefault ? 1 : 0));
-        NotificationMgr::Send(m_ownerID, Notify::Types::InsurancePayout, corpSCC, data);
+    PyDict* data = new PyDict();
+        data->SetItemString("itemID", new PyInt(m_self->itemID()));
+        data->SetItemString("amount", new PyFloat(payout));
+        data->SetItemString("payout", new PyInt(isDefault ? 1 : 0));
+    if (IsPlayerCorp(payeeID)) {
+        NotificationMgr::SendToCorp(payeeID, Corp::Role::Accountant | Corp::Role::JuniorAccountant, Notify::Types::InsurancePayout, corpSCC, data);
+    } else {
+        NotificationMgr::Send(payeeID, Notify::Types::InsurancePayout, corpSCC, data);
     }
 }
 
