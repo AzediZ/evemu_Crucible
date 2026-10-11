@@ -36,7 +36,7 @@ class LSCChannel;
 
 class LSCChannelChar {
 public:
-    LSCChannelChar(LSCChannel *chan, uint32 corpID, uint32 charID, std::string charName, uint32 allianceID, uint32 warFactionID, int64 role, uint32 extra, LSC::Mode mode) :
+    LSCChannelChar(LSCChannel *chan, uint32 corpID, uint32 charID, std::string charName, uint32 allianceID, uint32 warFactionID, int64 role, uint32 extra, int32 mode) :
       m_parent(chan),
       m_corpID(corpID),
       m_charID(charID),
@@ -50,6 +50,10 @@ public:
     ~LSCChannelChar() { }
     PyRep *Encode() const;
 
+    uint32 GetCorpID() const                            { return m_corpID; }
+    uint32 GetAllianceID() const                        { return m_allianceID; }
+    void SetMode(int32 mode)                            { m_mode = mode; }
+
 protected:
     LSCChannel *m_parent;
     uint32 m_corpID;
@@ -59,13 +63,16 @@ protected:
     uint32 m_warFactionID;
     int64 m_role;
     uint32 m_extra;
-    LSC::Mode m_mode;
+    int32 m_mode;
 };
 
+/* one access control entry.  accessor is a char, corp or alliance id; 0 is the channel default (None to the client).
+ *  untilWhen (filetime, 0 = permanent) entries go back to originalMode when they run out (gags, kicks)
+ */
 class LSCChannelMod {
 public:
-    LSCChannelMod(LSCChannel * chan, uint32 accessor, int64 untilWhen, uint32 originalMode, std::string admin, std::string reason, LSC::Mode mode) :
-      m_parent(chan),
+    LSCChannelMod(uint32 accessor = 0, int32 mode = LSC::Mode::chUnspecified, int64 untilWhen = 0,
+                  int32 originalMode = LSC::Mode::chUnspecified, std::string admin = "", std::string reason = "") :
       m_accessor(accessor),
       m_mode(mode),
       m_untilWhen(untilWhen),
@@ -73,17 +80,15 @@ public:
       m_admin(admin),
       m_reason(reason) { }
 
-    ~LSCChannelMod() { }
-    PyRep * Encode();
+    // one line of the channel's acl rowset (accessor, mode, untilWhen, originalMode, admin, reason)
+    PyRep* Encode() const;
 
-    LSC::Mode GetMode() const                           { return m_mode; }
+    int32 GetMode() const                               { return m_mode; }
 
-protected:
-    LSCChannel * m_parent;    // we do not own this
     uint32 m_accessor;
-    LSC::Mode m_mode;
+    int32 m_mode;
     int64 m_untilWhen;
-    uint32 m_originalMode;
+    int32 m_originalMode;
     std::string m_admin;
     std::string m_reason;
 };
@@ -97,9 +102,9 @@ public:
     ~LSCChannel();
 
     PyRep *EncodeID();
-    // the password is only sent when showPassword (owner/operator/GM)
-    PyRep *EncodeStaticChannel(uint32 charID, bool showPassword = false);
-    PyRep *EncodeDynamicChannel(uint32 charID, bool showPassword = false);
+    // the password is only sent when showPassword (owner/operator/GM).  mode is pClient's access mode
+    PyRep *EncodeStaticChannel(Client* pClient, bool showPassword = false, bool subscribed = false);
+    PyRep *EncodeDynamicChannel(Client* pClient, bool showPassword = false, bool subscribed = false);
     PyRep *EncodeChannelMods();
     PyRep *EncodeChannelChars();
     PyRep *EncodeEmptyChannelChars();
@@ -112,14 +117,49 @@ public:
     bool IsOperator(uint32 charID);
     bool HasPassword() const                            { return !m_password.empty(); }
 
-    // this is used for updating joined clients when channel config is changed.
-    void UpdateConfig();
+    /* access control (mirrors the client's lscengine.GetAccessInfo, plus the server side extras:
+     *  corp ChatManager is operator in his corp/alliance channel, the fleet boss/commander in fleet channels)
+     */
+    int32 GetAccessMode(Client* pClient);
+    bool CanSpeak(Client* pClient)                      { return (GetAccessMode(pClient) >= LSC::Mode::chSpeaker); }
+    // sets (or with chUnspecified, removes) an entry, tells the members, kicks the ones who lost access
+    void SetAccess(uint32 accessor, int32 mode, int64 untilWhen, const std::string& reason, Client* pAdmin);
+    // adds an entry without telling anyone (startup, new channels)
+    void LoadMod(const LSCChannelMod& mod)              { m_mods[mod.m_accessor] = mod; }
+    bool HasDefaultMod()                                { return (m_mods.find(0) != m_mods.end()); }
+    // mode of the entry for accessor (0 = default), chUnspecified when there is none
+    int32 GetEntryMode(uint32 accessor);
+    // restores entries whose time ran out
+    void ExpireMods(Client* pAdmin = nullptr);
+
+    // OnLSC(channelID, count, method, who, args) to every member.  consumes args
+    void Broadcast(const char* method, Client* pWho, PyTuple* args);
+
+    // config changes, each told to the members
+    void Rename(const std::string& name, Client* pWho);
+    void ChangeMOTD(const std::string& motd, Client* pWho);
+    void ChangeLanguageRestriction(bool restricted, Client* pWho);
+    // only privileged members get the new password, the others "*" (or "" when cleared)
+    void ChangePassword(const std::string& password, Client* pWho);
+    void ChangeCreator(uint32 ownerID, Client* pWho);
+    void ChangeMemberless(bool memberless, Client* pWho);
+
+    // private (temporary) channels can only be joined by their owner and the characters invited to them
+    void AddInvite(uint32 charID)                       { m_invited.insert(charID); }
+    bool IsInvited(uint32 charID)                       { return (m_invited.find(charID) != m_invited.end()); }
+    // player created channels (not the server's static ones)
+    bool IsUserChannel() const;
+    // channel ids that are ints to the client (the rest are ((type, id),) tuples)
+    bool HasIntID() const;
 
     void Evacuate(Client * c);
     void SendMessage(Client * c, const char * message, bool self = false);
     // a message from "EVE System" to every member (server broadcasts and notices)
     void SendSystemMessage(const char * message);
     void SendServerMOTD(Client* pClient);
+
+    // world.chatLogs: append a line to <logDir>/chat_YYYY-MM-DD.log
+    static void LogChat(LSCChannel* pChan, Client* pClient, const std::string& message);
 
     void GetChannelInfo(int32 * channelID, uint32 * ownerID, std::string &displayName, std::string &motd, std::string &comparisonKey,
             bool * memberless, std::string &password, bool * mailingList, uint32 * cspa, uint32 * temporary);
@@ -135,6 +175,7 @@ public:
     bool                GetMemberless()                 { return m_memberless; }
     bool                GetMailingList()                { return m_mailingList; }
     bool                GetTemporary()                  { return m_temporary; }
+    bool                GetLanguageRestriction()        { return m_languageRestriction; }
     int32               GetGrpMsgID()                   { return m_groupMessageID; }
     int32               GetChMsgID()                    { return m_channelMessageID; }
     uint16              GetCSPA()                       { return m_cspa; }
@@ -169,10 +210,15 @@ protected:
     std::string         m_comparisonKey;
     std::string         m_password;
 
-    std::map<uint32, LSCChannelMod> m_mods;
+    std::map<uint32, LSCChannelMod> m_mods;     // key = accessor, 0 = default
     std::map<uint32, LSCChannelChar> m_chars;
+    std::set<uint32> m_invited;
 
     OnLSC_SenderInfo *_FakeSenderInfo();
+    // saves (or deletes) one entry for channels that outlive a restart
+    void PersistMod(uint32 accessor);
+    // sends OnLSC to the given characters
+    void SendOnLSC(const std::set<uint32>& charIDs, const char* method, Client* pWho, PyTuple* args);
 };
 
 #endif

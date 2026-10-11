@@ -63,7 +63,7 @@ int32 LSCDB::GetNextAvailableChannelID()
         "SELECT"
         "    channelID "
         " FROM channels "
-        " WHERE channelID >= %i ", LSCService::BASE_CHANNEL_ID ))
+        " WHERE channelID >= %i ORDER BY channelID", LSCService::BASE_CHANNEL_ID ))
     {
         _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
         return 0;
@@ -86,15 +86,21 @@ int32 LSCDB::GetNextAvailableChannelID()
 }
 
 void LSCDB::UpdateChannelInfo(LSCChannel *channel) {
-    std::string new_password = "NULL";
-    if (channel->GetPassword() != "")
-        new_password = "'" + channel->GetPassword() + "'";
+    std::string name, motd, key, password("NULL");
+    sDatabase.DoEscapeString(name, channel->GetDisplayName());
+    sDatabase.DoEscapeString(motd, channel->GetMOTD());
+    sDatabase.DoEscapeString(key, channel->GetComparisonKey());
+    if (!channel->GetPassword().empty()) {
+        std::string pw;
+        sDatabase.DoEscapeString(pw, channel->GetPassword());
+        password = "'" + pw + "'";
+    }
 
     DBerror err;
     if (!sDatabase.RunQuery(err,
         " INSERT INTO channels"
-        "   (channelID, ownerID, displayName, motd, comparisonKey, memberless, password, mailingList, cspa)"
-        " VALUES (%i, %u, '%s', '%s', '%s', %u, '%s', %u, %u)"
+        "   (channelID, ownerID, displayName, motd, comparisonKey, memberless, password, mailingList, cspa, languageRestriction)"
+        " VALUES (%i, %u, '%s', '%s', '%s', %u, %s, %u, %u, %u)"
         " ON DUPLICATE KEY UPDATE"
         "  ownerID=VALUES(ownerID),"
         "  displayName=VALUES(displayName),"
@@ -103,16 +109,18 @@ void LSCDB::UpdateChannelInfo(LSCChannel *channel) {
         "  memberless=VALUES(memberless),"
         "  password=VALUES(password),"
         "  mailingList=VALUES(mailingList),"
-        "  cspa=VALUES(cspa)",
+        "  cspa=VALUES(cspa),"
+        "  languageRestriction=VALUES(languageRestriction)",
         channel->GetChannelID(),
         channel->GetOwnerID(),
-        channel->GetDisplayName().c_str(),
-        channel->GetMOTD().c_str(),
-        channel->GetComparisonKey().c_str(),
+        name.c_str(),
+        motd.c_str(),
+        key.c_str(),
         (channel->GetMemberless() ? 1 : 0),
-        new_password.c_str(),
+        password.c_str(),
         (channel->GetMailingList() ? 1 : 0),
-        channel->GetCSPA()))
+        channel->GetCSPA(),
+        (channel->GetLanguageRestriction() ? 1 : 0)))
     {
         _log(DATABASE__ERROR, "Error in query: %s", err.c_str());
     }
@@ -121,7 +129,7 @@ void LSCDB::UpdateChannelInfo(LSCChannel *channel) {
 void LSCDB::UpdateSubscription(int32 channelID, Client* pClient) {
     DBerror err;
     sDatabase.RunQuery(err,
-        " INSERT INTO channelChars "
+        " INSERT IGNORE INTO channelChars "
         " (channelID, corpID, charID, allianceID, role, extra) "
         " VALUES (%i, %i, %i, %i, %lli, 0) ",
         channelID, pClient->GetCorporationID(),  pClient->GetCharacterID(), pClient->GetAllianceID(), pClient->GetAccountRole());
@@ -130,6 +138,8 @@ void LSCDB::UpdateSubscription(int32 channelID, Client* pClient) {
 void LSCDB::DeleteChannel(int32 channelID)
 {
     DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM channelMods WHERE channelID=%i", channelID);
+    sDatabase.RunQuery(err, "DELETE FROM channelChars WHERE channelID=%i", channelID);
     sDatabase.RunQuery(err, "DELETE FROM channels WHERE channelID=%i", channelID);
 }
 
@@ -576,4 +586,120 @@ bool LSCDB::DeleteMessage(uint32 messageID, uint32 readerID) {
     }
 
     return ret;
+}
+
+/*
+ * user channel persistence and access lists
+ */
+void LSCDB::LoadUserChannels(std::vector<UserChannelRow>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT channelID, ownerID, displayName, motd, comparisonKey, memberless, password, mailingList, cspa, languageRestriction"
+            " FROM channels WHERE channelID >= %i", LSCService::BASE_CHANNEL_ID))
+    {
+        _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        UserChannelRow chan;
+            chan.channelID = row.GetInt(0);
+            chan.ownerID = row.GetUInt(1);
+            chan.displayName = (row.IsNull(2) ? "" : row.GetText(2));
+            chan.motd = (row.IsNull(3) ? "" : row.GetText(3));
+            chan.comparisonKey = (row.IsNull(4) ? "" : row.GetText(4));
+            chan.memberless = (row.GetInt(5) != 0);
+            chan.password = (row.IsNull(6) ? "" : row.GetText(6));
+            chan.mailingList = (row.GetInt(7) != 0);
+            chan.cspa = row.GetUInt(8);
+            chan.languageRestriction = (row.GetInt(9) != 0);
+        into.push_back(chan);
+    }
+}
+
+void LSCDB::LoadChannelMods(std::vector<std::pair<int32, LSCChannelMod>>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+            "SELECT channelID, accessor, mode, untilWhen, originalMode, admin, reason FROM channelMods"))
+    {
+        _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        LSCChannelMod mod(row.GetUInt(1), row.GetInt(2), (row.IsNull(3) ? 0 : row.GetInt64(3)),
+                          (row.IsNull(4) ? (int32)LSC::Mode::chUnspecified : row.GetInt(4)),
+                          (row.IsNull(5) ? "" : row.GetText(5)), (row.IsNull(6) ? "" : row.GetText(6)));
+        into.push_back(std::make_pair(row.GetInt(0), mod));
+    }
+}
+
+void LSCDB::SaveChannelMod(int32 channelID, const LSCChannelMod& mod)
+{
+    std::string admin, reason;
+    sDatabase.DoEscapeString(admin, mod.m_admin);
+    sDatabase.DoEscapeString(reason, mod.m_reason);
+    std::string untilWhen("NULL"), originalMode("NULL");
+    if (mod.m_untilWhen != 0)
+        untilWhen = std::to_string(mod.m_untilWhen);
+    if (mod.m_originalMode != LSC::Mode::chUnspecified)
+        originalMode = std::to_string(mod.m_originalMode);
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "INSERT INTO channelMods (channelID, accessor, mode, untilWhen, originalMode, admin, reason)"
+            " VALUES (%i, %u, %i, %s, %s, '%s', '%s')"
+            " ON DUPLICATE KEY UPDATE mode = VALUES(mode), untilWhen = VALUES(untilWhen), originalMode = VALUES(originalMode),"
+            " admin = VALUES(admin), reason = VALUES(reason)",
+            channelID, mod.m_accessor, mod.m_mode, untilWhen.c_str(), originalMode.c_str(), admin.c_str(), reason.c_str()))
+        _log(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void LSCDB::DeleteChannelMod(int32 channelID, uint32 accessor)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM channelMods WHERE channelID = %i AND accessor = %u", channelID, accessor);
+}
+
+void LSCDB::GetSubscribedChannels(uint32 charID, std::set<int32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT channelID FROM channelChars WHERE charID = %u", charID)) {
+        _log(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.insert(row.GetInt(0));
+}
+
+uint32 LSCDB::GetSubscriberCount(int32 channelID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM channelChars WHERE channelID = %i", channelID))
+        return 1;   // keep the channel when in doubt
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 1;
+    return row.GetUInt(0);
+}
+
+void LSCDB::DeleteOrphanUserChannels()
+{
+    // user channels nobody is subscribed to any more
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "DELETE c FROM channels AS c"
+            " LEFT JOIN channelChars AS s ON s.channelID = c.channelID"
+            " WHERE c.channelID >= %i AND s.channelID IS NULL", LSCService::BASE_CHANNEL_ID))
+        _log(DATABASE__ERROR, "Error in query: %s", err.c_str());
+    if (!sDatabase.RunQuery(err,
+            "DELETE m FROM channelMods AS m"
+            " LEFT JOIN channels AS c ON c.channelID = m.channelID"
+            " WHERE m.channelID >= %i AND c.channelID IS NULL", LSCService::BASE_CHANNEL_ID))
+        _log(DATABASE__ERROR, "Error in query: %s", err.c_str());
 }

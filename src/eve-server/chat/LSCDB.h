@@ -32,6 +32,20 @@
 class Client;
 class LSCService;
 class LSCChannel;
+class LSCChannelMod;
+
+struct UserChannelRow {
+    int32 channelID;
+    uint32 ownerID;
+    std::string displayName;
+    std::string motd;
+    std::string comparisonKey;
+    std::string password;
+    bool memberless;
+    bool mailingList;
+    bool languageRestriction;
+    uint32 cspa;
+};
 
 class LSCDB
 : public ServiceDB
@@ -75,8 +89,20 @@ public:
     void UpdateChannelInfo(LSCChannel *channel);
     void UpdateSubscription(int32 channelID, Client* pClient);
 
+    // also drops its access list and subscriptions
     void DeleteChannel(int32 channelID);
     void DeleteSubscription(int32 channelID, uint32 charID);
+
+    /* user channels (ids >= LSCService::BASE_CHANNEL_ID) and access lists outlive restarts */
+    static void LoadUserChannels(std::vector<UserChannelRow>& into);
+    // every stored access entry (channelID, entry)
+    static void LoadChannelMods(std::vector<std::pair<int32, LSCChannelMod>>& into);
+    static void SaveChannelMod(int32 channelID, const LSCChannelMod& mod);
+    static void DeleteChannelMod(int32 channelID, uint32 accessor);
+    static void GetSubscribedChannels(uint32 charID, std::set<int32>& into);
+    static uint32 GetSubscriberCount(int32 channelID);
+    // chat.UserChannelCleanup: user channels with no subscribers left
+    static void DeleteOrphanUserChannels();
 
     /* chat gags (chrChatGags) */
     static void SaveGag(uint32 charID, int64 until, const std::string& reason, uint32 gmID);

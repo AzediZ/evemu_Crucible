@@ -314,6 +314,7 @@ public:
         bool EnforceRookieInHelp;
         bool EnforceChannelAccess;
         bool ContactStatusMutual;
+        bool UserChannelCleanup;
     } chat;
 
     // From <crime>

@@ -151,9 +151,8 @@ Client::~Client() {
     if (pShipSE != nullptr)
         WarpOut();      // need to make tests for this...it will segfault if m_char is invalid
 
-    // LSC logout
-    for (auto cur : m_channels)
-        cur->LeaveChannel(this);
+    // LSC logout (also drops private conversations nobody is left in)
+    m_lsc->CharacterLogout(this);
 
     if (m_char.get() != nullptr) {   // we have valid character
         /** @todo  - for warping to random point when client logs out in space...
@@ -2113,6 +2112,12 @@ void Client::SendSessionChange()
     if (scn.changes->empty())
         return;
 
+    // location, corp, alliance or fleet changes may take the character out of chat channels
+    bool checkChannels = false;
+    for (const char* key : { "solarsystemid2", "constellationid", "regionid", "corpid", "allianceid", "fleetid", "wingid", "squadid" })
+        if (scn.changes->GetItemString(key) != nullptr)
+            checkChannels = true;
+
     if (is_log_enabled(CLIENT__SESSION)) {
         _log(CLIENT__SESSION, "Session updated.  Sending session change");
         scn.changes->Dump(CLIENT__SESSION, "   Changes: ");
@@ -2154,6 +2159,9 @@ void Client::SendSessionChange()
 
     // clean up packet after being created by 'new'
     //SafeDelete(packet);
+
+    if (checkChannels and (m_lsc != nullptr))
+        m_lsc->EnforceMembership(this);
 }
 
 void Client::FlushQueue() {

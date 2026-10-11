@@ -82,6 +82,11 @@ LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
     this->Add("SendMessage", &LSCService::SendMessage);
     this->Add("Invite", &LSCService::Invite);
     this->Add("AccessControl", &LSCService::AccessControl);
+    this->Add("RenameChannel", &LSCService::RenameChannel);
+    this->Add("SetChannelMOTD", &LSCService::SetChannelMOTD);
+    this->Add("SetChannelLanguageRestriction", &LSCService::SetChannelLanguageRestriction);
+    this->Add("ForgetChannel", &LSCService::ForgetChannel);
+    this->Add("VoiceStatus", &LSCService::VoiceStatus);
 
     this->Add("GetMyMessages", &LSCService::GetMyMessages);
     this->Add("GetMessageDetails", &LSCService::GetMessageDetails);
@@ -89,11 +94,8 @@ LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
     this->Add("MarkMessagesRead", &LSCService::MarkMessagesRead);
     this->Add("DeleteMessages", &LSCService::DeleteMessages);
 
-	// sm.RemoteSvc('LSC').VoiceStatus(eveChannelID, 2)  gag
-	// sm.RemoteSvc('LSC').VoiceStatus(eveChannelID, 1)  ungag
-	// sm.RemoteSvc('LSC').VoiceStatus(eveChannelName, 0) leave channel
-
     CreateStaticChannels();
+    LoadUserChannels();
 
     // gags outlive restarts
     s_gags.clear();
@@ -138,18 +140,37 @@ const int cspa = 2950; // CONCORD Spam Prevention Act
 
 PyResult LSCService::GetChannels(PyCallArgs &call)
 {
+    /* the static channels, the caller's corp and alliance channels and the user channels the caller owns or is
+     *  subscribed to.  never other people's private conversations
+     */
     ChannelInfo info;
     info.lines = new PyList();
 
-    uint32 regionID = call.client->GetRegionID(), constID = call.client->GetConstellationID(), systemID = call.client->GetSystemID();
-    uint32 corpID = call.client->GetCorporationID();
+    uint32 charID = call.client->GetCharacterID();
+    uint32 corpID = call.client->GetCorporationID(), allianceID = call.client->GetAllianceID();
+    std::set<int32> subscribed;
+    m_db.GetSubscribedChannels(charID, subscribed);
 
     std::map<int32, LSCChannel*>::iterator cur = m_channels.begin();
     for (; cur != m_channels.end(); cur++) {
+        bool isSubscribed(false);
         switch (cur->second->GetType()) {
             case LSC::Type::corp: {
                 if (cur->first != corpID)
                     continue;
+            } break;
+            case LSC::Type::alliance: {
+                if ((allianceID == 0) or (cur->first != allianceID))
+                    continue;
+            } break;
+            case LSC::Type::normal: {
+                if (cur->second->IsUserChannel()) {
+                    if (cur->second->GetTemporary())
+                        continue;
+                    isSubscribed = (subscribed.find(cur->first) != subscribed.end());
+                    if (!isSubscribed and (cur->second->GetOwnerID() != charID))
+                        continue;
+                }
             } break;
             case LSC::Type::region:
             case LSC::Type::constellation:
@@ -163,9 +184,11 @@ PyResult LSCService::GetChannels(PyCallArgs &call)
             case LSC::Type::custom: {
                 continue;
             } break;
+            default:
+                break;
         }
 
-        info.lines->AddItem(cur->second->EncodeStaticChannel(call.client->GetCharacterID(), IsPrivileged(call.client, cur->second)));
+        info.lines->AddItem(cur->second->EncodeStaticChannel(call.client, IsPrivileged(call.client, cur->second), isSubscribed));
     }
 
     if (is_log_enabled(LSC__RSP_DUMP))
@@ -214,6 +237,9 @@ PyResult LSCService::CreateChannel(PyCallArgs& call, PyRep* channelName)
     } else if (create)  {
         // figure out how to determine owner of this channel.....corp, ally, char.  for now, use charID
         int32 nextID = m_db.GetNextAvailableChannelID();
+        // private conversations are never stored, so skip the ids in use here
+        while ((nextID != 0) and (m_channels.find(nextID) != m_channels.end()))
+            nextID = (nextID < INT32_MAX ? nextID + 1 : 0);
         if (nextID != 0) {
             std::string comStr = name;
             boost::algorithm::to_lower(comStr);
@@ -221,9 +247,16 @@ PyResult LSCService::CreateChannel(PyCallArgs& call, PyRep* channelName)
             channel = CreateChannel(nextID, pClient->GetCharacterID(), name.c_str(), "motd", nullptr, comStr.c_str(), LSC::Type::normal, cspa,\
             nextID, nextID, memberless, false, temporary, false);
         }
-        // save non-temp channel info for new channels
-        if ((channel) and (!temporary))
-            m_db.UpdateChannelInfo(channel);
+        if (channel != nullptr) {
+            // new channels are public; the owner restricts them in the settings
+            LSCChannelMod mod(0, LSC::Mode::chConversationalist);
+            channel->LoadMod(mod);
+            // save non-temp channel info for new channels
+            if (!temporary) {
+                m_db.UpdateChannelInfo(channel);
+                LSCDB::SaveChannelMod(channel->GetChannelID(), mod);
+            }
+        }
     } else {
         // make error here for !join and !create  (should never hit)
     }
@@ -256,7 +289,7 @@ PyResult LSCService::CreateChannel(PyCallArgs& call, PyRep* channelName)
     if (!channel->IsJoined(pClient->GetCharacterID()))  {
         if (channel->JoinChannel(pClient)) {
             //if ((channel->GetChannelID() < 0) or (channel->GetChannelID() > maxStaticChannel)) {
-                reply.ChannelInfo = channel->EncodeDynamicChannel(pClient->GetCharacterID(), IsPrivileged(pClient, channel));
+                reply.ChannelInfo = channel->EncodeDynamicChannel(pClient, IsPrivileged(pClient, channel), channel->IsUserChannel() and !channel->GetTemporary());
             //} else {
             //    reply.ChannelInfo = channel->EncodeStaticChannel(pClient->GetCharacterID());
             //}
@@ -265,7 +298,7 @@ PyResult LSCService::CreateChannel(PyCallArgs& call, PyRep* channelName)
         } else {
             reply.ChannelInfo = new PyInt(LSC::Error::errUnspecified);
         }
-        if (!temporary)
+        if (channel->IsUserChannel() and !channel->GetTemporary())
             m_db.UpdateSubscription(channel->GetChannelID(), pClient);
 
         return reply.Encode();
@@ -366,9 +399,12 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
             continue;
         } else {
             if (channel->JoinChannel(call.client)) {
+                bool subscribe = (channel->IsUserChannel() and !channel->GetTemporary());
+                if (subscribe)
+                    m_db.UpdateSubscription(channelID, call.client);
                 ChannelJoinOK cjok;
                 //if ((channelID < 0) or (channelID > maxStaticChannel)) {
-                    cjok.ChannelInfo = channel->EncodeDynamicChannel(charID, IsPrivileged(call.client, channel));
+                    cjok.ChannelInfo = channel->EncodeDynamicChannel(call.client, IsPrivileged(call.client, channel), subscribe);
                 //} else {
                 //    cjok.ChannelInfo = channel->EncodeStaticChannel(charID);
                 //}
@@ -452,7 +488,12 @@ PyResult LSCService::SendMessage(PyCallArgs& call, PyRep* channelInfo, PyWString
             int64 minutes((until - GetFileTimeNow()) / Win32Time_Minute + 1);
             throw CustomError ("You are gagged for another %lli minutes: %s", minutes, reason.c_str());
         }
+        // the channel's access list (moderated channels, gags, blocked default)
+        if (!itr->second->CanSpeak(call.client))
+            throw UserError("LSCCannotSendMessage").AddFormatValue("msg", new PyString("You are not allowed to speak in this channel."));
         itr->second->SendMessage(call.client, message.c_str());
+        if (sConfig.world.chatLogs)
+            LSCChannel::LogChat(itr->second, call.client, message);
         // console 'hear all'
         if (sConsole.HearAll())
             sLog.Magenta("        Chat", "[%s] %s: %s", itr->second->GetDisplayName().c_str(), call.client->GetName(), message.c_str());
@@ -503,251 +544,234 @@ bool LSCService::IsGagged(uint32 charID, int64& until, std::string& reason) {
     return true;
 }
 
-PyResult LSCService::AccessControl(PyCallArgs& call, PyRep* channelInfo, PyInt* characterID, PyInt* role)
+PyResult LSCService::AccessControl(PyCallArgs& call, PyRep* channelInfo, PyRep* accessor, PyInt* mode, std::optional<PyRep*> untilWhen, std::optional<PyRep*> reason)
 {
-    if (is_log_enabled(LSC__CALL_DUMP)) {
-        sLog.Warning("LSCService::Handle_AccessControl()", "size=%lu", call.tuple->size());
-        call.Dump(LSC__CALL_DUMP);
-    }
-    /*  args passed as channelID, charID, mode
-     *
-     * 20:43:44 W LSCService::Handle_AccessControl(): size=3
-     * 20:43:44 [LSC_CDump]   Call Arguments:
-     * 20:43:44 [LSC_CDump]       Tuple: 3 elements
-     * 20:43:44 [LSC_CDump]         [ 0] Integer field: 2100000000
-     * 20:43:44 [LSC_CDump]         [ 1] (None)
-     * 20:43:44 [LSC_CDump]         [ 2] Integer field: 1
-     * 20:43:44 [LSC_CDump]   Call Named Arguments:
-     * 20:43:44 [LSC_CDump]     Argument 'machoVersion':
-     * 20:43:44 [LSC_CDump]         Integer field: 1
+    /* AccessControl(channelID, accessor|None, mode[, untilWhen, reason])
+     *  gag = LISTENER with untilWhen/reason, ungag = CONVERSATIONALIST (or NOTSPECIFIED with a past time),
+     *  kick = DISALLOWED with untilWhen/reason; the settings dialog sets allowed/blocked/operator entries and the
+     *  default (accessor None)
      */
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
+    if (channel == nullptr)
+        throw UserError("LSCCannotAccessControl").AddFormatValue("msg", new PyString("That channel does not exist."));
+    if (!IsPrivileged(call.client, channel))
+        throw UserError("LSCCannotAccessControl").AddFormatValue("msg", new PyString("You are not allowed to change the access list of this channel."));
 
-    // WARNING: This call contains manual packet decoding to handle Access Control since I didn't want to monkey around with the LSCPkts.xmlp.
-    // -- Aknor Jaden (2010-11-26)
+    uint32 accessorID = (accessor->IsNone() ? 0 : PyRep::IntegerValueU32(accessor));
+    int32 newMode = mode->value();
+    switch (newMode) {
+        case LSC::Mode::chDisallowed:
+        case LSC::Mode::chUnspecified:
+        case LSC::Mode::chListener:
+        case LSC::Mode::chSpeaker:
+        case LSC::Mode::chConversationalist:
+        case LSC::Mode::chOperator:
+        case LSC::Mode::chCreator:
+            break;
+        default:
+            throw UserError("LSCCannotAccessControl").AddFormatValue("msg", new PyString("That is not a valid access mode."));
+    }
 
-    int32 channel_id = 0;
+    if ((accessorID != 0) and (accessorID == channel->GetOwnerID()))
+        throw UserError("LSCCannotAccessControl").AddFormatValue("msg", new PyString("The channel owner's access can't be changed."));
 
-    //m_db->UpdateChannelInfo(channel);
+    // operators are made (and unmade) by the owner
+    bool isCreator = (channel->GetAccessMode(call.client) >= LSC::Mode::chCreator);
+    if (!isCreator and ((newMode >= LSC::Mode::chOperator) or (channel->GetEntryMode(accessorID) >= LSC::Mode::chOperator)))
+        throw UserError("LSCCannotAccessControl").AddFormatValue("msg", new PyString("Only the channel owner can change operators."));
 
-    // BIG TODO:  The whole reason why normal players cannot post chats in other channels has to do with the Access Mode
-    // in the channel settings dialog in the client.  Now, I don't know why chatting in the Help/Rookie Help is not allowed
-    // for ANY normal players, however, at the very least, implementing the change in Access Mode to 3 = Allowed may fix
-    // the issue.  The only thing to figure out is how to format a packet to be sent to the client(s) to inform of the change
-    // in access mode.  Is this really needed though, since the owner will change the mode and the owner's client will know
-    // immediately, and anyone wanting to join will get that mode value when the JoinChannel has been called.
+    int64 until(0);
+    if (untilWhen.has_value() and (untilWhen.value() != nullptr) and !untilWhen.value()->IsNone()) {
+        until = PyRep::IntegerValue(untilWhen.value());
+        // the client offers up to 30 days
+        int64 maxUntil = (int64)GetFileTimeNow() + 30 * EvE::Time::Day;
+        if (until > maxUntil)
+            until = maxUntil;
+    }
+    std::string reasonStr;
+    if (reason.has_value() and (reason.value() != nullptr) and !reason.value()->IsNone())
+        reasonStr = PyRep::StringContent(reason.value());
 
-    // call.tuple->GetItem(0)->AsInt()->value() = channel ID
-    // call.tuple->GetItem(1)->IsNone() == true  <---- change made to "" field
-    // call.tuple->GetItem(2)->AsInt()->value() =
-    //     0 = ??
-    //     1 = Moderated
-    //     2 = ??
-    //     3 = Allowed
+    channel->SetAccess(accessorID, newMode, until, reasonStr, call.client);
+    return PyStatic.NewNone();
+}
 
-    // call.tuple->GetItem(1)->IsInt() == true  <---- character ID for character add to one of the lists specified by GetItem(2):
-    // call.tuple->GetItem(2)->AsInt()->value() =
-    //     3 = Add to Allowed List
-    //     -2 = Add to Blocked List
-    //     7 = Add to Moderators List
+PyResult LSCService::Invite(PyCallArgs& call, PyInt* characterID, PyInt* channelID, std::optional<PyRep*> channelName, std::optional<PyRep*> addAllowed)
+{
+    // Invite(otherID, channelID, channelName, addAllowed) -> truthy when invited
+    LSCChannel* channel = GetChannelByID(channelID->value());
+    if (channel == nullptr)
+        throw CustomError("That channel does not exist.");
+    uint32 charID = call.client->GetCharacterID();
+    if (!channel->IsJoined(charID))
+        throw CustomError("You must be in the channel to invite someone to it.");
 
-    //channel->UpdateConfig();
+    uint32 targetID = characterID->value();
+    if (targetID == charID)
+        throw CustomError("You can't invite yourself.");
+    if (!IsCharacterID(targetID))
+        throw CustomError("You can only invite player characters.");
+    if (channel->IsJoined(targetID))
+        return PyStatic.NewOne();
 
+    // a public channel anyone may invite to; otherwise it takes an operator
+    if (!channel->GetTemporary() and !IsPrivileged(call.client, channel) and (channel->GetEntryMode(0) < LSC::Mode::chConversationalist))
+        throw CustomError("You are not allowed to invite people to this channel.");
+
+    // the client asks to put the invitee on the allowed list when the channel isn't public
+    if (addAllowed.has_value() and (addAllowed.value() != nullptr) and (PyRep::IntegerValue(addAllowed.value()) != 0)
+    and (channel->GetEntryMode(targetID) < LSC::Mode::chConversationalist))
+        channel->SetAccess(targetID, LSC::Mode::chConversationalist, 0, "", call.client);
+
+    channel->AddInvite(targetID);
     return PyStatic.NewOne();
 }
 
-PyResult LSCService::Invite(PyCallArgs& call, PyInt* characterID, PyInt* channelID)
+PyResult LSCService::RenameChannel(PyCallArgs& call, PyRep* channelInfo, PyRep* name)
 {
-    // WARNING: This call contains manual packet decoding to handle chat messages sent inside user-created
-    // chat channels since I didn't want to monkey around with the LSCPkts.xmlp.
-    // -- Aknor Jaden (2010-11-19)
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
+    if ((channel == nullptr) or !channel->IsUserChannel() or !IsPrivileged(call.client, channel))
+        throw UserError("LSCCannotRename").AddFormatValue("msg", new PyString("You are not allowed to rename this channel."));
 
-    LSCChannel* channel(nullptr);
+    std::string newName = PyRep::StringContent(name);
+    if (newName.empty())
+        throw UserError("LSCCannotRename").AddFormatValue("msg", new PyString("The channel needs a name."));
+    channel->Rename(newName, call.client);
+    if (!channel->GetTemporary())
+        m_db.UpdateChannelInfo(channel);
+    return PyStatic.NewNone();
+}
 
-    uint32 char_ID = call.client->GetCharacterID();
+PyResult LSCService::SetChannelMOTD(PyCallArgs& call, PyRep* channelInfo, PyRep* motd)
+{
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
+    if ((channel == nullptr) or !CanConfigure(call.client, channel))
+        throw UserError("LSCCannotSetMOTD").AddFormatValue("msg", new PyString("You are not allowed to change the MOTD of this channel."));
 
-    if (m_channels.find(channelID->value()) != m_channels.end()) {
-        channel = m_channels[channelID->value()];
+    channel->ChangeMOTD(PyRep::StringContent(motd), call.client);
+    if (channel->IsUserChannel() and !channel->GetTemporary())
+        m_db.UpdateChannelInfo(channel);
+    return PyStatic.NewNone();
+}
 
-        if (!channel->IsJoined(characterID->value())) {
-            // SOMEHOW SEND A JOIN COMMAND/REQUEST TO THE TARGET CLIENT FOR invited_char_ID
-            /*    OnLSC_JoinChannel join;
-             *            join.sender = channel->_MakeSenderInfo(call.client);
-             *            join.member_count = 1;
-             *            join.channelID = channel->EncodeID();
-             *            PyTuple *answer = join.Encode();
-             *            MulticastTarget mct;
-             *            //LSCChannelChar *invitor;
-             *            //LSCChannelChar *invitee;
-             *            if (!channel->IsJoined(char_ID))
-             *            {
-             *                //invitor = new LSCChannelChar(channel,0,char_ID,call.client->GetCharName(),0,0,0,0);
-             *                mct.characters.insert(char_ID);
-        }
-        //invitee = new LSCChannelChar(channel,0,invited_char_ID,entityList().FindCharacter(invited_char_ID)->GetCharName(),0,0,0,0);
-        mct.characters.insert(invited_char_ID);
-        entityList().Multicast("OnLSC", channel->GetTypeString(), &answer, mct);
-        //entityList().Unicast(invited_char_ID,"OnLSC",channel->GetTypeString(),&answer,false);
-        */
+PyResult LSCService::SetChannelLanguageRestriction(PyCallArgs& call, PyRep* channelInfo, PyRep* restricted)
+{
+    // a GM setting (the client shows it on the GM tab)
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
+    if ((channel == nullptr) or !IsGM(call.client))
+        throw CustomError("Only a GM can change the language restriction.");
 
-            // ********** TODO **********
-            // Figure out how to send the ChatInvite packet to the client running the character with id = 'invited_char_ID'
-            // in order for that character's client to then issue the JoinChannels call to the server with the chat channel
-            // ID equal to that of this channel, be it either a private convo (temporary==1) or an existing user-created chat.
-            // **************************
+    channel->ChangeLanguageRestriction(PyRep::IntegerValue(restricted) != 0, call.client);
+    if (channel->IsUserChannel() and !channel->GetTemporary())
+        m_db.UpdateChannelInfo(channel);
+    return PyStatic.NewNone();
+}
 
-            //ChatInvite chatInvitePacket;
-            //chatInvitePacket.integer1 = 1;
-            //chatInvitePacket.integer2 = invited_char_ID;
-            //chatInvitePacket.boolean = true;
-            //chatInvitePacket.displayName = call.tuple->GetItem(2)->AsString()->content();
-            //chatInvitePacket.integer3 = 1;
-            //chatInvitePacket.integer4 = 0;
-            //chatInvitePacket.integer5 = 1;
-            //PyTuple *tuple = chatInvitePacket.Encode();
-            //entityList().Unicast(invited_char_ID, "", "", &tuple, false);
-        } else {
-            _log(LSC__ERROR, "%s: Character %u is already joined to channel %u.", call.client->GetName(), characterID->value(), channelID->value());
-            return nullptr;
-        }
-    } else {
-        _log(LSC__ERROR, "%s: Cannot find channel %u.", call.client->GetName(), channelID->value());
-        return nullptr;
-    }
+PyResult LSCService::ForgetChannel(PyCallArgs& call, PyRep* channelInfo)
+{
+    // drops the channel from the caller's channel list
+    int32 id = DecodeChannelID(channelInfo);
+    m_db.DeleteSubscription(id, call.client->GetCharacterID());
+    LSCChannel* channel = GetChannelByID(id);
+    if (channel != nullptr)
+        DestroyIfAbandoned(channel);
+    return PyStatic.NewNone();
+}
 
-    return PyStatic.NewOne();
+PyResult LSCService::VoiceStatus(PyCallArgs& call, PyRep* channelInfo, PyInt* status)
+{
+    // there is no voice server; the members only get the "joined/left/muted voice chat" note.  0 left, 1 joined, 2 muted
+    LSCChannel* channel = GetChannelByID(DecodeChannelID(channelInfo));
+    if ((channel == nullptr) or !channel->IsJoined(call.client->GetCharacterID()))
+        return PyStatic.NewNone();
+    channel->Broadcast("VoiceStatus", call.client, new_tuple(new PyInt(status->value())));
+    return PyStatic.NewNone();
+}
+
+static bool GetNamedArg(PyCallArgs& call, const char* name, PyRep*& into)
+{
+    std::map<std::string, PyRep*>::iterator itr = call.byname.find(name);
+    if (itr == call.byname.end())
+        return false;
+    into = itr->second;
+    return true;
 }
 
 PyResult LSCService::Configure(PyCallArgs& call, PyInt* channelID)
 {
-    if (is_log_enabled(LSC__CALL_DUMP)) {
-        sLog.Warning("LSCService::Handle_Configure()", "size=%lu", call.tuple->size());
-        call.Dump(LSC__CALL_DUMP);
-    }
-    /*
-     * 20:43:44 W LSCService::Handle_Configure(): size=1
-     * 20:43:44 [LSC_CDump]   Call Arguments:
-     * 20:43:44 [LSC_CDump]       Tuple: 1 elements
-     * 20:43:44 [LSC_CDump]         [ 0] Integer field: 2100000000
-     * 20:43:44 [LSC_CDump]   Call Named Arguments:
-     * 20:43:44 [LSC_CDump]     Argument 'machoVersion':
-     * 20:43:44 [LSC_CDump]         Integer field: 1
-     * 20:43:44 [LSC_CDump]     Argument 'motd':
-     * 20:43:44 [LSC_CDump]         WString: 'test MOTD'
-     *
-     * 21:13:02 W LSCService::Handle_Configure(): size=1
-     * 21:13:02 [LSC_CDump]   Call Arguments:
-     * 21:13:02 [LSC_CDump]       Tuple: 1 elements
-     * 21:13:02 [LSC_CDump]         [ 0] Integer field: 2100000000
-     * 21:13:02 [LSC_CDump]   Call Named Arguments:
-     * 21:13:02 [LSC_CDump]     Argument 'creator':
-     * 21:13:02 [LSC_CDump]         Integer field: 140000130
-     * 21:13:02 [LSC_CDump]     Argument 'machoVersion':
-     * 21:13:02 [LSC_CDump]         Integer field: 1
-     *
-     */
+    // Configure(channelID, **{displayName, motd, oldPassword, newPassword, memberless, languageRestriction, creator})
+    LSCChannel* channel = GetChannelByID(channelID->value());
+    if (channel == nullptr)
+        throw UserError("LSCCannotSetMOTD").AddFormatValue("msg", new PyString("That channel does not exist."));
 
-    // WARNING: This call contains manual packet decoding to handle configuring parameters for
-    // user-created chat channels since I didn't want to monkey around with the LSCPkts.xmlp.
-    // -- Aknor Jaden (2010-11-26)
-
-    LSCChannel* channel(nullptr);
-    int32 channel_id = channelID->value();
-
-    //ChannelInfo args;
-    //if (!args.Decode(&call.tuple) {
-    //codelog(SERVICE__ERROR, "%s: Failed to decode arguments.", GetName());
-    //    return nullptr;
-    //}
-
-    // Get count of parameters or just loop through the std::map until you've reached the end
-    if (call.byname.size() == 0) {
-        _log(LSC__ERROR, "%s: byname std::map contained zero elements, expected at least one.", call.client->GetName());
-        return nullptr;
-    }
-
-    // Find channel in existing channels:
-    std::map<int32, LSCChannel*>::iterator res = m_channels.find(channel_id);
-    if (m_channels.end() == res)  {
-        _log(LSC__ERROR, "%s: Handle_Configure Couldn't find channel %u", call.client->GetName(), channel_id);
-        return nullptr;
-    }
-
-    channel = m_channels.find(channel_id)->second;
+    PyRep* value(nullptr);
     if (!CanConfigure(call.client, channel)) {
         // pick the client message matching the requested change
         const char* key = "LSCCannotSetMOTD";
-        if (call.byname.find("motd") != call.byname.end()) {
-            key = "LSCCannotSetMOTD";
-        } else if (call.byname.find("newPassword") != call.byname.end()) {
+        if (GetNamedArg(call, "newPassword", value)) {
             key = "LSCCannotSetPassword";
-        } else if (call.byname.find("memberless") != call.byname.end()) {
+        } else if (GetNamedArg(call, "memberless", value)) {
             key = "LSCCannotSetMemberless";
-        } else if (call.byname.find("displayName") != call.byname.end()) {
+        } else if (GetNamedArg(call, "displayName", value)) {
             key = "LSCCannotRename";
+        } else if (GetNamedArg(call, "creator", value)) {
+            key = "LSCCannotSetCreator";
         }
         throw UserError(key).AddFormatValue("msg", new PyString("You are not allowed to configure this channel."));
     }
 
-    if (call.byname.find("displayName") != call.byname.end()) {
-        if (call.byname.find("displayName")->second->IsWString()) {
-            channel->SetDisplayName(call.byname.find("displayName")->second->AsWString()->content());
-        } else {
-            _log(LSC__ERROR, "%s: displayName contained wrong type: '%s'", call.client->GetName(), call.byname.find("displayName")->second->TypeString());
-            return nullptr;
+    if (GetNamedArg(call, "displayName", value) and !value->IsNone()) {
+        std::string name = PyRep::StringContent(value);
+        if (!name.empty() and (name != channel->GetDisplayName())) {
+            if (!channel->IsUserChannel())
+                throw UserError("LSCCannotRename").AddFormatValue("msg", new PyString("This channel can't be renamed."));
+            channel->Rename(name, call.client);
         }
     }
 
-    if (call.byname.find("memberless") != call.byname.end()) {
-        if (call.byname.find("memberless")->second->IsInt()) {
-            channel->SetMemberless(call.byname.find("memberless")->second->AsInt()->value() ? true : false);
-        } else {
-            _log(LSC__ERROR, "%s: memberless contained wrong type: '%s'", call.client->GetName(), call.byname.find("memberless")->second->TypeString());
-            return nullptr;
-        }
+    if (GetNamedArg(call, "motd", value) and !value->IsNone()) {
+        std::string motd = PyRep::StringContent(value);
+        if (motd != channel->GetMOTD())
+            channel->ChangeMOTD(motd, call.client);
     }
 
-    if (call.byname.find("motd") != call.byname.end()) {
-        if (call.byname.find("motd")->second->IsWString()) {
-            channel->SetMOTD(call.byname.find("motd")->second->AsWString()->content());
-        } else {
-            _log(LSC__ERROR, "%s: motd contained wrong type: '%s'", call.client->GetName(), call.byname.find("motd")->second->TypeString());
-            return nullptr;
-        }
+    if (GetNamedArg(call, "newPassword", value)) {
+        std::string newPassword = (value->IsNone() ? "" : PyRep::StringContent(value));
+        PyRep* oldValue(nullptr);
+        if (GetNamedArg(call, "oldPassword", oldValue) and !oldValue->IsNone() and !IsGM(call.client)
+        and (PyRep::StringContent(oldValue) != channel->GetPassword()))
+            throw UserError("LSCCannotSetPassword").AddFormatValue("msg", new PyString("The old password is wrong."));
+        if (newPassword != channel->GetPassword())
+            channel->ChangePassword(newPassword, call.client);
     }
 
-    if (call.byname.find("oldPassword") != call.byname.end()) {
-        if (call.byname.find("oldPassword")->second->IsWString()) {
-            if (channel->GetPassword() == call.byname.find("oldPassword")->second->AsWString()->content()) {
-                if (call.byname.find("newPassword") != call.byname.end()) {
-                    if (call.byname.find("newPassword")->second->IsWString()) {
-                        channel->SetPassword(call.byname.find("newPassword")->second->AsWString()->content());
-                    } else {
-                        _log(LSC__ERROR, "%s: newPassword contained wrong type: '%s'", call.client->GetName(), call.byname.find("newPassword")->second->TypeString());
-                        return nullptr;
-                    }
-                }
-            } else {
-                _log(LSC__ERROR, "%s: incorrect oldPassword supplied. Password NOT changed.", call.client->GetName());
-                return nullptr;
-            }
-        } else if (call.byname.find("oldPassword")->second->IsNone()) {
-            if (call.byname.find("newPassword") != call.byname.end()) {
-                if (call.byname.find("newPassword")->second->IsWString()) {
-                    channel->SetPassword(call.byname.find("newPassword")->second->AsWString()->content());
-                } else {
-                    _log(LSC__ERROR, "%s: newPassword contained wrong type: '%s'", call.client->GetName(), call.byname.find("newPassword")->second->TypeString());
-                    return nullptr;
-                }
-            }
-        } else {
-            _log(LSC__ERROR, "%s: oldPassword is of an unexpected type: '%s'", call.client->GetName(), call.byname.find("oldPassword")->second->TypeString());
-            return nullptr;
-        }
+    if (GetNamedArg(call, "memberless", value) and !value->IsNone()) {
+        bool memberless = (PyRep::IntegerValue(value) != 0);
+        if (memberless != channel->GetMemberless())
+            channel->ChangeMemberless(memberless, call.client);
     }
 
-    m_db.UpdateChannelInfo(channel);
+    if (GetNamedArg(call, "languageRestriction", value) and !value->IsNone()) {
+        if (!IsGM(call.client))
+            throw CustomError("Only a GM can change the language restriction.");
+        bool restricted = (PyRep::IntegerValue(value) != 0);
+        if (restricted != channel->GetLanguageRestriction())
+            channel->ChangeLanguageRestriction(restricted, call.client);
+    }
 
-    channel->UpdateConfig();
+    if (GetNamedArg(call, "creator", value) and !value->IsNone()) {
+        // the owner may hand the channel on; GMs may give it to anyone
+        uint32 ownerID = PyRep::IntegerValueU32(value);
+        if (!IsGM(call.client) and (channel->GetOwnerID() != (uint32)call.client->GetCharacterID()))
+            throw UserError("LSCCannotSetCreator").AddFormatValue("msg", new PyString("Only the channel owner can hand the channel on."));
+        if (!IsCharacterID(ownerID) and (ownerID != 1))
+            throw UserError("LSCCannotSetCreator").AddFormatValue("msg", new PyString("A channel can only be owned by a character."));
+        if (ownerID != channel->GetOwnerID())
+            channel->ChangeCreator(ownerID, call.client);
+    }
+
+    if (channel->IsUserChannel() and !channel->GetTemporary())
+        m_db.UpdateChannelInfo(channel);
 
     return PyStatic.NewNone();
 }
@@ -792,11 +816,7 @@ PyResult LSCService::LeaveChannel(PyCallArgs &call, PyRep* channelInfo, PyInt* u
     std::map<int32, LSCChannel*>::iterator itr = m_channels.find(toLeave);
     if (itr != m_channels.end()) {
         itr->second->LeaveChannel(call.client);
-        if ((itr->second->GetMemberCount() < 1) and (itr->second->GetTemporary())) {
-            m_db.DeleteChannel(toLeave);
-            SafeDelete(itr->second);
-            m_channels.erase(itr);
-        }
+        DestroyIfAbandoned(itr->second);
     }
 
     return PyStatic.NewNone();
@@ -856,12 +876,7 @@ PyResult LSCService::LeaveChannels(PyCallArgs &call, PyList* channels, PyInt* un
             itr2->second->LeaveChannel(call.client);
             if (unsubscribe->value())
                 m_db.DeleteSubscription(*itr, call.client->GetCharacterID());
-
-            if ((itr2->second->GetMemberCount() < 1) and (itr2->second->GetTemporary())) {
-                m_db.DeleteChannel(*itr);
-                SafeDelete(itr2->second);
-                m_channels.erase(itr2);
-            }
+            DestroyIfAbandoned(itr2->second);
         }
     }
 
@@ -979,9 +994,12 @@ PyResult LSCService::JoinChannel(PyCallArgs& call, PyInt* channelID)
     if (!channel->IsJoined(charID))
         if (!channel->JoinChannel(call.client))
             throw UserError("LSCCannotJoin").AddFormatValue("msg", new PyString(""));
+    bool subscribe = (channel->IsUserChannel() and !channel->GetTemporary());
+    if (subscribe)
+        m_db.UpdateSubscription(channel->GetChannelID(), call.client);
 
     ChannelJoinOK cjok;
-        cjok.ChannelInfo = channel->EncodeDynamicChannel(charID, IsPrivileged(call.client, channel));
+        cjok.ChannelInfo = channel->EncodeDynamicChannel(call.client, IsPrivileged(call.client, channel), subscribe);
         cjok.ChannelMods = channel->EncodeChannelMods();
         cjok.ChannelChars = channel->EncodeChannelChars();
     return cjok.Encode();
@@ -998,7 +1016,23 @@ bool LSCService::CanAccess(Client* pClient, LSCChannel* pChan, std::string& msg)
 {
     if ((pClient == nullptr) or (pChan == nullptr))
         return false;
-    if (!sConfig.chat.EnforceChannelAccess or IsGM(pClient))
+    if (IsGM(pClient))
+        return true;
+
+    // private conversations are invite only; other int channels follow their access list (kicks, blocked default)
+    if (pChan->HasIntID()) {
+        uint32 charID = pClient->GetCharacterID();
+        if (pChan->GetTemporary() and (pChan->GetOwnerID() != charID) and !pChan->IsInvited(charID)) {
+            msg = "This is a private conversation.";
+            return false;
+        }
+        if (pChan->GetAccessMode(pClient) < LSC::Mode::chListener) {
+            msg = "You are not allowed to join this channel.";
+            return false;
+        }
+    }
+
+    if (!sConfig.chat.EnforceChannelAccess)
         return true;
 
     int32 channelID = pChan->GetChannelID();
@@ -1071,7 +1105,7 @@ bool LSCService::IsPrivileged(Client* pClient, LSCChannel* pChan)
     if (IsGM(pClient))
         return true;
     uint32 charID = pClient->GetCharacterID();
-    return ((pChan->GetOwnerID() == charID) or pChan->IsOperator(charID));
+    return ((pChan->GetOwnerID() == charID) or (pChan->GetAccessMode(pClient) >= LSC::Mode::chOperator));
 }
 
 bool LSCService::CheckPassword(Client* pClient, LSCChannel* pChan, const std::string* password)
@@ -1109,8 +1143,7 @@ bool LSCService::CanConfigure(Client* pClient, LSCChannel* pChan)
             // static (server) channels are owned by the system
             if (IsStaticChannel(channelID))
                 return false;
-            uint32 charID = pClient->GetCharacterID();
-            return ((pChan->GetOwnerID() == charID) or pChan->IsOperator(charID));
+            return IsPrivileged(pClient, pChan);
         }
         default:
             break;
@@ -1153,6 +1186,112 @@ void LSCService::CharacterLogin(Client* pClient)
     CreateSystemChannel(pClient->GetAllianceID());
 }
 
+/*
+ * channel lifetime
+ */
+void LSCService::LoadUserChannels()
+{
+    // player channels and stored access lists outlive restarts
+    if (sConfig.chat.UserChannelCleanup)
+        LSCDB::DeleteOrphanUserChannels();
+
+    std::vector<UserChannelRow> rows;
+    LSCDB::LoadUserChannels(rows);
+    for (auto& cur : rows) {
+        if (m_channels.find(cur.channelID) != m_channels.end())
+            continue;
+        CreateChannel(cur.channelID, cur.ownerID, cur.displayName.c_str(), cur.motd, (cur.password.empty() ? nullptr : cur.password.c_str()),
+                      cur.comparisonKey.c_str(), LSC::Type::normal, cur.cspa, cur.channelID, cur.channelID, cur.memberless, cur.mailingList,
+                      false, cur.languageRestriction);
+    }
+
+    std::vector<std::pair<int32, LSCChannelMod>> mods;
+    LSCDB::LoadChannelMods(mods);
+    for (auto& cur : mods) {
+        LSCChannel* pChan = GetChannelByID(cur.first);
+        if (pChan != nullptr) {
+            pChan->LoadMod(cur.second);
+        } else {
+            // alliance channels are made at login
+            m_storedMods[cur.first].push_back(cur.second);
+        }
+    }
+
+    // channels from before access lists existed are public
+    for (auto& cur : rows) {
+        LSCChannel* pChan = GetChannelByID(cur.channelID);
+        if ((pChan == nullptr) or pChan->HasDefaultMod())
+            continue;
+        LSCChannelMod mod(0, LSC::Mode::chConversationalist);
+        pChan->LoadMod(mod);
+        LSCDB::SaveChannelMod(cur.channelID, mod);
+    }
+
+    _log(LSC__CHANNELS, "Loaded %u user channels and %u access entries", (uint32)rows.size(), (uint32)mods.size());
+}
+
+bool LSCService::DestroyIfAbandoned(LSCChannel* pChan)
+{
+    // private conversations go when the last member leaves; other user channels (chat.UserChannelCleanup) when nobody is subscribed
+    if ((pChan == nullptr) or (pChan->GetMemberCount() > 0))
+        return false;
+
+    int32 channelID = pChan->GetChannelID();
+    if (!pChan->GetTemporary()) {
+        if (!pChan->IsUserChannel() or !sConfig.chat.UserChannelCleanup)
+            return false;
+        if (m_db.GetSubscriberCount(channelID) > 0)
+            return false;
+    }
+
+    _log(LSC__CHANNELS, "Destroying abandoned channel %i - %s", channelID, pChan->GetDisplayName().c_str());
+    m_db.DeleteChannel(channelID);
+    m_channels.erase(channelID);
+    SafeDelete(pChan);
+    return true;
+}
+
+void LSCService::CharacterLogout(Client* pClient)
+{
+    // copy, since leaving changes the client's set
+    std::set<LSCChannel*> channels = pClient->GetChannels();
+    for (auto cur : channels) {
+        cur->LeaveChannel(pClient);
+        DestroyIfAbandoned(cur);
+    }
+}
+
+void LSCService::EnforceMembership(Client* pClient)
+{
+    // after a session change: leave the local/constellation/region/corp/alliance/fleet channels the character no longer belongs to
+    if ((pClient == nullptr) or (pClient->GetChar().get() == nullptr))
+        return;
+
+    std::set<LSCChannel*> channels = pClient->GetChannels();
+    for (auto cur : channels) {
+        switch (cur->GetType()) {
+            case LSC::Type::solarsystem:
+            case LSC::Type::solarsystem2:
+            case LSC::Type::constellation:
+            case LSC::Type::region:
+            case LSC::Type::corp:
+            case LSC::Type::alliance:
+            case LSC::Type::fleet:
+            case LSC::Type::wing:
+            case LSC::Type::squad: {
+                std::string msg;
+                if (CanAccess(pClient, cur, msg))
+                    continue;
+                _log(LSC__CHANNELS, "%s no longer belongs in channel %i (%s)", pClient->GetName(), cur->GetChannelID(), msg.c_str());
+                cur->LeaveChannel(pClient);
+                DestroyIfAbandoned(cur);
+            } break;
+            default:
+                break;
+        }
+    }
+}
+
 void LSCService::SystemUnload(uint32 systemID, uint32 constID, uint32 regionID)
 {
     std::map<int32, LSCChannel*>::iterator itr = m_channels.find(systemID);
@@ -1185,8 +1324,9 @@ LSCChannel* LSCService::GetChannelByID(int32 channelID)
 
 LSCChannel* LSCService::GetChannelByName(std::string channelName)
 {
+    // joinExisting by name: public (normal) channels only, never someone's private conversation
     for (auto cur : m_channels)
-        if (cur.second->GetDisplayName() == channelName)
+        if ((cur.second->GetType() == LSC::Type::normal) and !cur.second->GetTemporary() and (cur.second->GetDisplayName() == channelName))
             return cur.second;
     return nullptr;
 }
@@ -1271,7 +1411,19 @@ void LSCService::CreateSystemChannel(int32 channelID)
     std::string comStr = motd;
     boost::algorithm::to_lower(comStr);
     comStr.erase(std::remove(comStr.begin(), comStr.end(), ' '), comStr.end());
-    CreateChannel(channelID, ownerID, name.c_str(), motd, nullptr, comStr.c_str(), type, cspa, grpMsgID, messageID);
+    LSCChannel* pChan = CreateChannel(channelID, ownerID, name.c_str(), motd, nullptr, comStr.c_str(), type, cspa, grpMsgID, messageID);
+
+    // the client checks int channels (alliance) against their access list: members may talk
+    if ((pChan != nullptr) and pChan->HasIntID()) {
+        std::map<int32, std::vector<LSCChannelMod>>::iterator itr = m_storedMods.find(channelID);
+        if (itr != m_storedMods.end()) {
+            for (auto& cur : itr->second)
+                pChan->LoadMod(cur);
+            m_storedMods.erase(itr);
+        }
+        if (!pChan->HasDefaultMod())
+            pChan->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));
+    }
 }
 
 void LSCService::DeleteSystemChannel(int32 channelID)
@@ -1289,6 +1441,9 @@ void LSCService::CreateStaticChannels() {
     // hardcode creating server static channels during server startup
     // these are all set to memberless to avoid constant updates
     std::ostringstream str;
+
+    // world.globalChat = false: no server wide public channels, only the GM command channel
+    if (sConfig.world.globalChat) {
 
 // basic template
     //CreateChannel(channelID, ownerID, "name", "motd", "password" or nullptr, "*title*", LSC::Type::normal, cspa, 0, 0, true);
@@ -1405,12 +1560,19 @@ void LSCService::CreateStaticChannels() {
     str << "<loc><url=http://www.fuzzwork.co.uk/>Fuzz Work</url></loc><color=0xffffffff> - A brilliant site that has many awesome calculators for LP stores, Blueprints, Invention, Ore and much more!</color><br>";
     CreateChannel(100, 2, "Free Wrecks", str.str().c_str(), nullptr, "freewrecks", LSC::Type::normal, cspa, 0, 0, true); //256739 <-- this was messageID from error about "channel already joined"
     //CreateChannel(101, 1, "", "motd", nullptr, "*title*", LSC::Type::normal, cspa, 0, 0, true);
+    }
+
 
 //GM Command channel
     str.str("");
     str << "<br><color=0xffffffff>Welcome to the</color> <color=0xff00ffff>GM Command</color><color=0xffffffff> channel.<br><br>";
     str << "This channel is intended for using dot commands.</color>";
     CreateChannel(2900000000, 1, "Command", str.str().c_str(), nullptr, "command", LSC::Type::custom, cspa, 0, 0, true);
+
+    // the client checks int channels against their access list: everyone may talk in the public channels
+    for (auto cur : m_channels)
+        if (cur.second->HasIntID() and !cur.second->HasDefaultMod())
+            cur.second->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));
 }
 
 void LSCService::SendServerMOTD(Client* pClient)

@@ -216,6 +216,7 @@ EVEServerConfig::EVEServerConfig()
     chat.EnforceRookieInHelp = false;
     chat.EnforceChannelAccess = true;
     chat.ContactStatusMutual = false;   // Crucible: any watchlisted character's online state is shown  (F23)
+    chat.UserChannelCleanup = true;     // delete player channels nobody is subscribed to any more  (F23)
 
     // crime
     crime.Enabled = true;
@@ -772,6 +773,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     AddValueParser( "EnforceRookieInHelp",  chat.EnforceRookieInHelp );
     AddValueParser( "EnforceChannelAccess", chat.EnforceChannelAccess );
     AddValueParser( "ContactStatusMutual",  chat.ContactStatusMutual );
+    AddValueParser( "UserChannelCleanup",   chat.UserChannelCleanup );
 
     const bool result = ParseElementChildren( ele );
 
@@ -782,6 +784,7 @@ bool EVEServerConfig::ProcessChat(const TiXmlElement* ele)
     RemoveParser( "EnforceRookieInHelp" );
     RemoveParser( "EnforceChannelAccess" );
     RemoveParser( "ContactStatusMutual" );
+    RemoveParser( "UserChannelCleanup" );
 
     return result;
 }

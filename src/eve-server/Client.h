@@ -299,6 +299,7 @@ public:
     void SelfEveMail(const char *subject, const char *fmt, ...);
     void ChannelJoined(LSCChannel *chan);
     void ChannelLeft(LSCChannel *chan);
+    const std::set<LSCChannel*>& GetChannels() const    { return m_channels; }
     void UpdateSessionInt( const char *sessionType, int value );
 
     PyRep *GetAggressors() const;

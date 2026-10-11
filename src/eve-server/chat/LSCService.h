@@ -64,6 +64,10 @@ public:
     static bool IsGagged(uint32 charID, int64& until, std::string& reason);
 
     void CharacterLogin(Client *pClient);
+    // leaves every channel (and drops the abandoned ones).  called when the client goes away
+    void CharacterLogout(Client *pClient);
+    // after a session change: leaves the location/corp/alliance/fleet channels the character no longer belongs in
+    void EnforceMembership(Client *pClient);
     void SendServerMOTD(Client* pClient);
 
     // sends a message from "EVE System" to every Local channel with someone in it.  returns the number of channels
@@ -83,7 +87,7 @@ public:
     /* channel access rules (Crucible).  GMs (CHTADMINISTRATOR/GMH) pass every test */
     // membership rules by channel type (corp/alliance/local/constellation/region/fleet/wing/squad).  fills msg on refusal
     bool CanAccess(Client* pClient, LSCChannel* pChan, std::string& msg);
-    // GM, channel owner or operator
+    // GM, channel owner or operator (incl. corp ChatManager / fleet boss in their channels)
     bool IsPrivileged(Client* pClient, LSCChannel* pChan);
     // true when the channel has no password, the client is privileged, or password matches
     bool CheckPassword(Client* pClient, LSCChannel* pChan, const std::string* password);
@@ -96,6 +100,8 @@ protected:
     LSCDB m_db;
 
     std::map<int32, LSCChannel*> m_channels;  //we own these pointers
+    // stored access entries of channels that are made later (alliance channels)
+    std::map<int32, std::vector<LSCChannelMod>> m_storedMods;
     static std::map<uint32, std::pair<int64, std::string>> s_gags;   // charID -> (until, reason)
 
     PyResult GetChannels(PyCallArgs& call);
@@ -112,8 +118,13 @@ protected:
     PyResult GetMembers(PyCallArgs& call, PyRep* channelInfo);
     PyResult GetMember(PyCallArgs& call);
     PyResult SendMessage(PyCallArgs& call, PyRep* channelInfo, PyWString* cMessage);
-    PyResult Invite(PyCallArgs& call, PyInt* characterID, PyInt* channelID);
-    PyResult AccessControl(PyCallArgs& call, PyRep* channelInfo, PyInt* characterID, PyInt* role);
+    PyResult Invite(PyCallArgs& call, PyInt* characterID, PyInt* channelID, std::optional<PyRep*> channelName, std::optional<PyRep*> addAllowed);
+    PyResult AccessControl(PyCallArgs& call, PyRep* channelInfo, PyRep* accessor, PyInt* mode, std::optional<PyRep*> untilWhen, std::optional<PyRep*> reason);
+    PyResult RenameChannel(PyCallArgs& call, PyRep* channelInfo, PyRep* name);
+    PyResult SetChannelMOTD(PyCallArgs& call, PyRep* channelInfo, PyRep* motd);
+    PyResult SetChannelLanguageRestriction(PyCallArgs& call, PyRep* channelInfo, PyRep* restricted);
+    PyResult ForgetChannel(PyCallArgs& call, PyRep* channelInfo);
+    PyResult VoiceStatus(PyCallArgs& call, PyRep* channelInfo, PyInt* status);
 
     PyResult GetMyMessages(PyCallArgs& call);
     PyResult GetMessageDetails(PyCallArgs& call, PyInt* readerID, PyInt* messageID);
@@ -131,6 +142,10 @@ private:
     static int32 DecodeChannelID(PyRep* rep);
 
     void CreateStaticChannels();
+    // player channels and access lists from the db (startup)
+    void LoadUserChannels();
+    // deletes an empty private channel, or (chat.UserChannelCleanup) an empty user channel nobody is subscribed to.  true if deleted
+    bool DestroyIfAbandoned(LSCChannel* pChan);
     LSCChannel *GetChannelByID(int32 channelID);
     LSCChannel *GetChannelByName(std::string  channelName);
     LSCChannel *CreateChannel(int32 channelID, uint32 ownerID, const char* name, std::string motd, const char* password, const char* compkey,
