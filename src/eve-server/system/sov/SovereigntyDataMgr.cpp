@@ -118,8 +118,9 @@ SovereigntyData SovereigntyDataMgr::GetSovereigntyData(uint32 systemID)
         return sData;
     } else
     {
-        //Return empty object in case we don't find anything
-        SovereigntyData sData;
+        //Return empty object in case we don't find anything.  zeroed: a plain 'SovereigntyData sData;' left jammerID, beaconID
+        // and the rest as garbage, so every system without sov data (all of empire space) looked jammed to cynos
+        SovereigntyData sData = SovereigntyData();
         return sData;
     }
 }
