@@ -2338,6 +2338,14 @@ void Client::SendRemoteMessage(const char* msgKey, PyDict* args/*nullptr*/)
     SendNotification("OnRemoteMessage", "charid", &tuple);
 }
 
+PyTuple* Client::TypeNameArg(uint32 typeID)
+{
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(UserError_Parameter_TypeName));
+        tuple->SetItem(1, new PyInt(typeID));
+    return tuple;
+}
+
 int64 Client::SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey/*nullptr*/, PyDict* fallbackArgs/*nullptr*/)
 {
     /* macho.CallReq to the client's service.  the client runs it through ObjectCallGPCS (flag 0 = not an object call)

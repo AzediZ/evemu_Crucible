@@ -463,6 +463,8 @@ public:
     void SendNotification(const char *notifyType, const char *idType, PyTuple **payload, bool seq=true);
     // keyed client message (gameui.OnRemoteMessage(msgID, dict)) that does not throw.  args are consumed
     void SendRemoteMessage(const char* msgKey, PyDict* args = nullptr);
+    // (UserError_Parameter_TypeName, typeID) for old-style {what} message arguments
+    static PyTuple* TypeNameArg(uint32 typeID);
     /* calls an exported method of a client service (server -> client CALL_REQ).  args are consumed.  the response is only logged.
      * if the client answers with an error and fallbackKey is set, SendRemoteMessage(fallbackKey, fallbackArgs) is sent instead
      */

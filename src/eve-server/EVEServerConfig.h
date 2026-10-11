@@ -84,9 +84,12 @@ public:
         bool fleetWarpSlowestSpeed;
         bool shootRoids;
         bool shootWrecks;
+        bool StoreShipWithCargo;        // ships stored in a maintenance bay/array may carry cargo (Odyssey+).  Crucible: charges only  (F09)
         uint8 mailDelay;
         uint8 StationDockDelay;
-        uint16 shipBoardDistance;
+        uint16 shipBoardDistance;       // surface distance (client maxBoardingDistance)
+        uint16 SelfDestructDelay;       // s  (F09)
+        uint16 SelfDestructRetryDelay;  // s after an abort before self-destruct may be started again  (F09)
         uint16 gridUnloadTime;
         uint16 apWarptoDistance;
     } world;
@@ -340,6 +343,7 @@ public:
         float SecPodKillPenalty;
         float SecPodKillMinPenalty;
         bool CriminalLockdown;          // criminals can't use gates/stations in empire space except in a capsule
+        bool SwitchShipWeaponsTimer;    // no ejecting/boarding/storing ships while the weapons timer runs (Retribution rule)  (F09)
         bool Concord;
         std::string ConcordResponse;    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5
         bool ConcordWaves;              // officers and captains first, the commander later

@@ -85,6 +85,7 @@ public:
     uint16                  effectID;   // why is this here?
     InventoryItemRef        weaponRef;
     InventoryItemRef        chargeRef;    // May be null.
+    bool                    selfDestruct = false;   // the pilot's self-destruct (no killer)
 
 private:
     float kinetic;

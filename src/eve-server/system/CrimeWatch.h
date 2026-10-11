@@ -73,6 +73,7 @@ public:
     /* queries */
     bool IsCriminal(uint32 charID);                             // live global criminal countdown
     bool IsFlaggedTo(uint32 aggressorID, uint32 victimID);       // aggressor has a live flag towards victim (char or corp)
+    bool HasLiveFlags(uint32 charID);                            // live aggressor towards anyone, or a live criminal
     bool IsOutlaw(float secStatus)                               { return (roundf(secStatus * 10.0f) / 10.0f) <= -5.0f; }
     // seconds left before this pilot may dock or jump after an aggressive act.  0 = free to go
     uint32 WeaponsTimer(uint32 charID);
@@ -80,6 +81,8 @@ public:
     uint32 LogoffTimer(uint32 charID, bool& npcOnly);
     // can this pilot use gates/stations?  throws the client's error if not
     void CheckDockOrJump(Client* pClient, bool jump);
+    // can this pilot eject, board or store a ship?  criminals can't (destroying evidence).  throws the client's error if not
+    void CanSwitchShip(Client* pClient);
 
     /* client data */
     PyDict* GetCriminalTimeStamps(uint32 charID);               // aggressionMgr.GetCriminalTimeStamps
@@ -91,7 +94,8 @@ public:
     // the pilot's ship appeared in space: undock, gate jump, login, boarding.  a live GCC brings CONCORD
     void OnEnterSpace(Client* pClient);
     // a player's ship (or pod) was destroyed.  sec status penalties, kill rights, kill right use.  killerCharID 0 for NPCs
-    void OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem);
+    //  a self-destruct has no killer: the victim's aggressors get no penalties or kill rights
+    void OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem, bool selfDestruct = false);
     // security status gain for killing an NPC (only the best NPC per system per 15 minutes counts).  returns the gain
     float OnNPCKilled(Character* pChar, InventoryItemRef npcRef, SystemManager* pSystem);
 

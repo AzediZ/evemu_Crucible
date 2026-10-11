@@ -119,6 +119,17 @@ bool CrimeWatch::IsFlaggedTo(uint32 aggressorID, uint32 victimID)
     return Live(vItr->second, FlagTime());
 }
 
+bool CrimeWatch::HasLiveFlags(uint32 charID)
+{
+    std::map<uint32, Record>::iterator itr = m_records.find(charID);
+    if (itr == m_records.end())
+        return false;
+    for (auto cur : itr->second.victims)
+        if (Live(cur.second, (cur.first == 0 ? CrimTime() : FlagTime())))
+            return true;
+    return false;
+}
+
 /* ------------------------------------------------------------------------------------------------------------------
  *  who owns the target
  * ------------------------------------------------------------------------------------------------------------------ */
@@ -546,10 +557,30 @@ void CrimeWatch::OnEnterSpace(Client* pClient)
     }
 }
 
-void CrimeWatch::OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem)
+void CrimeWatch::CanSwitchShip(Client* pClient)
+{
+    if (!sConfig.crime.Enabled or (pClient == nullptr))
+        return;
+    // Crucible: a criminal may not switch ships, so the evidence stays.  the weapons timer lock is the Retribution rule
+    if (IsCriminal(pClient->GetCharacterID()))
+        throw UserError ("CannotEjectInvolvedInCrime");
+    if (sConfig.crime.SwitchShipWeaponsTimer) {
+        uint32 left(WeaponsTimer(pClient->GetCharacterID()));
+        if (left > 0)
+            throw CustomError ("You can't switch ships for another %u seconds after an aggressive act.", left);
+    }
+}
+
+void CrimeWatch::OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem, bool selfDestruct/*false*/)
 {
     if (!sConfig.crime.Enabled or (pSystem == nullptr))
         return;
+    // nobody killed a self-destructed ship
+    if (selfDestruct) {
+        if (pod)
+            m_illegal.erase(victimCharID);
+        return;
+    }
     float trueSec(pSystem->GetSystemSecurityRating());
     uint8 secClass(SecurityClass(trueSec));
     float level(SecurityLevel(trueSec));

@@ -78,7 +78,10 @@ boolean can use either 0/1 OR true/false.
         <apWarptoDistance>15000</apWarptoDistance><!-- in meters - sets autopilot warp stop distance from object (15km default)-->
         <saveOnMove>true</saveOnMove><!-- bool - save items when Move()'d -->
         <saveOnUpdate>true</saveOnUpdate><!-- bool - save items when values or attributes updated -->
-        <shipBoardDistance>500</shipBoardDistance><!-- int  - max distance to board ship in space (5c default) -->
+        <shipBoardDistance>6550</shipBoardDistance><!-- int  - max surface distance (meters) to board a ship in space.  the client's maxBoardingDistance (6550 default) -->
+        <SelfDestructDelay>120</SelfDestructDelay><!-- seconds from starting a self-destruct to the explosion (Crucible: 120) -->
+        <SelfDestructRetryDelay>30</SelfDestructRetryDelay><!-- seconds after aborting a self-destruct before another may be started -->
+        <StoreShipWithCargo>false</StoreShipWithCargo><!-- bool - ships stored in a maintenance bay/array may carry cargo (only assembled containers are refused, the Odyssey rule).  Crucible: false (charges only) -->
         <highSecCyno>false</highSecCyno><!-- bool - allow Cynosural fields to be created in high security space -->
         <empireInterdiction>false</empireInterdiction><!-- bool - allow items flagged 'disallowInEmpireSpace' (warp disruption bubbles, HIC fields, bombs, doomsday) in high and low security space.  Crucible: false -->
         <fleetWarpOnGridOnly>false</fleetWarpOnGridOnly><!-- bool - fleet/wing/squad warp only takes members on the commander's grid (the 2015 rule).  Crucible: false (every member in the system warps) -->
@@ -270,6 +273,7 @@ boolean can use either 0/1 OR true/false.
         <SecPodKillPenalty>37.5</SecPodKillPenalty>
         <SecPodKillMinPenalty>12.5</SecPodKillMinPenalty>
         <CriminalLockdown>true</CriminalLockdown><!-- criminals can't use gates or stations in empire space, except in a capsule -->
+        <SwitchShipWeaponsTimer>false</SwitchShipWeaponsTimer><!-- bool - no ejecting, boarding or storing ships while the weapons timer runs (the Retribution rule).  Crucible: false (only criminals can't switch ships) -->
         <Concord>true</Concord><!-- bool -->
         <ConcordResponse>6,6,7,10,14,19</ConcordResponse><!-- response seconds in 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 systems -->
         <ConcordWaves>false</ConcordWaves><!-- true: police officers and captains arrive first, the commander ConcordWaveDelay later -->

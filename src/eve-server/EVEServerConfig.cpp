@@ -79,7 +79,10 @@ EVEServerConfig::EVEServerConfig()
     world.mailDelay = 5;        // min seconds between eve mails sent by one character; 0 = off  (F23)
     world.StationDockDelay = 4 /*s*/;
     world.apWarptoDistance = 15000;
-    world.shipBoardDistance = 300;
+    world.shipBoardDistance = 6550;         // surface distance, the client's maxBoardingDistance  (F09)
+    world.SelfDestructDelay = 120 /*s*/;    // (F09)
+    world.SelfDestructRetryDelay = 30 /*s*/;
+    world.StoreShipWithCargo = false;       // Crucible: a stored ship may only carry charges  (F09)
     world.highSecCyno = false;
     world.empireInterdiction = false;
     world.fleetWarpOnGridOnly = false;      // Crucible fleet warp is system-wide (on-grid only came in 2015)  (F08)
@@ -240,6 +243,7 @@ EVEServerConfig::EVEServerConfig()
     crime.SecPodKillPenalty = 37.5f;
     crime.SecPodKillMinPenalty = 12.5f;
     crime.CriminalLockdown = true;
+    crime.SwitchShipWeaponsTimer = false;   // Retribution rule, off for Crucible  (F09)
     crime.Concord = true;
     crime.ConcordResponse = "6,6,7,10,14,19";
     crime.ConcordWaves = false;
@@ -421,6 +425,9 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     AddValueParser( "StationDockDelay",  world.StationDockDelay );
     AddValueParser( "apWarptoDistance",  world.apWarptoDistance );
     AddValueParser( "shipBoardDistance", world.shipBoardDistance );
+    AddValueParser( "SelfDestructDelay", world.SelfDestructDelay );
+    AddValueParser( "SelfDestructRetryDelay", world.SelfDestructRetryDelay );
+    AddValueParser( "StoreShipWithCargo", world.StoreShipWithCargo );
 
     const bool result = ParseElementChildren( ele );
 
@@ -442,6 +449,9 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     RemoveParser( "StationDockDelay" );
     RemoveParser( "apWarptoDistance" );
     RemoveParser( "shipBoardDistance" );
+    RemoveParser( "SelfDestructDelay" );
+    RemoveParser( "SelfDestructRetryDelay" );
+    RemoveParser( "StoreShipWithCargo" );
 
     return result;
 }
@@ -867,6 +877,7 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
     AddValueParser( "SecPodKillPenalty",    crime.SecPodKillPenalty );
     AddValueParser( "SecPodKillMinPenalty", crime.SecPodKillMinPenalty );
     AddValueParser( "CriminalLockdown",     crime.CriminalLockdown );
+    AddValueParser( "SwitchShipWeaponsTimer", crime.SwitchShipWeaponsTimer );
     AddValueParser( "Concord",              crime.Concord );
     AddValueParser( "ConcordResponse",      crime.ConcordResponse );
     AddValueParser( "ConcordWaves",         crime.ConcordWaves );
@@ -884,7 +895,7 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
 
     for (const char* name : {"Enabled", "AggFlagTime", "CrimFlagTime", "WeaponFlagTime", "KillRightDays", "LogoffNPCTime",
             "LogoffWarpTime", "SecGainWindow", "SecAggressionPenalty", "SecShipKillPenalty", "SecPodKillPenalty",
-            "SecPodKillMinPenalty", "CriminalLockdown", "Concord", "ConcordResponse", "ConcordWaves", "ConcordWaveDelay",
+            "SecPodKillMinPenalty", "CriminalLockdown", "SwitchShipWeaponsTimer", "Concord", "ConcordResponse", "ConcordWaves", "ConcordWaveDelay",
             "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
             "SentriesPerStation", "SentryRange"})
         RemoveParser( name );
