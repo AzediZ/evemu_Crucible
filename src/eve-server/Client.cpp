@@ -90,7 +90,8 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
   m_uncloakTimer(0),
   m_destinyEventQueue(new PyList()),
   m_destinyUpdateQueue(new PyList()),
-  m_nextNotifySequence(0)
+  m_nextNotifySequence(0),
+  m_nextServerCallID(0)
 {
     m_pod = ShipItemRef(nullptr);
     m_ship = ShipItemRef(nullptr);
@@ -2353,6 +2354,87 @@ void Client::SendNotification(const PyAddress &dest, EVENotificationStream &noti
     }
 
     QueuePacket(packet);
+}
+
+void Client::SendRemoteMessage(const char* msgKey, PyDict* args/*nullptr*/)
+{
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyString(msgKey));
+        tuple->SetItem(1, (args != nullptr ? args : new PyDict()));
+    SendNotification("OnRemoteMessage", "charid", &tuple);
+}
+
+void Client::SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey/*nullptr*/, PyDict* fallbackArgs/*nullptr*/)
+{
+    /* macho.CallReq to the client's service.  the client runs it through ObjectCallGPCS (flag 0 = not an object call)
+     * and ServiceCallGPCS ((1, method, args, kw) = service call), which only requires the method to be exported
+     */
+    PyCallStream call;
+        call.remoteObject = 1;
+        call.method = method;
+        call.arg_tuple = (args != nullptr ? args : new PyTuple(0));
+        call.arg_dict = new PyDict();
+
+    PyPacket* packet = new PyPacket();
+        packet->type_string = "macho.CallReq";
+        packet->type = CALL_REQ;
+        packet->source.type = PyAddress::Node;
+        packet->source.objectID = m_services.GetNodeID();
+        packet->source.service = service;
+        packet->source.callID = ++m_nextServerCallID;
+        packet->dest.type = PyAddress::Client;
+        packet->dest.objectID = GetClientID();
+        packet->dest.service = service;
+        packet->userid = GetUserID();
+        packet->payload = call.Encode();
+    // Encode() handed its args to the payload
+    call.arg_tuple = nullptr;
+    call.arg_dict = nullptr;
+
+    if (fallbackKey != nullptr) {
+        m_serverCallFallback[packet->source.callID] = std::make_pair(std::string(fallbackKey), (fallbackArgs != nullptr ? fallbackArgs : new PyDict()));
+    } else {
+        PySafeDecRef(fallbackArgs);
+    }
+
+    if (is_log_enabled(CLIENT__CALL_DUMP)) {
+        _log(CLIENT__CALL_REP, "Calling %s::%s on %s (callID %lli)", service, method, GetName(), packet->source.callID);
+        PyLogDumpVisitor dumper(CLIENT__CALL_DUMP, CLIENT__CALL_DUMP, "", true, true);
+        packet->Dump(CLIENT__CALL_DUMP, dumper);
+    }
+
+    QueuePacket(packet);
+}
+
+bool Client::Handle_CallRsp(PyPacket* packet)
+{
+    _log(CLIENT__CALL_REP, "%s: response to server call %lli (%s)", GetName(), packet->dest.callID, packet->dest.service.c_str());
+    std::map<int64, std::pair<std::string, PyDict*>>::iterator itr = m_serverCallFallback.find(packet->dest.callID);
+    if (itr != m_serverCallFallback.end()) {
+        PySafeDecRef(itr->second.second);
+        m_serverCallFallback.erase(itr);
+    }
+    if (is_log_enabled(CLIENT__CALL_DUMP)) {
+        PyLogDumpVisitor dumper(CLIENT__CALL_DUMP, CLIENT__CALL_DUMP, "", true, true);
+        packet->Dump(CLIENT__CALL_DUMP, dumper);
+    }
+    return true;
+}
+
+bool Client::Handle_ErrorResponse(PyPacket* packet, ErrorResponse& error)
+{
+    _log(CLIENT__WARNING, "%s: error response %i to server call %lli (%s)", GetName(), error.ErrorCode, packet->dest.callID, packet->dest.service.c_str());
+    if (is_log_enabled(CLIENT__CALL_DUMP)) {
+        PyLogDumpVisitor dumper(CLIENT__CALL_DUMP, CLIENT__CALL_DUMP, "", true, true);
+        packet->Dump(CLIENT__CALL_DUMP, dumper);
+    }
+    // the client could not run the call; tell the user what the call was about
+    std::map<int64, std::pair<std::string, PyDict*>>::iterator itr = m_serverCallFallback.find(packet->dest.callID);
+    if (itr != m_serverCallFallback.end()) {
+        SendRemoteMessage(itr->second.first.c_str(), itr->second.second);
+        m_serverCallFallback.erase(itr);
+    }
+    return true;
 }
 
 /************************************************************************/

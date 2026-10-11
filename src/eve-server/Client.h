@@ -443,6 +443,12 @@ public:
     void SendNotification(const PyAddress &dest, EVENotificationStream &noti, bool seq=true);
     void SendNotification(const char *notifyType, const char *idType, PyTuple *payload, bool seq=true);
     void SendNotification(const char *notifyType, const char *idType, PyTuple **payload, bool seq=true);
+    // keyed client message (gameui.OnRemoteMessage(msgID, dict)) that does not throw.  args are consumed
+    void SendRemoteMessage(const char* msgKey, PyDict* args = nullptr);
+    /* calls an exported method of a client service (server -> client CALL_REQ).  args are consumed.  the response is only logged.
+     * if the client answers with an error and fallbackKey is set, SendRemoteMessage(fallbackKey, fallbackArgs) is sent instead
+     */
+    void SendServiceCall(const char* service, const char* method, PyTuple* args, const char* fallbackKey = nullptr, PyDict* fallbackArgs = nullptr);
 
     // this is to check Throw status, to avoid throws/segfault when not applicable  (should use try/catch block)
     bool CanThrow()                                     { return m_canThrow; }
@@ -468,6 +474,9 @@ protected:
     void _SendPingResponse( const PyAddress& source, int64 callID );
 
     bool Handle_CallReq( PyPacket* packet, PyCallStream& req );
+    // responses to SendServiceCall()
+    bool Handle_CallRsp( PyPacket* packet );
+    bool Handle_ErrorResponse( PyPacket* packet, ErrorResponse& error );
     bool Handle_Notify( PyPacket* packet );
     bool Handle_PingReq( PyPacket* packet )             { _SendPingResponse( packet->dest, packet->source.callID ); return true; }
     bool Handle_PingRsp( PyPacket* packet )             { /* do nothing */ return true; }
@@ -479,6 +488,8 @@ private:
     void _SendQueuedUpdates();
 
     uint32 m_nextNotifySequence;
+    int64 m_nextServerCallID;   // callIDs of server -> client calls
+    std::map<int64, std::pair<std::string, PyDict*>> m_serverCallFallback;  // callID -> message sent if the call fails
 
     std::map<uint32, uint32>    m_lpMap;    // corpID/points
 

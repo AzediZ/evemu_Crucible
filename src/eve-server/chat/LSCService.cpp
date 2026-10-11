@@ -347,11 +347,17 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
             chjr.JoinRsp = MakeJoinError("LSCCannotJoin", args);
             chjr.ok = 0;
         } else if (!CheckPassword(call.client, channel, nullptr)) {
-            // lscengine handles LSCWrongPassword {channelName} here
+            /* ask the client for the password: lscengine.GetChannelPasswordAndJoin(title, channelID, displayName) prompts
+             * and joins through LSC.JoinChannel(channelID, password=...).  this channel is left out of the reply,
+             * since any ok=0 entry pops a message box on top of the prompt.  if the client refuses the call,
+             * it gets the LSCWrongPassword message instead
+             */
             PyDict* args = new PyDict();
                 args->SetItemString("channelName", new PyString(channel->GetDisplayName()));
-            chjr.JoinRsp = MakeJoinError("LSCWrongPassword", args);
-            chjr.ok = 0;
+            call.client->SendServiceCall("LSC", "GetChannelPasswordAndJoin",
+                    new_tuple(new PyString(channel->GetDisplayName()), new PyInt(channelID), new PyString(channel->GetDisplayName())),
+                    "LSCWrongPassword", args);
+            continue;
         } else {
             if (channel->JoinChannel(call.client)) {
                 ChannelJoinOK cjok;
