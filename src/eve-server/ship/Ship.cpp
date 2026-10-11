@@ -2,12 +2,14 @@
 #include "Client.h"
 #include "EntityList.h"
 #include "EVEServerConfig.h"
+#include "EVE_Mail.h"
 #include "Profiler.h"
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
 #include "character/Character.h"
 #include "effects/EffectsProcessor.h"
 #include "inventory/Inventory.h"
+#include "mail/NotificationMgr.h"
 #include "npc/Drone.h"
 #include "ship/Ship.h"
 #include "packets/DogmaIM.h"
@@ -505,9 +507,8 @@ void ShipItem::AddItem(InventoryItemRef iRef)
         uint32 mass = GetAttribute(AttrMass).get_uint32();
         uint32 addition = iRef->type().mass() * iRef->quantity();
         SetAttribute(AttrMass, mass + addition, HasPilot());
+        UpdateDestinyMass();
     }
-
-    /** @todo update destiny mass after adding item */
 }
 
 // cannot throw
@@ -584,7 +585,18 @@ void ShipItem::RemoveItem(InventoryItemRef iRef)
         uint32 mass = GetAttribute(AttrMass).get_uint32();
         uint32 addition = iRef->type().mass() * iRef->quantity();
         SetAttribute(AttrMass, mass - addition, HasPilot());
+        UpdateDestinyMass();
     }
+}
+
+void ShipItem::UpdateDestinyMass()
+{
+    // the ball's mass, agility and speed follow the ship's (SetBallMass/SetBallAgility/SetBallSpeed)
+    if ((m_pilot == nullptr) or !m_pilot->IsInSpace() or (m_pilot->GetShipSE() == nullptr))
+        return;
+    if ((m_pilot->GetShipSE()->GetID() != itemID()) or (m_pilot->GetShipSE()->DestinyMgr() == nullptr))
+        return;
+    m_pilot->GetShipSE()->DestinyMgr()->UpdateShipVariables();
 }
 
 void ShipItem::AddModuleToOnlineVec(uint32 modID)
@@ -1022,15 +1034,19 @@ void ShipItem::RepairModules(std::vector<InventoryItemRef>& itemRefVec, float fr
 
 void ShipItem::Online(uint32 modID)
 {
-    if (sDataMgr.IsSolarSystem(locationID())) {
-        ; // check for avalible cap, and drain accordingly (this can throw)
-        /*
-        float Charge = GetAttribute(AttrCapacitorCharge).get_float();
-        float Capacity = GetAttribute(AttrCapacitorCapacity).get_float();
-        float newCharge = 0;
-        SetAttribute(AttrCapacitorCharge, newCharge);
-        _log(SHIP__MESSAGE, "ShipItem::Online(): %s(%u) - New Cap Charge: %f", GetPilot()->GetName(), itemID(), newCharge);
-        */
+    /* without a station's fitting service a module needs 95% capacitor to come online, and onlining uses it all.
+     *  the client checks nothing itself, so this throws its NotEnoughCapacitorForOnline {module, need, have}
+     */
+    bool inSpace(sDataMgr.IsSolarSystem(locationID()));
+    GenericModule* pMod(m_ModuleManager->GetModule(modID));
+    if (inSpace and (pMod != nullptr) and !pMod->isOnline()) {
+        float charge(GetAttribute(AttrCapacitorCharge).get_float());
+        float capacity(GetAttribute(AttrCapacitorCapacity).get_float());
+        if ((capacity > 0) and (charge < (0.95f * capacity)))
+            throw UserError ("NotEnoughCapacitorForOnline")
+                    .AddFormatValue("module", new PyInt(pMod->GetSelf()->typeID()))
+                    .AddFormatValue("need", new PyInt(95))
+                    .AddFormatValue("have", new PyInt((int32)(charge * 100.0f / capacity)));
     }
     /* {'messageKey': 'EffectAlreadyActive2', 'dataID': 17876243, 'suppressable': False, 'bodyID': 256802, 'messageType': 'hint', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 3252}
      * {'messageKey': 'EffectCantHaveNegativeDuration', 'dataID': 17883801, 'suppressable': False, 'bodyID': 259632, 'messageType': 'notify', 'urlAudio': '', 'urlIcon': '', 'titleID': None, 'messageID': 847}
@@ -1053,6 +1069,11 @@ void ShipItem::Online(uint32 modID)
      * {'FullPath': u'UI/Messages', 'messageID': 259651, 'label': u'EffectStillActiveBody'}(u'The {[item]moduleTypeID.name} cannot be manually deactivated in the middle of an operation, it will deactivate without repeating in {[timeinterval]timeLeft.writtenForm, from=second, to=second} (its activation duration is {[timeinterval]duration.writtenForm, from=second, to=second}).', None, {u'{[timeinterval]timeLeft.writtenForm, from=second, to=second}': {'conditionalValues': [], 'variableType': 8, 'propertyName': 'writtenForm', 'args': 0, 'kwargs': {'to': 'second', 'from': 'second'}, 'variableName': 'timeLeft'}, u'{[timeinterval]duration.writtenForm, from=second, to=second}': {'conditionalValues': [], 'variableType': 8, 'propertyName': 'writtenForm', 'args': 0, 'kwargs': {'to': 'second', 'from': 'second'}, 'variableName': 'duration'}, u'{[item]moduleTypeID.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'moduleTypeID'}})
      */
 	m_ModuleManager->Online(modID);
+
+    if (inSpace and (pMod != nullptr) and pMod->isOnline()) {
+        SetShipCapacitorLevel(0.0f);
+        _log(SHIP__MESSAGE, "ShipItem::Online(): %s(%u) - capacitor used to online %s", name(), itemID(), pMod->GetSelf()->name());
+    }
 }
 
 void ShipItem::Offline(uint32 modID)
@@ -1994,9 +2015,7 @@ std::string ShipItem::GetShipDNA()
      *
      * [PyString "<url=fitting:24698:3841;2:2531;1:19812;1:23527;1:2410;7:1422;4:2547;1:31802;3:2301;1:2454;5::>Anchor</url>"]
      *
-     *  current code returns this:
-     * "587:8863;1:8863;1:8863;1:499;1:578;1:1798;1:6485;1:2046;1:8325;1:31788;1:31800;1:31788;1::"
-     *  need to figure out how to group modules for correct condensed counts
+     *  modules (and charges, drones) of one type are grouped:  "587:8863;3:499;1:578;1:1798;1:6485;1:2046;1:8325;1:31788;2:31800;1::"
      */
     if (typeID() == EVEDB::invTypes::Capsule) {
         std::stringstream dna;
@@ -2005,41 +2024,60 @@ std::string ShipItem::GetShipDNA()
         return dna.str();
     }
 
-    /* find and encode the module typeIDs */
-    std::stringstream modHi, modMid, modLow, subSys, modRig, charges, drones;
+    /* each typeID once per group, with the summed quantity, in the order first seen */
+    typedef std::vector<std::pair<uint32, uint32>> TypeCounts;
+    auto addType = [](TypeCounts& into, uint32 typeID, uint32 qty) {
+        for (auto& cur : into)
+            if (cur.first == typeID) {
+                cur.second += qty;
+                return;
+            }
+        into.push_back(std::make_pair(typeID, qty));
+    };
+    auto encode = [](std::stringstream& out, const TypeCounts& from) {
+        for (auto cur : from)
+            out << cur.first << ";" << cur.second << ":";
+    };
+
+    TypeCounts modHi, modMid, modLow, modRig, charges, drones;
+    std::stringstream subSys;
 
     std::vector<InventoryItemRef> moduleList;
     m_ModuleManager->GetModuleListOfRefsAsc(moduleList);
-
-    /** @todo update this for multiples of modules */
     for (auto cur : moduleList) {
         if (IsRigSlot(cur->flag())) {
-            modRig << cur->typeID() << ";" << cur->quantity() << ":";
+            addType(modRig, cur->typeID(), 1);
         } else if (IsHiSlot(cur->flag())) {
-            modHi << cur->typeID() << ";" << cur->quantity() << ":";
+            addType(modHi, cur->typeID(), 1);
         } else if (IsMidSlot(cur->flag())) {
-            modMid << cur->typeID() << ";" << cur->quantity() << ":";
+            addType(modMid, cur->typeID(), 1);
         } else if (IsLowSlot(cur->flag())) {
-            modLow << cur->typeID() << ";" << cur->quantity() << ":";
+            addType(modLow, cur->typeID(), 1);
         } else if (IsSubSystem(cur->flag())) {
             subSys << cur->typeID() << ":";
-        } else {
-            ; // error?
         }
     }
 
     std::map<EVEItemFlags, InventoryItemRef> chargeList;
     m_ModuleManager->GetLoadedCharges(chargeList);
     for (auto cur : chargeList)
-        charges << cur.second->typeID() << ";" << cur.second->quantity() << ":";
+        addType(charges, cur.second->typeID(), cur.second->quantity());
 
-    /* not sure how to get drones yet.  will work on later */
-    drones << ":";
+    std::vector<InventoryItemRef> droneList;
+    pInventory->GetItemsByFlag(flagDroneBay, droneList);
+    for (auto cur : droneList)
+        addType(drones, cur->typeID(), cur->quantity());
 
-    /* build the dna stream */
+    /* build the dna stream:  ship:subsystems:highs:mids:lows:rigs:charges:drones:: */
     std::stringstream dna;
-    dna << typeID() << ":";
-    dna << subSys.str() << modHi.str() << modMid.str() << modLow.str() << modRig.str() << charges.str() << drones.str();
+    dna << typeID() << ":" << subSys.str();
+    encode(dna, modHi);
+    encode(dna, modMid);
+    encode(dna, modLow);
+    encode(dna, modRig);
+    encode(dna, charges);
+    encode(dna, drones);
+    dna << ":";
 
     _log(SHIP__MESSAGE, "ShipDNA has compiled \"%s\" for %s(%u) ", dna.str().c_str(), name(), itemID());
     return dna.str();
@@ -2121,21 +2159,16 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client* 
             }
         } break;
 
-        /** @todo need to figure out how to separate ships into s/m/l/i for these.... */
-        case flagSmallShipHold: {
-            if (iRef->categoryID() != EVEDB::invCategories::Ship) {
-                throw CustomError ("Only small ships may be placed into the ship's small ship hold.");
-            }
-        } break;
-        case flagMediumShipHold: {
-            if (iRef->categoryID() != EVEDB::invCategories::Ship) {
-                throw CustomError ("Only medium ships may be placed into the ship's medium ship hold.");
-            }
-        } break;
+        // ship size from the rig size (1 small, 2 medium, 3 large).  only the unpublished Cockroach has these holds
+        case flagSmallShipHold:
+        case flagMediumShipHold:
         case flagLargeShipHold: {
-            if (iRef->categoryID() != EVEDB::invCategories::Ship) {
-                throw CustomError ("Only large ships may be placed into the ship's large ship hold.");
-            }
+            uint8 size(flag == flagSmallShipHold ? 1 : (flag == flagMediumShipHold ? 2 : 3));
+            if ((iRef->categoryID() != EVEDB::invCategories::Ship)
+            or  !iRef->HasAttribute(AttrRigSize) or (iRef->GetAttribute(AttrRigSize).get_uint32() != size))
+                throw UserError ("CannotStoreDestinationRestricted")
+                        .AddFormatValue("item", new PyString(iRef->itemName()))
+                        .AddFormatValue("ship", new PyInt(typeID()));
         } break;
         case flagIndustrialShipHold: {
             if ((iRef->groupID() != EVEDB::invGroups::MiningBarge)
@@ -2586,16 +2619,29 @@ void ShipSE::PayInsurance() {
     std::string reason = "Insurance payment for loss of the ship ";
     reason += m_self->itemName();
 
-    AccountService::TransferFunds(
-        corpSCC,
-        m_ownerID,
-        m_db.GetShipInsurancePayout(m_self->itemID()),
-        reason,
-        Journal::EntryType::Insurance,
-        m_self->typeID()
-    );
+    // an uninsured ship gets the default payout (40% of its insurance value)
+    bool isDefault(false);
+    double payout(m_db.GetShipInsurancePayout(m_self->itemID(), m_self->typeID(), isDefault));
+    if (payout > 0)
+        AccountService::TransferFunds(
+            corpSCC,
+            m_ownerID,
+            payout,
+            reason,
+            Journal::EntryType::Insurance,
+            m_self->typeID()
+        );
 
     ShipDB::DeleteInsuranceByShipID(m_self->itemID());
+
+    // the payout notification (Notifications/bodyInsurancePayout).  'payout' set adds the default payout text
+    if ((payout > 0) and IsCharacterID(m_ownerID)) {
+        PyDict* data = new PyDict();
+            data->SetItemString("itemID", new PyInt(m_self->itemID()));
+            data->SetItemString("amount", new PyFloat(payout));
+            data->SetItemString("payout", new PyInt(isDefault ? 1 : 0));
+        NotificationMgr::Send(m_ownerID, Notify::Types::InsurancePayout, corpSCC, data);
+    }
 }
 
 void ShipSE::ResetShipSystemMgr(SystemManager* pSystem) {

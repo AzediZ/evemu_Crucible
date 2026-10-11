@@ -188,12 +188,12 @@ PyResult DogmaIMBound::SetModuleOnline(PyCallArgs& call, PyInt* locationID, PyIn
             _log(PLAYER__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
             return PyStatic.NewNone();
         } else if (pDestiny->IsWarping()) {
-            /** @todo  warpsafe modules can be activated while warping.  fix this */
-            pClient->SendNotifyMsg("You can't do this while warping");
-            return PyStatic.NewNone();
+            // the 'online' effect isn't warp safe.  the client has already changed its own state and only reverts on an error
+            throw UserError ("ShipInWarp");
         }
     }
 
+    // this throws the client's error when the module can't come online (capacitor in space, ...)
 	pClient->GetShip()->Online(moduleID->value());
 
     // returns nodeID and timestamp
@@ -209,9 +209,8 @@ PyResult DogmaIMBound::TakeModuleOffline(PyCallArgs& call, PyInt* locationID, Py
             _log(PLAYER__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
             return PyStatic.NewNone();
         } else if (pDestiny->IsWarping()) {
-            /** @todo  warpsafe modules can be deactivated while warping.  fix this */
-            pClient->SendNotifyMsg("You can't do this while warping");
-            return PyStatic.NewNone();
+            // the client has already changed its own state and only reverts on an error
+            throw UserError ("ShipInWarp");
         }
     }
 

@@ -27,6 +27,9 @@ Author: Zhur, Allan
 
 
 #include "ship/ShipDB.h"
+#include "inventory/InventoryItem.h"
+#include "inventory/ItemFactory.h"
+#include "inventory/ItemType.h"
 
 
 PyRep *ShipDB::GetInsuranceByShipID(uint32 shipID) {
@@ -67,15 +70,20 @@ void ShipDB::DeleteInsuranceByShipID(uint32 shipID) {
 	sDatabase.RunQuery(err, "DELETE FROM shipInsurance WHERE shipID=%u", shipID);
 }
 
-float ShipDB::GetShipInsurancePayout(uint32 shipID) {
+double ShipDB::GetShipInsurancePayout(uint32 shipID, uint16 typeID, bool& isDefault) {
+    isDefault = false;
     DBQueryResult res;
     DBResultRow row;
     sDatabase.RunQuery(res, "SELECT payOutAmount FROM shipInsurance WHERE shipID = %u", shipID);
     if (res.GetRow(row))
-        return row.GetFloat(0);
+        return row.GetDouble(0);
 
-    /** @todo  send mail to owner about no insurance, so limited payout. from SCC  */
-    return 15000;  //default to flat 15K for no insurance.
+    // Crucible: an uninsured ship pays 40% of its insurance value (InsuranceService uses the base price as that value)
+    isDefault = true;
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if (pType == nullptr)
+        return 0;
+    return pType->basePrice() * 0.4;
 }
 
 bool ShipDB::IsShipInsured(uint32 shipID)

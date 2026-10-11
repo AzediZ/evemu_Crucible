@@ -65,6 +65,8 @@ public:
     void LogOut();
     // adds cargo mass to ship's mass
     void UpdateMass();  // will reset ship mass to default, then loop thru cargo
+    // tells destiny about a mass change (cargo mass, server.CargoMassAdditive)
+    void UpdateDestinyMass();
     static ShipItemRef Load( uint32 shipID);
     static ShipItemRef Spawn( ItemData &data);
 

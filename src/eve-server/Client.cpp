@@ -1408,7 +1408,7 @@ void Client::CreateNewPod() {
 }
 
 ShipItemRef Client::SpawnNewRookieShip(uint32 stationID) {
-    /** @todo  create/send mail from scc about lost ship as needed....create char uses this method also */
+    // a rookie ship isn't insured, so there is no payout notification for it (ShipSE::PayInsurance)
     //create rookie ship of appropriate type
     using namespace Char;
     uint16 shipID(0), gunID(0);

@@ -700,8 +700,9 @@ void TargetManager::Depleted(MiningLaser* pMod)
 }
 
 float TargetManager::TimeToLock ( ShipItemRef sRef, SystemEntity* tSE ) const {
-    if ((tSE->IsAsteroidSE()) or (tSE->IsDeployableSE()) or (tSE->IsWreckSE())
-        or  (tSE->IsContainerSE()) or (tSE->IsInanimateSE()))
+    bool hasSig((tSE->GetSelf().get() != nullptr) and tSE->GetSelf()->HasAttribute(AttrSignatureRadius));
+    if (!hasSig and ((tSE->IsAsteroidSE()) or (tSE->IsDeployableSE()) or (tSE->IsWreckSE())
+        or  (tSE->IsContainerSE()) or (tSE->IsInanimateSE())))
         return 2.0f;
 
     //  fixed lock time  -allan 24Dec14  -updated 26May15   -revisited after new effects system implementation 25Mar17
@@ -713,41 +714,15 @@ float TargetManager::TimeToLock ( ShipItemRef sRef, SystemEntity* tSE ) const {
         scanRes = 1.0f;
     float sigRad = 25; // set base as capsule with 25m signature radius
 
-    if ( tSE->GetSelf().get() != nullptr )
-        if ( tSE->GetSelf()->HasAttribute(AttrSignatureRadius) )
-            sigRad = tSE->GetSignatureRadius();   // includes target painters
+    if (hasSig)
+        sigRad = tSE->GetSignatureRadius();   // includes target painters
+    if (sigRad < 1.0f)
+        sigRad = 1.0f;
 
-        //https://wiki.eveonline.com/en/wiki/Targeting_speed
-        //locktime = 40000/(scanres * asinh(sigrad)^2)
-        float time = ( 40000 /(scanRes * std::pow(asinh(sigRad), 2)));   // higher scan res means faster lock time.
-
-        /*  distance-based modifier to targeting speed?         sure, why the hell not?   -allan 27.6.15
-         *  +0.1s for each 10k distance
-         *     distance = pos - targ.pos
-         *     disMod = distance /10k (for 10k increments)
-         *     time += disMod * 0.1
-         */
-        double distance = sRef->position().distance( tSE->GetPosition());
-        // check for snipers... >85k distance do NOT need additional 7.5+s to targettime
-        // should we check LRT skill for pilots to modify this?  yes....not sure how to modify time using this yet...
-        /*
-         *    uint8 sLevel = 1;
-         *    if (ship->HasPilot()) {
-         *        sLevel += ship->GetPilot()->GetChar()->GetSkillLevel(EvESkill::LongRangeTargeting);   // bonus to target range
-         *        sLevel += ship->GetPilot()->GetChar()->GetSkillLevel(EvESkill::SignatureAnalysis); // skill at operating target systems
-         *        sLevel += ship->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Electronics);   // basic ship sensor and computer systems
-}
-*/
-        //if (mySE->IsNPCSE())      // not all snipers are npc
-        if (distance > 85000)
-            distance -= 75000;
-
-        float disMod = distance /10000;
-        if (disMod < 1)
-            disMod = 0.0f;
-        time += (disMod * 0.1f);
-
-        return time;
+    //https://wiki.eveonline.com/en/wiki/Targeting_speed
+    //locktime = 40000/(scanres * asinh(sigrad)^2).  distance doesn't matter (long range targeting and signature analysis
+    // work thru max targeting range and scan resolution, which the skills' effects already set)
+    return ( 40000 /(scanRes * std::pow(asinh(sigRad), 2)));   // higher scan res means faster lock time.
 }
 
 void TargetManager::QueueEvent( PyTuple** event ) const

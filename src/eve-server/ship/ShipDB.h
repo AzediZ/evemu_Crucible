@@ -44,7 +44,8 @@ public:
     bool InsertInsuranceByShipID(uint32 shipID, std::string name, uint32 ownerID, float level, double payOut, bool isCorpItem = false, uint8 numWeeks = 12);
 	static void DeleteInsuranceByShipID(uint32 shipID);
 
-    float GetShipInsurancePayout(uint32 shipID);
+    // the insurance contract's payout, or the default payout for an uninsured ship (isDefault set)
+    double GetShipInsurancePayout(uint32 shipID, uint16 typeID, bool& isDefault);
 
     bool IsShipInsured(uint32 shipID);
 
