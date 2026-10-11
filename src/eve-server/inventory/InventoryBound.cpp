@@ -48,6 +48,7 @@
 #include "station/StationDataMgr.h"
 #include "manufacturing/FactoryDB.h"
 #include "contract/ContractUtils.h"
+#include "inventory/ContainerSecurity.h"
 
 InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<InventoryBound>& parent, InventoryItemRef item, EVEItemFlags flag, uint32 ownerID, bool passive) :
     EVEBoundObject(mgr, parent),
@@ -72,6 +73,14 @@ InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<Invent
     EVEBoundObject::Add("CreateBookmarkVouchers", &InventoryBound::CreateBookmarkVouchers);
     EVEBoundObject::Add("ListDroneBay", &InventoryBound::ListDroneBay);
     EVEBoundObject::Add("SetPassword", &InventoryBound::SetPassword);
+    EVEBoundObject::Add("EnterPassword", &InventoryBound::EnterPassword);
+    EVEBoundObject::Add("HasExistingPasswordSet", &InventoryBound::HasExistingPasswordSet);
+    EVEBoundObject::Add("RetrievePassword", &InventoryBound::RetrievePassword);
+    EVEBoundObject::Add("LockItem", &InventoryBound::LockItem);
+    EVEBoundObject::Add("UnlockItem", &InventoryBound::UnlockItem);
+    EVEBoundObject::Add("ALSCConfigGet", &InventoryBound::ALSCConfigGet);
+    EVEBoundObject::Add("ALSCConfigSet", &InventoryBound::ALSCConfigSet);
+    EVEBoundObject::Add("ALSCLogGet", &InventoryBound::ALSCLogGet);
     EVEBoundObject::Add("RunRefiningProcess", &InventoryBound::RunRefiningProcess);
     EVEBoundObject::Add("TakeOutTrash", &InventoryBound::TakeOutTrash);
     EVEBoundObject::Add("BreakPlasticWrap", &InventoryBound::BreakPlasticWrap);
@@ -100,6 +109,9 @@ PyResult InventoryBound::DestroyFitting(PyCallArgs &call, PyInt* itemID) {
 }
 
 PyResult InventoryBound::StackAll(PyCallArgs &call, std::optional <PyInt*> flag) {
+    // a password protected container (the client asks for the password and calls again)
+    sContSec.CheckOpen(call.client, m_self);
+
     call.Dump(INV__DUMP);
 
     EVEItemFlags stackFlag = m_flag;
@@ -194,6 +206,21 @@ PyResult InventoryBound::RemoveChargeToCargo(PyCallArgs &call, PyTuple* chargeIn
     return PyStatic.NewNone();
 }
 
+/* audit log containers log what's put in (Add) and what's taken out (Move):  typeID and quantity */
+static void LogContainerMove(Client* pClient, InventoryItemRef iRef, uint32 fromID, uint32 toID, int32 qty = 0)
+{
+    if ((fromID == toID) or (pClient == nullptr))
+        return;
+    if (qty < 1)
+        qty = (iRef->isSingleton() ? 1 : iRef->quantity());
+    InventoryItemRef toRef = sItemFactory.GetItemRefFromID(toID, false);
+    if (ContainerSecurity::IsAuditLog(toRef))
+        sContSec.Log(toRef, pClient->GetCharacterID(), Inv::ALSCAction::Add, true, iRef->typeID(), qty);
+    InventoryItemRef fromRef = sItemFactory.GetItemRefFromID(fromID, false);
+    if (ContainerSecurity::IsAuditLog(fromRef))
+        sContSec.Log(fromRef, pClient->GetCharacterID(), Inv::ALSCAction::Move, true, iRef->typeID(), qty);
+}
+
 /* exploration site containers can't be looted until they're hacked/analyzed/salvaged */
 static void CheckLockedContainer(Client* pClient, InventoryItemRef iRef)
 {
@@ -241,6 +268,9 @@ static void CheckTheft(Client* pClient, InventoryItemRef iRef)
 }
 
 PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::optional<PyRep*> sourceContainerID) {
+    // a password protected container (the client asks for the password and calls again)
+    sContSec.CheckOpen(call.client, m_self);
+
     _log(INV__MESSAGE, "IB::MultiMerge() called by %s(%u)", m_self->name(), m_itemID);
     call.Dump(INV__DUMP);
 
@@ -297,7 +327,9 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
         if (pInv->ValidateAddItem(destItem->flag(), srcItem)) {
             CheckLockedContainer(call.client, srcItem);
             CheckTheft(call.client, srcItem);
+            uint32 fromLocationID(srcItem->locationID());
             destItem->Merge( srcItem, qty, true );
+            LogContainerMove(call.client, destItem, fromLocationID, destItem->locationID(), qty);
         }
         // if false, error is thrown in ValidateAddItem() call
     }
@@ -312,6 +344,9 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
  * Adding Modules to a specific slot on ship
  */
 PyResult InventoryBound::Add(PyCallArgs &call, PyInt* itemID, PyInt* containerID) {
+    // a password protected container (the client asks for the password and calls again)
+    sContSec.CheckOpen(call.client, m_self);
+
     if (is_log_enabled(INV__DUMP)) {
         _log(INV__DUMP, "IB::Handle_Add() size= %lli", call.tuple->size());
         call.Dump(INV__DUMP);
@@ -368,6 +403,9 @@ PyResult InventoryBound::Add(PyCallArgs &call, PyInt* itemID, PyInt* containerID
 
 // this call is for moving items to *THIS* inventory
 PyResult InventoryBound::MultiAdd(PyCallArgs &call, PyList* itemIDs, PyInt* containerID) {
+    // a password protected container (the client asks for the password and calls again)
+    sContSec.CheckOpen(call.client, m_self);
+
     if (is_log_enabled(INV__DUMP)) {
         _log(INV__DUMP, "IB::Handle_MultiAdd() size= %lli", call.tuple->size());
         call.Dump(INV__DUMP);
@@ -643,8 +681,10 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             }
         }
 
+        uint32 fromLocationID(iRef->locationID());
         if (donating) {
             iRef->Donate(m_ownerID, m_itemID, toFlag);
+            LogContainerMove(pClient, iRef, fromLocationID, m_itemID);
             continue;
         }
 
@@ -718,6 +758,7 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
             pInventory->ValidateAddItem(toFlag, iRef);  // this will throw if it fails
             iRef->Donate(m_ownerID, m_itemID, toFlag);
         }
+        LogContainerMove(pClient, iRef, fromLocationID, m_itemID);
     }
 
     sItemFactory.UnsetUsingClient();
@@ -788,6 +829,9 @@ std::vector< int32 > InventoryBound::CatSortItems(std::vector< InventoryItemRef 
 PyResult InventoryBound::List(PyCallArgs &call, std::optional <PyInt*> listFlag) {
     if (pInventory == nullptr)
         return PyStatic.NewNone();
+
+    // a password protected container (the client asks for the password and calls again)
+    sContSec.CheckOpen(call.client, m_self);
 
     _log(INV__DUMP, "IB::List() dump.");
     call.Dump(INV__DUMP);
@@ -996,6 +1040,8 @@ void InventoryBound::CheckSourceAccess(Client* pClient, InventoryItemRef iRef, u
         // locked audit log container contents stay until they are unlocked
         if ((iRef->flag() == flagLocked) and (srcRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container))
             throw UserError("CrpItemIsLocked");
+        // a password protected container
+        sContSec.CheckOpen(pClient, srcRef);
     }
 
     // corp hangar division take roles
@@ -1095,10 +1141,92 @@ EVEItemFlags InventoryBound::ResolveAddFlag(uint16 toFlag) const
     return (EVEItemFlags)toFlag;
 }
 
-PyResult InventoryBound::SetPassword(PyCallArgs &call, PyInt* which, PyString* newPassword, PyString* oldPassword) {
-    _log(INV__MESSAGE, "%s Calling InventoryBound::SetPassword() for %s(%u)", call.client->GetName(), m_self->name(), m_itemID);
-    call.Dump(INV__DUMP);
+/* secure containers and audit log containers.  the client wraps these in its PasswordHandlerCallWrapper */
+
+PyResult InventoryBound::SetPassword(PyCallArgs &call, PyInt* which, PyRep* oldPassword, PyRep* newPassword) {
+    // container.SetPassword(which, old|None, new)
+    sContSec.SetPassword(call.client, m_self, which->value(), oldPassword, newPassword);
     return nullptr;
+}
+
+PyResult InventoryBound::EnterPassword(PyCallArgs &call, PyInt* which, PyRep* password) {
+    sContSec.EnterPassword(call.client, m_self, which->value(), password);
+    return nullptr;
+}
+
+PyResult InventoryBound::HasExistingPasswordSet(PyCallArgs &call, PyInt* which) {
+    // decides whether the client asks for the old password
+    if (!ContainerSecurity::IsSecure(m_self))
+        return new PyBool(false);
+    return new PyBool(sContSec.HasPassword(m_itemID, which->value()));
+}
+
+PyResult InventoryBound::RetrievePassword(PyCallArgs &call, PyInt* which) {
+    sContSec.RetrievePassword(call.client, m_self, which->value());
+    return nullptr;
+}
+
+PyResult InventoryBound::LockItem(PyCallArgs &call, PyInt* itemID) {
+    // menu ALSCLock:  invCache.GetInventoryFromId(item.locationID).LockItem(item.itemID)
+    if (!ContainerSecurity::IsAuditLog(m_self))
+        throw UserError("CantConfigureThat");
+    sContSec.CheckManage(call.client, m_self);
+    sContSec.CheckConfigPassword(call.client, m_self, Inv::ALSCConfig::NeedToLock);
+
+    if (pInventory != nullptr)
+        pInventory->LoadContents();
+    InventoryItemRef iRef = ((pInventory == nullptr) ? InventoryItemRef(nullptr) : pInventory->GetByID(itemID->value()));
+    if (iRef.get() == nullptr)
+        throw UserError("CrpLockedItemNotFound");
+    if (iRef->flag() == flagLocked)
+        throw UserError("CrpItemIsLocked");
+
+    iRef->SetFlag(flagLocked, true);
+    sContSec.Log(m_self, call.client->GetCharacterID(), Inv::ALSCAction::Lock, true, iRef->typeID(), (iRef->isSingleton() ? 1 : iRef->quantity()));
+    return nullptr;
+}
+
+PyResult InventoryBound::UnlockItem(PyCallArgs &call, PyInt* itemID) {
+    // menu ALSCUnlock:  invCache.GetInventoryFromId(item.locationID).UnlockItem(item.itemID)
+    if (!ContainerSecurity::IsAuditLog(m_self))
+        throw UserError("CantConfigureThat");
+    sContSec.CheckManage(call.client, m_self);
+    sContSec.CheckConfigPassword(call.client, m_self, Inv::ALSCConfig::NeedToUnlock);
+
+    if (pInventory != nullptr)
+        pInventory->LoadContents();
+    InventoryItemRef iRef = ((pInventory == nullptr) ? InventoryItemRef(nullptr) : pInventory->GetByID(itemID->value()));
+    if (iRef.get() == nullptr)
+        throw UserError("CrpLockedItemNotFound");
+    if (iRef->flag() != flagLocked)
+        throw UserError("CrpItemIsNotLocked");
+
+    iRef->SetFlag(flagUnlocked, true);
+    sContSec.Log(m_self, call.client->GetCharacterID(), Inv::ALSCAction::Unlock, true, iRef->typeID(), (iRef->isSingleton() ? 1 : iRef->quantity()));
+    return nullptr;
+}
+
+PyResult InventoryBound::ALSCConfigGet(PyCallArgs &call) {
+    // the client hides the password settings when this throws
+    if (!ContainerSecurity::IsAuditLog(m_self))
+        throw UserError("CantConfigureThat");
+    sContSec.CheckManage(call.client, m_self);
+    sContSec.CheckConfigPassword(call.client, m_self, 0);
+    return new PyInt(sContSec.GetConfig(m_itemID));
+}
+
+PyResult InventoryBound::ALSCConfigSet(PyCallArgs &call, PyInt* config) {
+    sContSec.SetConfig(call.client, m_self, config->value());
+    return nullptr;
+}
+
+PyResult InventoryBound::ALSCLogGet(PyCallArgs &call, PyRep* fromDate, PyRep* fromLogID, PyInt* forward) {
+    // AuditLogSecureContainerLogViewer:  container.ALSCLogGet(fromDate, fromLogID, forward), 50 at a time
+    if (!ContainerSecurity::IsAuditLog(m_self))
+        throw UserError("CantConfigureThat");
+    sContSec.CheckViewLog(call.client, m_self);
+    sContSec.CheckConfigPassword(call.client, m_self, Inv::ALSCConfig::NeedToViewLog);
+    return sContSec.GetLog(m_itemID, fromDate, fromLogID, forward->value());
 }
 
 PyResult InventoryBound::ListDroneBay(PyCallArgs &call) {

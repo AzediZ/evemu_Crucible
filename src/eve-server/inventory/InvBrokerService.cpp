@@ -33,6 +33,7 @@
 
 #include "StaticDataMgr.h"
 #include "character/CharacterDB.h"
+#include "inventory/ContainerSecurity.h"
 #include "inventory/InvBrokerService.h"
 #include "inventory/InventoryBound.h"
 #include "station/StationDataMgr.h"
@@ -131,6 +132,10 @@ PyResult InvBrokerBound::GetContainerContents(PyCallArgs &call, PyInt* container
                     item->name(), item->itemID(), call.client->GetName(), call.client->GetCharacterID());
          throw UserError ("CantDoThatWithSomeoneElsesStuff");
     }
+
+    // no peeking into a password protected container
+    if (ContainerSecurity::IsSecure(item) and sContSec.HasPassword(item->itemID(), Inv::SecPassword::General))
+        throw UserError("CannotViewContentsOfPasswordProtectedContainer");
 
     return item->GetMyInventory()->List( flagNone );
 }
@@ -417,6 +422,7 @@ PyResult InvBrokerBound::SetLabel(PyCallArgs &call, PyInt* itemID, PyRep* itemNa
         call.client->SendErrorMsg("You are not allowed to rename that.");
     } else {
         iRef->Rename(PyRep::StringContent(itemName));
+        sContSec.Log(iRef, call.client->GetCharacterID(), Inv::ALSCAction::SetName, true);
     }
 
     // Release the ItemFactory
@@ -512,6 +518,7 @@ void InvBrokerBound::TrashItem(Client* pClient, InventoryItemRef iRef)
     }
     if (iRef->GetMyInventory() != nullptr)
         iRef->GetMyInventory()->Unload();
+    sContSec.Forget(itemID);
 
     // out of its hangar (and out of the owner's sight).  the junkyard isn't a loadable location, so save it here
     iRef->Move(locJunkyard, flagJunkyardTrashed, true);
@@ -576,6 +583,7 @@ PyResult InvBrokerBound::AssembleCargoContainer(PyCallArgs &call, PyInt* itemID,
     iRef->ChangeSingleton(true, true);
     iRef->SaveItem();
     sItemFactory.UnsetUsingClient();
+    sContSec.Log(iRef, pClient->GetCharacterID(), Inv::ALSCAction::Assemble, true, iRef->ownerID(), iRef->typeID());
 
     _log(INV__MESSAGE, "IBB::AssembleCargoContainer() - %s assembled %s(%u)", pClient->GetName(), iRef->name(), iRef->itemID());
     return nullptr;

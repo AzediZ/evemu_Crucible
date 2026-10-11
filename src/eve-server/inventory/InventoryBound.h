@@ -53,7 +53,16 @@ protected:
     PyResult CreateBookmarkVouchers(PyCallArgs& call, PyList* bookmarkIDs, PyInt* flag, PyBool* isMove);
     PyResult TakeOutTrash(PyCallArgs& call, PyList* itemIDs);
     PyResult BreakPlasticWrap(PyCallArgs& call);
-    PyResult SetPassword(PyCallArgs& call, PyInt* which, PyString* newPassword, PyString* oldPassword);
+    // secure containers and audit log containers (ContainerSecurity)
+    PyResult SetPassword(PyCallArgs& call, PyInt* which, PyRep* oldPassword, PyRep* newPassword);
+    PyResult EnterPassword(PyCallArgs& call, PyInt* which, PyRep* password);
+    PyResult HasExistingPasswordSet(PyCallArgs& call, PyInt* which);
+    PyResult RetrievePassword(PyCallArgs& call, PyInt* which);
+    PyResult LockItem(PyCallArgs& call, PyInt* itemID);
+    PyResult UnlockItem(PyCallArgs& call, PyInt* itemID);
+    PyResult ALSCConfigGet(PyCallArgs& call);
+    PyResult ALSCConfigSet(PyCallArgs& call, PyInt* config);
+    PyResult ALSCLogGet(PyCallArgs& call, PyRep* fromDate, PyRep* fromLogID, PyInt* forward);
     PyResult ListDroneBay(PyCallArgs& call);
     PyResult RunRefiningProcess(PyCallArgs& call);
     PyResult Build(PyCallArgs& call);

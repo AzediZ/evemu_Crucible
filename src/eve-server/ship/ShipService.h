@@ -63,7 +63,7 @@ protected:
     PyResult ActivateShip(PyCallArgs& call, PyInt* newShipID, std::optional<PyInt*> oldShipID);
     PyResult Undock(PyCallArgs& call, PyInt* shipID, PyBool* ignoreContraband);
     PyResult Drop(PyCallArgs& call, PyList* PyToDropList, std::optional <PyInt*> ownerID, PyBool* ignoreWarning);
-    PyResult Scoop(PyCallArgs& call, PyInt* itemID);
+    PyResult Scoop(PyCallArgs& call, PyInt* itemID, std::optional<PyRep*> password);
     PyResult ScoopDrone(PyCallArgs& call, PyList* itemIDs);
     PyResult Jettison(PyCallArgs& call, PyList* itemIDs);
     PyResult AssembleShip(PyCallArgs& args, PyInt* shipID);

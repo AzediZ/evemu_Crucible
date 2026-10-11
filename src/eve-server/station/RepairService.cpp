@@ -31,6 +31,7 @@
 
 #include "Client.h"
 #include "account/AccountService.h"
+#include "inventory/ContainerSecurity.h"
 #include "inventory/Inventory.h"
 #include "station/StationDataMgr.h"
 #include "ship/ShipDB.h"
@@ -215,6 +216,9 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
                 throw CustomError("Unfit %s before repackaging it.", iRef->name());
             if (GetItemDamage(iRef) > 0)
                 throw UserError("CantRepackageDamagedItem");
+            // an audit log container with a log entry less than three weeks old
+            if (ContainerSecurity::IsAuditLog(iRef) and sContSec.HasRecentLog(itemID, GetFileTimeNow() - (Win32Time_Day * 21)))
+                throw UserError("CanNotRepackageALSC");
             if (iRef->IsShipItem()) {
                 // fitted modules lose their damage when the ship is repackaged
                 std::vector<InventoryItemRef> modules;
@@ -256,6 +260,11 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
                             iRef->GetShipItem()->StripFitting(true);
                             // check insurance and delete if applicable
                             ShipDB::DeleteInsuranceByShipID(itemID);
+                        }
+                        // a repackaged secure container loses its passwords
+                        if (ContainerSecurity::IsSecure(iRef)) {
+                            sContSec.Log(iRef, call.client->GetCharacterID(), Inv::ALSCAction::Repackage, true);
+                            sContSec.ClearPasswords(itemID);
                         }
 
                         iRef->ChangeSingleton(false, true);

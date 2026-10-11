@@ -47,6 +47,7 @@
 #include "corporation/CorporationDB.h"
 #include "fleet/FleetService.h"
 #include "imageserver/ImageServer.h"
+#include "inventory/ContainerSecurity.h"
 #include "inventory/Inventory.h"
 #include "map/MapData.h"
 #include "map/MapDB.h"
@@ -186,6 +187,9 @@ Client::~Client() {
         // drop fleet invites/join requests and leave the fleet before the character goes away
         if (!sConsole.IsShutdown())
             sFltSvc.ClientLogout(this);
+
+        // container passwords entered this session are forgotten
+        sContSec.ForgetCharacter(m_char->itemID());
 
         // remove fleet data, remove char from ItemFactory cache, save SP and set logout time
         m_char->LogOut();

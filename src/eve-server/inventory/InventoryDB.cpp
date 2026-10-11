@@ -253,3 +253,89 @@ void InventoryDB::DeleteItemsRecursive(std::vector<uint32>& itemIDs)
         sDatabase.RunQuery(err, "DELETE FROM entity WHERE itemID IN (%s)", ids.c_str());
     }
 }
+
+bool InventoryDB::GetContainerSecurity(uint32 itemID, std::string& general, std::string& config, uint8& alscConfig)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT generalPassword, configPassword, alscConfig FROM invContainerSecurity WHERE itemID = %u", itemID)) {
+        codelog(DATABASE__ERROR, "Error in GetContainerSecurity query for item %u: %s", itemID, res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    general = (row.IsNull(0) ? "" : row.GetText(0));
+    config = (row.IsNull(1) ? "" : row.GetText(1));
+    alscConfig = row.GetUInt(2);
+    return true;
+}
+
+void InventoryDB::SaveContainerSecurity(uint32 itemID, const std::string& general, const std::string& config, uint8 alscConfig)
+{
+    std::string gen, conf;
+    sDatabase.DoEscapeString(gen, general);
+    sDatabase.DoEscapeString(conf, config);
+    std::string genVal(general.empty() ? "NULL" : "'" + gen + "'"), confVal(config.empty() ? "NULL" : "'" + conf + "'");
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO invContainerSecurity (itemID, generalPassword, configPassword, alscConfig)"
+        " VALUES (%u, %s, %s, %u)"
+        " ON DUPLICATE KEY UPDATE generalPassword = VALUES(generalPassword), configPassword = VALUES(configPassword),"
+        "  alscConfig = VALUES(alscConfig)", itemID, genVal.c_str(), confVal.c_str(), alscConfig))
+        codelog(DATABASE__ERROR, "Error in SaveContainerSecurity query for item %u: %s", itemID, err.c_str());
+}
+
+void InventoryDB::DeleteContainerSecurity(uint32 itemID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM invContainerSecurity WHERE itemID = %u", itemID);
+}
+
+void InventoryDB::AddAuditLog(uint32 containerID, uint32 actorID, uint8 actionID, bool ok, uint32 invMgrLocationID,
+                              uint32 locationID, uint16 flagID, int32 arg1, int32 arg2)
+{
+    std::string a1(arg1 == 0 ? "NULL" : std::to_string(arg1)), a2(arg2 == 0 ? "NULL" : std::to_string(arg2));
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO invAuditLog (containerID, logDate, actorID, actionID, status, inventoryMgrLocationID, locationID, flagID, arg1, arg2)"
+        " VALUES (%u, %lli, %u, %u, %u, %u, %u, %u, %s, %s)",
+        containerID, GetFileTimeNow(), actorID, actionID, (ok ? 1 : 0), invMgrLocationID, locationID, flagID, a1.c_str(), a2.c_str()))
+        codelog(DATABASE__ERROR, "Error in AddAuditLog query for container %u: %s", containerID, err.c_str());
+}
+
+PyRep* InventoryDB::GetAuditLog(uint32 containerID, int64 fromDate, int32 fromLogID, bool forward)
+{
+    // the client pages 50 at a time, forward (newer) or back (older) from a logID, or from a date
+    std::string where, order;
+    if (fromDate > 0) {
+        where = (forward ? " AND logDate >= " : " AND logDate <= ") + std::to_string(fromDate);
+        order = (forward ? " ORDER BY logID ASC" : " ORDER BY logID DESC");
+    } else if (forward) {
+        where = ((fromLogID <= 1) ? " AND logID >= " : " AND logID > ") + std::to_string(fromLogID);
+        order = " ORDER BY logID ASC";
+    } else {
+        if (fromLogID > 0)
+            where = " AND logID < " + std::to_string(fromLogID);
+        order = " ORDER BY logID DESC";
+    }
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT logID, logDate, inventoryMgrLocationID, locationID, flagID, actorID, actionID, status, arg1, arg2"
+        " FROM invAuditLog WHERE containerID = %u%s%s LIMIT 50", containerID, where.c_str(), order.c_str())) {
+        codelog(DATABASE__ERROR, "Error in GetAuditLog query for container %u: %s", containerID, res.error.c_str());
+        return new PyList();
+    }
+    return DBResultToCRowset(res);
+}
+
+bool InventoryDB::HasAuditLogSince(uint32 containerID, int64 since)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT logID FROM invAuditLog WHERE containerID = %u AND logDate >= %lli LIMIT 1", containerID, since)) {
+        codelog(DATABASE__ERROR, "Error in HasAuditLogSince query for container %u: %s", containerID, res.error.c_str());
+        return false;
+    }
+    return (res.GetRowCount() > 0);
+}

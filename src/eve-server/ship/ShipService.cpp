@@ -37,6 +37,7 @@
 #include "pos/Tower.h"
 #include "ship/ShipService.h"
 #include "ship/modules/GenericModule.h"
+#include "inventory/ContainerSecurity.h"
 #include "system/Container.h"
 #include "system/DestinyManager.h"
 #include "system/Interdiction.h"
@@ -716,7 +717,8 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
     return dict;
 }
 
-PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID) {
+PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID, std::optional<PyRep*> password) {
+    // ship.Scoop(objectID[, password]).  the password is sent on a retry after ShpScoopSecureCC
     Client* pClient(call.client);
     SystemManager* pSysMgr(pClient->SystemMgr());
     if (pSysMgr == nullptr) {
@@ -766,6 +768,14 @@ PyResult ShipBound::Scoop(PyCallArgs &call, PyInt* itemID) {
     if (iRef.get() == nullptr) {
         codelog(CLIENT__ERROR, "ItemRef for %i not found.", itemID->value());
         return PyStatic.mtDict();
+    }
+
+    // someone else's password protected secure container is disarmed with its password, or it won't come aboard
+    if (pSE->IsContainerSE() and ContainerSecurity::IsSecure(iRef)
+    and (iRef->ownerID() != (uint32)pClient->GetCharacterID())
+    and sContSec.HasPassword(iRef->itemID(), Inv::SecPassword::General)) {
+        if (!password.has_value() or !sContSec.MatchPassword(iRef->itemID(), Inv::SecPassword::General, password.value()))
+            throw UserError("ShpScoopSecureCC");
     }
 
     // Check cargo bay capacity:

@@ -27,6 +27,41 @@ namespace Inv {
         };
     }
 
+    // secure container password kinds (const.SCCPasswordType*)
+    namespace SecPassword {
+        enum {
+            General           = 1,
+            Config            = 2
+        };
+    }
+
+    // audit log secure container log actions (const.ALSCAction*)
+    namespace ALSCAction {
+        enum {
+            Assemble          = 1,
+            Repackage         = 2,
+            SetName           = 3,
+            Move              = 4,
+            SetPassword       = 5,
+            Add               = 6,
+            Lock              = 7,
+            Unlock            = 8,
+            EnterPassword     = 9,
+            Configure         = 10
+        };
+    }
+
+    // audit log secure container config bits:  which actions need a password (const.ALSCPasswordNeededTo*)
+    namespace ALSCConfig {
+        enum {
+            NeedToOpen        = 1,
+            NeedToLock        = 2,
+            NeedToUnlock      = 4,
+            NeedToViewLog     = 8,
+            Default           = 15
+        };
+    }
+
     namespace Update {
         //these are used with the OnItemChange packet to update client's item data (and trigger other actions)
         // updated for crucible.  -allan 16May16

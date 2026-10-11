@@ -50,6 +50,17 @@ public:
     static void PurgeTrash(int64 cutoff);
     // deletes items and all they contain, with their per-item rows
     static void DeleteItemsRecursive(std::vector<uint32>& itemIDs);
+
+    /* secure container passwords and audit log container settings.  an empty password is no password */
+    static bool GetContainerSecurity(uint32 itemID, std::string& general, std::string& config, uint8& alscConfig);
+    static void SaveContainerSecurity(uint32 itemID, const std::string& general, const std::string& config, uint8 alscConfig);
+    static void DeleteContainerSecurity(uint32 itemID);
+    /* audit log container action log.  arg1/arg2 of 0 are stored as NULL */
+    static void AddAuditLog(uint32 containerID, uint32 actorID, uint8 actionID, bool ok, uint32 invMgrLocationID,
+                            uint32 locationID, uint16 flagID, int32 arg1, int32 arg2);
+    // up to 50 rows:  logID, logDate, inventoryMgrLocationID, locationID, flagID, actorID, actionID, status, arg1, arg2
+    static PyRep* GetAuditLog(uint32 containerID, int64 fromDate, int32 fromLogID, bool forward);
+    static bool HasAuditLogSince(uint32 containerID, int64 since);
 };
 
 #endif
