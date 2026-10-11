@@ -923,7 +923,9 @@ PyResult Command_warpto(Client* pClient, CommandDB* db, EVEServiceManager &servi
         distIdx = 4;
     } else if (args.isNumber(1)) {
         uint32 id(strtoul(args.arg(1).c_str(), nullptr, 10));
-        if (id >= minBookmark) {
+        // NPCs, missiles and dungeon objects have IDs above minBookmark too, so anything in space wins
+        pSE = pSystem->GetSE(id);
+        if ((pSE == nullptr) and (id >= minBookmark)) {
             uint32 itemID(0), locationID(0);
             uint16 typeID(0);
             double x(0.0), y(0.0), z(0.0);
@@ -941,10 +943,8 @@ PyResult Command_warpto(Client* pClient, CommandDB* db, EVEServiceManager &servi
                 if (pSE == nullptr)
                     throw CustomError ("Bookmark %u is for %u, which is not in your system.", id, itemID);
             }
-        } else {
-            pSE = pSystem->GetSE(id);
-            if (pSE == nullptr)
-                throw CustomError ("%u is not in space in your system.", id);
+        } else if (pSE == nullptr) {
+            throw CustomError ("%u is not in space in your system.", id);
         }
     } else {
         throw CustomError (usage);

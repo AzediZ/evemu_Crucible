@@ -21,6 +21,7 @@
 #include "map/MapConnections.h"
 #include "map/MapData.h"
 #include "npc/Drone.h"
+#include "npc/LawEnforcement.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
@@ -895,6 +896,9 @@ PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &serv
             throw CustomError ("/unspawn failed.  %s is a static object.", sys_entity->GetName());
         if (sys_entity->HasPilot())
             throw CustomError ("/unspawn failed.  %s has a pilot.", sys_entity->GetName());
+        // law enforcement holds ships of logged-off pilots until their timers run out
+        if (pClient->SystemMgr()->GetLaw()->GetLoggedOffOwner(target) != 0)
+            throw CustomError ("/unspawn failed.  %s belongs to a logged-off pilot.", sys_entity->GetName());
 
         std::string name(sys_entity->GetName());
         sys_entity->Delete();
@@ -918,6 +922,8 @@ PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &serv
     for (auto cur : pClient->SystemMgr()->GetEntities()) {
         SystemEntity* pSE(cur.second);
         if ((pSE == nullptr) or pSE->IsStaticEntity() or pSE->HasPilot())
+            continue;
+        if (pSE->IsShipSE() and (pClient->SystemMgr()->GetLaw()->GetLoggedOffOwner(cur.first) != 0))
             continue;
         if (is_category_match ? (match_id != pSE->GetCategoryID()) : (match_id != pSE->GetGroupID()))
             continue;
