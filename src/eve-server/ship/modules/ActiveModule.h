@@ -134,6 +134,12 @@ private:
     Timer               m_timer;
     Timer               m_reloadTimer;
 
+    /* ship and cargo scanners:  results at the end of the cycle (OnShipScanCompleted / OnCargoScanComplete) */
+    void                ShipScanResult();
+    void                CargoScanResult();
+    // the target resists this scanner (shipScanResistance / cargoScanResistance, % chance)
+    bool                ScanResisted(uint16 resistAttr);
+
     /* warp disruption field generator, sphere mode */
     void                StartDisruptField();
     void                StopDisruptField();

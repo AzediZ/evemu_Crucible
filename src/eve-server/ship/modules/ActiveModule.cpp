@@ -19,6 +19,8 @@
 #include "ship/modules/EwarModule.h"
 #include "ship/modules/ModuleItem.h"
 #include "ship/modules/Prospector.h"
+#include "manufacturing/Blueprint.h"
+#include "exploration/Exploration.h"
 #include "system/Container.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/CrimeWatch.h"
@@ -937,11 +939,6 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
                 m_targetSE->GetSelf()->SetAttribute(AttrWarpScrambleStatus);
         } break;
         */
-        case EVEDB::invGroups::Ship_Scanner:
-        case EVEDB::invGroups::Cargo_Scanner:{
-            if (m_targetSE != nullptr)
-                ;  // not sure if we need this here.....do these work like belt scanner?
-        } break;
         // not sure just how this works yet
         // case EVEDB::invGroups::System_Scanner:
     }
@@ -977,6 +974,114 @@ void ActiveModule::ProcessActiveCycle() {
 
 void ActiveModule::CycleComplete()
 {
+    switch (groupID()) {
+        case EVEDB::invGroups::Ship_Scanner: {
+            ShipScanResult();
+        } break;
+        case EVEDB::invGroups::Cargo_Scanner: {
+            CargoScanResult();
+        } break;
+    }
+}
+
+bool ActiveModule::ScanResisted(uint16 resistAttr)
+{
+    float resist(m_targetSE->GetSelf()->GetAttribute(resistAttr).get_float());
+    if ((resist > 0) and (MakeRandomFloat(0, 100) < resist)) {
+        // no client message for this
+        m_shipRef->GetPilot()->SendNotifyMsg("The %s resisted your %s.", m_targetSE->GetName(), m_modRef->name());
+        return true;
+    }
+    return false;
+}
+
+/* Crucible ship scanner (effect shipScan):  the target's fitted modules and loaded charges, and its capacitor.
+ *  beyond shipScanRange each module shows with a chance falling off over shipScanFalloff ("the further it goes beyond scan
+ *  range, the more inaccurate its results will be").  client:  OnShipScanCompleted(shipID, capCharge, capCapacity,
+ *  [(typeID, quantity)]), charges are shown once.  npcs have nothing fitted
+ */
+void ActiveModule::ShipScanResult()
+{
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (m_targetSE == nullptr) or !(m_targetSE->IsShipSE() or m_targetSE->IsNPCSE()))
+        return;
+    if (ScanResisted(AttrShipScanResistance))
+        return;
+
+    float range(GetAttribute(AttrShipScanRange).get_float());
+    float falloff(GetAttribute(AttrShipScanFalloff).get_float());
+    float distance(m_shipRef->position().distance(m_targetSE->GetPosition()) - m_targetSE->GetRadius());
+    float chance(1.0f);
+    if ((distance > range) and (falloff > 0))
+        chance = std::exp(-std::pow((distance - range) / falloff, 2));
+
+    std::map<uint16, uint32> found;     // typeID, count
+    if (m_targetSE->IsShipSE()) {
+        ShipItemRef targetShip(m_targetSE->GetShipSE()->GetShipItemRef());
+        std::vector<InventoryItemRef> modules;
+        targetShip->GetModuleManager()->GetModuleListOfRefsAsc(modules);
+        for (auto cur : modules) {
+            // fitted hi/med/low modules (no rigs or subsystems)
+            if ((cur->flag() < flagLowSlot0) or (cur->flag() > flagHiSlot7))
+                continue;
+            if ((chance < 1.0f) and (MakeRandomFloat() >= chance))
+                continue;
+            ++found[cur->typeID()];
+            InventoryItemRef chargeRef(targetShip->GetModuleManager()->GetLoadedChargeOnModule(cur));
+            if (chargeRef.get() != nullptr)
+                found[chargeRef->typeID()] = 1;
+        }
+    }
+
+    PyList* list = new PyList();
+    for (auto cur : found) {
+        PyTuple* entry = new PyTuple(2);
+            entry->SetItem(0, new PyInt(cur.first));
+            entry->SetItem(1, new PyInt(cur.second));
+        list->AddItem(entry);
+    }
+
+    InventoryItemRef targetRef(m_targetSE->GetSelf());
+    PyTuple* tuple = new PyTuple(4);
+        tuple->SetItem(0, new PyInt(m_targetSE->GetID()));
+        tuple->SetItem(1, new PyFloat(targetRef->GetAttribute(AttrCapacitorCharge).get_double()));
+        tuple->SetItem(2, new PyFloat(targetRef->GetAttribute(AttrCapacitorCapacity).get_double()));
+        tuple->SetItem(3, list);
+    pClient->SendNotification("OnShipScanCompleted", "clientID", &tuple);
+}
+
+/* Crucible cargo scanner (effect cargoScan):  the target's cargo hold.  client:  OnCargoScanComplete(shipID,
+ *  [(typeID, quantity)]), a blueprint copy has quantity -singletonBlueprintCopy (-2)
+ */
+void ActiveModule::CargoScanResult()
+{
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (m_targetSE == nullptr) or !(m_targetSE->IsShipSE() or m_targetSE->IsNPCSE()))
+        return;
+    if (ScanResisted(AttrCargoScanResistance))
+        return;
+
+    PyList* list = new PyList();
+    if (m_targetSE->IsShipSE()) {
+        std::vector<InventoryItemRef> cargo;
+        m_targetSE->GetSelf()->GetMyInventory()->GetInventoryVec(cargo);
+        for (auto cur : cargo) {
+            if (cur->flag() != flagCargoHold)
+                continue;
+            int32 quantity(cur->quantity());
+            if ((cur->categoryID() == EVEDB::invCategories::Blueprint) and BlueprintRef::StaticCast(cur)->copy())
+                quantity = -2;      // -const.singletonBlueprintCopy
+            PyTuple* entry = new PyTuple(2);
+                entry->SetItem(0, new PyInt(cur->typeID()));
+                entry->SetItem(1, new PyInt(quantity));
+            list->AddItem(entry);
+        }
+    }
+
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(m_targetSE->GetID()));
+        tuple->SetItem(1, list);
+    pClient->SendNotification("OnCargoScanComplete", "clientID", &tuple);
 }
 
 void ActiveModule::SetTimer(uint32 time) {
@@ -1328,7 +1433,8 @@ bool ActiveModule::CanActivate() {
                 range = GetAttribute(AttrCargoScanRange).get_float();
             } break;
             case Ship_Scanner: {
-                range = GetAttribute(AttrShipScanRange).get_float();
+                // results thin out over the falloff (ShipScanResult)
+                range = GetAttribute(AttrShipScanRange).get_float() + GetAttribute(AttrShipScanFalloff).get_float();
             } break;
             case Shield_Disruptor:      // no modules in this group
             case Stasis_Web:
@@ -1635,6 +1741,15 @@ void ActiveModule::LaunchProbe()
     Client* pClient = m_shipRef->GetPilot();
     if (pClient == nullptr)
         return;
+
+    // survey probes fly to a moon and report its materials.  they aren't scanner probes
+    if (m_chargeRef->groupID() == EVEDB::invGroups::Survey_Probe) {
+        sExplorationMgr.LaunchSurveyProbe(pClient, m_shipRef, m_chargeRef);
+        ConsumeCharge();
+        sStatMgr.Increment(Stat::probesLaunched);
+        return;
+    }
+
     if (pClient->scan() == nullptr)
         pClient->SetScan(new Scan(pClient));
 

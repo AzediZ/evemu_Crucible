@@ -198,6 +198,7 @@ public:
     void GetClientList(std::vector<Client*>& cVec);
 
     std::map< uint32, SystemEntity* > GetEntities()     { return m_entities; }
+    const std::map<uint32, SystemEntity*>& GetMoonMap() const { return m_moonMap; }
 
     SystemEntity* GetPlanet(uint32 planetID);
 

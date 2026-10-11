@@ -15,6 +15,7 @@
 
 #include "eve-server.h"
 
+class Client;
 class ContainerSE;
 class SystemManager;
 
@@ -42,6 +43,15 @@ namespace Exploration {
         float chance;
         std::string pattern;    // '' any, '*' container's faction prefix, 'x' starts with x, '%x' contains x
     };
+
+    // a survey probe on its way to a moon
+    struct SurveyFlight {
+        uint16 probeTypeID;
+        uint32 charID;
+        uint32 systemID;
+        uint32 moonID;
+        int64 landTime;         // filetime
+    };
 }
 
 /* Crucible (pre-Odyssey) site containers:  locked spawn containers (invGroup 306 with accessDifficulty) open with a
@@ -67,7 +77,16 @@ public:
     //  SystemManager::BuildDynamicEntity, which does the same
     ContainerSE* SpawnSiteContainer(SystemManager* pSys, uint16 typeID, uint32 ownerID, const GPoint& pos, const std::string& customInfo);
 
+    /* survey (moon) probes.  launched from an expanded probe launcher, a survey probe flies to the moon the ship is
+     *  heading for (within its scanRange AU and exploring.SurveyProbeConeAngle), lands after its explosionDelay
+     *  (frigate and covert ops hull bonuses) and reports the moon's materials (OnMoonScanComplete) */
+    void LaunchSurveyProbe(Client* pClient, ShipItemRef shipRef, InventoryItemRef chargeRef);
+    // 1Hz (EntityList):  survey probe landings
+    void Process();
+
 private:
+    void LandSurveyProbe(const Exploration::SurveyFlight& flight);
+
     // published types of this group (lazy) with their names
     const std::vector<std::pair<uint16, std::string>>& GetGroupTypes(uint16 groupID);
     // a type for this row, or 0
@@ -78,6 +97,7 @@ private:
     std::map<uint16, std::pair<uint8, std::string>> m_family;     // container typeID -> family, faction prefix
     std::multimap<uint8, Exploration::LootRow> m_loot;              // family -> rows, in table order
     std::map<uint16, std::vector<std::pair<uint16, std::string>>> m_groupTypes;
+    std::list<Exploration::SurveyFlight> m_flights;
 };
 
 #define sExplorationMgr \

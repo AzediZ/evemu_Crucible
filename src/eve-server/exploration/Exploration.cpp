@@ -9,10 +9,15 @@
 
 #include "eve-server.h"
 
+#include "Client.h"
+#include "EntityList.h"
 #include "exploration/Exploration.h"
 #include "exploration/ScanningDB.h"
 #include "manufacturing/Blueprint.h"
+#include "math/Trig.h"
+#include "planet/Moon.h"
 #include "system/Container.h"
+#include "system/DestinyManager.h"
 #include "system/SystemManager.h"
 
 ExplorationMgr::ExplorationMgr()
@@ -20,6 +25,7 @@ ExplorationMgr::ExplorationMgr()
     m_family.clear();
     m_loot.clear();
     m_groupTypes.clear();
+    m_flights.clear();
 }
 
 int ExplorationMgr::Initialize()
@@ -247,4 +253,136 @@ ContainerSE* ExplorationMgr::SpawnSiteContainer(SystemManager* pSys, uint16 type
     if ((pSE == nullptr) or !pSE->IsContainerSE())
         return nullptr;
     return pSE->GetContSE();
+}
+
+void ExplorationMgr::LaunchSurveyProbe(Client* pClient, ShipItemRef shipRef, InventoryItemRef chargeRef)
+{
+    if ((pClient == nullptr) or (pClient->SystemMgr() == nullptr) or (pClient->GetShipSE() == nullptr))
+        return;
+
+    // the probe flies the way the ship is heading.  a ship at rest sends it to the nearest moon
+    GPoint origin(pClient->GetShipSE()->GetPosition());
+    GVector heading(pClient->GetShipSE()->DestinyMgr()->GetHeading());
+    if (!heading.isNotZero())
+        heading = pClient->GetShipSE()->DestinyMgr()->GetVelocity();
+    bool aimed(heading.isNotZero());
+    if (aimed)
+        heading.normalize();
+
+    double range(chargeRef->type().GetAttribute(AttrScanRange).get_double());   // AU
+    if (range <= 0)
+        range = 1;
+    range *= ONE_AU_IN_METERS;
+    double maxAngle(EvE::Trig::Deg2Rad(sConfig.exploring.SurveyProbeConeAngle));
+
+    SystemEntity* pMoon(nullptr);
+    double best(0);
+    for (auto cur : pClient->SystemMgr()->GetMoonMap()) {
+        double distance(origin.distance(cur.second->GetPosition()));
+        if (distance > range)
+            continue;
+        if (aimed) {
+            GVector dir(origin, cur.second->GetPosition());
+            dir.normalize();
+            double angle(std::acos(std::min(1.0, std::max(-1.0, (double)heading.dotProduct(dir)))));
+            if (angle > maxAngle)
+                continue;
+            if ((pMoon == nullptr) or (angle < best)) {
+                pMoon = cur.second;
+                best = angle;
+            }
+        } else if ((pMoon == nullptr) or (distance < best)) {
+            pMoon = cur.second;
+            best = distance;
+        }
+    }
+    if (pMoon == nullptr) {
+        // the probe is spent anyway
+        pClient->SendNotifyMsg("Your %s found no moon in its flight path.", chargeRef->name());
+        return;
+    }
+
+    // flight time is the probe's explosionDelay.  survey skills don't apply, frigate and covert ops hulls do.
+    //  base values (the loaded charge may carry dogma already)
+    double flight(chargeRef->type().GetAttribute(AttrExplosionDelay).get_double());
+    const ItemType& sType(shipRef->type());
+    Character* pChar(pClient->GetChar().get());
+    struct HullBonus { uint16 attr; uint16 skill; };
+    static const HullBonus bonuses[] = {
+        { AttrshipBonus3AF, EvESkill::AmarrFrigate },
+        { AttrshipBonus3CF, EvESkill::CaldariFrigate },
+        { AttrshipBonus3GF, EvESkill::GallenteFrigate },
+        { AttrshipBonus3MF, EvESkill::MinmatarFrigate },
+        { AttreliteBonusCoverOps3, EvESkill::CovertOps }
+    };
+    for (auto& cur : bonuses)
+        if (sType.HasAttribute(cur.attr))
+            flight *= (1.0 + 0.01 * sType.GetAttribute(cur.attr).get_double() * pChar->GetSkillLevel(cur.skill));
+
+    Exploration::SurveyFlight data = Exploration::SurveyFlight();
+        data.probeTypeID = chargeRef->typeID();
+        data.charID = pClient->GetCharacterID();
+        data.systemID = pClient->GetSystemID();
+        data.moonID = pMoon->GetID();
+        data.landTime = GetFileTimeNow() + (int64)(flight * (EvE::Time::Second / 1000));
+    m_flights.push_back(data);
+
+    _log(SCAN__TRACE, "ExplorationMgr::LaunchSurveyProbe() - %s launched a %s at %s.  it lands in %.0fs.", \
+            pClient->GetName(), chargeRef->name(), pMoon->GetName(), flight / 1000);
+}
+
+void ExplorationMgr::Process()
+{
+    if (m_flights.empty())
+        return;
+    int64 now(GetFileTimeNow());
+    std::list<Exploration::SurveyFlight>::iterator itr = m_flights.begin();
+    while (itr != m_flights.end()) {
+        if (itr->landTime > now) {
+            ++itr;
+            continue;
+        }
+        LandSurveyProbe(*itr);
+        itr = m_flights.erase(itr);
+    }
+}
+
+void ExplorationMgr::LandSurveyProbe(const Exploration::SurveyFlight& flight)
+{
+    // the result goes to the pilot wherever he is.  nobody online, nothing to report
+    Client* pClient(sEntityList.FindClientByCharID(flight.charID));
+    if (pClient == nullptr)
+        return;
+    // never boot a system for this
+    SystemManager* pSys(sEntityList.FindSystem(flight.systemID));
+    if (pSys == nullptr)
+        return;
+    SystemEntity* pSE(pSys->GetSE(flight.moonID));
+    if ((pSE == nullptr) or !pSE->IsMoonSE())
+        return;
+    MoonSE* pMoon(pSE->GetMoonSE());
+
+    // one notification per moon, never an empty list (the client keys its results on result[0].celestialID)
+    PyList* result = new PyList();
+    for (auto itr = pMoon->GooBegin(); itr != pMoon->GooEnd(); ++itr) {
+        if (itr->second < 1)
+            continue;
+        PyDict* dict = new PyDict();
+            dict->SetItemString("celestialID", new PyInt(flight.moonID));
+            dict->SetItemString("typeID", new PyInt(itr->first));
+            dict->SetItemString("quantity", new PyInt(itr->second));
+        result->AddItem(new PyObject("util.KeyVal", dict));
+    }
+
+    if (result->empty()) {
+        PyDecRef(result);
+        PyDict* args = new PyDict();
+            args->SetItemString("moon", new PyInt(flight.moonID));
+        pClient->SendRemoteMessage("ScnNoMaterials", args);
+        return;
+    }
+
+    PyTuple* tuple = new PyTuple(1);
+        tuple->SetItem(0, result);
+    pClient->SendNotification("OnMoonScanComplete", "charid", &tuple);
 }

@@ -155,11 +155,6 @@ m_scanShips(false)
     m_scanDeviation = self->GetAttribute(AttrBaseMaxScanDeviation).get_float();
     m_baseScanRange = self->GetAttribute(AttrBaseScanRange).get_float() * (ONE_AU_IN_METERS /100);
 
-    // not sure about this one yet....moon survey.  will need special initializers here
-    if (self->groupID() == EVEDB::invGroups::Survey_Probe) {
-        // 5% reduction to flight time?  10% for t2 ship
-    }
-
     // i think we may have to do probe modifiers here....they are not being done thru fx system
     Character* pChar = m_client->GetChar().get();
     // skills

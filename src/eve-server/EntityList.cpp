@@ -34,6 +34,7 @@
 #include "EVEServerConfig.h"
 #include "ServiceDB.h"
 #include "agents/Agent.h"
+#include "exploration/Exploration.h"
 #include "exploration/Probes.h"
 #include "map/MapDB.h"
 #include "market/MarketMgr.h"
@@ -266,6 +267,7 @@ void EntityList::Process() {
         // these need 1Hz tics
         sCivMgr.Process();
         sBubbleMgr.Process();
+        sExplorationMgr.Process();
 
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {
