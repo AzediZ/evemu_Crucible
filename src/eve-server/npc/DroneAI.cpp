@@ -604,6 +604,7 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
         } break;
         case DroneAI::Action::Ewar: {
             StartEwar(pTarget);
+            TryJam(pTarget);
             // neutralizers drain the target's capacitor every cycle
             const ItemType& type(m_pDrone->GetSelf()->type());
             if (type.HasAttribute(AttrEnergyDestabilizationAmount)) {
@@ -684,6 +685,49 @@ void DroneAIMgr::StartEwar(SystemEntity* pTarget) {
     // NPCs keep copies of their weapon stats
     if (!m_ewarMods.empty() and pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr))
         pTarget->GetNPCSE()->GetAIMgr()->RefreshWeaponStats();
+}
+
+/* ECM drones try to jam their target every cycle.  the chance is the drone's jam strength for the target's sensor type
+ *  (scan<Type>StrengthBonus) divided by the target's sensor strength (scan<Type>Strength).  a jammed target loses its
+ *  locks and can't lock again until the end of the drone's cycle (its duration, 20s for these drones)
+ */
+void DroneAIMgr::TryJam(SystemEntity* pTarget) {
+    const ItemType& type(m_pDrone->GetSelf()->type());
+    if (!type.HasAttribute(AttrScanGravimetricStrengthBonus) and !type.HasAttribute(AttrScanLadarStrengthBonus)
+    and !type.HasAttribute(AttrScanMagnetometricStrengthBonus) and !type.HasAttribute(AttrScanRadarStrengthBonus))
+        return;
+    if (pTarget->TargetMgr() == nullptr)
+        return;
+
+    // the target's sensor type is the one with the highest strength
+    static const uint16 sensor[4] = {AttrScanGravimetricStrength, AttrScanLadarStrength, AttrScanMagnetometricStrength, AttrScanRadarStrength};
+    static const uint16 jammer[4] = {AttrScanGravimetricStrengthBonus, AttrScanLadarStrengthBonus, AttrScanMagnetometricStrengthBonus, AttrScanRadarStrengthBonus};
+    InventoryItemRef tRef(pTarget->GetSelf());
+    double strength(0.0), jam(0.0);
+    for (uint8 i = 0; i < 4; ++i) {
+        double s(tRef->HasAttribute(sensor[i]) ? tRef->GetAttribute(sensor[i]).get_double() : 0.0);
+        if (s > strength) {
+            strength = s;
+            jam = (type.HasAttribute(jammer[i]) ? type.GetAttribute(jammer[i]).get_double() : 0.0);
+        }
+    }
+    if (strength <= 0.0) {
+        strength = 1.0;
+        jam = type.GetAttribute(AttrScanGravimetricStrengthBonus).get_double();
+    }
+    double chance(jam / strength);
+    bool success(MakeRandomFloat(0.0, 1.0) < chance);
+    _log(DRONE__AI_TRACE, "Drone %s(%u): jam attempt on %s(%u): strength %.2f vs sensors %.2f, chance %.0f%% - %s", m_pDrone->GetName(),
+         m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID(), jam, strength, chance * 100.0, (success ? "jammed" : "failed"));
+    if (!success)
+        return;
+
+    pTarget->TargetMgr()->Jam(static_cast<uint32>(m_pDrone->Stats().cycleTime));
+    ShipSE* pController(m_pDrone->GetController());
+    if ((pController != nullptr) and pController->HasPilot())
+        pController->GetPilot()->SendNotifyMsg("Your %s jams the %s.", m_pDrone->GetName(), pTarget->GetName());
+    if (pTarget->HasPilot())
+        pTarget->GetPilot()->SendNotifyMsg("You have been jammed by a %s.", m_pDrone->GetName());
 }
 
 void DroneAIMgr::StopEwar() {

@@ -111,6 +111,7 @@ private:
     void StartWeb(SystemEntity* pTarget);
     void StopWeb();             // also undoes electronic warfare (see StartEwar)
     void StartEwar(SystemEntity* pTarget);
+    void TryJam(SystemEntity* pTarget);
     void StopEwar();
 
     // target lock with the drone's own sensors

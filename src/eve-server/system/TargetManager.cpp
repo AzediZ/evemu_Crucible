@@ -109,8 +109,22 @@ void TargetManager::Unload() {
     m_targetedBy.clear();
 }
 
+void TargetManager::Jam(uint32 durationMS) {
+    double until(GetTimeMSeconds() + durationMS);
+    if (until > m_jammedUntil)
+        m_jammedUntil = until;
+    ClearTargets(true);
+    _log(TARGET__TRACE, "Jam:  %s(%u) is jammed for %ums.", mySE->GetName(), mySE->GetID(), durationMS);
+}
+
+bool TargetManager::IsJammed() const {
+    return (GetTimeMSeconds() < m_jammedUntil);
+}
+
 bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
 {       // NOTE this is for players and CAN throw (client calls this inside try/catch block)
+    if (IsJammed())
+        throw CustomError ("Your sensors are jammed.  You can't lock targets until the jamming wears off.");
     if (!mySE->HasPilot()) {
         codelog(TARGET__ERROR, "StartTargeting() called by pilot-less ship %s(%u) to target %s(%u)", \
         mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
@@ -202,6 +216,8 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
 
 bool TargetManager::StartTargeting(SystemEntity *tSE, float lockTime, uint8 maxLockedTargets, double maxTargetLockRange, bool &chase)
 {       // NOTE  this is for npcs
+    if (IsJammed())
+        return false;
     //first make sure they are not already in the list
     if (m_targets.find(tSE) != m_targets.end()) {
         _log(TARGET__DEBUG, " %s(%u): Told to target %s(%u), but we are already targeting them. Ignoring request.", \

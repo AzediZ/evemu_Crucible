@@ -87,6 +87,10 @@ public:
 
     // iterate thru the map of modules targeting this object and call AbortCycle on each.
     void                ClearModules();
+
+    // electronic warfare: a jammed ship or NPC loses its locks and can't lock anything until the jam ends
+    void                Jam(uint32 durationMS);
+    bool                IsJammed() const;
     void                TargetsCleared();
     void                ClearFromTargets();
     void                TargetLost(SystemEntity *tSE);
@@ -199,6 +203,7 @@ private:
     std::map<SystemEntity*, TargetedByEntry*> m_targetedBy;  //we own these values, not the keys
 
     bool m_canAttack;   // true if npcs can begin attack (to correct attacking before targetlock)
+    double m_jammedUntil = 0.0;     // GetTimeMSeconds() when the current jam ends
 };
 
 #endif
