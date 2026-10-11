@@ -20,32 +20,38 @@ class RamMethods
 : public Singleton< RamMethods >
 {
 public:
-    // verify output, runs, and type data
-    void ActivityCheck(Client* const pClient, const Call_InstallJob& args, BlueprintRef bpRef);
+    // verify output, runs, and type data.  structureLine: the line is in a POS array/lab (strict producibility)
+    void ActivityCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef iRef, bool structureLine = false);
     // verify job count for char
     void JobsCheck(Character* pChar, const Call_InstallJob& args);
     // verify range for stations and structure data for POS
     void InstallationCheck(Client* const pClient, int32 lineLocationID);
-    // verify roles and restrictions
-    void LinePermissionCheck(Client* const pClient, const Call_InstallJob& args);
-    void ItemOwnerCheck(Client*const pClient, const Call_InstallJob& args, BlueprintRef bpRef);
+    // verify roles and restrictions.  returns the line's restriction data (owner, container)
+    void LinePermissionCheck(Client* const pClient, const Call_InstallJob& args, EvERam::LineRestrictions& into);
+    void ItemOwnerCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef iRef);
     void ItemLocationCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef installedItem);
 
-    void HangarRolesCheck(Client* const pClient, int16 flagID);
-    // only used for station location role checks
-    void LocationRolesCheck(Client*const pClient, const CorpPathElement& data);
+    // corp roles the client holds at locationID (hq, base or other, with rolesAtAll).  directors hold every role
+    int64 GetLocationRoles(Client* const pClient, uint32 locationID);
+    // verify the take role of a corp hangar division at locationID (station or structure)
+    void HangarRolesCheck(Client* const pClient, uint32 locationID, int16 flagID);
 
     void ProductionTimeCheck(uint32 productionTime);
-    void MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
+    // verify skills and that ownerID has every needed material at bomLocation
+    void MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
+    // remove the job's materials owned by ownerID from bomLocation.  call MaterialSkillsCheck() first
+    void ConsumeMaterials(uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
+    // units of a required item a job takes
+    uint32 GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs);
 
-    void VerifyCompleteJob(const Call_CompleteJob& args, EvERam::JobProperties& data, Client*const pClient);
+    void VerifyCompleteJob(const Call_CompleteJob& args, EvERam::JobProperties& data, Client* const pClient);
 
-    bool Calculate(const Call_InstallJob& args, BlueprintRef bpRef, Character* pChar, Rsp_InstallJob& into);
+    bool Calculate(const Call_InstallJob& args, InventoryItemRef iRef, Character* pChar, Rsp_InstallJob& into);
     void EncodeBillOfMaterials(const std::vector< EvERam::RequiredItem >& reqItems, float materialMultiplier, float charMaterialMultiplier, uint32 runs, BillOfMaterials& into);
-    void EncodeMissingMaterials(const std::vector< EvERam::RequiredItem >& reqItems, const PathElement& bomLocation, Client*const pClient, float materialMultiplier, float charMaterialMultiplier, int32 runs, std::map< int32, PyRep* >& into);
+    void EncodeMissingMaterials(const std::vector< EvERam::RequiredItem >& reqItems, const PathElement& bomLocation, uint32 ownerID, Client* const pClient, float materialMultiplier, float charMaterialMultiplier, int32 runs, std::map< int32, PyRep* >& into);
 
-    void GetBOMItems(const PathElement &bomLocation, std::vector<InventoryItemRef> &into);
-    void GetBOMItemsMap(const PathElement &bomLocation, std::map<uint16, InventoryItemRef> &into);
+    // inventory of the job's bill of materials location (loads its contents).  null when there is none
+    Inventory* GetBOMInventory(const PathElement& bomLocation);
 
     void GetAdjustedRamRequiredMaterials();
     const char* GetActivityName(int8 activityID);

@@ -50,7 +50,9 @@ public:
     // InstallJob stuff
     static bool GetAssemblyLineProperties(const uint32 assemblyLineID, Character *pChar, Rsp_InstallJob &into, bool isCorpJob=false);
     static bool GetAssemblyLineRestrictions(const int32 assemblyLineID, EvERam::LineRestrictions& data);
-    static uint32 InstallJob(const uint32 ownerID, const uint32 installerID, Call_InstallJob &args, const int64 beginTime, const int64 endTime, const uint32 systemID);
+    static uint32 InstallJob(const uint32 ownerID, const uint32 installerID, Call_InstallJob &args, const int64 beginTime, const int64 endTime,
+                             const uint32 systemID, const uint32 outputLocationID, const uint32 containerTypeID, const uint16 installedTypeID,
+                             const EvERam::InventionData* pInvData = nullptr);
 
     // CompleteJob stuff
     static bool GetJobProperties(const uint32 jobID, EvERam::JobProperties& data);
@@ -60,7 +62,8 @@ public:
     static bool DeleteBlueprint(uint32 blueprintID);
     static bool GetBlueprintData(uint32 blueprintID, EvERam::bpData& into);
     static bool SaveBlueprintData(uint32 blueprintID, EvERam::bpData& data);
-    static bool IsProducableBy(const uint32 assemblyLineID, const ItemType *pType);
+    // strict: the line type must list the product's category or group (structure lines)
+    static bool IsProducableBy(const uint32 assemblyLineID, const ItemType *pType, bool strict = false);
     static bool GetMultipliers(const uint32 assemblyLineID, const ItemType *pType, Rsp_InstallJob &into);
 
     static uint32 CountManufacturingJobs(const uint32 installerID);

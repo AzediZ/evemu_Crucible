@@ -77,6 +77,24 @@ BlueprintRef Blueprint::Spawn(ItemData& data, EvERam::bpData& bdata) {
     return bRef;
 }
 
+BlueprintRef Blueprint::SpawnCopy(uint16 typeID, uint32 ownerID, uint32 locationID, EVEItemFlags flag, int16 runs, int8 me/*0*/, int8 pe/*0*/)
+{
+    // copies are always singletons
+    ItemData idata(typeID, ownerID, locTemp, flagNone);
+    EvERam::bpData bdata = EvERam::bpData();
+        bdata.copy   = true;
+        bdata.runs   = (runs < 1 ? 1 : runs);
+        bdata.mLevel = me;
+        bdata.pLevel = pe;
+    BlueprintRef bRef = Blueprint::Spawn(idata, bdata);
+    if (bRef.get() == nullptr) {
+        _log(MANUF__ERROR, "Blueprint::SpawnCopy() - Failed to spawn a copy of type %u for %u.", typeID, ownerID);
+        return bRef;
+    }
+    bRef->Move(locationID, flag, true);
+    return bRef;
+}
+
 uint32 Blueprint::CreateItemID(ItemData& data, EvERam::bpData& bdata) {
     // make sure it's a blueprint type
     const BlueprintType* bpType = sItemFactory.GetBlueprintType(data.typeID);
@@ -156,9 +174,10 @@ PyDict* Blueprint::GetBlueprintAttributes() {
 
 float Blueprint::GetME()
 {
+    // pre-Crius waste:  ME >= 0  WF / (1 + ME),  ME < 0  WF * (1 - ME)
     float bwf(m_bpType.wasteFactor());
     if (m_data.mLevel < 0) {
-        bwf /= (-m_data.mLevel);
+        bwf *= (1 - m_data.mLevel);
     } else if (m_data.mLevel > 0) {
         bwf /= (1 + m_data.mLevel);
     }

@@ -145,6 +145,8 @@ EVEServerConfig::EVEServerConfig()
     ram.ProdTime = 1.0;
     ram.CopyTime = 1.0;
     ram.InventTime = 1.0;
+    ram.InventChance = 1.0;
+    ram.ReChance = 1.0;
 
     // account
     account.autoAccountRole = Acct::Role::STD;
@@ -593,6 +595,8 @@ bool EVEServerConfig::ProcessBPTimes(const TiXmlElement* ele)
     AddValueParser( "ResPE",            ram.ResPE);
     AddValueParser( "ReTime",           ram.ReTime);
     AddValueParser( "InventTime",       ram.InventTime);
+    AddValueParser( "InventChance",     ram.InventChance);
+    AddValueParser( "ReChance",         ram.ReChance);
 
     const bool result = ParseElementChildren( ele );
 
@@ -605,6 +609,8 @@ bool EVEServerConfig::ProcessBPTimes(const TiXmlElement* ele)
     RemoveParser( "ResPE" );
     RemoveParser( "ReTime" );
     RemoveParser( "InventTime" );
+    RemoveParser( "InventChance" );
+    RemoveParser( "ReChance" );
 
     return result;
 }

@@ -190,6 +190,34 @@ namespace Corp {
 
         };
     }
+
+    // take role for a corp hangar division by item flag (flagHangar = 4, flagCorpHangar2..7 = 116..121).  0 for other flags
+    inline int64_t HangarTakeRole(int32_t flag) {
+        switch (flag) {
+            case 4:     return Role::HangarCanTake1;
+            case 116:   return Role::HangarCanTake2;
+            case 117:   return Role::HangarCanTake3;
+            case 118:   return Role::HangarCanTake4;
+            case 119:   return Role::HangarCanTake5;
+            case 120:   return Role::HangarCanTake6;
+            case 121:   return Role::HangarCanTake7;
+        }
+        return 0;
+    }
+
+    // take role for a corp wallet division by account key (1000..1006).  0 for other keys
+    inline int64_t AccountTakeRole(int32_t key) {
+        switch (key) {
+            case 1000:  return Role::AccountCanTake1;
+            case 1001:  return Role::AccountCanTake2;
+            case 1002:  return Role::AccountCanTake3;
+            case 1003:  return Role::AccountCanTake4;
+            case 1004:  return Role::AccountCanTake5;
+            case 1005:  return Role::AccountCanTake6;
+            case 1006:  return Role::AccountCanTake7;
+        }
+        return 0;
+    }
 }
 
 #endif  //EVE_ROLES_H

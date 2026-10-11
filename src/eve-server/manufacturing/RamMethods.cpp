@@ -14,6 +14,7 @@
 #include "inventory/Inventory.h"
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/RamMethods.h"
+#include "pos/PosMgrDB.h"
 #include "station/StationDataMgr.h"
 
 static const uint32 RAM_PRODUCTION_TIME_LIMIT = 60*60*24*30;   //30 days
@@ -37,19 +38,32 @@ static const uint32 RAM_PRODUCTION_TIME_LIMIT = 60*60*24*30;   //30 days
  */
 
 
-void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& args, BlueprintRef bpRef)
+void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef iRef, bool structureLine/*false*/)
 {
-    if (bpRef.get() == nullptr)
-        throw UserError ("RamInventionNoOutput");
+    if (iRef.get() == nullptr)
+        throw UserError ("RamActivityRequiresABlueprint");
 
     // check validity of activity
     if ((args.activityID < EvERam::Activity::Manufacturing)
     or  (args.activityID > EvERam::Activity::Invention))
         throw UserError ("RamAssemblyLineHasNoActivity");
 
+    if (args.activityID == EvERam::Activity::ReverseEngineering) {
+        // reverse engineering is only done in experimental laboratories and caldari research outposts
+        sLog.Error("RAM::InstallJob()", "Unsupported Activity %u sent by %s(%u).", args.activityID, pClient->GetName(), pClient->GetCharacterID());
+        throw UserError ("RamActivityInvalid");
+    }
+
+    // everything else needs a blueprint
+    if (iRef->categoryID() != EVEDB::invCategories::Blueprint)
+        throw UserError ("RamActivityRequiresABlueprint");
+
+    BlueprintRef bpRef = BlueprintRef::StaticCast(iRef);
     const ItemType* pType(nullptr);
     switch(args.activityID) {
         case EvERam::Activity::Manufacturing: {
+            if (args.runs < 1)
+                throw UserError ("RamTooManyProductionRuns");
             if (!bpRef->infinite()
             and ((bpRef->runs() - args.runs) < 0))
                 throw UserError ("RamTooManyProductionRuns");
@@ -75,21 +89,19 @@ void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& arg
         case EvERam::Activity::Copying: {
             if (bpRef->copy())
                 throw UserError ("RamCannotCopyABlueprintCopy");
+            if (args.copyRuns < 1)
+                throw UserError ("RamCannotCopyZeroRuns");
+            if ((uint32)args.copyRuns > bpRef->type().maxProductionLimit())
+                throw UserError ("RamTooManyProductionRuns");
             pType = &bpRef->type();
         } break;
         case EvERam::Activity::Invention: {
+            // the T1 copy is used up by the job.  the output is checked with the rest of the invention data
             if (!bpRef->copy() or bpRef->infinite())
                 throw UserError ("RamCannotInventABlueprintOriginal");
-
-            uint32 pTypeID = FactoryDB::GetTech2Blueprint(bpRef->typeID());
-            if (pTypeID == 0)
-                throw UserError ("RamInventionNoOutput");
             if (bpRef->runs() < 1)
-                throw UserError ("RamTooManyProductionsRuns");
-
-            pType = &bpRef->productType();
+                throw UserError ("RamCannotInventZeroRuns");
         } break;
-        case EvERam::Activity::ReverseEngineering:  // RE is ONLY at experimental POS module...cannot do RE in stations.  right now, this will never hit.
         case EvERam::Activity::ResearchTech:    // cannot find any reference to this.  not used?
         case EvERam::Activity::Duplicating:     // ancient pre-apoc 'copy' activity.  no longer used.
         default: {
@@ -99,10 +111,15 @@ void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& arg
         }
     }
 
+    // invention outputs are not tied to the line's product lists
+    if (args.activityID == EvERam::Activity::Invention)
+        return;
+
     if (pType == nullptr)
         throw UserError ("RamNoKnownOutputType");
 
-    if (!FactoryDB::IsProducableBy(args.AssemblyLineID, pType))
+    // npc station data is incomplete, so stations are lenient.  structure lines only take what their type lists
+    if (!FactoryDB::IsProducableBy(args.AssemblyLineID, pType, structureLine))
         throw UserError ("RamBadEndProductForActivity");
 }
 
@@ -159,50 +176,64 @@ void RamMethods::InstallationCheck(Client*const pClient, int32 lineLocationID)
      */
 }
 
-void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob& args)
+void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob& args, EvERam::LineRestrictions& data)
 {
     // get properties
-    EvERam::LineRestrictions data = EvERam::LineRestrictions();
     if (!FactoryDB::GetAssemblyLineRestrictions(args.AssemblyLineID, data))
         throw UserError ("RamInstallationHasNoDefaultContent");
+
+    // the line must be in the installation the client sent
+    if (data.containerID != (uint32)args.lineContainerID)
+        throw UserError ("RamInstallationIDUnexpected");
 
     // check validity of activity
     if ((data.activityID < EvERam::Activity::Manufacturing)
     or  (data.activityID > EvERam::Activity::Invention))
         throw UserError ("RamAssemblyLineHasNoActivity");
+    if (data.activityID != args.activityID)
+        throw UserError ("RamActivityInvalid");
 
-    // verify corp roles
+    uint32 corpID(pClient->GetCorporationID());
+    // verify corp roles.  directors hold every role
     if (args.isCorpJob) {
         int64 roles(pClient->GetCorpRole());
-        // check slot rental permissions first
-        if (args.activityID == EvERam::Activity::Manufacturing) {
-            if ((roles & Corp::Role::CanRentFactorySlot) != Corp::Role::CanRentFactorySlot)
-                throw UserError ("RamCannotInstallWithoutRentFactorySlot");
-        } else {
-            if ((roles & Corp::Role::CanRentResearchSlot) != Corp::Role::CanRentResearchSlot)
-                throw UserError ("RamCannotInstallWithoutRentResearchSlot");
+        if ((roles & Corp::Role::Director) != Corp::Role::Director) {
+            if ((roles & Corp::Role::FactoryManager) != Corp::Role::FactoryManager)
+                throw UserError ("RamCannotInstallForCorpByRoleFactoryManager");
+            // renting a line of another owner needs the slot rental role
+            if (data.ownerID != corpID) {
+                if (args.activityID == EvERam::Activity::Manufacturing) {
+                    if ((roles & Corp::Role::CanRentFactorySlot) != Corp::Role::CanRentFactorySlot)
+                        throw UserError ("RamCannotInstallWithoutRentFactorySlot");
+                } else {
+                    if ((roles & Corp::Role::CanRentResearchSlot) != Corp::Role::CanRentResearchSlot)
+                        throw UserError ("RamCannotInstallWithoutRentResearchSlot");
+                }
+            }
         }
-        if ((roles & Corp::Role::FactoryManager) != Corp::Role::FactoryManager)
-            throw UserError ("RamCannotInstallForCorpByRoleFactoryManager");
-        if ((roles & Corp::Role::Director) != Corp::Role::Director)
-            throw UserError ("RamCannotInstallForCorpByRole");
     }
 
-    // check usage restriction
-    if (data.rMask & EvERam::RestrictionMask::ByAlliance) {
-        if (data.ownerID != pClient->GetAllianceID())
-            throw UserError ("RamAccessDeniedWrongAlliance");
-    }
-    if (data.rMask & EvERam::RestrictionMask::ByCorp) {
-        if (data.ownerID != pClient->GetCorporationID())
-            throw UserError ("RamAccessDeniedWrongCorp");
+    // check usage restriction.  corp and alliance restrictions allow either group
+    uint8 groupMask(data.rMask & (EvERam::RestrictionMask::ByCorp | EvERam::RestrictionMask::ByAlliance));
+    if (groupMask) {
+        bool allowed(false);
+        if ((groupMask & EvERam::RestrictionMask::ByCorp) and (data.ownerID == corpID))
+            allowed = true;
+        if (!allowed and (groupMask & EvERam::RestrictionMask::ByAlliance)) {
+            uint32 allyID(pClient->GetAllianceID());
+            if ((allyID != 0) and (data.ownerID != 0)
+            and ((data.ownerID == corpID) or (PosMgrDB::GetCorpAllianceID(data.ownerID) == allyID)))
+                allowed = true;
+        }
+        if (!allowed)
+            throw UserError ((groupMask & EvERam::RestrictionMask::ByCorp) ? "RamAccessDeniedWrongCorp" : "RamAccessDeniedWrongAlliance");
     }
 
     // check standing
     if (data.rMask & EvERam::RestrictionMask::ByStanding) {
         // get standings
         if (args.isCorpJob) {
-            if (data.minStanding > StandingDB::GetStanding(data.ownerID, pClient->GetCorporationID()))
+            if (data.minStanding > StandingDB::GetStanding(data.ownerID, corpID))
                 throw UserError ("RamAccessDeniedCorpStandingTooLow");
         } else {
             if (data.minStanding > pClient->GetChar()->GetStandingModified(data.ownerID))
@@ -213,7 +244,6 @@ void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob
     // check security rating
     if (data.rMask & EvERam::RestrictionMask::BySecurity) {
         if (args.isCorpJob) {
-            /** @todo  corp secStatus????  didnt know that was a thing.  */
             if (data.minCorpSec > pClient->GetChar()->corpSecRating())
                 throw UserError ("RamAccessDeniedCorpSecStatusTooLow");
             if (data.maxCorpSec < pClient->GetChar()->corpSecRating())
@@ -227,15 +257,15 @@ void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob
     }
 }
 
-void RamMethods::ItemOwnerCheck(Client*const pClient, const Call_InstallJob& args, BlueprintRef bpRef)
+void RamMethods::ItemOwnerCheck(Client*const pClient, const Call_InstallJob& args, InventoryItemRef iRef)
 {
     // ownership
     if (args.isCorpJob) {
-        if (bpRef->ownerID() != pClient->GetCorporationID())
+        if (iRef->ownerID() != pClient->GetCorporationID())
             throw UserError ("RamCannotInstallItemForAnotherCorp");
     } else {
         // this one is checked in client
-        if (bpRef->ownerID() != pClient->GetCharacterID())
+        if (iRef->ownerID() != pClient->GetCharacterID())
             throw UserError ("RamCannotInstallItemForAnother");
     }
 }
@@ -244,37 +274,39 @@ void RamMethods::ItemLocationCheck(Client*const pClient, const Call_InstallJob& 
 {
     // a lot of this is checked in client.  need to verify
     if (sDataMgr.IsStation(args.lineContainerID)) {
-        if (installedItem->locationID() != args.lineContainerID) {
-            if (args.lineContainerID == pClient->GetLocationID()) {
-                throw UserError (
-                            (args.isCorpJob)
-                            ? "RamCorpInstalledItemWrongLocation"
-                            : "RamInstalledItemWrongLocation")
-                        .AddLocationName ("location", args.lineContainerID);
-            } else {
-                throw UserError ("RamRemoteInstalledItemNotInStation");
+        uint32 stationID(args.lineContainerID);
+        if (args.isCorpJob) {
+            // corp items are on a hangar floor of the corp's office in this station
+            uint32 officeID(stDataMgr.GetOfficeIDForCorp(stationID, pClient->GetCorporationID()));
+            if (officeID == 0)
+                throw UserError ("RamCorpBOMItemNoSuchOffice")
+                        .AddLocationName ("location", stationID);
+            if ((installedItem->locationID() != officeID) or !IsHangarFlag(installedItem->flag())) {
+                if (stationID == pClient->GetLocationID()) {
+                    throw UserError ("RamCorpInstalledItemWrongLocation")
+                            .AddLocationName ("location", stationID);
+                } else {
+                    throw UserError ("RamRemoteInstalledItemNotInOffice");
+                }
             }
+        } else if (installedItem->locationID() == stationID) {
+            if (installedItem->flag() != flagHangar) {
+                if (stationID == pClient->GetLocationID()) {
+                    throw UserError ("RamInstalledItemWrongLocation")
+                            .AddLocationName ("location", stationID);
+                } else {
+                    throw UserError ("RamRemoteInstalledItemInStationNotHangar");
+                }
+            }
+        } else if ((installedItem->locationID() == pClient->GetShipID())
+               and (pClient->GetStationID() == stationID)
+               and (installedItem->flag() == flagCargoHold)) {
+            // the client offers items in the cargo of the ship docked here
+        } else if (stationID == pClient->GetLocationID()) {
+            throw UserError ("RamInstalledItemWrongLocation")
+                    .AddLocationName ("location", stationID);
         } else {
-            if (args.isCorpJob) {
-                if (!IsHangarFlag(installedItem->flag())) {
-                    if (args.lineContainerID == pClient->GetLocationID()) {
-                        throw UserError(
-                                (args.isCorpJob)
-                                ? "RamCorpInstalledItemWrongLocation"
-                                : "RamInstalledItemWrongLocation")
-                                .AddLocationName("location", args.lineContainerID);
-                    }
-                }
-            } else {
-                if (installedItem->flag() != flagHangar) {
-                    if (args.lineLocationID == pClient->GetLocationID()) {
-                        throw UserError ("RamInstalledItemWrongLocation")
-                                .AddLocationName ("location", args.lineContainerID);
-                    } else {
-                        throw UserError ("RamRemoteInstalledItemInStationNotHangar");
-                    }
-                }
-            }
+            throw UserError ("RamRemoteInstalledItemNotInStation");
         }
     } else if (args.lineContainerID == pClient->GetShipID()) {
         if (pClient->GetChar()->flag() != flagPilot)
@@ -283,7 +315,7 @@ void RamMethods::ItemLocationCheck(Client*const pClient, const Call_InstallJob& 
         if (args.isCorpJob and (installedItem->flag() == flagCargoHold))
             throw UserError ("RamCorpInstalledItemNotInCargo");
 
-        if (installedItem->locationID() != args.lineContainerID)
+        if (installedItem->locationID() != (uint32)args.lineContainerID)
             throw UserError ("RamInstalledItemMustBeInShip");
     } else {
         /* this will be POS assembly modules and Outpost checks
@@ -293,64 +325,52 @@ void RamMethods::ItemLocationCheck(Client*const pClient, const Call_InstallJob& 
         *  RamInstalledItemInStructureNotInContainer
         *  RamInstalledItemInStructureUnknownLocation
         */
-        throw CustomError ("R.A.M. at POS/Outpost not supported yet");
+        throw UserError ("RamActivityInvalid");
     }
 }
 
-void RamMethods::HangarRolesCheck(Client* const pClient, int16 flagID)
+int64 RamMethods::GetLocationRoles(Client* const pClient, uint32 locationID)
 {
-    int64 roles(pClient->GetCorpRole());
-    switch (flagID) {
-        case flagHangar: {
-            if ((roles & Corp::Role::HangarCanTake1) != Corp::Role::HangarCanTake1)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar2: {
-            if ((roles & Corp::Role::HangarCanTake2) != Corp::Role::HangarCanTake2)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar3: {
-            if ((roles & Corp::Role::HangarCanTake3) != Corp::Role::HangarCanTake3)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar4: {
-            if ((roles & Corp::Role::HangarCanTake4) != Corp::Role::HangarCanTake4)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar5: {
-            if ((roles & Corp::Role::HangarCanTake5) != Corp::Role::HangarCanTake5)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar6: {
-            if ((roles & Corp::Role::HangarCanTake6) != Corp::Role::HangarCanTake6)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-        case flagCorpHangar7: {
-            if ((roles & Corp::Role::HangarCanTake7) != Corp::Role::HangarCanTake7)
-                throw UserError ("RamAccessDeniedToBOMHangar");
-        } break;
-    }
+    if ((pClient->GetCorpRole() & Corp::Role::Director) == Corp::Role::Director)
+        return Corp::Role::Admin;
+    return pClient->GetCorpRolesAtLocation(locationID);
 }
 
-void RamMethods::LocationRolesCheck(Client*const pClient, const CorpPathElement &data)
+void RamMethods::HangarRolesCheck(Client* const pClient, uint32 locationID, int16 flagID)
 {
-    int64 roles(0);
-    // this will verify corp roles at location
-    uint32 stationID(data.officeFolderID - STATION_OFFICE_OFFSET);
-    if (stationID == pClient->GetCorpHQ()) {
-        roles = pClient->GetRolesAtHQ();
-        /** @todo determine what roles are required here and test */
-    } else {
-        // not hq  is this a base?
-        /** @todo finish this.  */
-    }
+    int64 role(Corp::HangarTakeRole(flagID));
+    if (role == 0)
+        return;     // not a corp hangar division
+    if ((GetLocationRoles(pClient, locationID) & role) != role)
+        throw UserError ("RamAccessDeniedToBOMHangar");
 }
 
-void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems)
+Inventory* RamMethods::GetBOMInventory(const PathElement& bomLocation)
 {
-    std::map<uint16, InventoryItemRef> items;   // typeID, itemRef
-    GetBOMItemsMap( bomLocation, items );
+    if (bomLocation.locationID == 0)
+        return nullptr;
+    Inventory* pInv = sItemFactory.GetInventoryFromId(bomLocation.locationID);
+    if (pInv == nullptr)
+        return nullptr;
+    if (!pInv->ContentsLoaded())
+        pInv->LoadContents();
+    return pInv;
+}
 
+uint32 RamMethods::GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs)
+{
+    if (item.isSkill)
+        return 0;
+    // "extra" materials are not affected by skills
+    uint32 qty((uint32)round(item.quantity * materialMultiplier));
+    if (!item.extra)
+        qty += (uint32)round(item.quantity * charMaterialMultiplier - item.quantity);
+    return qty * runs;
+}
+
+void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems)
+{
+    Inventory* pInv(GetBOMInventory(bomLocation));
     for (auto cur : reqItems) {
         if (cur.isSkill) { // check skill (quantity is required level)
             if (pClient->GetChar()->GetSkillLevel(cur.typeID) < cur.quantity) {
@@ -358,23 +378,36 @@ void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const P
                         .AddFormatValue ("skillID", new PyInt (cur.typeID))
                         .AddFormatValue ("skillLevel", new PyInt (cur.quantity));
             }
-        } else {
-            uint32 qtyNeeded = round(cur.quantity * rsp.materialMultiplier) * runs;
-            if (cur.damagePerJob == 1)
-                qtyNeeded += round(cur.quantity * rsp.charMaterialMultiplier - cur.quantity) * runs;
-            std::map<uint16, InventoryItemRef>::iterator itr = items.find(cur.typeID);
-            if (itr != items.end())
-                if (itr->second->typeID() == cur.typeID) {
-                    if (itr->second->quantity() < qtyNeeded)
-                        qtyNeeded -= itr->second->quantity();
-                    else
-                        qtyNeeded = 0;
-                }
-
-            if (qtyNeeded)
-                throw UserError ("RamNeedMoreForJob")
-                        .AddFormatValue ("item", new PyInt (cur.typeID));
+            continue;
         }
+
+        uint32 qtyNeeded(GetMaterialQuantity(cur, rsp.materialMultiplier, rsp.charMaterialMultiplier, runs));
+        if (qtyNeeded == 0)
+            continue;
+        uint32 qtyHave(pInv == nullptr ? 0 : pInv->GetTypeQtyForOwner(cur.typeID, (EVEItemFlags)bomLocation.flagID, ownerID));
+        if (qtyHave < qtyNeeded)
+            throw UserError ("RamNeedMoreForJob")
+                    .AddFormatValue ("item", new PyInt (cur.typeID));
+    }
+}
+
+void RamMethods::ConsumeMaterials(uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems)
+{
+    Inventory* pInv(GetBOMInventory(bomLocation));
+    for (auto cur : reqItems) {
+        uint32 qtyNeeded(GetMaterialQuantity(cur, rsp.materialMultiplier, rsp.charMaterialMultiplier, runs));
+        if (qtyNeeded == 0)
+            continue;
+
+        // items that are not used up (damage < 1) are taken now and returned on delivery (StaticDataMgr::GetRamReturns)
+        std::vector<InventoryItemRef> taken;
+        if ((pInv == nullptr) or !pInv->TakeTypeQtyForOwner(cur.typeID, (EVEItemFlags)bomLocation.flagID, ownerID, qtyNeeded, taken)) {
+            _log(MANUF__ERROR, "RamMethods::ConsumeMaterials() - %u of type %u missing at %u:%u for owner %u.", qtyNeeded, cur.typeID, bomLocation.locationID, bomLocation.flagID, ownerID);
+            throw UserError ("RamNeedMoreForJob")
+                    .AddFormatValue ("item", new PyInt (cur.typeID));
+        }
+        for (auto iRef : taken)
+            iRef->Delete();
     }
 }
 
@@ -393,34 +426,44 @@ void RamMethods::VerifyCompleteJob(const Call_CompleteJob &args, EvERam::JobProp
         if (pClient->GetChar()->flag() != flagPilot)
             throw UserError ("RamCompletionMustBeInShip");
 
-    if (IsCorp(data.ownerID)) {
-        if (data.ownerID == pClient->GetCorporationID()) {
-            if ((pClient->GetCorpRole() & Corp::Role::FactoryManager) != Corp::Role::FactoryManager)
-                throw UserError ("RamCompletionAccessDeniedByCorpRole");
-        } else  // alliances not implemented
-            throw UserError ("RamCompletionAccessDenied");
+    if (IsPlayerCorp(data.ownerID)) {
+        if (data.ownerID != (uint32)pClient->GetCorporationID())
+            throw UserError ("RamCompletionAccessDenied");     // alliances not implemented
+        int64 roles(pClient->GetCorpRole());
+        if (((roles & Corp::Role::Director) != Corp::Role::Director)
+        and ((roles & Corp::Role::FactoryManager) != Corp::Role::FactoryManager))
+            throw UserError ("RamCompletionAccessDeniedByCorpRole");
+    } else if (data.ownerID != (uint32)pClient->GetCharacterID()) {
+        throw UserError ("RamCompletionAccessDenied");
     }
 
     if (data.status != EvERam::Status::InProgress)
         throw UserError ("RamCompletionJobCompleted");
 
-    if (!args.cancel and (data.endTime > GetFileTimeNow()))
-        throw UserError ("RamCompletionJobCompleted");
+    if (!args.cancel and ((data.pauseTime > 0) or (data.endTime > GetFileTimeNow())))
+        throw UserError ("RamCompletionInProduction");
 }
 
-bool RamMethods::Calculate(const Call_InstallJob &args, BlueprintRef bpRef, Character* pChar, Rsp_InstallJob &into)
+bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, Character* pChar, Rsp_InstallJob &into)
 {
     // get line data
     if (!FactoryDB::GetAssemblyLineProperties(args.AssemblyLineID, pChar, into, args.isCorpJob))
         return false;
 
-    // set char defaults
+    // set char defaults.  the character's waste multiplier is only for manufacturing
     into.charTimeMultiplier = 1.0;
-    into.charMaterialMultiplier = EvE::max(1.0f, pChar->GetAttribute (AttrManufactureCostMultiplier).get_float ());
+    into.charMaterialMultiplier = 1.0;
+
+    BlueprintRef bpRef(nullptr);
+    if (iRef->categoryID() == EVEDB::invCategories::Blueprint)
+        bpRef = BlueprintRef::StaticCast(iRef);
+    if (bpRef.get() == nullptr)
+        return false;
 
     const ItemType* pType(nullptr);
     switch(args.activityID) {
         case EvERam::Activity::Manufacturing: {
+            into.charMaterialMultiplier = EvE::max(1.0f, pChar->GetAttribute (AttrManufactureCostMultiplier).get_float ());
             pType = &bpRef->productType();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
             into.materialMultiplier += bpRef->GetME();
@@ -467,32 +510,25 @@ bool RamMethods::Calculate(const Call_InstallJob &args, BlueprintRef bpRef, Char
             //bpRef->type().chanceOfDuplicating();
         }  break;
         case EvERam::Activity::Invention: {
-            pType = &bpRef->type();
+            // no skill shortens invention.  base time is the T1 blueprint's researchTechTime
+            pType = &bpRef->productType();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            into.productionTime = EvEMath::RAM::InventionTime(bpRef->type().researchTechTime(),
-                                                              pChar->GetSkillLevel(EvESkill::AdvancedLaboratoryOperation),
-                                                              into.timeMultiplier
+            into.productionTime = EvEMath::RAM::InventionTime(bpRef->type().researchTechTime(), into.timeMultiplier
                                                               /*implant modifier here*/);
             into.productionTime *= sConfig.ram.InventTime;
         } break;
-        case EvERam::Activity::ReverseEngineering: {
-            pType = &bpRef->type();
-            FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            // base research time for RE is one hour
-            into.productionTime = 3600; // in seconds
-            into.productionTime *= sConfig.ram.ReTime;
-            //bpRef->type().chanceOfRE();
-        } break;
+        default:
+            return false;
     }
 
-    // calculate cost
-    into.usageCost *= ceil(into.productionTime / 3600.0f);
-    into.cost = into.installCost + into.usageCost;
     // multiply single run time by run count for total time
     if (args.activityID != EvERam::Activity::ResearchMaterial && args.activityID != EvERam::Activity::ResearchTime) { // Dont multiply ME/PE activities as the time isnt linear.
         into.productionTime *= args.runs;
     }
-    
+
+    // calculate cost (rent per started hour of the whole job)
+    into.usageCost *= ceil(into.productionTime / 3600.0f);
+    into.cost = into.installCost + into.usageCost;
 
     into.maxJobStartTime = FactoryDB::GetNextFreeTime(args.AssemblyLineID);
 
@@ -514,7 +550,7 @@ void RamMethods::EncodeBillOfMaterials(const std::vector<EvERam::RequiredItem> &
             continue;
         }
 
-        int qtyNeeded = (uint32)round(cur.quantity * materialMultiplier + (cur.quantity * charMaterialMultiplier - cur.quantity)) * runs;
+        int qtyNeeded = GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
 
         // otherwise, make line for material list
         MaterialList_Line line;
@@ -542,61 +578,22 @@ void RamMethods::EncodeBillOfMaterials(const std::vector<EvERam::RequiredItem> &
     }
 }
 
-void RamMethods::EncodeMissingMaterials(const std::vector<EvERam::RequiredItem> &reqItems, const PathElement &bomLocation, Client *const pClient, float materialMultiplier, float charMaterialMultiplier, int32 runs, std::map<int32, PyRep *> &into) {
-    //
-    std::vector<InventoryItemRef> skills, items;
-
-    //get the skills
-    pClient->GetChar()->GetMyInventory()->GetItemsByFlag(flagSkill, skills);
-
-    //get the items
-    GetBOMItems( bomLocation, items );
-
-    //now do the check
-    uint32 qtyReq(0);
+void RamMethods::EncodeMissingMaterials(const std::vector<EvERam::RequiredItem> &reqItems, const PathElement &bomLocation, uint32 ownerID, Client *const pClient, float materialMultiplier, float charMaterialMultiplier, int32 runs, std::map<int32, PyRep *> &into) {
+    Inventory* pInv(GetBOMInventory(bomLocation));
     for (auto cur : reqItems) {
-        qtyReq = cur.quantity;
-        if (!cur.isSkill) {
-            qtyReq = (uint32)round(qtyReq * materialMultiplier + (cur.quantity * charMaterialMultiplier - cur.quantity)) * runs;
-        }
-
-        std::vector<InventoryItemRef>::iterator itri, endi;
+        uint32 qtyReq(0), qtyHave(0);
         if (cur.isSkill) {
-            itri = skills.begin();
-            endi = skills.end();
+            qtyReq = cur.quantity;
+            qtyHave = pClient->GetChar()->GetSkillLevel(cur.typeID);
         } else {
-            itri = items.begin();
-            endi = items.end();
+            qtyReq = GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
+            if (pInv != nullptr)
+                qtyHave = pInv->GetTypeQtyForOwner(cur.typeID, (EVEItemFlags)bomLocation.flagID, ownerID);
         }
 
-        for (; itri != endi and qtyReq > 0; ++itri) {
-            if (((*itri)->typeID() == cur.typeID)
-            and (((*itri)->ownerID() == pClient->GetCharacterID())
-              or ((*itri)->ownerID() == pClient->GetCorporationID()))) {
-                if (cur.isSkill) {
-                    qtyReq -= std::min(qtyReq, (*itri)->GetAttribute(AttrSkillLevel).get_uint32() );
-                } else {
-                    qtyReq -= std::min(qtyReq, (uint32)(*itri)->quantity() );
-                }
-            }
-        }
-
-        if (qtyReq > 0)
-            into[cur.typeID] = new PyInt(qtyReq);
+        if (qtyReq > qtyHave)
+            into[cur.typeID] = new PyInt(qtyReq - qtyHave);
     }
-}
-void RamMethods::GetBOMItems(const PathElement& bomLocation, std::vector< InventoryItemRef >& into)
-{
-    Inventory *inventory = sItemFactory.GetInventoryFromId( bomLocation.locationID );
-    if (inventory != nullptr )
-        inventory->GetItemsByFlag((EVEItemFlags)bomLocation.flagID, into );
-}
-
-void RamMethods::GetBOMItemsMap(const PathElement& bomLocation, std::map< uint16, InventoryItemRef >& into)
-{
-    Inventory *inventory = sItemFactory.GetInventoryFromId( bomLocation.locationID );
-    if (inventory != nullptr )
-        inventory->GetTypesByFlag( (EVEItemFlags)bomLocation.flagID, into );
 }
 
 /* For each material required for a blueprint (from invTypeMaterials), the quantity is affected by ME research and skills.

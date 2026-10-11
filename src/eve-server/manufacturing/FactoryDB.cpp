@@ -25,10 +25,31 @@
 #include "character/Character.h"
 #include "manufacturing/FactoryDB.h"
 
-/** @todo  is there is a better way to do this??  */
-bool FactoryDB::IsProducableBy(const uint32 assemblyLineID, const ItemType *pType) {
-    Rsp_InstallJob into;
-    return FactoryDB::GetMultipliers(assemblyLineID, pType, into);
+bool FactoryDB::IsProducableBy(const uint32 assemblyLineID, const ItemType *pType, bool strict/*false*/) {
+    if (!strict) {
+        // static npc station data lacks rows for some products (T3, outpost lines), so stations stay lenient
+        Rsp_InstallJob into;
+        return FactoryDB::GetMultipliers(assemblyLineID, pType, into);
+    }
+
+    // structure lines only build what their line type lists (by category or group)
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT 1 FROM ramAssemblyLines AS al"
+        " JOIN ramAssemblyLineTypeDetailPerCategory AS alc USING (assemblyLineTypeID)"
+        " WHERE al.assemblyLineID = %u AND alc.categoryID = %u"
+        " UNION ALL"
+        " SELECT 1 FROM ramAssemblyLines AS al"
+        " JOIN ramAssemblyLineTypeDetailPerGroup AS alg USING (assemblyLineTypeID)"
+        " WHERE al.assemblyLineID = %u AND alg.groupID = %u",
+        assemblyLineID, pType->categoryID(), assemblyLineID, pType->groupID()))
+    {
+        _log(DATABASE__ERROR, "Failed to check producability of type %u by line %u: %s", pType->id(), assemblyLineID, res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    return res.GetRow(row);
 }
 
 void FactoryDB::GetSalvage(DBQueryResult& res)
@@ -209,18 +230,25 @@ PyRep *FactoryDB::GetJobs2(const int32 ownerID, const bool completed)
 {
     DBQueryResult res;
 
+    /* installed items of finished invention/reverse engineering jobs are gone, and structures may be gone too,
+     *  so the job row keeps the types needed to show the job (the client calls cfg.invtypes.Get() on them)  */
     if (!sDatabase.RunQuery(res,
         "SELECT"
         " job.jobID,"
         " job.assemblyLineID,"
         " assemblyLine.containerID,"
         " job.installedItemID,"
-        " installedItem.typeID AS installedItemTypeID,"
-        " installedItem.ownerID AS installedItemOwnerID,"
-        " blueprint.pLevel AS installedItemProductivityLevel,"
-        " blueprint.mLevel AS installedItemMaterialLevel,"
+        " COALESCE(installedItem.typeID, job.installedItemTypeID) AS installedItemTypeID,"
+        " COALESCE(installedItem.ownerID, job.ownerID) AS installedItemOwnerID,"
+        " COALESCE(blueprint.pLevel, 0) AS installedItemProductivityLevel,"
+        " COALESCE(blueprint.mLevel, 0) AS installedItemMaterialLevel,"
         // quite ugly, but lets us use DBResultToRowset
-        " IF(assemblyLine.activityID = 1, blueprintType.productTypeID, installedItem.typeID) AS outputTypeID,"
+        " CASE assemblyLine.activityID"
+        "  WHEN 1 THEN COALESCE(blueprintType.productTypeID, job.installedItemTypeID)"
+        "  WHEN 7 THEN job.outputTypeID"
+        "  WHEN 8 THEN job.outputTypeID"
+        "  ELSE COALESCE(installedItem.typeID, job.installedItemTypeID)"
+        " END AS outputTypeID,"
         " job.outputFlag,"
         " job.installerID,"
         " assemblyLine.activityID,"
@@ -231,19 +259,19 @@ PyRep *FactoryDB::GetJobs2(const int32 ownerID, const bool completed)
         " job.endProductionTime,"
         " job.completedStatusID != 0 AS completed,"
         " job.licensedProductionRuns,"
-        " station.solarSystemID AS installedInSolarSystemID,"
+        " job.installedInSolarSystemID,"
         " job.completedStatusID AS completedStatus,"
-        " station.stationTypeID AS containerTypeID,"
-        " station.solarSystemID AS containerLocationID"
+        " COALESCE(station.stationTypeID, container.typeID, job.containerTypeID) AS containerTypeID,"
+        " COALESCE(station.solarSystemID, job.installedInSolarSystemID) AS containerLocationID"
         " FROM ramJobs AS job"
         " LEFT JOIN entity AS installedItem ON job.installedItemID = installedItem.itemID"
         " LEFT JOIN ramAssemblyLines AS assemblyLine ON job.assemblyLineID = assemblyLine.assemblyLineID"
         " LEFT JOIN invBlueprints AS blueprint ON installedItem.itemID = blueprint.itemID"
-        " LEFT JOIN invBlueprintTypes AS blueprintType ON installedItem.typeID = blueprintType.blueprintTypeID"
-        " LEFT JOIN ramAssemblyLineStations AS station ON assemblyLine.containerID = station.stationID"
+        " LEFT JOIN invBlueprintTypes AS blueprintType ON COALESCE(installedItem.typeID, job.installedItemTypeID) = blueprintType.blueprintTypeID"
+        " LEFT JOIN staStations AS station ON assemblyLine.containerID = station.stationID"
+        " LEFT JOIN entity AS container ON assemblyLine.containerID = container.itemID"
         " WHERE job.ownerID = %u"
-        " AND job.completedStatusID %s 0"
-        " GROUP BY job.jobID",
+        " AND job.completedStatusID %s 0",
         ownerID, (completed ? "!=" : "=") ))
     {
         _log(DATABASE__ERROR, "Failed to query jobs for owner %u: %s", ownerID, res.error.c_str());
@@ -405,6 +433,7 @@ PyRep *FactoryDB::AssemblyLinesGet(const uint32 containerID) {
         " assemblyLineTypeID,"
         " containerID,"
         " nextFreeTime,"
+        " COALESCE(UIGroupingID, 0) AS UIGroupingID,"
         " costInstall,"
         " costPerHour,"
         " restrictionMask,"
@@ -414,7 +443,9 @@ PyRep *FactoryDB::AssemblyLinesGet(const uint32 containerID) {
         " minimumCharSecurity,"
         " minimumCorpSecurity,"
         " maximumCharSecurity,"
-        " maximumCorpSecurity"
+        " maximumCorpSecurity,"
+        " ownerID,"
+        " activityID"
         " FROM ramAssemblyLines"
         " WHERE containerID = %u",
         containerID)) {
@@ -463,42 +494,38 @@ bool FactoryDB::GetAssemblyLineProperties(const uint32 assemblyLineID, Character
     }
 
     // verify line standings modifiers (some have no modifiers)
-    if ((row.GetFloat(6) == 0) and (row.GetFloat(7) == 0))
+    float discount(row.IsNull(6) ? 0 : row.GetFloat(6)), surcharge(row.IsNull(7) ? 0 : row.GetFloat(7));
+    if ((discount == 0) and (surcharge == 0))
         return true;
 
-    float standing(1), costModifier(1);
-    uint32 factionID(sDataMgr.GetCorpFaction(row.GetInt(5)));
-    if (isCorpJob) {
-        // this is only for PC corps.  take higher of (npc faction to pc corp)/2 or npc corp to pc corp
-        float cStanding(StandingDB::GetStanding(row.GetInt(5), pChar->corporationID()));
-        float fStanding(StandingDB::GetStanding(factionID, pChar->corporationID()));
-        fStanding /= 2;
-        // this works for negative standings also
-        if (cStanding > fStanding) {
-            standing = cStanding;
-        } else {
-            standing = fStanding;
-        }
+    // lines of the installer's own corp (corp structures and outposts) have no standings modifier
+    uint32 lineOwnerID(row.IsNull(5) ? 0 : row.GetUInt(5));
+    if ((lineOwnerID == 0) or (lineOwnerID == pChar->corporationID()))
+        return true;
 
-        /** @todo  this shit will have to be verified for negative standings */
-        // modify end result by 25% for char standings with station owner
-        standing *= (1 - (0.025f * StandingDB::GetStanding(row.GetInt(5), pChar->itemID())));
+    /* the stored values are percent per standing point (1.5 / 0.5 on npc lines, 0-10 on configurable lines)
+     *   cost * (1 - discount% * standing) with good standing, cost * (1 + surcharge% * -standing) with bad standing
+     * personal jobs use the installer's effective standing (connections/diplomacy) with the line owner,
+     * corp jobs the better of the corp's standing with the owner corp and with the owner's faction  */
+    float standing(0), costModifier(1);
+    if (isCorpJob) {
+        float cStanding(StandingDB::GetStanding(lineOwnerID, pChar->corporationID()));
+        uint32 factionID(sDataMgr.GetCorpFaction(lineOwnerID));
+        float fStanding(factionID ? StandingDB::GetStanding(factionID, pChar->corporationID()) : cStanding);
+        standing = EvE::max(cStanding, fStanding);
     } else {
-        // else take personal standings with station corp only
-        standing = StandingDB::GetStanding(row.GetInt(5), pChar->itemID());
+        standing = pChar->GetStandingModified(lineOwnerID);
     }
 
     if (standing < 0) {
-        costModifier += row.GetFloat(7) * -standing;
+        costModifier += (surcharge / 100.0f) * -standing;
     } else {
-        costModifier -= row.GetFloat(6) * standing;
+        costModifier -= (discount / 100.0f) * standing;
     }
+    if (costModifier < 0)
+        costModifier = 0;
 
-    // make sure costModifier isnt 0 (some lines have 0 as modifier)
-    if (costModifier == 0)
-        costModifier = 1;
-
-    _log(MANUF__MESSAGE, "FactoryDB::GetALProps() - Cost Modifier %.2f, standing %.2f", costModifier, standing);
+    _log(MANUF__MESSAGE, "FactoryDB::GetALProps() - Cost Modifier %.3f, standing %.2f", costModifier, standing);
 
     // modify setup cost based on standings
     into.installCost *= costModifier;
@@ -519,7 +546,8 @@ bool FactoryDB::GetAssemblyLineRestrictions(const int32 assemblyLineID, EvERam::
         " minimumCorpSecurity,"
         " maximumCorpSecurity,"
         " restrictionMask,"
-        " activityID"
+        " activityID,"
+        " containerID"
         " FROM ramAssemblyLines"
         " WHERE assemblyLineID = %i",
         assemblyLineID))
@@ -534,33 +562,43 @@ bool FactoryDB::GetAssemblyLineRestrictions(const int32 assemblyLineID, EvERam::
         return false;
     }
 
-    data.ownerID        = row.GetUInt(0);
+    data.ownerID        = (row.IsNull(0) ? 0 : row.GetUInt(0));
     data.minStanding    = row.GetFloat(1);
     data.minCharSec     = row.GetFloat(2);
     data.maxCharSec     = row.GetFloat(3);
     data.minCorpSec     = row.GetFloat(4);
     data.maxCorpSec     = row.GetFloat(5);
-    data.rMask          = row.GetUInt(6);
-    data.activityID     = row.GetUInt(7);
+    data.rMask          = (row.IsNull(6) ? 0 : row.GetUInt(6));
+    data.activityID     = (row.IsNull(7) ? 0 : row.GetUInt(7));
+    data.containerID    = (row.IsNull(8) ? 0 : row.GetUInt(8));
 
     return true;
 }
 
-uint32 FactoryDB::InstallJob(const uint32 ownerID, const uint32 installerID, Call_InstallJob& args,
-                             const int64 beginTime, const int64 endTime, const uint32 systemID)
+uint32 FactoryDB::InstallJob(const uint32 ownerID, const uint32 installerID, Call_InstallJob& args, const int64 beginTime,
+                             const int64 endTime, const uint32 systemID, const uint32 outputLocationID, const uint32 containerTypeID,
+                             const uint16 installedTypeID, const EvERam::InventionData* pInvData/*nullptr*/)
 {
+    // invention and reverse engineering outputs are decided at installation
+    EvERam::InventionData invData = EvERam::InventionData();
+    if (pInvData != nullptr)
+        invData = *pInvData;
+
     DBerror err;
     uint32 jobID(0);
     // insert job
     if (!sDatabase.RunQueryLID(err, jobID,
         "INSERT INTO ramJobs"
-        " (ownerID, installerID, assemblyLineID, installedItemID, installTime, beginProductionTime, endProductionTime,"
-        " runs, outputFlag, licensedProductionRuns, completedStatusID, installedInSolarSystemID)"
+        " (ownerID, installerID, assemblyLineID, installedItemID, installedItemTypeID, installTime, beginProductionTime, endProductionTime,"
+        " runs, outputFlag, outputLocationID, containerTypeID, licensedProductionRuns, completedStatusID, installedInSolarSystemID,"
+        " outputTypeID, outputRuns, outputME, outputPE, successChance)"
         " VALUES"
-        " (%u, %u, %i, %i, %.0f, %lli, %lli,"
-        " %i, %i, %i, 0, %i)",
-        ownerID, installerID, args.AssemblyLineID, args.bpItemID, GetFileTimeNow(), beginTime, endTime,
-        args.runs, args.outputFlag, args.copyRuns, systemID))
+        " (%u, %u, %i, %i, %u, %.0f, %lli, %lli,"
+        " %i, %i, %u, %u, %i, 0, %u,"
+        " %u, %i, %i, %i, %f)",
+        ownerID, installerID, args.AssemblyLineID, args.bpItemID, installedTypeID, GetFileTimeNow(), beginTime, endTime,
+        args.runs, args.outputFlag, outputLocationID, containerTypeID, args.copyRuns, systemID,
+        invData.outputBpTypeID, invData.outputRuns, invData.outputME, invData.outputPE, invData.chance))
     {
         _log(DATABASE__ERROR, "Failed to insert new job to database: %s.", err.c_str());
         return 0;
@@ -633,7 +671,9 @@ bool FactoryDB::GetJobProperties(const uint32 jobID, EvERam::JobProperties &data
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT job.installedItemID, job.ownerID, job.outputFlag, job.runs, job.licensedProductionRuns,"
-        " job.endProductionTime, job.completedStatusID, line.activityID, job.eventID"
+        " job.endProductionTime, job.completedStatusID, line.activityID, job.eventID, job.installerID,"         // 9
+        " job.assemblyLineID, line.containerID, job.outputLocationID, job.installedInSolarSystemID, job.pauseProductionTime,"
+        " job.installedItemTypeID, job.outputTypeID, job.outputRuns, job.outputME, job.outputPE, job.successChance"    // 20
         " FROM ramJobs AS job"
         " LEFT JOIN ramAssemblyLines AS line USING (assemblyLineID)"
         " WHERE job.jobID = %u",
@@ -649,15 +689,27 @@ bool FactoryDB::GetJobProperties(const uint32 jobID, EvERam::JobProperties &data
         return false;
     }
 
-    data.itemID         = row.GetUInt(0);
-    data.ownerID        = row.GetUInt(1);
-    data.outputFlag     = (EVEItemFlags)row.GetUInt(2);
-    data.jobRuns        = row.GetInt(3);
-    data.licensedRuns   = row.GetInt(4);
-    data.endTime        = row.GetInt64(5);
-    data.status         = row.GetInt(6);
-    data.activity       = row.GetUInt(7);
-    data.eventID        = row.GetUInt(8);
+    data.itemID             = row.GetUInt(0);
+    data.ownerID            = row.GetUInt(1);
+    data.outputFlag         = (EVEItemFlags)row.GetUInt(2);
+    data.jobRuns            = row.GetInt(3);
+    data.licensedRuns       = (row.IsNull(4) ? 0 : row.GetInt(4));
+    data.endTime            = row.GetInt64(5);
+    data.status             = row.GetInt(6);
+    data.activity           = (row.IsNull(7) ? 0 : row.GetUInt(7));
+    data.eventID            = (row.IsNull(8) ? 0 : row.GetUInt(8));
+    data.installerID        = row.GetUInt(9);
+    data.assemblyLineID     = row.GetUInt(10);
+    data.containerID        = (row.IsNull(11) ? 0 : row.GetUInt(11));
+    data.outputLocationID   = row.GetUInt(12);
+    data.solarSystemID      = row.GetUInt(13);
+    data.pauseTime          = (row.IsNull(14) ? 0 : row.GetInt64(14));
+    data.installedItemTypeID= row.GetUInt(15);
+    data.outputTypeID       = row.GetUInt(16);
+    data.outputRuns         = row.GetInt(17);
+    data.outputME           = row.GetInt(18);
+    data.outputPE           = row.GetInt(19);
+    data.successChance      = row.GetFloat(20);
 
     return true;
 }

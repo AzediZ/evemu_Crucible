@@ -129,6 +129,8 @@ public:
 
     static BlueprintRef     Load( uint32 blueprintID);
     static BlueprintRef     Spawn( ItemData& data, EvERam::bpData& bdata);
+    // spawns one blueprint copy and moves it to locationID/flag (with notification).  returns null on failure
+    static BlueprintRef     SpawnCopy(uint16 typeID, uint32 ownerID, uint32 locationID, EVEItemFlags flag, int16 runs, int8 me = 0, int8 pe = 0);
 
     // query methods
     const BlueprintType&    type()                const { return m_bpType; }

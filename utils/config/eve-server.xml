@@ -140,17 +140,20 @@ boolean can use either 0/1 OR true/false.
         <OrderModificationDelay>300</OrderModificationDelay><!-- integer - seconds between modifications of one market order (Crucible: 300).  0 disables -->
     </market>
 
-    <!-- don't modify any of the following bpTimes settings - they are not fully debugged -->
-    <bpTimes> <!-- these are multiplied to db values to get a modified result - < 1.0 = faster -->
-        <ResPE>0.5</ResPE>
-        <ResME>0.4</ResME>
-        <ResRE>0.5</ResRE>
-        <MatMod>1.0</MatMod>
-        <ProdMod>1.0</ProdMod>
-        <ResCopy>0.3</ResCopy>
-        <ProdTime>0.3</ProdTime>
-        <WasteMod>1.1</WasteMod>
-    </bpTimes>
+    <!-- R.A.M. (science and industry).  times/materials are multiplied to db values to get a modified result - < 1.0 = faster/cheaper -->
+    <ram>
+        <AutoEvent>false</AutoEvent><!-- bool  add a calendar event for every installed job -->
+        <ProdTime>1.0</ProdTime><!-- manufacturing time -->
+        <CopyTime>1.0</CopyTime><!-- copying time -->
+        <WasteMod>1.0</WasteMod>
+        <MatMod>1.0</MatMod><!-- manufacturing materials -->
+        <ResME>1.0</ResME><!-- material efficiency research time -->
+        <ResPE>1.0</ResPE><!-- productivity research time -->
+        <ReTime>1.0</ReTime><!-- reverse engineering time -->
+        <InventTime>1.0</InventTime><!-- invention time -->
+        <InventChance>1.0</InventChance><!-- multiplies the Crucible invention chance (1.0 = Crucible, result capped at 100%) -->
+        <ReChance>1.0</ReChance><!-- multiplies the Crucible reverse engineering chance (1.0 = Crucible, result capped at 100%) -->
+    </ram>
 
     <character>
         <startBalance>5000.0</startBalance>

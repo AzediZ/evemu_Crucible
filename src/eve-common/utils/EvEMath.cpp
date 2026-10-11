@@ -95,9 +95,10 @@ int32 EvEMath::RAM::CopyTime(uint16 BaseTime, uint8 ScienceLevel, float SlotModi
     return (BaseTime * (1.0f - (0.05f * ScienceLevel)) * SlotModifier * ImplantModifier);
 }
 
-int32 EvEMath::RAM::InventionTime(uint32 BaseTime, uint8 AdvLabLevel, float SlotModifier/*1*/, float ImplantModifier/*1*/ )
+int32 EvEMath::RAM::InventionTime(uint32 BaseTime, float SlotModifier/*1*/, float ImplantModifier/*1*/ )
 {
-     return BaseTime * (1.0f - (0.03f * AdvLabLevel)) * SlotModifier * ImplantModifier;
+    // no skill shortens invention (Advanced Laboratory Operation only adds a research slot)
+     return BaseTime * SlotModifier * ImplantModifier;
 }
 
 float EvEMath::RAM::ME_EffectOnWaste( float MaterialAmount, float BaseWasteFactor, float MaterialEfficiency )
@@ -129,8 +130,12 @@ float EvEMath::RAM::WasteSkillBased( uint32 MaterialAmount, float ProductionEffi
 
 float EvEMath::RAM::InventionChance( float BaseChance, uint8 EncryptionLevel, uint8 DataCore1SkillLevel, uint8 DataCore2SkillLevel, uint8 MetaLevel, float DecryptorModifier )
 {
-     return (BaseChance * (1 + 0.11f * EncryptionLevel) * (1.0f + (DataCore1SkillLevel + DataCore2SkillLevel)
-     * (0.8f / (5.0f - MetaLevel)) * DecryptorModifier));
+     // pre-Phoebe (Crucible) formula, chruker.dk 'Invention Chance - Before Phoebe 1.0'
+     if (MetaLevel > 4)
+         MetaLevel = 4;
+     return (BaseChance * (1.0f + 0.01f * EncryptionLevel)
+           * (1.0f + (DataCore1SkillLevel + DataCore2SkillLevel) * (0.1f / (5.0f - MetaLevel)))
+           * DecryptorModifier);
      // fuzzysteve's formula (23may13)
      // base * (1+0.01*EncryptionLevel) * (1+ (skill*(0.1/(5-metalevel)))) * max(decryptor,1)
      // skill = sum of sciences skill lvls (as required by bpc)
@@ -141,6 +146,30 @@ float EvEMath::RAM::InventionChance( float BaseChance, uint8 EncryptionLevel, ui
      //  new formula (pre phoebe)
      // base * skill * decryptor
      //  skill = 1 + EncryptionLevel/40 + (DataCore1SkillLevel + DataCore2SkillLevel)/30
+}
+
+float EvEMath::RAM::ReverseEngineeringChance(float BaseChance, uint8 ReverseEngineeringLevel, uint8 DataCore1SkillLevel, uint8 DataCore2SkillLevel)
+{
+    // pre-Phoebe formula (chruker.dk 'Reverse Engineering Chance - Merged with Invention in Phoebe 1.0')
+    return (BaseChance * (1.0f + 0.01f * ReverseEngineeringLevel) * (1.0f + 0.1f * (DataCore1SkillLevel + DataCore2SkillLevel)));
+}
+
+int16 EvEMath::RAM::InventionRuns(int16 T1Runs, uint32 T1MaxRuns, uint32 T2MaxRuns, int16 DecryptorRuns)
+{
+    //  min(max(rounddown((inputT1BPCruns/T1MaxPerBPC)*(T2MaxPerBPC/10)),1)+decryptorRunBonus, T2MaxPerBPC)
+    if (T1MaxRuns < 1)
+        T1MaxRuns = 1;
+    if (T2MaxRuns < 1)
+        T2MaxRuns = 1;
+    int32 runs = (int32)floor(((double)T1Runs / T1MaxRuns) * (T2MaxRuns / 10.0));
+    if (runs < 1)
+        runs = 1;
+    runs += DecryptorRuns;
+    if (runs > (int32)T2MaxRuns)
+        runs = T2MaxRuns;
+    if (runs < 1)
+        runs = 1;
+    return (int16)runs;
 }
 
 float EvEMath::Refine::StationTaxesForReprocessing(float CharacterStandingWithStationOwner )

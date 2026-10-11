@@ -171,6 +171,8 @@ public:
         float ResPE;
         float ResME;
         float InventTime;
+        float InventChance;         // multiplies the Crucible invention chance (1.0 = Crucible)
+        float ReChance;             // multiplies the Crucible reverse engineering chance (1.0 = Crucible)
     } ram;
 
     // From <account>

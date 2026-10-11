@@ -217,7 +217,7 @@ PyResult ReprocessingServiceBound::Reprocess(PyCallArgs &call, PyList* itemIDs, 
         if (outLocationID == 0)
             throw CustomError("Your corporation does not have an office in this station.");
 
-        sRamMthd.HangarRolesCheck(call.client, outFlag);
+        sRamMthd.HangarRolesCheck(call.client, m_stationRef->GetID(), outFlag);
     } else {
         _log(MANUF__WARNING, "%s(%u) tried to reprocess for owner %u.", call.client->GetName(), call.client->GetCharacterID(), outOwnerID);
         throw CustomError("Invalid output owner.");
@@ -364,7 +364,7 @@ bool ReprocessingServiceBound::ValidateItem(Client* pClient, InventoryItemRef iR
             error = "Corporation items must be in your corporation's office hangars in this station to be reprocessed.";
         } else if (throwOnError) {
             // this throws "access denied to bom hangar" on error.  probably wrong for this application
-            sRamMthd.HangarRolesCheck(pClient, iRef->flag());
+            sRamMthd.HangarRolesCheck(pClient, stationID, iRef->flag());
         }
     } else {
         _log(SERVICE__ERROR, "Character %u tried to reprocess item %u of owner %u.", pClient->GetCharacterID(), iRef->itemID(), iRef->ownerID());

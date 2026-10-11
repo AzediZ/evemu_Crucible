@@ -35,7 +35,7 @@ namespace EvEMath {
 
     namespace RAM {
         int32 CopyTime(uint16 BaseTime, uint8 ScienceLevel, float SlotModifier=1, float ImplantModifier=1);
-        int32 InventionTime(uint32 BaseTime, uint8 AdvLabLevel, float SlotModifier = 1, float ImplantModifier = 1);
+        int32 InventionTime(uint32 BaseTime, float SlotModifier = 1, float ImplantModifier = 1);
         int32 ProductionTime(uint32 BaseTime, float bpProductivityModifier, float ProductionLevel, float TimeModifier=1);
         int32 ME_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 MetallurgyLevel, float SlotModifier=1, float ImplantModifier=1);
         int32 PE_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 ResearchLevel, float SlotModifier=1, float ImplantModifier=1);
@@ -49,6 +49,9 @@ namespace EvEMath {
 
         float WasteSkillBased(uint32 MaterialAmount, float ProductionEfficiency);
         float InventionChance(float BaseChance, uint8 EncryptionLevel, uint8 DataCore1SkillLevel, uint8 DataCore2SkillLevel, uint8 MetaLevel, float DecryptorModifier );
+        float ReverseEngineeringChance(float BaseChance, uint8 ReverseEngineeringLevel, uint8 DataCore1SkillLevel, uint8 DataCore2SkillLevel);
+        // runs of an invented T2 copy
+        int16 InventionRuns(int16 T1Runs, uint32 T1MaxRuns, uint32 T2MaxRuns, int16 DecryptorRuns);
     }
 
     namespace Refine {

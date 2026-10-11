@@ -9,13 +9,12 @@
 #ifndef EVE_RAM_ENUMS_H
 #define EVE_RAM_ENUMS_H
 
-/*
-BASE_INVENTION_ME = -4.0
-BASE_INVENTION_PE = -4.0
-*/
-
 /*  for indy */
 namespace EvERam {
+    // client consts BASE_INVENTION_ME / BASE_INVENTION_PE.  reverse engineered T3 copies use the same base
+    static const int8 BaseInventionME = -4;
+    static const int8 BaseInventionPE = -4;
+
     namespace Activity {
         //from table 'ramActivities'
         enum  {
@@ -58,6 +57,7 @@ namespace EvERam {
         uint8 activityID;
         uint8 rMask;
         uint32 ownerID;
+        uint32 containerID;
         float minCharSec;
         float maxCharSec;
         float minCorpSec;
@@ -93,13 +93,51 @@ namespace EvERam {
     struct JobProperties {
         int8 activity;
         int8 status;
+        int8 outputME;
+        int8 outputPE;
         int16 jobRuns;
         int16 licensedRuns;
+        int16 outputRuns;
+        uint16 outputTypeID;
+        uint16 installedItemTypeID;
         uint32 itemID;
         uint32 ownerID;
+        uint32 installerID;
         uint32 eventID;
+        uint32 assemblyLineID;
+        uint32 containerID;         // assembly line container (station, ship or structure)
+        uint32 outputLocationID;    // where the results go (station, office, ship or structure).  0 on jobs from before F16
+        uint32 solarSystemID;
+        float successChance;
         int64 endTime;
+        int64 pauseTime;            // 0 when not paused
         EVEItemFlags outputFlag;
+    };
+
+    /* POD structure for invention and reverse engineering job data (set at installation) */
+    struct InventionData {
+        int8 metaLevel;             // of the optional base item (0 without one)
+        int8 outputME;
+        int8 outputPE;
+        int16 outputRuns;
+        uint16 outputBpTypeID;      // T2 (invention) or T3 (reverse engineering) blueprint type
+        uint16 baseItemTypeID;      // optional invention base item (meta 0-4)
+        uint16 decryptorTypeID;     // optional for invention, required for reverse engineering
+        float chance;               // 0-1
+    };
+
+    /* POD structure for the owner-editable assembly line settings */
+    struct LineConfig {
+        uint8 restrictionMask;
+        double costInstall;
+        double costPerHour;
+        double discountPerGoodStandingPoint;
+        double surchargePerBadStandingPoint;
+        double minimumStanding;
+        double minimumCharSecurity;
+        double maximumCharSecurity;
+        double minimumCorpSecurity;
+        double maximumCorpSecurity;
     };
 
     /* POD structure for blueprint data */

@@ -137,6 +137,17 @@ public:
     int64 GetRolesAtHQ() const                          { return pSession->GetCurrentLong( "rolesAtHQ" ); }
     // access roles for non-station containers with corp hangars
     int64 GetRolesAtOther() const                       { return pSession->GetCurrentLong( "rolesAtOther" ); }
+    // corp base (session baseID)
+    int32 GetCorpBaseID() const                         { return pSession->GetCurrentInt( "baseID" ); }
+    // access roles at a location, as the client's GetCorpRoleAtLocation (hq, base or other, joined with rolesAtAll and corprole)
+    int64 GetCorpRolesAtLocation(uint32 locationID) const {
+        int64 roles(GetRolesAtAll() | GetCorpRole());
+        if ((int32)locationID == GetCorpHQ())
+            return roles | GetRolesAtHQ();
+        if ((int32)locationID == GetCorpBaseID())
+            return roles | GetRolesAtBase();
+        return roles | GetRolesAtOther();
+    }
 
     // fleet data
     int8 GetFleetRole()                                 { return pSession->GetCurrentInt("fleetrole"); }
