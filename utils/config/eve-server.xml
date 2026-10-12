@@ -200,6 +200,14 @@ boolean can use either 0/1 OR true/false.
         <SimPaysFees>true</SimPaysFees><!-- bool - the sim pays broker's fees and sales tax (sinks) -->
         <SimRecordNpcSide>false</SimRecordNpcSide><!-- bool - also write the npc side of a trade's transactions when the sim buys (the sell side, which the price history needs, is always written) -->
         <SimBrokerFee>0.01</SimBrokerFee><!-- float - the sim's broker fee rate -->
+        <!-- facility capacity (phase 5):  the sim's manufacturing, research, copying and invention take npc station assembly lines
+             (players see them busy; no ramJobs rows, the jobs are in mktSimJob) and its refining is metered per station.  players always
+             get a line:  one the sim holds goes to the player at once (the sim's job moves on), and quotes never wait for the sim.  a job is at most MaxSimJobHours long.  GM: /simfacility -->
+        <EnableFacilities>true</EnableFacilities><!-- bool - the sim's production books station capacity (false: its own virtual capacity)  default: true (plan 12.7) -->
+        <UseRealAssemblyLines>true</UseRealAssemblyLines><!-- bool - sim jobs take real lines;  false: per station counters only, nothing written to the lines  default: true -->
+        <MaxLineShare>0.3</MaxLineShare><!-- float - at most this share of a station's lines of an activity is the sim's (rounded down)  default: 0.3 -->
+        <MinFreeLinesPerStation>2</MinFreeLinesPerStation><!-- integer - the sim leaves at least this many lines of an activity free at a station  default: 2 -->
+        <RefineryM3PerHour>2000000</RefineryM3PerHour><!-- float - m3 of ore the sim refines per station and hour (soft: the rest waits);  0 = no limit  default: 2e6 -->
         <MoneyDaysTarget>30</MoneyDaysTarget><!-- float - the sim holds about this many days of consumer spending -->
         <ControllerKp>0.3</ControllerKp><!-- float - money controller -->
         <ControllerKi>0.02</ControllerKi><!-- float - money controller -->

@@ -139,6 +139,7 @@
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
 #include "market/sim/MarketSimMgr.h"
+#include "market/sim/SimFacilityMgr.h"
 // missions services
 #include "missions/MissionMgrService.h"
 // planet services
@@ -811,6 +812,8 @@ int main( int argc, char* argv[] )
     NpcProfile::StartupChecks();
     /* the market simulation (needs the static, map and station data above) */
     sLog.Green("       ServerInit", "Starting Market Simulation");
+    // its station capacity first:  the jobs and their lines (players' installs check them even with the sim off)
+    sSimFacilities.Initialize();
     sMktSim.Initialize();
     std::printf("\n");     // spacer
 
@@ -1008,6 +1011,7 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
     sMissionInstanceMgr.Close();
     /* Close the market simulation (writes its state), then the MarketMgr */
     sMktSim.Close();
+    sSimFacilities.Close();
     sMktMgr.Close();
     /* Close the sovereignty data manager (saves anything changed before shutdown) */
     svDataMgr.Close();

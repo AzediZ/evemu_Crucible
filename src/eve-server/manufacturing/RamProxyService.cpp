@@ -40,6 +40,7 @@
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/RamMethods.h"
 #include "manufacturing/RamProxyService.h"
+#include "market/sim/SimFacilityMgr.h"
 #include "station/StationDataMgr.h"
 #include "system/CalendarDB.h"
 
@@ -409,6 +410,9 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
             bpRef = BlueprintRef::StaticCast(installedItem);
         args.bpItemID = installedItem->itemID();
     }
+
+    // the market sim gives the line up if it had it (its job moves to another line or goes on without one)
+    sSimFacilities.PlayerInstalls(args.AssemblyLineID, beginTime + rsp.productionTime * EvE::Time::Second);
 
     uint32 jobID = FactoryDB::InstallJob(ownerID, pClient->GetCharacterID(), args, beginTime, beginTime + rsp.productionTime * EvE::Time::Second,
                                          solarSystemID, outputLocationID, containerTypeID, installedItem->typeID(),
