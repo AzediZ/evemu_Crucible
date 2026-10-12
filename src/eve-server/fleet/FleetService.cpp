@@ -572,6 +572,15 @@ bool FleetService::UpdateMember(uint32 charID, uint32 fleetID, int32 newWingID, 
     return true;
 }
 
+// a squad member gets the squad's boost when they have a ship in space in the booster's system.
+//  docked members have no ship, and neither does a member who is undocking until their ship is made.
+static bool CanTakeBoost(Client* pMember, Client* pBooster)
+{
+    if ((pMember == nullptr) or (pBooster == nullptr) or (pMember->GetShipSE() == nullptr))
+        return false;
+    return (pMember->GetSystemID() == pBooster->GetSystemID());
+}
+
 void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& wing, std::list<int32>& squad)
 {
     double start = GetTimeUSeconds();
@@ -648,7 +657,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                 SquadData sData = SquadData();
                 GetSquadData(squadID, sData);
                 for (auto cur : sData.members)  // SC is a member
-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                    if (sboost and CanTakeBoost(cur.second, sData.booster))
                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
             }
         }
@@ -678,7 +687,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                 SquadData sData = SquadData();
                 GetSquadData(squadID, sData);
                 for (auto cur : sData.members)
-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                    if (sboost and CanTakeBoost(cur.second, sData.booster))
                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
             }
         }
@@ -702,7 +711,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
             bool sboost(false);
             SetSquadBoostData(squadID, bData, sboost);
             for (auto cur : sData.members)
-                if (sboost and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                if (sboost and CanTakeBoost(cur.second, sData.booster))
                     memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
         }
     }
