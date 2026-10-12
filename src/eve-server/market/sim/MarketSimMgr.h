@@ -66,6 +66,8 @@ public:
                     MktSim::Units dQty, MktSim::Units dReservedQty) override;
     void IntakeAdd(int32_t day, uint32_t ownerID, uint16_t typeID, MktSim::Units qty, MktSim::Cents isk) override;
     void OrderGone(uint32_t orderID) override;
+    void FillBegin() override;
+    void FillEnd() override;
 
 private:
     int64 Now() const;

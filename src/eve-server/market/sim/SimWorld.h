@@ -194,6 +194,10 @@ namespace MktSim {
         virtual void IntakeAdd(int32_t day, uint32_t ownerID, uint16_t typeID, Units qty, Cents isk) = 0;
         // a sim order a player filled completely (its mktOrders row is gone already)
         virtual void OrderGone(uint32_t orderID) = 0;
+        /* around a trade the sim takes with a player order:  the player's side (through the gateway) and the ledger's
+         *  writes above are saved together */
+        virtual void FillBegin()                        { }
+        virtual void FillEnd()                          { }
     };
 
     class World {

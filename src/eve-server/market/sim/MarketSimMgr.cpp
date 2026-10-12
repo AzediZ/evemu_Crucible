@@ -690,6 +690,16 @@ void MarketSimMgr::OrderGone(uint32_t orderID)
     MarketSimDB::ForgetOrder(orderID);
 }
 
+void MarketSimMgr::FillBegin()
+{
+    sDatabase.StartTransaction("market sim trade with a player order");
+}
+
+void MarketSimMgr::FillEnd()
+{
+    sDatabase.CommitTransaction();
+}
+
 /************************************************************************************************************************
  * /mktsim
  */

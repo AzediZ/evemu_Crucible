@@ -675,6 +675,12 @@ void MarketMgr::CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amoun
             .AddISK("balance", balance);
 }
 
+void MarketMgr::SaveStack(InventoryItemRef iRef)
+{
+    if (!sConfig.world.saveOnUpdate and (iRef.get() != nullptr) and (iRef->quantity() > 0))
+        iRef->SaveItem();
+}
+
 void MarketMgr::RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,
                             uint32 sellerOwnerID, bool sellerIsCorp, uint32 sellerCharID, uint16 sellerKey,
                             uint32 buyerOwnerID, bool buyerIsCorp, uint32 buyerCharID, uint16 buyerKey, bool recordBuyer/*true*/)
@@ -764,6 +770,8 @@ uint32 MarketMgr::SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 
                 continue;
         }
 
+        // the split and the sale are saved together (a crash between them would leave the seller both stacks)
+        DBTransaction tx("market sale");
         InventoryItemRef part(iRef);
         if ((uint32)iRef->quantity() > fill) {
             part = iRef->Split(fill, true);
@@ -771,14 +779,17 @@ uint32 MarketMgr::SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 
                 _log(MARKET__ERROR, "SellToBuyOrders - Failed to split %u from %s(%u).", fill, iRef->name(), iRef->itemID());
                 break;
             }
+            SaveStack(iRef);
         }
 
         bool sold(false);
         try {
             sold = ExecuteBuyOrder(seller, cur, part, fill, stationID, useCorp, accountKey);
         } catch (...) {
-            if (part != iRef)
+            if (part != iRef) {
                 iRef->Merge(part);
+                SaveStack(iRef);
+            }
             if (remaining == qty)
                 throw;
             break;
@@ -789,6 +800,7 @@ uint32 MarketMgr::SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 
         } else if (part != iRef) {
             // nothing happened to the split part.  put it back
             iRef->Merge(part);
+            SaveStack(iRef);
         }
     }
 
@@ -869,6 +881,9 @@ bool MarketMgr::FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market
         _log(MARKET__TRACE, "FillAgainstBuyOrder - npc buy order #%u of %u has nothing behind it.  Skipped.", oInfo.orderID, buyerID);
         return false;
     }
+    // everything a fill writes (wallets, journal, items, transactions, the order, the sim's ledger) is saved together
+    std::string what("market fill of order #" + std::to_string(oInfo.orderID));
+    DBTransaction tx(what.c_str());
     uint16 buyerKey(isCorp ? oInfo.accountKey : Account::KeyType::Cash);
     uint32 buyerCharID(isCorp ? oInfo.memberID : buyerID);
     // the escrow sits with the owner of the order's station
@@ -1006,6 +1021,9 @@ bool MarketMgr::FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Marke
         _log(MARKET__TRACE, "FillAgainstSellOrder - npc sell order #%u of %u has nothing behind it.  Skipped.", oInfo.orderID, sellerID);
         return false;
     }
+    // everything a fill writes (wallets, journal, items, transactions, the order, the sim's ledger) is saved together
+    std::string what("market fill of order #" + std::to_string(oInfo.orderID));
+    DBTransaction tx(what.c_str());
     uint16 sellerKey(sellerIsCorp ? oInfo.accountKey : Account::KeyType::Cash);
     uint32 sellerCharID(sellerIsCorp ? oInfo.memberID : sellerID);
 
@@ -1080,6 +1098,9 @@ bool MarketMgr::FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Marke
 
 bool MarketMgr::CancelOrderInternal(const Market::OrderInfo& oInfo, const char* reason)
 {
+    // the order goes and its escrow or items return together
+    std::string what("market cancel of order #" + std::to_string(oInfo.orderID));
+    DBTransaction tx(what.c_str());
     // delete first, so nothing is refunded twice
     PyRep* order(MarketDB::GetOrderRow(oInfo.orderID));
     if (order == nullptr)

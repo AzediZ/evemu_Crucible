@@ -39,6 +39,13 @@ namespace {
         va_end(ap);
         return buf;
     }
+
+    // a trade with a player order and the ledger's writes for it, saved together (IPersist::FillBegin)
+    struct FillScope {
+        IPersist* p;
+        explicit FillScope(IPersist* persist) : p(persist)  { if (p != nullptr) p->FillBegin(); }
+        ~FillScope()                                        { if (p != nullptr) p->FillEnd(); }
+    };
 }
 
 World::World(const StaticData& data, const Params& params, IMarketGateway& gateway)
@@ -707,6 +714,7 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
                     take = std::min<Units>(take, IntakeLeft(c, po.ownerID, po.price, t));
                     if (take <= 0)
                         continue;
+                    FillScope scope(m_persist);
                     uint32_t got(m_gw.TakePlayerAsk(po, (uint32_t)take, consumer, m_actors[c.mm - 1].ownerCorpID));
                     if (got == 0) {
                         q.qty = 0;
@@ -781,6 +789,7 @@ void World::SellToPlayerBids(Cell& c, int64_t t)
         Units q(std::min<Units>(bid.qty, sellable));
         if ((q < bid.minVolume) and (bid.qty >= bid.minVolume))
             continue;
+        FillScope scope(m_persist);
         uint32_t got(m_gw.TakePlayerBid(bid, (uint32_t)q, c.mm, corp, node.stationID));
         if (got == 0)
             continue;
