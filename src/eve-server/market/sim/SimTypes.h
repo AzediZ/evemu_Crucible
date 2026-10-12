@@ -61,12 +61,13 @@ namespace MktSim {
             Reprocessor     = 6,    // per node:  buys what refines for more than it costs (the refine floor), sells minerals
             Manufacturer    = 7,    // per node and sector (ships, goods):  T1 jobs from bought inputs, sells the output
             LootSource      = 8,    // per node:  loot, LP and salvage at their calibrated rates, plus dropped fits
+            // 9, 10:  phase 4 (Hauler, RemoteMiner, SimHaulers.cpp)
             // phase 6 (PLAN 6.4, SimChains.cpp):  the advanced chains that replace the abstract producers of T2, moon and PI
-            Inventor        = 9,    // per node:  invents T2 blueprint copies (datacores, decryptors) and builds T2 from them
-            Harvester       = 10,   // per node:  moon harvesting arrays and gas harvesters (POS fuel)
-            Reactor         = 11,   // per node:  moon reactions (POS fuel)
-            Planetary       = 12,   // per node:  planetary extraction (P0) and factories (P1 to P4)
-            Count           = 13
+            Inventor        = 11,    // per node:  invents T2 blueprint copies (datacores, decryptors) and builds T2 from them
+            Harvester       = 12,   // per node:  moon harvesting arrays and gas harvesters (POS fuel)
+            Reactor         = 13,   // per node:  moon reactions (POS fuel)
+            Planetary       = 14,   // per node:  planetary extraction (P0) and factories (P1 to P4)
+            Count           = 15
         };
         const char* Name(uint8_t kind);
     }
@@ -141,12 +142,13 @@ namespace MktSim {
             RefineTax       = 13,   // sink:  the units the station keeps when refining
             Destroyed       = 14,   // sink:  the actors' own ships lost
             Spoiled         = 15,   // sink:  loot nobody wanted for too long
+            // 16:  phase 4 (Transport)
             // phase 6
-            Invented        = 16,   // faucet:  runs of T2 blueprint copies a successful invention gives (the blueprint type)
-            Harvested       = 17,   // faucet:  moon materials and gas the harvesters bring in
-            Extracted       = 18,   // faucet:  planetary resources (P0)
-            Fuel            = 19,   // sink:  fuel blocks the POS towers burn
-            Count           = 20
+            Invented        = 17,   // faucet:  runs of T2 blueprint copies a successful invention gives (the blueprint type)
+            Harvested       = 18,   // faucet:  moon materials and gas the harvesters bring in
+            Extracted       = 19,   // faucet:  planetary resources (P0)
+            Fuel            = 20,   // sink:  fuel blocks the POS towers burn
+            Count           = 21
         };
         int Sign(uint8_t flow);
         const char* Name(uint8_t flow);
