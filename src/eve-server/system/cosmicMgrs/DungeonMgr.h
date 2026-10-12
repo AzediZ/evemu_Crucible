@@ -305,9 +305,9 @@ private:
     GPoint NextRoomOrigin(const GPoint& from);
     bool IsNPCType(uint32 typeID);
     /* liveGroupID:  a spawn group's object (its sentries, npc ai plan 4.11).  a sentry joins that group's aggro group, or its
-     *  room's when it has none */
+     *  room's when it has none.  factionID:  the group's faction (0 = the instance's) */
     uint32 SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius,
-                       uint32 liveGroupID = 0);
+                       uint32 liveGroupID = 0, uint32 factionID = 0);
     void PopulateRoom(Instance& inst, uint8 roomIdx);
     void SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group);
     uint32 SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID);

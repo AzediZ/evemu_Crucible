@@ -779,8 +779,10 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
 }
 
 uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius,
-                               uint32 liveGroupID/*0*/)
+                               uint32 liveGroupID/*0*/, uint32 factionID/*0*/)
 {
+    if (factionID == 0)
+        factionID = inst.factionID;
     const ItemType* pType(sItemFactory.GetType(typeID));
     if (pType == nullptr) {
         _log(DUNG__WARNING, "DungeonMgr::SpawnObject() - invalid type %u in dungeon %u", typeID, inst.dungeon->dungeonID);
@@ -814,7 +816,7 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
         return pASE->GetID();
     }
 
-    uint32 ownerID(sDataMgr.GetFactionCorp(inst.factionID));
+    uint32 ownerID(sDataMgr.GetFactionCorp(factionID));
     if (ownerID == 0)
         ownerID = ownerSystem;
     std::string info("livedungeon_" + std::to_string(inst.instanceID));
@@ -834,8 +836,8 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
         entity.categoryID = pType->categoryID();
         entity.ownerID = ownerID;
         entity.corporationID = ownerID;
-        entity.allianceID = inst.factionID;
-        entity.factionID = ((inst.factionID == factionRogueDrones) ? 0 : inst.factionID);
+        entity.allianceID = factionID;
+        entity.factionID = ((factionID == factionRogueDrones) ? 0 : factionID);
         entity.position = pos;
 
     uint32 itemID(iRef->itemID());
@@ -968,7 +970,7 @@ void DungeonMgr::SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group)
              *  not npcs, placed where they stand.  still members of the group (its waves and completion wait for them) */
             uint32 itemID(IsNPCType(cur.typeID)
                           ? SpawnNPC(inst, roomIdx, cur.typeID, factionID, pos, def.warpIn, group.liveGroupID)
-                          : SpawnObject(inst, roomIdx, cur.typeID, pos, 0, 0, group.liveGroupID));
+                          : SpawnObject(inst, roomIdx, cur.typeID, pos, 0, 0, group.liveGroupID, factionID));
             if (itemID != 0)
                 group.alive.insert(itemID);
         }
