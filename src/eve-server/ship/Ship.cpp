@@ -2204,8 +2204,15 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
             cur->ResetAttributes();
         std::map<EVEItemFlags, InventoryItemRef> charges;
         m_ModuleManager->GetLoadedCharges(charges);
-        for (auto cur : charges)
+        for (auto cur : charges) {
+            /* the reset reloads the charge's attributes from the type and the db, and a crystal's damage taken in space was
+             *  never written there (SaveItem() doesn't save attributes):  it is carried over (dock, eject, boarding) */
+            EvilNumber damage(EvilZero);
+            bool damaged(cur.second->HasAttribute(AttrDamage, damage) and (damage.get_double() > 0.0));
             cur.second->ResetAttributes();
+            if (damaged)
+                cur.second->SetAttribute(AttrDamage, damage, false);
+        }
         // the charges' effects on their modules went with the reset
         m_ModuleManager->ChargeFxReset();
 
