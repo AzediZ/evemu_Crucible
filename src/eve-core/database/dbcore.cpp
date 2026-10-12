@@ -372,9 +372,10 @@ void DBcore::DoEscapeString(std::string &to, const std::string &from)
 {
     assert(mysql);
     uint32 len = (uint32)from.length();
-    to.resize(len * 2);   // make enough room
+    to.resize(len * 2 + 1);   // make enough room (every character escaped, and the terminating NUL it writes)
     uint32 esc_len = mysql_real_escape_string(mysql, &to[0], from.c_str(), len);
-    to.resize(esc_len + 1); // optional.
+    // the escaped text only.  keeping the NUL in the string cut queries built by concatenation ("'" + esc + "'") short
+    to.resize(esc_len);
 }
 
 //look for things in the string which might cause SQL problems
