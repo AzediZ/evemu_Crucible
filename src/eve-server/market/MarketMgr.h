@@ -106,6 +106,14 @@ public:
     void NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, PyRep* order = nullptr);
 
     void InvalidateOrdersCache(uint32 regionID, uint32 typeID);
+    void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
+
+    /* the market window's best-price lists (GetStationAsks, GetSystemAsks, GetRegionBest), cached for a minute (they
+     *  group the whole region's orders).  MarkAsksDirty drops a region's lists at once */
+    PyRep* GetStationAsks(uint32 stationID);
+    PyRep* GetSystemAsks(uint32 solarSystemID);
+    PyRep* GetRegionBest(uint32 regionID);
+    void MarkAsksDirty(uint32 regionID);
 
     // player order modification delay (market.OrderModificationDelay, Crucible const.mktModificationDelay)
     // issued = order's issue date.  the last-modified stamps are kept in memory only
@@ -148,7 +156,6 @@ public:
 protected:
     void Populate();
     void ProcessOrderExpiry();
-    void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
     // records both sides of a trade.  recordBuyer false leaves out the buy side row (the sell side row is the one the
     //  price history uses, so it is always written)
     void RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,
@@ -169,6 +176,14 @@ private:
     std::map<uint16, double> m_materialIndex;       // typeID/market index price
     std::map<uint16, double> m_insuranceValue;      // ship typeID/insurance value (memo, cleared with the index)
     bool m_indexReady;
+
+    struct AsksCache {
+        PyRep* rep;
+        int64  built;       // filetime
+        uint32 regionID;
+    };
+    std::map<std::pair<uint8, uint32>, AsksCache> m_asks;   // (0 station / 1 system / 2 region, id)
+    PyRep* CachedAsks(uint8 kind, uint32 id, uint32 regionID);
 
     // markets are regional.  there are 66 regions.
     // market orders are stored as {regionID/typeID}

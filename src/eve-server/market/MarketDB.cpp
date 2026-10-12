@@ -46,8 +46,8 @@ PyRep *MarketDB::GetStationAsks(uint32 stationID) {
         "SELECT"
         "    typeID, MIN(price) AS price, volRemaining, stationID "
         " FROM mktOrders "
-        " WHERE stationID=%u"
-        " GROUP BY typeID",  stationID))
+        " WHERE stationID=%u AND bid=%u"
+        " GROUP BY typeID",  stationID, Market::Type::Sell))
         //" LIMIT %u",  stationID, sConfig.market.StationOrderLimit))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
@@ -67,8 +67,8 @@ PyRep *MarketDB::GetSystemAsks(uint32 solarSystemID) {
         "SELECT"
         "    typeID, MIN(price) AS price, volRemaining, stationID "
         " FROM mktOrders "
-        " WHERE solarSystemID=%u"
-        " GROUP BY typeID", solarSystemID))
+        " WHERE solarSystemID=%u AND bid=%u"
+        " GROUP BY typeID", solarSystemID, Market::Type::Sell))
         //" LIMIT %u", solarSystemID, sConfig.market.SystemOrderLimit))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
@@ -456,17 +456,24 @@ bool MarketDB::RecordTransaction(Market::TxData &data) {
 
 void MarketDB::RollupHistory(int64 dayStart, int64 dayEnd)
 {
-    // one row per trade is the sell side (transactionType 0)
+    // one row per trade is the sell side (transactionType 0).  the market sim's internal trades of the day are added
+    //  (mktSimHistory, money in cents)
     DBerror err;
     if (!sDatabase.RunQuery(err,
         "INSERT INTO mktHistory (regionID, typeID, historyDate, lowPrice, highPrice, avgPrice, volume, orders)"
-        " SELECT regionID, typeID, %lli, MIN(price), MAX(price), SUM(price * quantity) / SUM(quantity), SUM(quantity), COUNT(*)"
-        " FROM mktTransactions"
-        " WHERE transactionType=0 AND transactionDate >= %lli AND transactionDate < %lli"
-        " GROUP BY regionID, typeID"
+        " SELECT regionID, typeID, %lli, MIN(lo), MAX(hi), SUM(val) / SUM(qty), SUM(qty), SUM(n) FROM ("
+        "  SELECT regionID, typeID, MIN(price) AS lo, MAX(price) AS hi, SUM(price * quantity) AS val, SUM(quantity) AS qty, COUNT(*) AS n"
+        "  FROM mktTransactions"
+        "  WHERE transactionType=0 AND transactionDate >= %lli AND transactionDate < %lli"
+        "  GROUP BY regionID, typeID"
+        "  UNION ALL"
+        "  SELECT regionID, typeID, low / 100, high / 100, sumValue / 100, volume, trades"
+        "  FROM mktSimHistory"
+        "  WHERE historyDate = %lli AND volume > 0"
+        " ) u GROUP BY regionID, typeID"
         " ON DUPLICATE KEY UPDATE lowPrice=VALUES(lowPrice), highPrice=VALUES(highPrice), avgPrice=VALUES(avgPrice),"
         "  volume=VALUES(volume), orders=VALUES(orders)",
-        dayStart, dayStart, dayEnd))
+        dayStart, dayStart, dayEnd, dayStart))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
     }
@@ -504,16 +511,22 @@ PyRep* MarketDB::GetHistoryOld(uint32 regionID, uint16 typeID, int64 from, int64
 
 PyRep* MarketDB::GetHistoryToday(uint32 regionID, uint16 typeID, int64 midnight)
 {
-    // same columns (and types) as GetHistoryOld().  no transactions -> no row
+    // same columns (and types) as GetHistoryOld().  no trades -> no row.  the market sim's internal trades of today count
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        "SELECT CAST(%lli AS SIGNED) AS historyDate, MIN(price) AS lowPrice, MAX(price) AS highPrice,"
-        "  SUM(price * quantity) / SUM(quantity) AS avgPrice,"
-        "  CAST(SUM(quantity) AS SIGNED) AS volume, CAST(COUNT(*) AS SIGNED) AS orders"
-        " FROM mktTransactions"
-        " WHERE regionID=%u AND typeID=%u AND transactionType=0 AND transactionDate >= %lli"
-        " GROUP BY regionID, typeID",
-        midnight, regionID, typeID, midnight))
+        "SELECT CAST(%lli AS SIGNED) AS historyDate, CAST(MIN(lo) AS DOUBLE) AS lowPrice, CAST(MAX(hi) AS DOUBLE) AS highPrice,"
+        "  CAST(SUM(val) / SUM(qty) AS DOUBLE) AS avgPrice,"
+        "  CAST(SUM(qty) AS SIGNED) AS volume, CAST(SUM(n) AS SIGNED) AS orders"
+        " FROM ("
+        "  SELECT MIN(price) AS lo, MAX(price) AS hi, SUM(price * quantity) AS val, SUM(quantity) AS qty, COUNT(*) AS n"
+        "  FROM mktTransactions"
+        "  WHERE regionID=%u AND typeID=%u AND transactionType=0 AND transactionDate >= %lli"
+        "  HAVING COUNT(*) > 0"
+        "  UNION ALL"
+        "  SELECT low / 100, high / 100, sumValue / 100, volume, trades"
+        "  FROM mktSimHistory WHERE regionID=%u AND typeID=%u AND historyDate = %lli AND volume > 0"
+        " ) u HAVING SUM(qty) > 0",
+        midnight, regionID, typeID, midnight, regionID, typeID, midnight))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;

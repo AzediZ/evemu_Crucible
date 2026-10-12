@@ -169,6 +169,51 @@ boolean can use either 0/1 OR true/false.
         <InsuranceMultiplierT3>1.0</InsuranceMultiplierT3><!-- float - insurance value multiplier for strategic cruisers -->
     </market>
 
+    <!-- the simulated market economy (doc/code_and_design_notes/market-sim/PLAN.md).  NPC corporations quote real buy and
+         sell orders at the trade hubs, priced from Crucible-era market history (the mktCal* tables), and trade with
+         players through the normal market.  every ISK and item it trades is accounted for (/mktsim audit).  GM: /mktsim -->
+    <marketSim>
+        <Enabled>false</Enabled><!-- bool - master switch.  off leaves the sim's orders in place (still backed; /mktsim purge removes them) -->
+        <Seed>20111129</Seed><!-- integer - random seed (Crucible's release date).  the same seed and inputs give the same market -->
+        <EconomyScale>0.01</EconomyScale><!-- float - fraction of Tranquility's volumes and income this server represents.  a small private server may want 0.002-0.005  default: 0.01 -->
+        <Hubs>60003760,60008494,60011866,60004588,60005686</Hubs><!-- stationIDs of the hubs (Jita IV-4, Amarr VIII, Dodixie IX-20, Rens VI-8, Hek VIII-12) -->
+        <RegionalNodes>auto</RegionalNodes><!-- auto (one station per high/low-sec region with >= 1% of the isk traded), none, or a list of stationIDs -->
+        <BudgetMsPerSecond>4</BudgetMsPerSecond><!-- float - milliseconds of each server second the sim may use  default: 4 -->
+        <TickMinutes>15</TickMinutes><!-- integer - the economic tick -->
+        <HotCellMinutes>15</HotCellMinutes><!-- integer - how often the busiest types are re-quoted -->
+        <ColdCellMinutes>120</ColdCellMinutes><!-- integer - how often the other types are re-quoted (player activity re-quotes within seconds) -->
+        <HotCellShare>0.05</HotCellShare><!-- float - share of a hub's types (by isk traded) that are hot -->
+        <QuoteLevels>3</QuoteLevels><!-- integer - price levels per side and type -->
+        <MaxOrdersPerCellSide>3</MaxOrdersPerCellSide><!-- integer -->
+        <SimMaxOrders>200000</SimMaxOrders><!-- integer - over this, the least traded types get one level per side -->
+        <QuoteDepthDays>1.0</QuoteDepthDays><!-- float - quotes show about this many days of demand -->
+        <RequoteThreshold>0.01</RequoteThreshold><!-- float - an order is re-priced when its price is this far off -->
+        <MinHalfSpread>0.015</MinHalfSpread><!-- float - the smallest half spread (asks above, bids below fair value) -->
+        <MaxPriceDeviation>2.0</MaxPriceDeviation><!-- float - Kmax: stock pressure moves the fair value at most this factor from its anchor -->
+        <FairValueHalfLifeDays>3</FairValueHalfLifeDays><!-- float -->
+        <MarketNoise>1.0</MarketNoise><!-- float - day to day noise of the fair value, x the calibrated volatility (plan 0.5; 1.0 matches the observed noise) -->
+        <TransientNoise>1.0</TransientNoise><!-- float - the quotes' daily bounce, x the volatility, at most 3/4 of the half spread -->
+        <PlayerTradeWeight>0.1</PlayerTradeWeight><!-- float - how much trades with players move the fair value (0 for a counterparty with over 20% of the day's volume) -->
+        <BuyBand>0.10</BuyBand><!-- float - the sim's consumers buy player sell orders up to fair value + max(BuyBand, half spread) -->
+        <SellBand>0.10</SellBand><!-- float - the sim sells into player buy orders down to fair value - min(SellBand, half spread / 2) -->
+        <IntakeShareCounterparty>0.25</IntakeShareCounterparty><!-- float - a player sells the sim at most this share of a day's demand per type per day -->
+        <MaxIskToCounterpartyPerDay>0.02</MaxIskToCounterpartyPerDay><!-- float - and at most this share of the sim's money target, in ISK per day -->
+        <IntakeDays>1.0</IntakeDays><!-- float - the sim buys at most this many days of demand per type per day from all players -->
+        <SimPaysFees>true</SimPaysFees><!-- bool - the sim pays broker's fees and sales tax (sinks) -->
+        <SimRecordNpcSide>false</SimRecordNpcSide><!-- bool - also write the npc side of a trade's transactions when the sim buys (the sell side, which the price history needs, is always written) -->
+        <SimBrokerFee>0.01</SimBrokerFee><!-- float - the sim's broker fee rate -->
+        <MoneyDaysTarget>30</MoneyDaysTarget><!-- float - the sim holds about this many days of consumer spending -->
+        <ControllerKp>0.3</ControllerKp><!-- float - money controller -->
+        <ControllerKi>0.02</ControllerKi><!-- float - money controller -->
+        <SupplyFactor>1.0</SupplyFactor><!-- float - production capacity x calibrated demand -->
+        <VendorStations>corpHomeRegion</VendorStations><!-- hubsOnly, corpHomeRegion or all:  where npc corps sell their skills, blueprints and trade goods at base price -->
+        <VendorStock>1000</VendorStock><!-- integer - npc vendor orders are restocked to this every hour -->
+        <HistoryBackfillDays>90</HistoryBackfillDays><!-- integer - days of synthetic price history a type gets the first time a client asks (0 = none) -->
+        <MaxCatchUpHours>48</MaxCatchUpHours><!-- integer - after a downtime the sim catches up at most this much -->
+        <FlushSeconds>30</FlushSeconds><!-- integer - the sim's state is written this often (trades with players at once) -->
+        <PauseOnAuditResidual>true</PauseOnAuditResidual><!-- bool - stop the sim when its daily books don't close (logged as an error) -->
+    </marketSim>
+
     <!-- R.A.M. (science and industry).  times/materials are multiplied to db values to get a modified result - < 1.0 = faster/cheaper -->
     <ram>
         <AutoEvent>false</AutoEvent><!-- bool  add a calendar event for every installed job -->

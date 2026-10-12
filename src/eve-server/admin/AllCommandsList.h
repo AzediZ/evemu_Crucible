@@ -8,6 +8,7 @@
 #include "admin/debug_commands.h"
 #include "admin/DungeonCommands.h"
 #include "admin/GMToolCommands.h"
+#include "admin/MarketSimCommands.h"
 
 //clean up macros
 #undef COMMAND

@@ -81,6 +81,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/DungeonCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMToolCommands.h"
+     "${TARGET_INCLUDE_DIR}/admin/MarketSimCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionDB.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionerService.h"
      "${TARGET_INCLUDE_DIR}/admin/SlashService.h"
@@ -97,6 +98,7 @@ SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/DungeonCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMToolCommands.cpp"
+     "${TARGET_SOURCE_DIR}/admin/MarketSimCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionDB.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionerService.cpp"
      "${TARGET_SOURCE_DIR}/admin/SlashService.cpp"
@@ -382,13 +384,30 @@ SET( map_SOURCE
 SET( market_INCLUDE
      "${TARGET_INCLUDE_DIR}/market/MarketMgr.h"
      "${TARGET_INCLUDE_DIR}/market/MarketDB.h"
-     "${TARGET_INCLUDE_DIR}/market/MarketProxyService.h" )
-     #"${TARGET_INCLUDE_DIR}/market/NPCMarket.h")
+     "${TARGET_INCLUDE_DIR}/market/MarketMatch.h"
+     "${TARGET_INCLUDE_DIR}/market/MarketProxyService.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/IMarketGateway.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/MarketSimDB.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/MarketSimMgr.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/ServerMarketGateway.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimClock.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimEconomy.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimLedger.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimRng.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimStaticData.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimTypes.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimWorld.h" )
 SET( market_SOURCE
      "${TARGET_SOURCE_DIR}/market/MarketMgr.cpp"
      "${TARGET_SOURCE_DIR}/market/MarketDB.cpp"
-     "${TARGET_SOURCE_DIR}/market/MarketProxyService.cpp" )
-     #"${TARGET_SOURCE_DIR}/market/NPCMarket.cpp")
+     "${TARGET_SOURCE_DIR}/market/MarketProxyService.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/MarketSimDB.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/MarketSimMgr.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/ServerMarketGateway.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimEconomy.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimLedger.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimStaticData.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimWorld.cpp" )
 
 SET( missions_INCLUDE
      "${TARGET_INCLUDE_DIR}/missions/MissionDB.h"

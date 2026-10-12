@@ -34,6 +34,7 @@
 #include "manufacturing/Blueprint.h"
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
+#include "market/sim/MarketSimMgr.h"
 #include "station/StationDataMgr.h"
 #include "system/SystemManager.h"
 #include "standing/StandingDB.h"
@@ -95,18 +96,17 @@ PyResult MarketProxyService::GetCorporationOrders(PyCallArgs &call) {
     return MarketDB::GetOrdersForOwner(call.client->GetCorporationID());
 }
 
-/** @todo update these to use market manager and cache instead of hitting db? */
-// station, system, region based on selection in market window
+// station, system, region based on selection in market window.  cached for a minute by the market manager
 PyResult MarketProxyService::GetStationAsks(PyCallArgs &call) {
-    return MarketDB::GetStationAsks(call.client->GetStationID());
+    return sMktMgr.GetStationAsks(call.client->GetStationID());
 }
 
 PyResult MarketProxyService::GetSystemAsks(PyCallArgs &call) {
-    return MarketDB::GetSystemAsks(call.client->GetSystemID());
+    return sMktMgr.GetSystemAsks(call.client->GetSystemID());
 }
 
 PyResult MarketProxyService::GetRegionBest(PyCallArgs &call) {
-    return MarketDB::GetRegionBest(call.client->GetRegionID());
+    return sMktMgr.GetRegionBest(call.client->GetRegionID());
 }
 
 // this is called 3x on every market transaction
@@ -374,6 +374,8 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         //send notification of new order...
         sMktMgr.InvalidateOrdersCache(data.regionID, orderTypeID);
         sMktMgr.SendOnOwnOrderChanged(pClient, orderID, Market::Action::Add, corpOrder);
+        // the market sim sees the new order within seconds
+        sMktSim.OnPlayerOrder(data.regionID, orderTypeID);
         return nullptr;
     }
 
@@ -514,6 +516,8 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     //notify client about new order.
     sMktMgr.InvalidateOrdersCache(data.regionID, orderTypeID);
     sMktMgr.SendOnOwnOrderChanged(pClient, orderID, Market::Action::Add, corpOrder);
+    // the market sim sees the new order within seconds
+    sMktSim.OnPlayerOrder(data.regionID, orderTypeID);
 
     return nullptr;
 }
@@ -590,6 +594,7 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
 
     sMktMgr.InvalidateOrdersCache(oInfo.regionID, oInfo.typeID);
     sMktMgr.NotifyOrderOwner(oInfo, Market::Action::Modify);
+    sMktSim.OnPlayerOrder(oInfo.regionID, oInfo.typeID);
 
     return nullptr;
 }

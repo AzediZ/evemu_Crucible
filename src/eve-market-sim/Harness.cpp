@@ -463,13 +463,27 @@ namespace {
                             avg = (double)r.sumValue / (double)r.volume / 100.0;
                             vol = r.volume;
                         }
-                    std::printf("  trace day %3d  V %.4f  anchor %.4f  stock %lld (%lld on asks) of %.0f  dBar %.1f d0 %.1f  avg %.4f vol %lld  clamp %u\n",
-                                day, std::exp(tc->lnV), std::exp(tc->lnAnchor), (long long)(s ? s->qty + s->reserved : 0), (long long)(s ? s->reserved : 0),
+                    std::printf("  trace day %3d  V %.4f  V* %.4f  anchor %.4f  stock %lld (%lld on asks) of %.0f  dBar %.1f d0 %.1f  avg %.4f vol %lld  clamp %u\n",
+                                day, std::exp(tc->lnV), tc->vStar, std::exp(tc->lnAnchor), (long long)(s ? s->qty + s->reserved : 0), (long long)(s ? s->reserved : 0),
                                 tc->targetStock, tc->dBar, tc->d0, avg, (long long)vol, tc->clampDays);
                 }
             }
             res.indexMin = std::min(res.indexMin, index);
             res.indexMax = std::max(res.indexMax, index);
+            if (opt.verbose) {
+                // the basket's biggest movers against day 0
+                double worst(1.0);
+                uint16_t worstType(0);
+                for (size_t i = 0; i < basket.size(); ++i) {
+                    const Cell& c(world.Cells()[basket[i]]);
+                    double r(std::exp(c.lnV) / v0[i]);
+                    if (std::fabs(std::log(r)) > std::fabs(std::log(worst))) {
+                        worst = r;
+                        worstType = c.typeID;
+                    }
+                }
+                std::printf("  day %3d  price index %.4f  (biggest mover type %u x%.3f)\n", day, index, worstType, worst);
+            }
             for (auto& c : world.Cells())
                 if (c.clampDays > res.maxClampDays) {
                     res.maxClampDays = c.clampDays;

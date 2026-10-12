@@ -137,6 +137,7 @@
 // market services
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
+#include "market/sim/MarketSimMgr.h"
 // missions services
 #include "missions/MissionMgrService.h"
 // planet services
@@ -822,6 +823,10 @@ int main( int argc, char* argv[] )
     std::printf("\n");     // spacer
     svDataMgr.Initialize();
     std::printf("\n");     // spacer
+    /* the market simulation (needs the static, map and station data above) */
+    sLog.Green("       ServerInit", "Starting Market Simulation");
+    sMktSim.Initialize();
+    std::printf("\n");     // spacer
 
     // clear dynamic system data (player counts, etc) on server start
     MapDB::SystemStartup();
@@ -1015,7 +1020,8 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
         sEntityList.Shutdown();
     /* mission pockets get no more dungeon events */
     sMissionInstanceMgr.Close();
-    /* Close the MarketMgr */
+    /* Close the market simulation (writes its state), then the MarketMgr */
+    sMktSim.Close();
     sMktMgr.Close();
     /* Close the sovereignty data manager (saves anything changed before shutdown) */
     svDataMgr.Close();

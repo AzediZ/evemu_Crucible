@@ -150,6 +150,47 @@ EVEServerConfig::EVEServerConfig()
     market.InsuranceMultiplierT2 = 1.0f;
     market.InsuranceMultiplierT3 = 1.0f;
 
+    // marketSim (PLAN 9.6 defaults;  MarketNoise and TransientNoise as tuned in the phase 2 harness)
+    marketSim.Enabled = false;
+    marketSim.Seed = 20111129;
+    marketSim.EconomyScale = 0.01;
+    marketSim.Hubs = "60003760,60008494,60011866,60004588,60005686";
+    marketSim.RegionalNodes = "auto";
+    marketSim.BudgetMsPerSecond = 4.0;
+    marketSim.TickMinutes = 15;
+    marketSim.HotCellMinutes = 15;
+    marketSim.ColdCellMinutes = 120;
+    marketSim.HotCellShare = 0.05;
+    marketSim.QuoteLevels = 3;
+    marketSim.MaxOrdersPerCellSide = 3;
+    marketSim.SimMaxOrders = 200000;
+    marketSim.QuoteDepthDays = 1.0;
+    marketSim.RequoteThreshold = 0.01;
+    marketSim.MinHalfSpread = 0.015;
+    marketSim.MaxPriceDeviation = 2.0;
+    marketSim.FairValueHalfLifeDays = 3.0;
+    marketSim.MarketNoise = 1.0;
+    marketSim.TransientNoise = 1.0;
+    marketSim.PlayerTradeWeight = 0.1;
+    marketSim.BuyBand = 0.10;
+    marketSim.SellBand = 0.10;
+    marketSim.IntakeShareCounterparty = 0.25;
+    marketSim.MaxIskToCounterpartyPerDay = 0.02;
+    marketSim.IntakeDays = 1.0;
+    marketSim.SimPaysFees = true;
+    marketSim.SimRecordNpcSide = false;
+    marketSim.SimBrokerFee = 0.01;
+    marketSim.MoneyDaysTarget = 30.0;
+    marketSim.ControllerKp = 0.3;
+    marketSim.ControllerKi = 0.02;
+    marketSim.SupplyFactor = 1.0;
+    marketSim.VendorStations = "corpHomeRegion";
+    marketSim.VendorStock = 1000;
+    marketSim.HistoryBackfillDays = 90;
+    marketSim.MaxCatchUpHours = 48;
+    marketSim.FlushSeconds = 30;
+    marketSim.PauseOnAuditResidual = true;
+
     // ram
     ram.AutoEvent = false;
     ram.ResME = 1.0;
@@ -444,6 +485,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "world",       &EVEServerConfig::ProcessWorld );
     AddMemberParser( "rates",       &EVEServerConfig::ProcessRates );
     AddMemberParser( "market",      &EVEServerConfig::ProcessMarket );
+    AddMemberParser( "marketSim",   &EVEServerConfig::ProcessMarketSim );
     AddMemberParser( "ram",     &EVEServerConfig::ProcessBPTimes );
     AddMemberParser( "account",     &EVEServerConfig::ProcessAccount );
     AddMemberParser( "character",   &EVEServerConfig::ProcessCharacter );
@@ -476,6 +518,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "world" );
     RemoveParser( "rates" );
     RemoveParser( "market" );
+    RemoveParser( "marketSim" );
     RemoveParser( "ram" );
     RemoveParser( "account" );
     RemoveParser( "character" );
@@ -733,6 +776,93 @@ bool EVEServerConfig::ProcessMarket(const TiXmlElement* ele)
     RemoveParser( "InsuranceMultiplierT1" );
     RemoveParser( "InsuranceMultiplierT2" );
     RemoveParser( "InsuranceMultiplierT3" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
+{
+    AddValueParser( "Enabled",                      marketSim.Enabled );
+    AddValueParser( "Seed",                         marketSim.Seed );
+    AddValueParser( "EconomyScale",                 marketSim.EconomyScale );
+    AddValueParser( "Hubs",                         marketSim.Hubs );
+    AddValueParser( "RegionalNodes",                marketSim.RegionalNodes );
+    AddValueParser( "BudgetMsPerSecond",            marketSim.BudgetMsPerSecond );
+    AddValueParser( "TickMinutes",                  marketSim.TickMinutes );
+    AddValueParser( "HotCellMinutes",               marketSim.HotCellMinutes );
+    AddValueParser( "ColdCellMinutes",              marketSim.ColdCellMinutes );
+    AddValueParser( "HotCellShare",                 marketSim.HotCellShare );
+    AddValueParser( "QuoteLevels",                  marketSim.QuoteLevels );
+    AddValueParser( "MaxOrdersPerCellSide",         marketSim.MaxOrdersPerCellSide );
+    AddValueParser( "SimMaxOrders",                 marketSim.SimMaxOrders );
+    AddValueParser( "QuoteDepthDays",               marketSim.QuoteDepthDays );
+    AddValueParser( "RequoteThreshold",             marketSim.RequoteThreshold );
+    AddValueParser( "MinHalfSpread",                marketSim.MinHalfSpread );
+    AddValueParser( "MaxPriceDeviation",            marketSim.MaxPriceDeviation );
+    AddValueParser( "FairValueHalfLifeDays",        marketSim.FairValueHalfLifeDays );
+    AddValueParser( "MarketNoise",                  marketSim.MarketNoise );
+    AddValueParser( "TransientNoise",               marketSim.TransientNoise );
+    AddValueParser( "PlayerTradeWeight",            marketSim.PlayerTradeWeight );
+    AddValueParser( "BuyBand",                      marketSim.BuyBand );
+    AddValueParser( "SellBand",                     marketSim.SellBand );
+    AddValueParser( "IntakeShareCounterparty",      marketSim.IntakeShareCounterparty );
+    AddValueParser( "MaxIskToCounterpartyPerDay",   marketSim.MaxIskToCounterpartyPerDay );
+    AddValueParser( "IntakeDays",                   marketSim.IntakeDays );
+    AddValueParser( "SimPaysFees",                  marketSim.SimPaysFees );
+    AddValueParser( "SimRecordNpcSide",             marketSim.SimRecordNpcSide );
+    AddValueParser( "SimBrokerFee",                 marketSim.SimBrokerFee );
+    AddValueParser( "MoneyDaysTarget",              marketSim.MoneyDaysTarget );
+    AddValueParser( "ControllerKp",                 marketSim.ControllerKp );
+    AddValueParser( "ControllerKi",                 marketSim.ControllerKi );
+    AddValueParser( "SupplyFactor",                 marketSim.SupplyFactor );
+    AddValueParser( "VendorStations",               marketSim.VendorStations );
+    AddValueParser( "VendorStock",                  marketSim.VendorStock );
+    AddValueParser( "HistoryBackfillDays",          marketSim.HistoryBackfillDays );
+    AddValueParser( "MaxCatchUpHours",              marketSim.MaxCatchUpHours );
+    AddValueParser( "FlushSeconds",                 marketSim.FlushSeconds );
+    AddValueParser( "PauseOnAuditResidual",         marketSim.PauseOnAuditResidual );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "Enabled" );
+    RemoveParser( "Seed" );
+    RemoveParser( "EconomyScale" );
+    RemoveParser( "Hubs" );
+    RemoveParser( "RegionalNodes" );
+    RemoveParser( "BudgetMsPerSecond" );
+    RemoveParser( "TickMinutes" );
+    RemoveParser( "HotCellMinutes" );
+    RemoveParser( "ColdCellMinutes" );
+    RemoveParser( "HotCellShare" );
+    RemoveParser( "QuoteLevels" );
+    RemoveParser( "MaxOrdersPerCellSide" );
+    RemoveParser( "SimMaxOrders" );
+    RemoveParser( "QuoteDepthDays" );
+    RemoveParser( "RequoteThreshold" );
+    RemoveParser( "MinHalfSpread" );
+    RemoveParser( "MaxPriceDeviation" );
+    RemoveParser( "FairValueHalfLifeDays" );
+    RemoveParser( "MarketNoise" );
+    RemoveParser( "TransientNoise" );
+    RemoveParser( "PlayerTradeWeight" );
+    RemoveParser( "BuyBand" );
+    RemoveParser( "SellBand" );
+    RemoveParser( "IntakeShareCounterparty" );
+    RemoveParser( "MaxIskToCounterpartyPerDay" );
+    RemoveParser( "IntakeDays" );
+    RemoveParser( "SimPaysFees" );
+    RemoveParser( "SimRecordNpcSide" );
+    RemoveParser( "SimBrokerFee" );
+    RemoveParser( "MoneyDaysTarget" );
+    RemoveParser( "ControllerKp" );
+    RemoveParser( "ControllerKi" );
+    RemoveParser( "SupplyFactor" );
+    RemoveParser( "VendorStations" );
+    RemoveParser( "VendorStock" );
+    RemoveParser( "HistoryBackfillDays" );
+    RemoveParser( "MaxCatchUpHours" );
+    RemoveParser( "FlushSeconds" );
+    RemoveParser( "PauseOnAuditResidual" );
 
     return result;
 }

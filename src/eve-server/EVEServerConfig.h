@@ -175,6 +175,49 @@ public:
         float InsuranceMultiplierT3;
     } market;
 
+    // from <marketSim>:  the simulated market economy (doc/code_and_design_notes/market-sim/PLAN.md 9.6)
+    struct {
+        bool Enabled;                   // master switch.  off at boot leaves the sim's orders alone (they stay backed)
+        uint32 Seed;                    // rng seed
+        double EconomyScale;            // fraction of TQ volumes and income the server represents
+        std::string Hubs;               // comma list of hub stationIDs
+        std::string RegionalNodes;      // auto | none | comma list of stationIDs
+        double BudgetMsPerSecond;       // cpu per server second
+        uint32 TickMinutes;
+        uint32 HotCellMinutes;
+        uint32 ColdCellMinutes;
+        double HotCellShare;            // share of a node's cells (by isk turnover) that are hot
+        uint32 QuoteLevels;
+        uint32 MaxOrdersPerCellSide;
+        uint32 SimMaxOrders;
+        double QuoteDepthDays;
+        double RequoteThreshold;
+        double MinHalfSpread;
+        double MaxPriceDeviation;       // Kmax
+        double FairValueHalfLifeDays;
+        double MarketNoise;
+        double TransientNoise;
+        double PlayerTradeWeight;
+        double BuyBand;
+        double SellBand;
+        double IntakeShareCounterparty;
+        double MaxIskToCounterpartyPerDay;  // x M*
+        double IntakeDays;
+        bool SimPaysFees;
+        bool SimRecordNpcSide;
+        double SimBrokerFee;            // the sim's broker fee rate
+        double MoneyDaysTarget;
+        double ControllerKp;
+        double ControllerKi;
+        double SupplyFactor;
+        std::string VendorStations;     // hubsOnly | corpHomeRegion | all
+        uint32 VendorStock;
+        uint32 HistoryBackfillDays;
+        uint32 MaxCatchUpHours;
+        uint32 FlushSeconds;
+        bool PauseOnAuditResidual;
+    } marketSim;
+
     // From <ram>
     struct {
         bool AutoEvent;
@@ -536,6 +579,7 @@ protected:
     bool ProcessWorld( const TiXmlElement* ele );
     bool ProcessRates( const TiXmlElement* ele );
     bool ProcessMarket( const TiXmlElement* ele );
+    bool ProcessMarketSim( const TiXmlElement* ele );
     bool ProcessAccount( const TiXmlElement* ele );
     bool ProcessCharacter( const TiXmlElement* ele );
     bool ProcessNPC( const TiXmlElement* ele );

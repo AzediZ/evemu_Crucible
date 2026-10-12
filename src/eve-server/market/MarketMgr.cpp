@@ -26,6 +26,7 @@
 #include "map/MapData.h"
 #include "market/MarketMatch.h"
 #include "market/MarketMgr.h"
+#include "market/sim/MarketSimMgr.h"
 #include "station/StationDataMgr.h"
 
 /*
@@ -159,6 +160,9 @@ void MarketMgr::Close()
 {
     /** @todo put a save method here which will save anything changed before shutdown */
     PyDecRef(m_marketGroups);
+    for (auto& cur : m_asks)
+        PySafeDecRef(cur.second.rep);
+    m_asks.clear();
     sLog.Warning("        MarketMgr", "Market Manager has been closed." );
 }
 
@@ -210,6 +214,8 @@ void MarketMgr::SystemShutdown(SolarSystemData& data)
 
 void MarketMgr::UpdatePriceHistory()
 {
+    // the market sim's rows of the finished days first (it writes them behind)
+    sMktSim.FlushHistory();
     double start = GetTimeMSeconds();
     int64 midnight = GetMidnight();
     int64 oldest = midnight - (EvE::Time::Day * sConfig.market.HistoryDays);
@@ -296,10 +302,12 @@ void MarketMgr::UpdateMaterialIndex()
         trades[row.GetUInt(0)].push_back(std::make_pair(row.GetDouble(1), row.GetUInt(2)));
 
     // trimmed mean:  the cheapest and dearest 10% of the trades are dropped, the rest weighted by quantity
+    std::set<uint16> thin(m_indexTypes);
     for (auto& cur : trades) {
         size_t count(cur.second.size());
         if (count < sConfig.market.InsuranceIndexMinTrades)
             continue;
+        thin.erase(cur.first);
         size_t trim(count / 10);
         double value(0.0), qty(0.0);
         for (size_t i = trim; i < count - trim; ++i) {
@@ -308,6 +316,25 @@ void MarketMgr::UpdateMaterialIndex()
         }
         if (qty > 0)
             m_materialIndex[cur.first] = value / qty;
+    }
+
+    // too few trades:  the market sim's own trades over the window, volume weighted (PLAN 7.5).  replaces basePrice
+    if (!thin.empty()) {
+        std::string list;
+        for (auto cur : thin)
+            list += std::to_string(cur) + ",";
+        list.pop_back();
+        DBQueryResult sres;
+        DBResultRow srow;
+        if (sDatabase.RunQuery(sres,
+            "SELECT typeID, SUM(sumValue) / SUM(volume) / 100 FROM mktSimHistory"
+            " WHERE historyDate >= %lli AND typeID IN (%s) AND volume > 0 GROUP BY typeID",
+            GetMidnight() - (EvE::Time::Day * sConfig.market.InsuranceIndexDays), list.c_str()))
+        {
+            while (sres.GetRow(srow))
+                if (srow.GetDouble(1) > 0.0)
+                    m_materialIndex[srow.GetUInt(0)] = srow.GetDouble(1);
+        }
     }
 
     _log(MARKET__MESSAGE, "UpdateMaterialIndex - %u of %u materials priced from the market in %.3fms.",
@@ -431,6 +458,8 @@ PyRep *MarketMgr::GetOldPriceHistory(uint32 regionID, uint32 typeID) {
         m_cache->InvalidateCache(method_id);
     //check to see if this method is in the cache already.
     if (!m_cache->IsCacheLoaded(method_id)) {
+        // a market sim type gets synthetic days before the sim started, once (PLAN 7.5)
+        sMktSim.EnsureBackfill(regionID, typeID);
         //this method is not in cache yet, load up the contents and cache it
         PyRep* result = MarketDB::GetHistoryOld(regionID, typeID, midnight - (EvE::Time::Day * sConfig.market.HistoryDays), midnight);
         if (result == nullptr) {
@@ -524,6 +553,59 @@ void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID) {
     method_name += std::to_string(typeID);
     ObjectCachedMethodID method_id("marketProxy", method_name.c_str());
     this->m_cache->InvalidateCache(method_id);
+    // and the region's best-price lists
+    MarkAsksDirty(regionID);
+}
+
+PyRep* MarketMgr::CachedAsks(uint8 kind, uint32 id, uint32 regionID)
+{
+    int64 now(GetFileTimeNow());
+    std::pair<uint8, uint32> key(kind, id);
+    std::map<std::pair<uint8, uint32>, AsksCache>::iterator itr = m_asks.find(key);
+    if ((itr != m_asks.end()) and (itr->second.rep != nullptr) and ((now - itr->second.built) < 60 * EvE::Time::Second)) {
+        PyIncRef(itr->second.rep);
+        return itr->second.rep;
+    }
+    PyRep* rep((kind == 0) ? MarketDB::GetStationAsks(id) : ((kind == 1) ? MarketDB::GetSystemAsks(id) : MarketDB::GetRegionBest(id)));
+    if (itr != m_asks.end()) {
+        PySafeDecRef(itr->second.rep);
+        m_asks.erase(itr);
+    }
+    if (rep == nullptr)
+        return nullptr;
+    // one reference for the cache, one for the caller
+    PyIncRef(rep);
+    m_asks[key] = AsksCache{rep, now, regionID};
+    return rep;
+}
+
+PyRep* MarketMgr::GetStationAsks(uint32 stationID)
+{
+    return CachedAsks(0, stationID, sDataMgr.GetStationRegion(stationID));
+}
+
+PyRep* MarketMgr::GetSystemAsks(uint32 solarSystemID)
+{
+    SystemData data = SystemData();
+    sDataMgr.GetSystemData(solarSystemID, data);
+    return CachedAsks(1, solarSystemID, data.regionID);
+}
+
+PyRep* MarketMgr::GetRegionBest(uint32 regionID)
+{
+    return CachedAsks(2, regionID, regionID);
+}
+
+void MarketMgr::MarkAsksDirty(uint32 regionID)
+{
+    for (std::map<std::pair<uint8, uint32>, AsksCache>::iterator itr = m_asks.begin(); itr != m_asks.end(); ) {
+        if (itr->second.regionID != regionID) {
+            ++itr;
+            continue;
+        }
+        PySafeDecRef(itr->second.rep);
+        itr = m_asks.erase(itr);
+    }
 }
 
 bool MarketMgr::CanModifyOrder(uint32 orderID, int64 issued)
@@ -623,6 +705,8 @@ void MarketMgr::RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stat
 
     sStatMgr.Add(Stat::iskMarket, price * qty);
     InvalidateHistoryCache(data.regionID, typeID);
+    // the market sim looks at the type soon
+    sMktSim.OnPlayerOrder(data.regionID, typeID);
 }
 
 /** @todo take off market overhead fees */
@@ -668,6 +752,12 @@ uint32 MarketMgr::SellToBuyOrders(Client* seller, InventoryItemRef iRef, uint32 
                                            sConfig.market.UseOrderRange, s_rangeCovers));
         if (fill == 0)
             continue;
+        // the sim's bids take what its intake caps allow from one player (PLAN 7.2)
+        if (!IsPlayerOrder(cur)) {
+            fill = sMktSim.AllowIntake(cur, useCorp ? seller->GetCorporationID() : seller->GetCharacterID(), fill);
+            if ((fill == 0) or ((fill < cur.minVolume) and (cur.quantity >= cur.minVolume)))
+                continue;
+        }
 
         InventoryItemRef part(iRef);
         if ((uint32)iRef->quantity() > fill) {
@@ -751,9 +841,9 @@ bool MarketMgr::IsPlayerOrder(const Market::OrderInfo& oInfo)
 
 bool MarketMgr::IsBackedNpcOrder(const Market::OrderInfo& oInfo)
 {
-    // nothing backs npc orders yet.  an npc buyer would pay from a wallet that holds nothing and an npc seller would
-    //  deliver items that never existed, so those orders are left alone
-    return false;
+    // the market sim's orders are backed by its ledger.  any other npc order (old seed scripts) would pay from a
+    //  wallet that holds nothing or deliver items that never existed, so those are left alone
+    return sMktSim.IsSimOrder(oInfo.orderID);
 }
 
 bool MarketMgr::FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market::Party& seller, InventoryItemRef iRef, uint32 qty, uint32 stationID)
@@ -852,7 +942,11 @@ bool MarketMgr::FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market
 
     RecordTrade(oInfo.typeID, qty, oInfo.price, stationID,
                 seller.ownerID, seller.isCorp, seller.charID, seller.accountKey,
-                buyerID, isCorp, buyerCharID, buyerKey);
+                buyerID, isCorp, buyerCharID, buyerKey, !npcBuyer or sConfig.marketSim.SimRecordNpcSide);
+
+    // the sim's bid:  its ledger pays the seller and takes the items
+    if (npcBuyer)
+        sMktSim.OnSimBidFilled(oInfo, qty, seller.ownerID);
 
     if (qty < oInfo.quantity) {
         // update the buyer's order to reflect the remaining amount
@@ -950,7 +1044,11 @@ bool MarketMgr::FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Marke
 
     RecordTrade(oInfo.typeID, qty, oInfo.price, oInfo.stationID,
                 sellerID, sellerIsCorp, sellerCharID, sellerKey,
-                buyer.ownerID, buyer.isCorp, buyer.charID, buyer.accountKey);
+                buyer.ownerID, buyer.isCorp, buyer.charID, buyer.accountKey, !buyer.IsSim() or sConfig.marketSim.SimRecordNpcSide);
+
+    // the sim's ask (or an npc vendor's):  its ledger is paid and gives up the items
+    if (!playerSeller)
+        sMktSim.OnSimAskFilled(oInfo, qty, buyer.ownerID);
 
     if (qty == oInfo.quantity) {
         _log(MARKET__TRACE, "FillAgainstSellOrder - satisfied order #%u, deleting.", oInfo.orderID);

@@ -144,6 +144,7 @@ namespace MktSim {
         double   sigmaT         = 0.0;  // transient daily noise of the quotes
         uint32_t lot            = 1;
         double   quoteMid       = 0.0;  // the V the current quotes were made from
+        double   vStar          = 0.0;  // the stock pressure target at the last visit
         uint8_t  levels         = 1;
         bool     shocked        = false;
         // GM overrides (persisted in mktSimState)
@@ -207,7 +208,8 @@ namespace MktSim {
          *  Seed() gives a fresh world (or one node) its starting money and stock (one-off faucets), Start() schedules the
          *  work.  a loaded world calls Build(), the Load* functions, Reconcile(), then Start() */
         void Build(int64_t now);
-        void Seed(int64_t now, uint32_t nodeID = 0);
+        // freshOnly:  only cells that were never visited and actors without money (a loaded world that grew)
+        void Seed(int64_t now, uint32_t nodeID = 0, bool freshOnly = false);
         void Start(int64_t now, bool catchUp);
 
         // processes due work up to now.  budgetUs <= 0:  no limit.  usNow:  a microsecond clock for the budget
@@ -250,6 +252,9 @@ namespace MktSim {
         void TodayHistory(std::vector<HistoryRow>& into) const;
         // region/type pairs whose 'today' history changed since the last call (the client's history cache)
         void TakeHistoryTouched(std::vector<std::pair<uint32_t, uint16_t>>& into);
+        // cells whose state changed since the last call (the server's write-behind)
+        void TakeChangedCells(std::vector<uint32_t>& into);
+        void MarkAllCellsChanged();
 
         /* state for persistence */
         Ledger& GetLedger()                             { return m_ledger; }
@@ -261,6 +266,8 @@ namespace MktSim {
         std::vector<VendorSlot>& VendorSlots()          { return m_vendorSlots; }
         Cell* FindCell(uint32_t nodeID, uint16_t typeID);
         const NodeData* Node(uint32_t nodeID) const;
+        const std::vector<NodeData>& Nodes() const      { return m_static.nodes; }
+        const StaticData& Static() const                { return m_static; }
         double ControllerIntegral() const               { return m_integral; }
         void SetControllerIntegral(double v)            { m_integral = v; }
         double IncomeFactor() const                     { return m_incomeFactor; }
@@ -309,6 +316,7 @@ namespace MktSim {
         int64_t  Period(const Cell& c) const;
         void     Schedule(Cell& c, int64_t t);
         void     RollDay(Cell& c, int64_t t);
+        void     Changed(const Cell& c);
         void     Print(Cell& c, Cents price, Units qty);
         void     PlayerFeedback(Cell& c, uint32_t ownerID, Cents price, Units qty);
 
@@ -364,6 +372,8 @@ namespace MktSim {
         std::vector<HistoryRow> m_historyDone;
         std::map<std::pair<uint32_t, uint16_t>, bool> m_historyTouched;
         std::vector<AuditLine> m_auditLines;
+        std::vector<uint32_t> m_changedCells;
+        std::vector<uint8_t>  m_cellChanged;
         std::function<void(const DayReport&)> m_onDay;
 
         bool     m_paused;

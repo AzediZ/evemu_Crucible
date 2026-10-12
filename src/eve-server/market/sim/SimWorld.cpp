@@ -329,7 +329,8 @@ void World::Build(int64_t now)
             costByProducer[c.producer] += c.dc * c.refLocal * (1.0 - c.h) * m_p.producerCostShare * 100.0;
     }
     m_income0 = (Cents)std::llround(spend);
-    m_moneyTarget = m_p.moneyDaysTarget * spend;
+    // M* (PLAN 6.8) is MoneyDaysTarget days of consumer spending for the consumers, plus the working capital the market
+    //  makers and producers need on top (their stock's worth, which the plan's M* leaves out)
     double others(0.0);
     for (auto& a : m_actors) {
         if (a.kind == ActorKind::MarketMaker) {
@@ -340,7 +341,8 @@ void World::Build(int64_t now)
             others += a.target;
         }
     }
-    double consumerMoney(std::max(0.0, m_moneyTarget - others));
+    double consumerMoney(m_p.moneyDaysTarget * spend);
+    m_moneyTarget = consumerMoney + others;
     for (auto& a : m_actors) {
         if (a.kind != ActorKind::Consumer)
             continue;
@@ -349,20 +351,33 @@ void World::Build(int64_t now)
     }
 }
 
-void World::Seed(int64_t now, uint32_t nodeID)
+void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
 {
+    /* fair values of cells that never had one:  the reference price first, then the anchor (which needs the inputs' fair
+     *  values), a few rounds so chains of inputs settle */
+    std::vector<uint32_t> fresh;
+    for (auto& c : m_cells)
+        if ((c.lnV == 0.0) and ((nodeID == 0) or (c.nodeID == nodeID)) and ((c.flags & CellFlag::Disabled) == 0)) {
+            fresh.push_back(c.index);
+            c.lnV = std::log(std::max(0.01, c.refLocal));
+        }
+    for (int round = 0; round < 4; ++round)
+        for (auto idx : fresh) {
+            Cell& c(m_cells[idx]);
+            c.lnAnchor = std::log(AnchorOf(c));
+            c.lnV = c.lnAnchor;
+        }
+    std::set<uint32_t> isFresh(fresh.begin(), fresh.end());
     for (auto& c : m_cells) {
         if ((nodeID != 0) and (c.nodeID != nodeID))
             continue;
         if ((c.flags & CellFlag::Disabled) != 0)
             continue;
+        if (freshOnly and (isFresh.count(c.index) == 0))
+            continue;
+        Changed(c);
         if (c.dBar <= 0.0)
             c.dBar = c.dc;
-        double anchor(AnchorOf(c));
-        if (c.lnV == 0.0) {
-            c.lnAnchor = std::log(anchor);
-            c.lnV = c.lnAnchor;
-        }
         c.targetStock = TargetStock(c);
         const Ledger::Stock* s(m_ledger.FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
         Units have((s == nullptr) ? 0 : (s->qty + s->reserved));
@@ -380,7 +395,9 @@ void World::Seed(int64_t now, uint32_t nodeID)
     for (auto& a : m_actors) {
         if ((nodeID != 0) and (a.nodeID != nodeID))
             continue;
-        if ((a.kind == ActorKind::Vendor) or !(a.target > 0.0))
+        if ((a.kind == ActorKind::Vendor) or !(a.target > 0.0) or (a.state != 0))
+            continue;
+        if (freshOnly and (m_ledger.FindAcct(a.actorID) != nullptr))
             continue;
         Cents have(m_ledger.MoneyOf(a.actorID));
         Cents want((Cents)std::llround(a.target));
@@ -561,6 +578,7 @@ void World::MarkDirty(uint32_t regionID, uint16_t typeID, int64_t now)
 void World::ProcessCell(Cell& c, int64_t t)
 {
     ++m_cellVisits;
+    Changed(c);
     RollDay(c, t);
     c.flags &= ~CellFlag::Dirty;
     double dt(std::min(MaxCellDtDays, (double)(t - c.lastTime) / (double)SecondsPerDay));
@@ -575,8 +593,10 @@ void World::ProcessCell(Cell& c, int64_t t)
         double stock((s == nullptr) ? 0.0 : (double)(s->qty + s->reserved));
         c.targetStock = TargetStock(c);
         bool clamped(false);
-        // half a lot of slack:  one sold-out lot of a thin type is scarcity, not a clamp
-        double vStar(Econ::TargetValue(anchor, stock + 0.5 * c.lot, c.targetStock, c.theta, m_p.kMax, &clamped));
+        // a lot of slack on both sides:  one sold-out lot of a thin type is scarcity, not a clamp (and a full shelf is
+        //  exactly the anchor)
+        double vStar(Econ::TargetValue(anchor, stock + c.lot, c.targetStock + c.lot, c.theta, m_p.kMax, &clamped));
+        c.vStar = vStar;
         double kappa(Ln2 / std::max(0.1, m_p.fairValueHalfLifeDays));
         c.lnV = Econ::OUStep(c.lnV, std::log(vStar), kappa, dt, c.sigma, Rng::Normal(H(c, t, hOU)));
         // V* is clamped to [anchor / Kmax, anchor x Kmax] (PLAN 6.2);  the noise may take V a little further, never
@@ -1130,8 +1150,8 @@ bool World::ChangeOrder(SimOrder& o, Cents price, uint32_t qty, int64_t t)
     } else {
         if (qty > o.qty) {
             const Ledger::Stock* s(m_ledger.FindInv(o.actorID, (uint16_t)c.nodeID, c.typeID));
-            Units free((s == nullptr) ? 0 : s->qty);
-            qty = (uint32_t)std::min<Units>(qty, o.qty + free);
+            Units freeQty((s == nullptr) ? 0 : s->qty);
+            qty = (uint32_t)std::min<Units>(qty, o.qty + freeQty);
             if (qty > o.qty)
                 m_ledger.ReserveGoods(o.actorID, (uint16_t)c.nodeID, c.typeID, qty - o.qty);
         } else if (qty < o.qty) {
@@ -1268,6 +1288,7 @@ void World::OnAskFilled(uint32_t orderID, uint32_t qty, uint32_t buyerOwnerID, i
             m_persist->PlayerFill(o.actorID, value - tax, 0, c.nodeID, c.typeID, 0, -(Units)qty);
         PlayerFeedback(c, buyerOwnerID, o.price, qty);
         MarkDirty(o.regionID, o.typeID, now);
+        Changed(c);
     }
     o.qty -= qty;
     o.dbQty = o.qty;
@@ -1305,6 +1326,7 @@ void World::OnBidFilled(uint32_t orderID, uint32_t qty, uint32_t sellerOwnerID, 
         m_persist->PlayerFill(o.actorID, 0, -value, c.nodeID, c.typeID, qty, 0);
     PlayerFeedback(c, sellerOwnerID, o.price, qty);
     MarkDirty(o.regionID, o.typeID, now);
+    Changed(c);
     o.qty -= qty;
     o.dbQty = o.qty;
     if (o.qty == 0) {
@@ -1835,12 +1857,12 @@ bool World::ExportCsv(const std::string& path) const
     std::ofstream f(path.c_str(), std::ios::out | std::ios::trunc);
     if (!f)
         return false;
-    f << "nodeID,stationID,typeID,V,anchor,refLocal,d0,dBar,targetStock,stock,reserved,h,levels,flags,clampDays\n";
+    f << "nodeID,stationID,typeID,V,anchor,refLocal,d0,dBar,targetStock,stock,reserved,h,levels,flags,clampDays,vStar,simClass,sigma\n";
     for (auto& c : m_cells) {
         const Ledger::Stock* s(m_ledger.FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
-        f << Fmt("%u,%u,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%lld,%lld,%.4f,%u,%u,%u\n", c.nodeID, Node(c.nodeID)->stationID, c.typeID,
+        f << Fmt("%u,%u,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%lld,%lld,%.4f,%u,%u,%u,%.4f,%u,%.4f\n", c.nodeID, Node(c.nodeID)->stationID, c.typeID,
                  Value(c), std::exp(c.lnAnchor), c.refLocal, c.d0, c.dBar, c.targetStock, (long long)(s ? s->qty : 0),
-                 (long long)(s ? s->reserved : 0), c.h, c.levels, c.flags, c.clampDays);
+                 (long long)(s ? s->reserved : 0), c.h, c.levels, c.flags, c.clampDays, c.vStar, c.simClass, c.sigma);
     }
     f << "\nday,category,amount\n";
     for (auto& line : m_auditLines)
@@ -1901,8 +1923,10 @@ void World::MarkBackfilled(uint32_t regionID, uint16_t typeID)
     std::map<std::pair<uint32_t, uint16_t>, std::vector<uint32_t>>::const_iterator itr = m_regionCells.find(std::make_pair(regionID, typeID));
     if (itr == m_regionCells.end())
         return;
-    for (auto idx : itr->second)
+    for (auto idx : itr->second) {
         m_cells[idx].flags |= CellFlag::Backfilled;
+        Changed(m_cells[idx]);
+    }
 }
 
 void World::TakeFinishedHistory(std::vector<HistoryRow>& into)
@@ -1927,6 +1951,31 @@ void World::TodayHistory(std::vector<HistoryRow>& into) const
         row.trades = c.dTrades;
         into.push_back(row);
     }
+}
+
+void World::Changed(const Cell& c)
+{
+    if (m_cellChanged.size() != m_cells.size())
+        m_cellChanged.assign(m_cells.size(), 0);
+    if (m_cellChanged[c.index] == 0) {
+        m_cellChanged[c.index] = 1;
+        m_changedCells.push_back(c.index);
+    }
+}
+
+void World::TakeChangedCells(std::vector<uint32_t>& into)
+{
+    into.insert(into.end(), m_changedCells.begin(), m_changedCells.end());
+    for (auto idx : m_changedCells)
+        if (idx < m_cellChanged.size())
+            m_cellChanged[idx] = 0;
+    m_changedCells.clear();
+}
+
+void World::MarkAllCellsChanged()
+{
+    for (auto& c : m_cells)
+        Changed(c);
 }
 
 void World::TakeHistoryTouched(std::vector<std::pair<uint32_t, uint16_t>>& into)
