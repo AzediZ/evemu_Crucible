@@ -22,6 +22,10 @@ if [ ! -f "/app/etc/devtools.raw" ]; then
     echo "devtools.raw not found, installing..."
     cp /src/utils/config/devtools.raw /app/etc/
 fi
+if [ ! -f "/app/etc/gmtools.py" ]; then
+    echo "gmtools.py not found, installing..."
+    cp /src/utils/config/gmtools.py /app/etc/
+fi
 
 #Start eve-server
 echo "Starting eve-server..."
