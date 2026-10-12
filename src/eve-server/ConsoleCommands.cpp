@@ -74,8 +74,9 @@ void ConsoleCommand::Initialize(CommandDispatcher* cd, EVEServiceManager* svc)
 
     m_inputThread = new std::thread([&] {
         std::string temp;
-        while (true) {
-            std::getline(std::cin, temp);
+        // stdin at its end (or closed, eg. /dev/null) stops reading:  getline would fail at once forever, flooding the
+        //  main loop with empty commands
+        while (std::getline(std::cin, temp)) {
             std::lock_guard<std::mutex> lock(m_inputMutex);
             m_input.push_back(std::move(temp));
             m_inputCondition.notify_one();
