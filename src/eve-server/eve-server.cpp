@@ -54,7 +54,6 @@
 #include "admin/PetitionerService.h"
 #include "admin/SlashService.h"
 // agent services
-#include "agents/Agent.h"
 #include "agents/AgentMgrService.h"
 // alliance services
 #include "alliance/AllianceRegistry.h"
@@ -142,7 +141,6 @@
 // missions services
 #include "missions/MissionMgrService.h"
 // planet services
-#include "planet/Planet.h"
 #include "planet/PlanetDataMgr.h"
 #include "planet/PlanetMgrBound.h"
 #include "planet/PlanetORBBound.h"
@@ -176,15 +174,12 @@
 #include "system/BookmarkService.h"
 #include "system/BubbleManager.h"
 #include "system/KeeperService.h"
-#include "system/ScenarioService.h"
 #include "system/sov/SovereigntyMgrService.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/WormholeSvc.h"
 // cosmic managers
-#include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/CivilianMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
-#include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 // database cleaner service
 #include "DBCleaner.h"
