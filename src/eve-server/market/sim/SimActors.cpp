@@ -459,7 +459,13 @@ void World::PlanMining(uint32_t nodeID)
         value0[o] = std::max(oc.refLocal * (1.0 - share * oc.h) / t.volume, refined);
         x0[o] = std::max(oc.dc * t.volume, 1e-3);
     }
-    std::vector<double> mix(Prod::FitMix(y, need, x0));
+    /* the reference mix:  the node's needs covered m3 by m3 (as MinerStep mines), within the m3 a least squares fit
+     *  from the traded ores' m3 takes (a bound;  the covering uses less, it wastes no m3 on co-products) */
+    std::vector<double> fit(Prod::FitMix(y, need, x0));
+    double bound(0.0);
+    for (auto v : fit)
+        bound += v;
+    std::vector<double> mix(Prod::CoverMix(y, need, 2.0 * bound, std::vector<bool>(ores.size(), true), 2000));
     double m3(0.0), value(0.0);
     for (size_t o = 0; o < ores.size(); ++o) {
         m3 += mix[o];
@@ -485,7 +491,7 @@ void World::PlanMining(uint32_t nodeID)
         lossTotal += perDay * scale * m_static.RegionUnits(node.regionID, t.typeID);
     }
     // a fleet of at least MinFleet hulls (a small node's consortium isn't one barge:  losing it would stop the mining)
-    double capacity(m3 * (1.0 + m_p.productionSlack));
+    double capacity(m3 * (1.0 + m_p.miningSlack));
     double fleetSize(std::max(MinFleet, std::round(capacity / std::max(1.0, m_p.miningM3PerHullDay))));
     MinerPlan plan;
     plan.ores = ores;
@@ -895,10 +901,10 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
     }
 
     /* 3.  mining (demand pull, like a market maker's restocking):  what each mineral needs now (the node's demand, its
-     *  dBar, plus refilling its market maker to the target within RestockDays, less what the miner holds unsold), met
-     *  with the ore mix that fits it best (Prod::FitMix, from the reference mix), up to the fleet's m3.  ores give
-     *  several minerals:  the scarce one decides, and a glut of the others is the price of it (step 5).  prices follow
-     *  the stock (PLAN 6.2):  a mining shock empties the shelves, and V rises */
+     *  dBar, plus refilling its market maker to the target within RestockDays, less what the miner holds unsold), covered
+     *  m3 by m3 with the ores of the reference mix that cover the most of it (Prod::CoverMix), up to the fleet's m3.  ores
+     *  give several minerals:  a glut of the others is the price of the scarce one (step 5).  prices follow the stock
+     *  (PLAN 6.2):  a mining shock empties the shelves of what the fleet is worst at, and V rises */
     double hulls(0.0);
     for (auto& h : plan.fleet)
         hulls += (double)Held(a.actorID, node, h.first);
@@ -911,13 +917,15 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
         // a mineral in glut still counts a little:  the fit then won't pick ores for what nobody needs
         need[m] = std::max(need[m], 0.05 * plan.need[m]);
     }
-    std::vector<double> x(Prod::FitMix(plan.yield, need, plan.mix, 150));
+    std::vector<bool> allowed(plan.ores.size(), true);
+    for (size_t o = 0; o < plan.ores.size(); ++o)
+        allowed[o] = (plan.mix[o] > 0.0);
+    std::vector<double> x(Prod::CoverMix(plan.yield, need, capacity, allowed));
     plan.lastNeed = need;
     double wsum(0.0);
     for (auto v : x)
         wsum += v;
-    // the fleet can't do more than its m3
-    double scale((wsum > capacity) ? capacity / wsum : 1.0);
+    double scale(1.0);
     plan.lastWanted = wsum;
     plan.lastMined = wsum * scale;
     plan.lastCapacity = capacity;
@@ -957,8 +965,8 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
     }
     /* 5.  the minerals go to the market makers.  what it holds beyond HoldDays of its output (a glut:  Tritanium comes
      *  with every ore) is sold into the market maker's public bids, at the bid like anyone's:  the stock over the target
-     *  takes V down (PLAN 6.2), so consumers use more of it and the ores rich in it pay less.  what nobody takes beyond
-     *  twice that is left behind (spoiled:  co-production waste, it was never worth hauling) */
+     *  takes V down (PLAN 6.2), so consumers use more of it and the ores rich in it pay less.  what nobody takes is left
+     *  behind (spoiled:  co-production waste, it was never worth hauling) */
     for (size_t m = 0; m < plan.outputs.size(); ++m) {
         Cell& mc(m_cells[plan.outputs[m]]);
         Units have(Held(a.actorID, node, mc.typeID));
@@ -967,8 +975,8 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
         Units hold((Units)std::ceil(std::max(0.1, m_p.holdDays) * plan.supply[m]));
         if (have > hold)
             have -= SellToBids(a.actorID, mc, have - hold, t);
-        if (have > 2 * hold)
-            m_ledger.GoodsOut(a.actorID, (uint16_t)node, mc.typeID, have - 2 * hold, Goods::Spoiled, false);
+        if (have > hold)
+            m_ledger.GoodsOut(a.actorID, (uint16_t)node, mc.typeID, have - hold, Goods::Spoiled, false);
     }
 }
 

@@ -200,6 +200,7 @@ EVEServerConfig::EVEServerConfig()
     marketSim.InternalSpreadShare = 0.5;
     marketSim.MinMargin = 0.02;
     marketSim.ProductionSlack = 1.0;
+    marketSim.MiningSlack = 0.25;
     marketSim.MiningM3PerHullDay = 12000.0;
     marketSim.MaxSimJobHours = 24.0;
     marketSim.LineInstallCost = 1000.0;
@@ -906,6 +907,7 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     AddValueParser( "InternalSpreadShare",          marketSim.InternalSpreadShare );
     AddValueParser( "MinMargin",                    marketSim.MinMargin );
     AddValueParser( "ProductionSlack",              marketSim.ProductionSlack );
+    AddValueParser( "MiningSlack",                  marketSim.MiningSlack );
     AddValueParser( "MiningM3PerHullDay",           marketSim.MiningM3PerHullDay );
     AddValueParser( "MaxSimJobHours",               marketSim.MaxSimJobHours );
     AddValueParser( "LineInstallCost",              marketSim.LineInstallCost );
@@ -958,6 +960,7 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     RemoveParser( "InternalSpreadShare" );
     RemoveParser( "MinMargin" );
     RemoveParser( "ProductionSlack" );
+    RemoveParser( "MiningSlack" );
     RemoveParser( "MiningM3PerHullDay" );
     RemoveParser( "MaxSimJobHours" );
     RemoveParser( "LineInstallCost" );

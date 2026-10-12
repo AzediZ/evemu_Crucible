@@ -84,6 +84,38 @@ double VirtualCapacity::JobCost(const SimJob& job) const
     return m_install + m_perHour * std::max(0.0, hours);
 }
 
+std::vector<double> CoverMix(const std::vector<std::vector<double>>& y, const std::vector<double>& need, double capacity,
+                             const std::vector<bool>& allowed, int slices)
+{
+    size_t ores(y.size()), mins(need.size());
+    std::vector<double> x(ores, 0.0), left(need);
+    if (!(capacity > 0.0) or (slices <= 0))
+        return x;
+    double slice(capacity / (double)slices);
+    for (int i = 0; i < slices; ++i) {
+        size_t best(ores);
+        double bestScore(0.0);
+        for (size_t o = 0; o < ores; ++o) {
+            if ((o < allowed.size()) and !allowed[o])
+                continue;
+            double score(0.0);
+            for (size_t m = 0; m < mins; ++m)
+                if ((left[m] > 0.0) and (need[m] > 0.0))
+                    score += std::min(left[m], y[o][m] * slice) / need[m];
+            if (score > bestScore) {
+                bestScore = score;
+                best = o;
+            }
+        }
+        if (best == ores)
+            break;          // every need is met (or no ore helps)
+        x[best] += slice;
+        for (size_t m = 0; m < mins; ++m)
+            left[m] -= y[best][m] * slice;
+    }
+    return x;
+}
+
 std::vector<double> FitMix(const std::vector<std::vector<double>>& y, const std::vector<double>& need,
                            std::vector<double> x, int iterations)
 {

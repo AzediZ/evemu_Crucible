@@ -106,6 +106,13 @@ namespace Prod {
     std::vector<double> FitMix(const std::vector<std::vector<double>>& y, const std::vector<double>& need,
                                std::vector<double> x0, int iterations = 400);
 
+    /* the m3 to mine now:  covers need[m] with at most 'capacity' m3, a slice at a time, each slice to the ore that covers
+     *  the most of what is still missing (relative to each need) per m3.  so a fleet short of m3 mines what it mines
+     *  best, and the shortfall goes to the minerals it is worst at;  nothing is mined for a need that is met.  allowed[o]
+     *  false:  ore o isn't mined.  deterministic (ties to the lower index) */
+    std::vector<double> CoverMix(const std::vector<std::vector<double>>& y, const std::vector<double>& need, double capacity,
+                                 const std::vector<bool>& allowed, int slices = 400);
+
 }
 }
 

@@ -216,7 +216,8 @@ boolean can use either 0/1 OR true/false.
         <PodLossRate>0</PodLossRate><!-- float - capsules lost per ship lost;  0 = the killmails' own capsule losses  default: 0 -->
         <InternalSpreadShare>0.5</InternalSpreadShare><!-- float - the sim's miners, manufacturers and the like trade with its market makers at fair value -+ this share of the half spread (players trade at the quotes)  default: 0.5 -->
         <MinMargin>0.02</MinMargin><!-- float - a manufacturer starts a job when the output sells for this much over inputs and line  default: 0.02 -->
-        <ProductionSlack>1.0</ProductionSlack><!-- float - lines and mining fleets beyond the calibrated need (mining follows prices into it)  default: 1.0 -->
+        <ProductionSlack>1.0</ProductionSlack><!-- float - manufacturers' lines beyond the calibrated need  default: 1.0 -->
+        <MiningSlack>0.25</MiningSlack><!-- float - mining fleets beyond the calibrated need (a shock to them beyond this empties the shelves)  default: 0.25 -->
         <MiningM3PerHullDay>12000</MiningM3PerHullDay><!-- float - what a mining barge or exhumer brings in a day (fleets have at least 20 hulls)  default: 12000 -->
         <MaxSimJobHours>24</MaxSimJobHours><!-- float - the sim's manufacturing jobs are at most this long  default: 24 -->
         <LineInstallCost>1000</LineInstallCost><!-- float - isk per sim job (npc station lines:  ramAssemblyLines.costInstall)  default: 1000 -->

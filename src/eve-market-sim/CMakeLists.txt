@@ -38,6 +38,7 @@ SET( SOURCE
      "${TARGET_SOURCE_DIR}/HarnessData.cpp"
      "${TARGET_SOURCE_DIR}/HarnessMarket.cpp"
      "${TARGET_SOURCE_DIR}/MatchTest.cpp"
+     "${TARGET_SOURCE_DIR}/Phase3Test.cpp"
      "${TARGET_SOURCE_DIR}/SimTest.cpp" )
 # the sim core, shared with eve-server
 SET( core_INCLUDE
@@ -89,3 +90,8 @@ ADD_TEST( NAME "MarketSimWorldTest"
 ADD_TEST( NAME "MarketSimAcceptance"
           COMMAND "${TARGET_NAME}" --synthetic --days 365 --seeds 5 )
 SET_TESTS_PROPERTIES( "MarketSimAcceptance" PROPERTIES TIMEOUT 3600 )
+# the phase 3 acceptance tests:  a mineral shock and a Drake losses shock against a control run, no negatives, T1 price /
+#  bill of materials at steady state (Phase3Test.cpp)
+ADD_TEST( NAME "MarketSimPhase3"
+          COMMAND "${TARGET_NAME}" --synthetic --phase3 --days 120 --seeds 3 )
+SET_TESTS_PROPERTIES( "MarketSimPhase3" PROPERTIES TIMEOUT 3600 )

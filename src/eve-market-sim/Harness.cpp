@@ -57,6 +57,7 @@ namespace {
         uint32_t    traceNode   = 1;            // at this node
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
         bool        actors      = false;        // print the phase 3 actors at the start and the end
+        bool        phase3      = false;        // the phase 3 acceptance tests (Phase3Test.cpp) instead
     };
 
     struct ShockSpec {
@@ -327,7 +328,17 @@ namespace {
         size_t shockIdx(0);
         for (int day = 0; day < opt.days; ++day) {
             for (; shockIdx < shocks.size() and (shocks[shockIdx].day <= day); ++shockIdx)
-                world.Shock(shocks[shockIdx].kind, shocks[shockIdx].id, shocks[shockIdx].mult, shocks[shockIdx].days, StartTime + (int64_t)day * SecondsPerDay);
+            {
+                const ShockSpec& s(shocks[shockIdx]);
+                int64_t when(StartTime + (int64_t)day * SecondsPerDay);
+                // phase 3:  l:<hullTypeID> ship losses, m:0 the miners' fleets
+                if (s.kind == 'l')
+                    world.ShockLosses((uint16_t)s.id, s.mult, s.days, when);
+                else if (s.kind == 'm')
+                    world.ShockMining(s.mult, s.days, when);
+                else
+                    world.Shock(s.kind, s.id, s.mult, s.days, when);
+            }
             for (int tick = 0; tick < 96; ++tick) {
                 int64_t t(StartTime + (int64_t)day * SecondsPerDay + tick * 900);
                 market.SetNow(t);
@@ -632,10 +643,12 @@ namespace {
     void Usage()
     {
         std::printf("usage: eve-market-sim [--static export.json | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
-                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose]\n"
+                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3]\n"
                     "       eve-market-sim --test <name>\n");
     }
 }
+
+int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
 
 int HarnessMain(int argc, char** argv)
 {
@@ -672,6 +685,8 @@ int HarnessMain(int argc, char** argv)
             opt.exportCsv = next();
         else if (a == "--actors")
             opt.actors = true;
+        else if (a == "--phase3")
+            opt.phase3 = true;
         else {
             Usage();
             return 2;
@@ -702,6 +717,9 @@ int HarnessMain(int argc, char** argv)
         std::printf("static data:  %s\n", s.c_str());
     std::printf("market sim harness:  %zu types, %zu nodes, %zu vendor offers, %d days, %zu seed(s), EconomyScale %g\n",
                 data.types.size(), data.nodes.size(), data.vendors.size(), opt.days, opt.seeds.size(), p.economyScale);
+
+    if (opt.phase3)
+        return Phase3Main(data, p, opt.seeds, opt.days);
 
     int failures(0);
     std::vector<RunResult> results;

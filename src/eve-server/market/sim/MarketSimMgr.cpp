@@ -134,6 +134,7 @@ void MarketSimMgr::ReadParams()
     p.internalSpreadShare = c.InternalSpreadShare;
     p.minMargin = c.MinMargin;
     p.productionSlack = std::max(0.0, c.ProductionSlack);
+    p.miningSlack = std::max(0.0, c.MiningSlack);
     p.miningM3PerHullDay = c.MiningM3PerHullDay;
     p.maxJobHours = std::max(1.0, c.MaxSimJobHours);
     p.lineInstallCost = c.LineInstallCost;

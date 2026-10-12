@@ -110,7 +110,8 @@ namespace MktSim {
         double   minMargin          = 0.02;         // a job starts when its output sells for this much over its cost
         double   lootCostShare      = 0.9;          // T1 calibrated under this x its inputs' cost isn't built:  NPC loot supplies it
         double   mineralOtherShare  = 0.2;          // minerals' final demand beyond T1 building, at least this share (elastic:  it clears gluts)
-        double   productionSlack    = 1.0;          // manufacturers' lines and miners' fleets over the calibrated need
+        double   productionSlack    = 1.0;          // manufacturers' lines over the calibrated need
+        double   miningSlack        = 0.25;         // miners' fleets over the calibrated need (what a shock to them leaves)
         double   miningM3PerHullDay = 12000.0;      // what one mining hull brings in a day
         double   lineInstallCost    = 1000.0;       // isk per job (Crucible npc station lines:  ramAssemblyLines.costInstall)
         double   lineCostPerHour    = 333.0;        // ramAssemblyLines.costPerHour
@@ -119,7 +120,7 @@ namespace MktSim {
         double   maxJobHours        = 24.0;         // MaxSimJobHours:  longer runs are split
         double   actorCapitalDays   = 5.0;          // miners', manufacturers' and reprocessors' working money, days of turnover
         double   reprocessorMargin  = 0.03;         // the reprocessor pays refine value x (1 - margin)
-        double   holdDays           = 3.0;          // a mineral miners hold this many days of, unsold, starts to be worth less to them
+        double   holdDays           = 1.0;          // a mineral miners hold this many days of, unsold, starts to be worth less to them
         double   lootHoldDays       = 20.0;         // loot nobody bought for this long is refined or spoils
         double   lootPriceResponse  = 2.0;          // loot comes in faster when it fetches more:  (V / anchor)^k, x0.25..x4
         double   lootRestockDays    = 1.0;          // and a type down to half its target is refilled this fast (like RestockDays)

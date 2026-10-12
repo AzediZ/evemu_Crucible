@@ -946,6 +946,14 @@ void World::ProducerSupply(Cell& c, int64_t t, double dt, double anchor)
     // loot is free to its source, which sells it at its floor
     Cents price(loot ? floor : cost);
     Units q(std::min<Units>(avail, need));
+    // the market maker's money may all be in bids:  this cell's bids give theirs back first (re-posted with the quotes)
+    if ((price > 0) and (q > 0) and (wallet < Econ::MulCents(price, q))) {
+        for (int i = 0; i < MaxLevels; ++i)
+            if (c.bid[i] != 0)
+                CancelOrderNow(c.bid[i]);
+        a = m_ledger.FindAcct(c.mm);
+        wallet = (a == nullptr) ? 0 : a->wallet;
+    }
     if ((price > 0) and (q > 0))
         q = std::min<Units>(q, wallet / price);
     if (q <= 0)
