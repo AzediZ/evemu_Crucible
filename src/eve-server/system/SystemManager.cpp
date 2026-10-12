@@ -1478,7 +1478,12 @@ void SystemManager::DoSpawnForBubble(SystemBubble* pBubble)
              pBubble->GetID(), sBubbleMgr.GetBeltID(pBubble->GetID()), m_data.name.c_str(), \
              m_data.systemID, m_data.securityRating, m_data.regionID);
 
-    if ((m_activeRatSpawns < m_beltCount ) or (pBubble->IsGate())) {
+    /* belt spawns at once:  about half the belt count (npc ai plan phase 5 spawn generation, [Era, med];  npc.BeltSpawnCap,
+     *  0 = one per belt as before) */
+    uint32 cap(m_beltCount);
+    if (sConfig.npc.BeltSpawnCap > 0.0f)
+        cap = std::max<uint32>(1, std::min<uint32>(m_beltCount, static_cast<uint32>(std::ceil(m_beltCount * sConfig.npc.BeltSpawnCap))));
+    if ((m_activeRatSpawns < cap) or (pBubble->IsGate())) {
         if (m_spawnMgr->DoSpawnForBubble(pBubble)) {
             m_ratBubbles.emplace(pBubble->GetID(), pBubble);
             if (is_log_enabled(SPAWN__TRACE))

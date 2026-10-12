@@ -272,6 +272,7 @@ boolean can use either 0/1 OR true/false.
         <WarpOutVanishChance>0.04</WarpOutVanishChance><!-- chance an idle belt spawn's group warp-out (WarpOut) is off grid for good:  the spawn is gone and the belt free (era:  "run-away spawns", "1 in 25 vanish").  0 = never.  0.04 default -->
         <WanderRepickMin>60</WanderRepickMin><!-- s.  an idle belt rat orbits a random asteroid (or the belt) at 10-20 km and picks a new one after U(WanderRepickMin, WanderRepickMax).  60 default -->
         <WanderRepickMax>180</WanderRepickMax><!-- s.  180 default -->
+        <BeltSpawnCap>0.5</BeltSpawnCap><!-- a system holds at most this x its number of belts of belt spawns at once (at least 1;  era:  about half as many spawns as belts).  0 = one per belt (the old cap).  0.5 default -->
         <LodFarInterval>4</LodFarInterval><!-- s.  level of detail:  idle npcs in a bubble without players think this often (players' bubbles:  every second;  busy npcs always run).  0 = every second.  4 default -->
         <LodEmptySystem>true</LodEmptySystem><!-- bool  idle npcs in a system without players don't think at all (movement still runs).  true default -->
         <TickBudget>50000</TickBudget><!-- us of npc ai per system and tick for npcs where no player is:  past it they wait for the next tick.  npcs in bubbles with players always run.  0 = no budget.  50000 default -->

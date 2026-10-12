@@ -260,6 +260,7 @@ EVEServerConfig::EVEServerConfig()
     npc.WarpOutVanishChance = 0.04f;    // era (med):  "run-away spawns", "1 in 25 vanish"
     npc.WanderRepickMin = 60 /*s*/;     // plan phase 5:  U(60, 180) s
     npc.WanderRepickMax = 180 /*s*/;
+    npc.BeltSpawnCap = 0.5f;            // era (med):  about half as many spawns as belts (plan phase 5 spawn generation)
     npc.LodFarInterval = 4 /*s*/;       // plan 6.7:  every 4s when players are only in the system
     npc.LodEmptySystem = true;          // plan 6.7:  nothing in empty systems
     npc.TickBudget = 50000 /*us*/;      // [DD] 5% of a tick per system;  only npcs away from players wait for the next tick
@@ -969,6 +970,7 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "WarpOutVanishChance",      npc.WarpOutVanishChance );
     AddValueParser( "WanderRepickMin",          npc.WanderRepickMin );
     AddValueParser( "WanderRepickMax",          npc.WanderRepickMax );
+    AddValueParser( "BeltSpawnCap",             npc.BeltSpawnCap );
     AddValueParser( "LodFarInterval",           npc.LodFarInterval );
     AddValueParser( "LodEmptySystem",           npc.LodEmptySystem );
     AddValueParser( "TickBudget",               npc.TickBudget );
@@ -1042,6 +1044,7 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "WarpOutVanishChance" );
     RemoveParser( "WanderRepickMin" );
     RemoveParser( "WanderRepickMax" );
+    RemoveParser( "BeltSpawnCap" );
     RemoveParser( "LodFarInterval" );
     RemoveParser( "LodEmptySystem" );
     RemoveParser( "TickBudget" );

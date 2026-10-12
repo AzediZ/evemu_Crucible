@@ -307,6 +307,7 @@ public:
         float WarpOutVanishChance;  // chance an idle belt spawn's warp-out is off grid for good (the spawn is gone)
         uint32 WanderRepickMin;     // s.  an idle wandering belt rat picks a new asteroid (or the belt) after U(min, max)
         uint32 WanderRepickMax;     // s
+        float BeltSpawnCap;         // a system holds at most this x its belt count of belt spawns at once.  0 = one per belt
         uint32 LodFarInterval;      // s.  idle npcs in a bubble without players think this often.  0 = every tick
         bool LodEmptySystem;        // idle npcs in a system without players don't think at all
         uint32 TickBudget;          // us per system and tick for the ai of npcs where no player is (players' bubbles always run).  0 = none
