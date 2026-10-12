@@ -688,7 +688,9 @@ void LawEnforcement::Process()
         }
 
         if (r.npcs.empty()) {
-            // police beaten off.  they don't come back until the pilot arrives somewhere again
+            /* police beaten off (or a GM took every ship out of space).  they don't come back until the pilot arrives somewhere
+             *  again.  what they put on the ship goes with them (scripted scram and jam, the cloak block) */
+            ReleaseTackle(r);
             itr = m_responses.erase(itr);
             continue;
         }
