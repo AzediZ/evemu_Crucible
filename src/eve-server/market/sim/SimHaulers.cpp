@@ -50,6 +50,7 @@ namespace {
     const uint16_t GroupIndustrial = 28;
     const double DefaultCargoM3 = 5000.0;       // an industrial's hold when the static data has none
     const int64_t ShipEverySeconds = 12 * 3600; // a remote miner ships at least this often (when it has anything)
+    const double RemoteSupplySlack = 0.02;      // remote supply at its reference netback:  the demand and this much over
 
     std::string Fmt(const char* fmt, ...)
     {
@@ -384,8 +385,13 @@ void World::BuildHaulers()
             if ((c.nodeID != pr.first) or ((c.flags & CellFlag::Disabled) != 0))
                 continue;
             std::map<uint64_t, uint32_t>::const_iterator other = m_cellIndex.find(((uint64_t)pr.second << 16) | c.typeID);
-            if ((other != m_cellIndex.end()) and ((m_cells[other->second].flags & CellFlag::Disabled) == 0))
-                hp.pairs.push_back(std::make_pair(c.index, other->second));
+            if ((other == m_cellIndex.end()) or ((m_cells[other->second].flags & CellFlag::Disabled) != 0))
+                continue;
+            double m3(Logi::PackagedVolume(*m_static.Type(c.typeID)));
+            if (m3 > hp.cargoM3)
+                continue;           // doesn't fit in the hull
+            hp.pairs.push_back(std::make_pair(c.index, other->second));
+            hp.pairM3.push_back(m3);
         }
         hp.fleet = std::max(1, m_p.haulerFleet);
         Actor a = Actor();
@@ -576,8 +582,8 @@ void World::HaulerStep(Actor& a, int64_t t)
     }
     BuyHulls(a, hp, t);
     hp.shortOfHulls = false;
-    HaulDirection(a, hp, true, t);
-    HaulDirection(a, hp, false, t);
+    // one direction per half hour step (the trader steps every 1800s:  A -> B and B -> A take turns)
+    HaulDirection(a, hp, ((t / 1800) % 2) == 0, t);
     // profitable hauls waited for hulls and the money is there:  one more (PLAN 6.4 haulers buy capacity)
     if (hp.shortOfHulls and ((double)m_ledger.MoneyOf(a.actorID) > 1.5 * a.target) and (hp.fleet < 4.0 * std::max(1, m_p.haulerFleet))) {
         hp.fleet += 1.0;
@@ -603,34 +609,37 @@ void World::HaulDirection(Actor& a, HaulPlan& hp, bool aToB, int64_t t)
         double   margin;
     };
     std::vector<Cand> cands;
-    for (auto& pr : hp.pairs) {
-        const Cell& cx(m_cells[aToB ? pr.first : pr.second]);
-        const Cell& cy(m_cells[aToB ? pr.second : pr.first]);
+    // a full hull's chance to be lost on the route (UnitTransport's share of it per unit)
+    double loss(Logi::TripLoss(m_p.risk, route.bandJumps, maxValue));
+    for (size_t p = 0; p < hp.pairs.size(); ++p) {
+        const Cell& cx(m_cells[aToB ? hp.pairs[p].first : hp.pairs[p].second]);
+        const Cell& cy(m_cells[aToB ? hp.pairs[p].second : hp.pairs[p].first]);
         double buy(Econ::ToIsk(InternalBuy(cx)));
         // the best it could sell at:  under V or V*, whichever is higher
         if (!(std::max(cy.vStar, Mid(cy)) > buy * (1.0 + margin)))
             continue;
-        const TypeData& type(*m_static.Type(cx.typeID));
-        double m3(Logi::PackagedVolume(type));
-        if (m3 > hp.cargoM3)
-            continue;           // doesn't fit in the hull
-        double transport(UnitTransport(route, type, buy, m_p.risk));
+        double m3(hp.pairM3[p]);
+        double transport(m_p.freightPerM3Jump * m3 * (double)route.jumps + loss * buy);
         /* how much:  its buying takes X's stock down and its selling takes Y's up, and the stock moves the fair values
          *  (PLAN 6.2 stock pressure):  as much as still pays at the fair values the trade leaves behind.  so a haul never
          *  overshoots into a gap the other way (and back) */
         double sx((double)MakerStock(cx)), sy((double)(MakerStock(cy) + Transit((uint16_t)to, cy.typeID) + Held(a.actorID, to, cy.typeID)));
         double ax(std::exp(cx.lnAnchor)), ay(std::exp(cy.lnAnchor));
+        /* Y is filled against its calibrated target (its demand at the calibration, not today's):  a glut's low price
+         *  brings demand that raises Y's target, which would take more, which lowers the price further, until the demand
+         *  falls back and leaves the stock at the clamp */
+        double ty(std::min(cy.targetStock, std::max(cy.dRef * cy.coverDays, 2.0 * cy.lot)));
         auto buyAt = [&](double q) {
             return Econ::TargetValue(ax, sx - q + cx.lot, cx.targetStock + cx.lot, cx.theta, m_p.kMax) * (1.0 + share * cx.h);
         };
         auto sellAt = [&](double q) {
-            double v(Econ::TargetValue(ay, sy + q + cy.lot, cy.targetStock + cy.lot, cy.theta, m_p.kMax));
-            return v * ((sy + q <= cy.targetStock) ? (1.0 - share * cy.h) : (1.0 - cy.h));
+            double v(Econ::TargetValue(ay, sy + q + cy.lot, ty + cy.lot, cy.theta, m_p.kMax));
+            return v * ((sy + q <= ty) ? (1.0 - share * cy.h) : (1.0 - cy.h));
         };
         auto pays = [&](double q) {
             return sellAt(q) >= (std::max(buy, buyAt(q)) + transport) * (1.0 + margin);
         };
-        double hi(std::min(sx - std::max(0.0, m_p.haulerKeepShare) * cx.targetStock, m_p.bidStockFactor * cy.targetStock - sy));
+        double hi(std::min(sx - std::max(0.0, m_p.haulerKeepShare) * cx.targetStock, m_p.bidStockFactor * ty - sy));
         hi = std::floor(hi);
         if ((hi < 1.0) or !pays(1.0))
             continue;
@@ -827,10 +836,10 @@ void World::RemoteMinerStep(Actor& a, int64_t t, double dt)
     double hulls(0.0);
     for (auto& h : plan.fleet)
         hulls += (double)Held(a.actorID, node, h.first);
-    /* what pays (the supply curve of each mineral it mines):  its reference supply, as far as the node's demand for
-     *  the mineral has grown since (in the long run more pilots mine out there at the same netback), x the mineral's
-     *  netback response (in the short run its price has to pay for the trip).  what it is short of shows in the stock
-     *  and the price rises until the trip pays again.  a co-product (its glut) doesn't count */
+    /* what pays (the supply curve of each mineral it mines):  its share of the node's demand for the mineral (in the long
+     *  run more pilots mine out there at the same netback), a little more to refill the shelves, x the mineral's netback
+     *  response (in the short run its price has to pay for the trip).  what it is short of shows in the stock and the
+     *  price rises until the trip pays again.  a co-product (its glut) doesn't count */
     std::vector<double> need(plan.outputs.size(), 0.0);
     for (size_t m = 0; m < plan.outputs.size(); ++m) {
         const Cell& mc(m_cells[plan.outputs[m]]);
@@ -845,8 +854,7 @@ void World::RemoteMinerStep(Actor& a, int64_t t, double dt)
                         mine += l.qty;
         double gap(share * (mc.targetStock - (double)MakerStock(mc)) - (double)mine);
         need[m] = std::max(0.0, share * mc.dBar + gap / std::max(0.1, m_p.restockDays));
-        double demand((plan.need[m] > 0.0) ? std::min(4.0, std::max(0.5, share * mc.dBar / plan.need[m])) : 1.0);
-        need[m] = std::min(need[m], plan.supply[m] * demand * RemoteResponse(hp, mc));
+        need[m] = std::min(need[m], share * mc.dBar * (1.0 + RemoteSupplySlack) * RemoteResponse(hp, mc));
         need[m] = std::max(need[m], 0.05 * plan.need[m]);
     }
     double capacity(hulls * plan.m3PerHull * MiningShockOf(t));

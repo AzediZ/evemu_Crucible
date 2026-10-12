@@ -555,7 +555,8 @@ void World::Step(int64_t now, double budgetUs, std::function<double()> usNow)
                 if ((d.index == 0) or (d.index > m_actors.size()))
                     break;
                 StepActor(m_actors[d.index - 1], d.t);
-                m_due.push(Due{d.t + 3600, DueActor, d.index});
+                // phase 4:  hub traders plan every half hour (PLAN 6.4), one direction at a time
+                m_due.push(Due{d.t + ((m_actors[d.index - 1].kind == ActorKind::Hauler) ? 1800 : 3600), DueActor, d.index});
                 break;
             default: {
                 if (d.index >= m_cells.size())

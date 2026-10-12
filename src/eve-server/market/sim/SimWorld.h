@@ -564,7 +564,8 @@ namespace MktSim {
             double   cargoM3 = 0.0;
             double   fleet = 0.0;                           // hulls it keeps
             std::map<uint32_t, int64_t> busy;               // tripID -> when its hull is back home
-            std::vector<std::pair<uint32_t, uint32_t>> pairs;   // a trader's cells of the same type at A and B
+            std::vector<std::pair<uint32_t, uint32_t>> pairs;   // a trader's cells of the same type at A and B (that fit a hull)
+            std::vector<double> pairM3;                     // their packaged m3
             Route    route[2];                              // A -> B and B -> A (a remote miner:  site -> node)
             std::vector<double> share;                      // a remote miner:  its share of the node's supply of each output
             double   refM3 = 0.0;                           // a remote miner:  m3 a day of its reference mix

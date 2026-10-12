@@ -299,6 +299,8 @@ namespace {
                     std::printf("%s", world.ActorInfo(a.actorID).c_str());
         };
         printActors("at the start");
+        if (opt.actors and p.logistics)
+            std::printf("  routes:\n%s", world.RouteInfo(0).c_str());
 
         std::ostringstream csv;
         int dayNo(0);
