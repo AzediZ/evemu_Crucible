@@ -33,6 +33,8 @@ public:
     virtual void Process();
     virtual void TargetLost(SystemEntity* who);
     virtual void TargetedAdd(SystemEntity* who);
+    // a lock we started has completed (from TargetManager::Process)
+    void TargetLocked(SystemEntity* who);
     virtual void EncodeDestiny(Buffer& into);
 
     /* virtual functions default to base class and overridden as needed */

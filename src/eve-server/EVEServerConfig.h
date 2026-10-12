@@ -139,12 +139,14 @@ public:
         uint32 allyCost;
         uint32 medalAwardCost;
         uint32 medalCreateCost;
-        // Crit chance
+        // Crit chance.  deprecated (npc ai plan phase 0):  read only to warn when set.  every turret uses WreckingChance
         float PlayerCritChance;
         float NpcCritChance;
         float SentryCritChance;
         float DroneCritChance;
         float ConcordCritChance;
+        // chance of a wrecking (3x) shot inside a turret hit, for every shooter (players, npcs, drones, sentries, starbases)
+        float WreckingChance;
     } rates;
 
     // from <market>
@@ -251,7 +253,7 @@ public:
         uint32 LeashRange;          // m.  sleepers and deadspace npcs pulled further than this from home give up.  0 = off
         uint16 RoamingTimer;
         uint16 StaticTimer;
-        uint16 RespawnTimer;
+        uint16 RespawnTimer;        // s.  a killed belt rat respawns this long (+ RespawnJitter) after it died
         uint32 RatFaction;
         float ThreatRadius;
         float WarpFollowChance;
@@ -259,6 +261,12 @@ public:
         float DefenderMissileChance;
         float LootDropChance;
         float DroneAggroChance;     // chance (per 30s) that a regular rat switches to a drone that damaged it
+        // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
+        bool SleepEmptyBubbles;     // idle npcs in bubbles without players skip their ai until something wakes them
+        bool AuditOnStartup;        // build every npc profile at boot and log the data problems found
+        bool RequireWeaponEffects;  // turrets need effect 10, missiles effect 569 (false = attribute-only gating, the old behaviour)
+        uint32 RngSeed;             // seed of every npc's random numbers (with its itemID).  0 = from the clock
+        uint32 RespawnJitter;       // s.  a killed belt rat respawns RespawnTimer + U(0, RespawnJitter) after it died
     } npc;
 
     // From <database>

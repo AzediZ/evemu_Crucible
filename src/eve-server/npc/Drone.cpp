@@ -497,14 +497,14 @@ void DroneSE::OnAggression(SystemEntity* pVictim, SystemEntity* pAttacker) {
     if (pAttacker->IsDroneSE() and (pAttacker->GetDroneSE()->GetControllerID() == shipID))
         return;
 
-    for (auto cur : pSystem->GetDrones()) {
-        DroneSE* pDrone(cur.second);
+    // the victim's drones and those guarding its pilot, from the system's index (it used to walk every drone on every hit)
+    pSystem->ForEachAggressionDrone(shipID, charID, [&](DroneSE* pDrone) {
         if (!pDrone->IsControlled())
-            continue;
+            return;
         if ((pDrone->GetControllerID() == shipID)
         or  ((pDrone->GetAI()->GetOrder() == DroneAI::Order::Guard) and (pDrone->GetAI()->GetActivityCharID() == charID)))
             pDrone->GetAI()->Aggressed(pAttacker);
-    }
+    });
 }
 
 /* ======================================================================================

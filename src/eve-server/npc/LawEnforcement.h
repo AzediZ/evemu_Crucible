@@ -75,6 +75,8 @@ private:
     };
     // charID * 4 + kind
     std::map<uint64_t, Response> m_responses;
+    // which response an npc belongs to (OnLawAttack runs on every shot;  npc ai plan 6.7).  checked against Response::npcs
+    std::unordered_map<NPC*, uint64_t> m_npcResponse;
 
     struct LoggedOff {
         ShipSE* pShipSE = nullptr;

@@ -118,11 +118,14 @@ EVEServerConfig::EVEServerConfig()
     rates.WebUpdate = 15 /*m*/;
     rates.TaxAmount = 5000;
     rates.TaxedAmount = 75000;
-    rates.PlayerCritChance = 0.02;
-    rates.NpcCritChance = 0.15;
-    rates.SentryCritChance = 0.02;
-    rates.DroneCritChance = 0.03;
-    rates.ConcordCritChance = 0.05;
+    // deprecated per-shooter crit chances.  -1 = not set;  a value set in the xml only gets a warning at startup
+    rates.PlayerCritChance = -1.0f;
+    rates.NpcCritChance = -1.0f;
+    rates.SentryCritChance = -1.0f;
+    rates.DroneCritChance = -1.0f;
+    rates.ConcordCritChance = -1.0f;
+    // the Crucible turret formula:  1% of shots are wrecking, and only inside a hit (npc ai plan 5.1)
+    rates.WreckingChance = 0.01f;
 
     //market
     market.FindBuyOrder = 10;
@@ -204,13 +207,19 @@ EVEServerConfig::EVEServerConfig()
     npc.StaticSpawns = false;
     npc.RoamingTimer = 900 /*s*/;
     npc.StaticTimer = 600 /*s*/;
-    npc.RespawnTimer = 480 /*s*/;
+    npc.RespawnTimer = 1200 /*s*/;  // Crucible belt rats "reliably reappear in 20 to 25 minutes" (with RespawnJitter)
     npc.RatFaction = 0;
     npc.TargetPodSec = 0;
     npc.TargetPod = false;
     npc.UseDamageMultiplier = true;
     npc.DefenderMissileChance = 0.0;
     npc.LootDropChance = 0.75;
+    // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
+    npc.SleepEmptyBubbles = true;       // performance:  no ai for idle npcs where no player is
+    npc.AuditOnStartup = false;         // logs every npc type's data problems at boot (slow-ish, for content work)
+    npc.RequireWeaponEffects = true;    // Crucible dogma:  what an npc can fire comes from its effects (10, 569)
+    npc.RngSeed = 0;                    // 0 = seeded from the clock
+    npc.RespawnJitter = 300 /*s*/;      // 20 min + U(0, 5) min respawn (owner decision, npc ai plan 5.10)
 
     // cosmic
     cosmic.PIEnabled = false;
@@ -341,7 +350,7 @@ EVEServerConfig::EVEServerConfig()
     crime.CriminalLockdown = true;
     crime.SwitchShipWeaponsTimer = false;   // Retribution rule, off for Crucible  (F09)
     crime.Concord = true;
-    crime.ConcordResponse = "6,6,7,10,14,19";
+    crime.ConcordResponse = "2,5,10,15,20,25";   // closest pre-Crucible measurements (owner decision, npc ai plan 10.3)
     crime.ConcordWaves = false;
     crime.ConcordWaveDelay = 10 /*s*/;
     crime.ConcordLinger = 60 /*s*/;
@@ -647,6 +656,7 @@ bool EVEServerConfig::ProcessRates( const TiXmlElement* ele )
     AddValueParser( "SentryCritChance",     rates.SentryCritChance );
     AddValueParser( "DroneCritChance",      rates.DroneCritChance );
     AddValueParser( "ConcordCritChance",    rates.ConcordCritChance );
+    AddValueParser( "WreckingChance",       rates.WreckingChance );
 
     const bool result = ParseElementChildren( ele );
 
@@ -678,6 +688,7 @@ bool EVEServerConfig::ProcessRates( const TiXmlElement* ele )
     RemoveParser( "SentryCritChance" );
     RemoveParser( "DroneCritChance" );
     RemoveParser( "ConcordCritChance" );
+    RemoveParser( "WreckingChance" );
 
     return result;
 }
@@ -856,6 +867,12 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "DroneAggroChance",         npc.DroneAggroChance );
     AddValueParser( "LeashRange",               npc.LeashRange );
     AddValueParser( "TargetSwitchTime",         npc.TargetSwitchTime );
+    // npc ai foundations (npc ai plan phases 0-1)
+    AddValueParser( "SleepEmptyBubbles",        npc.SleepEmptyBubbles );
+    AddValueParser( "AuditOnStartup",           npc.AuditOnStartup );
+    AddValueParser( "RequireWeaponEffects",     npc.RequireWeaponEffects );
+    AddValueParser( "RngSeed",                  npc.RngSeed );
+    AddValueParser( "RespawnJitter",            npc.RespawnJitter );
 
     const bool result = ParseElementChildren( ele );
 
@@ -879,6 +896,11 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "DroneAggroChance" );
     RemoveParser( "LeashRange" );
     RemoveParser( "TargetSwitchTime" );
+    RemoveParser( "SleepEmptyBubbles" );
+    RemoveParser( "AuditOnStartup" );
+    RemoveParser( "RequireWeaponEffects" );
+    RemoveParser( "RngSeed" );
+    RemoveParser( "RespawnJitter" );
 
     return result;
 }

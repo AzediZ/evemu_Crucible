@@ -13,6 +13,7 @@
 #include "StaticDataMgr.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/ai/NpcProfile.h"
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
@@ -68,7 +69,9 @@ bool SpawnMgr::Init()
         return true;
     }
 
-    m_groupTimerSetTime = 150;  // (in seconds) 2.5m default check time. this will allow a max wait time of 7.5m for respawn
+    // (in seconds) how often waiting respawns are checked.  each one is due at its own time (SpawnKilled());  this only
+    //  adds up to 30s to it
+    m_groupTimerSetTime = 30;
 
     _log(COSMIC_MGR__INIT, "SpawnMgr Initialized for %s(%u)", m_system->GetName(), m_system->GetID());
     _log(COSMIC_MGR__INIT, "Roaming Belt Spawns are %s", sConfig.npc.RoamingSpawns ? "enabled" : "disabled");
@@ -104,19 +107,26 @@ void SpawnMgr::Process() {
     if (m_ratGroupTimer.Enabled())
         if (m_ratGroupTimer.Check()) {
             bool killTimer = true;
+            uint32 now(sEntityList.GetStamp());
             SpawnEntryDef::iterator itr = m_spawns.begin(), end = m_spawns.end();
             while (itr != end) {
                 if (itr->second.enabled) {
                     killTimer = false;
-                    if (itr->second.stamp < sEntityList.GetStamp()) {
+                    // not due yet (bug B4a:  this test was the wrong way round, so rats respawned on the next check or never)
+                    if (itr->second.stamp > now) {
                         ++itr;
                         continue;
                     }
                     _log(SPAWN__TRACE, "Process() calling Respawn for SpawnEntryID %u (0x%X)", \
                             itr->second.spawnID, &itr->second);
                     // this means check SpawnEntry for 'missing' SpawnGroup members and respawn as needed.
-                    ReSpawn(sBubbleMgr.FindBubbleByID(itr->first), itr->second);
-                    itr->second.enabled = false;
+                    SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(itr->first));
+                    if ((pBubble != nullptr) and ReSpawn(pBubble, itr->second)) {
+                        itr->second.enabled = false;
+                    } else {
+                        // try again in a minute
+                        itr->second.stamp = now + 60;
+                    }
                 }
                 ++itr;
             }
@@ -229,9 +239,10 @@ bool SpawnMgr::HasSpawn(uint16 bubbleID)
 
 void SpawnMgr::StartRatTimer()
 {
+    // nothing starts or checks this timer at the moment (the bubbles' spawn timers do the roaming spawns)
     if (m_ratTimer.Enabled())
         return;
-    uint16 time = sConfig.npc.RoamingTimer *1000;  //  s to ms
+    uint32 time = sConfig.npc.RoamingTimer *1000;  //  s to ms  (bug B17:  uint16 overflowed)
     if (sConfig.debug.SpawnTest)
         time = 5000; /* 5s for npc spawn testing */
     m_ratTimer.Start(time);
@@ -263,13 +274,29 @@ void SpawnMgr::SpawnKilled(SystemBubble* pBubble, uint32 itemID)
         _log(SPAWN__DEPOP, "SpawnMgr::SpawnKilled::Belt - called by %u.", itemID);
         // if any SpawnEntry still exists for this bubble, reset group timer.
         // this enables chain ratting
+        /* chain ratting (npc ai plan 5.10):  a killed member comes back into its group RespawnTimer + U(0, RespawnJitter)
+         *  seconds later, while one of the group lives.  it rolls entityGroupRespawnChance (640:  0 on commanders, haulers,
+         *  overseers), and officer, hauler and commander spawns never respawn.  otherwise its entry is dropped */
         bool killed = true;
         auto range = m_spawns.equal_range(pBubble->GetID());
         auto itr = range.first;
         while (itr != range.second) {
             if (itr->second.itemID == itemID) {
-                itr->second.stamp = sEntityList.GetStamp() + sConfig.npc.RespawnTimer; // in seconds
-                itr->second.enabled = true;
+                float chance(0.0f);
+                if (itr->second.spawnClass <= Spawn::Class::Hell) {
+                    std::shared_ptr<const NpcProfile> profile(NpcProfile::Get(itr->second.typeID));
+                    chance = (profile.get() != nullptr ? profile->groupRespawnChance : 1.0f);
+                }
+                if ((chance > 0.0f) and (MakeRandomFloat() < chance)) {
+                    itr->second.stamp = sEntityList.GetStamp() + sConfig.npc.RespawnTimer
+                                      + static_cast<uint32>(MakeRandomFloat(0, sConfig.npc.RespawnJitter + 1)); // in seconds
+                    itr->second.enabled = true;
+                    _log(SPAWN__TRACE, "SpawnKilled() - %u respawns in %us.", itemID, itr->second.stamp - sEntityList.GetStamp());
+                } else {
+                    _log(SPAWN__TRACE, "SpawnKilled() - %u doesn't respawn (class %u, chance %.2f).", itemID, itr->second.spawnClass, chance);
+                    itr = m_spawns.erase(itr);
+                    continue;
+                }
             }
             if (!itr->second.enabled)
                 killed = false;     // at least one rat left.
@@ -699,6 +726,7 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
             if (!pNPC->Load()) {
                 _log(SPAWN__ERROR, "Failed to load NPC data for NPC %u with type %u, depoping.", pNPC->GetID(), pNPC->GetSelf()->typeID());
                 pNPC->Delete();
+                SafeDelete(pNPC);   // bug B17:  the object leaked
                 continue;
             }
 
@@ -739,7 +767,8 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
     }
 
     ++m_spawnID;
-    m_bubbles.push_back(pBubble);
+    if (std::find(m_bubbles.begin(), m_bubbles.end(), pBubble) == m_bubbles.end())
+        m_bubbles.push_back(pBubble);
 
     //cleanup
     m_toSpawn.clear();
@@ -749,11 +778,11 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
                 m_system->GetName(), m_system->GetID(), m_bubbles.size(), m_spawns.size());
 }
 
-void SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
+bool SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
 {
-    //  we are NOT enabling spawn chaining for officer, hauler, or commander spawns.
-    if (spawnEntry.spawnClass > Spawn::Class::Insane)
-        return;
+    //  we are NOT enabling spawn chaining for officer, hauler, or commander spawns.  (SpawnKilled() dropped those already)
+    if (spawnEntry.spawnClass > Spawn::Class::Hell)
+        return false;
     GPoint startPos(pBubble->GetCenter());
     GPoint warpToPoint(startPos);
     startPos.MakeRandomPointOnSphere(MakeRandomInt(10, 15) *100000); //1-1m5 km from bubble center
@@ -767,7 +796,7 @@ void SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
     InventoryItemRef iRef = sItemFactory.SpawnItem(idata);      // will have to work on this to NOT save npc to db.
     if (iRef.get() == nullptr) {
         _log(SPAWN__ERROR, "Failed to spawn item type %u.", spawnEntry.typeID);
-        return;
+        return false;
     }
 
     _log(SPAWN__POP, "SpawnMgr::ReSpawn - Spawning NPC %s(%u)", iRef->name(), iRef->itemID());
@@ -780,21 +809,29 @@ void SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
     NPC* pNPC = new NPC(iRef, m_services, m_system, data, this);
     if (pNPC == nullptr) {
         _log(SPAWN__ERROR, "Failed to create NPC SE for item type %u.", spawnEntry.typeID);
-        return;
+        iRef->Delete();
+        return false;
     }
 
     if (!pNPC->Load()) {
         _log(SPAWN__ERROR, "Failed to load NPC data for NPC %u with type %u, depoping.", pNPC->GetID(), pNPC->GetSelf()->typeID());
+        // the item goes too (bug B4c:  it leaked)
+        pNPC->Delete();
         SafeDelete(pNPC);
-        return;
+        return false;
     }
 
     m_system->AddNPC(pNPC);
+    // it starts off grid and warps in, like the first spawn
+    pNPC->DestinyMgr()->SetPosition(startPos);
     pNPC->DestinyMgr()->WarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));
 
+    // the entry follows the new npc (bug B4c:  it kept the dead one's itemID, so the new one wasn't tracked)
+    spawnEntry.itemID = iRef->itemID();
     spawnEntry.stamp = 0;
     spawnEntry.enabled = false;
     _log(SPAWN__TRACE, "ReSpawn() completed for spawnEntryID %u 0x%X in bubble %u.", spawnEntry.spawnID, &spawnEntry, pBubble->GetID());
+    return true;
 }
 
 bool SpawnMgr::FindSpawnForBubble(uint16 bubbleID) {

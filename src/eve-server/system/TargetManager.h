@@ -143,6 +143,17 @@ public:
     // everything we target (locking or locked), or only completed locks
     void                GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked=false) const;
     SystemEntity*       GetTarget(uint32 targetID, bool need_locked=true) const;
+    /* calls fn(SystemEntity*, bool locked) for each of our targets, without copying them (npc ai, no allocation).
+     *  fn must not add or remove targets */
+    template <class F>
+    void                ForEachTarget(const F& fn) const {
+        for (auto& cur : m_targets)
+            if ((cur.first != nullptr) and (cur.second != nullptr))
+                fn(cur.first, (cur.second->state == TargMgr::State::Locked));
+    }
+    size_t              TargetCount() const             { return m_targets.size(); }
+    // ms until the lock on pSE completes (0 when locked or not targeted).  for /npcai
+    uint32              LockRemaining(SystemEntity* pSE) const;
 
     // called by npc
     bool                StartTargeting(SystemEntity* who, float lockTime, uint8 maxLockedTargets, double maxTargetLockRange, bool& chase);

@@ -123,6 +123,10 @@ void NPC::TargetedAdd(SystemEntity *who) {
     m_AI->Targeted(who);
 }
 
+void NPC::TargetLocked(SystemEntity* who) {
+    m_AI->OnLockComplete(who);
+}
+
 void NPC::EncodeDestiny( Buffer& into )
 {
     using namespace Destiny;

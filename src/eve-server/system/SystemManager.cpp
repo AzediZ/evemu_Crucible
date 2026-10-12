@@ -96,7 +96,10 @@ m_activeRatSpawns(0),
 m_activeGateSpawns(0),
 m_activeRoidSpawns(0),
 m_secValue(1.1f),
-m_tutorialSiteID(0)
+m_tutorialSiteID(0),
+m_droneIndexStamp(0),
+m_droneIndexBusy(0),
+m_droneIndexDirty(true)
 {
     m_minutes = 0;
 
@@ -266,8 +269,10 @@ bool SystemManager::ProcessTic() {
         itr->second->Process();
 
         if (m_entityChanged) {
+            // the map changed under us:  carry on after the last one we processed (bug N7:  restarting from begin()
+            //  walked the whole map again for every missile, wreck or npc added or removed in a tick)
             m_entityChanged = false;
-            itr = m_ticEntities.begin();
+            itr = m_ticEntities.upper_bound(mLast);
             continue;
         }
         ++itr;
@@ -388,6 +393,10 @@ void SystemManager::UnloadSystem() {
 
     // drones are deleted with the rest of the entities below.  nothing may look them up meanwhile
     m_drones.clear();
+    m_dronesByController.clear();
+    m_dronesByGuardChar.clear();
+    m_droneIndexStamp = 0;
+    m_droneIndexDirty = true;
     m_droneReturns.clear();
 
     // remove static and dynamic entities
@@ -929,7 +938,8 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making ContainerSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
                 return cSE;
             } else if ((entity.groupID == EVEDB::invGroups::Sentry_Gun) or (entity.groupID == EVEDB::invGroups::Protective_Sentry_Gun)
-                or (entity.groupID == EVEDB::invGroups::Destructible_Sentry_Gun) or (entity.groupID == EVEDB::invGroups::Mobile_Sentry_Gun))
+                or (entity.groupID == EVEDB::invGroups::Destructible_Sentry_Gun) or (entity.groupID == EVEDB::invGroups::Mobile_Sentry_Gun)
+                or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer_s_Sentry))   // a gun, not a ship (bug B11)
             {
                 InventoryItemRef sentryRef = sItemFactory.GetItemRef( entity.itemID );
                 if (sentryRef.get() == nullptr)
@@ -944,7 +954,7 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 or (entity.groupID == EVEDB::invGroups::Tutorial_Drone) or (entity.groupID == EVEDB::invGroups::Rogue_Drone) or (entity.groupID == EVEDB::invGroups::Faction_Drone)
                 or (entity.groupID == EVEDB::invGroups::Convoy) or (entity.groupID == EVEDB::invGroups::Convoy_Drone) or (entity.groupID == EVEDB::invGroups::Concord_Drone)
                 or (entity.groupID == EVEDB::invGroups::Mission_Drone) or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer) or (entity.groupID == EVEDB::invGroups::Customs_Official)
-                or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer_s_Structure) or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer_s_Sentry)
+                or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer_s_Structure)
                 or (entity.groupID == EVEDB::invGroups::Deadspace_Overseer_s_Belongings) or (entity.groupID == EVEDB::invGroups::Storyline_Frigate)
                 or (entity.groupID == EVEDB::invGroups::Storyline_Cruiser) or (entity.groupID == EVEDB::invGroups::Storyline_Battleship) or (entity.groupID == EVEDB::invGroups::Storyline_Mission_Frigate)
                 or (entity.groupID == EVEDB::invGroups::Storyline_Mission_Cruiser) or (entity.groupID == EVEDB::invGroups::Storyline_Mission_Battleship)
@@ -1204,8 +1214,10 @@ void SystemManager::AddEntity(SystemEntity* pSE, bool addSignal/*true*/) {
         // Add Entity's Item Ref to Solar System Dynamic Inventory:
         m_solarSystemRef->AddItemToInventory( pSE->GetSelf() );
 
-        if (pSE->IsDroneSE())
+        if (pSE->IsDroneSE()) {
             m_drones[itemID] = pSE->GetDroneSE();
+            m_droneIndexDirty = true;
+        }
     }
     sBubbleMgr.Add(pSE);
     // add item to our AnomalyMgr
@@ -1223,7 +1235,8 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
     // ...and stops its self-destruct (the self-destruct itself has already removed its entry)
     if (pSE->IsShipSE() and IsSelfDestructing(pSE->GetID()))
         CancelSelfDestruct(pSE->GetID(), (pSE->HasPilot() ? SelfDestruct::Cancel::External : SelfDestruct::Cancel::Silent));
-    m_drones.erase(pSE->GetID());
+    if (m_drones.erase(pSE->GetID()) > 0)
+        m_droneIndexDirty = true;
     // a field source leaving space (probe expired, deployable destroyed or scooped, HIC docked/jumped/died) takes its field along
     m_interdiction->RemoveField(pSE->GetID());
     sBubbleMgr.Remove(pSE);
@@ -1622,6 +1635,30 @@ void SystemManager::ProcessSelfDestructs()
  *  "in distant space".  owned drones that aren't listed are offered for reconnection, so uncontrolled drones are left out.
  *  lines must be lists (the client edits them in place), and the header is needed even with no rows
  */
+void SystemManager::UpdateDroneIndex()
+{
+    uint32 stamp(sEntityList.GetStamp());
+    if ((m_droneIndexBusy > 0) or (!m_droneIndexDirty and (m_droneIndexStamp == stamp)))
+        return;
+    m_droneIndexDirty = false;
+    m_droneIndexStamp = stamp;
+    m_dronesByController.clear();
+    m_dronesByGuardChar.clear();
+    for (auto cur : m_drones) {
+        DroneSE* pDrone(cur.second);
+        if ((pDrone == nullptr) or !pDrone->IsControlled())
+            continue;
+        m_dronesByController[pDrone->GetControllerID()].push_back(pDrone);
+        if (pDrone->GetAI()->GetOrder() == DroneAI::Order::Guard)
+            m_dronesByGuardChar[pDrone->GetAI()->GetActivityCharID()].push_back(pDrone);
+    }
+}
+
+bool SystemManager::IsDroneControlledBy(DroneSE* pDrone, uint32 shipID)
+{
+    return ((pDrone != nullptr) and pDrone->IsControlled() and (pDrone->GetControllerID() == shipID));
+}
+
 PyObject* SystemManager::MakeDroneState(uint32 charID) const {
     PyList* header = new PyList(7);
         header->SetItemString(0, "droneID");

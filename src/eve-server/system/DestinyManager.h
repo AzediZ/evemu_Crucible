@@ -101,7 +101,14 @@ public:
     void EntityRemoved(SystemEntity* pSE);
 
     /* Configuration methods */
+    /* a web (stasis webifier module, npc/drone/CONCORD web) starts or ends on us.  every web is kept by its source item, so
+     *  the same web can't count twice;  the webbed speed is the requested speed (SetMaxVelocity) x the stacking-penalised product
+     *  of the webs, recomputed on any change (bug B5:  it was multiplied and divided in place, and the next speed change wiped it) */
     void WebbedMe(InventoryItemRef modRef, bool apply=false);
+    // stacking-penalised product of the webs on us (1 = none)
+    float GetWebFactor() const;
+    // the speed asked for before webs (min(request, maxVelocity))
+    float GetRequestedSpeed() const                     { return m_requestedSpeed; }
     void SpeedBoost(bool deactivate=false);             // reset speed variables and bubblecast ship's AB/MWD modified speed (module activate/deactivate)
     void SetPosition(const GPoint& pt, bool update=false);
     void SetRadius(double radius, bool update = false);
@@ -223,7 +230,11 @@ protected:
     float m_mass;                       //in kg
     float m_massMKg;                    //in Mkg  - millions of kg
     float m_alignTime;                  //in s      - time to reach 75% of max speed from a stop
-    float m_maxShipSpeed;               //in m/s
+    float m_maxShipSpeed;               //in m/s.  the requested speed x the web factor
+    float m_requestedSpeed;             //in m/s.  what SetMaxVelocity (or the ship's attributes) asked for, before webs
+    std::map<uint32, float> m_webs;     // web source itemID -> speed factor (1 + speedFactor/100)
+    // m_maxShipSpeed = m_requestedSpeed x the web factor;  tells the client when it changed and update is set
+    void ApplySpeed(bool update);
     float m_shipWarpSpeed;              //in au/s
     float m_timeToEnterWarp;            //in s
     float m_shipMaxAccelTime;           //in s      - time to reach 99.99% of max speed from a stop

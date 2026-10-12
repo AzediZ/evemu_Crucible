@@ -527,6 +527,15 @@ void SystemBubble::GetEntities(std::map<uint32, SystemEntity*> &into) const {
     }
 }
 
+bool SystemBubble::IsVisibleEntity(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return false;
+    if ((pSE->DestinyMgr() != nullptr) and pSE->DestinyMgr()->IsCloaked())
+        return false;
+    return true;
+}
+
 void SystemBubble::GetAllEntities(std::map< uint32, SystemEntity* >& into) const
 {
     if (m_dynamicEntities.empty())

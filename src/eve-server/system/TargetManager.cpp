@@ -39,6 +39,7 @@
 #include "npc/Drone.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
 #include "pos/Structure.h"
 #include "pos/Tower.h"
 #include "pos/sovStructures/TCU.h"
@@ -88,6 +89,11 @@ bool TargetManager::Process() {
                     TargetAdded(itr->first);
                     itr->first->TargetMgr()->TargetedByLocked(mySE);
                     m_canAttack = true;
+                    // the npc ai learns of it now instead of on its next poll.  (it doesn't change our targets from here)
+                    if (mySE->IsNPCSE())
+                        mySE->GetNPCSE()->TargetLocked(itr->first);
+                    else if (mySE->IsSentrySE())
+                        mySE->GetSentrySE()->TargetLocked(itr->first);
                 }
             } break;
         }
@@ -597,6 +603,14 @@ SystemEntity* TargetManager::GetTarget(uint32 targetID, bool need_locked/*true*/
     }
     _log(TARGET__INFO, "Unable to find target %u (nl? %s)", targetID, need_locked?"yes":"no");
     return nullptr;    //not found.
+}
+
+uint32 TargetManager::LockRemaining(SystemEntity* pSE) const
+{
+    std::map<SystemEntity*, TargetEntry*>::const_iterator itr = m_targets.find(pSE);
+    if ((itr == m_targets.end()) or (itr->second == nullptr) or (itr->second->state == TargMgr::State::Locked))
+        return 0;
+    return itr->second->timer.GetRemainingTime();
 }
 
 void TargetManager::AddTargetModule(ActiveModule* pMod)

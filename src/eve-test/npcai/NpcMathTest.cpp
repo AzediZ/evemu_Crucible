@@ -191,6 +191,11 @@ int npcai_NpcMathTest( int argc, char* argv[] )
         True("not due again in the same tick", !s.Due(NpcAct::Missile, 1000));
         True("lag over 2 periods resets instead of bursting", s.Due(NpcAct::Missile, 10000) and !s.Due(NpcAct::Missile, 10000)
              and !s.Due(NpcAct::Missile, 10999) and s.Due(NpcAct::Missile, 11000));
+        s.StartPeriodic(NpcAct::Turret, 0, 2500);
+        s.Defer(NpcAct::Turret, 9000);      // due since 2500, held (no lock) until 9000
+        True("deferred: due when allowed", s.IsDue(NpcAct::Turret, 9000) and s.Due(NpcAct::Turret, 9000));
+        True("deferred: no catch-up burst after", !s.Due(NpcAct::Turret, 10000) and !s.Due(NpcAct::Turret, 11000)
+             and s.Due(NpcAct::Turret, 12000));
         s.Start(NpcAct::Reaction, 0, 500);
         True("one shot: due once", s.Due(NpcAct::Reaction, 600) and !s.Active(NpcAct::Reaction));
         True("stopped is never due", !s.Due(NpcAct::Flee, 1000000));

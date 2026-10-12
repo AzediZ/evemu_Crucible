@@ -3,7 +3,7 @@
  *   Sentry AI class
  * @Author:     Allan
  * @date:       23 April 2017
- * @version     0.10
+ * @version     0.11
  */
 
 
@@ -21,79 +21,36 @@
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/NPCEwar.h"
+#include "npc/ai/NpcProfile.h"
+#include "ship/modules/TurretFormulas.h"
 #include "EVEServerConfig.h"
 
 SentryAI::SentryAI(Sentry* who)
 : m_state(State::Idle),
 m_npc(who),
-m_mainAttackTimer(1000),
-m_processTimer(5000),         //arbitrary.
-m_beginFindTarget(5000),      //arbitrary.
-m_missileTimer(0),
+m_primaryID(0),
 m_ewar(nullptr)
 {
-    m_beginFindTarget.Disable();    //arbitrary.
-    m_mainAttackTimer.Disable();    //waiting till engaged
-
     m_ewarChecked = false;
+    m_profile = NpcProfile::Get(who->GetSelf()->type());
 
-    m_damageMultiplier = who->GetSelf()->GetAttribute(AttrDamageMultiplier).get_int();
-
-    // missile sentries
-    m_missileTypeID = 0;
-    m_launcherCycleTime = who->GetSelf()->GetAttribute(AttrMissileLaunchDuration).get_uint32();
-    if (m_launcherCycleTime > 100)
-        m_missileTypeID = who->GetSelf()->GetAttribute(AttrEntityMissileTypeID).get_uint32();
-    if (m_missileTypeID == 0)
-        m_launcherCycleTime = 0;
-
-    /* set npc ship speeds and distances */
-    m_sigRadius = who->GetSelf()->GetAttribute(AttrSignatureRadius).get_int();
-    m_attackSpeed = who->GetSelf()->GetAttribute(AttrSpeed).get_int();
-    m_processTimer.Start(m_attackSpeed);
-
-    // Optimal Range
-    m_optimalRange = who->GetSelf()->GetAttribute(AttrMaxRange).get_int();
-    // Accuracy falloff  (distance past maximum range at which accuracy has fallen by half)
-    m_falloff = who->GetSelf()->GetAttribute(AttrFalloff).get_int();
-    m_trackingSpeed = who->GetSelf()->GetAttribute(AttrTrackingSpeed).get_float();
-    // max firing range   default:10000
-    m_maxAttackRange = who->GetSelf()->GetAttribute(AttrEntityAttackRange).get_int();
-    if (!m_maxAttackRange)
-        m_maxAttackRange = 10000;
     // 'sight' range
     m_sightRange = 20000;
-    if (m_maxAttackRange > m_sightRange)
-        m_sightRange = m_maxAttackRange *2;
+    if (m_profile->attackRange > m_sightRange)
+        m_sightRange = static_cast<uint32>(m_profile->attackRange *2);
 
-    // advanced AI variables  only used by sleepers for now.  will update advanced npcs to use these also
-    if (who->GetSelf()->HasAttribute(AttrAI_ShouldUseTargetSwitching)) {
-        m_useTargSwitching = true;
-    } else {
-        m_useTargSwitching = false;
-    }
-    if (who->GetSelf()->HasAttribute(AttrAI_ShouldUseSecondaryTarget)) {
-        m_useSecondTarget = true;
-    } else {
-            m_useSecondTarget = false;
-    }
-    if (who->GetSelf()->HasAttribute(AttrAI_ShouldUseSignatureRadius)) {
-        m_useSigRadius = true;
-        m_preferedSigRadius = who->GetSelf()->GetAttribute(AttrAI_PreferredSignatureRadius).get_int();
-    } else {
-        m_useSigRadius = false;
-        m_preferedSigRadius = 0;
-    }
-    if (who->GetSelf()->HasAttribute(AttrAI_ChanceToNotTargetSwitch)) {
-        m_switchTargChance = 1.0 - who->GetSelf()->GetAttribute(AttrAI_ChanceToNotTargetSwitch).get_float();
-    } else {
-        m_switchTargChance = 0.0f;
-    }
+    // one look around per second (bug B1:  this used to wait for the turret cycle, and never came for sentries without one)
+    m_sched.Start(NpcAct::Think, Now(), 1000 + (who->GetID() % 4) * 250, 1000);
 }
 
 SentryAI::~SentryAI()
 {
     SafeDelete(m_ewar);
+}
+
+int64 SentryAI::Now()
+{
+    return GetSteadyTime();
 }
 
 void SentryAI::OnKilled()
@@ -113,11 +70,15 @@ void SentryAI::Process() {
         }
     }
 
+    SystemBubble* pBubble(m_npc->SysBubble());
+    if (pBubble == nullptr)
+        return;
+
     // ewar keeps its own timers, so it runs every tick while we're fighting
     if ((m_ewar != nullptr) and (m_state == State::Engaged))
-        m_ewar->Process(m_npc->TargetMgr()->GetFirstTarget(true));
+        m_ewar->Process(m_npc->TargetMgr()->GetTarget(m_primaryID, true));
 
-    if ((!m_processTimer.Check()) or (!m_npc->SysBubble()->HasPlayers()))
+    if (!m_sched.Due(NpcAct::Think, Now()) or !pBubble->HasPlayers())
         return;
 
     /* NPC::State definitions   -allan 25July15  (UD 1June16)
@@ -127,25 +88,10 @@ void SentryAI::Process() {
     */
     switch(m_state) {
         case State::Idle: {
-            if (m_npc->IsLawSentry()) {
-                if (m_beginFindTarget.Check()) {
-                    SystemEntity* pTarget(FindLawTarget());
-                    if (pTarget != nullptr)
-                        Target(pTarget);
-                } else if (!m_beginFindTarget.Enabled()) {
-                    m_beginFindTarget.Start(m_attackSpeed);
-                }
-                break;
-            }
-            // pirate and deadspace sentries open fire on the nearest ship in sight
-            if (m_beginFindTarget.Check()) {
-                SystemEntity* pTarget(FindTarget());
-                if (pTarget != nullptr)
-                    Target(pTarget);
-            } else {
-                if (!m_beginFindTarget.Enabled())
-                    m_beginFindTarget.Start(m_attackSpeed);  //find target is based on npc attack speed.
-            }
+            // law sentries:  criminals and those flagged to our owner.  pirate and deadspace sentries:  the nearest ship in sight
+            SystemEntity* pTarget(m_npc->IsLawSentry() ? FindLawTarget() : FindTarget());
+            if (pTarget != nullptr)
+                Target(pTarget);
         } break;
         case State::Engaged: {
             if (m_npc->TargetMgr()->HasNoTargets()) {
@@ -153,16 +99,13 @@ void SentryAI::Process() {
                 SetIdle();
                 return;
             }
-            SystemEntity* pTarget = m_npc->TargetMgr()->GetFirstTarget(false);
-            if ((pTarget != nullptr) and m_npc->IsLawSentry() and !IsLawTarget(pTarget)) {
-                ClearTarget(pTarget);
-                return;
-            }
-            if (!pTarget) {
-                _log(NPC__AI_TRACE, "%s(%u): Stopped %s, GetFirstTarget() returned NULL.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
+            SystemEntity* pTarget(GetPrimary());
+            if (pTarget == nullptr) {
+                _log(NPC__AI_TRACE, "%s(%u): Stopped %s, no primary target.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
                 SetIdle();
                 return;
-            } else if (!pTarget->SysBubble()) {
+            }
+            if (pTarget->SysBubble() == nullptr) {
                 ClearTarget(pTarget);
                 return;
             }
@@ -175,16 +118,48 @@ void SentryAI::Process() {
     }
 }
 
+SystemEntity* SentryAI::GetPrimary()
+{
+    if (m_primaryID != 0) {
+        SystemEntity* pTarget(m_npc->TargetMgr()->GetTarget(m_primaryID, false));
+        if (pTarget != nullptr) {
+            // gate and station guns let go of anyone who's no longer a criminal or flagged to our owner
+            if (m_npc->IsLawSentry() and !IsLawTarget(pTarget)) {
+                m_primaryID = 0;
+                ClearTarget(pTarget);
+                return nullptr;
+            }
+            return pTarget;
+        }
+        m_primaryID = 0;
+    }
+    // the nearest of what we have locked (or are locking)
+    SystemEntity* pBest(nullptr);
+    double nearest(0.0);
+    m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
+        if (cur->IsDead() or (m_npc->IsLawSentry() and !IsLawTarget(cur)) or !PodRuleAllows(cur))
+            return;
+        double distance(m_npc->GetPosition().distance(cur->GetPosition()));
+        if ((pBest == nullptr) or (distance < nearest)) {
+            pBest = cur;
+            nearest = distance;
+        }
+    });
+    if (pBest != nullptr)
+        m_primaryID = pBest->GetID();
+    return pBest;
+}
+
 void SentryAI::SetIdle() {
     if (m_state == State::Idle) return;
     // not doing anything....idle.
     _log(NPC__AI_TRACE, "%s(%u): Idle: returning to idle.", \
     m_npc->GetName(), m_npc->GetID());
     m_state = State::Idle;
+    m_primaryID = 0;
 
-    m_beginFindTarget.Disable();
-    m_mainAttackTimer.Disable();
-    m_missileTimer.Disable();
+    m_sched.Stop(NpcAct::Turret);
+    m_sched.Stop(NpcAct::Missile);
     if (m_ewar != nullptr)
         m_ewar->StopAll();
 }
@@ -198,15 +173,6 @@ void SentryAI::SetEngaged(SystemEntity* pTarget) {
     m_state = State::Engaged;
 }
 
-void SentryAI::SetSignaling(SystemEntity* pTarget) {
-    if (m_state == State::Signaling)
-        return;
-    _log(NPC__AI_TRACE, "%s(%u): Signaling: Begin signaling.  Target is %s(%u).", \
-            m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
-    // actively signaling
-    m_state = State::Signaling;
-}
-
 void SentryAI::CheckDistance(SystemEntity* pTarget)
 {
     double dist = m_npc->GetPosition().distance(pTarget->GetPosition());
@@ -215,8 +181,6 @@ void SentryAI::CheckDistance(SystemEntity* pTarget)
                 m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID(), dist);
         if (m_state != State::Idle) {
             // target is no longer in npc's "sight range" and is NOT targeting this npc.  unlock target and return to idle.
-            //   should we do anything else here?  search for another target?  wander around?  yes..later
-            // if npc is targeted greater than this distance, it will chase
             ClearTarget(pTarget);
         }
         return;
@@ -224,26 +188,45 @@ void SentryAI::CheckDistance(SystemEntity* pTarget)
 
     SetEngaged(pTarget);
 
-    if (!m_mainAttackTimer.Enabled())
-        m_mainAttackTimer.Start(m_attackSpeed);
-    if (!m_missileTimer.Enabled() and (m_launcherCycleTime > 0))
-        m_missileTimer.Start(m_launcherCycleTime);
+    int64 now(Now());
+    if (m_profile->hasTurret)
+        m_sched.Ensure(NpcAct::Turret, now, m_profile->turretCycleMs, m_profile->turretCycleMs);
+    if (m_profile->hasMissile)
+        m_sched.Ensure(NpcAct::Missile, now, m_profile->missileCycleMs, m_profile->missileCycleMs);
 
     uint32 targetID(pTarget->GetID());
     Attack(pTarget);
 
     // the attack may have destroyed or dropped the target
-    if ((m_state == State::Idle) or !m_missileTimer.Check())
+    if (m_state == State::Idle)
         return;
     pTarget = m_npc->SystemMgr()->GetSE(targetID);
-    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->DestinyMgr() == nullptr) or pTarget->DestinyMgr()->IsCloaked())
+    if ((pTarget == nullptr) or pTarget->IsDead())
         return;
-    if (!m_npc->TargetMgr()->CanAttack())
+    FireMissile(pTarget);
+}
+
+void SentryAI::FireMissile(SystemEntity* pTarget)
+{
+    if (!m_profile->hasMissile)
         return;
-    LaunchEntityMissile(m_npc, m_npc->GetSelf(), m_missileTypeID, pTarget);
+    int64 now(Now());
+    if (!m_sched.IsDue(NpcAct::Missile, now))
+        return;
+    if ((pTarget->DestinyMgr() == nullptr) or pTarget->DestinyMgr()->IsCloaked())
+        return;
+    // only at a completed lock on this target (bug B6)
+    if (m_npc->TargetMgr()->GetTarget(pTarget->GetID(), true) == nullptr) {
+        m_sched.Defer(NpcAct::Missile, now);
+        return;
+    }
+    m_sched.Due(NpcAct::Missile, now);
+    LaunchEntityMissile(m_npc, m_npc->GetSelf(), m_profile->missileTypeID, pTarget);
 }
 
 void SentryAI::ClearTarget(SystemEntity* pTarget) {
+    if (pTarget->GetID() == m_primaryID)
+        m_primaryID = 0;
     m_npc->TargetMgr()->ClearTarget(pTarget);
     //m_npc->TargetMgr()->OnTarget(pTarget, TargMgr::Mode::Lost);
 
@@ -252,15 +235,16 @@ void SentryAI::ClearTarget(SystemEntity* pTarget) {
 }
 
 void SentryAI::ClearAllTargets() {
+    m_primaryID = 0;
     m_npc->TargetMgr()->ClearAllTargets();
     //m_npc->TargetMgr()->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::ClientReq);
 }
 
 void SentryAI::Target(SystemEntity* pTarget) {
-    double targetTime = GetTargetTime();
     bool chase = false;
 
-    if (!m_npc->TargetMgr()->StartTargeting(pTarget, targetTime, (uint8)m_npc->GetSelf()->GetAttribute(AttrMaxAttackTargets).get_int(), m_sightRange, chase)) {
+    // maxLockedTargets caps our locks (bug B9:  it used maxAttackTargets, 1)
+    if (!m_npc->TargetMgr()->StartTargeting(pTarget, GetTargetTime(pTarget), m_profile->maxLockedTargets, m_sightRange, chase)) {
         if (!chase) {
             _log(NPC__AI_TRACE, "%s(%u): Targeting of %s(%u) failed.  Clear Target and Return to Idle.", \
                     m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
@@ -268,26 +252,24 @@ void SentryAI::Target(SystemEntity* pTarget) {
         }
         return;
     }
-    m_beginFindTarget.Disable();
+    if (m_primaryID == 0)
+        m_primaryID = pTarget->GetID();
     CheckDistance(pTarget);
 }
 
 void SentryAI::Targeted(SystemEntity* pAgressor) {
-    double targetTime = GetTargetTime();
+    if (pAgressor == nullptr)
+        return;
+    // gate and station guns never lock back an innocent (bug B9).  nothing locks back a pod unless npc.TargetPod says so
+    if (m_npc->IsLawSentry() and !IsLawTarget(pAgressor))
+        return;
+    if (!PodRuleAllows(pAgressor))
+        return;
     switch(m_state) {
         case State::Idle: {
             _log(NPC__AI_TRACE, "%s(%u): Targeted by %s(%u) in Idle. Begin Targeting sequence.", \
                     m_npc->GetName(), m_npc->GetID(), pAgressor->GetName(), pAgressor->GetID());
-
-            bool chase = false;
-            if (!m_npc->TargetMgr()->StartTargeting( pAgressor, targetTime, (uint8)m_npc->GetSelf()->GetAttribute(AttrMaxAttackTargets).get_int(), m_sightRange, chase)) {
-                if (!chase) {
-                    _log(NPC__AI_TRACE, "%s(%u): Targeting of %s(%u) failed.  Clear Target and Return to Idle.", \
-                            m_npc->GetName(), m_npc->GetID(), pAgressor->GetName(), pAgressor->GetID());
-                    SetIdle();
-                }
-            }
-            m_beginFindTarget.Disable();
+            Target(pAgressor);
         } break;
         /** @todo  determine if new targetedby entity is weaker than current target. use optimalSigRadius to test for 'optimal' target */
         case State::Engaged: {
@@ -302,6 +284,8 @@ void SentryAI::Targeted(SystemEntity* pAgressor) {
 }
 
 void SentryAI::TargetLost(SystemEntity* pTarget) {
+    if (pTarget->GetID() == m_primaryID)
+        m_primaryID = 0;
     if (m_state == State::Engaged) {
         if (m_npc->TargetMgr()->HasNoTargets()) {
             _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) lost. No targets remain.  Return to Idle.", \
@@ -315,83 +299,92 @@ void SentryAI::TargetLost(SystemEntity* pTarget) {
     }
 }
 
+void SentryAI::OnLockComplete(SystemEntity* pTarget)
+{
+    // from TargetManager::Process() while it walks our targets:  don't add or remove targets here
+    if ((pTarget != nullptr) and (m_primaryID == 0))
+        m_primaryID = pTarget->GetID();
+}
+
 void SentryAI::Attack(SystemEntity* pTarget)
 {
-    if (m_mainAttackTimer.Check()) {
-        if (!pTarget) return;
-        // Check to see if the target still in the bubble (Client warped out)
-        if (!m_npc->SysBubble()->InBubble(pTarget->GetPosition())) {
-            _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) no longer in bubble.  Clear target and move on",
-                 m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
-            ClearTarget(pTarget);
-            return;
-        }
-        if (!pTarget->DestinyMgr()) {
-            _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) has no destiny manager.  Clear target and move on",
-                 m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
-            ClearTarget(pTarget);
-            return;
-        }
-        // Check to see if the target is not cloaked:
-        if (pTarget->DestinyMgr()->IsCloaked()) {
-            _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) is cloaked.  Clear target and move on",
-                 m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
-            ClearTarget(pTarget);
-            return;
-        }
-        if (m_npc->TargetMgr()->CanAttack())
-            AttackTarget(pTarget);
+    if (!pTarget or !m_profile->hasTurret)
+        return;
+    int64 now(Now());
+    if (!m_sched.IsDue(NpcAct::Turret, now))
+        return;
+    if (m_npc->SysBubble() == nullptr)
+        return;
+    // Check to see if the target still in the bubble (Client warped out)
+    if (!m_npc->SysBubble()->InBubble(pTarget->GetPosition())) {
+        _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) no longer in bubble.  Clear target and move on",
+             m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
+        ClearTarget(pTarget);
+        return;
     }
+    if (!pTarget->DestinyMgr()) {
+        _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) has no destiny manager.  Clear target and move on",
+             m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
+        ClearTarget(pTarget);
+        return;
+    }
+    // Check to see if the target is not cloaked:
+    if (pTarget->DestinyMgr()->IsCloaked()) {
+        _log(NPC__AI_TRACE, "%s(%u): Target %s(%u) is cloaked.  Clear target and move on",
+             m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
+        ClearTarget(pTarget);
+        return;
+    }
+    // only at a completed lock on this target (bug B6b:  it used to be any lock).  the shot waits, it doesn't pile up
+    if (m_npc->TargetMgr()->GetTarget(pTarget->GetID(), true) == nullptr) {
+        m_sched.Defer(NpcAct::Turret, now);
+        return;
+    }
+    m_sched.Due(NpcAct::Turret, now);
+    AttackTarget(pTarget);
 }
 
 //also check for special effects and write code to implement them
 //modifyTargetSpeedRange, modifyTargetSpeedChance
 //entityWarpScrambleChance
 void SentryAI::AttackTarget(SystemEntity* pTarget) {
-    // some npcs use missiles.....write code for using missiles   -- entityMissileTypeID
     std::string guid = "effects.Laser";
     // sentry does NOT have a destiny manager...use target's destiny manager for sending fx
     pTarget->DestinyMgr()->SendSpecialEffect(m_npc->GetSelf()->itemID(),
                                              m_npc->GetSelf()->itemID(),
                                              m_npc->GetSelf()->typeID(), //m_npc->GetSelf()->GetAttribute(AttrGfxTurretID).get_int(),
                                              pTarget->GetID(),
-                                             0,guid,1,1,1,m_attackSpeed,0);
+                                             0,guid,1,1,1,m_profile->turretCycleMs,0);
 
-    // gate and station guns ignore transversal and signature radius
+    // gate and station guns ignore transversal and signature radius.  others use the turret formula with maxRange as optimal
+    TurretFormulas formula;
     Damage d(m_npc,
              m_npc->GetSelf(),
              m_npc->GetKinetic(),
              m_npc->GetThermal(),
              m_npc->GetEM(),
              m_npc->GetExplosive(),
-             (m_npc->IsLawSentry() ? 1.0f : m_formula.GetSentryToHit(m_npc, pTarget)),
+             (m_npc->IsLawSentry() ? 1.0f : formula.GetSentryToHit(m_npc, pTarget)),
              EVEEffectID::targetAttack
     );
 
-    d *= m_damageMultiplier;
+    // the type's damageMultiplier as it is (bug B9:  it was read as an integer, 3.5 became 3)
+    if (m_profile->damageMultiplier > 0)
+        d *= m_profile->damageMultiplier;
     pTarget->ApplyDamage(d);
 }
 
-double SentryAI::GetTargetTime()
+double SentryAI::GetTargetTime(SystemEntity* pTarget)
 {
-    double targetTime = (m_npc->GetSelf()->GetAttribute(AttrScanSpeed).get_int());
-    float radius = m_npc->GetSelf()->GetAttribute(AttrRadius).get_float();
-    if (!targetTime) {
-        if (radius < 30) {
-            targetTime = 1500;
-        } else if (radius < 60) {
-            targetTime = 2500;
-        } else if (radius < 150) {
-            targetTime = 4000;
-        } else if (radius < 280) {
-            targetTime = 6000;
-        } else if (radius < 550) {
-            targetTime = 8000;
-        } else {
-            targetTime = 13000;
-        }
+    // the player formula with scanResolution where the type has it, else its scanSpeed, else the radius table
+    double sig(0.0);
+    if (pTarget != nullptr) {
+        sig = pTarget->GetSignatureRadius();
+        if (sig <= 0.0)
+            sig = pTarget->GetRadius();
     }
-    return targetTime;
+    double mult(m_npc->GetEwar() != nullptr ? m_npc->GetEwar()->GetScanResMult() : 1.0);
+    return m_profile->LockTimeMs(sig, mult);
 }
 
 std::string SentryAI::GetStateName(SentryAI::State name)
@@ -402,6 +395,15 @@ std::string SentryAI::GetStateName(SentryAI::State name)
         case State::Signaling: return "Signaling";
     }
     return "Undefined";
+}
+
+bool SentryAI::PodRuleAllows(SystemEntity* pTarget)
+{
+    if ((pTarget == nullptr) or !pTarget->HasPilot() or !pTarget->GetPilot()->InPod())
+        return true;
+    if (!sConfig.npc.TargetPod)
+        return false;
+    return (m_npc->SystemMgr()->GetSystemSecurityRating() <= sConfig.npc.TargetPodSec);
 }
 
 bool SentryAI::IsLawTarget(SystemEntity* pTarget)
@@ -435,40 +437,77 @@ bool SentryAI::IsLawTarget(SystemEntity* pTarget)
 
 SystemEntity* SentryAI::FindTarget()
 {
-    std::vector<Client*> clientVec;
-    m_npc->SysBubble()->GetPlayers(clientVec);
+    if (m_npc->SysBubble() == nullptr)
+        return nullptr;
     SystemEntity* pTarget(nullptr);
     double nearest(m_sightRange);
-    for (auto cur : clientVec) {
+    m_npc->SysBubble()->ForEachPlayer([&](Client* cur) {
         if (cur->IsInvul() or (cur->GetShipSE() == nullptr))
-            continue;
+            return;
         if (cur->InPod()) {
             if (!sConfig.npc.TargetPod)
-                continue;
+                return;
             if (m_npc->SystemMgr()->GetSystemSecurityRating() > sConfig.npc.TargetPodSec)
-                continue;
+                return;
         }
         DestinyManager* pDestiny(cur->GetShipSE()->DestinyMgr());
         if ((pDestiny == nullptr) or pDestiny->IsCloaked() or pDestiny->IsWarping())
-            continue;
+            return;
         if (cur->GetShipSE()->SysBubble() != m_npc->SysBubble())
-            continue;
+            return;
         double distance(m_npc->GetPosition().distance(cur->GetShipSE()->GetPosition()));
         if (distance > nearest)
-            continue;
+            return;
         nearest = distance;
         pTarget = cur->GetShipSE();
-    }
+    });
     return pTarget;
 }
 
 SystemEntity* SentryAI::FindLawTarget()
 {
-    std::map<uint32, SystemEntity*> entities;
-    m_npc->SysBubble()->GetEntities(entities);
-    for (auto cur : entities)
-        if ((cur.second != nullptr) and (cur.second->IsShipSE() or cur.second->IsDroneSE() or cur.second->IsNPCSE())
-        and !((cur.second->IsNPCSE() and cur.second->GetNPCSE()->IsLawEnforcer())) and IsLawTarget(cur.second))
-            return cur.second;
-    return nullptr;
+    if (m_npc->SysBubble() == nullptr)
+        return nullptr;
+    SystemEntity* pFound(nullptr);
+    m_npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
+        if (pFound != nullptr)
+            return;
+        if ((cur->IsShipSE() or cur->IsDroneSE() or cur->IsNPCSE())
+        and !(cur->IsNPCSE() and cur->GetNPCSE()->IsLawEnforcer()) and IsLawTarget(cur))
+            pFound = cur;
+    });
+    return pFound;
+}
+
+std::string SentryAI::Dump(SystemEntity* pViewer, bool verbose)
+{
+    const NpcProfile& p(*m_profile);
+    int64 now(Now());
+    std::ostringstream str;
+    str << std::fixed << std::setprecision(0);
+    str << m_npc->GetName() << " (" << m_npc->GetID() << ")  type " << p.typeID << " group " << p.groupID << "<br>";
+    str << "sentry" << (m_npc->IsLawSentry() ? " (law)" : "") << ", state " << GetStateName(m_state) << ", primary " << m_primaryID << "<br>";
+    str << "locks (" << m_npc->TargetMgr()->TargetCount() << "/" << (uint32)p.maxLockedTargets << "):";
+    m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
+        str << "  " << cur->GetName() << "(" << cur->GetID() << ") ";
+        if (locked) {
+            str << "locked";
+        } else {
+            str << "locking " << m_npc->TargetMgr()->LockRemaining(cur) << "ms";
+        }
+    });
+    str << "<br>next due (ms):";
+    for (uint8 i = 0; i < NpcAct::Count; ++i)
+        if (m_sched.Active(i))
+            str << "  " << NpcSchedule::Name(i) << " " << m_sched.Remaining(i, now);
+    str << "<br>weapons:  turret " << (p.hasTurret ? "yes" : "no") << " (" << p.turretCycleMs << "ms, x" << std::setprecision(2)
+        << p.damageMultiplier << std::setprecision(0) << ", opt " << p.optimal << " fo " << p.falloff << ")"
+        << ", missile " << (p.hasMissile ? "yes" : "no") << " (type " << p.missileTypeID << ", " << p.missileCycleMs << "ms)<br>";
+    str << "ranges:  sight " << m_sightRange << ", R_atk " << p.attackRange;
+    if (pViewer != nullptr)
+        str << ", t_lock to " << pViewer->GetName() << " " << GetTargetTime(pViewer) << "ms";
+    str << "<br>";
+    if (verbose and (p.problems != 0))
+        str << "data:  " << NpcProfile::ProblemList(p.problems) << "<br>";
+    return str.str();
 }

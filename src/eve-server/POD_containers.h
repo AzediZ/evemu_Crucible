@@ -206,7 +206,7 @@ struct SpawnEntry {     // notes for me while creating/writing/testing
     uint16 typeID;      // rat type id
     uint16 groupID;     // rat group id (may look into changing typeID within group later on respawn (for chaining))
     uint16 spawnID;     // spawn id (if needed to match up with other spawns of this group (multiple spawn types in this group))
-    uint16 stamp;       // entry stamp time to respawn (process conditional to allow for common timer and multiple respawn times)
+    uint32 stamp;       // EntityList stamp (s) when this entry respawns (bug B4b:  uint16 overflowed after 18h uptime)
     uint32 itemID;      // rat entity id
     uint32 corpID;      // rat corp id
     uint32 factionID;   // rat faction id

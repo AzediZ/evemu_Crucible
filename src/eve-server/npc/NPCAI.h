@@ -28,7 +28,9 @@
 #define __NPCAI_H_INCL__
 
 #include "ship/Missile.h"
-#include "ship/modules/TurretFormulas.h"
+#include "npc/ai/NpcRng.h"
+#include "npc/ai/NpcSchedule.h"
+#include "npc/ai/ThreatTable.h"
 
 namespace NPCAI {
     namespace State {
@@ -48,12 +50,15 @@ namespace NPCAI {
 
 class NPC;
 class NPCEwar;
+class NpcBrain;
 class SystemEntity;
-class Timer;
-class EvilNumber;
+struct NpcContext;
+struct NpcProfile;
 
+/* the npc ai state machine (doc/code_and_design_notes/npc-ai/PLAN.md 6.3).  the policy (whom to go after) is the
+ *  npc's brain (npc/ai/NpcBrain.h), the data its profile (npc/ai/NpcProfile.h), the timing its schedule
+ *  (npc/ai/NpcSchedule.h) and the rolls its own rng (npc/ai/NpcRng.h, seeded from npc.RngSeed and its itemID) */
 class NPCAIMgr {
-protected:
 public:
     NPCAIMgr(NPC *who);
     ~NPCAIMgr();
@@ -64,6 +69,8 @@ public:
     void Target(SystemEntity* pTargSE);
     void Targeted(SystemEntity* pTargSE);
     void TargetLost(SystemEntity* pTargSE);
+    // TargetManager finished a lock we started
+    void OnLockComplete(SystemEntity* pTargSE);
 
     void DisableRepTimers(bool shield=true, bool armor=true);
 
@@ -78,19 +85,18 @@ public:
     // called from NPC::Killed()
     void OnKilled();
 
-    // public methods to enable calls from other classes (namely, TurretFormulas.cpp)
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
     bool IsFighting();
-    uint32 GetOptimalRange()                            { return m_optimalRange; }
-    uint16 GetSigRes()                                  { return m_sigResolution; }
-    uint32 GetFalloff()                                 { return m_falloff; }
-    uint32 GetAttackRange()                             { return m_maxAttackRange; }
-    double GetTrackingSpeed()                           { return m_trackingSpeed; }
+    // asleep in a bubble without players (npc.SleepEmptyBubbles)
+    bool IsDormant() const                              { return m_dormant; }
     uint32 GetPrimaryID()                               { return m_primaryID; }
-    float GetThreat(uint32 entityID);
+    float GetThreat(uint32 entityID)                    { return m_threat.Get(entityID); }
+    const NpcProfile& GetProfile() const                { return *m_profile; }
+    // this npc's random numbers (every ai roll, turret shots too)
+    NpcRng& GetRng()                                    { return m_rng; }
 
     // npcAI methods
-    void DisableWarpOutTimer()                          { m_warpOutTimer.Disable(); }
+    void DisableWarpOutTimer()                          { m_sched.Stop(NpcAct::WarpOut); }
     // from DestinyManager::OnWarpExited()
     void WarpOutComplete();
     // our spawn group is warping away (SpawnMgr::WarpOutSpawn()), or we follow a target through warp
@@ -101,9 +107,39 @@ public:
     void LaunchMissile(uint16 typeID, SystemEntity* pTargSE);   // us to them
     void MissileLaunched(Missile* pMissile); // them to us
 
+    // the state, schedule, locks and profile for /npcai (pViewer:  lock time to them)
+    std::string Dump(SystemEntity* pViewer, bool verbose);
+    static const char* GetStateName(int8 stateID);
+
+    /* brain helpers (npc/ai/NpcBrain.h).  the mechanics a brain may use;  the policy is the brain's */
+    // a ship we may pick on our own (players' ships in sight, pod rules).  drones only for advanced ai
+    bool IsCandidate(SystemEntity* pSE, bool drones);
+    // something that attacked us (or our group) that we can go after.  never pods unless npc.TargetPod allows them
+    bool CanAggro(SystemEntity* pSE);
+    // best candidate in the bubble: nearest for regular rats, best score for advanced ai
+    SystemEntity* ChooseTarget();
+    // whom to shoot back at: a drone's pilot when we can see him, else whoever it was
+    SystemEntity* AggroTarget(SystemEntity* pSE);
+    // next primary from our locks: most threat, then nearest
+    SystemEntity* PickPrimary(SystemEntity* pExclude);
+    // go after pSE on our next idle tick (first one wins)
+    void QueueAggro(SystemEntity* pSE);
+    // threat decay, target switching, secondary (ewar) target  (advanced ai)
+    void ProcessAdvanced();
+    // regular rats now and then turn on a drone that hurt them
+    void ProcessDroneAggro();
+    // (1 + threat) x how well the target's signature suits us.  drones that hurt us +25%
+    float Score(SystemEntity* pSE);
+    // the advanced ai's ewar target (a completed lock), nullptr if none
+    SystemEntity* GetSecondary();
+
 protected:
+    // ms clock for the schedule
+    static int64 Now();
+
     void Attack(SystemEntity* pTargSE);
-    void SetIdle();
+    // clearLocks false:  only from TargetLost when nothing is left to clear
+    void SetIdle(bool clearLocks = true);
     void WarpOut();
     void SetWander();
     void SetChasing(SystemEntity* pTargSE);
@@ -112,37 +148,25 @@ protected:
     void SetFollowing(SystemEntity* pTargSE);
     void AttackTarget(SystemEntity* pTargSE);
     void CheckDistance(SystemEntity* pTargSE);
+    void FireMissile(SystemEntity* pTargSE);
 
-    float GetTargetTime();
+    float GetTargetTime(SystemEntity* pTargSE);
     void ProcessRepairs();
 
-    /* target selection */
-    // a ship we may pick on our own (players' ships in sight, pod rules).  drones only for advanced ai
-    bool IsCandidate(SystemEntity* pSE, bool drones);
-    // something that attacked us (or our group) that we can go after
-    bool CanAggro(SystemEntity* pSE);
-    // best candidate in the bubble: nearest for regular rats
-    SystemEntity* ChooseTarget();
-    // whom to shoot back at: a drone's pilot when we can see him, else whoever it was
-    SystemEntity* AggroTarget(SystemEntity* pSE);
     // the primary (weapons) target among our locks.  picks a new one if it's gone
     SystemEntity* GetPrimary();
-    // next primary from our locks: most threat, then nearest
-    SystemEntity* PickPrimary(SystemEntity* pExclude);
     void SetPrimary(SystemEntity* pSE);
-    void AddThreat(SystemEntity* pSE, float amount);
+    void AddThreat(SystemEntity* pSE, float amount, uint8 kind);
     void AlertGroup(SystemEntity* pAggressor);
-    void ProcessDroneAggro();
 
-    /* advanced ai (types with AI_ShouldUseTargetSwitching: the sleepers) */
-    // (1 + threat) x how well the target's signature suits us.  drones that hurt us +25%
-    float Score(SystemEntity* pSE);
     SystemEntity* ChooseAdvancedTarget(double range);
-    // threat decay, target switching, secondary (ewar) target
-    void ProcessAdvanced();
     // NPCRemoteArmorRepair / NPCRemoteShieldBoost on friends
     void ProcessRemoteRepairs();
     void RemoteRepair(bool armor);
+
+    /* sleep (npc.SleepEmptyBubbles):  true while dormant.  wakes when a player is in the bubble or we're locked or aggressed */
+    bool CheckDormant();
+    void Wake(const char* reason);
 
     /* movement */
     void StartWarpOutTimer();
@@ -157,20 +181,21 @@ protected:
     void StartChaseDelay();
     void StartChaseBoost();
     void ProcessChase();
-    uint16 CruiseSpeed()                                { return (m_orbitSpeed > 0 ? m_orbitSpeed : m_maxSpeed); }
+    float CruiseSpeed();
+
+    // surface distance to pSE
+    double SurfaceDistance(SystemEntity* pSE);
 
     int8 m_state;
 
-    std::string GetStateName(int8 stateID);
-
 private:
+    NpcContext MakeContext();
+    void CreateBrain();
+
     bool m_isWandering      :1;
     bool m_ewarChecked      :1;
-    bool m_useSigRadius     :1;
-    bool m_useTargSwitching :1;
-    bool m_useSecondTarget  :1;
     bool m_chaseFast        :1;
-    bool m_evasive          :1;
+    bool m_dormant          :1;
 
     float m_switchTargChance;   //fuzzy logic
     float m_preferedSigRadius;
@@ -188,29 +213,15 @@ private:
     uint32 m_rsDuration;
     uint8 m_rsMaxTargets;
 
-    //these attributes are cached to reduce access times. (much faster but uses more memory)
-    uint8 m_maxAttackTargets;
-    uint8 m_maxLockedTargets;
-    uint16 m_maxSpeed;
-    uint16 m_attackSpeed;
-    uint16 m_missileTypeID;
-    uint16 m_launcherCycleTime;
-    uint16 m_sigResolution;
-    uint16 m_orbitSpeed;
-    uint16 m_targetRange;   // max targeting range  default: m_maxAttackRange (unused)
-    uint32 m_optimalRange;
-    uint32 m_boostRange;    // distance for Speed Boost activation   default:2500
+    // today's movement numbers (phase 2 moves to the profile's orbitRange/boostRange, PLAN.md 5.5)
     uint32 m_armorRepairDuration;
     uint32 m_shieldBoosterDuration;
     uint32 m_chaseMaxDelay;
     uint32 m_chaseMaxDuration;
-    uint32 m_assistRange;   // npcAssistanceRange.  how far group aggro (and remote repair) reaches.  0 = sight range
-
-    uint32 m_sigRadius;
-    uint32 m_falloff;// distance past maximum range at which accuracy has fallen by half
-    uint32 m_flyRange;  // npc tries to stay at this distance from active target    default:500
+    uint32 m_boostRange;    // distance for Speed Boost activation
+    uint32 m_flyRange;      // npc tries to stay at this distance from active target
     uint32 m_sightRange;
-    uint32 m_maxAttackRange;// max firing range   default:15000
+    uint32 m_assistRange;   // npcAssistanceRange.  how far group aggro (and remote repair) reaches.  0 = sight range
 
     uint32 m_primaryID;     // weapons target
     uint32 m_pendingAggroID;// someone who attacked us (or our group) while we were idle.  handled in Process()
@@ -220,39 +231,25 @@ private:
 
     float m_armorRepairDelayChance;
     float m_shieldBoosterDelayChance;
-    float m_chaseDelayChance;
-    float m_chaseDurationChance;
-
-    double m_trackingSpeed;
-    float m_damageMultiplier;
 
     GPoint m_lastGoto;      // where we're chasing to
     GPoint m_home;          // where we spawned (or last arrived by warp)
 
-    std::map<uint32, float> m_threat;   // entityID -> damage (and ewar) done to us
+    ThreatTable m_threat;   // entityID -> damage (and ewar) done to us
 
     NPC* m_npc;
     NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (or we're law enforcement)
+    NpcBrain* m_brain;          // we own this.  made on the first Process()
     DestinyManager* m_destiny;
     InventoryItemRef m_self;
+    std::shared_ptr<const NpcProfile> m_profile;
 
-    TurretFormulas m_formula;
+    NpcSchedule m_sched;
+    NpcRng m_rng;
 
-    Timer m_processTimer;
-    Timer m_mainAttackTimer;
-    Timer m_missileTimer;
-    Timer m_shieldBoosterTimer;
-    Timer m_armorRepairTimer;
-    Timer m_beginFindTarget;
-    Timer m_warpOutTimer;
-    Timer m_chaseDelayTimer;
-    Timer m_chaseTimer;
-    Timer m_droneAggroTimer;
-    Timer m_leashTimer;
-    Timer m_switchTimer;
-    Timer m_threatDecayTimer;
-    Timer m_remoteArmorTimer;
-    Timer m_remoteShieldTimer;
+    // scratch space, reused (no allocation per tick)
+    struct Patient { NPC* pNPC; float priority; float fraction; };
+    std::vector<Patient> m_patients;
 };
 
 /* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */

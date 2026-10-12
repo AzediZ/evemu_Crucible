@@ -77,7 +77,7 @@ void ManagerDB::GetSkillList(DBQueryResult& res)
 
 void ManagerDB::GetAttributeTypes(DBQueryResult& res)
 {
-    if (!sDatabase.RunQuery(res, "SELECT attributeID, attributeName, attributeCategory, displayName, categoryID FROM dgmAttributeTypes"))
+    if (!sDatabase.RunQuery(res, "SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue FROM dgmAttributeTypes"))
         codelog(DATABASE__ERROR, "Error in GetAttributeTypes query: %s", res.error.c_str());
 
     _log(DATABASE__RESULTS, "GetAttributeTypes returned %lu items", res.GetRowCount());

@@ -27,6 +27,7 @@
 #include "pos/Structure.h"
 #include "pos/Tower.h"
 #include "ship/modules/EwarModule.h"
+#include "npc/ai/NpcMath.h"
 #include "ship/modules/TurretFormulas.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
@@ -213,16 +214,8 @@ float POS_AI::GetLockTime(SystemEntity* pTarget)
     float scanRes(m_selfRef->GetAttribute(AttrScanResolution).get_float());
     if (m_self->GetEwar() != nullptr)
         scanRes *= m_self->GetEwar()->GetScanResMult();
-    float sig(pTarget->GetSignatureRadius());
-    if (sig < 1.0f)
-        sig = 1.0f;
-    if (scanRes < 1.0f)
-        scanRes = 1.0f;
-    float asinhSig(std::log(sig + std::sqrt(sig * sig + 1.0f)));
-    float time(40000000.0f / (scanRes * asinhSig * asinhSig));
-    if (time < 1000.0f)
-        time = 1000.0f;
-    return time;
+    // the shared lock formula (npc/ai/NpcMath, also used by npcs), at least 1s
+    return static_cast<float>(NpcMath::LockTimeMs(scanRes, pTarget->GetSignatureRadius(), 1000.0, 0.0));
 }
 
 bool POS_AI::IsEngageable(SystemEntity* pTarget)

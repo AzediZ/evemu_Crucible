@@ -77,7 +77,7 @@ kinetic(wRef->GetAttribute(AttrKineticDamage).get_float()),
 thermal(wRef->GetAttribute(AttrThermalDamage).get_float()),
 explosive(wRef->GetAttribute(AttrExplosiveDamage).get_float())
 {
-    _log(DAMAGE__WARNING, "Damage:C'tor - Called by source %s(%u) with weapon %s(%u).",
+    _log(DAMAGE__TRACE, "Damage:C'tor - Called by source %s(%u) with weapon %s(%u).",
          srcSE->GetName(), srcSE->GetID(), wRef->name(), wRef->itemID() );
 }
 
@@ -90,7 +90,7 @@ kinetic(cRef->GetAttribute(AttrKineticDamage).get_float()),
 thermal(cRef->GetAttribute(AttrThermalDamage).get_float()),
 explosive(cRef->GetAttribute(AttrExplosiveDamage).get_float())
 {
-    _log(DAMAGE__WARNING, "Damage:C'tor - Called by source %s(%u) with weapon %s(%u) using charge %s(%u).",
+    _log(DAMAGE__TRACE, "Damage:C'tor - Called by source %s(%u) with weapon %s(%u) using charge %s(%u).",
          srcSE->GetName(), srcSE->GetID(), wRef->name(), wRef->itemID(), cRef->name(), cRef->itemID() );
 }
 
@@ -199,7 +199,12 @@ bool SystemEntity::ApplyDamage(Damage &d) {
     }
 
     int8 damageID(0);
-    switch (d.weaponRef->groupID()) {
+    /* a missile (the only damage with a charge) gets rates.missileDamage whoever fired it.  npc and sentry missiles have the
+     *  npc as their 'launcher', which isn't a launcher group (npc ai plan 5.2, bug B12) */
+    uint16 weaponGroupID(d.weaponRef->groupID());
+    if ((d.chargeRef.get() != nullptr) and (weaponGroupID != EVEDB::invGroups::Missile_Launcher_Snowball))
+        weaponGroupID = EVEDB::invGroups::Missile_Launcher_Standard;
+    switch (weaponGroupID) {
         case EVEDB::invGroups::Missile_Launcher_Assault:
         case EVEDB::invGroups::Missile_Launcher_Bomb:       // not sure here
         case EVEDB::invGroups::Missile_Launcher_Citadel:

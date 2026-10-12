@@ -162,6 +162,26 @@ public:
 
     /* drones in this system */
     const std::map<uint32, DroneSE*>& GetDrones() const { return m_drones; }
+    /* the drones that may answer an attack on shipID (flown by charID):  the ship's drones, and drones guarding charID.
+     *  each drone once, without walking every drone in the system (npc ai plan 6.7:  this runs on every hit).
+     *  the index is rebuilt at most once per tick and whenever a drone enters or leaves space;  callers check the drone */
+    template <class F>
+    void ForEachAggressionDrone(uint32 shipID, uint32 charID, const F& fn) {
+        UpdateDroneIndex();
+        ++m_droneIndexBusy;     // a nested call (fn -> damage -> aggression) mustn't rebuild what we're walking
+        std::unordered_map<uint32, std::vector<DroneSE*>>::const_iterator itr(m_dronesByController.find(shipID));
+        if (itr != m_dronesByController.end())
+            for (auto cur : itr->second)
+                fn(cur);
+        if (charID != 0) {
+            itr = m_dronesByGuardChar.find(charID);
+            if (itr != m_dronesByGuardChar.end())
+                for (auto cur : itr->second)
+                    if (!IsDroneControlledBy(cur, shipID))   // already visited
+                        fn(cur);
+        }
+        --m_droneIndexBusy;
+    }
     // a drone has reached its ship's drone bay.  it is moved there after this tick's processing
     void QueueDroneReturn(uint32 droneID)               { m_droneReturns.push_back(droneID); }
     // SetState droneState: the drones this pilot owns or controls, anywhere in the system
@@ -276,6 +296,14 @@ private:
     std::map<uint32, SystemEntity*> m_staticEntities;   // this list is for static entities to send in setstate
     std::map<uint32, SystemEntity*> m_opStaticEntities; // this list is for static entities which are operational and need to be initialized and operated upon even when system is empty
     std::map<uint32, DroneSE*> m_drones;                // all drones in space here.  we do not own these (they are also in m_entities)
+    // ForEachAggressionDrone():  drones by controlling shipID and by the charID they guard
+    std::unordered_map<uint32, std::vector<DroneSE*>> m_dronesByController;
+    std::unordered_map<uint32, std::vector<DroneSE*>> m_dronesByGuardChar;
+    uint32 m_droneIndexStamp;
+    uint32 m_droneIndexBusy;
+    bool m_droneIndexDirty;
+    void UpdateDroneIndex();
+    static bool IsDroneControlledBy(DroneSE* pDrone, uint32 shipID);
     std::vector<uint32> m_droneReturns;                 // drones to move into their ship's drone bay after this tick
     void ProcessDroneReturns();
 

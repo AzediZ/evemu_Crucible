@@ -93,6 +93,12 @@ public:
         }
         return true;
     }
+    /* due, but it can't happen now (no lock, out of range):  it stays due without piling up, so it happens on the first
+     *  tick it can and the period counts from there (no burst of catch-up activations afterwards) */
+    void Defer(uint8_t act, int64_t now) {
+        if (Active(act) and (m_next[act] < now))
+            m_next[act] = now;
+    }
     // changes the period of a running activity (from its next activation on)
     void SetPeriod(uint8_t act, int64_t periodMs) {
         if (act < NpcAct::Count)
