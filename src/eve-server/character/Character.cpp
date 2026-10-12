@@ -1825,17 +1825,16 @@ void Character::SkillQueueLoop(bool update/*true*/)
     double begin(GetTimeMSeconds());
     _log(SKILL__QUEUE, "%s(%u) calling SkillQueueLoop() - update %s", name(), m_itemID, update?"true":"false");
 
-    // anything to do here?
+    // anything to do here?  (an empty queue has nothing to train or finish.  CancelSkillInTraining() needs a queue too)
     if (m_skillQueue.empty())
-        if (m_inTraining == nullptr)
-            return;
+        return;
 
-    if (m_inTraining->typeID() != m_skillQueue.front().typeID)
+    if ((m_inTraining != nullptr) and (m_inTraining->typeID() != m_skillQueue.front().typeID))
         CancelSkillInTraining(update);
 
-    // at this point, there is a skill in training, and it is front of queue
+    // at this point, the skill in training is front of queue, or nothing is training (the loop below starts it)
     int64 curTime(GetFileTimeNow());
-    if (m_skillQueue.front().endTime > curTime) {
+    if ((m_inTraining != nullptr) and (m_skillQueue.front().endTime > curTime)) {
         float timeLeft = (m_skillQueue.front().endTime - curTime) / EvE::Time::Second;
         const char* formatedTime = EvE::FormatTime(timeLeft);
         _log(SKILL__INFO, "%s still training.  %s remaining.", m_inTraining->name(), formatedTime);

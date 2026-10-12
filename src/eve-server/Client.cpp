@@ -1226,9 +1226,10 @@ void Client::Eject()
     }
 
     m_ship->SetCustomInfo(ci);
-    m_ship->SetPlayer(nullptr);
     m_ship->SetFlag(flagShipOffline);
+    // modules, overloads and fleet links come off while the pilot is still aboard
     m_ship->Eject();
+    m_ship->SetPlayer(nullptr);
 
     pShipSE->DestinyMgr()->Eject();
 
@@ -1276,8 +1277,9 @@ void Client::StoreShip(InventoryItemRef destRef, EVEItemFlags flag)
     DroneSE::ReleaseDronesOf(m_system, oldShipSE->GetID());
 
     m_ship->SetCustomInfo(nullptr);
-    m_ship->SetPlayer(nullptr);
+    // modules, overloads and fleet links come off while the pilot is still aboard
     m_ship->Eject();
+    m_ship->SetPlayer(nullptr);
 
     oldShipSE->DestinyMgr()->Eject();
 

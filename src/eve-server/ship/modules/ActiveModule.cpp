@@ -546,6 +546,11 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
 void ActiveModule::Deactivate(std::string effect/*""*/)
 {
     if (m_ModuleState != Module::State::Activated) {
+        // a module finishing its last cycle on a target that is gone stops now.  it must not keep the target pointer
+        if ((m_ModuleState == Module::State::Deactivating) and (effect.compare("TargetDestroyed") == 0)) {
+            AbortCycle();
+            return;
+        }
         _log(MODULE__TRACE, "ActiveModule::Deactivate - %s called Deactivate but is not currently Activated (%s).", m_modRef->name(), GetModuleStateName(m_ModuleState));
         return;
     }
@@ -823,9 +828,10 @@ void ActiveModule::AbortCycle(bool force/*false*/)
     if (m_ModuleState < Module::State::Deactivating)
         return;
 
-    // if stop is already set, let module finish cycle.
-    if (m_Stop and !force)
-        return;
+    /* a module finishing its last cycle (m_Stop set) stops now too:  every caller (target gone, unfit, warp, jump, eject,
+     *  logoff, death) needs its effects off and its target pointer cleared.  DeactivateCycle() ends in Clear(), which
+     *  sets the module online, so it runs once
+     */
     // Immediately stop active cycle for things such as insufficient cap, remove module, init warp, target destroyed, target left bubble, or miner deactivated by player:
     SetModuleState(Module::State::Deactivating);
     DeactivateCycle(true);

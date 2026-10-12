@@ -456,6 +456,22 @@ bool TowerSE::IsHostile(SystemEntity* pTarget)
     return false;
 }
 
+void TowerSE::Delete()
+{
+    // same clean up as Killed() (which ends up here too), so the modules don't keep a pointer to a tower that is gone
+    if (m_hasShield) {
+        m_pShieldSE->Delete();
+        SafeDelete(m_pShieldSE);
+        m_hasShield = false;
+    }
+    if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
+        m_moonSE->SetTower(nullptr);
+    if ((m_bubble != nullptr) and (m_bubble->GetTowerSE() == this))
+        m_bubble->SetTowerSE(nullptr);
+    OrphanModules();
+    StructureSE::Delete();
+}
+
 void TowerSE::Scoop() {
     // structures launched near it (all unanchored by now) belong to no tower; the bubble forgets it
     OrphanModules();

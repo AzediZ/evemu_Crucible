@@ -674,6 +674,10 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                     case EVEDB::invGroups::Construction_Platform: {   // outpost construction platforms
                         // our alliance must hold sovereignty here, and one platform per planet
                         uint32 planetID(pSystem->GetClosestPlanetID(pShipSE->GetPosition()));
+                        if (planetID == 0) {
+                            addCustomError("There is no planet in this system to build an outpost at.");
+                            break;
+                        }
                         if (svDataMgr.GetSystemAllianceID(pClient->GetSystemID()) != (uint32)pClient->GetAllianceID()) {
                             addCustomError("You cannot launch Construction Platforms in a system which your alliance does not control.");
                             break;

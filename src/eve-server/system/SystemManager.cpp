@@ -1936,6 +1936,9 @@ uint32 SystemManager::GetClosestPlanetID(const GPoint& myPos)
     for (auto cur : m_planetMap)
         sorted.insert(std::pair<double, SystemEntity*>(myPos.distance(cur.second->GetPosition()), cur.second));
 
+    // 0 when the system has no planets
+    if (sorted.empty())
+        return 0;
     std::map<double, SystemEntity*>::iterator itr = sorted.begin();
 
     return itr->second->GetID();

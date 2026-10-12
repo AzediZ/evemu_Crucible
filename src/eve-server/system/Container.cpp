@@ -319,6 +319,10 @@ ContainerSE::~ContainerSE()
             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
         }
 
+    // the item outlives us (system unload keeps it cached).  it must not call into a deleted entity
+    if (m_contRef.get() != nullptr)
+        m_contRef->SetMySE(nullptr);
+
     SafeDelete(m_targMgr);
     SafeDelete(m_destiny);
 }
@@ -509,6 +513,9 @@ m_launchedByID(0)
 
 WreckSE::~WreckSE()
 {
+    // the item outlives us (system unload keeps it cached).  it must not call into a deleted entity
+    if (m_contRef.get() != nullptr)
+        m_contRef->SetMySE(nullptr);
     // these are cleared in base class
     //SafeDelete(m_targMgr);
     //SafeDelete(m_destiny);

@@ -141,6 +141,8 @@ public:
     virtual void                Init();
     virtual void                InitData();
     virtual void                Scoop();
+    // removed outright (gm /unspawn):  a module leaves its tower first
+    virtual void                Delete();
     /* the structure is leaving space (killed or scooped).  clears what the system knows about it
      *  structure-removal paths (unanchor completion, reinforcement-destroyed, ...) must call this too
      */

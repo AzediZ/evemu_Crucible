@@ -53,6 +53,8 @@ public:
     virtual void                Reinforced();
 
     virtual void                Scoop();
+    // removed outright (gm /unspawn):  the moon, the bubble and the tower's structures forget it first
+    virtual void                Delete();
 
     void                        ReinforceTower();
 

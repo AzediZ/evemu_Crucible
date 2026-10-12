@@ -1340,11 +1340,8 @@ void LSCService::EnforceMembership(Client* pClient)
 
 void LSCService::SystemUnload(uint32 systemID, uint32 constID, uint32 regionID)
 {
-    std::map<int32, LSCChannel*>::iterator itr = m_channels.find(systemID);
-    if (itr != m_channels.end()) {
-        SafeDelete(itr->second);
-        m_channels.erase(itr);
-    }
+    // members leave first, so no client keeps a pointer to the deleted channel
+    DeleteSystemChannel(systemID);
     /** @todo  find a way to track usages of region and const channels to delete when no longer used */
     //  is this needed?
 }

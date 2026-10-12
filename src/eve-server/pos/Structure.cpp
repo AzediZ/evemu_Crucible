@@ -515,6 +515,14 @@ void StructureSE::Init()
         m_self->SetFlag(flagStructureActive);
 }
 
+void StructureSE::Delete()
+{
+    // killed and scooped modules have left their tower already
+    if (m_module)
+        SetControlTower(nullptr);
+    ObjectSystemEntity::Delete();
+}
+
 void StructureSE::Scoop()
 {
     // a module launched near a tower is listed with it until it anchors elsewhere
