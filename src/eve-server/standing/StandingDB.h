@@ -43,8 +43,12 @@ public:
     PyRep* GetCharStandings(Client* pClient);
     PyRep* PrimeCharStandings(uint32 charID);
     PyRep* GetCharNPCStandings(uint32 charID);
-    PyRep* GetStandingTransactions(uint32 fromID, uint32 toID);
-    PyRep* GetStandingCompositions(uint32 fromID, uint32 toID);
+    /* one page (25 rows, newest first) of repStandingChanges.  0 = any for fromID/toID/eventType/eventID/eventDateTime.
+     *  direction 0 = older than eventID, 1 = newer than eventID (the client's "previous" page); eventDateTime = up to that time
+     */
+    static PyRep* GetStandingTransactions(uint32 fromID, uint32 toID, uint8 direction, uint32 eventID, uint32 eventType, int64 eventDateTime);
+    // rows (ownerID, standing): fromID's own standing towards toID, plus fromID's standings towards toID's members for a player corp
+    static PyRep* GetStandingCompositions(uint32 fromID, uint32 toID);
 
 
     /*  all standings are in same table now, but follow identical rules

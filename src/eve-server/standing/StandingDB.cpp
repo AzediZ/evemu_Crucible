@@ -112,14 +112,31 @@ PyRep *StandingDB::PrimeCharStandings(uint32 charID)
     return DBResultToRowset(res);
 }
 
-PyRep *StandingDB::GetStandingTransactions(uint32 fromID, uint32 toID)
+PyRep *StandingDB::GetStandingTransactions(uint32 fromID, uint32 toID, uint8 direction, uint32 eventID, uint32 eventType, int64 eventDateTime)
 {
-    //GetStandingTransactions(fromID, toID, direction, eventID, eventType, eventDateTime)
-    /** @todo update this for direction */
+    /* client StandingTransactionsWnd: rows are shown newest first, pages of 25 ("view more" hidden when fewer come back).
+     *  "view more" sends the last (oldest) eventID with direction 0, "previous" the first (newest) with direction 1.
+     *  a date sends eventDateTime (end of that day for direction 1) and no eventID
+     */
+    std::ostringstream where;
+    where << " WHERE 1";
+    if (fromID != 0)
+        where << " AND fromID = " << fromID;
+    if (toID != 0)
+        where << " AND toID = " << toID;
+    if (eventType != 0)
+        where << " AND eventTypeID = " << eventType;
+    if (eventDateTime != 0)
+        where << " AND eventDateTime <= " << eventDateTime;
+    bool newer((direction == 1) and (eventID != 0));
+    if (eventID != 0)
+        where << " AND eventID " << (newer ? ">" : "<") << " " << eventID;
 
+    // the newer page is the 25 rows right after eventID, returned newest first like every page
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-                            "SELECT"
+                            "SELECT * FROM ("
+                            " SELECT"
                             "  eventID,"
                             "  eventTypeID,"
                             "  eventDateTime,"
@@ -133,8 +150,10 @@ PyRep *StandingDB::GetStandingTransactions(uint32 fromID, uint32 toID)
                             "  int_3,"
                             "  msg"
                             " FROM repStandingChanges"
-                            " WHERE toID = %u AND fromID = %u",
-                            toID, fromID))
+                            " %s"
+                            " ORDER BY eventID %s LIMIT 25) AS t"
+                            " ORDER BY eventID DESC",
+                            where.str().c_str(), (newer ? "ASC" : "DESC")))
     {
         codelog(SERVICE__ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
@@ -160,7 +179,9 @@ float StandingDB::GetStanding(uint32 fromID, uint32 toID)
 void StandingDB::SetStanding(uint32 fromID, uint32 toID, float standing)
 {
     DBerror err;
-    sDatabase.RunQuery(err, "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u,%u,%f)", fromID, toID, standing);
+    sDatabase.RunQuery(err,
+                       "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u,%u,%f)"
+                       " ON DUPLICATE KEY UPDATE standing = VALUES(standing)", fromID, toID, standing);
 }
 
 void StandingDB::UpdateStanding(uint32 fromID, uint32 toID, float standing)
@@ -177,16 +198,36 @@ void StandingDB::UpdateStanding(uint32 fromID, uint32 toID, float standing)
 void StandingDB::SaveStandingChanges(uint32 fromID, uint32 toID, uint16 eventType, float amount, std::string msg)
 {
     /* eventTypeID,eventDateTime,fromID,toID,modification,originalFromID,originalToID,int_1,int_2,int_3,msg */
+    std::string eMsg;
+    sDatabase.DoEscapeString(eMsg, msg);
     DBerror err;
     sDatabase.RunQuery(err,
                        "INSERT INTO repStandingChanges (eventTypeID, eventDateTime, fromID, toID, modification, msg)"
                        " VALUES (%u, %f, %u, %u, %f, '%s' )",
-                       eventType, GetFileTimeNow(), fromID, toID, amount, msg.c_str());
+                       eventType, GetFileTimeNow(), fromID, toID, amount, eMsg.c_str());
 }
 
 PyRep *StandingDB::GetStandingCompositions(uint32 fromID, uint32 toID)
 {
-    // ownerID, standing ...
-
-    return PyStatic.NewNone();
+    // client StandingCompositionsWnd: the row with ownerID == fromID is "Current Value", the others are listed as contributors
+    DBQueryResult res;
+    if (IsPlayerCorp(toID)) {
+        // towards a player corp: fromID's standing to the corp, then to each of its members
+        if (!sDatabase.RunQuery(res,
+            "SELECT %u AS ownerID, COALESCE((SELECT standing FROM repStandings WHERE fromID = %u AND toID = %u), 0) AS standing"
+            " UNION ALL"
+            " SELECT r.toID, r.standing FROM repStandings AS r"
+            " JOIN chrCharacters AS c ON c.characterID = r.toID"
+            " WHERE r.fromID = %u AND c.corporationID = %u",
+            fromID, fromID, toID, fromID, toID)) {
+            codelog(DATABASE__ERROR, "Error in GetStandingCompositions query: %s", res.error.c_str());
+            return PyStatic.NewNone();
+        }
+    } else if (!sDatabase.RunQuery(res,
+            "SELECT %u AS ownerID, COALESCE((SELECT standing FROM repStandings WHERE fromID = %u AND toID = %u), 0) AS standing",
+            fromID, fromID, toID)) {
+        codelog(DATABASE__ERROR, "Error in GetStandingCompositions query: %s", res.error.c_str());
+        return PyStatic.NewNone();
+    }
+    return DBResultToRowset(res);
 }

@@ -92,12 +92,24 @@ PyResult Standing::GetMyKillRights(PyCallArgs &call) {
     return KillRights;
 }
 
-PyResult Standing::GetStandingTransactions(PyCallArgs &call, PyInt* fromID, PyInt* toID, PyInt* direction, std::optional<PyInt*> eventID, std::optional<PyInt*> eventType, std::optional<PyLong*> eventDateTime) {
+PyResult Standing::GetStandingTransactions(PyCallArgs &call, PyRep* fromID, PyRep* toID, PyRep* direction, std::optional<PyRep*> eventID, std::optional<PyRep*> eventType, std::optional<PyRep*> eventDateTime) {
     // data = sm.RemoteSvc('standing2').GetStandingTransactions(fromID, toID, direction, eventID, eventType, eventDateTime)
-    _log(STANDING__MESSAGE,  "Standing::Handle_GetStandingTransactions()");
-    call.Dump(STANDING__DUMP);
+    //  None = any for fromID / toID / eventID / eventType / eventDateTime
+    uint32 from(PyRep::IntegerValueU32(fromID)), to(PyRep::IntegerValueU32(toID));
 
-    return m_db.GetStandingTransactions(fromID->value(), toID->value());
+    // only transactions from or to the caller, its corporation or its alliance
+    std::set<uint32> mine;
+    mine.insert(call.client->GetCharacterID());
+    mine.insert(call.client->GetCorporationID());
+    if (call.client->GetAllianceID() != 0)
+        mine.insert(call.client->GetAllianceID());
+    if ((mine.find(from) == mine.end()) and (mine.find(to) == mine.end()))
+        return new PyList();
+
+    return StandingDB::GetStandingTransactions(from, to, (uint8)PyRep::IntegerValue(direction),
+            eventID.has_value() ? PyRep::IntegerValueU32(eventID.value()) : 0,
+            eventType.has_value() ? PyRep::IntegerValueU32(eventType.value()) : 0,
+            eventDateTime.has_value() ? PyRep::IntegerValue(eventDateTime.value()) : 0);
 }
 
 PyResult Standing::GetStandingCompositions(PyCallArgs &call, PyInt* fromID, PyInt* toID) {
@@ -109,8 +121,5 @@ PyResult Standing::GetStandingCompositions(PyCallArgs &call, PyInt* fromID, PyIn
                     if each.ownerID == fromID:
                         prior = each.standing
                         */
-    _log(STANDING__MESSAGE,  "Standing::Handle_GetStandingCompositions()");
-    call.Dump(STANDING__DUMP);
-
-    return m_db.GetStandingCompositions(fromID->value(), toID->value());
+    return StandingDB::GetStandingCompositions(fromID->value(), toID->value());
 }
