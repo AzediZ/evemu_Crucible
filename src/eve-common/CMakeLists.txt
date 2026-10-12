@@ -17,6 +17,7 @@ SET( TARGET_PACKETS_DIR "${PROJECT_BINARY_DIR}/src/${TARGET_NAME}" )
 #########
 SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/eve-common.h"
+     "${TARGET_INCLUDE_DIR}/EVE_Charges.h"
      "${TARGET_INCLUDE_DIR}/EVE_Consts.h"
      "${TARGET_INCLUDE_DIR}/EVE_Corp.h"
      "${TARGET_INCLUDE_DIR}/EVE_Defines.h"
