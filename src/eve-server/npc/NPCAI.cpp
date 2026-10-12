@@ -333,8 +333,7 @@ void NPCAIMgr::Process() {
             SystemEntity* pLocked(m_npc->TargetMgr()->GetTarget(targetID, true));
             if (m_ewar != nullptr)
                 m_ewar->Process(pLocked, m_brain->EwarTarget(ctx, pLocked));
-            if (pLocked != nullptr)
-                FireMissile(pLocked);
+            FireMissile(pSE, (pLocked != nullptr));
             m_brain->Think(ctx);
             CheckLeash();
         } break;
@@ -382,6 +381,8 @@ bool NPCAIMgr::CheckDormant()
     if (m_sched.Active(NpcAct::Leash) or m_sched.Active(NpcAct::ShieldRep) or m_sched.Active(NpcAct::ArmorRep))
         return false;
     m_dormant = true;
+    // the idle spawn still moves to another belt now and then (checked before the sleep test in Process())
+    StartWarpOutTimer();
     _log(NPC__AI_TRACE, "%s(%u): Dormant:  no players in bubble %u.", m_npc->GetName(), m_npc->GetID(), pBubble->GetID());
     return true;
 }
@@ -992,7 +993,7 @@ void NPCAIMgr::SetFollowing(SystemEntity* pSE) {
     m_sched.Stop(NpcAct::ChaseBoost);
     m_moveTargetID = pSE->GetID();
     m_destiny->SetMaxVelocity(CruiseSpeed() *2);
-    m_destiny->Follow(pSE, static_cast<uint32>(EvE::max(m_profile->falloff)));  //try to get inside falloff range
+    m_destiny->Follow(pSE, InsideAttackRange(m_profile->falloff));  //try to get inside falloff range
     m_state = NPCAI::State::Following;
     m_sched.Stop(NpcAct::WarpOut);
 }
@@ -1009,7 +1010,7 @@ void NPCAIMgr::SetEngaged(SystemEntity* pSE) {
     m_sched.Stop(NpcAct::ChaseBoost);
     m_moveTargetID = pSE->GetID();
     m_destiny->SetMaxVelocity((m_profile->evasive > 0) ? m_profile->maxVelocity : CruiseSpeed());
-    m_destiny->Orbit(pSE, static_cast<uint32>(EvE::max(m_profile->optimal)));  //try to get inside orbit range
+    m_destiny->Orbit(pSE, InsideAttackRange(m_profile->optimal));  //try to get inside orbit range
     m_state = NPCAI::State::Engaged;
     m_sched.Stop(NpcAct::WarpOut);
 }
@@ -1383,6 +1384,16 @@ void NPCAIMgr::ProcessDroneAggro()
     }
 }
 
+uint32 NPCAIMgr::InsideAttackRange(float distance)
+{
+    /* weapons fire only within entityAttackRange (B7), so today's orbit (maxRange) and follow (falloff) distances are kept
+     *  inside 90% of it:  66 armed types have maxRange and 136 falloff beyond it.  phase 2 orbits at entityFlyRange (B8) */
+    double range(EvE::max(distance));
+    if (m_profile->HasWeapons() and (m_profile->attackRange > 0.0f))
+        range = EvE::min(range, 0.9 * m_profile->attackRange);
+    return static_cast<uint32>(range);
+}
+
 double NPCAIMgr::SurfaceDistance(SystemEntity* pSE)
 {
     if (pSE == nullptr)
@@ -1434,7 +1445,7 @@ void NPCAIMgr::Attack(SystemEntity* pSE)
     AttackTarget(pSE);
 }
 
-void NPCAIMgr::FireMissile(SystemEntity* pSE)
+void NPCAIMgr::FireMissile(SystemEntity* pSE, bool locked)
 {
     if ((pSE == nullptr) or !m_profile->hasMissile)
         return;
@@ -1442,8 +1453,10 @@ void NPCAIMgr::FireMissile(SystemEntity* pSE)
     m_sched.Ensure(NpcAct::Missile, now, m_profile->missileCycleMs, m_profile->missileCycleMs);
     if (!m_sched.IsDue(NpcAct::Missile, now))
         return;
-    // the caller checked the lock.  in range:  min(entityAttackRange, 0.95 x the missile's flight range) (PLAN.md 5.2)
-    if ((pSE->DestinyMgr() == nullptr) or pSE->DestinyMgr()->IsCloaked() or (SurfaceDistance(pSE) > m_profile->MissileFireRange())) {
+    // a completed lock on the primary, in range:  min(entityAttackRange, 0.95 x the missile's flight range) (PLAN.md 5.2).
+    //  otherwise the launch waits (no catch-up volleys after a long lock)
+    if (!locked or (pSE->DestinyMgr() == nullptr) or pSE->DestinyMgr()->IsCloaked()
+    or (SurfaceDistance(pSE) > m_profile->MissileFireRange())) {
         m_sched.Defer(NpcAct::Missile, now);
         return;
     }
@@ -1455,7 +1468,8 @@ void NPCAIMgr::ClearTarget(SystemEntity* pSE) {
     m_npc->TargetMgr()->ClearTarget(pSE);
     //m_npc->TargetMgr()->OnTarget(pSE, TargMgr::Mode::Lost);
 
-    if (m_npc->TargetMgr()->HasNoTargets())
+    // TargetLost() may have started a warp after it (warp follow):  leave that alone
+    if (m_npc->TargetMgr()->HasNoTargets() and (m_state != NPCAI::State::WarpOut) and (m_state != NPCAI::State::WarpFollow))
         SetIdle(false);
 }
 

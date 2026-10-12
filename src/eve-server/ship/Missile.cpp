@@ -77,8 +77,9 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
     } else if ((pMod == nullptr) and (pSE->IsNPCSE() or pSE->IsSentrySE()) and (modRef.get() != nullptr)) {
         /* npc and sentry missiles (modRef is the npc itself):  its missileDamageMultiplier (212, dgm default 1).
          *  npc missiles don't use damageMultiplier (64), that one is for turrets (npc ai plan 5.2, bug B12) */
-        bool law(pSE->IsNPCSE() and pSE->GetNPCSE()->IsLawEnforcer());
-        if ((sConfig.npc.UseDamageMultiplier or law) and modRef->HasAttribute(AttrMissileDamageMultiplier)) {
+        //  law npcs and sentries always use theirs (as their turrets do);  other npcs per npc.UseDamageMultiplier
+        bool always(pSE->IsSentrySE() or (pSE->IsNPCSE() and pSE->GetNPCSE()->IsLawEnforcer()));
+        if ((sConfig.npc.UseDamageMultiplier or always) and modRef->HasAttribute(AttrMissileDamageMultiplier)) {
             float mult(modRef->GetAttribute(AttrMissileDamageMultiplier).get_float());
             if (mult > 0.0f)
                 m_damageMod *= mult;

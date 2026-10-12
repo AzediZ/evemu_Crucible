@@ -319,7 +319,8 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
     }
     // jammed: loses its locks and can't lock anything while CONCORD is on it
     if (!r.jammed and (pTarget->TargetMgr() != nullptr)) {
-        pTarget->TargetMgr()->ClearAllTargets();
+        // its own locks only (ClearAllTargets() also broke CONCORD's lock on it, so CONCORD had to lock again before its next shot)
+        pTarget->TargetMgr()->LoseAllTargets();
         m_jammed.insert(r.shipID);
         r.jammed = true;
     }

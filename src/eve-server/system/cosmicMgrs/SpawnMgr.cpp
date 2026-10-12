@@ -121,7 +121,12 @@ void SpawnMgr::Process() {
                             itr->second.spawnID, &itr->second);
                     // this means check SpawnEntry for 'missing' SpawnGroup members and respawn as needed.
                     SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(itr->first));
-                    if ((pBubble != nullptr) and ReSpawn(pBubble, itr->second)) {
+                    if (pBubble == nullptr) {
+                        // the bubble is gone:  so is this respawn
+                        itr = m_spawns.erase(itr);
+                        continue;
+                    }
+                    if (ReSpawn(pBubble, itr->second)) {
                         itr->second.enabled = false;
                     } else {
                         // try again in a minute

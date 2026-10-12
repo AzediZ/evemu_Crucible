@@ -48,6 +48,7 @@ public:
         m_next[act] = now + (delayMs > 0 ? delayMs : 0);
         m_period[act] = (periodMs > 0 ? periodMs : 0);
         m_active[act] = true;
+        m_deferred[act] = false;
     }
     // every periodMs, the first one periodMs from now
     void StartPeriodic(uint8_t act, int64_t now, int64_t periodMs) {
@@ -69,6 +70,7 @@ public:
     void StopAll() {
         for (uint8_t i = 0; i < NpcAct::Count; ++i) {
             m_active[i] = false;
+            m_deferred[i] = false;
             m_next[i] = 0;
             m_period[i] = 0;
         }
@@ -86,7 +88,11 @@ public:
             return true;
         }
         int64_t lag(now - m_next[act]);
-        if (lag > (2 * m_period[act])) {
+        if (m_deferred[act]) {
+            // it waited:  the next one is a full period from now
+            m_deferred[act] = false;
+            m_next[act] = now + m_period[act];
+        } else if (lag > (2 * m_period[act])) {
             m_next[act] = now + m_period[act];
         } else {
             m_next[act] += m_period[act];
@@ -96,8 +102,10 @@ public:
     /* due, but it can't happen now (no lock, out of range):  it stays due without piling up, so it happens on the first
      *  tick it can and the period counts from there (no burst of catch-up activations afterwards) */
     void Defer(uint8_t act, int64_t now) {
-        if (Active(act) and (m_next[act] < now))
+        if (Active(act) and (m_next[act] <= now)) {
             m_next[act] = now;
+            m_deferred[act] = true;
+        }
     }
     // changes the period of a running activity (from its next activation on)
     void SetPeriod(uint8_t act, int64_t periodMs) {
@@ -140,6 +148,7 @@ private:
     int64_t m_next[NpcAct::Count];
     int64_t m_period[NpcAct::Count];
     bool m_active[NpcAct::Count];
+    bool m_deferred[NpcAct::Count];
 };
 
 #endif  // _EVE_NPC_AI_NPCSCHEDULE_H_

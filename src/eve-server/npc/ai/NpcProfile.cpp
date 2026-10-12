@@ -124,6 +124,9 @@ const char* NpcAI::GetProblemText(uint32 problemBit)
         case Problem::MissileTypeMissing:   return "effect 569 but no usable missile type -> no missiles";
         case Problem::L1LevelTwo:           return "AI_ShouldUseTargetSwitching 2 -> treated as 1";
         case Problem::NoTracking:           return "turret without trackingSpeed -> hits only targets without angular velocity";
+        case Problem::MissileCycleTooShort: return "effect 569 with missileLaunchDuration under 1s -> 20s default";
+        case Problem::RangeBeyondAttack:    return "maxRange or falloff beyond entityAttackRange -> orbit/follow kept inside it";
+        case Problem::SentryNoRange:        return "sentry turret without maxRange -> entityAttackRange as optimal";
         case Problem::MissileNoEffect:      return "missileLaunchDuration and entityMissileTypeID but no effect 569 -> no missiles (they fired without RequireWeaponEffects)";
     }
     return "unknown";
@@ -252,8 +255,14 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     } else {
         r.hasMissile = (r.missileCycleMs > 100) and (r.missileTypeID > 0);
     }
-    if (r.missileCycleMs < 1000)
-        r.missileCycleMs = 1000;
+    if (r.missileCycleMs < 1000) {
+        // the placeholder 1 (or nonsense):  dogma's default
+        if (r.hasMissile)
+            r.problems |= NpcAI::Problem::MissileCycleTooShort;
+        r.missileCycleMs = static_cast<uint32>(sDataMgr.GetAttributeDefault(AttrMissileLaunchDuration));
+        if (r.missileCycleMs < 1000)
+            r.missileCycleMs = 20000;
+    }
     r.missileRange = 0.0;
     if (r.hasMissile) {
         const ItemType* pMissile((r.missileTypeID > 0) ? sItemFactory.GetType(r.missileTypeID) : nullptr);
@@ -295,6 +304,8 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     r.radius = type.radius();
     r.sigBloom = static_cast<float>(Attr(type, AttrEntityMaxVelocitySignatureRadiusMultiplier));
     r.sightRange = LegacySightRange(r.radius, r.attackRange);
+    if (r.hasTurret and ((r.optimal > r.attackRange) or (r.falloff > r.attackRange)))
+        r.problems |= NpcAI::Problem::RangeBeyondAttack;
 
     /* targeting */
     double maxAttack(Attr(type, AttrMaxAttackTargets));
@@ -365,6 +376,12 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     bool support(r.hasSelfRepair or r.hasRemoteRepair or r.hasGroupAssist);
     if (IsSentryGroup(r.groupID)) {
         r.tier = NpcAI::Tier::Sentry;
+        // sentries don't move:  the range rule above doesn't apply.  one without maxRange shoots out to entityAttackRange
+        r.problems &= ~static_cast<uint32>(NpcAI::Problem::RangeBeyondAttack);
+        if (r.hasTurret and (r.optimal <= 0.0f)) {
+            r.problems |= NpcAI::Problem::SentryNoRange;
+            r.optimal = r.attackRange;
+        }
     } else if (!r.HasWeapons() and r.ewarEffects.empty() and !support and (r.maxVelocity <= 0.0f)) {
         r.tier = NpcAI::Tier::Inert;
     } else if (!r.HasWeapons()) {

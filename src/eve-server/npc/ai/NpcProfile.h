@@ -49,7 +49,10 @@ namespace NpcAI {
             NoTracking              = 1 << 11,  // turret without trackingSpeed:  hits only targets without angular velocity
             MissileNoEffect         = 1 << 12,  // a real missileLaunchDuration and entityMissileTypeID but no effect 569:  no missiles
                                                 //  (rogue drones, some commanders;  the attribute-only gating fired them)
-            Count                   = 13
+            MissileCycleTooShort    = 1 << 13,  // effect 569 with missileLaunchDuration under 1s (the placeholder 1):  dgm default 20s
+            RangeBeyondAttack       = 1 << 14,  // maxRange or falloff beyond entityAttackRange:  today's movement is kept inside it
+            SentryNoRange           = 1 << 15,  // sentry turret without maxRange:  entityAttackRange is its optimal
+            Count                   = 16
         };
     }
     const char* GetProblemText(uint32 problemBit);

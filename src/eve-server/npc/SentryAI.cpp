@@ -157,6 +157,9 @@ void SentryAI::SetIdle() {
     m_npc->GetName(), m_npc->GetID());
     m_state = State::Idle;
     m_primaryID = 0;
+    // locks on what we no longer shoot (expired criminals, cloaked or warping ships) would fill our lock slots
+    if (!m_npc->TargetMgr()->HasNoTargets())
+        m_npc->TargetMgr()->ClearTargets();
 
     m_sched.Stop(NpcAct::Turret);
     m_sched.Stop(NpcAct::Missile);

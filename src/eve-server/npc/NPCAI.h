@@ -148,7 +148,8 @@ protected:
     void SetFollowing(SystemEntity* pTargSE);
     void AttackTarget(SystemEntity* pTargSE);
     void CheckDistance(SystemEntity* pTargSE);
-    void FireMissile(SystemEntity* pTargSE);
+    // locked:  we have a completed lock on pTargSE
+    void FireMissile(SystemEntity* pTargSE, bool locked);
 
     float GetTargetTime(SystemEntity* pTargSE);
     void ProcessRepairs();
@@ -185,6 +186,8 @@ protected:
 
     // surface distance to pSE
     double SurfaceDistance(SystemEntity* pSE);
+    // a movement distance kept inside our firing range (phase 0 stopgap until phase 2's movement)
+    uint32 InsideAttackRange(float distance);
 
     int8 m_state;
 
