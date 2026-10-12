@@ -19,6 +19,7 @@
 #include "market/sim/MarketSimDB.h"
 #include "market/sim/MarketSimMgr.h"
 #include "market/sim/SimEconomy.h"
+#include "market/sim/SimFacilityMgr.h"
 #include "station/StationDataMgr.h"
 
 /*
@@ -313,6 +314,11 @@ int MarketSimMgr::Initialize()
     m_world.reset(new World(m_static, m_params, *m_gw));
     m_world->SetPersist(this);
     m_world->SetDayHook([this](const DayReport& rep) { OnDay(rep); });
+    // the manufacturers' jobs on npc station lines (phase 5), written with the sim's own flush
+    if (sConfig.marketSim.EnableFacilities and sSimFacilities.IsLoaded()) {
+        m_world->SetCapacity(sSimFacilities.Capacity(m_static.nodes, m_params.lineInstallCost, m_params.lineCostPerHour));
+        sSimFacilities.AttachToSim(true);
+    }
     m_world->Build(now);
 
     if (saved) {
@@ -488,9 +494,9 @@ bool MarketSimMgr::LoadSaved(int64 now)
         j.start = r.start;
         j.end = r.end;
         j.stationID = r.stationID;
-        for (auto& n : m_static.nodes)
-            if (n.stationID == r.stationID)
-                j.nodeID = n.nodeID;
+        // the manufacturer's node (the job may run at another station of its constellation, phase 5)
+        if ((j.actorID != 0) and (j.actorID <= m_world->Actors().size()))
+            j.nodeID = m_world->Actors()[j.actorID - 1].nodeID;
         if (m_world->LoadJob(j))
             ++jobsLoaded;
         else

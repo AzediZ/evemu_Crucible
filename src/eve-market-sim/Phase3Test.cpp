@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "HarnessData.h"
+#include "HarnessFacilities.h"
 #include "HarnessMarket.h"
 #include "market/sim/SimWorld.h"
 
@@ -112,7 +113,8 @@ namespace {
         return cost;
     }
 
-    Daily RunOne(const StaticData& data, Params p, uint64_t seed, int days, std::function<void(World&, int, int64_t)> shock)
+    Daily RunOne(const StaticData& data, Params p, uint64_t seed, int days, bool stationLines,
+                 std::function<void(World&, int, int64_t)> shock)
     {
         Daily out;
         p.seed = seed;
@@ -121,6 +123,9 @@ namespace {
         HarnessMarket market(data, p.salesTaxRate);
         World world(data, p, market);
         market.SetWorld(&world);
+        HarnessCapacity lines(data.nodes, p);
+        if (stationLines)
+            world.SetCapacity(lines.Capacity());
         world.Build(StartTime);
         world.Seed(StartTime);
         world.Start(StartTime, false);
@@ -247,12 +252,13 @@ namespace {
     }
 }
 
-int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days)
+int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days, bool stationLines)
 {
     int failures(0);
     if (days < ShockDay + LossShockDays + RecoveryDays + 5)
         days = ShockDay + LossShockDays + RecoveryDays + 5;
-    std::printf("market sim phase 3 acceptance tests:  %d days, shocks on day %d, %zu seed(s)\n", days, ShockDay, seeds.size());
+    std::printf("market sim phase 3 acceptance tests:  %d days, shocks on day %d, %zu seed(s), %s\n", days, ShockDay, seeds.size(),
+                stationLines ? "jobs on the hubs' station lines" : "virtual lines");
 
     // PLAN 4.1:  price / mineral cost medians of T1
     std::map<std::string, double> plan41 = { {"modules", 0.97}, {"charges", 1.18}, {"ships", 1.24}, {"drones", 1.15} };
@@ -273,12 +279,12 @@ int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64
     }
 
     for (auto seed : seeds) {
-        Daily control(RunOne(data, p, seed, days, [](World&, int, int64_t) { }));
-        Daily mining(RunOne(data, p, seed, days, [](World& w, int day, int64_t t) {
+        Daily control(RunOne(data, p, seed, days, stationLines, [](World&, int, int64_t) { }));
+        Daily mining(RunOne(data, p, seed, days, stationLines, [](World& w, int day, int64_t t) {
             if (day == ShockDay)
                 w.ShockMining(0.5, MiningShockDays, t);
         }));
-        Daily losses(RunOne(data, p, seed, days, [](World& w, int day, int64_t t) {
+        Daily losses(RunOne(data, p, seed, days, stationLines, [](World& w, int day, int64_t t) {
             if (day == ShockDay)
                 w.ShockLosses(Drake, 2.0, LossShockDays, t);
         }));

@@ -84,3 +84,43 @@ bool HarnessFacilities::LoadLines(uint32_t stationID, uint8_t activity, int64_t 
     }
     return true;
 }
+
+namespace {
+    /* Crucible:  the npc stations with manufacturing lines in the constellation of each hub, as
+     *  FactoryDB::StationsWithLinesNear lists them (the hub, its solar system's, the rest);  50 lines each */
+    struct HubStations { uint32_t hub; std::vector<uint32_t> stations; };
+    const std::vector<HubStations>& CrucibleHubStations()
+    {
+        static const std::vector<HubStations> hubs = {
+            { 60003760, { 60003760, 60002953, 60002959, 60003055, 60003757, 60004423, 60002950, 60002956, 60003052, 60003058,
+                          60003754, 60003763, 60003769, 60014659, 60014935 } },                 // Jita:  15 stations
+            { 60008494, { 60008494 } },                                                         // Amarr:  1
+            { 60011866, { 60011866, 60011863, 60011869, 60011872, 60011977, 60011983, 60015013 } },  // Dodixie:  7
+            { 60004588, { 60004588, 60005725, 60005728, 60005731, 60014779, 60015041 } },       // Rens:  5 (none at the hub)
+            { 60005686, { 60005686, 60005683, 60005689, 60014770 } },                           // Hek:  4
+        };
+        return hubs;
+    }
+
+    FacilityParams HarnessFacilityParams(const Params& p)
+    {
+        FacilityParams fp;          // the server's defaults (<marketSim> MaxLineShare, MinFreeLinesPerStation, ...)
+        fp.maxJobHours = p.maxJobHours;
+        return fp;
+    }
+}
+
+HarnessCapacity::HarnessCapacity(const std::vector<NodeData>& nodes, const Params& p)
+: m_lines(HarnessFacilityParams(p)),
+  m_capacity(m_lines, p.lineInstallCost, p.lineCostPerHour)
+{
+    m_lines.SetLineCost(p.lineInstallCost, p.lineCostPerHour, 1000002);
+    m_lines.SetStationLines(60004588, LineActivity::Manufacturing, 0);
+    for (auto& n : nodes) {
+        std::vector<uint32_t> stations(1, n.stationID);
+        for (auto& h : CrucibleHubStations())
+            if (h.hub == n.stationID)
+                stations = h.stations;
+        m_capacity.SetNodeStations(n.nodeID, stations);
+    }
+}

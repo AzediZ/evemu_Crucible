@@ -564,6 +564,15 @@ bool World::LoadJob(const SimJob& job)
     return true;
 }
 
+void World::SetJobLine(uint32_t jobID, uint32_t lineID)
+{
+    std::map<uint32_t, SimJob>::iterator itr = m_jobs.find(jobID);
+    if ((itr == m_jobs.end()) or (itr->second.lineID == lineID))
+        return;
+    itr->second.lineID = lineID;
+    m_jobsChanged = true;
+}
+
 std::string World::JobList(uint32_t actorID) const
 {
     std::ostringstream out;
@@ -792,12 +801,19 @@ Units World::BuyAtNode(uint32_t actorID, Cell& c, Units q, Cents limit, Units fr
     return got;
 }
 
-Units World::RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q)
+Units World::RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q, int64_t now)
 {
     const TypeData* t(m_static.Type(typeID));
     if ((t == nullptr) or t->refine.empty())
         return 0;
     q = std::min(q, Held(actorID, nodeID, typeID));
+    // what the node's refinery takes now (its soft cap, phase 5):  the rest is kept for the next step
+    if ((q > 0) and (t->volume > 0.0f)) {
+        double m3((double)q * t->volume);
+        double allowed(m_capacity->RefineAllowance(Node(nodeID)->stationID, m3, now));
+        if (allowed < m3)
+            q = std::min<Units>(q, (Units)std::floor(allowed / t->volume + 1e-9));
+    }
     Prod::RefineResult r;
     Prod::Refine(*t, q, NodeYield(nodeID), NodeTake(nodeID), r);
     if ((r.used <= 0) or !m_ledger.GoodsOut(actorID, (uint16_t)nodeID, typeID, r.used, Goods::Materials, false))
@@ -961,7 +977,7 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
         if (Econ::ToIsk(InternalSell(oc)) >= worth)
             have -= SellToMaker(a.actorID, oc, have, 0, t);
         if ((have > 0) and (worth > 0.0))
-            RefineHeld(a.actorID, node, oc.typeID, have);
+            RefineHeld(a.actorID, node, oc.typeID, have, t);
     }
     /* 5.  the minerals go to the market makers.  what it holds beyond HoldDays of its output (a glut:  Tritanium comes
      *  with every ore) is sold into the market maker's public bids, at the bid like anyone's:  the stock over the target
@@ -1020,7 +1036,7 @@ void World::ReprocessorStep(Actor& a, int64_t t, double /*dt*/)
         Cell* c(FindCell(a.nodeID, typeID));
         if ((c != nullptr) and (c->supply == Supply::Refined))
             continue;
-        RefineHeld(a.actorID, a.nodeID, typeID, Held(a.actorID, a.nodeID, typeID));
+        RefineHeld(a.actorID, a.nodeID, typeID, Held(a.actorID, a.nodeID, typeID), t);
     }
     std::set<uint16_t> now(m_holdings[a.actorID]);
     for (auto typeID : now) {

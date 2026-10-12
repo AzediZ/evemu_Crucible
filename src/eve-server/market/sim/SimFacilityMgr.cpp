@@ -64,6 +64,7 @@ void SimFacilityMgr::ReadParams()
     p.maxLineShare = std::min(1.0, std::max(0.0, sConfig.marketSim.MaxLineShare));
     p.minFreeLines = sConfig.marketSim.MinFreeLinesPerStation;
     p.refineryM3PerHour = sConfig.marketSim.RefineryM3PerHour;
+    p.maxJobHours = std::max(1.0, sConfig.marketSim.MaxSimJobHours);
     SetParams(p);
 }
 

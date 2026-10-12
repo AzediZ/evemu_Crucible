@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "HarnessData.h"
+#include "HarnessFacilities.h"
 #include "HarnessMarket.h"
 #include "market/sim/SimEconomy.h"
 #include "market/sim/SimWorld.h"
@@ -60,6 +61,7 @@ namespace {
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
         bool        actors      = false;        // print the phase 3 actors at the start and the end
         bool        phase3      = false;        // the phase 3 acceptance tests (Phase3Test.cpp) instead
+        bool        stationLines = true;        // jobs on the hubs' station lines (phase 5);  false:  the world's virtual lines
     };
 
     struct ShockSpec {
@@ -272,6 +274,9 @@ namespace {
         HarnessMarket market(data, p.salesTaxRate);
         World world(data, p, market);
         market.SetWorld(&world);
+        HarnessCapacity lines(data.nodes, p);
+        if (opt.stationLines)
+            world.SetCapacity(lines.Capacity());
         world.Build(StartTime);
         world.Seed(StartTime);
         world.Start(StartTime, false);
@@ -688,11 +693,12 @@ namespace {
     {
         std::printf("usage: eve-market-sim [--static export.json | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
                     "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3]\n"
+                    "                      [--virtual-lines]\n"
                     "       eve-market-sim --test <name>\n");
     }
 }
 
-int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
+int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days, bool stationLines);
 
 int HarnessMain(int argc, char** argv)
 {
@@ -731,6 +737,8 @@ int HarnessMain(int argc, char** argv)
             opt.actors = true;
         else if (a == "--phase3")
             opt.phase3 = true;
+        else if (a == "--virtual-lines")
+            opt.stationLines = false;
         else {
             Usage();
             return 2;
@@ -763,7 +771,7 @@ int HarnessMain(int argc, char** argv)
                 data.types.size(), data.nodes.size(), data.vendors.size(), opt.days, opt.seeds.size(), p.economyScale);
 
     if (opt.phase3)
-        return Phase3Main(data, p, opt.seeds, opt.days);
+        return Phase3Main(data, p, opt.seeds, opt.days, opt.stationLines);
 
     int failures(0);
     std::vector<RunResult> results;

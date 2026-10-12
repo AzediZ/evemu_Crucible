@@ -2000,7 +2000,7 @@ std::string World::ActorInfo(uint32_t actorID) const
             out << "\n";
         }
     } else if (a.kind == ActorKind::Manufacturer) {
-        out << Fmt("  lines %u (%u free), %u products\n", m_capacity->Slots(actorID), m_capacity->Free(actorID, a.nodeID, Activity::Manufacturing, 0),
+        out << Fmt("  lines %u (%u free), %u products\n", m_capacity->Slots(actorID), m_capacity->Free(actorID, a.nodeID, Activity::Manufacturing, a.lastStep),
                    (m_makerPlans.count(actorID) > 0) ? (uint32_t)m_makerPlans.at(actorID).products.size() : 0);
         if (m_makerPlans.count(actorID) > 0) {
             out << "  inputs used since the start:";

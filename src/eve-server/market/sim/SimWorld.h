@@ -373,6 +373,8 @@ namespace MktSim {
         // the jobs changed since the last call (the server's write-behind)
         bool TakeJobsChanged()                          { bool c(m_jobsChanged); m_jobsChanged = false; return c; }
         void MarkJobsChanged()                          { m_jobsChanged = true; }
+        // a player moved the job to another line (the capacity's CurrentLine):  kept, and saved with the next flush
+        void SetJobLine(uint32_t jobID, uint32_t lineID);
         // consumers lose hullTypeID x mult for days (0:  every hull)
         void ShockLosses(uint16_t hullTypeID, double mult, double days, int64_t now);
         // the miners' fleets bring in x mult for days
@@ -495,7 +497,7 @@ namespace MktSim {
         // an actor sells into the market maker's public bids at their prices (a glut).  returns units sold
         Units    SellToBids(uint32_t actorID, Cell& c, Units q, int64_t t);
         // refines what an actor holds of a type (whole batches) at the node's refinery.  returns units used
-        Units    RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q);
+        Units    RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q, int64_t now);
         // what one unit refines into at the node, at the internal sell prices of its outputs (isk)
         double   RefineWorth(uint32_t nodeID, const TypeData& t) const;
         double   NodeYield(uint32_t nodeID) const;
