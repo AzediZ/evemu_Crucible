@@ -119,7 +119,7 @@ namespace Dungeon {
         double value;
     };
 
-    /* missions (F12) and incursions (F25) get their instance's events through this.
+    /* missions (F12) get their instance's events through this.
      *  the listener must call DungeonMgr::ClearListener() (or DespawnInstance()) before it is destroyed
      */
     class DungeonListener {

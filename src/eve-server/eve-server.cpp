@@ -691,6 +691,7 @@ int main( int argc, char* argv[] )
     newSvcMgr.Register(new MapService());
     newSvcMgr.Register(new CalendarMgrService());
     newSvcMgr.Register(new AgentMgrService(newSvcMgr));
+    newSvcMgr.Register(new EpicArcService());
     newSvcMgr.Register(new ScanMgrService(newSvcMgr));
     newSvcMgr.Register(new ShipService(newSvcMgr));
     newSvcMgr.Register(new SkillMgrService(newSvcMgr));

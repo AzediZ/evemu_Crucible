@@ -290,7 +290,7 @@ PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
      *            -- (sceneType = staging, vanguard)
      */
 
-    // no incursions yet:  F25 replaces this with incursion manager data (list of (solarSystemID, sceneType))
+    // incursions are not implemented (doc/code_and_design_notes/incursions):  an incursion manager would return a list of (solarSystemID, sceneType)
     return new PyList();
 }
 
@@ -299,7 +299,7 @@ PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
      *        participatingSystems = ms.GetSystemsInIncursionsGM()
      *        for solarSystemID, sceneType in participatingSystems:
      *            -- (sceneType = staging, vanguard, assault, headquarters)
-     *  F25 replaces this with incursion manager data (keep the role check and the shape)
+     *  incursions are not implemented:  an incursion manager would fill this (keep the role check and the shape)
      */
     if (!(call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::ADMIN)))
         throw CustomError("Access denied.");
@@ -365,7 +365,7 @@ PyResult MapService::GetIncursionGlobalReport(PyCallArgs &call) {
               [PyIntegerVar 129493861959830226]
               [PyInt -950263469]
               */
-    // list of KeyVals (above).  no incursions yet:  F25 replaces this with incursion manager data
+    // list of KeyVals (above).  incursions are not implemented, so there is nothing to report
     return new PyList();
 }
 
