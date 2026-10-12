@@ -224,6 +224,18 @@ public:
         uint32 MaxCatchUpHours;
         uint32 FlushSeconds;
         bool PauseOnAuditResidual;
+        // logistics and route risk (PLAN 6.5, phase 4):  hub traders between the nodes, remote miners at low/null-sec sites
+        bool EnableLogistics;           // off:  every node mines all its ores itself and nothing is hauled
+        double RiskHighSec;             // loss chance per high-sec jump of a 1e9 ISK cargo ...
+        double RiskHighSecBeta;         // ... x (value / 1e9)^beta (suicide ganks follow the value)
+        double RiskLowSec;              // loss chance per low-sec jump
+        double RiskNullSec;             // loss chance per null-sec jump
+        double FreightIskPerM3Jump;     // haulers' hull upkeep per m3 and jump (a sink)
+        uint32 HaulerFleet;             // hulls of a hub trader at the start
+        double HaulerMaxTripValue;      // isk in one hull at most
+        double HaulerCargoFactor;       // a hull's cargo hold (invTypes.capacity) x this
+        double HaulerMargin;            // a haul starts when it pays this much over its cost, freight and expected loss
+        double RemoteSupplyElasticity;  // remote mining follows its netback (sale less freight and expected loss) ^ this
         // phase 3:  the actor model (miners, reprocessors, T1 manufacturers, loot sources, ship losses;  PLAN 6.3, 6.4)
         bool Actors;                    // off:  the phase 2 stock model (abstract producers for every class)
         double KillmailCoverage;        // public killmails / all losses (mktCalLoss counts public ones)

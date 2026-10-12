@@ -60,6 +60,50 @@ void AddHubs(StaticData& data)
 }
 
 namespace {
+    // phase 4:  the export's regional node stations (gen_market_calibration.py logistics_json 'regional')
+    std::vector<std::pair<uint32_t, uint32_t>> s_regional;     // (regionID, stationID)
+
+    // the export's map (gen_market_calibration.py logistics_json):  systems, jumps, stations, ore belts, cargo holds
+    void LoadLogistics(const Json& doc, StaticData& data)
+    {
+        const Json& lg(doc["logistics"]);
+        data.systems.clear();
+        data.jumps.clear();
+        data.stations.clear();
+        data.oreBands.clear();
+        s_regional.clear();
+        if (lg.IsNull())
+            return;
+        // [systemID, security, regionID]
+        for (auto& r : lg["systems"].a) {
+            MapSystem s;
+            s.security = (float)r[1].Num();
+            s.regionID = (uint32_t)r[2].Num();
+            data.systems[(uint32_t)r[0].Num()] = s;
+        }
+        for (auto& r : lg["jumps"].a)
+            data.jumps.push_back(std::make_pair((uint32_t)r[0].Num(), (uint32_t)r[1].Num()));
+        // [stationID, systemID, regionID, reprocessingEfficiency, reprocessingStationsTake]
+        for (auto& r : lg["stations"].a) {
+            MapStation st;
+            st.stationID = (uint32_t)r[0].Num();
+            st.systemID = (uint32_t)r[1].Num();
+            st.regionID = (uint32_t)r[2].Num();
+            st.refineEfficiency = (float)r[3].Num(0.5);
+            st.refineTake = (float)r[4].Num(0.05);
+            data.stations.push_back(st);
+        }
+        for (auto& cur : lg["oreBands"].o)
+            data.oreBands[(uint16_t)std::atoi(cur.first.c_str())] = (uint8_t)cur.second.Num();
+        for (auto& cur : lg["cargo"].o) {
+            std::map<uint16_t, TypeData>::iterator itr = data.types.find((uint16_t)std::atoi(cur.first.c_str()));
+            if (itr != data.types.end())
+                itr->second.capacity = cur.second.Num();
+        }
+        for (auto& r : lg["regional"].a)
+            s_regional.push_back(std::make_pair((uint32_t)r[0].Num(), (uint32_t)r[1].Num()));
+    }
+
     struct Gen {
         uint64_t seed, n;
         explicit Gen(uint64_t s) : seed(s), n(0) { }
@@ -291,6 +335,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         }
     }
     AddSyntheticIndustry(data, seed);
+    AddSyntheticGeography(data, seed);
 }
 
 void AddSyntheticIndustry(StaticData& data, uint64_t seed)
@@ -629,7 +674,183 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
         err = "no types in " + path;
         return false;
     }
+    LoadLogistics(doc, data);
     return true;
+}
+
+void AddSyntheticGeography(StaticData& data, uint64_t seed)
+{
+    /* phase 4 (PLAN 6.1, 6.5):  a map of a few hundred systems.  the hubs' systems are the real ones, the rest are made
+     *  up (ids from 31000001).  high-sec chains between the hubs of about their Crucible jump counts, a low-sec shortcut
+     *  between Jita and Amarr (shorter, not safer), and at each hub a pocket of low-sec three jumps out with null-sec
+     *  beyond, each with a station with a refinery at its end (the hub's sites) */
+    Gen g(seed ^ 0x6E06A7ull);
+    data.systems.clear();
+    data.jumps.clear();
+    data.stations.clear();
+    data.oreBands.clear();
+    uint32_t nextSystem(31000001), nextStation(61000001);
+    auto system = [&](float sec, uint32_t regionID) -> uint32_t {
+        MapSystem s;
+        s.security = sec;
+        s.regionID = regionID;
+        data.systems[nextSystem] = s;
+        return nextSystem++;
+    };
+    for (auto& n : data.nodes) {
+        MapSystem s;
+        s.security = n.security;
+        s.regionID = n.regionID;
+        data.systems[n.systemID] = s;
+    }
+    // a chain of 'jumps' jumps from a to b through new systems of the security band [lo, hi]
+    auto chain = [&](uint32_t a, uint32_t b, int jumps, float lo, float hi, uint32_t regionID) -> std::vector<uint32_t> {
+        std::vector<uint32_t> path(1, a);
+        for (int i = 1; i < jumps; ++i)
+            path.push_back(system((float)(lo + (hi - lo) * g.U()), regionID));
+        path.push_back(b);
+        for (size_t i = 1; i < path.size(); ++i)
+            data.jumps.push_back(std::make_pair(path[i - 1], path[i]));
+        return path;
+    };
+    auto hub = [&](size_t i) { return data.nodes[i].systemID; };
+    auto region = [&](size_t i) { return data.nodes[i].regionID; };
+    if (data.nodes.size() >= 5) {
+        // Jita, Amarr, Dodixie, Rens, Hek
+        std::vector<uint32_t> ja(chain(hub(0), hub(1), 10, 0.5f, 0.9f, region(0)));
+        chain(hub(0), hub(2), 15, 0.5f, 0.9f, region(2));
+        chain(hub(1), hub(2), 13, 0.5f, 0.9f, region(1));
+        chain(hub(0), hub(4), 14, 0.5f, 0.9f, region(4));
+        chain(hub(4), hub(3), 7, 0.5f, 0.9f, region(3));
+        chain(hub(2), hub(4), 11, 0.5f, 0.9f, region(4));
+        // the low-sec shortcut:  two jumps out of Jita, four low-sec systems, two jumps into Amarr (8 against 10)
+        chain(ja[2], ja[ja.size() - 3], 5, 0.1f, 0.4f, region(0));
+    }
+    // each hub's pocket:  three high-sec jumps, three low-sec, three null-sec;  a station at the end of each
+    for (size_t i = 0; i < data.nodes.size(); ++i) {
+        std::vector<uint32_t> hs(chain(hub(i), system(0.6f, region(i)), 3, 0.5f, 0.8f, region(i)));
+        std::vector<uint32_t> ls(chain(hs.back(), system(0.2f, region(i)), 3, 0.1f, 0.4f, region(i)));
+        std::vector<uint32_t> ns(chain(ls.back(), system(-0.3f, region(i) + 100), 3, -0.5f, -0.05f, region(i) + 100));
+        for (uint32_t sys : { ls.back(), ns.back() }) {
+            MapStation st;
+            st.stationID = nextStation++;
+            st.systemID = sys;
+            st.regionID = data.systems[sys].regionID;
+            st.refineEfficiency = (sys == ls.back()) ? 0.5f : 0.35f;
+            st.refineTake = 0.05f;
+            data.stations.push_back(st);
+        }
+    }
+    // where the ores' belts are (roidDistribution):  the high-sec ores everywhere, Jaspet, Hemorphite and Hedbergite from
+    //  low-sec, the rest null-sec only (Mercoxit isn't listed:  null-sec).  the synthetic ores share their groups
+    const uint8_t H(1 << SecBand::High), L(1 << SecBand::Low), N(1 << SecBand::Null);
+    static const std::pair<uint16_t, uint8_t> bands[] = {
+        { 462, 0 }, { 460, 0 }, { 459, 0 }, { 458, 0 }, { 469, 0 }, { 457, 0 },        // Veldspar .. Kernite
+        { 456, 1 }, { 455, 1 }, { 454, 1 },                                             // Jaspet, Hemorphite, Hedbergite
+        { 467, 2 }, { 453, 2 }, { 452, 2 }, { 461, 2 }, { 451, 2 }, { 450, 2 } };       // Gneiss .. Arkonor
+    for (auto& b : bands)
+        data.oreBands[b.first] = (b.second == 0) ? (uint8_t)(H | L | N) : ((b.second == 1) ? (uint8_t)(L | N) : N);
+    // the phase 2 world's made-up ores (mostly Tritanium) are high-sec ores:  groups of their own
+    for (auto& cur : data.types)
+        if ((cur.second.categoryID == Category::Asteroid) and (cur.first >= 30000)) {
+            cur.second.groupID = (uint16_t)(9000 + cur.second.groupID);
+            data.oreBands[cur.second.groupID] = (uint8_t)(H | L | N);
+        }
+
+    /* the industrials (Badger, Mammoth, Iteron Mark V, Bestower):  T1 ships the manufacturers build, lost now and then
+     *  (killmails), with their cargo holds */
+    static const uint16_t Minerals[8] = { 34, 35, 36, 37, 38, 39, 40, 11399 };
+    struct Hull { uint16_t typeID; double capacity, cost, units; };
+    static const Hull hulls[] = {
+        { 648, 4125.0, 1.0e6, 300.0 }, { 652, 5625.0, 1.5e6, 250.0 }, { 657, 6000.0, 2.2e6, 500.0 }, { 1944, 4800.0, 1.4e6, 200.0 } };
+    static const double mShare[8] = { 0.40, 0.25, 0.15, 0.10, 0.06, 0.04, 0.0, 0.0 };
+    for (auto& h : hulls) {
+        TypeData t(Base(h.typeID, 28, Category::Ship, SimClass::MfgT1));
+        t.capacity = h.capacity;
+        t.volume = 250000.0;
+        for (int i = 0; i < 8; ++i)
+            if (mShare[i] > 0.0)
+                t.bom.push_back(std::make_pair(Minerals[i], std::round(h.cost * mShare[i] / data.types[Minerals[i]].refPrice)));
+        double cost(0.0);
+        for (auto& in : t.bom)
+            cost += in.second * data.types[in.first].refPrice;
+        t.buildCostRef = cost;
+        t.refPrice = cost * 1.1;
+        for (auto& in : t.bom)
+            t.refine.push_back(std::make_pair(in.first, std::floor(in.second / 1.1)));
+        t.unitsPerDay = h.units;
+        t.volatility = 0.025f;
+        t.buildSeconds = 6000.0;
+        data.types[t.typeID] = t;
+        for (size_t n = 1; n < data.nodes.size(); ++n) {
+            RegionTypeCal r = RegionTypeCal();
+            r.priceRatio = (float)std::exp(0.03 * g.N());
+            r.unitsShare = (float)(data.regionDefault[data.nodes[n].regionID].unitsShare * std::exp(0.1 * g.N()));
+            r.activeShare = 1.0f;
+            data.region[std::make_pair(data.nodes[n].regionID, t.typeID)] = r;
+        }
+        std::array<float, SecBand::Count> perDay = {};
+        perDay[SecBand::High] = (float)(h.units * 0.06);
+        perDay[SecBand::Low] = (float)(h.units * 0.02);
+        perDay[SecBand::Null] = (float)(h.units * 0.02);
+        data.losses[h.typeID] = perDay;
+    }
+}
+
+void PullApart(StaticData& data, double sigma)
+{
+    for (auto& cur : data.types) {
+        if (!SimClass::HasCells(cur.second.simClass))
+            continue;
+        for (size_t n = 1; n < data.nodes.size(); ++n) {
+            uint32_t regionID(data.nodes[n].regionID);
+            std::pair<uint32_t, uint16_t> key(regionID, cur.first);
+            RegionTypeCal r = RegionTypeCal();
+            std::map<std::pair<uint32_t, uint16_t>, RegionTypeCal>::const_iterator itr = data.region.find(key);
+            if (itr != data.region.end()) {
+                r = itr->second;
+            } else {
+                r.unitsShare = data.RegionUnits(regionID, cur.first);
+                r.activeShare = 1.0f;
+            }
+            r.priceRatio = (float)(data.RegionPrice(regionID, cur.first) * std::exp(sigma * Rng::Normal(Rng::Hash64(0xA9A27ull, regionID, cur.first))));
+            data.region[key] = r;
+        }
+    }
+}
+
+size_t AddRegionalNodes(StaticData& data)
+{
+    std::set<uint32_t> regions;
+    for (auto& n : data.nodes)
+        regions.insert(n.regionID);
+    std::map<uint32_t, const MapStation*> stations;
+    for (auto& st : data.stations)
+        stations[st.stationID] = &st;
+    size_t added(0);
+    for (auto& r : s_regional) {
+        std::map<uint32_t, const MapStation*>::const_iterator itr = stations.find(r.second);
+        if ((regions.count(r.first) > 0) or (itr == stations.end()))
+            continue;
+        NodeData n = NodeData();
+        n.nodeID = (uint32_t)data.nodes.size() + 1;
+        n.stationID = r.second;
+        n.systemID = itr->second->systemID;
+        n.regionID = r.first;
+        n.kind = NodeKind::Regional;
+        std::map<uint32_t, MapSystem>::const_iterator sys = data.systems.find(n.systemID);
+        n.security = (sys == data.systems.end()) ? 0.5f : sys->second.security;
+        n.refineEfficiency = itr->second->refineEfficiency;
+        n.refineTake = itr->second->refineTake;
+        data.nodes.push_back(n);
+        // a made-up corp per node and sector (the books show a few names)
+        data.stationOwner[n.stationID] = 1000300 + n.nodeID;
+        for (uint8_t s = 0; s < Sector::Count; ++s)
+            data.mmCorp[std::make_pair(n.nodeID, s)] = 1000300 + 10 * n.nodeID + s;
+        regions.insert(r.first);
+        ++added;
+    }
+    return added;
 }
 
 }

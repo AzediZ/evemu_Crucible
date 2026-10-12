@@ -61,7 +61,10 @@ namespace MktSim {
             Reprocessor     = 6,    // per node:  buys what refines for more than it costs (the refine floor), sells minerals
             Manufacturer    = 7,    // per node and sector (ships, goods):  T1 jobs from bought inputs, sells the output
             LootSource      = 8,    // per node:  loot, LP and salvage at their calibrated rates, plus dropped fits
-            Count           = 9
+            // phase 4 (PLAN 6.5):  logistics
+            Hauler          = 9,    // per pair of nodes (sector = the other node):  arbitrage, buys where cheap, ships, sells
+            RemoteMiner     = 10,   // per node and band (sector = SecBand):  mines the low/null-sec ores at a site, ships the minerals
+            Count           = 11
         };
         const char* Name(uint8_t kind);
     }
@@ -106,7 +109,8 @@ namespace MktSim {
             VendorSales     = 8,    // sink:  what players pay npc vendors
             Reconcile       = 9,    // boot reconciliation (faucet when positive)
             LineCost        = 10,   // sink:  assembly line installation and rent (to the station's npc owner)
-            Count           = 11
+            Freight         = 11,   // sink:  haulers' hull upkeep per m3 and jump (phase 4)
+            Count           = 12
         };
         int Sign(uint8_t flow);     // +1 faucet, -1 sink, 0 crossing (PlayerToSim +, SimToPlayer -)
         const char* Name(uint8_t flow);
@@ -132,7 +136,8 @@ namespace MktSim {
             RefineTax       = 13,   // sink:  the units the station keeps when refining
             Destroyed       = 14,   // sink:  the actors' own ships lost
             Spoiled         = 15,   // sink:  loot nobody wanted for too long
-            Count           = 16
+            Transport       = 16,   // sink:  cargo lost on the way (phase 4 route risk)
+            Count           = 17
         };
         int Sign(uint8_t flow);
         const char* Name(uint8_t flow);
@@ -165,6 +170,34 @@ namespace MktSim {
         uint32_t lineID         = 0;    // the assembly line it holds (0:  virtual capacity, PLAN 6.6 mode false)
         int64_t  start          = 0;
         int64_t  end            = 0;
+    };
+
+    /* phase 4:  where the ledger keeps goods that are not at a market node (Ledger's nodeID).  a node's production sites
+     *  (low/null-sec stations its remote miners work at) are SiteLoc(node, band);  goods on the way are at TransitLoc */
+    static const uint16_t SiteLocBase = 0x4000;
+    static const uint16_t TransitLoc = 0xFFFF;
+    inline uint16_t SiteLoc(uint32_t nodeID, uint8_t band)  { return (uint16_t)(SiteLocBase + nodeID * 4 + (band & 3)); }
+    inline bool     IsSiteLoc(uint32_t loc)             { return (loc >= SiteLocBase) and (loc < TransitLoc); }
+    inline uint32_t SiteNode(uint32_t loc)              { return (loc - SiteLocBase) / 4; }
+    inline uint8_t  SiteBand(uint32_t loc)              { return (uint8_t)((loc - SiteLocBase) & 3); }
+
+    // a shipment (mktSimShipment, one row per cargo line):  a hull carrying goods from one location to another
+    struct SimTrip {
+        struct Line {
+            uint16_t typeID     = 0;
+            Units    qty        = 0;
+            Cents    value      = 0;    // what it cost (or is worth) when it left
+        };
+        uint32_t tripID         = 0;
+        uint32_t actorID        = 0;
+        uint16_t from           = 0;    // ledger locations:  a node or a site
+        uint16_t to             = 0;
+        uint16_t hullTypeID     = 0;
+        int64_t  depart         = 0;
+        int64_t  arrive         = 0;
+        double   lossRoll       = 0.0;  // the hash's draw at departure
+        bool     lost           = false;// decided at departure (lossRoll < the route's loss chance):  lost when it would arrive
+        std::vector<Line> lines;
     };
 
     // a fixed price npc vendor order:  corp sells typeID at stationID for basePrice

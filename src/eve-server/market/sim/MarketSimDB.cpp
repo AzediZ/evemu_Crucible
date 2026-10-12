@@ -101,6 +101,11 @@ bool MarketSimDB::TablesReady(std::string& why)
         why = "column mktSimCell.lossWant is missing (run the market sim actors migration)";
         return false;
     }
+    // phase 4 (20261015150000-market-sim-logistics.sql)
+    if (!sDatabase.RunQuery(res, "SHOW COLUMNS FROM mktSimShipment LIKE 'tripID'") or (res.GetRowCount() == 0)) {
+        why = "column mktSimShipment.tripID is missing (run the market sim logistics migration)";
+        return false;
+    }
     return true;
 }
 
@@ -499,6 +504,8 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
                     " nextDue=VALUES(nextDue), flags=VALUES(flags), clampDays=VALUES(clampDays), lossWant=VALUES(lossWant)") and ok;
     // the phase 3 manufacturers' jobs
     ok = FlushJobs(world) and ok;
+    // the phase 4 shipments
+    ok = FlushShipments(world) and ok;
 
     // history rows are whole days (or today so far) summed over the region's nodes
     std::map<std::tuple<uint32, uint16, int32>, HistoryRow> sum;
@@ -897,5 +904,113 @@ bool MarketSimDB::FlushJobs(World& world)
                     " endTime, state) VALUES ", rows, "") and ok;
     if (!ok)
         world.MarkJobsChanged();
+    return ok;
+}
+
+/************************************************************************************************************************
+ * phase 4:  logistics
+ */
+
+void MarketSimDB::LoadLogistics(StaticData& data)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    // k-space (wormhole regions are 11000000 and up)
+    if (sDatabase.RunQuery(res, "SELECT solarSystemID, security, regionID FROM mapSolarSystems WHERE regionID < 11000000")) {
+        while (res.GetRow(row)) {
+            MapSystem s;
+            s.security = row.GetFloat(1);
+            s.regionID = row.GetUInt(2);
+            data.systems[row.GetUInt(0)] = s;
+        }
+    }
+    if (sDatabase.RunQuery(res, "SELECT fromSolarSystemID, toSolarSystemID FROM mapSolarSystemJumps WHERE fromSolarSystemID < toSolarSystemID"))
+        while (res.GetRow(row))
+            data.jumps.push_back(std::make_pair(row.GetUInt(0), row.GetUInt(1)));
+    if (sDatabase.RunQuery(res,
+        "SELECT stationID, solarSystemID, regionID, reprocessingEfficiency, reprocessingStationsTake FROM staStations"
+        " WHERE reprocessingEfficiency > 0 ORDER BY stationID"))
+    {
+        while (res.GetRow(row)) {
+            MapStation st;
+            st.stationID = row.GetUInt(0);
+            st.systemID = row.GetUInt(1);
+            st.regionID = row.GetUInt(2);
+            st.refineEfficiency = row.GetFloat(3);
+            st.refineTake = row.GetFloat(4);
+            data.stations.push_back(st);
+        }
+    }
+    // the bands each ore group's belts are in:  roidDistribution per security class, the classes of k-space's systems
+    if (sDatabase.RunQuery(res,
+        "SELECT i.groupID, MAX(s.security >= 0.45), MAX(s.security > 0 AND s.security < 0.45), MAX(s.security <= 0)"
+        " FROM roidDistribution r JOIN invTypes i ON i.typeID = r.roidID"
+        " JOIN mapSolarSystems s ON s.securityClass = r.systemSec AND s.regionID < 11000000"
+        " GROUP BY i.groupID"))
+    {
+        while (res.GetRow(row))
+            data.oreBands[(uint16)row.GetUInt(0)] = (uint8)((row.GetInt(1) ? (1 << SecBand::High) : 0) | (row.GetInt(2) ? (1 << SecBand::Low) : 0)
+                                                           | (row.GetInt(3) ? (1 << SecBand::Null) : 0));
+    }
+    // the hauling hulls' holds:  industrials, transport ships, freighters
+    if (sDatabase.RunQuery(res, "SELECT typeID, capacity FROM invTypes WHERE groupID IN (28, 380, 513)")) {
+        while (res.GetRow(row)) {
+            std::map<uint16, TypeData>::iterator itr = data.types.find((uint16)row.GetUInt(0));
+            if (itr != data.types.end())
+                itr->second.capacity = row.GetDouble(1);
+        }
+    }
+    _log(MARKET__SIM, "Market sim logistics:  %u systems, %u jumps, %u stations with a refinery, %u ore groups placed.",
+         (uint32)data.systems.size(), (uint32)data.jumps.size(), (uint32)data.stations.size(), (uint32)data.oreBands.size());
+}
+
+void MarketSimDB::LoadShipments(std::vector<SimTrip>& into)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res,
+        "SELECT shipmentID, actorID, fromNode, toNode, typeID, qty, valueCents, depart, arrive, lossRoll, state, tripID, hullTypeID"
+        " FROM mktSimShipment ORDER BY tripID, shipmentID"))
+        return;
+    while (res.GetRow(row)) {
+        uint32 tripID(row.GetUInt(11));
+        if ((tripID == 0) or into.empty() or (into.back().tripID != tripID)) {
+            SimTrip t;
+            t.tripID = (tripID != 0) ? tripID : 0;
+            t.actorID = row.GetUInt(1);
+            t.from = (uint16)row.GetUInt(2);
+            t.to = (uint16)row.GetUInt(3);
+            t.depart = row.GetInt64(7);
+            t.arrive = row.GetInt64(8);
+            t.lossRoll = row.GetDouble(9);
+            t.lost = (row.GetUInt(10) != 0);
+            t.hullTypeID = (uint16)row.GetUInt(12);
+            into.push_back(t);
+        }
+        SimTrip::Line l;
+        l.typeID = (uint16)row.GetUInt(4);
+        l.qty = row.GetInt64(5);
+        l.value = row.GetInt64(6);
+        into.back().lines.push_back(l);
+    }
+}
+
+bool MarketSimDB::FlushShipments(World& world)
+{
+    // a few hundred rows at most:  rewritten whole when they changed (with the stock on the way, in the same transaction)
+    if (!world.TakeTripsChanged())
+        return true;
+    bool ok(Exec("DELETE FROM mktSimShipment"));
+    std::vector<std::string> rows;
+    for (auto& cur : world.Trips()) {
+        const SimTrip& t(cur.second);
+        for (auto& l : t.lines)
+            rows.push_back(Fmt("(%u,%u,%u,%u,%lld,%lld,%lld,%lld,%.17g,%u,%u,%u)", t.actorID, t.from, t.to, l.typeID, (long long)l.qty,
+                               (long long)l.value, (long long)t.depart, (long long)t.arrive, t.lossRoll, t.lost ? 1 : 0, t.tripID, t.hullTypeID));
+    }
+    ok = InsertRows("INSERT INTO mktSimShipment (actorID, fromNode, toNode, typeID, qty, valueCents, depart, arrive, lossRoll, state,"
+                    " tripID, hullTypeID) VALUES ", rows, "") and ok;
+    if (!ok)
+        world.MarkTripsChanged();
     return ok;
 }

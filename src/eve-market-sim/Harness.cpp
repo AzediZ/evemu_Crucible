@@ -60,6 +60,9 @@ namespace {
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
         bool        actors      = false;        // print the phase 3 actors at the start and the end
         bool        phase3      = false;        // the phase 3 acceptance tests (Phase3Test.cpp) instead
+        bool        phase4      = false;        // the phase 4 acceptance tests (Phase4Test.cpp) instead
+        bool        regional    = false;        // the export's regional nodes too (PLAN 6.1 'auto')
+        double      pullApart   = 0.0;          // the other nodes' price ratios x e^(this N) (Phase4Test's arbitrage case)
     };
 
     struct ShockSpec {
@@ -101,6 +104,17 @@ namespace {
             {"HotCellMinutes", [&](double v) { p.hotCellMinutes = (int)v; }},
             {"ColdCellMinutes", [&](double v) { p.coldCellMinutes = (int)v; }},
             {"Days", [&](double v) { o.days = (int)v; }},
+            // phase 4
+            {"EnableLogistics", [&](double v) { p.logistics = (v != 0.0); }},
+            {"RiskHighSec", [&](double v) { p.risk.highSec = v; }},
+            {"RiskHighSecBeta", [&](double v) { p.risk.highSecBeta = v; }},
+            {"RiskLowSec", [&](double v) { p.risk.lowSec = v; }},
+            {"RiskNullSec", [&](double v) { p.risk.nullSec = v; }},
+            {"FreightIskPerM3Jump", [&](double v) { p.freightPerM3Jump = v; }},
+            {"HaulerFleet", [&](double v) { p.haulerFleet = (int)v; }},
+            {"HaulerMaxTripValue", [&](double v) { p.haulerMaxTripValue = v; }},
+            {"HaulerMargin", [&](double v) { p.haulerMargin = v; }},
+            {"RemoteSupplyElasticity", [&](double v) { p.remoteSupplyElasticity = v; }},
         };
         std::string line;
         while (std::getline(f, line)) {
@@ -281,7 +295,7 @@ namespace {
                 return;
             std::printf("  actors %s:\n%s", when, world.ActorList(0).c_str());
             for (auto& a : world.Actors())
-                if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::Manufacturer))
+                if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::Manufacturer) or (a.kind >= ActorKind::Hauler))
                     std::printf("%s", world.ActorInfo(a.actorID).c_str());
         };
         printActors("at the start");
@@ -686,17 +700,20 @@ namespace {
 
     void Usage()
     {
-        std::printf("usage: eve-market-sim [--static export.json | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
-                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3]\n"
+        std::printf("usage: eve-market-sim [--static export.json [--regional] | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
+                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3] [--phase4]\n"
+                    "                      [--no-logistics]\n"
                     "       eve-market-sim --test <name>\n");
     }
 }
 
 int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
+int Phase4Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
 
 int HarnessMain(int argc, char** argv)
 {
     Options opt;
+    bool noLogistics(false);
     for (int i = 1; i < argc; ++i) {
         std::string a(argv[i]);
         auto next = [&]() -> const char* { return (i + 1 < argc) ? argv[++i] : ""; };
@@ -731,6 +748,14 @@ int HarnessMain(int argc, char** argv)
             opt.actors = true;
         else if (a == "--phase3")
             opt.phase3 = true;
+        else if (a == "--phase4")
+            opt.phase4 = true;
+        else if (a == "--regional")
+            opt.regional = true;
+        else if (a == "--pull-apart")
+            opt.pullApart = std::strtod(next(), nullptr);
+        else if (a == "--no-logistics")
+            noLogistics = true;
         else {
             Usage();
             return 2;
@@ -740,6 +765,8 @@ int HarnessMain(int argc, char** argv)
         opt.seeds.push_back(1);
 
     Params p;
+    if (noLogistics)
+        p.logistics = false;
     std::vector<ShockSpec> shocks;
     std::string err;
     if (!opt.scenario.empty() and !ApplyScenario(opt.scenario, p, opt, shocks, err)) {
@@ -752,9 +779,13 @@ int HarnessMain(int argc, char** argv)
             std::printf("static data:  %s\n", err.c_str());
             return 2;
         }
+        if (opt.regional)
+            std::printf("regional nodes:  %zu added\n", AddRegionalNodes(data));
     } else {
         BuildSynthetic(data, 20111129, opt.scale);
     }
+    if (opt.pullApart > 0.0)
+        PullApart(data, opt.pullApart);
     std::vector<std::string> problems;
     data.Validate(problems);
     for (auto& s : problems)
@@ -764,6 +795,10 @@ int HarnessMain(int argc, char** argv)
 
     if (opt.phase3)
         return Phase3Main(data, p, opt.seeds, opt.days);
+    if (opt.phase4)
+        return Phase4Main(data, p, opt.seeds, opt.days);
+    std::printf("logistics %s:  %zu systems, %zu jumps, %zu site stations\n", p.logistics ? "on" : "off", data.systems.size(),
+                data.jumps.size(), data.stations.size());
 
     int failures(0);
     std::vector<RunResult> results;

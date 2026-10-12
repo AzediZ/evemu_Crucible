@@ -75,6 +75,8 @@ namespace MktSim {
         std::vector<std::pair<uint16_t, double>> refine;
         // manufacturing:  the blueprint's productionTime per run (one run makes portionSize units).  0 = unknown
         double   buildSeconds   = 0.0;
+        // phase 4:  the cargo hold of a hauling hull (invTypes.capacity, m3).  0 = unknown
+        double   capacity       = 0.0;
     };
 
     // a ship lost:  what was fitted to it (mktCalFit), per loss
@@ -118,6 +120,20 @@ namespace MktSim {
         float iskShare;
     };
 
+    // phase 4 (PLAN 6.1, 6.5):  the map.  a k-space system (mapSolarSystems)
+    struct MapSystem {
+        float    security       = 0.0f;
+        uint32_t regionID       = 0;
+    };
+    // an npc station with a refinery, where actors can work (production sites;  staStations)
+    struct MapStation {
+        uint32_t stationID      = 0;
+        uint32_t systemID       = 0;
+        uint32_t regionID       = 0;
+        float    refineEfficiency = 0.5f;
+        float    refineTake     = 0.05f;
+    };
+
     class StaticData {
     public:
         std::map<uint16_t, TypeData>                        types;
@@ -136,6 +152,11 @@ namespace MktSim {
         // killmails (PLAN 4.2):  public losses per day by security band, and the fits lost with them
         std::map<uint16_t, std::array<float, SecBand::Count>> losses;      // hullTypeID -> losses per day
         std::map<uint16_t, std::vector<FitItem>>            fits;           // hullTypeID -> fit
+        // phase 4:  the jump graph (k-space), the stations sites can be at, and where each ore's belts are
+        std::map<uint32_t, MapSystem>                       systems;
+        std::vector<std::pair<uint32_t, uint32_t>>          jumps;          // (from, to) solar systems
+        std::vector<MapStation>                             stations;
+        std::map<uint16_t, uint8_t>                         oreBands;       // ore groupID -> bands with its belts (1 << SecBand)
 
         const TypeData* Type(uint16_t typeID) const;
         const GroupCal* Group(uint16_t groupID) const;
@@ -165,6 +186,9 @@ namespace MktSim {
                                                                    and ((t.groupID == Group::Ice) or (t.portionSize >= 100)); }
         // public losses per day over all bands
         float LossesPerDay(uint16_t hullTypeID) const;
+        /* phase 4:  the bands (1 << SecBand) where a mineable type's belts are (roidDistribution).  ice, and everything
+         *  when the map has no ore data, is anywhere;  an ore missing from roidDistribution (Mercoxit) is null-sec */
+        uint8_t OreBands(const TypeData& t) const;
 
         // problems a loader should report (refPrice <= 0 and the like).  returns the number found
         size_t Validate(std::vector<std::string>& problems) const;

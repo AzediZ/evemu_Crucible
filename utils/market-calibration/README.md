@@ -23,7 +23,7 @@ is missing and reports any file whose sha256 differs (EVE Ref warns that archive
 | `history.py` | Streams the history CSVs into per (region, type) daily series. |
 | `killmails.py` | Streams the killmail archives into losses per (victim type, security band) and fit baskets. |
 | `derive.py` | Static data, type classes, statistics, bill-of-materials costs, gap filling, regional/weekday shape, meta ratios. |
-| `gen_market_calibration.py` | The CLI: writes the migration and `manifest.json`, prints the consistency report, optionally writes the harness snapshot (`--export-json`). |
+| `gen_market_calibration.py` | The CLI: writes the migration and `manifest.json`, prints the consistency report, optionally writes the harness snapshot (`--export-json`:  the types, bills of materials, refine outputs and `mktCal*` rows;  `buildTime`, the blueprints' production times (market sim phase 3);  `logistics`, the k-space jump graph with each system's security, the npc stations with a refinery, the security bands of each ore group's belts (`roidDistribution`), the hauling hulls' cargo holds and the regional node stations (market sim phase 4)). |
 | `manifest.json` | Every source file of the committed run: URL, data date, Last-Modified, size, sha256, rows; the repo static files and the client bulkdata file used; the sha256 of the generated SQL. |
 
 All of these are stdlib Python 3 and deterministic: two runs over the same inputs write byte-identical SQL, manifest

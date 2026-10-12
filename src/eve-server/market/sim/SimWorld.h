@@ -46,6 +46,7 @@
 
 #include "market/sim/IMarketGateway.h"
 #include "market/sim/SimLedger.h"
+#include "market/sim/SimLogistics.h"
 #include "market/sim/SimProduction.h"
 #include "market/sim/SimStaticData.h"
 
@@ -126,6 +127,19 @@ namespace MktSim {
         double   lootRestockDays    = 1.0;          // and a type down to half its target is refilled this fast (like RestockDays)
         double   replaceHalfLifeDays = 5.0;         // lost ships nobody replaced fade from demand
         double   replaceDays        = 1.0;          // pilots buy back what they lost over about this long
+        // phase 4:  logistics and route risk (PLAN 6.5).  false:  every node mines all its ores itself, no hauling
+        bool     logistics          = true;
+        RiskParams risk;                            // RiskHighSec, RiskHighSecBeta, RiskLowSec, RiskNullSec
+        double   routeRiskScale     = 1000.0;       // the routes' risk weight:  a 0.1% chance of loss per jump weighs a jump (balanced)
+        double   freightPerM3Jump   = 1.5;          // isk per m3 and jump:  hull upkeep (a sink)
+        double   secondsPerJump     = 120.0;        // an industrial;  plus dockSeconds per trip
+        double   dockSeconds        = 300.0;
+        int      haulerFleet        = 5;            // hulls of a hub trader at the start (it buys more when it can't keep up)
+        double   haulerMaxTripValue = 5e8;          // isk in one hull at most (suicide ganks follow the cargo's value)
+        double   haulerCargoFactor  = 3.0;          // a hull's cargo hold (invTypes.capacity) x this:  expanded cargoholds and skills
+        double   haulerMargin       = 0.03;         // a haul starts when it sells for this much over its cost, freight and expected loss
+        double   haulerKeepShare    = 0.5;          // a hauler takes a node's stock down to this share of its target at most
+        double   remoteSupplyElasticity = 2.0;      // remote mining follows its netback (sale less freight and expected loss), ^ this
     };
 
     struct Actor {
@@ -140,6 +154,15 @@ namespace MktSim {
         uint8_t  state          = 0;
         double   capacity       = 0.0;  // miner:  m3 a day of its reference fleet;  manufacturer:  lines
         int64_t  lastStep       = 0;    // phase 3 actors:  the last planning step
+    };
+
+    // phase 4:  a node's production site in a band (low or null-sec):  where its remote miners work
+    struct SiteInfo {
+        uint16_t   loc          = 0;            // SiteLoc(nodeID, band)
+        uint32_t   nodeID       = 0;
+        uint8_t    band         = 0;
+        MapStation station;
+        uint16_t   jumps        = 0;            // from the node (the shortest route)
     };
 
     // how a cell's goods come to the node
@@ -388,6 +411,33 @@ namespace MktSim {
         uint32_t NodeActor(uint32_t nodeID, uint8_t kind, uint8_t sector = 0) const;
         std::string JobList(uint32_t actorID) const;
 
+        /* phase 4:  logistics (SimHaulers.cpp, PLAN 6.5).  hub traders (per pair of nodes) buy where a type is cheap, ship
+         *  and sell where it is dear, when that pays over freight, the expected loss and a margin;  remote miners (per node
+         *  and band) mine the ores of low and null-sec at the node's site there and ship the minerals in.  a shipment rolls
+         *  its loss on the route's risk when it leaves:  the cargo is a goods sink (Goods::Transport), the hull is destroyed
+         *  and bought again.  goods on the way are the actor's at TransitLoc */
+        const std::map<uint32_t, SimTrip>& Trips() const    { return m_trips; }
+        // a shipment loaded from mktSimShipment (after Build and the stock, before Start).  false:  its actor is gone
+        bool LoadTrip(const SimTrip& trip);
+        // after loading:  the goods on the way (the ledger's TransitLoc) and the shipments agree.  returns a summary
+        std::string ReconcileTransit();
+        bool TakeTripsChanged()                         { bool c(m_tripsChanged); m_tripsChanged = false; return c; }
+        void MarkTripsChanged()                         { m_tripsChanged = true; }
+        uint32_t NextTripID() const                     { return m_nextTripID; }
+        void SetNextTripID(uint32_t id)                 { if (id > m_nextTripID) m_nextTripID = id; }
+        const std::vector<SiteInfo>& Sites() const      { return m_sites; }
+        // a persisted ledger location after the nodes were renumbered at boot (nodeMap:  old nodeID -> new)
+        static uint16_t MapLocation(uint16_t loc, const std::function<uint32_t(uint32_t)>& nodeMap);
+        std::string RouteInfo(uint32_t nodeID);
+        std::string TripList(uint32_t actorID) const;
+        // since the world started:  shipments that arrived and were lost, units lost per type, hauling hulls bought per type
+        uint64_t TripsArrived() const                   { return m_tripsArrived; }
+        uint64_t TripsLost() const                      { return m_tripsLost; }
+        const std::map<uint16_t, Units>& TransportLost() const  { return m_transportLost; }
+        const std::map<uint16_t, Units>& HaulHullsBought() const { return m_haulHullsBought; }
+        // the share of a node's reference supply of a mineral its remote miners bring in (0 without logistics)
+        double RemoteShare(uint32_t nodeID, uint16_t typeID) const;
+
     private:
         struct Due {
             int64_t  t;
@@ -399,7 +449,7 @@ namespace MktSim {
                 return index > o.index;
             }
         };
-        enum : uint8_t { DueDay = 0, DueHour = 1, DueCell = 2, DueJob = 3, DueActor = 4 };
+        enum : uint8_t { DueDay = 0, DueHour = 1, DueCell = 2, DueJob = 3, DueActor = 4, DueTrip = 5 };
 
         uint64_t Key(const Cell& c) const               { return ((uint64_t)c.nodeID << 16) | c.typeID; }
         uint64_t H(const Cell& c, int64_t t, uint64_t purpose, uint64_t extra = 0) const;
@@ -506,6 +556,43 @@ namespace MktSim {
         double   LossShockOf(uint16_t hullTypeID, int64_t t) const;
         double   MiningShockOf(int64_t t) const;
 
+        /* phase 4 (SimHaulers.cpp) */
+        struct HaulPlan {
+            uint32_t nodeA = 0, nodeB = 0;                  // a hub trader's pair (A is home);  a remote miner's node (A)
+            uint16_t site = 0;                              // a remote miner's site
+            uint16_t hullTypeID = 0;                        // the hauling hull (an industrial of the home node)
+            double   cargoM3 = 0.0;
+            double   fleet = 0.0;                           // hulls it keeps
+            std::map<uint32_t, int64_t> busy;               // tripID -> when its hull is back home
+            std::vector<std::pair<uint32_t, uint32_t>> pairs;   // a trader's cells of the same type at A and B
+            Route    route[2];                              // A -> B and B -> A (a remote miner:  site -> node)
+            std::vector<double> share;                      // a remote miner:  its share of the node's supply of each output
+            double   refM3 = 0.0;                           // a remote miner:  m3 a day of its reference mix
+            int64_t  lastShip = 0;
+            bool     shortOfHulls = false;
+        };
+        void     BuildRoutes();
+        void     SplitMining(uint32_t nodeID, uint32_t minerID, const std::vector<double>& mix);
+        void     BuildHaulers();
+        void     SeedHaulers(uint32_t nodeID, bool freshOnly);
+        void     HaulerStep(Actor& a, int64_t t);
+        void     RemoteMinerStep(Actor& a, int64_t t, double dtDays);
+        void     HaulDirection(Actor& a, HaulPlan& hp, bool aToB, int64_t t);
+        bool     Dispatch(Actor& a, HaulPlan& hp, uint16_t from, uint16_t to, const Route& route, std::vector<SimTrip::Line>& lines, int64_t t);
+        void     ArriveTrip(uint32_t tripID, int64_t t);
+        void     SellHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, double holdUnits, int64_t t);
+        void     BuyHulls(Actor& a, HaulPlan& hp, int64_t t);
+        uint32_t HullsFree(const Actor& a, const HaulPlan& hp, int64_t t) const;
+        Units    Transit(uint16_t to, uint16_t typeID) const;
+        Units    RemotePipeline(uint32_t nodeID, uint16_t typeID) const;
+        double   UnitTransport(const Route& r, const TypeData& t, double price, const RiskParams& risk) const;
+        double   RemoteResponse(const HaulPlan& hp, const Cell& mineral) const;
+        Units    RefineAtSite(uint32_t actorID, const SiteInfo& site, uint16_t typeID, Units q);
+        const SiteInfo* Site(uint16_t loc) const;
+        uint32_t LocSystem(uint16_t loc) const;
+        std::string HaulerInfo(const Actor& a) const;
+        std::string LogisticsStatus(int64_t now) const;
+
         const StaticData&   m_static;
         Params              m_p;
         IMarketGateway&     m_gw;
@@ -563,6 +650,18 @@ namespace MktSim {
         std::map<uint16_t, Units> m_made, m_mined, m_bought;
         std::map<uint32_t, std::vector<uint32_t>> m_actorCells;     // loot source -> the cells it supplies
         std::map<uint32_t, std::set<uint16_t>> m_holdings;          // phase 3 actor -> types it may hold at its node
+
+        // phase 4
+        std::unique_ptr<RouteMap> m_routes;
+        std::vector<SiteInfo> m_sites;
+        std::map<uint32_t, HaulPlan> m_haulPlans;                   // hauler or remote miner -> its plan
+        std::map<uint64_t, double> m_remoteShare;                   // (node << 16 | type) -> the remote miners' share
+        std::map<uint32_t, SimTrip> m_trips;
+        std::map<uint32_t, Units> m_transit;                        // (to << 16 | type) -> units on the way there
+        uint32_t m_nextTripID;
+        bool     m_tripsChanged;
+        uint64_t m_tripsArrived, m_tripsLost;
+        std::map<uint16_t, Units> m_transportLost, m_haulHullsBought;
     };
 
 }

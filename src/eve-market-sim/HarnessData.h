@@ -25,6 +25,14 @@ namespace MktHarness {
     void BuildSynthetic(MktSim::StaticData& data, uint64_t seed, double scale);
     // phase 3:  blueprint times, ore volume, a Drake and mining barges, killmail losses and fits (BuildSynthetic calls it)
     void AddSyntheticIndustry(MktSim::StaticData& data, uint64_t seed);
+    /* phase 4:  a small map (BuildSynthetic calls it):  the hubs joined by high-sec chains of about their Crucible jump
+     *  counts and a low-sec shortcut, each hub with a low-sec pocket and null-sec beyond (a station with a refinery at the
+     *  end of each), where the ores' belts are, and the industrials haulers fly */
+    void AddSyntheticGeography(MktSim::StaticData& data, uint64_t seed);
+    // phase 4:  the regional nodes the export lists (PLAN 6.1 'auto':  regions with 1% of the isk), except the hubs' regions
+    size_t AddRegionalNodes(MktSim::StaticData& data);
+    // phase 4:  the other nodes' calibrated price ratios pulled apart, each x e^(sigma N) (a test of the arbitrage)
+    void PullApart(MktSim::StaticData& data, double sigma);
 
     // the --export-json snapshot (types, bills of materials, refine outputs, the mktCal* rows).  false and a message
     //  when the file can't be read

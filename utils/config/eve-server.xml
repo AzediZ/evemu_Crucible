@@ -218,6 +218,21 @@ boolean can use either 0/1 OR true/false.
         <MaxCatchUpHours>48</MaxCatchUpHours><!-- integer - after a downtime the sim catches up at most this much -->
         <FlushSeconds>30</FlushSeconds><!-- integer - the sim's state is written this often (trades with players at once) -->
         <PauseOnAuditResidual>true</PauseOnAuditResidual><!-- bool - stop the sim when its daily books don't close (logged as an error) -->
+        <!-- phase 4:  logistics and route risk (PLAN 6.5).  hub traders buy where a type is cheap and ship it where it is dear when that pays for freight, the
+             expected loss and a margin;  the ores of low and null-sec (roidDistribution) are mined at each node's nearest station of the band and the minerals
+             shipped in, as much as their netback pays.  a shipment's loss is rolled when it leaves:  the cargo is a goods sink (goods.sink.transport in the audit),
+             the hull is bought again (industrial demand).  the risk defaults are the plan's;  the calibrated prices are taken to carry them.  GM: /mktsim routes, shipments -->
+        <EnableLogistics>true</EnableLogistics><!-- bool - false:  every node mines all its ores itself, nothing is hauled (phase 3)  default: true -->
+        <RiskHighSec>2e-5</RiskHighSec><!-- float - loss chance per high-sec (>= 0.45) jump of a 1e9 ISK cargo  default: 2e-5 (PLAN 6.5) -->
+        <RiskHighSecBeta>0.7</RiskHighSecBeta><!-- float - ... x (cargo value / 1e9)^this:  suicide ganks follow the value  default: 0.7 -->
+        <RiskLowSec>2e-3</RiskLowSec><!-- float - loss chance per low-sec jump  default: 2e-3 -->
+        <RiskNullSec>5e-3</RiskNullSec><!-- float - loss chance per null-sec jump  default: 5e-3 -->
+        <FreightIskPerM3Jump>1.5</FreightIskPerM3Jump><!-- float - haulers' hull upkeep, isk per m3 and jump (a sink;  ships travel packaged)  default: 1.5 -->
+        <HaulerFleet>5</HaulerFleet><!-- integer - industrials of a hub trader at the start (it buys more when profitable hauls wait for hulls)  default: 5 -->
+        <HaulerMaxTripValue>5e8</HaulerMaxTripValue><!-- float - isk a hauler puts in one hull at most  default: 5e8 -->
+        <HaulerCargoFactor>3.0</HaulerCargoFactor><!-- float - an industrial's cargo hold x this (expanded cargoholds, skills)  default: 3 -->
+        <HaulerMargin>0.03</HaulerMargin><!-- float - a haul starts when it sells for this much over its cost, freight and expected loss  default: 0.03 -->
+        <RemoteSupplyElasticity>2.0</RemoteSupplyElasticity><!-- float - low/null-sec mining follows its netback (sale less freight and expected loss, against the default risk's) ^ this  default: 2 -->
         <!-- phase 3:  the supply chain.  mining consortia (their fleets lost and bought again), reprocessors, T1 manufacturers and loot sources replace the stock model's producers of ore, minerals, T1 and loot;  consumers lose ships and fits at the killmail rates (PLAN 6.3, 6.4) -->
         <Actors>true</Actors><!-- bool - false:  the phase 2 stock model  default: true -->
         <KillmailCoverage>0.5</KillmailCoverage><!-- float - public killmails / all losses (the calibration counts the public ones;  PLAN 4.2)  default: 0.5 -->

@@ -290,14 +290,15 @@ void World::BuildActors(int64_t /*now*/)
             derived[((uint64_t)c.nodeID << 16) | in.first] += made * in.second;
     }
 
-    // 4.  per node:  the miner's plan (its fleet loses hulls and fits like anyone), then the other actors
+    // 4.  per node:  the miner's plan (its fleet loses hulls and fits like anyone), then the other actors.  phase 4:  the
+    //  routes and sites first (PlanMining leaves the ores of less secure space to remote miners)
+    if (m_p.logistics)
+        BuildRoutes();
     for (auto& node : m_static.nodes)
         PlanMining(node.nodeID);
-    for (auto& node : m_static.nodes) {
-        uint32_t miner(m_nodeActors[node.nodeID - 1].miner);
-        if (miner == 0)
-            continue;
-        const MinerPlan& plan(m_minerPlans[miner]);
+    for (auto& mp : m_minerPlans) {
+        const NodeData& node(*Node(m_actors[mp.first - 1].nodeID));
+        const MinerPlan& plan(mp.second);
         for (auto& h : plan.fleet) {
             double lost(h.second * plan.lossPerHullDay);
             Cell* hc(cellAt(node.nodeID, h.first));
@@ -404,6 +405,9 @@ void World::BuildActors(int64_t /*now*/)
     // the miners' working money:  days of what their fleet brings in
     for (auto& cur : m_minerPlans)
         m_actors[cur.first - 1].target = std::max(1e8, cur.second.valuePerDay * capitalDays * 100.0);
+    // phase 4:  the haulers, and the remote miners' hauling
+    if (m_p.logistics)
+        BuildHaulers();
 }
 
 void World::PlanMining(uint32_t nodeID)
@@ -522,6 +526,9 @@ void World::PlanMining(uint32_t nodeID)
     m_actors.push_back(a);
     m_nodeActors[nodeID - 1].miner = a.actorID;
     m_minerPlans[a.actorID] = plan;
+    // phase 4:  the ores of less secure space go to remote miners (SimHaulers.cpp)
+    if (m_p.logistics)
+        SplitMining(nodeID, a.actorID, mix);
 }
 
 void World::SeedActors(int64_t /*now*/, uint32_t nodeID, bool freshOnly)
@@ -833,6 +840,8 @@ void World::StepActor(Actor& a, int64_t t)
         case ActorKind::Reprocessor:    ReprocessorStep(a, t, dt); break;
         case ActorKind::Manufacturer:   ManufacturerStep(a, t, dt); break;
         case ActorKind::LootSource:     LootStep(a, t, dt); break;
+        case ActorKind::Hauler:         HaulerStep(a, t); break;
+        case ActorKind::RemoteMiner:    RemoteMinerStep(a, t, dt); break;
     }
 }
 
@@ -912,8 +921,11 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
     std::vector<double> need(plan.outputs.size(), 0.0);
     for (size_t m = 0; m < plan.outputs.size(); ++m) {
         const Cell& mc(m_cells[plan.outputs[m]]);
-        double gap(mc.targetStock - (double)MakerStock(mc) - (double)Held(a.actorID, node, mc.typeID));
-        need[m] = std::max(0.0, mc.dBar + gap / std::max(0.1, m_p.restockDays));
+        // phase 4:  less the remote miners' share of the demand and what they have coming (0 without logistics)
+        double remote(RemoteShare(node, mc.typeID));
+        double gap(mc.targetStock - (double)MakerStock(mc) - (double)Held(a.actorID, node, mc.typeID)
+                   - ((remote > 0.0) ? (double)RemotePipeline(node, mc.typeID) : 0.0));
+        need[m] = std::max(0.0, mc.dBar * (1.0 - remote) + gap / std::max(0.1, m_p.restockDays));
         // a mineral in glut still counts a little:  the fit then won't pick ores for what nobody needs
         need[m] = std::max(need[m], 0.05 * plan.need[m]);
     }

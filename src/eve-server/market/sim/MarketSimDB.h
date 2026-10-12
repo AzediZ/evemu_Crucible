@@ -94,6 +94,15 @@ public:
     // mktSimJob, rewritten when the jobs changed (inside Flush's transaction)
     static bool FlushJobs(MktSim::World& world);
 
+    /* phase 4:  logistics */
+    // the k-space map (mapSolarSystems, mapSolarSystemJumps), the npc stations with a refinery (staStations), where the
+    //  ores' belts are (roidDistribution and the systems' securityClass) and the hauling hulls' holds (invTypes.capacity)
+    static void LoadLogistics(MktSim::StaticData& data);
+    // mktSimShipment:  one row per cargo line, grouped into shipments by tripID (locations as written:  the caller maps them)
+    static void LoadShipments(std::vector<MktSim::SimTrip>& into);
+    // mktSimShipment, rewritten when the shipments changed (inside Flush's transaction)
+    static bool FlushShipments(MktSim::World& world);
+
     /* history */
     static bool HasHistoryBefore(uint32 regionID, uint16 typeID, int64 fileTime);
     static void InsertBackfill(const std::vector<MktSim::HistoryRow>& rows);
