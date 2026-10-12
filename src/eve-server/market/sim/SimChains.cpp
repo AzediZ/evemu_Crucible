@@ -1063,7 +1063,8 @@ void World::InventorStep(Actor& a, ChainPlan& plan, int64_t t)
                 n = std::min<Units>(n, (Units)std::floor((double)Held(a.actorID, node, in.first) / in.second + 1e-9));
         if (n <= 0)
             continue;
-        Units successes(Chains::Successes(n, p.chance, Rng::Hash64(m_p.seed, a.actorID, (uint64_t)t, hInvent, p.blueprint)));
+        // (salted with the job number:  a product's several jobs of a step draw apart)
+        Units successes(Chains::Successes(n, p.chance, Rng::Hash64(m_p.seed, a.actorID, (uint64_t)t, hInvent, ((uint64_t)m_nextJobID << 16) | p.blueprint)));
         SimJob job;
         job.actorID = a.actorID;
         job.nodeID = node;
