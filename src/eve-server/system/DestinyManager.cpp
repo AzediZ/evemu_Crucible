@@ -114,6 +114,7 @@ m_frozen(false)
     m_alignTime = 1.0f;
     m_maxShipSpeed = 100.0f;
     m_requestedSpeed = 100.0f;
+    m_speedBuff = 1.0f;
     m_shipWarpSpeed = 1.0f;
     m_timeToEnterWarp = 10.0f;
     m_shipMaxAccelTime = 0.0f;
@@ -1411,7 +1412,7 @@ void DestinyManager::SetMaxVelocity(float maxVelocity)
 void DestinyManager::ApplySpeed(bool update)
 {
     float oldSpeed(m_maxShipSpeed);
-    m_maxShipSpeed = m_requestedSpeed * GetWebFactor();
+    m_maxShipSpeed = m_requestedSpeed * GetWebFactor() * m_speedBuff;
     // the client simulates with this speed too, so keep it informed once we are in space
     if (update and (oldSpeed != m_maxShipSpeed) and (mySE->SysBubble() != nullptr)) {
         SetBallSpeed sbms;
@@ -1420,6 +1421,16 @@ void DestinyManager::ApplySpeed(bool update)
         PyTuple* up = sbms.Encode();
         SendSingleDestinyUpdate(&up);   // consumed
     }
+}
+
+void DestinyManager::SetSpeedBuff(float mult)
+{
+    if (!(mult > 0.0f))
+        mult = 1.0f;
+    if (mult == m_speedBuff)
+        return;
+    m_speedBuff = mult;
+    ApplySpeed(true);
 }
 
 float DestinyManager::GetWebFactor() const

@@ -425,13 +425,16 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/ai/AggroGroup.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawRules.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/LevelOneBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcMath.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcMovement.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcProfile.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcRng.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcSchedule.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcSupport.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/RecentDamage.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/SeenList.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/SentryBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/ThreatTable.h")
 SET( npc_SOURCE
@@ -447,10 +450,12 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/AggroGroup.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/LawBrain.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/LevelOneBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcMath.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcMovement.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcProfile.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/NpcSupport.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/SentryBrain.cpp" )
 
 SET( planet_INCLUDE

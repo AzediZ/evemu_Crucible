@@ -31,9 +31,12 @@
  *    delay, on the same target with probability entityReactionFactor), now and then turn on a drone that hurt them, orbit at
  *    entityFlyRange and chase-boost (with mwd signature bloom) beyond entityChaseMaxDistance, the data leash, ewar from their
  *    type, self-repair by effect.  idle belt groups warp between belts;  haulers flee, commanders run when alone.
- *   advanced ai (types with AI_ShouldUseTargetSwitching > 0: sleepers, incursion sansha, officers) still runs the phase 0-1
- *    rules (LegacyBrain) until phase 3:  threat/signature scoring incl. drones, timed target switching, ewar on a secondary
- *    target, remote repair of friends.  the movement, leash, reaction delay and groups above are shared.
+ *   level-one ai (LevelOneBrain, phase 3:  types with AI_ShouldUseTargetSwitching > 0:  sleepers, incursion sansha, asteroid
+ *    officers, 5 unique npcs):  threat from damage, ewar and remote repair, shared with the group, a score with signature,
+ *    drone, range and lock terms, a switch at most every AI_TargetSwitchTimer, ewar on a secondary target, jam responses,
+ *    evasive approach.  the movement, leash, reaction delay and groups above are shared.
+ *   support (NpcSupport, any tier with the effect):  remote repair of the group by priority with reservations, group assists,
+ *    the incursion capitals' remote ecm.
  *   law enforcement (CONCORD, police) only goes after the ship it was sent for (LawEnforcement, phase 4).
  *
  *  the type's data is its NpcProfile (dogma defaults for missing attributes, weapons from effects), the policy its brain
@@ -55,6 +58,7 @@
 #include "npc/ai/NpcMath.h"
 #include "npc/ai/NpcMovement.h"
 #include "npc/ai/NpcProfile.h"
+#include "npc/ai/NpcSupport.h"
 #include "ship/Missile.h"
 #include "ship/modules/TurretFormulas.h"
 #include "system/DestinyManager.h"
@@ -84,19 +88,25 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_hadEscorts(false),
   m_suppressLost(false),
   m_leashWarp(false),
+  m_buffsActive(false),
   m_role(NPCAI::Role::None),
   m_primaryID(0),
   m_pendingAggroID(0),
   m_secondaryID(0),
   m_switchToID(0),
+  m_jammerID(0),
+  m_jammerRange(0.0),
   m_pendingAt(0),
   m_softLeashAfter(0),
   m_lastLinkAlert(0),
+  m_lastSwitch(0),
+  m_lastDamagedAt(std::numeric_limits<int64>::min() / 2),
   m_home(NULL_ORIGIN),
   m_npc(who),
   m_ewar(nullptr),
   m_brain(nullptr),
   m_move(nullptr),
+  m_support(nullptr),
   m_destiny(who->DestinyMgr()),
   m_self(who->GetSelf())
 {
@@ -112,49 +122,12 @@ NPCAIMgr::NPCAIMgr(NPC* who)
 
     // R_acq (5.4):  how far we look for targets, and our lock range
     m_acquireRange = m_profile->acquireRange;
-    // how far remote repair reaches (phase 3 moves this to the profile's npcAssistanceRange, N4)
-    m_assistRange = m_self->GetAttribute(AttrNpcAssistanceRange).get_uint32();
-
-    /* advanced ai (level one).  the AI_* flags count by value, and 1648 = 0 switches 1650-1652 off (bug B3, profile) */
-    if (m_profile->l1SignatureRadius) {
-        // "if it is 0 or below it uses the ship's signature radius instead"
-        m_preferedSigRadius = m_profile->l1PreferredSig;
-        if (m_preferedSigRadius <= 0)
-            m_preferedSigRadius = m_profile->sigRadius;
-    } else {
-        m_preferedSigRadius = 0;
+    for (size_t i = 0; i < c_reservations; ++i)
+        m_reserved[i] = Reservation();
+    for (uint8 i = 0; i < NpcAI::Buff::Count; ++i) {
+        m_buffs[i].mult = 1.0f;
+        m_buffs[i].until = 0;
     }
-    m_switchTargChance = (m_profile->IsLevelOne() ? (1.0f - m_profile->l1ChanceToNotSwitch) : 0.0f);
-    // how often the advanced ai looks for a better target (phase 3: AI_TargetSwitchTimer as the switch cooldown)
-    m_switchTime = sConfig.npc.TargetSwitchTime *1000;
-    if (m_self->HasAttribute(AttrTargetSwitchTimer))
-        m_switchTime = m_self->GetAttribute(AttrTargetSwitchTimer).get_uint32();
-    if (m_switchTime < 1000)
-        m_switchTime = 1000;
-
-    // remote repair of friends (sleeper wardens, preservers, upholders, keepers).  defaults are the dgm defaults
-    m_rrAmount = 0;
-    if (m_self->type().HasEffect(EVEEffectID::NPCRemoteArmorRepair) or m_self->HasAttribute(AttrNpcRemoteArmorRepairAmount))
-        m_rrAmount = m_self->GetAttribute(AttrNpcRemoteArmorRepairAmount).get_float();
-    m_rrChance = (m_self->HasAttribute(AttrNpcRemoteArmorRepairChance) ? m_self->GetAttribute(AttrNpcRemoteArmorRepairChance).get_float() : 1.0f);
-    m_rrDuration = (m_self->HasAttribute(AttrNpcRemoteArmorRepairDuration) ? m_self->GetAttribute(AttrNpcRemoteArmorRepairDuration).get_uint32() : 10000);
-    m_rrThreshold = (m_self->HasAttribute(AttrNpcRemoteArmorRepairThreshold) ? m_self->GetAttribute(AttrNpcRemoteArmorRepairThreshold).get_float() : 0.25f);
-    m_rrMaxTargets = (m_self->HasAttribute(AttrNpcRemoteArmorRepairMaxTargets) ? m_self->GetAttribute(AttrNpcRemoteArmorRepairMaxTargets).get_uint32() : 1);
-    m_rsAmount = 0;
-    if (m_self->type().HasEffect(EVEEffectID::NPCRemoteShieldBoost) or m_self->HasAttribute(AttrNpcRemoteShieldBoostAmount))
-        m_rsAmount = (m_self->HasAttribute(AttrNpcRemoteShieldBoostAmount) ? m_self->GetAttribute(AttrNpcRemoteShieldBoostAmount).get_float() : 50.0f);
-    m_rsChance = (m_self->HasAttribute(AttrNpcRemoteShieldBoostChance) ? m_self->GetAttribute(AttrNpcRemoteShieldBoostChance).get_float() : 1.0f);
-    m_rsDuration = (m_self->HasAttribute(AttrNpcRemoteShieldBoostDuration) ? m_self->GetAttribute(AttrNpcRemoteShieldBoostDuration).get_uint32() : 20000);
-    m_rsThreshold = (m_self->HasAttribute(AttrNpcRemoteShieldBoostThreshold) ? m_self->GetAttribute(AttrNpcRemoteShieldBoostThreshold).get_float() : 0.75f);
-    m_rsMaxTargets = (m_self->HasAttribute(AttrNpcRemoteShieldBoostMaxTargets) ? m_self->GetAttribute(AttrNpcRemoteShieldBoostMaxTargets).get_uint32() : 1);
-    if (m_rrDuration < 1000)
-        m_rrDuration = 1000;
-    if (m_rsDuration < 1000)
-        m_rsDuration = 1000;
-    if (m_rrMaxTargets < 1)
-        m_rrMaxTargets = 1;
-    if (m_rsMaxTargets < 1)
-        m_rsMaxTargets = 1;
 
     // orbit, follow, chase cycle and signature bloom (5.5)
     m_move = new NpcMovement(m_npc, *m_profile, m_rng, m_sched);
@@ -174,6 +147,7 @@ NPCAIMgr::~NPCAIMgr()
     SafeDelete(m_ewar);
     SafeDelete(m_brain);
     SafeDelete(m_move);
+    SafeDelete(m_support);
 }
 
 int64 NPCAIMgr::Now()
@@ -186,9 +160,14 @@ void NPCAIMgr::CreateBrain()
     if (m_brain != nullptr)
         return;
     m_brain = NpcBrain::Create(*m_profile, m_npc->IsLawEnforcer());
-    // level-one npcs keep the phase 0-1 movement rule until phase 3:  evasive ones (1414) orbit at full speed
-    if (m_profile->IsLevelOne() and !m_npc->IsLawEnforcer() and (m_profile->evasive > 0))
-        m_move->SetFastOrbit(true);
+    if (!m_npc->IsLawEnforcer()) {
+        // emergent sleepers, incursion frigates and officers approach evasively from afar (1414, 5.5)
+        if (m_profile->IsLevelOne() and (m_profile->evasive > 0))
+            m_move->SetEvasive(true);
+        // remote repair, group assists, remote ecm (any tier with the effect)
+        if (NpcSupport::Needed(*m_profile))
+            m_support = new NpcSupport(m_npc, this, *m_profile, m_rng);
+    }
     _log(NPC__AI_TRACE, "%s(%u): %s brain (%s profile).", m_npc->GetName(), m_npc->GetID(), m_brain->GetName(),
             NpcAI::GetTierName(m_profile->tier));
 }
@@ -268,9 +247,12 @@ void NPCAIMgr::Process() {
                     Target(pTarget);
                 break;
             }
-            // a jammed npc can't lock anything (EwarState already broke its locks)
-            if ((m_npc->GetEwar() != nullptr) and m_npc->GetEwar()->IsJammed())
+            // a jammed npc can't lock anything (EwarState already broke its locks).  level-one npcs move (4.6)
+            if ((m_npc->GetEwar() != nullptr) and m_npc->GetEwar()->IsJammed()) {
+                if (m_jammerID != 0)
+                    m_brain->WhileJammed(ctx, m_npc->SystemMgr()->GetSE(m_jammerID), m_jammerRange);
                 break;
+            }
             // someone attacked us or our group.  a group join waits for its reaction delay first (5.6)
             if (m_pendingAggroID != 0) {
                 if (now < m_pendingAt)
@@ -334,10 +316,18 @@ void NPCAIMgr::Process() {
             if ((pSE == nullptr) or pSE->IsDead())
                 break;
             // ewar and missiles need a completed lock on the primary (bug B6a) and the reaction delay (5.6).
-            //  sleepers put their ewar on a secondary target
+            //  level-one npcs put their ewar on a secondary target (1649)
             SystemEntity* pLocked(m_npc->TargetMgr()->GetTarget(targetID, true));
-            if ((m_ewar != nullptr) and Reacted(now))
-                m_ewar->Process(pLocked, m_brain->EwarTarget(ctx, pLocked));
+            if ((m_ewar != nullptr) and Reacted(now)) {
+                SystemEntity* secondaries[8];
+                size_t count(m_brain->EwarTargets(ctx, pLocked, secondaries, 8));
+                m_secondaryID = (count > 0 ? secondaries[0]->GetID() : 0);
+                if (count > 0) {
+                    m_ewar->Process(pLocked, secondaries, count);
+                } else {
+                    m_ewar->Process(pLocked);
+                }
+            }
             FireMissile(pSE, (pLocked != nullptr));
             m_brain->Think(ctx);
         } break;
@@ -374,8 +364,12 @@ void NPCAIMgr::Process() {
     }
 
     ProcessRepairs();
-    if (!m_npc->IsLawEnforcer() and ((m_rrAmount > 0) or (m_rsAmount > 0)))
-        ProcessRemoteRepairs();
+    // remote repair, group assists, remote ecm
+    if (m_support != nullptr)
+        m_support->Process(now, ((m_state == NPCAI::State::Acquiring) or (m_state == NPCAI::State::Engaged)
+                                or (m_state == NPCAI::State::Returning)));
+    if (m_buffsActive)
+        ProcessBuffs(now);
 }
 
 bool NPCAIMgr::CheckDormant()
@@ -446,7 +440,9 @@ void NPCAIMgr::OnDamaged(SystemEntity* pSE, float amount)
 
     Wake("damaged");
     m_damaged = true;
-    AddThreat(pSE, amount, NpcAI::ThreatKind::Damage);
+    m_lastDamagedAt = ctx.now;
+    // threat:  the brain's rule (level one:  tanking modifiers, the group's share, 5.7)
+    m_brain->OnDamage(ctx, pSE, amount);
     m_recent.Add(pSE->GetID(), amount, ctx.now);
     // we're inside the attacker's ApplyDamage() call here, so the answer waits for our next Process().
     //  being shot beats a group join that is still waiting for its delay
@@ -456,234 +452,108 @@ void NPCAIMgr::OnDamaged(SystemEntity* pSE, float amount)
         QueueAggro(m_brain->OnAggressed(ctx, pSE));
     }
     AlertGroup(pSE);
-
-    // sleepers share what they know, so the group focuses together
-    if (m_profile->IsLevelOne() and (m_npc->SysBubble() != nullptr)) {
-        float share(amount * 0.5f);
-        m_npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
-            if ((cur == m_npc) or !cur->IsNPCSE())
-                return;
-            NPC* pNPC(cur->GetNPCSE());
-            if (pNPC->IsLawEnforcer() or (pNPC->GetCorporationID() != m_npc->GetCorporationID()))
-                return;
-            pNPC->GetAIMgr()->ShareThreat(pSE, share);
-        });
-    }
 }
 
 void NPCAIMgr::ShareThreat(SystemEntity* pSE, float amount)
 {
-    if (!m_profile->IsLevelOne() or m_npc->IsLawEnforcer())
+    if ((pSE == nullptr) or m_npc->IsLawEnforcer())
         return;
-    AddThreat(pSE, amount, NpcAI::ThreatKind::Damage);
+    NpcContext ctx(MakeContext());
+    m_brain->OnGroupThreat(ctx, pSE, amount);
 }
 
-float NPCAIMgr::Score(SystemEntity* pSE)
+float NPCAIMgr::ReservedArmor(int64 now) const
 {
-    if (pSE == nullptr)
-        return 0.0f;
-    float threat(GetThreat(pSE->GetID()));
-    float score(1.0f + threat);
-    // targets smaller than we like are worth less
-    if (m_profile->l1SignatureRadius and (m_preferedSigRadius > 0)) {
-        float sig(pSE->GetSignatureRadius());
-        if (sig < m_preferedSigRadius)
-            score *= (sig > 0 ? sig / m_preferedSigRadius : 0.1f);
-    }
-    // drones that hurt us get extra attention
-    if (pSE->IsDroneSE() and (threat > 0))
-        score *= 1.25f;
-    return score;
+    float sum(0.0f);
+    for (size_t i = 0; i < c_reservations; ++i)
+        if (m_reserved[i].until > now)
+            sum += m_reserved[i].amount;
+    return sum;
 }
 
-SystemEntity* NPCAIMgr::ChooseAdvancedTarget(double range)
+void NPCAIMgr::ReserveArmor(float amount, int64 until)
 {
-    // ships and drones in the bubble, best score.  ties go to the nearest
-    if (m_npc->SysBubble() == nullptr)
-        return nullptr;
-    SystemEntity* pBest(nullptr);
-    float bestScore(0.0f);
-    double bestDistance(0.0);
-    m_npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
-        if (!IsCandidate(cur, true))
-            return;
-        double distance(m_npc->GetPosition().distance(cur->GetPosition()));
-        if (distance > range)
-            return;
-        float score(Score(cur));
-        if ((pBest == nullptr) or (score > bestScore) or ((score == bestScore) and (distance < bestDistance))) {
-            pBest = cur;
-            bestScore = score;
-            bestDistance = distance;
-        }
-    });
-    return pBest;
-}
-
-void NPCAIMgr::ProcessAdvanced()
-{
+    // a free (or expired) slot, else the one that ends first
     int64 now(Now());
-    // threat fades (10% every 10s)
-    m_sched.Ensure(NpcAct::ThreatDecay, now, 10000, 10000);
-    if (m_sched.Due(NpcAct::ThreatDecay, now))
-        m_threat.Decay(0.9f, 1.0f);
-
-    // a switch we decided on happens once the new lock completes (OnLockComplete() usually gets there first)
-    if (m_switchToID != 0) {
-        SystemEntity* pNew(m_npc->TargetMgr()->GetTarget(m_switchToID, true));
-        if (pNew != nullptr) {
-            _log(NPC__AI_TRACE, "%s(%u): Switching to %s(%u).", m_npc->GetName(), m_npc->GetID(), pNew->GetName(), pNew->GetID());
-            SetPrimary(pNew);
-            m_switchToID = 0;
-        } else if (m_npc->TargetMgr()->GetTarget(m_switchToID, false) == nullptr) {
-            m_switchToID = 0;   // the lock failed
-        }
-    }
-
-    // look for a better target now and then
-    m_sched.Ensure(NpcAct::SwitchEval, now, m_switchTime, m_switchTime);
-    if (m_sched.Due(NpcAct::SwitchEval, now) and (m_switchToID == 0) and (m_rng.Uniform() < m_switchTargChance)) {
-        // only switch to targets within ThreatRadius x our targeting range
-        SystemEntity* pBest(ChooseAdvancedTarget(m_acquireRange * sConfig.npc.ThreatRadius));
-        SystemEntity* pPrimary(GetPrimary());
-        if ((pBest != nullptr) and (pBest != pPrimary) and ((pPrimary == nullptr) or (Score(pBest) > (Score(pPrimary) * 1.1f)))) {
-            if (m_npc->TargetMgr()->GetTarget(pBest->GetID(), false) != nullptr) {
-                // already locked (or locking)
-                m_switchToID = pBest->GetID();
-            } else {
-                // make room: drop our least interesting lock that isn't the primary
-                if (m_npc->TargetMgr()->TargetCount() >= m_profile->maxLockedTargets) {
-                    SystemEntity* pWorst(nullptr);
-                    float worstScore(0.0f);
-                    m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
-                        if (cur == pPrimary)
-                            return;
-                        float score(Score(cur));
-                        if ((pWorst == nullptr) or (score < worstScore)) {
-                            pWorst = cur;
-                            worstScore = score;
-                        }
-                    });
-                    if (pWorst != nullptr)
-                        m_npc->TargetMgr()->ClearTarget(pWorst);
-                }
-                bool chase = false;
-                if (m_npc->TargetMgr()->StartTargeting(pBest, GetTargetTime(pBest), m_profile->maxLockedTargets, m_acquireRange, chase))
-                    m_switchToID = pBest->GetID();
-            }
-        }
-    }
-
-    // ewar goes on the most interesting ship we have locked that isn't our primary
-    m_secondaryID = 0;
-    if (m_profile->l1SecondaryTarget and (m_ewar != nullptr)) {
-        float bestScore(0.0f);
-        double range(m_ewar->GetMaxRange());
-        m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
-            if (!locked or (cur->GetID() == m_primaryID) or !cur->IsShipSE() or !cur->HasPilot() or cur->GetPilot()->InPod())
-                return;
-            if (m_npc->GetPosition().distance(cur->GetPosition()) > range)
-                return;
-            float score(Score(cur));
-            if ((m_secondaryID == 0) or (score > bestScore)) {
-                m_secondaryID = cur->GetID();
-                bestScore = score;
-            }
-        });
-    }
-}
-
-SystemEntity* NPCAIMgr::GetSecondary()
-{
-    if (m_secondaryID == 0)
-        return nullptr;
-    return m_npc->TargetMgr()->GetTarget(m_secondaryID, true);
-}
-
-void NPCAIMgr::ProcessRemoteRepairs()
-{
-    int64 now(Now());
-    if (m_rrAmount > 0)
-        m_sched.Ensure(NpcAct::RemoteArmor, now, m_rrDuration, m_rrDuration);
-    if (m_rsAmount > 0)
-        m_sched.Ensure(NpcAct::RemoteShield, now, m_rsDuration, m_rsDuration);
-
-    if ((m_rrAmount > 0) and m_sched.Due(NpcAct::RemoteArmor, now) and (m_rng.Uniform() < m_rrChance))
-        RemoteRepair(true);
-    if ((m_rsAmount > 0) and m_sched.Due(NpcAct::RemoteShield, now) and (m_rng.Uniform() < m_rsChance))
-        RemoteRepair(false);
-}
-
-void NPCAIMgr::RemoteRepair(bool armor)
-{
-    if ((m_npc->SysBubble() == nullptr) or (m_destiny == nullptr) or m_destiny->IsWarping())
-        return;
-    double range(m_assistRange > 0 ? m_assistRange : m_acquireRange);
-    float threshold(armor ? m_rrThreshold : m_rsThreshold);
-
-    // friends (our corporation) in the bubble that need it: highest npcAssistancePriority, then the most damaged
-    m_patients.clear();
-    m_npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
-        if ((cur == m_npc) or !cur->IsNPCSE() or cur->IsDead())
-            return;
-        NPC* pNPC(cur->GetNPCSE());
-        if (pNPC->IsLawEnforcer() or (pNPC->GetCorporationID() != m_npc->GetCorporationID()))
-            return;
-        if (m_npc->GetPosition().distance(pNPC->GetPosition()) > range)
-            return;
-        InventoryItemRef iRef(pNPC->GetSelf());
-        float fraction(1.0f);
-        if (armor) {
-            float hp(iRef->GetAttribute(AttrArmorHP).get_float());
-            if (hp <= 0)
-                return;
-            fraction = 1.0f - (iRef->GetAttribute(AttrArmorDamage).get_float() / hp);
-        } else {
-            float capacity(iRef->GetAttribute(AttrShieldCapacity).get_float());
-            if (capacity <= 0)
-                return;
-            fraction = iRef->GetAttribute(AttrShieldCharge).get_float() / capacity;
-        }
-        // "0.1 means: must be below 90% armor to get repairs"
-        if (fraction >= (1.0f - threshold))
-            return;
-        Patient p = Patient();
-            p.pNPC = pNPC;
-            p.priority = iRef->GetAttribute(AttrNpcAssistanceProirity).get_float();
-            p.fraction = fraction;
-        m_patients.push_back(p);
-    });
-    if (m_patients.empty())
-        return;
-    std::sort(m_patients.begin(), m_patients.end(), [](const Patient& a, const Patient& b) {
-        if (a.priority != b.priority)
-            return (a.priority > b.priority);
-        return (a.fraction < b.fraction);
-    });
-
-    uint8 count(0);
-    uint8 maxTargets(armor ? m_rrMaxTargets : m_rsMaxTargets);
-    for (auto& cur : m_patients) {
-        if (count >= maxTargets)
+    size_t slot(0);
+    for (size_t i = 0; i < c_reservations; ++i) {
+        if (m_reserved[i].until <= now) {
+            slot = i;
             break;
-        ++count;
-        InventoryItemRef iRef(cur.pNPC->GetSelf());
-        if (armor) {
-            float damage(iRef->GetAttribute(AttrArmorDamage).get_float() - m_rrAmount);
-            iRef->SetAttribute(AttrArmorDamage, (damage < 0 ? 0 : damage));
-        } else {
-            float charge(iRef->GetAttribute(AttrShieldCharge).get_float() + m_rsAmount);
-            float capacity(iRef->GetAttribute(AttrShieldCapacity).get_float());
-            iRef->SetAttribute(AttrShieldCharge, (charge > capacity ? capacity : charge));
         }
-        m_destiny->SendSpecialEffect(m_npc->GetID(), m_npc->GetID(), m_self->typeID(), cur.pNPC->GetID(), 0,
-                                     (armor ? "effects.RemoteArmourRepair" : "effects.ShieldTransfer"), false, true, true,
-                                     (armor ? m_rrDuration : m_rsDuration), 1);
-        cur.pNPC->SendDamageStateChanged();
-        _log(NPC__AI_TRACE, "%s(%u): Remote %s repair on %s(%u) (%.0f%%).", m_npc->GetName(), m_npc->GetID(),
-                (armor ? "armor" : "shield"), cur.pNPC->GetName(), cur.pNPC->GetID(), cur.fraction * 100);
+        if (m_reserved[i].until < m_reserved[slot].until)
+            slot = i;
     }
-    m_patients.clear();
+    m_reserved[slot].amount = amount;
+    m_reserved[slot].until = until;
+}
+
+void NPCAIMgr::ApplyBuff(uint8 kind, float mult, uint32 durationMs)
+{
+    if ((kind >= NpcAI::Buff::Count) or !(mult > 0.0f) or (mult == 1.0f))
+        return;
+    int64 now(Now());
+    // what ran out goes first (Process() may not have got there)
+    if (m_buffsActive)
+        ProcessBuffs(now);
+    BuffState& buff(m_buffs[kind]);
+    if (buff.until != 0) {
+        if (buff.mult == mult) {
+            buff.until = std::max(buff.until, now + static_cast<int64>(durationMs));
+            return;
+        }
+        // another one of the same kind:  it replaces ours
+        SetBuff(kind, buff.mult, false);
+    }
+    buff.mult = mult;
+    buff.until = now + static_cast<int64>(durationMs);
+    SetBuff(kind, mult, true);
+    m_buffsActive = true;
+}
+
+void NPCAIMgr::ProcessBuffs(int64 now)
+{
+    bool any(false);
+    for (uint8 i = 0; i < NpcAI::Buff::Count; ++i) {
+        if (m_buffs[i].until == 0)
+            continue;
+        if (m_buffs[i].until > now) {
+            any = true;
+            continue;
+        }
+        SetBuff(i, m_buffs[i].mult, false);
+        m_buffs[i].until = 0;
+        m_buffs[i].mult = 1.0f;
+    }
+    m_buffsActive = any;
+}
+
+void NPCAIMgr::SetBuff(uint8 kind, float mult, bool on)
+{
+    switch (kind) {
+        case NpcAI::Buff::ShieldResist:
+        case NpcAI::Buff::ArmorResist: {
+            static const uint16 shield[] = { AttrShieldEmDamageResonance, AttrShieldExplosiveDamageResonance,
+                                             AttrShieldKineticDamageResonance, AttrShieldThermalDamageResonance };
+            static const uint16 armor[] = { AttrArmorEmDamageResonance, AttrArmorExplosiveDamageResonance,
+                                            AttrArmorKineticDamageResonance, AttrArmorThermalDamageResonance };
+            const uint16* attrs(kind == NpcAI::Buff::ShieldResist ? shield : armor);
+            for (uint8 i = 0; i < 4; ++i) {
+                // a missing resonance is 1 (no resistance, SystemEntity::Resonance)
+                float value(m_self->HasAttribute(attrs[i]) ? m_self->GetAttribute(attrs[i]).get_float() : 1.0f);
+                value = (on ? value * mult : value / mult);
+                m_self->SetAttribute(attrs[i], value, false);
+            }
+        } break;
+        case NpcAI::Buff::Speed: {
+            m_destiny->SetSpeedBuff(on ? mult : 1.0f);
+        } break;
+        case NpcAI::Buff::PropJam: {
+            if (m_ewar != nullptr)
+                m_ewar->SetTackleRangeMult(on ? mult : 1.0f);
+        } break;
+    }
+    _log(NPC__AI_TRACE, "%s(%u): Group assist %u x%.2f %s.", m_npc->GetName(), m_npc->GetID(), kind, mult, (on ? "on" : "off"));
 }
 
 bool NPCAIMgr::IsFighting() {
@@ -772,6 +642,8 @@ void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
         m_ewar->StopAll();
     m_npc->TargetMgr()->ClearTargets();
     m_move->Calm();
+    if (m_support != nullptr)
+        m_support->StopAll();
     m_sched.Stop(NpcAct::Missile);
     m_sched.Stop(NpcAct::Turret);
     m_sched.Stop(NpcAct::DroneRoll);
@@ -1103,7 +975,9 @@ void NPCAIMgr::SetIdle(bool clearLocks/*true*/) {
     m_returnHard = false;
     m_sched.Stop(NpcAct::SwitchEval);
     m_sched.Stop(NpcAct::ThreatDecay);
-    m_threat.Clear();
+    // level-one threat outlives a jam that broke every lock (it fades on its own)
+    if ((m_brain == nullptr) or !m_brain->KeepsThreat())
+        m_threat.Clear();
 
     //disallow warpout if anomaly, incursion or mission rat (and by config)
     StartWarpOutTimer();
@@ -1158,6 +1032,8 @@ void NPCAIMgr::Target(SystemEntity* pSE, bool joined/*false*/) {
          *  U(entityAttackDelayMin, Max) x entityReactionFactor.  a group join waited that long before locking.
          *  law enforcement answers at once */
         double delay((joined or m_npc->IsLawEnforcer()) ? 0.0 : DrawReactionDelay());
+        // the first pick counts as a switch:  the next one comes AI_TargetSwitchTimer later at the earliest (level one)
+        m_lastSwitch = now;
         if (delay >= 1.0) {
             m_sched.Start(NpcAct::Reaction, now, static_cast<int64>(delay));
         } else {
@@ -1260,10 +1136,8 @@ void NPCAIMgr::OnLockComplete(SystemEntity* pSE)
     if (m_primaryID == 0) {
         SetPrimary(pSE);
     } else if (pSE->GetID() == m_switchToID) {
-        // the switch we decided on (advanced ai switch, standard drone roll)
-        _log(NPC__AI_TRACE, "%s(%u): Switching to %s(%u).", m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID());
-        SetPrimary(pSE);
-        m_switchToID = 0;
+        // the switch we decided on (level-one switch, standard drone roll)
+        SwitchPrimary(pSE);
     }
     if ((pSE->GetID() == m_primaryID) and (m_state == NPCAI::State::Acquiring)) {
         m_state = NPCAI::State::Engaged;
@@ -1271,24 +1145,14 @@ void NPCAIMgr::OnLockComplete(SystemEntity* pSE)
     }
 }
 
-void NPCAIMgr::AddThreat(SystemEntity* pSE, float amount, uint8 kind)
+void NPCAIMgr::AddThreat(SystemEntity* pSE, float amount)
 {
-    if ((pSE == nullptr) or (amount <= 0.0f))
+    if ((pSE == nullptr) or !(amount > 0.0f))
         return;
     m_threat.Add(pSE->GetID(), amount);
-    // a drone's pilot is behind it
-    if (pSE->IsDroneSE()) {
-        SystemEntity* pController(pSE->GetDroneSE()->GetController());
-        if (pController != nullptr)
-            m_threat.Add(pController->GetID(), amount * 0.5f);
-    }
-    if (m_brain != nullptr) {
-        NpcContext ctx(MakeContext());
-        m_brain->OnThreat(ctx, pSE, amount, kind);
-    }
 }
 
-void NPCAIMgr::OnEwarBy(SystemEntity* pSE)
+void NPCAIMgr::OnEwarBy(SystemEntity* pSE, uint8 effect/*0*/)
 {
     if ((pSE == nullptr) or m_npc->IsLawEnforcer())
         return;
@@ -1296,13 +1160,92 @@ void NPCAIMgr::OnEwarBy(SystemEntity* pSE)
     if (!m_brain->RunsAI())
         return;
     Wake("ewar");
-    AddThreat(pSE, 50.0f, NpcAI::ThreatKind::Ewar);
+    m_brain->OnEwar(ctx, pSE, effect, false);
     if (IsIdle() and ((m_pendingAggroID == 0) or (m_pendingAt > ctx.now))) {
         m_pendingAggroID = 0;
         m_pendingJoined = false;
         QueueAggro(m_brain->OnAggressed(ctx, pSE));
     }
     AlertGroup(pSE);
+}
+
+void NPCAIMgr::OnJammedBy(SystemEntity* pSE, uint32 durationMs, double jammerRange)
+{
+    // the cycle itself came through OnEwarBy();  this is the jam on top of it
+    if ((pSE == nullptr) or m_npc->IsLawEnforcer())
+        return;
+    NpcContext ctx(MakeContext());
+    if (!m_brain->RunsAI())
+        return;
+    m_jammerID = pSE->GetID();
+    m_jammerRange = jammerRange;
+    m_brain->OnEwar(ctx, pSE, NpcMath::Effect::Ecm, true);
+    _log(NPC__AI_TRACE, "%s(%u): Jammed by %s(%u) for %ums (its reach %.0fm).", m_npc->GetName(), m_npc->GetID(), pSE->GetName(),
+            pSE->GetID(), durationMs, jammerRange);
+}
+
+void NPCAIMgr::OnAssistObserved(SystemEntity* pRepairer, SystemEntity* pPatient, float hp)
+{
+    if ((pRepairer == nullptr) or (pPatient == nullptr) or m_npc->IsLawEnforcer() or m_dormant)
+        return;
+    NpcContext ctx(MakeContext());
+    if (!m_brain->RunsAI())
+        return;
+    m_brain->OnAssist(ctx, pRepairer, pPatient, hp);
+}
+
+uint8 NPCAIMgr::EwarEffectOfGroup(uint16 groupID)
+{
+    switch (groupID) {
+        case EVEDB::invGroups::ECM:
+        case EVEDB::invGroups::ECM_Burst:
+        case EVEDB::invGroups::Remote_ECM_Burst:        return NpcMath::Effect::Ecm;
+        case EVEDB::invGroups::Remote_Sensor_Damper:    return NpcMath::Effect::Damp;
+        case EVEDB::invGroups::Tracking_Disruptor:      return NpcMath::Effect::TrackDisrupt;
+        case EVEDB::invGroups::Energy_Vampire:
+        case EVEDB::invGroups::Energy_Destabilizer:     return NpcMath::Effect::Neut;
+        case EVEDB::invGroups::Stasis_Web:              return NpcMath::Effect::Web;
+        case EVEDB::invGroups::Warp_Scrambler:
+        case EVEDB::invGroups::Warp_Disrupt_Field_Generator:    return NpcMath::Effect::Scramble;
+        case EVEDB::invGroups::Target_Painter:          return NpcMath::Effect::Paint;
+    }
+    return NpcMath::Effect::None;
+}
+
+void NPCAIMgr::JamStarted(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarget, uint32 durationMs)
+{
+    // players' ships and drones (npcs and structures jamming npcs aren't a fight we answer)
+    if ((pSource == nullptr) or (pTarget == nullptr) or !pTarget->IsNPCSE() or (!pSource->IsShipSE() and !pSource->IsDroneSE()))
+        return;
+    NPCAIMgr* pAI(pTarget->GetNPCSE()->GetAIMgr());
+    if (pAI == nullptr)
+        return;
+    // the jammer's reach:  its module's (or drone's) optimal + falloff
+    InventoryItemRef jammer(((moduleID != 0) and (moduleID != pSource->GetID())) ? sItemFactory.GetItemRef(moduleID) : pSource->GetSelf());
+    double range(0.0);
+    if (jammer.get() != nullptr)
+        range = jammer->GetAttribute(AttrMaxRange).get_double() + jammer->GetAttribute(AttrFalloff).get_double();
+    pAI->OnJammedBy(pSource, durationMs, range);
+}
+
+void NotifyRemoteAssist(SystemEntity* pRepairer, SystemEntity* pPatient, float hp)
+{
+    if ((pRepairer == nullptr) or (pPatient == nullptr) or !(hp > 0.0f) or (pPatient->SysBubble() == nullptr))
+        return;
+    // players helping players.  only level-one npcs that watch for effects (1652) care
+    if (pPatient->IsNPCSE() or pRepairer->IsNPCSE() or !(sConfig.npc.L1RepairThreat > 0.0f))
+        return;
+    uint32 patientID(pPatient->GetID());
+    pPatient->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
+        if (!cur->IsNPCSE() or cur->IsDead())
+            return;
+        NPCAIMgr* pAI(cur->GetNPCSE()->GetAIMgr());
+        if ((pAI == nullptr) or !pAI->GetProfile().l1EffectMultiplier)
+            return;
+        if ((cur->TargetMgr()->GetTarget(patientID, false) == nullptr) and !(pAI->GetThreat(patientID) > 0.0f))
+            return;
+        pAI->OnAssistObserved(pRepairer, pPatient, hp);
+    });
 }
 
 void NPCAIMgr::Aggro(SystemEntity* pSE)
@@ -1396,7 +1339,7 @@ bool NPCAIMgr::CanAggro(SystemEntity* pSE)
     return true;
 }
 
-bool NPCAIMgr::IsCandidate(SystemEntity* pSE, bool drones)
+bool NPCAIMgr::IsCandidate(SystemEntity* pSE, bool drones, bool undamped/*false*/)
 {
     if (!CanAggro(pSE))
         return false;
@@ -1408,8 +1351,8 @@ bool NPCAIMgr::IsCandidate(SystemEntity* pSE, bool drones)
         // players' ships only
         return false;
     }
-    // within what we can lock (R_acq, dampened like TargetManager::StartTargeting does)
-    return (m_npc->GetPosition().distance(pSE->GetPosition()) <= LockRange());
+    // within what we can lock (R_acq, dampened like TargetManager::StartTargeting does), or could after closing in
+    return (m_npc->GetPosition().distance(pSE->GetPosition()) <= (undamped ? static_cast<double>(m_acquireRange) : LockRange()));
 }
 
 double NPCAIMgr::LockRange()
@@ -1418,30 +1361,6 @@ double NPCAIMgr::LockRange()
     if (m_npc->GetEwar() != nullptr)
         range *= m_npc->GetEwar()->GetTargetRangeMult();
     return range;
-}
-
-SystemEntity* NPCAIMgr::ChooseTarget()
-{
-    // advanced ai (sleepers) weighs threat and signature, and drones count
-    if (m_profile->IsLevelOne())
-        return ChooseAdvancedTarget(m_acquireRange);
-
-    if (m_npc->SysBubble() == nullptr)
-        return nullptr;
-    // regular rats go for the nearest ship they see
-    SystemEntity* pTarget(nullptr);
-    double nearest(0.0);
-    m_npc->SysBubble()->ForEachPlayer([&](Client* cur) {
-        SystemEntity* pSE(cur->GetShipSE());
-        if (!IsCandidate(pSE, false))
-            return;
-        double distance(m_npc->GetPosition().distance(pSE->GetPosition()));
-        if ((pTarget == nullptr) or (distance < nearest)) {
-            pTarget = pSE;
-            nearest = distance;
-        }
-    });
-    return pTarget;
 }
 
 SystemEntity* NPCAIMgr::ChooseStandardTarget(bool drones, bool weakest, AggroGroup* aggressorsOnly)
@@ -1507,12 +1426,11 @@ SystemEntity* NPCAIMgr::PickPrimary(SystemEntity* pExclude)
     SystemEntity* pBest(nullptr);
     float bestThreat(0.0f);
     double bestDistance(0.0);
-    bool advanced(m_profile->IsLevelOne());
     m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
         // never a pod, a cloaked, warping or invulnerable ship, or one that left our bubble (bug B10)
         if ((cur == pExclude) or !CanAggro(cur))
             return;
-        float threat(advanced ? Score(cur) : GetThreat(cur->GetID()));
+        float threat(GetThreat(cur->GetID()));
         double distance(m_npc->GetPosition().distance(cur->GetPosition()));
         if ((pBest == nullptr) or (threat > bestThreat) or ((threat == bestThreat) and (distance < bestDistance))) {
             pBest = cur;
@@ -1534,6 +1452,38 @@ void NPCAIMgr::SetPrimary(SystemEntity* pSE)
         m_state = NPCAI::State::Acquiring;
     else if ((pSE != nullptr) and (m_state == NPCAI::State::Acquiring) and (m_npc->TargetMgr()->GetTarget(newID, true) != nullptr))
         m_state = NPCAI::State::Engaged;
+}
+
+bool NPCAIMgr::StartLock(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return false;
+    bool chase = false;
+    return m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase);
+}
+
+void NPCAIMgr::DropLock(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return;
+    uint32 id(pSE->GetID());
+    m_suppressLost = true;
+    m_npc->TargetMgr()->ClearTarget(pSE);
+    m_suppressLost = false;
+    if (id == m_primaryID)
+        m_primaryID = 0;
+    if (id == m_switchToID)
+        m_switchToID = 0;
+}
+
+void NPCAIMgr::SwitchPrimary(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return;
+    _log(NPC__AI_TRACE, "%s(%u): Switching to %s(%u).", m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID());
+    SetPrimary(pSE);
+    m_switchToID = 0;
+    m_lastSwitch = Now();
 }
 
 void NPCAIMgr::ProcessDroneRoll()
@@ -1912,8 +1862,6 @@ std::string NPCAIMgr::Dump(SystemEntity* pViewer, bool verbose)
         for (size_t i = 0; (i < n) and (i < 5); ++i) {
             SystemEntity* pSE(m_npc->SystemMgr()->GetSE(top[i].id));
             str << "  " << (pSE != nullptr ? pSE->GetName() : "?") << "(" << top[i].id << ") " << top[i].threat;
-            if (p.IsLevelOne() and (pSE != nullptr))
-                str << " score " << Score(pSE);
         }
         str << "<br>";
     }
@@ -1968,10 +1916,19 @@ std::string NPCAIMgr::Dump(SystemEntity* pViewer, bool verbose)
         << std::setprecision(2) << p.selfShield.skipChance << std::setprecision(0) << "), armor " << p.selfArmor.effectID << " ("
         << p.selfArmor.amount << "/" << p.selfArmor.cycleMs << "ms, skip " << std::setprecision(2) << p.selfArmor.skipChance
         << std::setprecision(0) << ")<br>";
-    if (p.IsLevelOne())
-        str << "level one:  secondary " << p.l1SecondaryTarget << ", sig " << p.l1SignatureRadius << " (pref " << m_preferedSigRadius
-            << "), effects " << p.l1EffectMultiplier << ", switch timer " << m_switchTime << "ms (data " << p.l1SwitchTimerMs
-            << "), evasive " << p.evasive << "<br>";
+    // the brain's own (level one:  scores, switch timer, newcomers)
+    str << m_brain->Describe(ctx);
+    if (m_support != nullptr)
+        str << m_support->Describe(ctx.now);
+    if (m_buffsActive) {
+        static const char* names[NpcAI::Buff::Count] = { "shield resist", "speed", "prop jam", "armor resist" };
+        str << "group assists on us:";
+        for (uint8 i = 0; i < NpcAI::Buff::Count; ++i)
+            if (m_buffs[i].until > ctx.now)
+                str << "  " << names[i] << " x" << std::setprecision(2) << m_buffs[i].mult << std::setprecision(0)
+                    << " for " << (m_buffs[i].until - ctx.now) << "ms";
+        str << "<br>";
+    }
     str << "group:  " << (m_group.get() != nullptr ? m_group->Describe(ctx.now) : std::string("none"))
         << (m_npc->GetSpawnMgr() != nullptr ? ", spawn manager" : "") << ", respawn chance " << std::setprecision(2)
         << p.groupRespawnChance << std::setprecision(0) << "<br>";

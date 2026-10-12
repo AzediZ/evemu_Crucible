@@ -222,12 +222,11 @@ boolean can use either 0/1 OR true/false.
         <WarpFollowChance>0.0</WarpFollowChance>
         <TargetPod>false</TargetPod><!-- bool   npc target/attack pod -->
         <TargetPodSec>0</TargetPodSec><!-- npc target/attack pod in truSec lower than this  -->
-        <ThreatRadius>1.0</ThreatRadius> <!-- multiplier on an npc's targeting range when it re-evaluates targets.  npcs only switch to targets within ThreatRadius x maxTargetRange -->
         <UseEwar>true</UseEwar><!-- bool  npcs and non-law sentries use their type's ewar on players (scram, web, jam, damp, tracking disruption, paint, neut).  Crucible default -->
         <GroupAggro>true</GroupAggro><!-- bool  attacking one npc aggros the rest of its spawn group in the bubble -->
         <DroneAggroChance>0.10</DroneAggroChance><!-- chance (checked every 30s) that a regular rat switches to a drone that damaged it.  sleepers use threat instead -->
         <LeashRange>0</LeashRange><!-- m.  deprecated:  every npc's leash comes from its entityMaxWanderRange (LeashSoftScale/LeashHardScale below).  > 0 replaces the hard leash range (logged at boot).  0 default -->
-        <TargetSwitchTime>15</TargetSwitchTime><!-- s.  how often sleepers re-evaluate their primary target (when the type has no switch timer of its own) -->
+        <TargetSwitchTime>0</TargetSwitchTime><!-- s.  level-one npcs (sleepers, incursion sansha, officers) switch targets at most this often.  0 = the type's AI_TargetSwitchTimer (1416, dgm default 60s:  "the time that must pass between one target switch and another").  0 default.  (ThreatRadius is gone:  they consider everything within R_acq) -->
         <!-- npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1) -->
         <SleepEmptyBubbles>true</SleepEmptyBubbles><!-- bool  idle npcs in a bubble without players skip their ai (movement still runs) until a player arrives, they are locked, damaged or their group is alerted.  true default -->
         <RequireWeaponEffects>true</RequireWeaponEffects><!-- bool  Crucible dogma:  npc turrets need effect 10 (targetAttack), missiles effect 569 (missileLaunchingForEntity).  false = attribute-only gating (the old behaviour, for comparison).  true default -->
@@ -252,6 +251,18 @@ boolean can use either 0/1 OR true/false.
         <HaulerFleeDelay>30</HaulerFleeDelay><!-- s.  an unharmed belt hauler warps off (and is gone) this long after a player arrives;  a damaged one tries at once, whenever it isn't scrambled.  30 default -->
         <CommanderFlee>true</CommanderFlee><!-- bool  a belt commander whose escorts are all dead warps to another belt when it isn't scrambled.  true default -->
         <RespectInterdiction>true</RespectInterdiction><!-- bool  npc warps are refused inside, and pulled by, warp disruption fields like players'.  true default -->
+        <!-- npc ai phase 3:  level-one ai for sleepers, incursion sansha, asteroid officers and 5 unique npcs (doc/code_and_design_notes/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9).  threat numbers are [DD]:  tune with /npcai -->
+        <L1EvalInterval>5</L1EvalInterval><!-- s.  how often a level-one npc re-scores its candidates (score = (1 + threat) x signature x drone x range x lock):  target switch, locks on the best ones, newcomers.  5 default -->
+        <L1SwitchMargin>1.10</L1SwitchMargin><!-- a level-one npc switches only to a target scoring more than this x its primary (and only AI_TargetSwitchTimer after its last switch).  1.10 default -->
+        <L1ThreatDecay>0.90</L1ThreatDecay><!-- level-one threat x this every L1ThreatDecayInterval (below 1 it is forgotten).  0.90 default -->
+        <L1ThreatDecayInterval>10</L1ThreatDecayInterval><!-- s.  10 default -->
+        <L1ThreatShare>0.5</L1ThreatShare><!-- this x every threat a level-one npc gains goes to the rest of its aggro group (era:  sleepers share threat).  0.5 default -->
+        <L1EffectThreat>0.02</L1EffectThreat><!-- E = this x the npc's max hp.  each ewar cycle on a level-one npc adds weight x E:  ECM 5 (x2 more when it jams), damp 3, tracking disruptor 2, neut/nos 2, web/scram/painter 1 (era:  "ECM generates a very high threat level").  0.02 default -->
+        <L1RepairThreat>0.5</L1RepairThreat><!-- this x the hp a pilot remote repairs on someone a level-one npc has locked (or has threat on) is threat on that pilot.  0 = off.  0.5 default -->
+        <L1DroneControllerShare>0.25</L1DroneControllerShare><!-- this x a drone's damage threat also goes to its pilot.  0.25 default -->
+        <L1NewcomerThreat>1.2</L1NewcomerThreat><!-- incursion sansha:  a ship coming into sight that wasn't seen for L1NewcomerMemory gets at least this x the primary's threat (era:  "they most likely will change targets to any newcomers").  1.2 default -->
+        <L1NewcomerMemory>300</L1NewcomerMemory><!-- s.  300 default -->
+        <RemoteEcmJamTime>5</RemoteEcmJamTime><!-- s.  the incursion capitals' remote ecm burst (every 5 min, sooner with more than 60 players) jams every player ship on grid this long.  [DD]  5 default -->
     </npc>
 
     <standings><!-- these are in percent. do not modify.  not fully debugged -->

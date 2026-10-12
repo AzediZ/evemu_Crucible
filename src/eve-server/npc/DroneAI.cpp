@@ -36,6 +36,9 @@
 #include "inventory/Inventory.h"
 #include "npc/Drone.h"
 #include "npc/DroneAI.h"
+#include "npc/NPC.h"
+#include "npc/NPCAI.h"
+#include "npc/ai/NpcMath.h"
 #include "ship/Ship.h"
 #include "ship/modules/EwarModule.h"
 #include "system/Damage.h"
@@ -573,6 +576,21 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
 
     SendEffect(pTarget, true);
 
+    // npcs remember a drone's ewar like a module's, and which kind (level-one effect threat, npc ai plan 5.7)
+    if (pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr)) {
+        uint8 effect(NpcMath::Effect::None);
+        if (m_action == DroneAI::Action::Web) {
+            effect = NpcMath::Effect::Web;
+        } else if (m_action == DroneAI::Action::Ewar) {
+            if (stats.effectID == EVEEffectID::ewTestEffectJam)
+                effect = NpcMath::Effect::Ecm;
+            else if (stats.effectID == EVEEffectID::energyDestabilizationNew)
+                effect = NpcMath::Effect::Neut;
+        }
+        if ((m_action == DroneAI::Action::Web) or (m_action == DroneAI::Action::Ewar))
+            pTarget->GetNPCSE()->GetAIMgr()->OnEwarBy(m_pDrone, effect);
+    }
+
     switch (m_action) {
         case DroneAI::Action::Attack: {
             const ItemType& type(m_pDrone->GetSelf()->type());
@@ -595,15 +613,22 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
         case DroneAI::Action::RepairShield: {
             InventoryItemRef tRef(pTarget->GetSelf());
             double capacity(tRef->GetAttribute(AttrShieldCapacity).get_double());
-            double charge(tRef->GetAttribute(AttrShieldCharge).get_double() + stats.repairAmount);
+            double before(tRef->GetAttribute(AttrShieldCharge).get_double());
+            double charge(before + stats.repairAmount);
             tRef->SetAttribute(AttrShieldCharge, (charge > capacity ? capacity : charge));
             pTarget->SendDamageStateChanged();
+            // level-one npcs fighting the patient take note (npc ai plan 5.7)
+            NotifyRemoteAssist((m_pDrone->GetController() != nullptr ? static_cast<SystemEntity*>(m_pDrone->GetController()) : m_pDrone),
+                               pTarget, static_cast<float>((charge > capacity ? capacity : charge) - before));
         } break;
         case DroneAI::Action::RepairArmor: {
             InventoryItemRef tRef(pTarget->GetSelf());
-            double damage(tRef->GetAttribute(AttrArmorDamage).get_double() - stats.repairAmount);
+            double before(tRef->GetAttribute(AttrArmorDamage).get_double());
+            double damage(before - stats.repairAmount);
             tRef->SetAttribute(AttrArmorDamage, (damage < 0.0 ? 0.0 : damage));
             pTarget->SendDamageStateChanged();
+            NotifyRemoteAssist((m_pDrone->GetController() != nullptr ? static_cast<SystemEntity*>(m_pDrone->GetController()) : m_pDrone),
+                               pTarget, static_cast<float>(before - (damage < 0.0 ? 0.0 : damage)));
         } break;
         case DroneAI::Action::Web: {
             StartWeb(pTarget);

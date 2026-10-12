@@ -109,6 +109,8 @@ public:
     float GetWebFactor() const;
     // the speed asked for before webs (min(request, maxVelocity))
     float GetRequestedSpeed() const                     { return m_requestedSpeed; }
+    // an npc group speed assist (NPCGroupSpeedAssist, npc ai plan 5.8):  the speed x mult on top of the request and the webs
+    void SetSpeedBuff(float mult);
     void SpeedBoost(bool deactivate=false);             // reset speed variables and bubblecast ship's AB/MWD modified speed (module activate/deactivate)
     void SetPosition(const GPoint& pt, bool update=false);
     void SetRadius(double radius, bool update = false);
@@ -233,6 +235,7 @@ protected:
     float m_maxShipSpeed;               //in m/s.  the requested speed x the web factor
     float m_requestedSpeed;             //in m/s.  what SetMaxVelocity (or the ship's attributes) asked for, before webs
     std::map<uint32, float> m_webs;     // web source itemID -> speed factor (1 + speedFactor/100)
+    float m_speedBuff;                  // npc group speed assist (1 = none)
     // m_maxShipSpeed = m_requestedSpeed x the web factor;  tells the client when it changed and update is set
     void ApplySpeed(bool update);
     float m_shipWarpSpeed;              //in au/s

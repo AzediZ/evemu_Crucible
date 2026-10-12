@@ -6,10 +6,12 @@
 #include "eve-server.h"
 
 #include "EVEServerConfig.h"
+#include "npc/Drone.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/ai/AggroGroup.h"
 #include "npc/ai/LawBrain.h"
+#include "npc/ai/LevelOneBrain.h"
 #include "npc/ai/NpcBrain.h"
 #include "npc/ai/NpcProfile.h"
 #include "npc/ai/NpcRng.h"
@@ -23,10 +25,37 @@ NpcBrain* NpcBrain::Create(const NpcProfile& profile, bool lawEnforcer)
         return new LawBrain();
     if (profile.tier == NpcAI::Tier::Passive)
         return new PassiveBrain();
-    // level-one npcs keep the phase 0-1 rules until phase 3 (LevelOneBrain)
+    // sleepers, incursion sansha, asteroid officers, 5 unique npcs (phase 3, npc/ai/LevelOneBrain.h)
     if (profile.tier == NpcAI::Tier::LevelOne)
-        return new LegacyBrain(false);
+        return new LevelOneBrain(profile);
     return new StandardBrain();
+}
+
+/* the standard threat rule (4.2):  the next primary is the locked target that hurt us most */
+void NpcBrain::OnDamage(NpcContext& ctx, SystemEntity* pSource, float hp)
+{
+    if ((pSource == nullptr) or !(hp > 0.0f))
+        return;
+    ctx.ai->AddThreat(pSource, hp);
+    // a drone's pilot is behind it
+    if (pSource->IsDroneSE()) {
+        SystemEntity* pController(pSource->GetDroneSE()->GetController());
+        if (pController != nullptr)
+            ctx.ai->AddThreat(pController, hp * 0.5f);
+    }
+}
+
+void NpcBrain::OnEwar(NpcContext& ctx, SystemEntity* pSource, uint8 effect, bool jammed)
+{
+    // a cycle of ewar on us counts like a little damage (the jam itself adds nothing more), a drone's pilot half of it
+    if ((pSource == nullptr) or jammed)
+        return;
+    ctx.ai->AddThreat(pSource, 50.0f);
+    if (pSource->IsDroneSE()) {
+        SystemEntity* pController(pSource->GetDroneSE()->GetController());
+        if (pController != nullptr)
+            ctx.ai->AddThreat(pController, 25.0f);
+    }
 }
 
 /* StandardBrain */
@@ -90,56 +119,13 @@ void StandardBrain::Think(NpcContext& ctx)
     ctx.ai->ProcessDroneRoll();
 }
 
-/* LegacyBrain:  the rules NPCAIMgr had before the brain interface */
-SystemEntity* LegacyBrain::Acquire(NpcContext& ctx)
-{
-    // law enforcement goes only after the ship it was sent for (the state machine handles that)
-    if (m_law)
-        return nullptr;
-    return ctx.ai->ChooseTarget();
-}
-
-SystemEntity* LegacyBrain::OnAggressed(NpcContext& ctx, SystemEntity* pBy)
-{
-    // a drone's pilot when we can see him, else whoever it was
-    return ctx.ai->AggroTarget(pBy);
-}
-
-void LegacyBrain::OnGroupAlert(NpcContext& ctx, SystemEntity* pAggressor)
-{
-    if (m_law)
-        return;
-    ctx.ai->QueueAggro(ctx.ai->AggroTarget(pAggressor));
-}
-
-SystemEntity* LegacyBrain::RepickPrimary(NpcContext& ctx, SystemEntity* pLost)
-{
-    // most threat (sleepers:  best score), then nearest
-    return ctx.ai->PickPrimary(pLost);
-}
-
-void LegacyBrain::Think(NpcContext& ctx)
-{
-    if (m_law)
-        return;
-    if (ctx.profile.IsLevelOne())
-        ctx.ai->ProcessAdvanced();
-}
-
-SystemEntity* LegacyBrain::EwarTarget(NpcContext& ctx, SystemEntity* pPrimary)
-{
-    // sleepers put their ewar on a secondary target
-    if (ctx.profile.IsLevelOne() and ctx.profile.l1SecondaryTarget)
-        return ctx.ai->GetSecondary();
-    return nullptr;
-}
-
 /* PassiveBrain */
 SystemEntity* PassiveBrain::Acquire(NpcContext& ctx)
 {
     if (ctx.profile.ewarEffects.empty())
         return nullptr;
-    return ctx.ai->ChooseTarget();
+    // the nearest player ship for its ewar
+    return ctx.ai->ChooseStandardTarget(false, false, nullptr);
 }
 
 SystemEntity* PassiveBrain::OnAggressed(NpcContext& ctx, SystemEntity* pBy)

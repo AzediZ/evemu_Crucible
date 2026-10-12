@@ -32,6 +32,25 @@ namespace NpcAI {
     }
     const char* GetTierName(uint8 tier);
 
+    // which level-one npcs a type belongs to (by group):  the incursion newcomer bonus and the sleepers' capital escalation
+    namespace L1Family {
+        enum : uint8 {
+            Other       = 0,    // asteroid officers, the 5 unique npcs
+            Sleeper     = 1,    // groups 959-961, 982-987
+            Incursion   = 2     // groups 1052-1054, 1056
+        };
+    }
+    // what a group assist (effects 4686-4689) gives, and what an npc has on it
+    namespace Buff {
+        enum : uint8 {
+            ShieldResist    = 0,    // NPCGroupShieldAssist (4686):  shield resonances x
+            Speed           = 1,    // NPCGroupSpeedAssist (4687):  speed x
+            PropJam         = 2,    // NPCGroupPropJamAssist (4688):  scram and web range x
+            ArmorResist     = 3,    // NPCGroupArmorAssist (4689):  armor resonances x
+            Count           = 4
+        };
+    }
+
     // data problems found while building a profile (bit flags)
     namespace Problem {
         enum : uint32 {
@@ -135,6 +154,8 @@ struct NpcProfile {
     float l1TankingShip;            // 1657
     uint32 l1SwitchTimerMs;         // AI_TargetSwitchTimer (1416)
     float evasive;                  // AI_ShouldUseEvasiveManeuver (1414)
+    uint8 l1Family;                 // NpcAI::L1Family (from the group):  sleeper, incursion or other
+    float maxHP;                    // shield capacity + armor hp + hull hp (E of the level-one effect threat, 5.7)
 
     /* ewar and support effects the type has */
     std::vector<uint16> ewarEffects;
@@ -147,6 +168,35 @@ struct NpcProfile {
     } selfShield, selfArmor;
     bool hasRemoteRepair;
     bool hasGroupAssist;
+    /* remote repair of friends (5.9):  NPCRemoteArmorRepair (3852) / NPCRemoteShieldBoost (3855) */
+    struct RemoteRepair {
+        uint16 effectID;            // 0 = none
+        float amount;               // npcRemoteArmorRepairAmount (1455) / npcRemoteShieldBoostAmount (1460)
+        uint32 cycleMs;             // 1454 / 1458
+        float chance;               // activation chance each cycle:  1453 / 1459
+        float threshold;            // 1456 (damage / armor hp) / 1462 (1 - charge / capacity)
+        uint8 maxTargets;           // 1501 / 1502
+    } remoteArmor, remoteShield;
+    /* group assists (effects 4686-4689):  a bonus for the same-group npcs within npcAssistanceRange, each duration */
+    struct GroupAssist {
+        uint16 effectID;
+        uint8 kind;                 // NpcAI::Buff
+        float bonus;                // 1671/1674/1675/1676 ("negative values is a bonus")
+        uint32 durationMs;          // 1672/1677/1679/1681
+        float chance;               // 1673/1678/1680/1682
+    };
+    std::vector<GroupAssist> groupAssists;
+    /* remote ecm (effect 4656, the incursion capitals):  every burst interval (1658, recalculated from 1659-1663 and the players
+     *  in the bubble) roll 1664, then jam every player ship on grid */
+    struct RemoteEcm {
+        bool has;
+        float baseMs;               // entityRemoteECMBaseDuration (1661)
+        float minMs;                // entityRemoteECMMinDuration (1659)
+        float scale;                // entityRemoteECMDurationScale (1660)
+        float playerStep;           // entityRemoteECMExtraPlayerScale (1662)
+        float intendedPlayers;      // entityRemoteECMIntendedNumPlayers (1663)
+        float chance;               // entityRemoteECMChanceOfActivation (1664)
+    } remoteEcm;
 
     /* respawn, bounty, security */
     float groupRespawnChance;       // entityGroupRespawnChance (640)

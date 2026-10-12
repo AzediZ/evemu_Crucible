@@ -17,7 +17,8 @@
   *
   *   members hold the group (shared_ptr);  the registry (one per system, in SpawnMgr) only finds it.  a group goes away with
   *   its last member.
-  *   phase 3 hooks:  ForEachMember() for the level-one threat share (5.7) and remote-repair reservations (5.9).
+ *   phase 3:  ForEachMember() is the level-one threat share (5.7) and the remote repairers' patients (5.9;  every group of
+ *   a dungeon room through AggroGroupRegistry::ForEachRoomMember()).
   *   sentries (4.11, 6.5):  pirate and deadspace sentries are members too (AddSentry):  a dungeon spawn group's sentries are
   *   members of its live group, a room's placed sentries of the room's group, a GM /spawn's of its batch.  an alert reaches
   *   them through SentryAI::OnGroupAlert, and a sentry that is locked, attacked or acquires a target alerts its group.
@@ -124,6 +125,17 @@ public:
     void AlertRoom(uint64_t roomKey, SystemEntity* pAggressor);
     // next free id for GM /spawn batches
     uint32 NextGMBatch()                                { return ++m_gmBatch; }
+    /* fn(NPC*) for every member of every group of a dungeon room (npc remote repair, phase 3).  fn must not change groups */
+    template<typename F>
+    void ForEachRoomMember(uint64_t roomKey, const F& fn) const {
+        if (roomKey == 0)
+            return;
+        for (auto& cur : m_groups) {
+            std::shared_ptr<AggroGroup> group(cur.second.lock());
+            if ((group.get() != nullptr) and (group->GetRoomKey() == roomKey))
+                group->ForEachMember(fn);
+        }
+    }
 
 private:
     void Prune();

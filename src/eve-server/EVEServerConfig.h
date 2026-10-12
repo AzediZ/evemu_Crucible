@@ -249,13 +249,13 @@ public:
         bool UseEwar;               // npcs and non-law sentries use their type's ewar (scram, web, jam, damp, td, paint, neut)
         bool GroupAggro;            // attacking one npc alerts the rest of its spawn group
         uint16 WarpOut;
-        uint16 TargetSwitchTime;    // s.  how often advanced (sleeper) npcs re-evaluate their primary
+        uint16 TargetSwitchTime;    // s.  level-one npcs:  overrides AI_TargetSwitchTimer (1416), the least time between two switches.  0 = the data
         uint32 LeashRange;          // m.  sleepers and deadspace npcs pulled further than this from home give up.  0 = off
         uint16 RoamingTimer;
         uint16 StaticTimer;
         uint16 RespawnTimer;        // s.  a killed belt rat respawns this long (+ RespawnJitter) after it died
         uint32 RatFaction;
-        float ThreatRadius;
+        float ThreatRadius;         // deprecated (npc ai phase 3) and ignored:  level-one npcs consider everything within R_acq
         float WarpFollowChance;
         float TargetPodSec;
         float DefenderMissileChance;
@@ -286,6 +286,18 @@ public:
         uint32 HaulerFleeDelay;     // s.  an unharmed hauler warps off this long after a player arrives
         bool CommanderFlee;         // a commander whose escorts are all dead warps to another belt
         bool RespectInterdiction;   // npc warps are stopped and pulled by warp disruption fields like players'
+        // npc ai phase 3:  level-one ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9)
+        uint32 L1EvalInterval;      // s.  how often a level-one npc re-scores its candidates (switch, locks, newcomers)
+        float L1SwitchMargin;       // a level-one npc switches only to a target scoring more than this x its primary
+        float L1ThreatDecay;        // level-one threat x this every L1ThreatDecayInterval
+        uint32 L1ThreatDecayInterval;   // s
+        float L1ThreatShare;        // this x every threat a level-one npc gains goes to the rest of its aggro group
+        float L1EffectThreat;       // E = this x the npc's max hp:  an ewar cycle on it adds weight x E (ECM 5, damp 3, TD/neut 2, others 1)
+        float L1RepairThreat;       // this x the hp a pilot repairs on someone a level-one npc fights is threat on that pilot
+        float L1DroneControllerShare;   // this x a drone's damage threat also goes to its pilot
+        float L1NewcomerThreat;     // incursion:  a newcomer gets at least this x the primary's threat
+        uint32 L1NewcomerMemory;    // s.  a ship not seen this long counts as a newcomer again
+        uint32 RemoteEcmJamTime;    // s.  how long the incursion capitals' remote ecm burst jams every ship on grid
     } npc;
 
     // From <database>

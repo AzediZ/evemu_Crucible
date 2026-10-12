@@ -191,6 +191,10 @@ public:
     void OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker);
     // pSE is about to be hit:  an overseer structure or sentry aggroes its whole room (npc ai plan 4.3)
     void OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker);
+    /* a sleeper (pSpotter) of a dungeon room saw a capital ship (npc ai plan 4.6:  "the sleepers will immediately call for
+     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance.  the
+     *  reinforcement spawn is phase 5's;  for now it is logged */
+    void OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital);
     void OnPlayerKilled(ShipSE* pShip, uint32 charID);
     // Dungeon::Trigger::HackingSuccess..ArchaeologyFailure (11-16), ItemPlacedInMissionContainer (23),
     //  ItemRemovedFromSpawnContainer (32), ItemInCargo (33) on the dungeon object itemID (typeID for item triggers)
@@ -364,6 +368,7 @@ private:
 
     std::map<uint32, Instance> m_instances;
     std::map<uint32, std::pair<uint32, uint8>> m_entityIndex;  // itemID -> (instanceID, roomIdx):  npcs, objects, asteroids
+    std::set<uint64_t> m_capitalsSighted;                       // (instanceID << 32) | capital shipID (OnCapitalSighted)
     std::map<uint32, LiveGate> m_gates;                         // gate itemID ->
     std::deque<PendingTrigger> m_pending;
     std::multimap<int64, PendingEvent> m_delayed;               // due time (FILETIME) ->

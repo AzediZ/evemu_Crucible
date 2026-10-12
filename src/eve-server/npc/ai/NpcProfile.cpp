@@ -361,6 +361,29 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     r.l1TankingShip = static_cast<float>(Attr(type, AttrAI_TankingModifier));
     r.l1SwitchTimerMs = static_cast<uint32>(EvE::max(Attr(type, AttrTargetSwitchTimer)));
     r.evasive = static_cast<float>(Attr(type, AttrEvasiveManeuverLevel));
+    switch (r.groupID) {
+        case EVEDB::invGroups::Deadspace_Sleeper_Sleepless_Sentinel:
+        case EVEDB::invGroups::Deadspace_Sleeper_Awakened_Sentinel:
+        case EVEDB::invGroups::Deadspace_Sleeper_Emergent_Sentinel:
+        case EVEDB::invGroups::Deadspace_Sleeper_Sleepless_Defender:
+        case EVEDB::invGroups::Deadspace_Sleeper_Sleepless_Patroller:
+        case EVEDB::invGroups::Deadspace_Sleeper_Awakened_Defender:
+        case EVEDB::invGroups::Deadspace_Sleeper_Awakened_Patroller:
+        case EVEDB::invGroups::Deadspace_Sleeper_Emergent_Defender:
+        case EVEDB::invGroups::Deadspace_Sleeper_Emergent_Patroller:
+            r.l1Family = NpcAI::L1Family::Sleeper;
+            break;
+        case EVEDB::invGroups::Incursion_Sanshas_Nation_Capital:
+        case EVEDB::invGroups::Incursion_Sanshas_Nation_Frigate:
+        case EVEDB::invGroups::Incursion_Sanshas_Nation_Cruiser:
+        case EVEDB::invGroups::Incursion_Sanshas_Nation_Battleship:
+            r.l1Family = NpcAI::L1Family::Incursion;
+            break;
+        default:
+            r.l1Family = NpcAI::L1Family::Other;
+            break;
+    }
+    r.maxHP = static_cast<float>(Attr(type, AttrShieldCapacity) + Attr(type, AttrArmorHP) + Attr(type, AttrHP));
 
     /* ewar and support */
     for (auto effectID : c_ewarEffects)
@@ -396,6 +419,69 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     for (auto effectID : c_groupAssistEffects)
         if (type.HasEffect(effectID))
             r.hasGroupAssist = true;
+    // a chance above 1 is a percentage (a few types, 5.8)
+    auto chance = [&type](uint16 attrID) -> float {
+        double value(Attr(type, attrID));
+        if (value > 1.0)
+            value /= 100.0;
+        return static_cast<float>(std::min(1.0, std::max(0.0, value)));
+    };
+    /* remote repair of friends (5.9, N4:  the reach is npcAssistanceRange, dgm default 5km, never the sight range) */
+    auto remote = [&type, &chance](uint16 effectID, uint16 amountAttr, uint16 cycleAttr, uint16 chanceAttr, uint16 thresholdAttr,
+                                   uint16 maxAttr, NpcProfile::RemoteRepair& into) {
+        into = NpcProfile::RemoteRepair();
+        if (!type.HasEffect(effectID))
+            return;
+        into.amount = static_cast<float>(Attr(type, amountAttr));
+        if (into.amount <= 0.0f)
+            return;
+        into.effectID = effectID;
+        into.cycleMs = static_cast<uint32>(std::max(1000.0, Attr(type, cycleAttr)));
+        into.chance = chance(chanceAttr);
+        into.threshold = static_cast<float>(Attr(type, thresholdAttr));
+        into.maxTargets = static_cast<uint8>(std::min(255.0, std::max(1.0, Attr(type, maxAttr))));
+    };
+    remote(EVEEffectID::NPCRemoteArmorRepair, AttrNpcRemoteArmorRepairAmount, AttrNpcRemoteArmorRepairDuration,
+           AttrNpcRemoteArmorRepairChance, AttrNpcRemoteArmorRepairThreshold, AttrNpcRemoteArmorRepairMaxTargets, r.remoteArmor);
+    remote(EVEEffectID::NPCRemoteShieldBoost, AttrNpcRemoteShieldBoostAmount, AttrNpcRemoteShieldBoostDuration,
+           AttrNpcRemoteShieldBoostChance, AttrNpcRemoteShieldBoostThreshold, AttrNpcRemoteShieldBoostMaxTargets, r.remoteShield);
+    /* group assists (4686-4689) */
+    struct AssistEffect { uint16 effectID; uint8 kind; uint16 bonusAttr; uint16 durationAttr; uint16 chanceAttr; };
+    const AssistEffect assists[] = {
+        { EVEEffectID::NPCGroupShieldAssist,  NpcAI::Buff::ShieldResist, AttrentityGroupShieldResistanceBonus,
+          AttrentityGroupShieldResistanceDuration, AttrentityGroupShieldResistanceActivationChance },
+        { EVEEffectID::NPCGroupSpeedAssist,   NpcAI::Buff::Speed,        AttrentityGroupSpeedBonus,
+          AttrentityGroupSpeedDuration, AttrentityGroupSpeedActivationChance },
+        { EVEEffectID::NPCGroupPropJamAssist, NpcAI::Buff::PropJam,      AttrentityGroupPropJamBonus,
+          AttrentityGroupPropJamDuration, AttrentityGroupPropJamActivationChance },
+        { EVEEffectID::NPCGroupArmorAssist,   NpcAI::Buff::ArmorResist,  AttrentityGroupArmorResistanceBonus,
+          AttrentityGroupArmorResistanceDuration, AttrentityGroupArmorResistanceActivationChance }
+    };
+    for (auto& cur : assists) {
+        if (!type.HasEffect(cur.effectID))
+            continue;
+        NpcProfile::GroupAssist ga = NpcProfile::GroupAssist();
+            ga.effectID = cur.effectID;
+            ga.kind = cur.kind;
+            ga.bonus = static_cast<float>(Attr(type, cur.bonusAttr));
+            ga.durationMs = static_cast<uint32>(std::max(1000.0, Attr(type, cur.durationAttr)));
+            ga.chance = chance(cur.chanceAttr);
+        if (ga.bonus != 0.0f)
+            r.groupAssists.push_back(ga);
+    }
+    /* remote ecm (4656) */
+    r.remoteEcm = NpcProfile::RemoteEcm();
+    r.remoteEcm.has = type.HasEffect(4656);
+    if (r.remoteEcm.has) {
+        r.remoteEcm.baseMs = static_cast<float>(Attr(type, AttrentityRemoteECMBaseDuration));
+        r.remoteEcm.minMs = static_cast<float>(Attr(type, AttrentityRemoteECMMinDuration));
+        r.remoteEcm.scale = static_cast<float>(Attr(type, AttrentityRemoteECMDurationScale));
+        r.remoteEcm.playerStep = static_cast<float>(Attr(type, AttrentityRemoteECMExtraPlayerScale));
+        r.remoteEcm.intendedPlayers = static_cast<float>(Attr(type, AttrentityRemoteECMIntendedNumPlayers));
+        r.remoteEcm.chance = chance(AttrentityRemoteECMChanceOfActivation);
+        if (r.remoteEcm.baseMs < 1000.0f)
+            r.remoteEcm.has = false;
+    }
 
     /* respawn, bounty, security */
     r.groupRespawnChance = static_cast<float>(Attr(type, AttrEntityGroupRespawnChance));
@@ -509,6 +595,13 @@ void NpcProfile::StartupChecks()
     if (sConfig.npc.LeashRange > 0)
         sLog.Warning("     ServerConfig", "<npc><LeashRange> is deprecated.  It replaces the data leash's hard range (%u m instead of %.1f x entityMaxWanderRange).",
                 sConfig.npc.LeashRange, sConfig.npc.LeashHardScale);
+
+    // level-one npcs score everything within R_acq (npc ai plan 5.7, B18)
+    if (sConfig.npc.ThreatRadius > 0.0f)
+        sLog.Warning("     ServerConfig", "<npc><ThreatRadius> is deprecated and ignored.  Level-one npcs consider every ship and drone within their acquisition range.");
+    if (sConfig.npc.TargetSwitchTime > 0)
+        sLog.Warning("     ServerConfig", "<npc><TargetSwitchTime> %us replaces every level-one npc's AI_TargetSwitchTimer (1416).  0 uses the data (60s).",
+                sConfig.npc.TargetSwitchTime);
 
     if (sConfig.npc.AuditOnStartup) {
         std::string report;

@@ -31,6 +31,25 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "effects/EffectsDataMgr.h"
 
+namespace {
+    /* npc ai (level one, PLAN.md 5.7):  the hp of the layer a remote repair module works on (-1:  not one).  the difference
+     *  over a cycle is what it repaired */
+    double RemoteAssistHP(uint16 groupID, SystemEntity* pTarget)
+    {
+        if (pTarget == nullptr)
+            return -1.0;
+        InventoryItemRef iRef(pTarget->GetSelf());
+        switch (groupID) {
+            case EVEDB::invGroups::Shield_Transporter:
+                return iRef->GetAttribute(AttrShieldCharge).get_double();
+            case EVEDB::invGroups::Armor_Repair_Projector:
+                return iRef->GetAttribute(AttrArmorHP).get_double() - iRef->GetAttribute(AttrArmorDamage).get_double();
+            case EVEDB::invGroups::Remote_Hull_Repairer:
+                return iRef->GetAttribute(AttrHP).get_double() - iRef->GetAttribute(AttrDamage).get_double();
+        }
+        return -1.0;
+    }
+}
 
 ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
 : GenericModule(mRef, sRef),
@@ -659,9 +678,11 @@ uint32 ActiveModule::DoCycle() {
         m_shipRef->SetShipCapacitorLevel(newCap / shipTotalCapacitor);
     }
 
-    // npcs remember who uses ewar (and neuts) on them, like damage
+    // npcs remember who uses ewar (and neuts) on them, like damage, and which kind (level-one effect threat, npc ai plan 5.7)
     if ((m_targetSE != nullptr) and m_targetSE->IsNPCSE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
-        m_targetSE->GetNPCSE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE());
+        m_targetSE->GetNPCSE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE(), NPCAIMgr::EwarEffectOfGroup(groupID()));
+    // remote repair of someone a level-one npc fights is threat (npc ai plan 5.7)
+    double assistBefore(RemoteAssistHP(groupID(), m_targetSE));
 
     // not sure if this is entirely accurate...wip
     switch (m_modRef->groupID()) {
@@ -792,6 +813,10 @@ uint32 ActiveModule::DoCycle() {
         case EVEDB::invGroups::ECM_Burst: {
         } break;
     }
+
+    if ((assistBefore >= 0.0) and (m_targetSE != nullptr) and m_shipRef->HasPilot())
+        NotifyRemoteAssist(m_shipRef->GetPilot()->GetShipSE(), m_targetSE,
+                           static_cast<float>(RemoteAssistHP(groupID(), m_targetSE) - assistBefore));
 
     EvilNumber cycleTime = 10000;   // default to 10s
     if (m_modRef->HasAttribute(AttrSpeed, cycleTime)) {
