@@ -402,31 +402,13 @@ int main( int argc, char* argv[] )
     }
     std::printf("\n");     // spacer
 
-    sLog.Blue("     ServerConfig","Critical Hit Chances");
-    if (sConfig.rates.PlayerCritChance != 0.02f) {
-        sLog.Yellow("           Player","Modified at %.1f%%.", (sConfig.rates.PlayerCritChance *100) );
+    /* one wrecking chance for every turret (npc ai plan 5.1).  the five old *CritChance keys are deprecated:  set, they only
+     *  warn (NpcProfile::StartupChecks) */
+    sLog.Blue("     ServerConfig","Wrecking Shots");
+    if (sConfig.rates.WreckingChance != 0.01f) {
+        sLog.Yellow("   Wrecking Chance","Modified at %.1f%% of hits.", (sConfig.rates.WreckingChance *100) );
     } else {
-        sLog.Green("           Player","Normal at 2%%.");
-    }
-    if (sConfig.rates.NpcCritChance != 0.015f) {
-        sLog.Yellow("              NPC","Modified at %.1f%%.", (sConfig.rates.NpcCritChance *100) );
-    } else {
-        sLog.Green("              NPC","Normal at 1.5%%.");
-    }
-    if (sConfig.rates.SentryCritChance != 0.02f) {
-        sLog.Yellow("           Sentry","Modified at %.1f%%.", (sConfig.rates.SentryCritChance *100) );
-    } else {
-        sLog.Green("           Sentry","Normal at 2%%.");
-    }
-    if (sConfig.rates.DroneCritChance != 0.03f) {
-        sLog.Yellow("            Drone","Modified at %.1f%%.", (sConfig.rates.DroneCritChance *100) );
-    } else {
-        sLog.Green("            Drone","Normal at 3%%.");
-    }
-    if (sConfig.rates.ConcordCritChance != 0.05f) {
-        sLog.Yellow("          Concord","Modified at %.1f%%.", (sConfig.rates.ConcordCritChance *100) );
-    } else {
-        sLog.Green("          Concord","Normal at 5%%.");
+        sLog.Green("   Wrecking Chance","Normal at 1%% of hits.");
     }
     std::printf("\n");     // spacer
 
