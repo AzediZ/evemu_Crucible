@@ -774,7 +774,7 @@ void DestinyManager::UpdateWarpBubble() {
 SystemBubble* DestinyManager::GetTargBubble() const {
     if (m_targBubbleID == 0)
         return nullptr;
-    // by ID, so a bubble that is gone is never touched.  (IDs wrap:  a namesake in another system isn't ours)
+    // by ID, so a bubble that is gone is never touched.  (and only one of our system)
     SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(m_targBubbleID));
     if ((pBubble == nullptr) or (mySE->SystemMgr() == nullptr) or (pBubble->GetSystemID() != mySE->SystemMgr()->GetID()))
         return nullptr;
@@ -791,7 +791,7 @@ void DestinyManager::SetTargBubble(SystemBubble* pBubble) {
             pOld->RemoveArrival();
         m_targBubbleID = 0;
     }
-    // (0 means none.  a bubble whose ID wrapped to 0 just isn't pinned)
+    // (0 means none.  bubble IDs start at 1)
     if ((pBubble != nullptr) and (pBubble->GetID() != 0)) {
         pBubble->AddArrival();
         m_targBubbleID = pBubble->GetID();
@@ -2262,7 +2262,8 @@ void DestinyManager::SendTerminalExplosion(uint32 shipID, uint32 bubbleID, bool 
     //send an explosion special effects update...
      TerminalExplosion du;
         du.shipID = shipID;
-        du.bubbleID = bubbleID;
+        // a PyInt on the wire (int32 in the packet).  bubble IDs count the bubbles made since boot, far below 2^31
+        du.bubbleID = static_cast<int32>(bubbleID);
         du.ballIsGlobal = isGlobal;
     PyTuple* up = du.Encode();
     SendSingleDestinyUpdate(&up);   // consumed

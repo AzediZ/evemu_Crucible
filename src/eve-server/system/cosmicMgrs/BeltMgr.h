@@ -42,15 +42,15 @@ public:
     void Save();
     void Process();
     void ClearAll();
-    void ClearBelt(uint16 bubbleID);
-    void SetActive(uint16 bubbleID, bool active=true);
+    void ClearBelt(uint32 bubbleID);
+    void SetActive(uint32 bubbleID, bool active=true);
     void RegisterBelt(InventoryItemRef itemRef);
     bool Create(CosmicSignature& sig, std::unordered_multimap<float, uint16>& roidTypes);
 
-    bool Load(uint16 bubbleID);
-    bool IsActive(uint16 bubbleID);
-    bool IsSpawned(uint16 bubbleID);
-    void CheckSpawn(uint16 bubbleID);
+    bool Load(uint32 bubbleID);
+    bool IsActive(uint32 bubbleID);
+    bool IsSpawned(uint32 bubbleID);
+    void CheckSpawn(uint32 bubbleID);
 
     void GetList(uint32 beltID, std::vector< AsteroidSE* >& list);
     void RemoveAsteroid(uint32 beltID, AsteroidSE* pASE);
@@ -70,7 +70,7 @@ public:
 protected:
     Timer m_respawnTimer;           // checks belt respawn and regrowth
 
-    void SpawnBelt(uint16 bubbleID, std::unordered_multimap<float, uint16>& roidTypes, int type = 0, bool anomaly = false);
+    void SpawnBelt(uint32 bubbleID, std::unordered_multimap<float, uint16>& roidTypes, int type = 0, bool anomaly = false);
     AsteroidSE* SpawnAsteroid(uint32 beltID, uint32 typeID, double radius, const GPoint& position, bool ice=false);
     // creates the item and entity
     AsteroidSE* AddAsteroid(uint32 beltID, uint16 typeID, double quantity, double radius, const GPoint& position);

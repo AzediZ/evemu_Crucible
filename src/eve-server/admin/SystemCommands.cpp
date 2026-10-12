@@ -961,7 +961,7 @@ PyResult Command_location(Client* pClient, CommandDB* db, EVEServiceManager &ser
         sBubbleMgr.Add(pClient->GetShipSE());
         pBubble = pClient->GetShipSE()->SysBubble();
     }
-    uint16 bubble = pBubble->GetID();
+    uint32 bubble = pBubble->GetID();
 
     const GPoint &loc = dm->GetPosition();
     const GVector &vel = dm->GetVelocity();

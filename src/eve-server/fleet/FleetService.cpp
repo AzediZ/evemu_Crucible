@@ -2525,7 +2525,7 @@ void FleetService::SendFleetUpdate(uint32 fleetID, const char* notifyType, PyTup
 void FleetService::GetFleetMembersOnGrid(Client* pClient, std::vector< uint32 >& data)
 {
     std::vector<Client*> members;
-    uint16 scopeID = pClient->GetShipSE()->SysBubble()->GetID();
+    uint32 scopeID = pClient->GetShipSE()->SysBubble()->GetID();
     auto range = m_fleetMembers.equal_range(pClient->GetFleetID());
     for (auto fItr = range.first; fItr != range.second; ++fItr)
         members.push_back(fItr->second);
@@ -2541,7 +2541,7 @@ void FleetService::GetFleetMembersOnGrid(Client* pClient, std::vector< uint32 >&
 void FleetService::GetFleetMembersInSystem(Client* pClient, std::vector< uint32 >& data)
 {
     std::vector<Client*> members;
-    uint16 scopeID = pClient->GetShipSE()->SystemMgr()->GetID();
+    uint32 scopeID = pClient->GetShipSE()->SystemMgr()->GetID();
     auto range = m_fleetMembers.equal_range(pClient->GetFleetID());
     for (auto fItr = range.first; fItr != range.second; ++fItr)
         members.push_back(fItr->second);

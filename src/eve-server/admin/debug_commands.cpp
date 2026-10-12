@@ -1353,7 +1353,7 @@ PyResult Command_bubblewarp(Client* pClient, CommandDB* db, EVEServiceManager &s
 
     if (!args.isNumber(1))
         throw CustomError ("Argument 1 must be a valid bubbleID.");
-    uint16 bubbleID = atoi(args.arg(1).c_str());
+    uint32 bubbleID(strtoul(args.arg(1).c_str(), nullptr, 10));
     SystemBubble* pBubble = sBubbleMgr.FindBubbleByID(bubbleID);
     if (pBubble == nullptr)
         throw CustomError ("Bubble %u not found.", bubbleID);
@@ -1436,7 +1436,7 @@ PyResult Command_dropLoot(Client* pClient, CommandDB* db, EVEServiceManager &ser
     if (!pClient->GetShipSE()->DestinyMgr())
         throw CustomError ("You have no destiny manager.");
 
-    uint16 bubbleID = atoi(args.arg(1).c_str());
+    uint32 bubbleID(strtoul(args.arg(1).c_str(), nullptr, 10));
     SystemBubble* pBubble = sBubbleMgr.FindBubbleByID(bubbleID);
     if (pBubble == nullptr)
         throw CustomError ("Bubble %u not found.", bubbleID);

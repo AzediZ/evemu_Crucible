@@ -310,7 +310,7 @@ SystemBubble* BubbleManager::MakeBubble(SystemManager* sysMgr, GPoint pos) {
     return pBubble;
 }
 
-SystemBubble* BubbleManager::FindBubbleByID(uint16 bubbleID)
+SystemBubble* BubbleManager::FindBubbleByID(uint32 bubbleID)
 {
     std::map<uint32, SystemBubble*>::iterator itr = m_bubbleIDMap.find(bubbleID);
     if (itr != m_bubbleIDMap.end())
@@ -342,7 +342,7 @@ void BubbleManager::RemoveBubble(uint32 systemID, SystemBubble* pSB)
             m_sysBubbleMap.erase(itr);
             break;
         }
-    // (bubble IDs wrap.  only this bubble's entries go)
+    // (only this bubble's entries go)
     std::map<uint32, SystemBubble*>::iterator itr = m_bubbleIDMap.find(pSB->GetID());
     if ((itr != m_bubbleIDMap.end()) and (itr->second == pSB)) {
         m_bubbleIDMap.erase(itr);
@@ -351,12 +351,12 @@ void BubbleManager::RemoveBubble(uint32 systemID, SystemBubble* pSB)
 }
 
 /* for beltmgr */
-void BubbleManager::AddSpawnID(uint16 bubbleID, uint32 spawnID)
+void BubbleManager::AddSpawnID(uint32 bubbleID, uint32 spawnID)
 {
     m_spawnIDs.emplace(bubbleID, spawnID);
 }
 
-void BubbleManager::RemoveSpawnID(uint16 bubbleID, uint32 spawnID)
+void BubbleManager::RemoveSpawnID(uint32 bubbleID, uint32 spawnID)
 {
     // is this right??
     auto range = m_spawnIDs.equal_range(bubbleID);
@@ -367,9 +367,9 @@ void BubbleManager::RemoveSpawnID(uint16 bubbleID, uint32 spawnID)
         }
 }
 
-uint32 BubbleManager::GetBeltID(uint16 bubbleID)
+uint32 BubbleManager::GetBeltID(uint32 bubbleID)
 {
-    std::map<uint16, uint32>::iterator itr = m_spawnIDs.find(bubbleID);
+    std::map<uint32, uint32>::iterator itr = m_spawnIDs.find(bubbleID);
     if (itr == m_spawnIDs.end())
         return 0;
     return itr->second;
