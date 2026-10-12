@@ -91,7 +91,8 @@ public:
     bool                IsMaster()                      { return m_linkMaster; }
     bool                IsDamaged()                     { return m_modRef->GetAttribute(AttrDamage) != EvilZero; }
     bool                IsActive()                      { return (m_ModuleState == Module::State::Activated ? true : m_ModuleState == Module::State::Deactivating ? true : false); }
-    bool                IsLoading()                     { return m_ModuleState == Module::State::Loading; }
+    // a charge is going in (empty module) or more is being added (reload).  the charge state, not the module state
+    bool                IsLoading()                     { return ((m_ChargeState == Module::State::Loading) or (m_ChargeState == Module::State::Reloading)); }
 
     /* generic access functions handled here, but set elsewhere. */
     bool                isOnline()                      { return m_modRef->IsOnline(); }
@@ -121,9 +122,10 @@ public:
     virtual void Deactivate(std::string effect="")      { /* do nothing here */ }
     // force stops the cycle even if the module was already stopping after its current cycle
     virtual void AbortCycle(bool force=false)           { /* do nothing here */ }
-    // this will not move charge item.
+    // this will not move charge item.  instant: the charge is already in the module (ship loading), no reload time
     // must NOT throw
-    virtual void LoadCharge(InventoryItemRef charge)    { /* do nothing here */ }
+    virtual void LoadCharge(InventoryItemRef charge, bool instant=false)
+                                                        { /* do nothing here */ }
     // this will not move charge item.
     // must NOT throw
     virtual void UnloadCharge()                         { /* do nothing here */ }
@@ -160,6 +162,12 @@ public:
     virtual uint16 GetReloadTime()                      { return 0; }
     virtual uint32 GetTargetID()                        { return 0; }
 
+    /* the loaded charge's effects on this module (ammo range/tracking multipliers, script bonuses) are on while the module
+     *  is online and the charge has finished loading.  a reset of the ship's effects takes them off with everything else
+     */
+    bool HasChargeEffects()                             { return m_chargeFx; }
+    void ChargeFxReset()                                { m_chargeFx = false; }
+
     //
     int8 GetModulePowerLevel();
 
@@ -167,6 +175,9 @@ public:
 protected:
     const char*         GetModuleStateName(int8 state);
     void                SendOverloadEffect(bool active);
+    /* puts the loaded charge's effects into this module's modifier map (add), or their removal.  the caller applies them.
+     *  false if there was nothing to do (no charge, or already in that state) */
+    bool                ParseChargeFx(bool add);
 
     ModuleItemRef       m_modRef;
     ShipItemRef         m_shipRef;
@@ -191,6 +202,7 @@ protected:
     bool                m_pendingOverload :1;
     bool                m_pendingStopOverload :1;
     bool                m_chargeLoaded :1;
+    bool                m_chargeFx     :1;              // the charge's effects are applied to this module
 };
 
 #endif  // _EVE_SHIP_MODULES_GENERIC_MODULE_H

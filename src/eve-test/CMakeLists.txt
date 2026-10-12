@@ -25,6 +25,8 @@ SET( auth_SOURCE
      "auth/PasswordModuleTest.cpp" )
 SET( marshal_SOURCE
      "marshal/EVEMarshalTest.cpp" )
+SET( ship_SOURCE
+     "ship/ChargeRulesTest.cpp" )
 SET( utils_SOURCE
      "utils/EvilNumberTest.cpp" )
 
@@ -34,11 +36,13 @@ SET( utils_SOURCE
 SOURCE_GROUP( "src"      ${INCLUDE} )
 SOURCE_GROUP( "src\\auth"    ${auth_SOURCE} )
 SOURCE_GROUP( "src\\marshal" ${marshal_SOURCE} )
+SOURCE_GROUP( "src\\ship"    ${ship_SOURCE} )
 SOURCE_GROUP( "src\\utils"   ${utils_SOURCE} )
 
 CREATE_TEST_SOURCELIST( TARGET_SOURCELIST "eve-test.cpp"
                         ${auth_SOURCE}
                         ${marshal_SOURCE}
+                        ${ship_SOURCE}
                         ${utils_SOURCE}
                         EXTRA_INCLUDE "eve-test.h" )
 ADD_EXECUTABLE( "${TARGET_NAME}"
@@ -64,3 +68,5 @@ ADD_TEST( NAME "EVEMarshalTest"
           COMMAND "${TARGET_NAME}" "marshal/EVEMarshalTest" )
 ADD_TEST( NAME "EvilNumberTest"
           COMMAND "${TARGET_NAME}" "utils/EvilNumberTest" )
+ADD_TEST( NAME "ChargeRulesTest"
+          COMMAND "${TARGET_NAME}" "ship/ChargeRulesTest" )

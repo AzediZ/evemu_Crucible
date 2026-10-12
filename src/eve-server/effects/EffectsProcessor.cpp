@@ -451,7 +451,14 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                             EvE::traceStack();
                             continue;
                         }
-                        itemRefVec.push_back(pShip->GetModuleManager()->GetModule(cur.second.srcRef->flag())->GetSelf());
+                        // a charge's modifier whose charge isn't in a module any more (unloaded, used up) has nothing to modify
+                        GenericModule* pOther(pShip->GetModuleManager()->GetModule(cur.second.srcRef->flag()));
+                        if (pOther == nullptr) {
+                            _log(EFFECTS__ERROR, "FxProc::ApplyEffects(): %s(%u) in %s is not in a module.", \
+                                    cur.second.srcRef->name(), cur.second.srcRef->itemID(), sDataMgr.GetFlagName(cur.second.srcRef->flag()));
+                            continue;
+                        }
+                        itemRefVec.push_back(pOther->GetSelf());
                     } break;
                     case Target::Target: {
                         // ... current target (focused, volatile...removed on 'invalid target')

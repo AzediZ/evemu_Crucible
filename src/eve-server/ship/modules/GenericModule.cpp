@@ -34,6 +34,7 @@ m_overLoaded(false),
 m_pendingOverload(false),
 m_pendingStopOverload(false),
 m_chargeLoaded(false),
+m_chargeFx(false),
 m_hiPower(false),
 m_medPower(false),
 m_loPower(false),
@@ -66,9 +67,15 @@ m_launcher(false)
 // throwing an error negates further processing
 void GenericModule::Online()
 {
-    if (m_shipRef->GetPilot()->IsDocked() and (!m_shipRef->IsUndocking())) {
+    // effects are processed with the pilot's character.  ships without a pilot keep their saved online state
+    Client* pClient(m_shipRef->GetPilot());
+    if (pClient == nullptr) {
+        _log(MODULE__ERROR, "GenericModule::Online() called for %u(%s) on a ship without a pilot.", itemID(), m_modRef->name());
+        return;
+    }
+    if (pClient->IsDocked() and (!m_shipRef->IsUndocking())) {
         m_ModuleState = Module::State::Online;
-        SetAttribute(AttrOnline, EvilOne, !m_shipRef->GetPilot()->IsLogin());
+        SetAttribute(AttrOnline, EvilOne, !pClient->IsLogin());
         return;
     }
 
@@ -128,33 +135,30 @@ void GenericModule::Online()
 
     ProcessEffects(FX::State::Passive, true);
     ProcessEffects(FX::State::Online, true);
-    if (m_ChargeState == Module::State::Loaded) {
-        if (!m_chargeLoaded) {
-            _log(MODULE__ERROR, "GenericModule::Online() - module %u(%s) has ChargeState(CHG_LOADED) but m_chargeLoaded = false.", \
-                    itemID(), m_modRef->name());
-        } else if (m_chargeRef.get() == nullptr) {
-            _log(MODULE__ERROR, "GenericModule::Online() - module %u(%s) has ChargeState(CHG_LOADED) but m_chargeRef = NULL.", \
-                    itemID(), m_modRef->name());
-        } else {
+    // a loaded charge (also one being topped up) works again.  one still going into an empty module gets its effects when it's in
+    if (m_chargeLoaded) {
+        if (m_chargeRef.get() == nullptr) {
+            _log(MODULE__ERROR, "GenericModule::Online() - module %u(%s) is loaded but m_chargeRef = NULL.", itemID(), m_modRef->name());
+        } else if (ParseChargeFx(true)) {
             _log(MODULE__MESSAGE, "GenericModule::Online() - module %u(%s) loading charge fx for %s.", itemID(), m_modRef->name(), m_chargeRef->name());
-            for (auto it : m_chargeRef->type().m_stateFxMap) {
-                fxData data = fxData();
-                data.action = FX::Action::Invalid;
-                data.srcRef = m_chargeRef;
-                sFxProc.ParseExpression(m_modRef.get(), sFxDataMgr.GetExpression(it.second.preExpression), data, this);
-            }
         }
     }
 
     // update available ship resources.
     m_shipRef->SetAttribute(AttrCpuLoad, cpuNeed, !m_shipRef->IsUndocking());
     m_shipRef->SetAttribute(AttrPowerLoad, pgNeed, !m_shipRef->IsUndocking());
-    sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), !m_shipRef->IsUndocking());
+    sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), !m_shipRef->IsUndocking());
 }
 
 void GenericModule::Offline()
 {
-    if (m_shipRef->GetPilot()->IsDocked()) {
+    Client* pClient(m_shipRef->GetPilot());
+    if (pClient == nullptr) {
+        // nothing to stop or take off without a pilot (effects are processed with the pilot's character)
+        _log(MODULE__ERROR, "GenericModule::Offline() called for %u(%s) on a ship without a pilot.", itemID(), m_modRef->name());
+        return;
+    }
+    if (pClient->IsDocked()) {
         m_ModuleState = Module::State::Offline;
         SetAttribute(AttrOnline, EvilZero, !m_shipRef->IsUndocking());
         return;
@@ -201,26 +205,36 @@ void GenericModule::Offline()
 
     _log(MODULE__MESSAGE, "GenericModule::Offline() - %u(%s) cpu: %.2f, pg: %.2f",itemID(), m_modRef->name(), cpuNeed.get_float(), pgNeed.get_float());
 
-    if (m_ChargeState == Module::State::Loaded) {
-        if (m_chargeRef.get() == nullptr) {
-            _log(MODULE__ERROR, "GenericModule::Offline() - module %u(%s) has ChargeState(CHG_LOADED) but m_chargeRef = NULL.", \
-                    itemID(), m_modRef->name());
-        } else {
-            for (auto it : m_chargeRef->type().m_stateFxMap) {
-                fxData data = fxData();
-                data.action = FX::Action::Invalid;
-                data.srcRef = m_chargeRef;
-                sFxProc.ParseExpression(m_modRef.get(), sFxDataMgr.GetExpression(it.second.postExpression), data, this);
-            }
-        }
-    }
+    /* the loaded charge stays in the module, but its effects come off with the module's.  a reload in progress carries on
+     *  (its timer runs in real time) and finishes when the module is back online
+     */
+    ParseChargeFx(false);
 
     ProcessEffects(FX::State::Passive, false);
     ProcessEffects(FX::State::Online, false);
-    sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), true);
+    sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), true);
 
     m_ModuleState = Module::State::Offline;
     m_modRef->SetOnline(false, isRig());
+}
+
+bool GenericModule::ParseChargeFx(bool add)
+{
+    if (add == m_chargeFx)
+        return false;
+    // civilian turrets keep their own item as the "charge" for damage, it has no charge effects
+    if ((m_chargeRef.get() == nullptr) or (m_chargeRef.get() == m_modRef.get())) {
+        m_chargeFx = false;
+        return false;
+    }
+    for (auto it : m_chargeRef->type().m_stateFxMap) {
+        fxData data = fxData();
+        data.action = FX::Action::Invalid;
+        data.srcRef = m_chargeRef;
+        sFxProc.ParseExpression(m_modRef.get(), sFxDataMgr.GetExpression(add ? it.second.preExpression : it.second.postExpression), data, this);
+    }
+    m_chargeFx = add;
+    return true;
 }
 
 void GenericModule::RequestOverload(bool set, bool deferred)

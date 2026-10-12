@@ -13,6 +13,7 @@
 #include "eve-server.h"
 
 #include "EVEServerConfig.h"
+#include "EVE_Charges.h"
 #include "Client.h"
 #include "EntityList.h"
 #include "StaticDataMgr.h"
@@ -131,7 +132,7 @@ bool ModuleManager::Initialize() {
                         // put that bitch back in cargo
                         cur->SetFlag(flagCargoHold);
                     } else {
-                        if (pMod->IsLoaded()) {
+                        if (pMod->IsLoaded() or (m_charges.find(cur->flag()) != m_charges.end())) {
                             _log(MODULE__TRACE, "MM::Initialize() - %s at %s is already loaded.  Moving %s to cargo.",\
                                     pMod->GetSelf()->name(), sDataMgr.GetFlagName(cur->flag()), cur->name());
                             // put that bitch back in cargo
@@ -141,10 +142,11 @@ bool ModuleManager::Initialize() {
                         _log(MODULE__TRACE, "MM::Initialize() - loading %s(%u) at %s with %s(%u).",\
                                 pMod->GetSelf()->name(), pMod->GetSelf()->itemID(), \
                                 sDataMgr.GetFlagName(cur->flag()), cur->name(), cur->itemID());
-                        pMod->LoadCharge(cur);
+                        // the ship's own charges are in already, no reload time
+                        m_charges[cur->flag()] = cur;
+                        pMod->LoadCharge(cur, true);
                         //cur->SetQuantity(cur->quantity());    //OIC
                         cur->SetAttribute(AttrQuantity, cur->quantity(), false);   // OMAC
-                        m_charges.emplace(cur->flag(), cur);
                     }
                     pMod = nullptr;
                 } break;
@@ -553,8 +555,9 @@ void ModuleManager::UnfitModule(uint32 itemID)
     _log(MODULE__TRACE, "%s(%u) calling MM::UnfitModule(itemID)", pMod->GetSelf()->name(), pMod->itemID());
 
     pMod->AbortCycle();
-    if (pMod->IsLoaded())
-         UnloadCharge(pMod);
+    // also a charge still loading (its reload is cancelled)
+    if (pMod->IsLoaded() or (GetChargeInSlot(pMod->flag()).get() != nullptr))
+        UnloadCharge(pMod);
 
     if (pMod->IsLinked())
         pShipItem->UnlinkGroup(itemID, true, true);
@@ -578,7 +581,8 @@ void ModuleManager::UnfitModule(EVEItemFlags flag) {
     _log(MODULE__TRACE, "%s(%u) calling MM::UnfitModule(flag)", pMod->GetSelf()->name(), pMod->itemID());
 
     pMod->AbortCycle();
-    if (pMod->IsLoaded())
+    // also a charge still loading (its reload is cancelled)
+    if (pMod->IsLoaded() or (GetChargeInSlot(pMod->flag()).get() != nullptr))
         UnloadCharge(pMod);
 
     if (pMod->IsLinked())
@@ -723,7 +727,7 @@ void ModuleManager::Offline(uint32 itemID)
     LinksChanging(true);
     pMod->Offline();
     LinksChanging(false);
-    OnModuleWentOffline(pMod);
+    OnModuleWentOffline(pMod, true);
 }
 
 void ModuleManager::Offline(EVEItemFlags flag)
@@ -743,16 +747,29 @@ void ModuleManager::Offline(EVEItemFlags flag)
     OnModuleWentOffline(pMod);
 }
 
-void ModuleManager::OnModuleWentOffline(GenericModule* pMod)
+void ModuleManager::OnModuleWentOffline(GenericModule* pMod, bool manual/*false*/)
 {
-    /* Crucible keeps the bank when one of its modules goes offline (manually, burnt out or shot).
-     *  the bank can't be activated until that module is back online (CantActivateLinkedModuleOffline),
-     *  and an active bank stops at the end of its cycle
-     */
     if ((pMod == nullptr) or !pMod->IsLinked())
         return;
     GenericModule* pMaster(pShipItem->GetBankMaster(pMod));
-    if ((pMaster == nullptr) or (pMaster == pMod))
+    if (pMaster == nullptr)
+        return;
+
+    /* the pilot taking a grouped module offline destroys its bank.  the client asks first:  "When offlining this module you
+     *  will destroy the weapons bank it's in" (ShipModuleButton and fitting slot _ChangeOnline), but leaves the rest to us
+     *  (OnWeaponGroupDestroyed).  a bank that is firing stops now, so every member's effect stops with it
+     */
+    if (manual) {
+        if (pMaster->IsActive())
+            pMaster->AbortCycle(true);
+        pShipItem->UnlinkGroup(pMaster->itemID(), true, true);
+        return;
+    }
+
+    /* a module burnt out (or shot) keeps its place in the bank.  the bank can't be activated until that module is back
+     *  online (CantActivateLinkedModuleOffline), and an active bank stops at the end of its cycle
+     */
+    if (pMaster == pMod)
         return;
     if (pMaster->IsActive())
         pMaster->Deactivate();
@@ -872,7 +889,7 @@ void ModuleManager::Deactivate(uint32 itemID, std::string effectName)
         LinksChanging(true);
         pMod->Offline();
         LinksChanging(false);
-        OnModuleWentOffline(pMod);
+        OnModuleWentOffline(pMod, true);
         return;
     }
     if (pMod->GetModuleState() != Module::State::Activated)  // we dont need an error msgs here....this is acceptable, as the module may not be active
@@ -1082,56 +1099,71 @@ void ModuleManager::StopModuleRepair(uint32 modID)
     }
 }
 
-void ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag)
+InventoryItemRef ModuleManager::GetChargeInSlot(EVEItemFlags flag)
+{
+    std::map<EVEItemFlags, InventoryItemRef>::iterator itr = m_charges.find(flag);
+    if (itr == m_charges.end())
+        return InventoryItemRef(nullptr);
+    return itr->second;
+}
+
+int32 ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag, int32 maxQty/*0*/)
 {
     GenericModule* pMod = GetModule(flag);
     if (pMod == nullptr) {
         _log(MODULE__ERROR, "MM::LoadCharge() - module not found at %s", sDataMgr.GetFlagName(flag));
-        return;
+        return 0;
     }
-    float modCapacity = pMod->GetAttribute(AttrCapacity).get_float();
-    float chargeVolume = chargeRef->GetAttribute(AttrVolume).get_float();
+    if (chargeRef.get() == nullptr) {
+        _log(MODULE__ERROR, "MM::LoadCharge() - no charge to load into %s", pMod->GetSelf()->name());
+        return 0;
+    }
 
-    bool loaded = pMod->IsLoaded();
-
-    if (loaded) {
-        if (chargeRef->typeID() == pMod->GetLoadedChargeRef()->typeID()) {
-            modCapacity -= (chargeVolume * pMod->GetLoadedChargeRef()->quantity());
-            _log(MODULE__TRACE, "MM::LoadCharge() - %s reloading with same type. remaining capy:%.2f", pMod->GetSelf()->name(), modCapacity);
-        } else {
-            // change charges
-            UnloadCharge(pMod);
-            loaded = false;
-            // update module capy
-            modCapacity = pMod->GetAttribute(AttrCapacity).get_float();
-            _log(MODULE__TRACE, "MM::LoadCharge() - %s reloading with different type. empty capy:%.2f", pMod->GetSelf()->name(), modCapacity);
-        }
-    } else {
-        _log(MODULE__TRACE, "MM::LoadCharge() - %s not loaded. capy:%.2f", pMod->GetSelf()->name(), modCapacity);
+    /* the charge in the slot, also one that is still loading.  more of the same type is added to it,
+     *  a different type is unloaded first (to cargo in space, to the hangar docked)
+     */
+    InventoryItemRef loadedRef(GetChargeInSlot(flag));
+    if ((loadedRef.get() == nullptr) and pMod->IsLoaded() and (pMod->GetLoadedChargeRef().get() != pMod->GetSelf().get()))
+        loadedRef = pMod->GetLoadedChargeRef();
+    if (loadedRef.get() == chargeRef.get()) {
+        _log(MODULE__TRACE, "MM::LoadCharge() - %s is already in %s", chargeRef->name(), pMod->GetSelf()->name());
+        return 0;
+    }
+    if ((loadedRef.get() != nullptr) and (loadedRef->typeID() != chargeRef->typeID())) {
+        _log(MODULE__TRACE, "MM::LoadCharge() - %s changing %s for %s", pMod->GetSelf()->name(), loadedRef->name(), chargeRef->name());
+        UnloadCharge(pMod);
+        loadedRef = InventoryItemRef(nullptr);
     }
 
     //{'FullPath': u'UI/Messages', 'messageID': 256676, 'label': u'CannotLoadNotEnoughChargesBody'}(u'There are not enough charges to fully load all of your modules. Some of your modules have been left partially loaded or empty.', None, None)
 
     // check quantities
-    if (modCapacity < chargeVolume)
-        return;
-
-    int32 loadQty = floor((modCapacity / chargeVolume));
+    int32 loadQty(Charges::RoomFor(pMod->GetAttribute(AttrCapacity).get_double(), chargeRef->GetAttribute(AttrVolume).get_double(),
+                                   (loadedRef.get() == nullptr ? 0 : loadedRef->quantity())));
+    if ((maxQty > 0) and (loadQty > maxQty))
+        loadQty = maxQty;
+    if (loadQty > chargeRef->quantity())
+        loadQty = chargeRef->quantity();
+    _log(MODULE__TRACE, "MM::LoadCharge() - %s %s %i %s", pMod->GetSelf()->name(), \
+            (loadedRef.get() == nullptr ? "loading" : "reloading with"), loadQty, chargeRef->name());
     if (loadQty < 1)
-        return;
+        return 0;
 
+    // assembled charges (damaged crystals) don't stack.  Merge() would throw, and this must not
+    if ((loadedRef.get() != nullptr) and (loadedRef->isSingleton() or chargeRef->isSingleton()))
+        return 0;
+
+    bool docked(pShipItem->HasPilot() ? pShipItem->GetPilot()->IsDocked() : false);
     if (loadQty < chargeRef->quantity()) {
         InventoryItemRef cRef(chargeRef);
         chargeRef = chargeRef->Split(loadQty, false, true);
         if (chargeRef.get() == nullptr) {
-            _log(MODULE__ERROR, "");
+            _log(MODULE__ERROR, "MM::LoadCharge() - could not split %s for %s", cRef->name(), pMod->GetSelf()->name());
             if (pShipItem->HasPilot())
                 pShipItem->GetPilot()->SendNotifyMsg("Could not split stack of %s.  %s was not reloaded.", \
                         cRef->name(), pMod->GetSelf()->name());
-            return;
+            return 0;
         }
-    } else {
-        loadQty = chargeRef->quantity();
     }
 
     /* loaded charges are set in a "SubLocation" in client.
@@ -1145,18 +1177,21 @@ void ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag)
      * because of this, OMAC isn't used when docked, and OnItemChange (OIC) is the update client will correctly process.
      */
 
-    if (loaded) {
-        //  merge addt'l charges with currently loaded charges (fillup)
-        pMod->GetLoadedChargeRef()->Merge(chargeRef, loadQty);
-    } else {
-        // if module wasnt previously loaded, add to ship's inventory and charge map
-        chargeRef->SetAttribute(AttrQuantity, EvilZero, false);    // OMAC
-        chargeRef->Move(pShipItem->itemID(), flag, pShipItem->HasPilot()?pShipItem->GetPilot()->IsDocked():false);
-        //chargeRef->Move(pShipItem->itemID(), flag, false);
-        m_charges.emplace(flag, chargeRef);
+    if (loadedRef.get() != nullptr) {
+        //  merge addt'l charges with currently loaded charges (fillup).  the quantity goes out as OMAC in space, OIC docked
+        if (!loadedRef->Merge(chargeRef, loadQty, docked))
+            return 0;
+        // this will enable module loading blink if ship in space, even on reload/fillup
+        pMod->LoadCharge(loadedRef);
+        return loadQty;
     }
 
-    // this will enable module loading blink if ship in space, even on reload/fillup
+    // if module wasnt previously loaded, add to ship's inventory and charge map
+    chargeRef->SetAttribute(AttrQuantity, EvilZero, false);    // OMAC
+    chargeRef->Move(pShipItem->itemID(), flag, docked);
+    m_charges[flag] = chargeRef;
+
+    // this will enable module loading blink if ship in space
     pMod->LoadCharge(chargeRef);
 
     //  just found a call i was missing.... 19Aug20
@@ -1184,25 +1219,25 @@ void ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag)
      *      [PyIntegerVar 131]
      */
     // send update to client for processing new subLocation   -found/added 19Aug20
-    if (!loaded)
-        if (pShipItem->HasPilot() and pShipItem->GetPilot()->IsInSpace()) {
-            Rsp_CommonGetInfo_Entry entry2;
-            if (chargeRef->Populate(entry2)) {
-                PyTuple* tuple = new PyTuple(3);
-                    tuple->SetItem(0, new PyInt(chargeRef->locationID()));
-                    tuple->SetItem(1, new PyInt(chargeRef->flag()));
-                    tuple->SetItem(2, new PyInt(chargeRef->typeID()));
-                PyTuple* result = new PyTuple(2);
-                    result->SetItem(0, new PyInt(chargeRef->locationID()));
-                    result->SetItem(1, new PyObject("util.KeyVal", entry2.Encode()));
-                pShipItem->GetPilot()->SendNotification("OnGodmaPrimeItem", "clientID", result);     // this is sequenced
-            } else {
-                sLog.Error("MM::LoadCharge","cannot Populate() %s", chargeRef->name());
-            }
+    if (pShipItem->HasPilot() and pShipItem->GetPilot()->IsInSpace()) {
+        Rsp_CommonGetInfo_Entry entry2;
+        if (chargeRef->Populate(entry2)) {
+            PyTuple* tuple = new PyTuple(3);
+                tuple->SetItem(0, new PyInt(chargeRef->locationID()));
+                tuple->SetItem(1, new PyInt(chargeRef->flag()));
+                tuple->SetItem(2, new PyInt(chargeRef->typeID()));
+            PyTuple* result = new PyTuple(2);
+                result->SetItem(0, new PyInt(chargeRef->locationID()));
+                result->SetItem(1, new PyObject("util.KeyVal", entry2.Encode()));
+            pShipItem->GetPilot()->SendNotification("OnGodmaPrimeItem", "clientID", result);     // this is sequenced
+        } else {
+            sLog.Error("MM::LoadCharge","cannot Populate() %s", chargeRef->name());
         }
+    }
 
     //chargeRef->SetQuantity(loadQty, true);                  // OIC
-    chargeRef->SetAttribute(AttrQuantity, loadQty, true);   // OMAC
+    chargeRef->SetAttribute(AttrQuantity, chargeRef->quantity(), true);   // OMAC
+    return loadQty;
 }
 
 void ModuleManager::UnloadCharge(GenericModule* pMod)
@@ -1214,23 +1249,25 @@ void ModuleManager::UnloadCharge(GenericModule* pMod)
 
     _log(MODULE__TRACE, "%s(%u) calling MM::UnloadCharge()", pMod->GetSelf()->name(), pMod->itemID());
 
+    // the charge in the slot, also one that is still loading
+    InventoryItemRef chargeRef(GetChargeInSlot(pMod->flag()));
+    if ((chargeRef.get() == nullptr) and pMod->IsLoaded())
+        chargeRef = pMod->GetLoadedChargeRef();
     // verify no charge at flag in map
     m_charges.erase(pMod->flag());
+    // civilian turrets keep their own item as the "charge"
+    if (chargeRef.get() == pMod->GetSelf().get())
+        chargeRef = InventoryItemRef(nullptr);
 
-    if (!pMod->IsLoaded()) {
-        _log(MODULE__ERROR, "MM::UnloadCharge() - %s at %s is not loaded", \
-                pMod->GetSelf()->name(), sDataMgr.GetFlagName(pMod->flag()));
-        return;
-    }
-
-    InventoryItemRef chargeRef(pMod->GetLoadedChargeRef());
-    if (chargeRef.get() == nullptr) {
-        _log(MODULE__ERROR, "MM::UnloadCharge() - charge not found on module %s at %s", \
-                pMod->GetSelf()->name(), sDataMgr.GetFlagName(pMod->flag()));
-        return;
-    }
-
+    // the module lets go of it either way (this also cancels a reload and takes the charge's effects off)
     pMod->UnloadCharge();
+
+    if (chargeRef.get() == nullptr) {
+        // nothing loaded.  this is also the way back in from deleting a used up or destroyed charge (ShipItem::RemoveItem)
+        _log(MODULE__TRACE, "MM::UnloadCharge() - %s at %s is not loaded", \
+                pMod->GetSelf()->name(), sDataMgr.GetFlagName(pMod->flag()));
+        return;
+    }
 
     // if charge is depleted, update has already been sent to client thru OMAC
     if (chargeRef->quantity() < 1)
@@ -1243,11 +1280,16 @@ void ModuleManager::UnloadCharge(GenericModule* pMod)
 
     chargeRef->SetAttribute(AttrQuantity, EvilZero);    // OMAC
 
+    // a damaged crystal stays on its own (it keeps its damage), and is saved as it is now
+    bool stacks(!chargeRef->isSingleton() and (chargeRef->GetAttribute(AttrDamage) <= EvilZero));
+    if (!stacks)
+        chargeRef->SaveItem();
+
     if (sDataMgr.IsStation(pShipItem->locationID())) {
         StationItemRef sRef = sEntityList.GetStationByID(pShipItem->locationID());
         if (sRef.get() != nullptr) {
-            InventoryItemRef iRef = sRef->GetMyInventory()->GetByTypeFlag(chargeRef->typeID(), flagHangar);
-            if (iRef.get() != nullptr) {
+            InventoryItemRef iRef(stacks ? sRef->GetMyInventory()->GetByTypeFlag(chargeRef->typeID(), flagHangar) : InventoryItemRef(nullptr));
+            if ((iRef.get() != nullptr) and !iRef->isSingleton() and (iRef->ownerID() == chargeRef->ownerID())) {
                 // merge with existing item
                 iRef->Merge(chargeRef);         // OIC  preferred
                 //iRef->AlterQuantity(chargeRef->quantity() + iRef->quantity(), true);
@@ -1273,11 +1315,11 @@ void ModuleManager::UnloadCharge(GenericModule* pMod)
         } else
         */
         if (pShipItem->GetMyInventory()->HasAvailableSpace(flagCargoHold, chargeRef)) {
-            InventoryItemRef iRef = pShipItem->GetMyInventory()->GetByTypeFlag(chargeRef->typeID(), flagCargoHold);
-            if (iRef.get() != nullptr) {
+            InventoryItemRef iRef(stacks ? pShipItem->GetMyInventory()->GetByTypeFlag(chargeRef->typeID(), flagCargoHold) : InventoryItemRef(nullptr));
+            if ((iRef.get() != nullptr) and !iRef->isSingleton()) {
                 // merge with existing item
                 // in case we're merging into existing stack, get current qty
-                int16 qty(chargeRef->quantity());
+                int32 qty(chargeRef->quantity());
                 chargeRef->Delete();
                 iRef->AlterQuantity(qty, true);
                 return;
@@ -1293,6 +1335,25 @@ void ModuleManager::UnloadCharge(GenericModule* pMod)
             chargeRef->Delete();
         }
     }
+}
+
+void ModuleManager::DestroyCharge(GenericModule* pMod)
+{
+    // a crystal burnt out:  the module lets go of it and it is gone
+    if (pMod == nullptr)
+        return;
+    InventoryItemRef chargeRef(GetChargeInSlot(pMod->flag()));
+    if ((chargeRef.get() == nullptr) and pMod->IsLoaded())
+        chargeRef = pMod->GetLoadedChargeRef();
+    m_charges.erase(pMod->flag());
+    pMod->UnloadCharge();
+    if ((chargeRef.get() == nullptr) or (chargeRef.get() == pMod->GetSelf().get()))
+        return;
+    _log(MODULE__TRACE, "MM::DestroyCharge() - %s in %s is destroyed", chargeRef->name(), pMod->GetSelf()->name());
+    // the client clears the sublocation on a zero quantity (OMAC in space)
+    chargeRef->SetAttribute(AttrQuantity, EvilZero);
+    // deleting it comes back through ShipItem::RemoveItem -> UnloadModule, which finds nothing left to do
+    chargeRef->Delete();
 }
 
 InventoryItemRef ModuleManager::GetLoadedChargeOnModule(EVEItemFlags flag) {
@@ -1338,26 +1399,29 @@ void ModuleManager::UnloadModule(GenericModule* pMod) {
 
 void ModuleManager::UnloadWeapons()
 {
-    std::map<uint8, GenericModule*>::iterator mItr;
-    for (uint8 i = flagHiSlot0; 1 < flagFixedSlot; ++i) {
-        mItr = m_modules.find((uint8)i);
-        if (mItr->second != nullptr)
-            UnloadCharge(mItr->second);
+    for (uint8 i = flagHiSlot0; i < flagFixedSlot; ++i) {
+        GenericModule* pMod(GetModule((EVEItemFlags)i));
+        if ((pMod != nullptr) and (pMod->IsLoaded() or (GetChargeInSlot(pMod->flag()).get() != nullptr)))
+            UnloadCharge(pMod);
     }
 }
 
 void ModuleManager::UnloadAllModules()
 {
-    /** @todo look into this....is this right?  */
+    // UnloadCharge() changes m_charges, so pick the modules first
+    std::vector<GenericModule*> modules;
+    for (auto cur : m_modules)
+        if ((cur.second != nullptr) and (cur.second->IsLoaded() or (GetChargeInSlot((EVEItemFlags)cur.first).get() != nullptr)))
+            modules.push_back(cur.second);
+    for (auto cur : modules)
+        UnloadCharge(cur);
+}
+
+void ModuleManager::ChargeFxReset()
+{
     for (auto cur : m_modules)
         if (cur.second != nullptr)
-            cur.second->UnloadCharge();
-    // can this be called when docked?
-    //bool docked = sDataMgr.IsStation(pShipItem->locationID());
-    for (auto cur : m_charges)
-        UnloadModule(cur.second->flag());
-
-    m_charges.clear();
+            cur.second->ChargeFxReset();
 }
 
 void ModuleManager::UpdateModules(std::vector<uint32> modVec)

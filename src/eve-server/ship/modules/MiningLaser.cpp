@@ -58,9 +58,9 @@ MiningLaser::MiningLaser(ModuleItemRef mRef, ShipItemRef sRef)
     _log(MINING__TRACE, "MiningLaser Created for %s with %ums Duration.", mRef->name(), GetAttribute(AttrDuration).get_uint32());
 }
 
-void MiningLaser::LoadCharge(InventoryItemRef charge)
+void MiningLaser::LoadCharge(InventoryItemRef charge, bool instant/*false*/)
 {
-    ActiveModule::LoadCharge(charge);
+    ActiveModule::LoadCharge(charge, instant);
 
     if (m_chargeRef.get() == nullptr)
         return;
