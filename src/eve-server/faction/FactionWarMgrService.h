@@ -67,6 +67,7 @@ protected:
     PyResult WithdrawLeaveFactionAsAlliance(PyCallArgs& call, PyInt* factionID);
     PyResult WithdrawLeaveFactionAsCorporation(PyCallArgs& call, PyInt* factionID);
     PyResult RefreshCorps(PyCallArgs& call);
+    PyResult CheckForRankChange(PyCallArgs& call);
 
 private:
     ObjCacheService* m_cache;

@@ -92,3 +92,13 @@ uint32 FactionWarMgrDB::GetFactionMilitiaCorporation(const uint32 factionID) {
     return row.GetUInt(0);
 }
 
+void FactionWarMgrDB::GetWarFactionIDs(std::vector<uint32>& into) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT factionID FROM facFactions WHERE militiaCorporationID IS NOT NULL ORDER BY factionID")) {
+        _log(DATABASE__ERROR, "Failed to query war factions: %s.", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}

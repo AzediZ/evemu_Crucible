@@ -65,6 +65,8 @@ FactionWarMgrService::FactionWarMgrService(EVEServiceManager& mgr) :
     this->Add("GetStats_FactionInfo", &FactionWarMgrService::GetStats_FactionInfo);
     this->Add("GetStats_TopAndAllKillsAndVPs", &FactionWarMgrService::GetStats_TopAndAllKillsAndVPs);
     this->Add("GetStats_Character", &FactionWarMgrService::GetStats_Character);
+    this->Add("GetStats_Corp", &FactionWarMgrService::GetStats_Corp);
+    this->Add("CheckForRankChange", &FactionWarMgrService::CheckForRankChange);
     this->Add("GetStats_Alliance", &FactionWarMgrService::GetStats_Alliance);
     this->Add("GetStats_Militia", &FactionWarMgrService::GetStats_Militia);
     this->Add("GetStats_CorpPilots", &FactionWarMgrService::GetStats_CorpPilots);
@@ -256,14 +258,19 @@ PyResult FactionWarMgrService::GetFactionalWarStatus(PyCallArgs &call) {
   _log(FACWAR__CALL, "FacWarMgr::Handle_GetFactionalWarStatus()");
   call.Dump(FACWAR__CALL_DUMP);
 
-  return nullptr;
+    // base_fw / charactersheet:  .status, .factionID, .startDate.  nobody is in (or joining) a militia here
+    PyDict* dict = new PyDict();
+        dict->SetItemString("factionID", PyStatic.NewNone());
+        dict->SetItemString("startDate", PyStatic.NewNone());
+        dict->SetItemString("status", PyStatic.NewNone());
+    return new PyObject("util.KeyVal", dict);
 }
 
 PyResult FactionWarMgrService::JoinFactionAsCharacter(PyCallArgs &call, PyInt* factionID) {
   _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCharacter()");
   call.Dump(FACWAR__CALL_DUMP);
 
-  return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::GetCorporationWarFactionID(PyCallArgs &call, PyInt* corporationID) {
@@ -283,7 +290,8 @@ PyResult FactionWarMgrService::GetSystemsConqueredThisRun(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetSystemsConqueredThisRun()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // a list of {solarsystemID, occupierID} dicts
+    return new PyList();
 }
 
 PyResult FactionWarMgrService::GetFactionCorporations(PyCallArgs &call, PyInt* factionID) {
@@ -291,7 +299,8 @@ PyResult FactionWarMgrService::GetFactionCorporations(PyCallArgs &call, PyInt* f
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetFactionCorporations()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // corporations in the faction's militia
+    return new PyList();
 }
 
 PyResult FactionWarMgrService::JoinFactionAsCharacterRecommendationLetter(PyCallArgs &call, PyInt* factionID, PyInt* itemID) {
@@ -302,7 +311,7 @@ PyResult FactionWarMgrService::JoinFactionAsCharacterRecommendationLetter(PyCall
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCharacterRecommendationLetter()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::JoinFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -310,7 +319,7 @@ PyResult FactionWarMgrService::JoinFactionAsAlliance(PyCallArgs &call, PyInt* fa
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::JoinFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -318,7 +327,7 @@ PyResult FactionWarMgrService::JoinFactionAsCorporation(PyCallArgs &call, PyInt*
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::GetStats_FactionInfo(PyCallArgs &call) {
@@ -326,7 +335,8 @@ PyResult FactionWarMgrService::GetStats_FactionInfo(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_FactionInfo()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // factionID -> KeyVal(totalMembersCount, systemsCount, ...);  the client reads missing ones as 0
+    return new PyDict();
 }
 
 PyResult FactionWarMgrService::GetStats_TopAndAllKillsAndVPs(PyCallArgs &call) {
@@ -334,7 +344,19 @@ PyResult FactionWarMgrService::GetStats_TopAndAllKillsAndVPs(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_TopAndAllKillsAndVPs()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // (top, all):  {groupCharacter, groupCorporation, groupAlliance: {killsY, killsLW, killsTotal, vpY, vpLW, vpTotal}}
+    PyTuple* res = new PyTuple(2);
+    for (uint8 i = 0; i < 2; ++i) {
+        PyDict* groups = new PyDict();
+        for (int32 groupID : {1 /*groupCharacter*/, 2 /*groupCorporation*/, 32 /*groupAlliance*/}) {
+            PyDict* stats = new PyDict();
+            for (const char* key : {"killsY", "killsLW", "killsTotal", "vpY", "vpLW", "vpTotal"})
+                stats->SetItemString(key, new PyInt(0));
+            groups->SetItem(new PyInt(groupID), stats);
+        }
+        res->SetItem(i, groups);
+    }
+    return res;
 }
 
 PyResult FactionWarMgrService::GetStats_Character(PyCallArgs &call) {
@@ -342,7 +364,8 @@ PyResult FactionWarMgrService::GetStats_Character(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_Character()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // stat name -> value (.items())
+    return new PyDict();
 }
 
 PyResult FactionWarMgrService::GetStats_Corp(PyCallArgs &call) {
@@ -350,7 +373,8 @@ PyResult FactionWarMgrService::GetStats_Corp(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_Corp()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // stat name -> value (.items())
+    return new PyDict();
 }
 
 PyResult FactionWarMgrService::GetStats_Alliance(PyCallArgs &call) {
@@ -358,7 +382,8 @@ PyResult FactionWarMgrService::GetStats_Alliance(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_Alliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // stat name -> value (.items())
+    return new PyDict();
 }
 
 PyResult FactionWarMgrService::GetStats_Militia(PyCallArgs &call) {
@@ -366,7 +391,23 @@ PyResult FactionWarMgrService::GetStats_Militia(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_Militia()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // {'header': [factionIDs], 'data': {stat: {factionID: value}}}
+    std::vector<uint32> factions;
+    m_db.GetWarFactionIDs(factions);
+    PyList* header = new PyList();
+    for (auto cur : factions)
+        header->AddItem(new PyInt(cur));
+    PyDict* data = new PyDict();
+    for (const char* key : {"killsY", "killsLW", "killsTotal", "vpY", "vpLW", "vpTotal"}) {
+        PyDict* values = new PyDict();
+        for (auto cur : factions)
+            values->SetItem(new PyInt(cur), new PyInt(0));
+        data->SetItemString(key, values);
+    }
+    PyDict* res = new PyDict();
+        res->SetItemString("header", header);
+        res->SetItemString("data", data);
+    return res;
 }
 
 PyResult FactionWarMgrService::GetStats_CorpPilots(PyCallArgs &call) {
@@ -374,7 +415,8 @@ PyResult FactionWarMgrService::GetStats_CorpPilots(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetStats_CorpPilots()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    // stat name -> value (.items())
+    return new PyDict();
 }
 
 PyResult FactionWarMgrService::LeaveFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -382,7 +424,7 @@ PyResult FactionWarMgrService::LeaveFactionAsAlliance(PyCallArgs &call, PyInt* f
     _log(FACWAR__CALL, "FacWarMgr::Handle_LeaveFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::LeaveFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -390,7 +432,7 @@ PyResult FactionWarMgrService::LeaveFactionAsCorporation(PyCallArgs &call, PyInt
     _log(FACWAR__CALL, "FacWarMgr::Handle_LeaveFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::WithdrawJoinFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -398,7 +440,7 @@ PyResult FactionWarMgrService::WithdrawJoinFactionAsAlliance(PyCallArgs &call, P
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawJoinFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::WithdrawJoinFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -406,7 +448,7 @@ PyResult FactionWarMgrService::WithdrawJoinFactionAsCorporation(PyCallArgs &call
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawJoinFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::WithdrawLeaveFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -414,7 +456,7 @@ PyResult FactionWarMgrService::WithdrawLeaveFactionAsAlliance(PyCallArgs &call, 
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawLeaveFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::WithdrawLeaveFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -422,7 +464,7 @@ PyResult FactionWarMgrService::WithdrawLeaveFactionAsCorporation(PyCallArgs &cal
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawLeaveFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    throw CustomError("Factional Warfare is not available on this server.");
 }
 
 PyResult FactionWarMgrService::RefreshCorps(PyCallArgs &call) {
@@ -430,6 +472,13 @@ PyResult FactionWarMgrService::RefreshCorps(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_RefreshCorps()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    return PyStatic.NewNone();
 }
 
+PyResult FactionWarMgrService::CheckForRankChange(PyCallArgs &call) {
+    //  newrank = self.facWarMgr.CheckForRankChange()    (only for militia members:  None = no change)
+    _log(FACWAR__CALL, "FacWarMgr::Handle_CheckForRankChange()");
+    call.Dump(FACWAR__CALL_DUMP);
+
+    return PyStatic.NewNone();
+}
