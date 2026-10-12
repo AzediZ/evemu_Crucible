@@ -7,8 +7,8 @@
   *    Far    players are in the system, not in the bubble:  an idle npc thinks every npc.LodFarInterval (4s), staggered
   *           by itemID;  a busy one (fighting, going home, warping, law) every tick
   *    Empty  no player in the system:  an idle npc doesn't think at all (npc.LodEmptySystem);  a busy one every tick
-  *   movement (destiny) always runs.  the ai of npcs that aren't Near also waits for the next tick once the system used
-  *   npc.TickBudget us of npc ai in this one, so the bubbles with players come first.
+  *   movement (destiny) always runs.  the ai of idle npcs that aren't Near also skips the tick once the system used
+  *   npc.TickBudget us of npc ai in it, so the bubbles with players (and busy npcs) come first.
   *   difficulty (npc.Difficulty, private servers):  d > 1 harder.  damage x d, lock and reaction time / d;  each part can
   *   be set on its own (DifficultyDamage, DifficultyLockTime, DifficultyReactionTime;  0 = from d).
   *   header only and dependency free (also used by eve-test, npcai/NpcPolishTest)
@@ -47,11 +47,11 @@ inline bool RunsThisTick(uint8_t tier, bool busy, uint64_t tick, uint32_t itemID
     return (((tick + itemID) % farEvery) == 0);
 }
 
-/* the cpu budget:  npcs that aren't Near wait for the next tick once the system's npc ai used budgetUs in this one.
- *  budgetUs 0 = no budget */
-inline bool OverBudget(uint8_t tier, double usedUs, uint32_t budgetUs)
+/* the cpu budget:  idle npcs that aren't Near skip this tick once the system's npc ai used budgetUs in it.  busy ones never
+ *  wait (the tick walk is in itemID order:  the same ones would wait every tick).  budgetUs 0 = no budget */
+inline bool OverBudget(uint8_t tier, bool busy, double usedUs, uint32_t budgetUs)
 {
-    if ((tier == Tier::Near) or (budgetUs == 0))
+    if (busy or (tier == Tier::Near) or (budgetUs == 0))
         return false;
     return (usedUs >= static_cast<double>(budgetUs));
 }

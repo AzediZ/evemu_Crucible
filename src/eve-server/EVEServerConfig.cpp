@@ -263,7 +263,7 @@ EVEServerConfig::EVEServerConfig()
     npc.BeltSpawnCap = 0.5f;            // era (med):  about half as many spawns as belts (plan phase 5 spawn generation)
     npc.LodFarInterval = 4 /*s*/;       // plan 6.7:  every 4s when players are only in the system
     npc.LodEmptySystem = true;          // plan 6.7:  nothing in empty systems
-    npc.TickBudget = 50000 /*us*/;      // [DD] 5% of a tick per system;  only npcs away from players wait for the next tick
+    npc.TickBudget = 50000 /*us*/;      // [DD] 5% of a tick per system;  only idle npcs away from players skip a tick
     npc.StatsInterval = 60 /*s*/;       // plan phase 5 telemetry (the line needs NPC__AI_STATS enabled)
     npc.Difficulty = 1.0f;              // plan phase 5:  1.0 = Crucible
     npc.DifficultyDamage = 0.0f;

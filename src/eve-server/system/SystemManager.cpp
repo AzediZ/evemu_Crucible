@@ -1268,7 +1268,10 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
         m_droneIndexDirty = true;
     // a field source leaving space (probe expired, deployable destroyed or scooped, HIC docked/jumped/died) takes its field along
     m_interdiction->RemoveField(pSE->GetID());
-    bool wasHere(m_entities.find(pSE->GetID()) != m_entities.end());
+    /* an npc or sentry:  out of its group, spawn and dungeon, freed next tick (npc ai plan phase 5).  while it is still in its
+     *  bubble, so the end of its ewar and beams reaches the clients there */
+    if ((pSE->IsNPCSE() or pSE->IsSentrySE()) and (m_entities.find(pSE->GetID()) != m_entities.end()))
+        OnNPCRemoved(pSE);
     sBubbleMgr.Remove(pSE);
     // Remove Entity's Item Ref from Solar System Dynamic Inventory:
     RemoveItemFromInventory(pSE->GetSelf());
@@ -1281,10 +1284,6 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
 
     // remove from anomaly map, if exists
     m_anomMgr->RemoveSignal(itemID);
-
-    // an npc or sentry:  out of its group, spawn and dungeon, freed next tick (npc ai plan phase 5)
-    if (wasHere and (pSE->IsNPCSE() or pSE->IsSentrySE()))
-        OnNPCRemoved(pSE);
 }
 
 void SystemManager::OnNPCRemoved(SystemEntity* pSE)
@@ -1332,9 +1331,11 @@ void SystemManager::FreeRemovedNPCs()
     std::map<uint32, SystemEntity*> removed;
     removed.swap(m_removedNPCs);
     for (auto& cur : removed) {
-        // back in space meanwhile (nothing does that today):  not ours then
-        if (m_entities.find(cur.first) != m_entities.end())
+        // back in space meanwhile (nothing does that today):  not freed while it is there (its destructor takes it off the list)
+        if (m_entities.find(cur.first) != m_entities.end()) {
+            m_removedNPCs.insert(cur);
             continue;
+        }
         if (cur.second->IsNPCSE())
             RemoveDeadNPC(cur.second->GetNPCSE());
         delete cur.second;

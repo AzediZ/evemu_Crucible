@@ -107,15 +107,16 @@ void NPC::Process() {
     SystemEntity::Process();
 
     /* the ai, by level of detail:  every tick near players, every npc.LodFarInterval elsewhere in the system, not at all in a
-     *  system without players, busy npcs always.  npcs away from players also wait for the next tick once the system used
-     *  npc.TickBudget us of npc ai in this one (npc/ai/NpcLod.h, doc/code_and_design_notes/npc-ai/PLAN.md 6.7) */
+     *  system without players, busy npcs always.  idle npcs away from players also skip the tick once the system used
+     *  npc.TickBudget us of npc ai in it (npc/ai/NpcLod.h, doc/code_and_design_notes/npc-ai/PLAN.md 6.7) */
     NpcStats& stats(m_system->GetNpcStats());
     ++stats.curNpcs;
     uint8 tier(NpcLod::TierOf((m_bubble != nullptr) and m_bubble->HasPlayers(), m_system->PlayerCount() > 0));
-    if (!NpcLod::RunsThisTick(tier, m_AI->IsBusy(), m_system->GetAiTick(), GetID(), sConfig.npc.LodFarInterval,
+    bool busy(m_AI->IsBusy());
+    if (!NpcLod::RunsThisTick(tier, busy, m_system->GetAiTick(), GetID(), sConfig.npc.LodFarInterval,
                               sConfig.npc.LodEmptySystem)) {
         ++stats.lodSkipped;
-    } else if (NpcLod::OverBudget(tier, stats.curUs, sConfig.npc.TickBudget)) {
+    } else if (NpcLod::OverBudget(tier, busy, stats.curUs, sConfig.npc.TickBudget)) {
         ++stats.budgetDeferred;
     } else {
         double aiStartTime(GetTimeUSeconds());

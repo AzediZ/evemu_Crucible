@@ -91,11 +91,12 @@ int npcai_NpcPolishTest( int argc, char* argv[] )
 
     ::printf("\n cpu budget (6.7)\n");
     {
-        True("near never waits", !OverBudget(Tier::Near, 1e9, 50000));
-        True("far under budget runs", !OverBudget(Tier::Far, 49999.0, 50000));
-        True("far at budget waits", OverBudget(Tier::Far, 50000.0, 50000));
-        True("empty system over budget waits", OverBudget(Tier::Empty, 60000.0, 50000));
-        True("budget 0 = none", !OverBudget(Tier::Far, 1e9, 0));
+        True("near never waits", !OverBudget(Tier::Near, false, 1e9, 50000));
+        True("far under budget runs", !OverBudget(Tier::Far, false, 49999.0, 50000));
+        True("far at budget waits", OverBudget(Tier::Far, false, 50000.0, 50000));
+        True("empty system over budget waits", OverBudget(Tier::Empty, false, 60000.0, 50000));
+        True("busy far npc never waits (no starving by itemID order)", !OverBudget(Tier::Far, true, 1e9, 50000));
+        True("budget 0 = none", !OverBudget(Tier::Far, false, 1e9, 0));
     }
 
     ::printf("\n difficulty presets (phase 5)\n");

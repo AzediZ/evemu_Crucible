@@ -1790,7 +1790,9 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
     TurretFormulas formula;
     NpcShotRecord shot;
     float quality(formula.GetNPCToHit(m_npc, pSE, &shot));
-    m_shots.Add(shot);
+    // (no roll without a destiny on the target:  nothing to show)
+    if (shot.atMs != 0)
+        m_shots.Add(shot);
     m_npc->SystemMgr()->GetNpcStats().AddShot(quality);
     Damage d(m_npc,
              m_self,
@@ -2096,7 +2098,8 @@ std::string NPCAIMgr::Dump(SystemEntity* pViewer, bool verbose)
     str << "level of detail:  " << tiers[tier < 3 ? tier : 0] << (IsBusy() ? ", busy (every tick)" : "") << ", difficulty damage x"
         << std::setprecision(2) << DifficultyDamage(m_npc) << " lock x"
         << (m_npc->IsLawEnforcer() ? 1.0 : NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyLockTime)) << " reaction x"
-        << NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyReactionTime) << std::setprecision(0)
+        << (m_npc->IsLawEnforcer() ? 1.0 : NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyReactionTime))
+        << std::setprecision(0)
         << (m_telegraph ? ", turned toward its group's target" : "") << (m_vanishing ? ", leaving for good" : "") << "<br>";
     if (verbose) {
         str << "home " << m_home.x << "," << m_home.y << "," << m_home.z << "<br>";
