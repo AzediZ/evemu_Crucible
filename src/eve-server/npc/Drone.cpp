@@ -135,7 +135,8 @@ void DroneSE::Process() {
  *   Drone Sharpshooting        +5% optimal range
  *   Mining Drone Operation     +5% mining yield, Mining Drone Specialization +3%
  *   Repair Drone Operation     +5% repair amount
- *  ship bonuses to drones (Vexor, Ishtar...) are not applied.
+ *   Fighters, Fighter Bombers  +20% damage, fighters and fighter bombers
+ *  carrier hull bonuses to fighter damage are applied (see below); other ship bonuses to drones (Vexor, Ishtar...) are not.
  */
 void DroneSE::UpdateStats(Client* pController) {
     using namespace EvESkill;
@@ -210,6 +211,22 @@ void DroneSE::UpdateStats(Client* pController) {
         s.orbitRange = base(AttrOrbitRange, 0.0);
     if (s.orbitRange <= 0.0)
         s.orbitRange = 500.0;
+    /* fighter bombers have no turret stats (no optimal, falloff or tracking).  they launch a missile that reaches
+     *  anything within entityAttackRange, so they always hit inside it and never outside it.  their damage scales
+     *  with the target's signature radius and speed like a missile's (see TurretFormulas::GetDroneToHit())
+     */
+    s.bomber = (m_self->groupID() == EVEDB::invGroups::Fighter_Bomber);
+    if (s.bomber) {
+        s.optimalRange = base(AttrEntityAttackRange, 20000.0);
+        s.falloff = 0.0;
+        s.tracking = 0.0;
+        s.effectRange = s.optimalRange;
+        s.aoeCloudSize = base(AttrAoeCloudSize, 0.0);
+        s.aoeVelocity = base(AttrAoeVelocity, 0.0);
+        s.aoeDrf = base(AttrAoeDamageReductionFactor, 0.0);
+        s.aoeDrs = base(AttrAoeDamageReductionSensitivity, 0.0);
+    }
+
     if (s.orbitRange > s.effectRange)
         s.orbitRange = s.effectRange * 0.8;
     s.idleOrbitRange = s.orbitRange;
@@ -231,6 +248,36 @@ void DroneSE::UpdateStats(Client* pController) {
         if (needsSkill(spec))
             s.damageMultiplier *= (1.0 + 0.02 * level(spec));
 
+    /* fighters and fighter bombers.  each skill gives +20% damage per level (its damageMultiplierBonus).
+     *  hull bonuses come from the controlling ship's own effects:
+     *   carrierGallenteDroneOwnDmg2 / carrierGallenteBomberDroneOwnDmg2   carrierGallenteBonus2 (5%) per Gallente Carrier level (Thanatos, Nyx)
+     *   shipFighterDamagePirateSupercarrier / shipFighterBomberDamagePirateSupercarrier   shipBonusPirateFaction (100%), flat (Revenant)
+     */
+    bool fighter(needsSkill(Fighters)), bomber(needsSkill(FighterBombers));
+    if (fighter)
+        s.damageMultiplier *= (1.0 + 0.20 * level(Fighters));
+    if (bomber)
+        s.damageMultiplier *= (1.0 + 0.20 * level(FighterBombers));
+    if ((fighter or bomber) and (pController != nullptr) and (pController->GetShip().get() != nullptr)) {
+        const ItemType& hull(pController->GetShip()->type());
+        auto hullAttr = [&](uint16 attrID) -> double {
+            return (hull.HasAttribute(attrID) ? hull.GetAttribute(attrID).get_double() : 0.0);
+        };
+        std::vector<TypeEffects> hullFx;
+        sFxDataMgr.GetTypeEffect(hull.id(), hullFx);
+        for (auto cur : hullFx) {
+            double bonus(0.0);
+            switch (cur.effectID) {
+                case 2332:  /* carrierGallenteDroneOwnDmg2 */                   if (fighter) bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
+                case 4720:  /* carrierGallenteBomberDroneOwnDmg2 */             if (bomber)  bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
+                case 4736:  /* shipFighterDamagePirateSupercarrier */           if (fighter) bonus = hullAttr(AttrShipBonusPirateFaction); break;
+                case 4735:  /* shipFighterBomberDamagePirateSupercarrier */     if (bomber)  bonus = hullAttr(AttrShipBonusPirateFaction); break;
+            }
+            if (bonus != 0.0)
+                s.damageMultiplier *= (1.0 + bonus / 100.0);
+        }
+    }
+
     s.miningAmount = base(AttrMiningAmount, 0.0) * (1.0 + 0.20 * level(DroneInterfacing)) * (1.0 + 0.05 * level(MiningDroneOperation));
     if (needsSkill(MiningDroneSpecialization))
         s.miningAmount *= (1.0 + 0.03 * level(MiningDroneSpecialization));
@@ -251,6 +298,33 @@ void DroneSE::UpdateStats(Client* pController) {
     _log(DRONE__TRACE, "Drone %s(%u) stats: action %u (%s), speed %.0f/%.0f, orbit %.0f, range %.0f+%.0f (use %.0f), cycle %.0fms, dmg x%.3f, mine %.1f, rep %.1f",
          GetName(), GetID(), s.action, effect.effectName.c_str(), s.maxVelocity, s.orbitVelocity, s.orbitRange, s.optimalRange,
          s.falloff, s.effectRange, s.cycleTime, s.damageMultiplier, s.miningAmount, s.repairAmount);
+}
+
+bool DroneSE::CanAttack(SystemEntity* pTarget) const {
+    if (!m_stats.bomber)
+        return true;
+    if ((pTarget == nullptr) or (pTarget->GetSelf().get() == nullptr))
+        return false;
+    InventoryItemRef tRef(pTarget->GetSelf());
+    switch (tRef->categoryID()) {
+        case EVEDB::invCategories::Station:
+        case EVEDB::invCategories::Structure:
+        case EVEDB::invCategories::SovereigntyStructure:
+            return true;
+    }
+    // carriers, dreadnoughts, supercarriers, titans, freighters and the Rorqual
+    if (tRef->type().HasAttribute(AttrIsCapitalSize) and (tRef->type().GetAttribute(AttrIsCapitalSize).get_int() != 0))
+        return true;
+    // NPC capitals
+    switch (tRef->groupID()) {
+        case 865:   // Mission Amarr Empire Carrier
+        case 866:   // Mission Caldari State Carrier
+        case 867:   // Mission Gallente Federation Carrier
+        case 868:   // Mission Minmatar Republic Carrier
+        case 1052:  // Incursion Sansha's Nation Capital
+            return true;
+    }
+    return false;
 }
 
 /* ======================================================================================

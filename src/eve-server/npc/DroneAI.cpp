@@ -84,6 +84,8 @@ DroneAIMgr::DroneAIMgr(DroneSE* pDrone)
   m_aggressorID(0),
   m_webbedID(0),
   m_jammedID(0),
+  m_ewarID(0),
+  m_ewarKind(0),
   m_moveRange(0.0),
   m_moveSpeed(0.0),
   m_cycleActive(false),
@@ -290,6 +292,8 @@ void DroneAIMgr::ProcessReturn(ShipSE* pController, bool toBay) {
 void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
     bool usable((pTarget != nullptr) and !pTarget->IsDead() and (pTarget->SysBubble() == m_pDrone->SysBubble()));
+    if (usable and !m_pDrone->CanAttack(pTarget))
+        usable = false;
     if (usable and (pTarget->DestinyMgr() != nullptr))
         if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
             usable = false;
@@ -318,7 +322,9 @@ void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     double gap(Gap(m_pDrone, pTarget));
     // close in at full speed, then settle into orbit at orbit velocity.  the effect is used whenever in range
     bool approaching(m_pDrone->DestinyMgr()->IsFollowing());
-    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : DRONE_APPROACH_MARGIN * 2.0));
+    // fast drones swing wide of their orbit, so they only break orbit to chase once well outside it
+    double leaveOrbit(std::max(DRONE_APPROACH_MARGIN * 2.0, stats.orbitVelocity * 2.0));
+    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : leaveOrbit));
     if (gap > approachUntil) {
         ApproachTarget(pTarget, stats.orbitRange, stats.maxVelocity);
     } else {
@@ -413,8 +419,9 @@ void DroneAIMgr::ProcessGuard(ShipSE* pController) {
             for (auto cur : m_pDrone->SystemMgr()->GetDrones())
                 if ((cur.second->GetControllerOwnerID() == m_activityCharID) and (cur.second->GetAI()->GetOrder() == DroneAI::Order::Engage)) {
                     pTarget = m_pDrone->SystemMgr()->GetSE(cur.second->GetAI()->GetTargetID());
-                    if (pTarget != nullptr)
+                    if ((pTarget != nullptr) and m_pDrone->CanAttack(pTarget))
                         break;
+                    pTarget = nullptr;
                 }
         } else {
             pTarget = PickAggressor();
@@ -447,6 +454,8 @@ SystemEntity* DroneAIMgr::PickAggressor() {
 
     auto usable = [&](SystemEntity* pSE) -> bool {
         if ((pSE == nullptr) or pSE->IsDead() or (pSE->SysBubble() != m_pDrone->SysBubble()))
+            return false;
+        if (!m_pDrone->CanAttack(pSE))
             return false;
         if ((pSE->DestinyMgr() != nullptr) and (pSE->DestinyMgr()->IsCloaked() or pSE->DestinyMgr()->IsWarping()))
             return false;
@@ -486,7 +495,20 @@ void DroneAIMgr::OrbitTarget(SystemEntity* pTarget, double range, double speed) 
     pDestiny->Orbit(pTarget, static_cast<uint32>(range));
 }
 
+/* the client slows a ball down once its goal is within one second's travel (the 'homing' range in GotoThrust), and
+ *  slows it hard: at half that range it has 1/16 of its thrust.  a light drone at 5 km/s therefore crawls the last
+ *  few km at a few m/s, so it never reaches its orbit or the drone bay.  approach at full speed while far away, then
+ *  halve the speed (not below cruise speed) until the goal is outside the homing range.  the steps keep the client
+ *  from being sent a new speed every second.
+ */
 void DroneAIMgr::ApproachTarget(SystemEntity* pTarget, double range, double speed) {
+    double toGo(Gap(m_pDrone, pTarget) - range);
+    double cruise(m_pDrone->Stats().orbitVelocity);
+    while ((speed > cruise) and (toGo < speed))
+        speed *= 0.5;
+    if (speed < cruise)
+        speed = cruise;
+
     DestinyManager* pDestiny(m_pDrone->DestinyMgr());
     pDestiny->SetMaxVelocity(static_cast<float>(speed));
     pDestiny->SetSpeedFraction(1.0f);
@@ -539,8 +561,64 @@ void DroneAIMgr::StopJam() {
     Ewar::EndJam(m_pDrone, m_pDrone->GetID(), pTarget);
 }
 
+/* sensor dampener, tracking disruptor and target painter drones (after AzediZ's 4c4f1d54, which changed the target's
+ *  attributes).  their effect goes into the target's EwarState like a module's (RemoteEwarModule):  stacking penalized
+ *  there, read by targeting, turret and missile formulas, with the client's ewar icon.  the values are the drone's own
+ *  attributes, as in its info window:
+ *   SD  maxTargetRangeMultiplier, scanResolutionMultiplier     -> Damp v1, v2
+ *   TD  trackingSpeedMultiplier, maxRangeMultiplier            -> TrackDisrupt v1, v2  (fallofMultiplier: the state has no falloff)
+ *   TP  signatureRadiusBonus (%)                               -> Paint v1
+ *  the entry lasts a cycle and a second, refreshed every cycle, and is removed when the drone stops (StopCycle)
+ */
+void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
+    if (m_ewarID != pTarget->GetID())
+        StopEwar();
+    // ewar immune targets (supercapitals, sieged/triaged ships)
+    if (pTarget->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+        return;
+    const ItemType& type(m_pDrone->GetSelf()->type());
+    auto attr = [&](uint16 attrID, float def) -> float {
+        return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_float() : def);
+    };
+    uint8 kind(Ewar::None);
+    float v1(1.0f), v2(1.0f);
+    switch (m_pDrone->Stats().effectID) {
+        case EVEEffectID::sensorBoostTargetedHostile: {
+            kind = Ewar::Damp;
+            v1 = attr(AttrMaxTargetRangeMultiplier, 1.0f);
+            v2 = attr(AttrScanResolutionMultiplier, 1.0f);
+        } break;
+        case EVEEffectID::turretWeaponRangeFalloffTrackingSpeedMultiplyTargetHostile: {
+            kind = Ewar::TrackDisrupt;
+            v1 = attr(AttrTrackingSpeedMultiplier, 1.0f);
+            v2 = attr(AttrMaxRangeMultiplier, 1.0f);
+        } break;
+        case EVEEffectID::ewTargetPaint: {
+            kind = Ewar::Paint;
+            v1 = 1.0f + (attr(AttrSignatureRadiusBonus, 0.0f) / 100.0f);
+            v2 = 0.0f;
+        } break;
+        default:
+            return;
+    }
+    pTarget->GetEwar(true)->Apply(m_pDrone->GetID(), kind, static_cast<uint32>(m_pDrone->Stats().cycleTime) + 1000, v1, v2,
+                                  InventoryItemRef(nullptr), m_pDrone->GetID());
+    m_ewarID = pTarget->GetID();
+    m_ewarKind = kind;
+}
+
+void DroneAIMgr::StopEwar() {
+    if (m_ewarID == 0)
+        return;
+    SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_ewarID));
+    m_ewarID = 0;
+    if ((pTarget != nullptr) and (pTarget->GetEwar() != nullptr))
+        pTarget->GetEwar()->Remove(m_pDrone->GetID(), m_ewarKind, m_pDrone->GetID());
+}
+
 void DroneAIMgr::StopCycle() {
     StopJam();
+    StopEwar();
     if (!m_cycleActive)
         return;
     m_cycleActive = false;
@@ -659,7 +737,11 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
                         m_jammedID = pTarget->GetID();
                     }
                 } break;
-                // damp, tracking disruption and painting drones need target dogma modifiers (F10).  they only show their effect
+                case EVEEffectID::sensorBoostTargetedHostile:
+                case EVEEffectID::turretWeaponRangeFalloffTrackingSpeedMultiplyTargetHostile:
+                case EVEEffectID::ewTargetPaint: {
+                    ApplyEwar(pTarget);
+                } break;
             }
         } break;
     }

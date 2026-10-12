@@ -128,6 +128,25 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
     const DroneStats& stats(pDrone->Stats());
+    /* fighter bombers (after AzediZ):  their missile always hits a target within missile range (entityAttackRange, surface
+     *  to surface), never one outside it.  the damage is scaled like a missile's (NpcMath::MissileDamageFactor):
+     *   min(1, S/E, ((S/E) * (Ve/Vt)) ^ (ln drf / ln drs))   S = target signature (with painters), E = explosion radius,
+     *   Ve = explosion velocity, Vt = target speed
+     */
+    if (stats.bomber) {
+        NpcMath::TurretGeometry g(NpcMath::Geometry(PositionOf(pDrone), VelocityOf(pDrone), pDrone->GetRadius(),
+                                                    PositionOf(pTarget), VelocityOf(pTarget), pTarget->GetRadius()));
+        if (g.surface > stats.optimalRange) {
+            _log(DAMAGE__TRACE, "Drone::ToHit bomber %s(%u) -> %s(%u):  out of range, %.0fm > %.0f", pDrone->GetName(), pDrone->GetID(),
+                 pTarget->GetName(), pTarget->GetID(), g.surface, stats.optimalRange);
+            return 0;
+        }
+        double sig(pTarget->GetSignatureRadius()), speed(pTarget->GetVelocity().length());
+        double factor(NpcMath::MissileDamageFactor(sig, stats.aoeCloudSize, stats.aoeVelocity, speed, stats.aoeDrf, stats.aoeDrs));
+        _log(DAMAGE__TRACE, "Drone::ToHit bomber %s(%u) -> %s(%u):  hit at %.0fm, sig %.0f, explosion %.0f, speed %.0f -> damage x%.3f",
+             pDrone->GetName(), pDrone->GetID(), pTarget->GetName(), pTarget->GetID(), g.surface, sig, stats.aoeCloudSize, speed, factor);
+        return static_cast<float>(factor);
+    }
     return Roll(pDrone, pTarget, stats.optimalRange, stats.falloff, stats.tracking, stats.sigResolution, MakeRandomFloat(),
                 DAMAGE__TRACE, "Drone");
 }
