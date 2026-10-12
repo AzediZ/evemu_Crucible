@@ -936,8 +936,11 @@ static void OpenJumpPortal(Client* pClient, const JumpDrive::Beacon& beacon)
     if (!JumpDrive::CheckRange(pClient, pClient->GetShip(), beacon.systemID, "jump portal"))
         return;
 
-    if (pPortal->OpenPortal(beacon))
+    if (pPortal->OpenPortal(beacon)) {
         pClient->SendNotifyMsg("Jump portal open.  Fleet members within %.0f m of your ship can jump through it.", JumpDrive::PortalUseRange);
+    } else {
+        pClient->SendNotifyMsg("Your jump portal generator didn't start.");
+    }
 }
 
 PyResult BeyonceBound::CmdBridgeToMember(PyCallArgs &call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID) {

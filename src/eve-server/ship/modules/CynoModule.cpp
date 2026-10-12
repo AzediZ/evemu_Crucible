@@ -38,8 +38,9 @@ void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
     m_firstRun = true;
     ActiveModule::Activate(effectID, targetID, repeat);
 
-    // check to see if Activate() was denied.
-    if (m_Stop)
+    // check to see if Activate() was denied.  check the state, not m_Stop: a single-cycle activation sets m_Stop
+    //  straight away, which skipped freezing the ship
+    if (GetModuleState() != Module::State::Activated)
         return;
 
     _log(MODULE__DEBUG, "Cynosural field generator activated by %s in %s", pClient->GetName(), m_sysMgr->GetName());

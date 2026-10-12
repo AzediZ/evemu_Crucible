@@ -35,7 +35,9 @@ bool JumpPortalModule::OpenPortal(const JumpDrive::Beacon& beacon)
 
     // one cycle.  this throws the usual activation errors (capacitor, fuel, offline...)
     ActiveModule::Activate(m_modRef->type().GetDefaultEffect(), 0, 1);
-    if (m_Stop or (GetModuleState() != Module::State::Activated))
+    // check the state only.  a one-cycle activation always sets m_Stop (stop when this cycle ends), so checking it
+    //  here refused every portal
+    if (GetModuleState() != Module::State::Activated)
         return false;
 
     m_beacon = beacon;
