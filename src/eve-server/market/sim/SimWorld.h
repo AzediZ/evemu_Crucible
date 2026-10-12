@@ -357,6 +357,7 @@ namespace MktSim {
         std::priority_queue<Due, std::vector<Due>, std::greater<Due>> m_due;
         OrderBatch          m_batch;
         std::vector<std::pair<uint32_t, uint32_t>> m_pendingVendor;  // post index -> vendor slot
+        std::vector<uint32_t> m_rewrite;    // orders whose last alter was not written (the gateway failed):  written again
 
         // money controller (PLAN 6.8)
         Cents    m_income0;                 // consumer spend per day at reference prices

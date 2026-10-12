@@ -72,7 +72,8 @@ MarketSimMgr::MarketSimMgr()
   m_offset(0),
   m_lastFlush(0),
   m_lastHistoryInvalidate(0),
-  m_startDay(0)
+  m_startDay(0),
+  m_replaceInventory(false)
 {
 }
 
@@ -277,6 +278,8 @@ int MarketSimMgr::Initialize()
         sLog.Warning("    MarketSimMgr", "Market sim is paused (/mktsim resume).");
     m_lastFlush = now;
     m_lastHistoryInvalidate = now;
+    // the market agrees with the ledger before the first client can trade (Reconcile's cuts, the vendor orders)
+    m_world->FlushOrders();
     Flush();
     uint32 legacy(MarketSimDB::CountLegacyOrders());
     if (legacy > 0)
@@ -306,6 +309,8 @@ bool MarketSimMgr::LoadSaved(int64 now)
             if (n.stationID == r.stationID)
                 mapped = n.nodeID;
         nodeMap[r.nodeID] = mapped;
+        if (mapped != r.nodeID)
+            m_replaceInventory = true;
     }
     auto node = [&nodeMap](uint32 old) -> uint32 {
         std::map<uint32, uint32>::const_iterator itr = nodeMap.find(old);
@@ -340,6 +345,8 @@ bool MarketSimMgr::LoadSaved(int64 now)
             id = a.actorID;
         }
         actorMap[r.actorID] = id;
+        if (id != r.actorID)
+            m_replaceInventory = true;
         m_world->GetLedger().Load(id, r.wallet, r.reserved);
     }
     auto actor = [&actorMap](uint32 old) -> uint32 {
@@ -404,6 +411,9 @@ bool MarketSimMgr::LoadSaved(int64 now)
         slots[std::make_tuple(s.actorID, s.offer.typeID, s.offer.stationID)] = i;
     }
     uint32 gone(0), dropped(0), loaded(0);
+    // (orderID, actorID, nodeID) of orders whose actor or node was renumbered:  mktSimOrder follows, or the next boot
+    //  would read the old numbers as new ones
+    std::vector<std::tuple<uint32, uint32, uint32>> remap;
     for (auto& r : orders) {
         if (!r.live) {
             MarketSimDB::ForgetOrder(r.orderID);
@@ -446,9 +456,13 @@ bool MarketSimMgr::LoadSaved(int64 now)
             ++dropped;
             continue;
         }
+        if ((o.actorID != r.actorID) or (node(r.nodeID) != r.nodeID))
+            remap.push_back(std::make_tuple(o.orderID, o.actorID, node(r.nodeID)));
         m_world->LoadOrder(o);
         ++loaded;
     }
+
+    MarketSimDB::RemapOrders(remap);
 
     std::vector<std::tuple<int32, uint32, uint16, int64, int64>> intake;
     int32 today(DayOf(now));
@@ -513,19 +527,24 @@ void MarketSimMgr::Flush()
     double start(GetTimeMSeconds());
     std::vector<uint32> cells;
     m_world->TakeChangedCells(cells);
+    // finished days first (with those a failed flush didn't write:  the world hands them out once)
     std::vector<HistoryRow> history;
+    std::swap(history, m_unwrittenHistory);
     m_world->TakeFinishedHistory(history);
+    size_t finished(history.size());
     for (auto idx : cells) {
         const Cell& c(m_world->Cells()[idx]);
         if (c.dVol > 0)
             history.push_back(HistoryRow{m_world->Node(c.nodeID)->regionID, c.typeID, c.day, c.dLow, c.dHigh, c.dSum, c.dVol, c.dTrades});
     }
-    if (!MarketSimDB::Flush(*m_world, cells, history, StateMap(), m_pendingAudit)) {
+    if (!MarketSimDB::Flush(*m_world, cells, history, StateMap(), m_pendingAudit, m_replaceInventory)) {
         sLog.Error("    MarketSimMgr", "Market sim:  writing its state failed.  It is kept in memory and written again.");
         m_world->MarkAllCellsChanged();
+        m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
         return;
     }
     m_pendingAudit.clear();
+    m_replaceInventory = false;
     m_lastFlush = Now();
     _log(MARKET__SIM_TRACE, "Market sim flushed %u cells, %u history rows in %.1fms.", (uint32)cells.size(), (uint32)history.size(),
          GetTimeMSeconds() - start);
@@ -544,6 +563,10 @@ void MarketSimMgr::Process()
     if (m_enabled) {
         double budgetUs(std::max(0.5, sConfig.marketSim.BudgetMsPerSecond) * 1000.0);
         m_world->Step(now, budgetUs, []() { return GetTimeUSeconds(); });
+    } else {
+        /* disabled with saved state:  nothing is processed, but what boot queued (Reconcile's cuts, duplicate orders,
+         *  missing vendor orders) must reach the market, or players fill rows the ledger no longer backs */
+        m_world->FlushOrders();
     }
     if ((now - m_lastFlush) >= (int64)std::max<uint32>(5, sConfig.marketSim.FlushSeconds)) {
         Flush();
@@ -593,6 +616,21 @@ void MarketSimMgr::OnDay(const DayReport& rep)
 bool MarketSimMgr::IsSimOrder(uint32 orderID) const
 {
     return (m_world.get() != nullptr) and m_world->IsSimOrder(orderID);
+}
+
+bool MarketSimMgr::CanFill(const Market::OrderInfo& oInfo, uint32 qty) const
+{
+    if (m_world.get() == nullptr)
+        return false;
+    const SimOrder* o(m_world->FindOrder(oInfo.orderID));
+    if (o == nullptr)
+        return false;
+    if ((o->bid == oInfo.isBuy) and (o->price == (Cents)std::llround(oInfo.price * 100.0)) and (qty > 0) and (qty <= o->qty))
+        return true;
+    // the row wasn't written as the sim has it (a failed write is retried with the next flush)
+    _log(MARKET__SIM, "Market sim:  order #%u is %s %u at %.2f in the market but %u at %.2f in the sim.  Not filled (%u wanted).",
+         oInfo.orderID, oInfo.isBuy ? "bid" : "ask", oInfo.quantity, oInfo.price, o->qty, Econ::ToIsk(o->price), qty);
+    return false;
 }
 
 void MarketSimMgr::OnSimAskFilled(const Market::OrderInfo& oInfo, uint32 qty, uint32 buyerOwnerID)
@@ -773,6 +811,8 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
         if (((who->GetAccountRole() & Acct::Role::PROGRAMMER) == 0) or !sConfig.debug.IsTestServer)
             return "/mktsim step needs the PROGRAMMER role on a test server (debug IsTestServer).";
         int ticks((args.argCount() > 2) ? std::max(1, std::atoi(args.arg(2).c_str())) : 1);
+        // the main loop waits for it (no clients are served meanwhile):  at most a day per command
+        ticks = std::min(ticks, std::max(1, 1440 / std::max(1, m_params.tickMinutes)));
         for (int i = 0; i < ticks; ++i) {
             m_offset += 60LL * m_params.tickMinutes;
             RunUntilIdle(Now());

@@ -14,6 +14,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "eve-server.h"
@@ -54,9 +55,13 @@ public:
     static void LoadIntake(int32 fromDay, std::vector<std::tuple<int32, uint32, uint16, int64, int64>>& into);
     static void LoadHistoryDay(int32 day, std::vector<MktSim::HistoryRow>& into);
 
-    // the write-behind snapshot (one transaction):  nodes, actors, changed stock and cells, history rows, state, audit
+    /* the write-behind snapshot (one transaction):  nodes, actors, changed stock and cells, history rows, state, audit.
+     *  replaceInventory:  the stock table is replaced by the ledger's dirty stock (all of it after a renumbering) */
     static bool Flush(MktSim::World& world, const std::vector<uint32>& cells, const std::vector<MktSim::HistoryRow>& history,
-                      const std::map<std::string, std::string>& state, const std::vector<MktSim::AuditLine>& audit);
+                      const std::map<std::string, std::string>& state, const std::vector<MktSim::AuditLine>& audit,
+                      bool replaceInventory = false);
+    // loaded orders whose actor or node got a new number:  (orderID, actorID, nodeID)
+    static void RemapOrders(const std::vector<std::tuple<uint32, uint32, uint32>>& orders);
     static void ClearState();
 
     /* at once (player boundary crossings, PLAN 8) */
