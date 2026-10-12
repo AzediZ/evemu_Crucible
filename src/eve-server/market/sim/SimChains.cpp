@@ -393,8 +393,11 @@ void World::ChainSupply()
         if (!ChainsMoonPI())
             continue;
 
-        // components (T2, capital, R.A.M., hybrid tech):  the goods manufacturer, at the bill of an unresearched original
-        if (t.simClass == SimClass::Component) {
+        /* components (T2, R.A.M., hybrid tech):  the goods manufacturer, at the bill of an unresearched original.  capital
+         *  components stay with the stock model (capitals are optional, PLAN 11 phase 6):  the calibration's few capital
+         *  hulls a day at a hub would make their minerals' derived demand several times all the rest */
+        if ((t.simClass == SimClass::Component) and (t.groupID != Chains::Group::CapitalComponents)
+            and (t.groupID != Chains::Group::AdvancedCapitalComponents)) {
             std::map<uint16_t, ChainBill>::const_iterator bill = m_static.bills.find(t.typeID);
             if (bill == m_static.bills.end())
                 continue;

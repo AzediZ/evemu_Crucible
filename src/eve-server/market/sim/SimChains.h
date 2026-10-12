@@ -26,6 +26,8 @@ namespace Chains {
             MoonMaterials       = 427,      // raw moon materials (harvested by a POS array)
             HarvestableCloud    = 711,      // gas (harvested by ships)
             DataInterface       = 716,      // an invention tool (not used up:  FactoryDB::GetRAMRequirements)
+            CapitalComponents   = 873,
+            AdvancedCapitalComponents = 913,
             FuelBlock           = 1136
         };
     }
