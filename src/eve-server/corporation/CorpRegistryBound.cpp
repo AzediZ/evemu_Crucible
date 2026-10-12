@@ -13,6 +13,7 @@
 #include "account/AccountService.h"
 #include "cache/ObjCacheService.h"
 #include "chat/LSCService.h"
+#include "corporation/CorpMgr.h"
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpRegistryBound.h"
 #include "corporation/OfficeSparseBound.h"
@@ -70,6 +71,7 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("GetMember", &CorpRegistryBound::GetMember);
     this->Add("GetMembers", &CorpRegistryBound::GetMembers);
     this->Add("UpdateMember", &CorpRegistryBound::UpdateMember);
+    this->Add("UpdateMembers", &CorpRegistryBound::UpdateMembers);
 
     this->Add("MoveCompanyShares", &CorpRegistryBound::MoveCompanyShares);
     this->Add("MovePrivateShares", &CorpRegistryBound::MovePrivateShares);
@@ -268,8 +270,25 @@ PyResult CorpRegistryBound::GetRecruiters(PyCallArgs &call, PyInt* corpID, PyInt
 }
 
 PyResult CorpRegistryBound::DeleteTitle(PyCallArgs &call, PyInt* titleID)
-{   // working
-    m_db.DeleteTitle(call.client->GetCorporationID(), titleID->value());
+{
+    RequireDirector(call);
+
+    // the title goes back to an empty 'Untitled n' and its holders lose it
+    m_db.DeleteTitle(m_corpID, titleID->value());
+    sCorpMgr.InvalidateTitles(m_corpID);
+
+    std::vector<Client*> list;
+    sEntityList.GetCorpClients(list, m_corpID);
+    for (auto cur : list) {
+        if ((cur == nullptr) or (cur->GetChar().get() == nullptr))
+            continue;
+        CorpData data = cur->GetChar()->GetCorpData();
+        if ((data.titleMask & titleID->value()) == 0)
+            continue;
+        data.titleMask &= ~(int64)titleID->value();
+        cur->GetChar()->UpdateCorpData(data);
+    }
+    CorporationDB::ClearTitle(m_corpID, titleID->value());
     return nullptr;
 }
 
@@ -295,14 +314,33 @@ PyResult CorpRegistryBound::GetRecentKillsAndLosses(PyCallArgs &call, PyInt* num
 }
 
 PyResult CorpRegistryBound::GetMember(PyCallArgs &call, PyInt* characterID)
-{   // not working
-    _log(CORP__CALL, "CorpRegistryBound::Handle_GetMember()");
-    PyRep* rep = m_db.GetMember(characterID->value());
+{
+    // corp.members.GetMember(charID):  the member row (util.KeyVal), None when not a member
+    std::vector<uint32> ids;
+    ids.push_back(characterID->value());
+    PyList* list = CorporationDB::GetMemberRows(m_corpID, &ids, 0, 0);
+    if (list->empty()) {
+        PyDecRef(list);
+        return PyStatic.NewNone();
+    }
 
-    if (is_log_enabled(CORP__RSP_DUMP))
-        rep->Dump(CORP__RSP_DUMP, "");
-
+    PyRep* rep = list->GetItem(0);
+    PyIncRef(rep);
+    PyDecRef(list);
     return rep;
+}
+
+void CorpRegistryBound::RequireMember(PyCallArgs& call)
+{
+    if (call.client->GetCorporationID() != (int32)m_corpID)
+        throw CustomError("You are not a member of this corporation.");
+}
+
+void CorpRegistryBound::RequireDirector(PyCallArgs& call)
+{
+    RequireMember(call);
+    if ((call.client->GetRolesAtAll() & Corp::Role::Director) != Corp::Role::Director)
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO and directors can do that."));
 }
 
 PyResult CorpRegistryBound::SetAccountKey(PyCallArgs &call, PyInt* accountKey)
@@ -456,55 +494,32 @@ PyResult CorpRegistryBound::UpdateDivisionNames(PyCallArgs &call,
 }
 
 PyResult CorpRegistryBound::GetMembersPaged(PyCallArgs &call, PyInt* page) {
-    //return self.GetCorpRegistry().GetMembersPaged(page)
-    DBQueryResult res;
-    m_db.GetMembersPaged(m_corpID, page->value(), res);
-    //uint32 rowCount = (uint32)res.GetRowCount();
+    // bco_members.PagedCorpMembers.PopulatePage(page):  1-based page of 50.  util.PagedCollection.Add stores the set at
+    //  perPage * resultSet.page and reads page n from perPage * (n - 1), so the set's page is page - 1
+    static const uint32 perPage = 50;
+    uint32 pageNo = (page->value() > 1 ? page->value() : 1);
 
-    PyList* list = new PyList();
-    DBResultRow row;
-    while (res.GetRow(row)) {
-        //SELECT characterID, corporationID, title, rolesAtAll, grantableRoles, startDateTime, rolesAtHQ, grantableRolesAtHQ, \
-          rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther, titleMask, corpAccountKey, baseID, blockRoles, name
-        PyDict* dict = new PyDict();
-        dict->SetItemString( "characterID",             new PyInt(row.GetInt(0)));
-        dict->SetItemString( "corporationID",           new PyInt(row.GetInt(1)));
-        dict->SetItemString( "divisionID",              new PyInt(0));
-        dict->SetItemString( "squadronID",              new PyInt(0));
-        dict->SetItemString( "title",                   new PyInt(row.GetInt(2)));
-        dict->SetItemString( "roles",                   new PyLong(row.GetInt64(3)));
-        dict->SetItemString( "grantableRoles",          new PyInt(row.GetInt(4)));
-        dict->SetItemString( "startDateTime",           new PyLong(row.GetInt64(5)));
-        dict->SetItemString( "rolesAtHQ",               new PyLong(row.GetInt64(6)));
-        dict->SetItemString( "grantableRolesAtHQ",      new PyLong(row.GetInt64(7)));
-        dict->SetItemString( "rolesAtBase",             new PyLong(row.GetInt64(8)));
-        dict->SetItemString( "grantableRolesAtBase",    new PyLong(row.GetInt64(9)));
-        dict->SetItemString( "rolesAtOther",            new PyLong(row.GetInt64(10)));
-        dict->SetItemString( "grantableRolesAtOther",   new PyLong(row.GetInt64(11)));
-        dict->SetItemString( "titleMask",               new PyLong(row.GetInt64(12))); // titleID
-        dict->SetItemString( "accountKey",              new PyInt(row.GetInt(13)));
-        dict->SetItemString( "rowDate",                 new PyLong(GetFileTimeNow())); //may not be right
-        dict->SetItemString( "baseID",                  new PyInt(row.GetInt(14))); /** @todo update this */
-        dict->SetItemString( "blockRoles",              new PyBool(row.GetInt(15)));
-        dict->SetItemString( "ownerName",               new PyString(row.GetText(16)));
-        list->AddItem(new PyObject("util.KeyVal", dict));
-    }
+    PyDict* dict = new PyDict();
+        dict->SetItemString("collection", CorporationDB::GetMemberRows(m_corpID, nullptr, (pageNo - 1) * perPage, perPage));
+        dict->SetItemString("totalCount", new PyInt(m_db.GetMemberCount(m_corpID)));
+        dict->SetItemString("page", new PyInt(pageNo - 1));
+        dict->SetItemString("perPage", new PyInt(perPage));
+    PyObject* rsp = new PyObject("util.PagedResultSet", dict);
 
     if (is_log_enabled(CORP__RSP_DUMP))
-        list->Dump(CORP__RSP_DUMP, "");
+        rsp->Dump(CORP__RSP_DUMP, "");
 
-    return list;
+    return rsp;
 }
 
 PyResult CorpRegistryBound::GetMembersByIds(PyCallArgs &call, PyList* memberIDs) {
-    //return self.GetCorpRegistry().GetMembersByIds(memberIDs)
-    _log(CORP__CALL, "CorpRegistryBound::Handle_GetMembersByIds()");
-    call.Dump(CORP__CALL_DUMP);
-
-    PyList* list = new PyList();
+    //return self.GetCorpRegistry().GetMembersByIds(memberIDs)    unknown IDs are left out
+    std::vector<uint32> ids;
     for (PyList::const_iterator itr = memberIDs->begin(); itr != memberIDs->end(); ++itr)
-        list->AddItem(new PyObject("util.KeyVal", m_db.GetMember(PyRep::IntegerValueU32(*itr))));
+        if ((*itr)->IsInt() or (*itr)->IsLong())
+            ids.push_back(PyRep::IntegerValueU32(*itr));
 
+    PyList* list = CorporationDB::GetMemberRows(m_corpID, &ids, 0, 0);
     if (is_log_enabled(CORP__RSP_DUMP))
         list->Dump(CORP__RSP_DUMP, "");
 
@@ -655,20 +670,23 @@ PyResult CorpRegistryBound::UpdateTitle(PyCallArgs &call,
         return nullptr;
     }
 
+    RequireDirector(call);
+
     PyDict* updates = new PyDict();
     if (m_db.UpdateTitle(m_corpID, args, updates)) {
-        /** @todo update this to use CorpNotify() */
         OnTitleChanged change;
             change.corpID = m_corpID;
             change.titleID = args.titleID;
             change.changes = updates;
-        PyTuple* notif = change.Encode();
-        MulticastTarget mct;
-            mct.corporations.insert(m_corpID);
-        sEntityList.Multicast("OnTitleChanged", "corpid", &notif, mct);
+        sEntityList.CorpNotify(m_corpID, Notify::Types::CorpNews, "OnTitleChanged", "corpid", change.Encode());
+
+        // title holders' session roles change with the title
+        sCorpMgr.InvalidateTitles(m_corpID);
+        sCorpMgr.RefreshTitleHolders(m_corpID, args.titleID);
+    } else {
+        PyDecRef(updates);
     }
 
-    //OnTitleChanged
     return nullptr;
 }
 
@@ -676,6 +694,7 @@ PyResult CorpRegistryBound::UpdateTitles(PyCallArgs &call, PyObject* titles) {
     //    self.GetCorpRegistry().UpdateTitles(titles)
     _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateTitles()");
     //call.Dump(CORP__CALL_DUMP);
+    RequireDirector(call);
     if (!call.tuple->GetItem(0)->IsObject()) {
         codelog(CORP__ERROR, "Tuple Item is wrong type: %s.  Expected PyObject.", call.tuple->GetItem(0)->TypeString());
         return nullptr;
@@ -714,15 +733,16 @@ PyResult CorpRegistryBound::UpdateTitles(PyCallArgs &call, PyObject* titles) {
         args.rolesAtOther = PyRep::IntegerValue(list2->GetItem(8));
         args.grantableRolesAtOther = PyRep::IntegerValue(list2->GetItem(9));
         if (m_db.UpdateTitle(m_corpID, args, updates)) {
-            /** @todo update this to use CorpNotify() */
             OnTitleChanged change;
                 change.corpID = m_corpID;
                 change.titleID = args.titleID;
                 change.changes = updates;
-            PyTuple* notif = change.Encode();
-            MulticastTarget mct;
-                mct.corporations.insert(m_corpID);
-            sEntityList.Multicast("OnTitleChanged", "corpid", &notif, mct);
+            sEntityList.CorpNotify(m_corpID, Notify::Types::CorpNews, "OnTitleChanged", "corpid", change.Encode());
+
+            sCorpMgr.InvalidateTitles(m_corpID);
+            sCorpMgr.RefreshTitleHolders(m_corpID, args.titleID);
+        } else {
+            PyDecRef(updates);
         }
     }
 
@@ -1311,100 +1331,103 @@ PyResult CorpRegistryBound::PayoutDividend(PyCallArgs &call, PyBool* paySharehol
 
 PyResult CorpRegistryBound::UpdateMember(PyCallArgs &call,
     PyInt* characterID, PyRep* title, PyRep* divisionID, PyRep* squadronID,
-    PyLong* roles, PyLong* grantableRoles, PyLong* rolesAtHQ, PyLong* grantableRolesAtHQ,
-    PyLong* rolesAtBase, PyLong* grantableRolesAtBase, PyLong* rolesAtOther, PyLong* grantableRolesAtOther,
-    PyRep* baseID, PyRep* titleMask, PyRep* blockRoles) {
+    PyRep* roles, PyRep* grantableRoles, PyRep* rolesAtHQ, PyRep* grantableRolesAtHQ,
+    PyRep* rolesAtBase, PyRep* grantableRolesAtBase, PyRep* rolesAtOther, PyRep* grantableRolesAtOther,
+    PyRep* baseID, std::optional<PyRep*> titleMask, std::optional<PyRep*> blockRoles) {
     //return self.GetCorpRegistry().UpdateMember(charIDToUpdate, title, divisionID, squadronID, roles, grantableRoles, rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther, baseID, titleMask, blockRoles)
-    /** @todo there is more to this call......havent fully figured it out yet.  */
-    /*  called when clicking on "member details - roles tab - apply"
-     * 21:14:49 [SvcCall] Service CorpRegistryBound::UpdateMember()
-     * 21:14:49 [CorpCallDump]   Call Arguments:
-     * 21:14:49 [CorpCallDump]      Tuple: 15 elements
-     * 21:14:49 [CorpCallDump]       [ 0]    Integer: 91000034
-     * 21:14:49 [CorpCallDump]       [ 1]     String: ''
-     * 21:14:49 [CorpCallDump]       [ 2]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 3]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 4]       Long: 288230376151711744
-     * 21:14:49 [CorpCallDump]       [ 5]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 6]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 7]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 8]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [ 9]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [10]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [11]    Integer: 0
-     * 21:14:49 [CorpCallDump]       [12]    Integer: 60014137
-     * 21:14:49 [CorpCallDump]       [13]       None
-     * 21:14:49 [CorpCallDump]       [14]       None
-     * 21:14:49 [CorpCallDump]  Named Arguments:
-     * 21:14:49 [CorpCallDump]   machoVersion
-     * 21:14:49 [CorpCallDump]        Integer: 1
-     * 21:14:49 [DecodeError] Decode Call_UpdateMember failed: grantableRoles is not a long Integer: Integer
-     * 21:14:49 [SvcError] Handle_UpdateMember(/usr/local/src/eve/EVEmu/src/eve-server/corporation/CorpRegistryBound.cpp:1270): allan: Failed to decode arguments.
-     */
-    /*  called when clicking on "member details - titles tab - apply"
-     * 21:17:46 [SvcCall] Service CorpRegistryBound::UpdateMember()
-     * 21:17:46 [CorpCallDump]   Call Arguments:
-     * 21:17:46 [CorpCallDump]      Tuple: 15 elements
-     * 21:17:46 [CorpCallDump]       [ 0]    Integer: 91000034
-     * 21:17:46 [CorpCallDump]       [ 1]    WString: ''
-     * 21:17:46 [CorpCallDump]       [ 2]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 3]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 4]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 5]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 6]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 7]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 8]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [ 9]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [10]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [11]    Integer: 0
-     * 21:17:46 [CorpCallDump]       [12]    Integer: 60014137
-     * 21:17:46 [CorpCallDump]       [13]    Integer: 1
-     * 21:17:46 [CorpCallDump]       [14]       None
-     * 21:17:46 [CorpCallDump]  Named Arguments:
-     * 21:17:46 [CorpCallDump]   machoVersion
-     * 21:17:46 [CorpCallDump]        Integer: 1
-     * 21:17:46 [DecodeWarning]  Safe is enabled. title was decoded as PyWString
-     * 21:17:46 [DecodeError] Decode Call_UpdateMember failed: roles is not a long Integer: Integer
-     * 21:17:46 [SvcError] Handle_UpdateMember(/usr/local/src/eve/EVE/src/eve-server/corporation/CorpRegistryBound.cpp:1270): allan: Failed to decode arguments.
-     */
+    //  any argument may be None (unchanged).  roles arrive as Int or Long.
+    //  "remove all roles" (prepare to quit):  (charID, None, None, None, 0,0,0,0,0,0,0,0, None, 0, 1);  "allow new roles":  blockRoles 0 only
     _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateMember()");
     call.Dump(CORP__CALL_DUMP);
 
-    // TODO: stop using this and make use of the parameters, changing this is way too out of the scope of the service manager changes
-    Call_UpdateMember args;
-    if (!args.Decode(&call.tuple)) {
-        codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
+    RequireMember(call);
+
+    Corp::MemberUpdate upd = Corp::MemberUpdate();
+        upd.charID = characterID->value();
+        if (!title->IsNone())
+            upd.title = PyRep::StringContent(title);
+        upd.roles = Corp::MemberUpdate::Int(roles);
+        upd.grantableRoles = Corp::MemberUpdate::Int(grantableRoles);
+        upd.rolesAtHQ = Corp::MemberUpdate::Int(rolesAtHQ);
+        upd.grantableRolesAtHQ = Corp::MemberUpdate::Int(grantableRolesAtHQ);
+        upd.rolesAtBase = Corp::MemberUpdate::Int(rolesAtBase);
+        upd.grantableRolesAtBase = Corp::MemberUpdate::Int(grantableRolesAtBase);
+        upd.rolesAtOther = Corp::MemberUpdate::Int(rolesAtOther);
+        upd.grantableRolesAtOther = Corp::MemberUpdate::Int(grantableRolesAtOther);
+        upd.baseID = Corp::MemberUpdate::Int(baseID);
+        if (titleMask.has_value())
+            upd.titleMask = Corp::MemberUpdate::Int(titleMask.value());
+        if (blockRoles.has_value()) {
+            std::optional<int64> block = Corp::MemberUpdate::Int(blockRoles.value());
+            if (block.has_value())
+                upd.blockRoles = (block.value() != 0);
+        }
+
+    sCorpMgr.UpdateMember(call.client, m_corpID, upd, true);
+    return nullptr;
+}
+
+PyResult CorpRegistryBound::UpdateMembers(PyCallArgs &call, PyObject* rows) {
+    // corp_ui_members / role management:  self.GetCorpRegistry().UpdateMembers(rows)
+    //  util.Rowset header characterID, title, divisionID, squadronID, roles, grantableRoles, rolesAtHQ, grantableRolesAtHQ,
+    //  rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther, baseID, titleMask.  None = unchanged
+    _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateMembers()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireMember(call);
+
+    if (!rows->arguments()->IsDict()) {
+        codelog(CORP__ERROR, "UpdateMembers rows argument is %s.  Expected PyDict.", rows->arguments()->TypeString());
         return nullptr;
     }
-    if (!IsCharacterID(args.charID))
+
+    PyDict* dict = rows->arguments()->AsDict();
+    PyRep* header = dict->GetItemString("header");
+    PyRep* lines = dict->GetItemString("lines");
+    if ((header == nullptr) or (lines == nullptr) or !header->IsList() or !lines->IsList()) {
+        codelog(CORP__ERROR, "UpdateMembers rowset has no header or lines");
         return nullptr;
-
-    int64 oldRole(0);
-    bool grantable(false);  // boolean - do new roles have grantable privs?  they may.
-
-    Client* pClient = sEntityList.FindClientByCharID(args.charID);
-    if (pClient == nullptr) {
-        oldRole = CharacterDB::GetCorpRole(args.charID);
-        CharacterDB::SetCorpRole(args.charID, args.roles);
-    } else {
-        oldRole = pClient->GetCorpRole();
-        CorpData data = pClient->GetChar()->GetCorpData();
-        data.rolesAtAll = args.roles;
-        data.rolesAtBase = args.rolesAtBase;
-        data.rolesAtHQ = args.rolesAtHQ;
-        data.rolesAtOther = args.rolesAtOther;
-        data.grantableRolesAtBase = args.grantableRolesAtBase;
-        data.grantableRolesAtHQ = args.grantableRolesAtHQ;
-        data.grantableRolesAtOther = args.grantableRolesAtOther;
-        data.grantableRoles = args.grantableRoles;
-        // update corp data and refresh session data.
-        pClient->GetChar()->UpdateCorpData(data);
     }
 
-    // check roleGroups data for bitmaks for grantable roles
-    //      use bitmaks to set 'grantable' bool
+    std::map<std::string, size_t> columns;
+    for (size_t i = 0; i < header->AsList()->size(); ++i)
+        columns[PyRep::StringContent(header->AsList()->GetItem(i))] = i;
 
-    m_db.AddRoleHistory(m_corpID, args.charID, call.client->GetCharacterID(), oldRole, args.roles, grantable);
+    for (PyList::const_iterator itr = lines->AsList()->begin(); itr != lines->AsList()->end(); ++itr) {
+        if (!(*itr)->IsList())
+            continue;
+        PyList* line = (*itr)->AsList();
+        auto get = [&](const char* name) -> PyRep* {
+            std::map<std::string, size_t>::iterator col = columns.find(name);
+            if ((col == columns.end()) or (col->second >= line->size()))
+                return nullptr;
+            return line->GetItem(col->second);
+        };
+
+        PyRep* charID = get("characterID");
+        if ((charID == nullptr) or !(charID->IsInt() or charID->IsLong()))
+            continue;
+
+        Corp::MemberUpdate upd = Corp::MemberUpdate();
+            upd.charID = PyRep::IntegerValueU32(charID);
+            PyRep* title = get("title");
+            if ((title != nullptr) and !title->IsNone())
+                upd.title = PyRep::StringContent(title);
+            upd.roles = Corp::MemberUpdate::Int(get("roles"));
+            upd.grantableRoles = Corp::MemberUpdate::Int(get("grantableRoles"));
+            upd.rolesAtHQ = Corp::MemberUpdate::Int(get("rolesAtHQ"));
+            upd.grantableRolesAtHQ = Corp::MemberUpdate::Int(get("grantableRolesAtHQ"));
+            upd.rolesAtBase = Corp::MemberUpdate::Int(get("rolesAtBase"));
+            upd.grantableRolesAtBase = Corp::MemberUpdate::Int(get("grantableRolesAtBase"));
+            upd.rolesAtOther = Corp::MemberUpdate::Int(get("rolesAtOther"));
+            upd.grantableRolesAtOther = Corp::MemberUpdate::Int(get("grantableRolesAtOther"));
+            upd.baseID = Corp::MemberUpdate::Int(get("baseID"));
+            upd.titleMask = Corp::MemberUpdate::Int(get("titleMask"));
+
+        // rows the caller may not change are skipped (logged)
+        sCorpMgr.UpdateMember(call.client, m_corpID, upd, false);
+    }
+
     return nullptr;
 }
 
@@ -2246,18 +2269,117 @@ PyResult CorpRegistryBound::RemoveCorporateContacts(PyCallArgs &call, PyList* co
 
 // this is a member role/title update by memberIDs called from corp->members->find in role->task mgmt
 PyResult CorpRegistryBound::ExecuteActions(PyCallArgs &call, PyList* targetIDs, PyList* remoteActions) {
-    //      verb, property, value = action
-    //      remoteActions.append(action)
-    //  return self.GetCorpRegistry().ExecuteActions(targetIDs, remoteActions)
+    //  corp_ui_member_view_task_mgt:  actions = [[verb, property, value], ...]
+    //   CTV_ADD (1) / CTV_REMOVE (2):  property = a role mask column or 'titleMask', value = the mask
+    //   CTV_SET (3):  'baseID'
+    //   CTV_GIVE (4):  CTPG_CASH (6) isk from the corp wallet, CTPG_SHARES (7) corp shares
     _log(CORP__CALL, "CorpRegistryBound::Handle_ExecuteActions() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
-    /*
-     *   args.memberIDs = list of charIDs to update
-     *   args.verb      = one of add, remove, set, give
-     *   args.queryType = all role* types or title
-     *   args.value     = roleMask or titleID
-     */
+    RequireMember(call);
+
+    for (PyList::const_iterator tItr = targetIDs->begin(); tItr != targetIDs->end(); ++tItr) {
+        if (!((*tItr)->IsInt() or (*tItr)->IsLong()))
+            continue;
+        uint32 targetID = PyRep::IntegerValueU32(*tItr);
+
+        CorpData data = CorpData();
+        Client* pTarget = sEntityList.FindClientByCharID(targetID);
+        if ((pTarget != nullptr) and (pTarget->GetChar().get() != nullptr)) {
+            data = pTarget->GetChar()->GetCorpData();
+        } else if (!CharacterDB::GetCharCorpData(targetID, data)) {
+            continue;
+        }
+        if (data.corporationID != m_corpID)
+            continue;
+
+        Corp::MemberUpdate upd = Corp::MemberUpdate();
+            upd.charID = targetID;
+            upd.roles = data.corpRole | data.rolesAtAll;
+            upd.grantableRoles = data.grantableRoles;
+            upd.rolesAtHQ = data.rolesAtHQ;
+            upd.grantableRolesAtHQ = data.grantableRolesAtHQ;
+            upd.rolesAtBase = data.rolesAtBase;
+            upd.grantableRolesAtBase = data.grantableRolesAtBase;
+            upd.rolesAtOther = data.rolesAtOther;
+            upd.grantableRolesAtOther = data.grantableRolesAtOther;
+            upd.titleMask = data.titleMask;
+            upd.baseID = data.baseID;
+
+        bool edit = false;
+        for (PyList::const_iterator aItr = remoteActions->begin(); aItr != remoteActions->end(); ++aItr) {
+            if (!(*aItr)->IsList() or ((*aItr)->AsList()->size() < 3))
+                continue;
+            PyList* action = (*aItr)->AsList();
+            int64 verb = PyRep::IntegerValue(action->GetItem(0));
+            PyRep* property = action->GetItem(1);
+            PyRep* value = action->GetItem(2);
+
+            if (verb == Corp::Actions::Give) {
+                int64 what = PyRep::IntegerValue(property);
+                if (what == Corp::Actions::Cash) {
+                    double amount = 0;
+                    if (value->IsInt() or value->IsLong()) {
+                        amount = (double)PyRep::IntegerValue(value);
+                    } else if (value->IsFloat()) {
+                        amount = PyRep::FloatValue(value);
+                    }
+                    if (amount < 0.01)
+                        continue;
+                    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::Accountant))
+                        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be an accountant to pay members from the corporation wallet."));
+                    std::string reason = "Payment from ";
+                    reason += CorporationDB::GetCorpName(m_corpID);
+                    AccountService::TransferFunds(m_corpID, targetID, amount, reason, Journal::EntryType::CorporationAccountWithdrawal,
+                                                  call.client->GetCharacterID(), call.client->GetCorpAccountKey());
+                } else if (what == Corp::Actions::Shares) {
+                    GiveShares(call, targetID, PyRep::IntegerValue(value));
+                }
+                continue;
+            }
+
+            if (!property->IsString() and !property->IsWString())
+                continue;
+            std::string name = PyRep::StringContent(property);
+
+            if (verb == Corp::Actions::Set) {
+                if (name.compare("baseID") == 0) {
+                    upd.baseID = Corp::MemberUpdate::Int(value);
+                    if (!upd.baseID.has_value())
+                        upd.baseID = 0;
+                    edit = true;
+                }
+                continue;
+            }
+
+            if ((verb != Corp::Actions::Add) and (verb != Corp::Actions::Remove))
+                continue;
+
+            std::optional<int64>* field(nullptr);
+            if (name.compare("roles") == 0)                       field = &upd.roles;
+            else if (name.compare("grantableRoles") == 0)         field = &upd.grantableRoles;
+            else if (name.compare("rolesAtHQ") == 0)              field = &upd.rolesAtHQ;
+            else if (name.compare("grantableRolesAtHQ") == 0)     field = &upd.grantableRolesAtHQ;
+            else if (name.compare("rolesAtBase") == 0)            field = &upd.rolesAtBase;
+            else if (name.compare("grantableRolesAtBase") == 0)   field = &upd.grantableRolesAtBase;
+            else if (name.compare("rolesAtOther") == 0)           field = &upd.rolesAtOther;
+            else if (name.compare("grantableRolesAtOther") == 0)  field = &upd.grantableRolesAtOther;
+            else if (name.compare("titleMask") == 0)              field = &upd.titleMask;
+            if (field == nullptr)
+                continue;
+
+            int64 mask = PyRep::IntegerValue(value);
+            if (verb == Corp::Actions::Add) {
+                *field = field->value() | mask;
+            } else {
+                *field = field->value() & ~mask;
+            }
+            edit = true;
+        }
+
+        if (edit)
+            sCorpMgr.UpdateMember(call.client, m_corpID, upd, false);
+    }
 
     return nullptr;
 }
@@ -2574,6 +2696,11 @@ PyResult CorpRegistryBound::GetNumberOfPotentialCEOs(PyCallArgs &call) {
 
 
     return nullptr;
+}
+
+void CorpRegistryBound::GiveShares(PyCallArgs& call, uint32 toID, int64 count)
+{
+    throw CustomError("Giving shares is not available yet.");
 }
 
 PyResult CorpRegistryBound::CanLeaveCurrentCorporation(PyCallArgs &call) {

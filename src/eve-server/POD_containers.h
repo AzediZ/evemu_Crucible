@@ -86,6 +86,9 @@ struct CorpData {
     int64 grantableRolesAtBase;
     int64 grantableRolesAtHQ;
     int64 grantableRolesAtOther;
+    int64 titleMask;                // corp titles held (crpRoleTitles.titleID bits)
+    int64 rolesClearedDateTime;     // when the member's own roles last went to none (start of corporate stasis)
+    bool blockRoles;                // member refuses new roles ("prepare to quit")
     float taxRate;
     float secRating;
     std::string name;

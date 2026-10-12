@@ -840,42 +840,122 @@ bool CorporationDB::CreateCorporationCreatePacket(OnCorporationChanged & cc, uin
     return true;
 }
 
-PyRep* CorporationDB::GetMember(uint32 charID)
+PyList* CorporationDB::GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit)
+{
+    // the client's member row (corp.members:  util.KeyVal per member, edited in place by OnCorporationMemberChanged)
+    std::ostringstream query;
+    query << "SELECT characterID, corporationID, title, corpRole | rolesAtAll, grantableRoles, startDateTime, baseID,"
+             " rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther,"
+             " titleMask, corpAccountKey, blockRoles + 0"
+             " FROM chrCharacters WHERE corporationID = " << corpID;
+    if (ids != nullptr) {
+        if (ids->empty())
+            return new PyList();
+        query << " AND characterID IN (";
+        bool first = true;
+        for (auto cur : *ids) {
+            if (!first)
+                query << ",";
+            query << cur;
+            first = false;
+        }
+        query << ")";
+    }
+    query << " ORDER BY characterID";
+    if (limit > 0)
+        query << " LIMIT " << offset << "," << limit;
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, query.str().c_str())) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return new PyList();
+    }
+
+    PyList* list = new PyList();
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("characterID",           new PyInt(row.GetUInt(0)));
+            dict->SetItemString("corporationID",         new PyInt(row.GetUInt(1)));
+            dict->SetItemString("divisionID",            new PyInt(0));
+            dict->SetItemString("squadronID",            new PyInt(0));
+            dict->SetItemString("title",                 new PyWString(std::string(row.GetText(2))));
+            dict->SetItemString("roles",                 new PyLong(row.GetInt64(3)));
+            dict->SetItemString("grantableRoles",        new PyLong(row.GetInt64(4)));
+            dict->SetItemString("startDateTime",         new PyLong(row.GetInt64(5)));
+            dict->SetItemString("baseID",                (row.GetInt(6) > 0 ? (PyRep*)new PyInt(row.GetInt(6)) : PyStatic.NewNone()));
+            dict->SetItemString("rolesAtHQ",             new PyLong(row.GetInt64(7)));
+            dict->SetItemString("grantableRolesAtHQ",    new PyLong(row.GetInt64(8)));
+            dict->SetItemString("rolesAtBase",           new PyLong(row.GetInt64(9)));
+            dict->SetItemString("grantableRolesAtBase",  new PyLong(row.GetInt64(10)));
+            dict->SetItemString("rolesAtOther",          new PyLong(row.GetInt64(11)));
+            dict->SetItemString("grantableRolesAtOther", new PyLong(row.GetInt64(12)));
+            dict->SetItemString("titleMask",             new PyLong(row.GetInt64(13)));
+            dict->SetItemString("accountKey",            new PyInt(row.GetInt(14)));
+            dict->SetItemString("rowDate",               new PyLong(row.GetInt64(5)));
+            dict->SetItemString("blockRoles",            new PyInt(row.GetInt(15)));
+        list->AddItem(new PyObject("util.KeyVal", dict));
+    }
+
+    return list;
+}
+
+std::string CorporationDB::GetMemberTitle(uint32 charID)
 {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        " SELECT "
-        "  characterID, "
-        "  corporationID,"
-        "  corpAccountKey AS divisionID,"
-        "  0 AS squadronID,"
-        "  title, "
-        "  corpRole AS roles,"
-        "  rolesAtAll, "
-        "  grantableRoles, "
-        "  startDateTime, "
-        "  baseID,"
-        "  rolesAtHQ, "
-        "  grantableRolesAtHQ, "
-        "  rolesAtBase, "
-        "  grantableRolesAtBase,"
-        "  rolesAtOther, "
-        "  grantableRolesAtOther, "
-        "  titleMask,"
-        "  startDateTime AS rowDate,"
-        "  blockRoles,"
-        "  characterName"
-        " FROM chrCharacters"
-        " WHERE characterID = %u", charID))
-    {
+    if (!sDatabase.RunQuery(res, "SELECT title FROM chrCharacters WHERE characterID = %u", charID)) {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
-        return nullptr;
+        return "";
     }
 
     DBResultRow row;
-    if (!res.GetRow(row))
-        return nullptr;
-    return DBRowToPackedRow(row);
+    if (res.GetRow(row))
+        return row.GetText(0);
+    return "";
+}
+
+void CorporationDB::GetTitleRoles(uint32 corpID, std::map<int64, Corp::TitleRoles>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT titleID, roles, grantableRoles, rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther"
+        " FROM crpRoleTitles WHERE corporationID = %u", corpID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Corp::TitleRoles roles = Corp::TitleRoles();
+            roles.roles                 = row.GetInt64(1);
+            roles.grantableRoles        = row.GetInt64(2);
+            roles.rolesAtHQ             = row.GetInt64(3);
+            roles.grantableRolesAtHQ    = row.GetInt64(4);
+            roles.rolesAtBase           = row.GetInt64(5);
+            roles.grantableRolesAtBase  = (row.IsNull(6) ? 0 : row.GetInt64(6));
+            roles.rolesAtOther          = row.GetInt64(7);
+            roles.grantableRolesAtOther = row.GetInt64(8);
+        into[row.GetInt64(0)] = roles;
+    }
+}
+
+void CorporationDB::ClearTitle(uint32 corpID, int64 titleID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrCharacters SET titleMask = titleMask & ~%lli WHERE corporationID = %u", titleID, corpID);
+}
+
+bool CorporationDB::HasOpenCEOVote(uint32 corpID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT voteCaseID FROM crpVoteItems WHERE corporationID = %u AND voteType = %u AND status = 2 LIMIT 1",
+                corpID, Corp::VoteType::CEO))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+    return (res.GetRowCount() > 0);
 }
 
 void CorporationDB::GetMembers(uint32 corpID, DBQueryResult& res)
@@ -922,41 +1002,6 @@ void CorporationDB::GetMembersForQuery(std::ostringstream& query, std::vector< u
     DBResultRow row;
     while (res.GetRow(row))
         result.push_back(row.GetInt(0));
-}
-
-void CorporationDB::GetMembersPaged(uint32 corpID, uint8 page, DBQueryResult& res)
-{
-    if (!sDatabase.RunQuery(res,
-        " SELECT "
-        "  characterID, "
-        "  corporationID,"
-        //"  0 AS divisionID,"
-        //"  0 AS squadronID,"
-        "  title, "
-        "  rolesAtAll, "
-        "  grantableRoles, "
-        "  startDateTime, "
-        //"  clone.locationID,"
-        "  rolesAtHQ, "
-        "  grantableRolesAtHQ, "
-        "  rolesAtBase, "
-        "  grantableRolesAtBase,"
-        "  rolesAtOther, "
-        "  grantableRolesAtOther, "
-        "  titleMask,"
-        "  corpAccountKey, "
-        "  baseID,"
-        "  blockRoles,"
-        "  characterName"
-        " FROM chrCharacters"
-        //"  LEFT JOIN entity AS clone ON clone.ownerID = characterID"
-        " WHERE corporationID = %u"
-        " LIMIT %u", corpID, page * 10))
-        //"  AND clone.flag='400'"
-        //"  AND clone.customInfo='active'"
-    {
-        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
-    }
 }
 
 uint16 CorporationDB::GetMemberCount(uint32 corpID)
@@ -1016,7 +1061,7 @@ PyRep* CorporationDB::GetCorpRoleGroups()
 void CorporationDB::DeleteTitle(uint32 corpID, uint16 titleID)
 {
     DBerror err;
-    sDatabase.RunQuery(err, "DELETE FROM crpRoleTitles WHERE corpID = %u AND titleID = %u", corpID, titleID);
+    sDatabase.RunQuery(err, "DELETE FROM crpRoleTitles WHERE corporationID = %u AND titleID = %u", corpID, titleID);
     std::string title = "Untitled ";
     title += std::to_string(log2(titleID) + 1);
     sDatabase.RunQuery(err, "INSERT INTO crpRoleTitles (corporationID, titleID, titleName) VALUES (%u,%u,'%s')", corpID, titleID, title.c_str());

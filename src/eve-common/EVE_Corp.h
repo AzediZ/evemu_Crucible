@@ -78,7 +78,10 @@ namespace Corp {
             Remove = 2,
             Set = 3,
             Give = 4,
-            Comms = 5
+            Comms = 5,
+            // CTV_GIVE properties (const.CTPG_CASH, const.CTPG_SHARES)
+            Cash = 6,
+            Shares = 7
         };
     }
     namespace RoleLoc {

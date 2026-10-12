@@ -469,6 +469,19 @@ public:
         bool TowerSnapToMoon;               // legacy: anchoring moves the tower to a fixed point at its moon and warps the pilot there
     } pos;
 
+    // From <corp>  (F21: corporation management)
+    struct {
+        uint32 StasisHours;                 // hours after a member's roles are removed before they may quit or be kicked.  0 = no stasis
+        uint32 CEOVoteMinSharePercent;      // % of the corporation's shares a member needs to run for CEO.  0 = any shareholder
+        uint32 CEOVoteCooldownDays;         // days after a CEO vote opens before another may be opened
+        uint32 SanctionDays;                // days the CEO has to implement a passed sanctionable vote
+        bool EnforceRaceLimit;              // allowedMemberRaceIDs and the Ethnic Relations quota on application acceptance
+        float JunkReleaseFraction;          // impound release fee as a fraction of the office rental fee
+        bool BillsEnabled;                  // office rent and alliance maintenance bills; false = offices never expire
+        bool CloseAllianceOnUnpaidBill;     // an alliance whose maintenance bill goes overdue is closed
+        uint32 BillGraceDays;               // days after a bill's due date before the overdue handling runs
+    } corp;
+
     // From <testing>
     struct {
         bool EnableDrones;
@@ -511,6 +524,7 @@ protected:
     bool ProcessCrime( const TiXmlElement* ele );
     bool ProcessSov( const TiXmlElement* ele );
     bool ProcessPOS( const TiXmlElement* ele );
+    bool ProcessCorp( const TiXmlElement* ele );
     bool ProcessBPTimes( const TiXmlElement* ele );
     bool ProcessTesting( const TiXmlElement* ele );
     bool ProcessDebug( const TiXmlElement* ele );

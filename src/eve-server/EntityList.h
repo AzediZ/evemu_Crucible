@@ -81,6 +81,8 @@ public:
     void AddPlayer(Client* pClient);
     //  this must only be called for a logged-in character.
     void RemovePlayer(Client* pClient);
+    // keeps the online corp member map (and the member's cached corprole) right after a corp or role change
+    void UpdateCorpMember(Client* pClient, uint32 oldCorpID);
     void AddNPC()                                       { ++m_npcs; }
     void RemoveNPC()                                    { --m_npcs; }
     void SetService(EVEServiceManager* svc)             { m_services = svc; }

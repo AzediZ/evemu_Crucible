@@ -260,6 +260,11 @@ public:
 
     static void SetCorpRole(uint32 charID, int64 role);
     static int64 GetCorpRole(uint32 charID);
+    // corp member title text
+    static void SetTitle(uint32 charID, const std::string& title);
+    // chrCharacters.schoolID, raceID
+    static uint32 GetSchoolID(uint32 charID);
+    static uint8 GetRaceID(uint32 charID);
     static uint32 GetCorpID(uint32 charID);
     static float GetCorpTaxRate(uint32 charID);
     static PyRep* GetMyCorpMates(uint32 corpID);

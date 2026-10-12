@@ -455,7 +455,15 @@ void Character::SetBaseID(uint32 baseID)
 void Character::UpdateCorpData(CorpData& data)
 {
     m_corpData = data;
-    m_pClient->UpdateCorpSession(m_corpData);
+    m_db.SaveCorpData(m_itemID, m_corpData);
+    if (m_pClient != nullptr)
+        m_pClient->UpdateCorpSession(m_corpData);
+}
+
+void Character::SetCorpTitle(const std::string& title)
+{
+    m_charData.title = title;
+    CharacterDB::SetTitle(m_itemID, title);
 }
 
 uint32 Character::PickAlternateShip(uint32 locationID)

@@ -299,7 +299,10 @@ public:
     void                    secStatusChange( float amount )    { m_charData.securityRating += amount; }
 
     // Corporation:
+    // the single write path of an online member's corp data:  saves it and refreshes the session roles
     void                    UpdateCorpData(CorpData& data);
+    // corp member title text (chrCharacters.title)
+    void                    SetCorpTitle(const std::string& title);
     CorpData                GetCorpData()                       { return m_corpData; }
     std::string             corpTicker() const                  { return m_corpData.ticker; }
     uint32                  corporationID() const               { return m_corpData.corporationID; }

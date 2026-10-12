@@ -51,6 +51,7 @@
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "corporation/CorporationDB.h"
+#include "corporation/CorpMgr.h"
 
 #include <random>
 
@@ -172,16 +173,29 @@ void EntityList::AddPlayer(Client* pClient)
     if (pClient != nullptr)
         if (pClient->IsValidSession()) {
             m_players.emplace(pClient->GetCharacterID(), pClient);
-            if (IsPlayerCorp(pClient->GetCorporationID())) {
-                corpRole role;
-                role.emplace(pClient, pClient->GetCorpRole());
-                m_corpMembers.emplace(pClient->GetCorporationID(), role);
-            }
+            if (IsPlayerCorp(pClient->GetCorporationID()))
+                m_corpMembers[pClient->GetCorporationID()][pClient] = pClient->GetCorpRole();
         } else {
             m_players.emplace(pClient->GetCharID(), pClient);
             // make note about invalid session and failure to add player to corp roles.
             //   this is nbd if player is in npc corp or in player corp with no roles
         }
+}
+
+void EntityList::UpdateCorpMember(Client* pClient, uint32 oldCorpID)
+{
+    if ((pClient == nullptr) or !pClient->IsValidSession())
+        return;
+
+    // corp change:  out of the old corp's members
+    if (oldCorpID != (uint32)pClient->GetCorporationID()) {
+        std::map<uint32, corpRole>::iterator itr = m_corpMembers.find(oldCorpID);
+        if (itr != m_corpMembers.end())
+            itr->second.erase(pClient);
+    }
+
+    if (IsPlayerCorp(pClient->GetCorporationID()))
+        m_corpMembers[pClient->GetCorporationID()][pClient] = pClient->GetCorpRole();
 }
 
 void EntityList::RemovePlayer(Client* pClient)
@@ -280,7 +294,7 @@ void EntityList::Process() {
                 sWHMgr.Process();
                 sMktMgr.Process();  // market order expiry, daily price history rollup
                 ContractUtils::ProcessExpiry();  // optional contract cleanup and courier failure
-                // write something to tic corps vote cases.
+                sCorpMgr.Process();  // vote cases, sanctioned actions
                 for (auto cur : m_systems)
                     cur.second->UpdateData();   // update active system timers and dynamic data every 5m
             }

@@ -49,11 +49,18 @@ public:
     bool UpdateTitle(uint32 corpID, Call_UpdateTitleData& args, PyDict* updates);
     void DeleteTitle(uint32 corpID, uint16 titleID);
     void CreateTitleData(uint32 corpID);
-    PyRep *GetMember(uint32 charID);
+    // the client's member rows (util.KeyVal) of the corp, all or only ids, ordered by characterID.  limit 0 = all
+    static PyList* GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit);
+    static std::string GetMemberTitle(uint32 charID);
+    // titleID -> roles of the corp's titles
+    static void GetTitleRoles(uint32 corpID, std::map<int64, Corp::TitleRoles>& into);
+    // takes the title from every member
+    static void ClearTitle(uint32 corpID, int64 titleID);
+    // a CEO vote is open (the CEO's roles are revoked meanwhile)
+    static bool HasOpenCEOVote(uint32 corpID);
     uint16 GetMemberCount(uint32 corpID);
     void GetMembers(uint32 corpID, DBQueryResult& res);
     void GetMembersForQuery(std::ostringstream& query, std::vector<uint32>& result);
-    void GetMembersPaged(uint32 corpID, uint8 page, DBQueryResult& res);
     PyRep* GetMemberTrackingInfo(uint32 corpID);
     PyRep* GetMemberTrackingInfoSimple(uint32 corpID);
     PyRep *GetCorporations(uint32 corpID);

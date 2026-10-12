@@ -169,6 +169,10 @@ public:
 
     //  public functions to update client session when char's roles are changed
     void UpdateCorpSession(CorpData& data);
+    // sets the session roles from the member's corp data (titles, CEO), without sending the session change
+    void ApplyCorpRoles(const CorpData& data);
+    // corprole for the current station from the session roles
+    void UpdateCorpRole();
     void UpdateFleetSession(CharFleetData& fleet);
 
     // character data used before session data is initialized

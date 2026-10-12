@@ -114,10 +114,14 @@ bool CharacterDB::SaveCorpData(uint32 characterID, const CorpData &data) {
         "  grantableRoles = %lli,"
         "  grantableRolesAtBase = %lli,"
         "  grantableRolesAtHQ = %lli,"
-        "  grantableRolesAtOther = %" PRIi64
+        "  grantableRolesAtOther = %lli,"
+        "  titleMask = %lli,"
+        "  blockRoles = %u,"
+        "  rolesClearedDateTime = %" PRIi64
         " WHERE characterID = %u",
         data.corporationID, data.baseID, data.corpRole, data.corpAccountKey, data.rolesAtAll, data.rolesAtBase, data.rolesAtHQ, data.rolesAtOther,
-        data.grantableRoles, data.grantableRolesAtBase, data.grantableRolesAtHQ, data.grantableRolesAtOther, characterID))
+        data.grantableRoles, data.grantableRolesAtBase, data.grantableRolesAtHQ, data.grantableRolesAtOther,
+        data.titleMask, (data.blockRoles ? 1 : 0), data.rolesClearedDateTime, characterID))
     {
         codelog(DATABASE__ERROR, "Failed to update corp member info of character %u: %s.", characterID, err.c_str());
         return false;
@@ -643,6 +647,9 @@ bool CharacterDB::GetCharCorpData(uint32 characterID, CorpData &into) {
         }
         into.corporationID = row.GetInt(0);
         into.baseID = row.GetInt(1);
+        into.titleMask = 0;
+        into.blockRoles = false;
+        into.rolesClearedDateTime = 0;
     } else {
         if (!sDatabase.RunQuery(res,
             "SELECT"
@@ -658,7 +665,10 @@ bool CharacterDB::GetCharCorpData(uint32 characterID, CorpData &into) {
             "  grantableRolesAtBase,"
             "  grantableRolesAtHQ,"
             "  grantableRolesAtOther,"
-            "  baseID"
+            "  baseID,"
+            "  titleMask,"
+            "  blockRoles + 0,"
+            "  rolesClearedDateTime"
             " FROM chrCharacters"
             " WHERE characterID = %u",
             characterID))
@@ -670,6 +680,10 @@ bool CharacterDB::GetCharCorpData(uint32 characterID, CorpData &into) {
             _log(DATABASE__MESSAGE, "No corp member info found for character %u.", characterID);
             return false;
         }
+
+        into.titleMask = row.GetInt64(13);
+        into.blockRoles = (row.GetInt(14) != 0);
+        into.rolesClearedDateTime = row.GetInt64(15);
 
         into.startDateTime = row.GetInt64(0);
         into.corporationID = row.GetInt(1);
@@ -1972,6 +1986,42 @@ int64 CharacterDB::GetCorpRole(uint32 charID)
     }
 
     return row.GetUInt(0);
+}
+
+void CharacterDB::SetTitle(uint32 charID, const std::string& title)
+{
+    std::string titleEsc;
+    sDatabase.DoEscapeString(titleEsc, title);
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrCharacters SET title = '%s' WHERE characterID = %u", titleEsc.c_str(), charID);
+}
+
+uint32 CharacterDB::GetSchoolID(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT schoolID FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
+uint8 CharacterDB::GetRaceID(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT raceID FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
 }
 
 uint32 CharacterDB::GetCorpID(uint32 charID)

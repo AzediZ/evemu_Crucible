@@ -45,6 +45,7 @@
 #include "chat/OnlineStatusService.h"
 #include "character/CharUnboundMgrService.h"
 #include "corporation/CorporationDB.h"
+#include "corporation/CorpMgr.h"
 #include "fleet/FleetService.h"
 #include "imageserver/ImageServer.h"
 #include "inventory/ContainerSecurity.h"
@@ -287,6 +288,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
     m_char->VerifySP();
     m_char->SetLoginTime();
     m_char->SetClient(this);
+    // session roles with the member's titles (and the CEO's roles)
+    ApplyCorpRoles(m_char->GetCorpData());
     m_char->SkillQueueLoop(false);
     // boosters that ran out while logged off go on the first tick
     SetBoosterTimer(m_char->GetNextBoosterExpiry());
@@ -2138,6 +2141,9 @@ void Client::UpdateSession()
     pSession->SetInt("solarsystemid2", solarsystemID);
     pSession->SetInt("constellationid", m_char->constellationID());
     pSession->SetInt("regionid", m_char->regionID());
+
+    // corprole depends on the station (hq, base or other roles)
+    UpdateCorpRole();
 }
 
 void Client::UpdateSessionInt(const char *id, int value)
@@ -2147,24 +2153,55 @@ void Client::UpdateSessionInt(const char *id, int value)
 
 void Client::UpdateCorpSession(CorpData& data)
 {
+    uint32 oldCorpID = GetCorporationID();
     // session.Set* methods only update on change
     pSession->SetInt("corpid", data.corporationID);
     pSession->SetInt("baseID", data.baseID);
     pSession->SetInt("hqID", data.corpHQ);
 
-    //Only set allianceID if it is not 0
-    if (data.allianceID != 0){
+    if (data.allianceID != 0) {
         pSession->SetInt("allianceid", data.allianceID);
+    } else if (GetAllianceID() != 0) {
+        pSession->Clear("allianceid");
     }
 
     pSession->SetInt("warfactionid", data.warFactionID);
     pSession->SetInt("corpAccountKey", data.corpAccountKey);
-    pSession->SetLong("corprole", data.corpRole);
-    pSession->SetLong("rolesAtAll", data.rolesAtAll);
-    pSession->SetLong("rolesAtBase", data.rolesAtBase);
-    pSession->SetLong("rolesAtHQ", data.rolesAtHQ);
-    pSession->SetLong("rolesAtOther", data.rolesAtOther);
+    ApplyCorpRoles(data);
     SendSessionChange();
+
+    sEntityList.UpdateCorpMember(this, oldCorpID);
+}
+
+void Client::ApplyCorpRoles(const CorpData& data)
+{
+    // the session roles are the effective ones:  own roles joined with the roles of the member's titles (all of them for the active CEO)
+    int64 all(0), hq(0), base(0), other(0);
+    sCorpMgr.ComputeEffectiveRoles(GetCharacterID(), data, all, hq, base, other);
+    pSession->SetLong("rolesAtAll", all);
+    pSession->SetLong("rolesAtBase", base);
+    pSession->SetLong("rolesAtHQ", hq);
+    pSession->SetLong("rolesAtOther", other);
+    UpdateCorpRole();
+}
+
+void Client::UpdateCorpRole()
+{
+    // corprole as the client derives it (eveSessions.RecalculateDependantAttributes)
+    int64 all = GetRolesAtAll();
+    int64 corprole = all | GetRolesAtOther();
+    int32 stationID = pSession->GetCurrentInt("stationid");
+    if (stationID != 0) {
+        if (stationID == GetCorpHQ()) {
+            corprole = all | GetRolesAtHQ();
+        } else if (stationID == GetCorpBaseID()) {
+            corprole = all | GetRolesAtBase();
+        }
+    }
+    if (corprole == GetCorpRole())
+        return;
+    pSession->SetLong("corprole", corprole);
+    sEntityList.UpdateCorpMember(this, GetCorporationID());
 }
 
 void Client::UpdateFleetSession(CharFleetData& fleet)

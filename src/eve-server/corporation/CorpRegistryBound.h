@@ -106,9 +106,10 @@ protected:
     PyResult GetRecentKillsAndLosses(PyCallArgs& call, PyInt* number, PyInt* offset);
     PyResult UpdateMember(PyCallArgs& call,
         PyInt* characterID, PyRep* title, PyRep* divisionID, PyRep* squadronID,
-        PyLong* roles, PyLong* grantableRoles, PyLong* rolesAtHQ, PyLong* grantableRolesAtHQ,
-        PyLong* rolesAtBase, PyLong* grantableRolesAtBase, PyLong* rolesAtOther, PyLong* grantableRolesAtOther,
-        PyRep* baseID, PyRep* titleMask, PyRep* blockRoles);
+        PyRep* roles, PyRep* grantableRoles, PyRep* rolesAtHQ, PyRep* grantableRolesAtHQ,
+        PyRep* rolesAtBase, PyRep* grantableRolesAtBase, PyRep* rolesAtOther, PyRep* grantableRolesAtOther,
+        PyRep* baseID, std::optional<PyRep*> titleMask, std::optional<PyRep*> blockRoles);
+    PyResult UpdateMembers(PyCallArgs& call, PyObject* rows);
     PyResult ExecuteActions(PyCallArgs& call, PyList* targetIDs, PyList* remoteActions);
 
     PyResult GetCorporateContacts(PyCallArgs& call);
@@ -146,6 +147,12 @@ protected:
 
 protected:
     static void FillOCApplicationChange(OnCorporationApplicationChanged& OCAC, const Corp::ApplicationInfo& Old, const Corp::ApplicationInfo& New);
+
+    // mutating calls are for members of this corp only
+    void RequireMember(PyCallArgs& call);
+    void RequireDirector(PyCallArgs& call);
+    // CTV_GIVE CTPG_SHARES:  corp treasury shares to a member
+    void GiveShares(PyCallArgs& call, uint32 toID, int64 count);
 
     bool GetSearchValues(int8 op, PyRep* rep, std::ostringstream& query);
     uint8 GetQueryType(std::string queryType);

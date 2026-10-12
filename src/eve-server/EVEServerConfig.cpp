@@ -359,6 +359,17 @@ EVEServerConfig::EVEServerConfig()
     pos.GunsEnabled = true;
     pos.TowerSnapToMoon = false;
 
+    // corp
+    corp.StasisHours = 24;
+    corp.CEOVoteMinSharePercent = 5;
+    corp.CEOVoteCooldownDays = 14;
+    corp.SanctionDays = 7;
+    corp.EnforceRaceLimit = true;
+    corp.JunkReleaseFraction = 0.5f;
+    corp.BillsEnabled = true;
+    corp.CloseAllianceOnUnpaidBill = true;
+    corp.BillGraceDays = 0;
+
     // testing
     testing.EnableDrones = false;
 
@@ -426,6 +437,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
+    AddMemberParser( "corp",        &EVEServerConfig::ProcessCorp );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
     AddMemberParser( "chat",        &EVEServerConfig::ProcessChat );
     AddMemberParser( "debug",       &EVEServerConfig::ProcessDebug );
@@ -454,6 +466,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "crime" );
     RemoveParser( "sov" );
     RemoveParser( "pos" );
+    RemoveParser( "corp" );
     RemoveParser( "standings" );
     RemoveParser( "chat" );
     RemoveParser( "debug" );
@@ -1217,6 +1230,27 @@ bool EVEServerConfig::ProcessPOS( const TiXmlElement* ele )
 
     for (const char* name : {"FuelRate", "RequireCharters", "HighSecStandingCheck", "ConcordAnchorRestriction",
             "KeepTowerSystemsLoaded", "MaxCatchUpCycles", "MoonGooSeed", "MoonGooEmptyChance", "GunsEnabled", "TowerSnapToMoon"})
+        RemoveParser( name );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessCorp( const TiXmlElement* ele )
+{
+    AddValueParser( "StasisHours",                  corp.StasisHours );
+    AddValueParser( "CEOVoteMinSharePercent",       corp.CEOVoteMinSharePercent );
+    AddValueParser( "CEOVoteCooldownDays",          corp.CEOVoteCooldownDays );
+    AddValueParser( "SanctionDays",                 corp.SanctionDays );
+    AddValueParser( "EnforceRaceLimit",             corp.EnforceRaceLimit );
+    AddValueParser( "JunkReleaseFraction",          corp.JunkReleaseFraction );
+    AddValueParser( "BillsEnabled",                 corp.BillsEnabled );
+    AddValueParser( "CloseAllianceOnUnpaidBill",    corp.CloseAllianceOnUnpaidBill );
+    AddValueParser( "BillGraceDays",                corp.BillGraceDays );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"StasisHours", "CEOVoteMinSharePercent", "CEOVoteCooldownDays", "SanctionDays", "EnforceRaceLimit",
+            "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays"})
         RemoveParser( name );
 
     return result;

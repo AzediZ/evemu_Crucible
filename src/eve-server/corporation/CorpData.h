@@ -13,6 +13,8 @@
 
 #include "../eve-server.h"
 
+#include <optional>
+
     /*
     "corpRole"      - corporation management-type roles (manager, officer, trader)  NOT access-type roles
     "rolesAtAll"    - access roles everywhere.  is joined with other access roles
@@ -72,6 +74,38 @@ namespace Corp {
         int8 part;
         int16 color;
         std::string graphic;
+    };
+
+    /* one member edit from UpdateMember/UpdateMembers/ExecuteActions.  unset fields are unchanged (the client sends None) */
+    struct MemberUpdate {
+        uint32 charID = 0;
+        std::optional<std::string> title;
+        std::optional<int64> roles;
+        std::optional<int64> grantableRoles;
+        std::optional<int64> rolesAtHQ;
+        std::optional<int64> grantableRolesAtHQ;
+        std::optional<int64> rolesAtBase;
+        std::optional<int64> grantableRolesAtBase;
+        std::optional<int64> rolesAtOther;
+        std::optional<int64> grantableRolesAtOther;
+        std::optional<int64> baseID;
+        std::optional<int64> titleMask;
+        std::optional<bool> blockRoles;
+
+        // None (or nullptr) -> unset.  Int and Long both work
+        static std::optional<int64> Int(PyRep* rep);
+    };
+
+    /* the roles a member's titles give */
+    struct TitleRoles {
+        int64 roles = 0;
+        int64 grantableRoles = 0;
+        int64 rolesAtHQ = 0;
+        int64 grantableRolesAtHQ = 0;
+        int64 rolesAtBase = 0;
+        int64 grantableRolesAtBase = 0;
+        int64 rolesAtOther = 0;
+        int64 grantableRolesAtOther = 0;
     };
 
 }
