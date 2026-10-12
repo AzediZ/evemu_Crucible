@@ -198,6 +198,18 @@ EVEServerConfig::EVEServerConfig()
     marketSim.MaxCatchUpHours = 48;
     marketSim.FlushSeconds = 30;
     marketSim.PauseOnAuditResidual = true;
+    // marketSim phase 3 (PLAN 6.3, 6.4, 6.6;  KillmailCoverage per PLAN 4.2, line costs as Crucible's npc station lines)
+    marketSim.Actors = true;
+    marketSim.KillmailCoverage = 0.5;
+    marketSim.PodLossRate = 0.0;
+    marketSim.InternalSpreadShare = 0.5;
+    marketSim.MinMargin = 0.02;
+    marketSim.ProductionSlack = 1.0;
+    marketSim.MiningSlack = 0.25;
+    marketSim.MiningM3PerHullDay = 12000.0;
+    marketSim.MaxSimJobHours = 24.0;
+    marketSim.LineInstallCost = 1000.0;
+    marketSim.LineCostPerHour = 333.0;
 
     // ram
     ram.AutoEvent = false;
@@ -899,6 +911,17 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     AddValueParser( "MaxCatchUpHours",              marketSim.MaxCatchUpHours );
     AddValueParser( "FlushSeconds",                 marketSim.FlushSeconds );
     AddValueParser( "PauseOnAuditResidual",         marketSim.PauseOnAuditResidual );
+    AddValueParser( "Actors",                       marketSim.Actors );
+    AddValueParser( "KillmailCoverage",             marketSim.KillmailCoverage );
+    AddValueParser( "PodLossRate",                  marketSim.PodLossRate );
+    AddValueParser( "InternalSpreadShare",          marketSim.InternalSpreadShare );
+    AddValueParser( "MinMargin",                    marketSim.MinMargin );
+    AddValueParser( "ProductionSlack",              marketSim.ProductionSlack );
+    AddValueParser( "MiningSlack",                  marketSim.MiningSlack );
+    AddValueParser( "MiningM3PerHullDay",           marketSim.MiningM3PerHullDay );
+    AddValueParser( "MaxSimJobHours",               marketSim.MaxSimJobHours );
+    AddValueParser( "LineInstallCost",              marketSim.LineInstallCost );
+    AddValueParser( "LineCostPerHour",              marketSim.LineCostPerHour );
 
     const bool result = ParseElementChildren( ele );
 
@@ -946,6 +969,17 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     RemoveParser( "MaxCatchUpHours" );
     RemoveParser( "FlushSeconds" );
     RemoveParser( "PauseOnAuditResidual" );
+    RemoveParser( "Actors" );
+    RemoveParser( "KillmailCoverage" );
+    RemoveParser( "PodLossRate" );
+    RemoveParser( "InternalSpreadShare" );
+    RemoveParser( "MinMargin" );
+    RemoveParser( "ProductionSlack" );
+    RemoveParser( "MiningSlack" );
+    RemoveParser( "MiningM3PerHullDay" );
+    RemoveParser( "MaxSimJobHours" );
+    RemoveParser( "LineInstallCost" );
+    RemoveParser( "LineCostPerHour" );
 
     return result;
 }

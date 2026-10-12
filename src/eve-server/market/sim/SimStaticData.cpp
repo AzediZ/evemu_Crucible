@@ -24,7 +24,7 @@ int Isk::Sign(uint8_t flow)
     switch (flow) {
         case Income: case Seed: case PlayerToSim: case Reconcile:
             return 1;
-        case SimToPlayer: case Production: case BrokerFee: case SalesTax: case Upkeep: case VendorSales:
+        case SimToPlayer: case Production: case BrokerFee: case SalesTax: case Upkeep: case VendorSales: case LineCost:
             return -1;
     }
     return 0;
@@ -43,6 +43,7 @@ const char* Isk::Name(uint8_t flow)
         case Upkeep:        return "isk.sink.upkeep";
         case VendorSales:   return "isk.sink.vendor";
         case Reconcile:     return "isk.reconcile";
+        case LineCost:      return "isk.sink.lineCost";
     }
     return "isk.unknown";
 }
@@ -51,8 +52,9 @@ int Goods::Sign(uint8_t flow)
 {
     switch (flow) {
         case Production: case Seed: case Vendor: case PlayerToSim: case Reconcile:
+        case Mined: case Loot: case Dropped: case Manufactured: case Refined:
             return 1;
-        case SimToPlayer: case Consumption:
+        case SimToPlayer: case Consumption: case Materials: case RefineTax: case Destroyed: case Spoiled:
             return -1;
     }
     return 0;
@@ -68,8 +70,32 @@ const char* Goods::Name(uint8_t flow)
         case SimToPlayer:   return "goods.simToPlayer";
         case Consumption:   return "goods.sink.consumption";
         case Reconcile:     return "goods.reconcile";
+        case Mined:         return "goods.faucet.mined";
+        case Loot:          return "goods.faucet.loot";
+        case Dropped:       return "goods.faucet.dropped";
+        case Manufactured:  return "goods.faucet.manufactured";
+        case Refined:       return "goods.faucet.refined";
+        case Materials:     return "goods.sink.materials";
+        case RefineTax:     return "goods.sink.refineTax";
+        case Destroyed:     return "goods.sink.destroyed";
+        case Spoiled:       return "goods.sink.spoiled";
     }
     return "goods.unknown";
+}
+
+const char* ActorKind::Name(uint8_t kind)
+{
+    switch (kind) {
+        case MarketMaker:   return "market maker";
+        case Producer:      return "producer";
+        case Consumer:      return "consumer";
+        case Vendor:        return "vendor";
+        case Miner:         return "miner";
+        case Reprocessor:   return "reprocessor";
+        case Manufacturer:  return "manufacturer";
+        case LootSource:    return "loot source";
+    }
+    return "?";
 }
 
 GroupCal::GroupCal()
@@ -262,6 +288,30 @@ uint32_t StaticData::ProducerCorp(uint32_t nodeID, uint8_t simClass) const
     TypeData t;
     t.simClass = simClass;
     return MarketMakerCorp(nodeID, SectorOf(t));
+}
+
+uint32_t StaticData::ActorCorp(uint32_t nodeID, uint8_t kind, uint8_t sector) const
+{
+    std::map<std::tuple<uint32_t, uint8_t, uint8_t>, uint32_t>::const_iterator itr = actorCorp.find(std::make_tuple(nodeID, kind, sector));
+    if ((itr != actorCorp.end()) and (itr->second != 0))
+        return itr->second;
+    // the market maker of the sector the actor supplies
+    switch (kind) {
+        case ActorKind::Manufacturer:   return MarketMakerCorp(nodeID, (sector == Sector::Ships) ? Sector::Ships : Sector::Goods);
+        case ActorKind::LootSource:     return MarketMakerCorp(nodeID, Sector::Loot);
+    }
+    return MarketMakerCorp(nodeID, Sector::Raw);
+}
+
+float StaticData::LossesPerDay(uint16_t hullTypeID) const
+{
+    std::map<uint16_t, std::array<float, SecBand::Count>>::const_iterator itr = losses.find(hullTypeID);
+    if (itr == losses.end())
+        return 0.0f;
+    float sum(0.0f);
+    for (auto v : itr->second)
+        sum += v;
+    return sum;
 }
 
 size_t StaticData::Validate(std::vector<std::string>& problems) const

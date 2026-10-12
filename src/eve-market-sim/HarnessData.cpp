@@ -7,8 +7,10 @@
   *
   */
 
+#include <array>
 #include <cmath>
 #include <fstream>
+#include <set>
 #include <sstream>
 
 #include "HarnessData.h"
@@ -91,6 +93,8 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
     data.groups.clear();
     data.region.clear();
     data.vendors.clear();
+    data.losses.clear();
+    data.fits.clear();
     AddHubs(data);
     Gen g(seed ^ 0x5EEDDA7Aull);
     auto count = [scale](int n) { return std::max(1, (int)std::lround(n * scale)); };
@@ -286,6 +290,197 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
             data.region[std::make_pair(data.nodes[n].regionID, cur.first)] = r;
         }
     }
+    AddSyntheticIndustry(data, seed);
+}
+
+void AddSyntheticIndustry(StaticData& data, uint64_t seed)
+{
+    /* phase 3:  what the actors need on top of the phase 2 world, with its own draws (the phase 2 types are unchanged).
+     *  ore volume (0.1 m3), blueprint times, a Drake and two mining barges, and killmails:  losses for every ship and
+     *  capsules, with fits of the world's modules, charges, drones, loot and implants (PLAN 4.2) */
+    Gen g(seed ^ 0x1A55E5ull);
+    std::vector<uint16_t> t1Modules, t2Modules, lootModules, charges, drones, implants, ships;
+    for (auto& cur : data.types) {
+        TypeData& t(cur.second);
+        if (t.categoryID == Category::Asteroid)
+            t.volume = 0.1;
+        // blueprint times per run (one unit):  of the order of Crucible's
+        if ((t.simClass == SimClass::MfgT1) or (t.simClass == SimClass::MfgT2) or (t.simClass == SimClass::Component)) {
+            switch (t.categoryID) {
+                case Category::Ship:    t.buildSeconds = 6000.0 * std::pow(std::max(1.0, t.refPrice / 1e6), 0.3); break;
+                case Category::Charge:  t.buildSeconds = 6.0; break;
+                case Category::Drone:   t.buildSeconds = 1800.0; break;
+                case Category::Module:  t.buildSeconds = 600.0 * std::pow(std::max(1.0, t.refPrice / 1e4), 0.25); break;
+                default:                t.buildSeconds = 1200.0; break;
+            }
+        }
+        if (t.simClass == SimClass::MfgT1) {
+            if (t.categoryID == Category::Module)   t1Modules.push_back(t.typeID);
+            if (t.categoryID == Category::Charge)   charges.push_back(t.typeID);
+            if (t.categoryID == Category::Drone)    drones.push_back(t.typeID);
+            if (t.categoryID == Category::Ship)     ships.push_back(t.typeID);
+        } else if ((t.simClass == SimClass::MfgT2) and (t.categoryID == Category::Module)) {
+            t2Modules.push_back(t.typeID);
+        } else if ((t.simClass == SimClass::MfgT2) and (t.categoryID == Category::Ship)) {
+            ships.push_back(t.typeID);
+        } else if ((t.simClass == SimClass::Loot) and (t.categoryID == Category::Module)) {
+            lootModules.push_back(t.typeID);
+        } else if (t.categoryID == Category::Implant) {
+            implants.push_back(t.typeID);
+        }
+    }
+    if (t1Modules.empty() or charges.empty())
+        return;
+
+    /* the Crucible ores (refine batch, its minerals, m3 per unit):  the synthetic ores above are mostly Tritanium, and
+     *  a node needs ores rich in the others too.  priced at 0.95 of what they refine into */
+    struct Ore { uint16_t typeID, groupID; uint32_t batch; double volume, share; uint32_t q[8]; };
+    static const Ore realOres[] = {
+        { 1230, 462, 333, 0.10, 0.30, { 1000,   0,   0,   0,   0,   0,   0,   0 } },     // Veldspar
+        { 1228, 460, 333, 0.15, 0.15, {  833, 416,   0,   0,   0,   0,   0,   0 } },     // Scordite
+        { 1224, 459, 333, 0.30, 0.12, {  844,  59, 120,   0,  11,   0,   0,   0 } },     // Pyroxeres
+        {   18, 458, 333, 0.35, 0.10, {  256, 512, 256,   0,   0,   0,   0,   0 } },     // Plagioclase
+        { 1227, 469, 500, 0.60, 0.05, {  307, 123,   0, 307,   0,   0,   0,   0 } },     // Omber
+        {   20, 457, 400, 1.20, 0.08, {  386,   0, 773, 386,   0,   0,   0,   0 } },     // Kernite
+        { 1226, 456, 500, 2.00, 0.02, {  259, 437, 518,   0, 259,   8,   0,   0 } },     // Jaspet
+        { 1231, 455, 500, 3.00, 0.02, {  212,   0,   0, 212, 424,  28,   0,   0 } },     // Hemorphite
+        {   21, 454, 500, 3.00, 0.02, {    0,   0,   0, 708, 354,  32,   0,   0 } },     // Hedbergite
+        { 1229, 467, 400, 5.00, 0.02, {  171,   0, 171, 343,   0, 171,   0,   0 } },     // Gneiss
+        { 1232, 453, 400, 8.00, 0.02, {  250,   0,   0,   0, 500, 250,   0,   0 } },     // Dark Ochre
+        { 1225, 452, 250, 16.0, 0.02, {  331,   0,   0,   0, 331, 663,   0,   0 } },     // Crokite
+        {   19, 461, 250, 16.0, 0.01, {  700, 140,   0,   0,   0,   0, 140,   0 } },     // Spodumain
+        { 1223, 451, 200, 16.0, 0.02, {    0, 170,   0,   0,   0, 341, 170,   0 } },     // Bistot
+        {   22, 450, 200, 16.0, 0.02, {  300,   0,   0,   0,   0, 166, 333,   0 } },     // Arkonor
+        { 11396, 468, 250, 40.0, 0.01, {   0,   0,   0,   0,   0,   0,   0, 530 } },    // Mercoxit
+    };
+    for (auto& o : realOres) {
+        TypeData t;
+        t.typeID = o.typeID;
+        t.groupID = o.groupID;
+        t.categoryID = Category::Asteroid;
+        t.simClass = SimClass::Mined;
+        t.portionSize = o.batch;
+        t.lotSize = 5000;
+        t.activeShare = 1.0f;
+        t.confidence = 1.0f;
+        t.priceSource = 1;
+        t.volume = o.volume;
+        double value(0.0);
+        for (int i = 0; i < 8; ++i) {
+            if (o.q[i] == 0)
+                continue;
+            t.refine.push_back(std::make_pair(Minerals[i], (double)o.q[i] / (double)o.batch));
+            value += (double)o.q[i] / (double)o.batch * data.types[Minerals[i]].refPrice;
+        }
+        t.refPrice = 0.95 * value;
+        t.basePrice = t.refPrice;
+        // traded m3 a day of the order of the Forge's ore trade
+        t.unitsPerDay = 3e8 * o.share / o.volume;
+        t.volatility = (float)g.LogN(0.055, 0.3);
+        data.types[t.typeID] = t;
+        for (size_t n = 1; n < data.nodes.size(); ++n) {
+            RegionTypeCal r = RegionTypeCal();
+            r.priceRatio = 1.0f;
+            r.unitsShare = (float)(data.regionDefault[data.nodes[n].regionID].unitsShare * std::exp(0.2 * g.N()));
+            r.activeShare = 1.0f;
+            data.region[std::make_pair(data.nodes[n].regionID, t.typeID)] = r;
+        }
+    }
+
+    // the Drake (a battlecruiser that is lost a lot) and the T1 mining barges (Retriever, Covetor)
+    struct Hull { uint16_t typeID, groupID; double cost, markup, units, buildSeconds; };
+    static const Hull hulls[] = {
+        { 24698, 419, 3.9e7, 1.10, 1000.0, 15000.0 },
+        { 17478, Group::MiningBarge, 5.6e6, 1.10, 520.0, 9000.0 },
+        { 17476, Group::MiningBarge, 2.0e7, 1.10, 280.0, 12000.0 },
+    };
+    static const double mPrice[8] = { 4.5, 10.0, 42.0, 70.0, 420.0, 830.0, 2600.0, 7300.0 };
+    static const double mShare[8] = { 0.30, 0.20, 0.15, 0.10, 0.10, 0.07, 0.05, 0.03 };
+    for (auto& h : hulls) {
+        TypeData t;
+        t.typeID = h.typeID;
+        t.groupID = h.groupID;
+        t.categoryID = Category::Ship;
+        t.simClass = SimClass::MfgT1;
+        t.portionSize = 1;
+        t.lotSize = 1;
+        t.activeShare = 1.0f;
+        t.confidence = 1.0f;
+        t.priceSource = 1;
+        for (int i = 0; i < 8; ++i)
+            t.bom.push_back(std::make_pair(Minerals[i], std::round(h.cost * mShare[i] / mPrice[i])));
+        double cost(0.0);
+        for (auto& in : t.bom)
+            cost += in.second * data.types[in.first].refPrice;
+        t.buildCostRef = cost;
+        t.refPrice = cost * h.markup;
+        for (auto& in : t.bom)
+            t.refine.push_back(std::make_pair(in.first, std::floor(in.second / 1.1)));
+        t.unitsPerDay = h.units;
+        t.volatility = 0.03f;
+        t.buildSeconds = h.buildSeconds;
+        data.types[t.typeID] = t;
+        for (size_t n = 1; n < data.nodes.size(); ++n) {
+            RegionTypeCal r = RegionTypeCal();
+            r.priceRatio = (float)std::exp(0.03 * g.N());
+            r.unitsShare = (float)(data.regionDefault[data.nodes[n].regionID].unitsShare * std::exp(0.1 * g.N()));
+            r.activeShare = 1.0f;
+            data.region[std::make_pair(data.nodes[n].regionID, t.typeID)] = r;
+        }
+        ships.push_back(t.typeID);
+    }
+
+    /* losses:  public killmails a day = a share of the hull's traded units (PLAN 4.2:  0.12 to 0.46, the runtime divides
+     *  by KillmailCoverage);  combat hulls more.  a fit of 4 to 8 items */
+    double shipLosses(0.0);
+    for (auto hull : ships) {
+        const TypeData& t(data.types[hull]);
+        double share(StaticData::IsMiningHull(t) ? 0.08 : ((hull == 24698) ? 0.2 : 0.06 + 0.12 * g.U()));
+        std::array<float, SecBand::Count> perDay = {};
+        perDay[SecBand::High] = (float)(t.unitsPerDay * share * 0.4);
+        perDay[SecBand::Low] = (float)(t.unitsPerDay * share * 0.25);
+        perDay[SecBand::Null] = (float)(t.unitsPerDay * share * 0.35);
+        data.losses[hull] = perDay;
+        shipLosses += t.unitsPerDay * share;
+        std::vector<FitItem> fit;
+        std::set<uint16_t> used;
+        int items(4 + (int)g.Pick(5));
+        for (int k = 0; k < items; ++k) {
+            double r(g.U());
+            uint16_t typeID;
+            float qty;
+            if (r < 0.45) {
+                typeID = t1Modules[g.Pick(t1Modules.size())];
+                qty = (float)(0.3 + 1.7 * g.U());
+            } else if ((r < 0.6) and !t2Modules.empty()) {
+                typeID = t2Modules[g.Pick(t2Modules.size())];
+                qty = (float)(0.2 + 1.0 * g.U());
+            } else if ((r < 0.7) and !lootModules.empty()) {
+                typeID = lootModules[g.Pick(lootModules.size())];
+                qty = (float)(0.1 + 0.5 * g.U());
+            } else if ((r < 0.85) and !drones.empty()) {
+                typeID = drones[g.Pick(drones.size())];
+                qty = (float)(0.5 + 2.0 * g.U());
+            } else {
+                typeID = charges[g.Pick(charges.size())];
+                qty = (float)(50.0 + 300.0 * g.U());
+            }
+            if (!used.insert(typeID).second)
+                continue;
+            fit.push_back(FitItem{typeID, qty, 0.5f});
+        }
+        data.fits[hull] = fit;
+    }
+    // pods:  a fifth of the ships' losses, with an implant now and then
+    if (!implants.empty()) {
+        std::array<float, SecBand::Count> perDay = {};
+        perDay[SecBand::Null] = (float)(0.2 * shipLosses);
+        data.losses[670] = perDay;
+        std::vector<FitItem> fit;
+        for (size_t k = 0; (k < implants.size()) and (k < 5); ++k)
+            fit.push_back(FitItem{implants[k], (float)(0.02 + 0.05 * g.U()), 1.0f});
+        data.fits[670] = fit;
+    }
 }
 
 bool LoadExport(const std::string& path, StaticData& data, std::string& err)
@@ -304,6 +499,8 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
     data.groups.clear();
     data.region.clear();
     data.vendors.clear();
+    data.losses.clear();
+    data.fits.clear();
     AddHubs(data);
     data.regionDefault.clear();
 
@@ -347,6 +544,27 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
             t.consumeShare = (float)r[c["consumeShare"]].Num();
             t.elasticity = (float)r[c["elasticity"]].Num();
         }
+    }
+    // killmails:  losses per hull and band, fits per hull (phase 3)
+    {
+        std::map<std::string, size_t> c;
+        for (auto& r : table("mktCalLoss", c).a) {
+            uint8_t band((uint8_t)r[c["secBand"]].Num());
+            if (band < SecBand::Count)
+                data.losses[(uint16_t)r[c["hullTypeID"]].Num()][band] += (float)r[c["lossesPerDay"]].Num();
+        }
+    }
+    {
+        std::map<std::string, size_t> c;
+        for (auto& r : table("mktCalFit", c).a)
+            data.fits[(uint16_t)r[c["hullTypeID"]].Num()].push_back(FitItem{(uint16_t)r[c["typeID"]].Num(),
+                (float)r[c["qtyPerLoss"]].Num(), (float)r[c["destroyedShare"]].Num()});
+    }
+    // blueprint times per run (gen_market_calibration.py's "buildTime":  typeID -> seconds)
+    for (auto& cur : doc["buildTime"].o) {
+        std::map<uint16_t, TypeData>::iterator itr = data.types.find((uint16_t)std::atoi(cur.first.c_str()));
+        if (itr != data.types.end())
+            itr->second.buildSeconds = cur.second.Num();
     }
     {
         std::map<std::string, size_t> c;

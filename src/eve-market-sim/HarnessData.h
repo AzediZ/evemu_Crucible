@@ -23,6 +23,8 @@ namespace MktHarness {
     // a synthetic world of about 475 types per unit of scale (minerals, ore, T1/T2 goods and ships, components, loot,
     //  faction, implants, PI, salvage, npc vendor skills).  the same seed gives the same world
     void BuildSynthetic(MktSim::StaticData& data, uint64_t seed, double scale);
+    // phase 3:  blueprint times, ore volume, a Drake and mining barges, killmail losses and fits (BuildSynthetic calls it)
+    void AddSyntheticIndustry(MktSim::StaticData& data, uint64_t seed);
 
     // the --export-json snapshot (types, bills of materials, refine outputs, the mktCal* rows).  false and a message
     //  when the file can't be read

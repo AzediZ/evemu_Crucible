@@ -55,7 +55,21 @@ namespace MktSim {
             MarketMaker     = 1,    // per node and sector:  holds the node's stock, owns its asks and bids
             Producer        = 2,    // per node and class:  the abstract supply of the stock model (a goods faucet with a cost)
             Consumer        = 3,    // per node region:  final demand.  its income is the only isk faucet
-            Vendor          = 4     // per npc corp:  fixed price orders of skills, blueprints and trade goods
+            Vendor          = 4,    // per npc corp:  fixed price orders of skills, blueprints and trade goods
+            // phase 3 (PLAN 6.4):  the supply chain that replaces the abstract producers of ore, minerals, T1 and loot
+            Miner           = 5,    // per node:  a mining consortium.  mines ore and ice with its fleet, refines or sells it
+            Reprocessor     = 6,    // per node:  buys what refines for more than it costs (the refine floor), sells minerals
+            Manufacturer    = 7,    // per node and sector (ships, goods):  T1 jobs from bought inputs, sells the output
+            LootSource      = 8,    // per node:  loot, LP and salvage at their calibrated rates, plus dropped fits
+            Count           = 9
+        };
+        const char* Name(uint8_t kind);
+    }
+
+    // what a sim industry job does (mktSimJob.kind)
+    namespace Activity {
+        enum : uint8_t {
+            Manufacturing   = 1     // ramActivities 1
         };
     }
 
@@ -91,7 +105,8 @@ namespace MktSim {
             Upkeep          = 7,    // sink:  actor overhead
             VendorSales     = 8,    // sink:  what players pay npc vendors
             Reconcile       = 9,    // boot reconciliation (faucet when positive)
-            Count           = 10
+            LineCost        = 10,   // sink:  assembly line installation and rent (to the station's npc owner)
+            Count           = 11
         };
         int Sign(uint8_t flow);     // +1 faucet, -1 sink, 0 crossing (PlayerToSim +, SimToPlayer -)
         const char* Name(uint8_t flow);
@@ -107,7 +122,17 @@ namespace MktSim {
             SimToPlayer     = 4,
             Consumption     = 5,    // sink:  final demand
             Reconcile       = 6,
-            Count           = 7
+            // phase 3
+            Mined           = 7,    // faucet:  ore and ice the miners' fleets bring in
+            Loot            = 8,    // faucet:  loot, LP and salvage at their calibrated rates
+            Dropped         = 9,    // faucet:  the share of lost fits that drops (it was consumed with the ship)
+            Manufactured    = 10,   // faucet:  the output of finished jobs
+            Refined         = 11,   // faucet:  reprocessing output
+            Materials       = 12,   // sink:  what jobs and reprocessing use up
+            RefineTax       = 13,   // sink:  the units the station keeps when refining
+            Destroyed       = 14,   // sink:  the actors' own ships lost
+            Spoiled         = 15,   // sink:  loot nobody wanted for too long
+            Count           = 16
         };
         int Sign(uint8_t flow);
         const char* Name(uint8_t flow);
@@ -122,6 +147,24 @@ namespace MktSim {
         uint8_t  kind;
         uint32_t factionID;
         float    security;
+        // the station's refinery (staStations):  base efficiency and the share the station keeps at neutral standing
+        float    refineEfficiency = 0.5f;
+        float    refineTake       = 0.05f;
+    };
+
+    // a sim industry job (mktSimJob).  the inputs were used up when it started;  the output appears when it ends
+    struct SimJob {
+        uint32_t jobID          = 0;
+        uint32_t actorID        = 0;
+        uint32_t nodeID         = 0;
+        uint32_t stationID      = 0;    // where it runs (the node's station until phase 4 adds production sites)
+        uint8_t  activity       = Activity::Manufacturing;
+        uint16_t typeID         = 0;    // output
+        uint32_t runs           = 0;
+        Units    qtyOut         = 0;
+        uint32_t lineID         = 0;    // the assembly line it holds (0:  virtual capacity, PLAN 6.6 mode false)
+        int64_t  start          = 0;
+        int64_t  end            = 0;
     };
 
     // a fixed price npc vendor order:  corp sells typeID at stationID for basePrice

@@ -41,6 +41,7 @@ SET( SOURCE
      "${TARGET_SOURCE_DIR}/HarnessFacilities.cpp"
      "${TARGET_SOURCE_DIR}/HarnessMarket.cpp"
      "${TARGET_SOURCE_DIR}/MatchTest.cpp"
+     "${TARGET_SOURCE_DIR}/Phase3Test.cpp"
      "${TARGET_SOURCE_DIR}/SimTest.cpp" )
 # the sim core, shared with eve-server
 SET( core_INCLUDE
@@ -51,15 +52,18 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimCapacityStandIn.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimProduction.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimRng.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimTypes.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h" )
 SET( core_SOURCE
+     "${SERVER_SOURCE_DIR}/market/sim/SimActors.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.cpp"
+     "${SERVER_SOURCE_DIR}/market/sim/SimProduction.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimWorld.cpp" )
 
@@ -92,7 +96,16 @@ ADD_TEST( NAME "MarketSimWorldTest"
           COMMAND "${TARGET_NAME}" --test world )
 ADD_TEST( NAME "MarketSimFacilitiesTest"
           COMMAND "${TARGET_NAME}" --test facilities )
+ADD_TEST( NAME "MarketSimProductionTest"
+          COMMAND "${TARGET_NAME}" --test production )
+ADD_TEST( NAME "MarketSimActorsTest"
+          COMMAND "${TARGET_NAME}" --test actors )
 # the phase 2 acceptance tests:  a simulated year at EconomyScale 0.01, five seeds, plus a determinism rerun
 ADD_TEST( NAME "MarketSimAcceptance"
           COMMAND "${TARGET_NAME}" --synthetic --days 365 --seeds 5 )
 SET_TESTS_PROPERTIES( "MarketSimAcceptance" PROPERTIES TIMEOUT 3600 )
+# the phase 3 acceptance tests:  a mineral shock and a Drake losses shock against a control run, no negatives, T1 price /
+#  bill of materials at steady state (Phase3Test.cpp)
+ADD_TEST( NAME "MarketSimPhase3"
+          COMMAND "${TARGET_NAME}" --synthetic --phase3 --days 120 --seeds 3 )
+SET_TESTS_PROPERTIES( "MarketSimPhase3" PROPERTIES TIMEOUT 3600 )

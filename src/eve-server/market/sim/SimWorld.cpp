@@ -62,8 +62,14 @@ World::World(const StaticData& data, const Params& params, IMarketGateway& gatew
   m_started(false),
   m_auditDay(0),
   m_cellVisits(0),
-  m_playerTrades(0)
+  m_playerTrades(0),
+  m_ownCapacity(new Prod::VirtualCapacity(params.lineInstallCost, params.lineCostPerHour)),
+  m_capacity(nullptr),
+  m_nextJobID(1),
+  m_jobsChanged(false),
+  m_miningShock(1.0, 0)
 {
+    m_capacity = m_ownCapacity.get();
     if (m_p.quoteLevels > MaxLevels)
         m_p.quoteLevels = MaxLevels;
     if (m_p.quoteLevels < 1)
@@ -132,7 +138,7 @@ double World::TargetStock(const Cell& c) const
 {
     // S* = D x coverDays (PLAN 6.1), D never below the calibrated consumption (a quiet week of a thin type doesn't turn
     //  its stock into a glut), at least two lots
-    return std::max(std::max(c.dBar, c.dc) * c.coverDays, 2.0 * c.lot);
+    return std::max(std::max(c.dBar, c.dRef) * c.coverDays, 2.0 * c.lot);
 }
 
 double World::RefineValue(const Cell& c) const
@@ -161,7 +167,10 @@ double World::AnchorOf(const Cell& c) const
         return c.anchorOverride;
     double anchor((c.wc <= 0.0) ? c.refLocal : Econ::Anchor(c.refLocal, c.wc, CostNow(c), c.costRef));
     // nothing that refines is worth less than what it refines into (the reprocessing floor PLAN 6.4 gives modules and
-    //  loot;  in the stock model it holds the anchor up)
+    //  loot).  with the actors the reprocessor holds it up, buying what is cheaper than its minerals;  the stock model
+    //  has no reprocessor and floors the anchor instead
+    if (m_p.actors)
+        return anchor;
     return std::max(anchor, RefineValue(c));
 }
 
@@ -195,6 +204,10 @@ void World::Build(int64_t now)
     m_regionCells.clear();
     m_vendorSlots.clear();
 
+    m_nodeActors.clear();
+    m_minerPlans.clear();
+    m_makerPlans.clear();
+    m_nodeLosses.clear();
     std::map<uint32_t, uint32_t> consumers;                         // regionID -> actor
     std::map<std::pair<uint32_t, uint8_t>, uint32_t> makers, producers;
     auto newActor = [this](uint8_t kind, uint8_t sector, uint32_t corp, uint32_t regionID, uint32_t nodeID) -> uint32_t {
@@ -225,13 +238,10 @@ void World::Build(int64_t now)
             c.typeID = t.typeID;
             c.sector = StaticData::SectorOf(t);
             c.simClass = t.simClass;
-            std::pair<uint32_t, uint8_t> mk(node.nodeID, c.sector), pk(node.nodeID, t.simClass);
+            std::pair<uint32_t, uint8_t> mk(node.nodeID, c.sector);
             if (makers.find(mk) == makers.end())
                 makers[mk] = newActor(ActorKind::MarketMaker, c.sector, m_static.MarketMakerCorp(node.nodeID, c.sector), node.regionID, node.nodeID);
-            if (producers.find(pk) == producers.end())
-                producers[pk] = newActor(ActorKind::Producer, t.simClass, m_static.ProducerCorp(node.nodeID, t.simClass), node.regionID, node.nodeID);
             c.mm = makers[mk];
-            c.producer = producers[pk];
             c.consumer = consumers[node.regionID];
             c.day = DayOf(now);
             m_cellIndex[((uint64_t)c.nodeID << 16) | c.typeID] = c.index;
@@ -267,6 +277,9 @@ void World::Build(int64_t now)
         // a unit the stock model consumes trades twice (producer to market maker, market maker to consumer), so the
         //  calibrated traded volume is TradesPerUnit x consumption
         c.dc = c.d0 / std::max(1.0, m_p.tradesPerUnit);
+        // the stock model's consumers buy all of it (BuildActors splits it between losses, derived and the rest)
+        c.dcGen = c.dc;
+        c.dRef = c.dc;
         // the round trip has to lose:  2h >= broker fee on both orders + sales tax + a margin
         double feeFloor(m_p.simPaysFees ? (m_p.brokerFeeRate + m_p.salesTaxRate / 2.0 + 0.0025) : 0.0025);
         c.h = Econ::HalfSpread(m_static.HalfSpread(t), m_p.minHalfSpread, feeFloor);
@@ -292,6 +305,20 @@ void World::Build(int64_t now)
         // order sizes follow the calibrated lot, but never more than a quarter of the (scaled) daily demand
         double lotCap(std::floor(c.dc / 4.0));
         c.lot = (uint32_t)std::max(1.0, std::min((double)std::max<uint32_t>(1, t.lotSize), lotCap));
+    }
+
+    /* where each cell's goods come from:  the phase 3 actors (BuildActors decides) or the stock model's abstract
+     *  producer per node and class */
+    if (m_p.actors)
+        BuildActors(now);
+    for (auto& c : m_cells) {
+        if (c.supply != Supply::Abstract)
+            continue;
+        const NodeData& node(*Node(c.nodeID));
+        std::pair<uint32_t, uint8_t> pk(node.nodeID, c.simClass);
+        if (producers.find(pk) == producers.end())
+            producers[pk] = newActor(ActorKind::Producer, c.simClass, m_static.ProducerCorp(node.nodeID, c.simClass), node.regionID, node.nodeID);
+        c.producer = producers[pk];
     }
 
     // hot cells:  the top share of each node's cells by isk turnover.  quote levels:  the full ladder for the most
@@ -327,15 +354,16 @@ void World::Build(int64_t now)
     double spend(0.0);
     std::map<uint32_t, double> spendByConsumer, turnoverByMaker, costByProducer;
     for (auto& c : m_cells) {
-        double v(c.dc * c.refLocal * (1.0 + c.h) * 100.0);
+        // consumers buy the final demand and replace what they lose (the miners replace their own losses)
+        double v((c.dcGen + c.lossRate) * c.refLocal * (1.0 + c.h) * 100.0);
         spend += v;
         spendByConsumer[c.consumer] += v;
         // working capital:  days of turnover, and the value of the target stock (the bids reach up to twice the target,
         //  and refilling an empty cell takes it;  thin, dear cells need more than their turnover says)
-        turnoverByMaker[c.mm] += c.dc * c.refLocal * 100.0 * m_p.marketMakerCapitalDays
-                               + std::max(c.dc * c.coverDays, 2.0 * c.lot) * c.refLocal * 100.0;
-        if (!SimClass::IsLoot(c.simClass))
-            costByProducer[c.producer] += c.dc * c.refLocal * (1.0 - c.h) * m_p.producerCostShare * 100.0;
+        turnoverByMaker[c.mm] += c.dRef * c.refLocal * 100.0 * m_p.marketMakerCapitalDays
+                               + std::max(c.dRef * c.coverDays, 2.0 * c.lot) * c.refLocal * 100.0;
+        if ((c.producer != 0) and !SimClass::IsLoot(c.simClass))
+            costByProducer[c.producer] += c.dRef * c.refLocal * (1.0 - c.h) * m_p.producerCostShare * 100.0;
     }
     m_income0 = (Cents)std::llround(spend);
     // M* (PLAN 6.8) is MoneyDaysTarget days of consumer spending for the consumers, plus the working capital the market
@@ -347,6 +375,9 @@ void World::Build(int64_t now)
             others += a.target;
         } else if (a.kind == ActorKind::Producer) {
             a.target = costByProducer[a.actorID];
+            others += a.target;
+        } else if (a.kind >= ActorKind::Miner) {
+            // the phase 3 actors' working money (BuildActors)
             others += a.target;
         }
     }
@@ -386,7 +417,7 @@ void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
             continue;
         Changed(c);
         if (c.dBar <= 0.0)
-            c.dBar = c.dc;
+            c.dBar = c.dRef;
         c.targetStock = TargetStock(c);
         const Ledger::Stock* s(m_ledger.FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
         Units have((s == nullptr) ? 0 : (s->qty + s->reserved));
@@ -413,6 +444,9 @@ void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
         if (want > have)
             m_ledger.Faucet(a.actorID, want - have, Isk::Seed);
     }
+    // the miners' fleets
+    if (m_p.actors)
+        SeedActors(now, nodeID, freshOnly);
 }
 
 void World::Start(int64_t now, bool catchUp)
@@ -439,6 +473,22 @@ void World::Start(int64_t now, bool catchUp)
     int64_t day((int64_t)DayOf(now) * SecondsPerDay);
     m_due.push(Due{day + SecondsPerDay, DueDay, 0});
     m_due.push(Due{now - (now % 3600) + 3600, DueHour, 0});
+    // the phase 3 actors plan hourly (spread over the hour), jobs end when they end (a job overdue after a downtime ends
+    //  at once)
+    for (auto& a : m_actors) {
+        if ((a.kind < ActorKind::Miner) or (a.state != 0))
+            continue;
+        if (a.lastStep == 0)
+            a.lastStep = now;
+        int64_t jitter((int64_t)(Rng::Uniform(Rng::Hash64(m_p.seed, a.actorID, 0, hJitter)) * 3600.0));
+        m_due.push(Due{now + jitter, DueActor, a.actorID});
+    }
+    for (auto& cur : m_jobs)
+        m_due.push(Due{std::max(cur.second.end, now), DueJob, cur.first});
+    for (auto& cur : m_minerPlans)
+        if (cur.second.since == 0)
+            cur.second.since = now;
+    RebuildHoldings();
     if (m_lastIncome == 0)
         m_lastIncome = now;
     if (m_lastIncome < now - 3600LL * m_p.maxCatchUpHours)
@@ -479,6 +529,15 @@ void World::Step(int64_t now, double budgetUs, std::function<double()> usNow)
             case DueHour:
                 Hourly(d.t);
                 m_due.push(Due{d.t + 3600, DueHour, 0});
+                break;
+            case DueJob:
+                CompleteJob(d.index, d.t);
+                break;
+            case DueActor:
+                if ((d.index == 0) or (d.index > m_actors.size()))
+                    break;
+                StepActor(m_actors[d.index - 1], d.t);
+                m_due.push(Due{d.t + 3600, DueActor, d.index});
                 break;
             default: {
                 if (d.index >= m_cells.size())
@@ -619,7 +678,11 @@ void World::ProcessCell(Cell& c, int64_t t)
          *  pressure).  trades with players feed back (PlayerFeedback) */
         ConsumerDemand(c, t, dt, anchor);
         SellToPlayerBids(c, t);
-        ProducerSupply(c, t, dt, anchor);
+        if (c.supply == Supply::Abstract)
+            ProducerSupply(c, t, dt, anchor);
+        // the refine floor (phase 3)
+        if (m_p.actors)
+            ReprocessorAtCell(c, t);
         c.lnV = std::min(hi, std::max(lo, c.lnV));
         // V* at a Kmax bound:  a stock-out or a glut (the stability test counts the days a cell ends that way)
         if (clamped)
@@ -682,15 +745,31 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
     double best(quotes.empty() ? 0.0 : Econ::ToIsk(quotes[0].price));
     double rate(0.0);
     if ((best > 0.0) and (best <= refAsk * m_p.kMax))
-        rate = Econ::DemandRate(c.dc, weekday, shock, budget, best, refAsk, c.eta);
+        rate = Econ::DemandRate(c.dcGen, weekday, shock, budget, best, refAsk, c.eta);
     double wanted(rate * dt);
     // the demand the cell would see at its own fair ask (stock targets follow it even when nothing could be bought)
-    double intent(Econ::DemandRate(c.dc, weekday, shock, budget, refAsk, refAsk, c.eta) * dt);
+    double intent(Econ::DemandRate(c.dcGen, weekday, shock, budget, refAsk, refAsk, c.eta) * dt);
+    /* lost ships and fits to replace (PLAN 6.3 loss-driven baskets):  pilots buy them back at the asks over about
+     *  ReplaceDays, fewer when the price is up or the money short;  what they don't buy fades (they fly something else) */
+    double lossTake(0.0);
+    if (c.lossWant > 0.0) {
+        double factor((best > 0.0) ? std::min(1.0, budget * std::pow(best / refAsk, -c.eta)) : 0.0);
+        if (best > refAsk * m_p.kMax)
+            factor = 0.0;
+        lossTake = c.lossWant * factor * std::min(1.0, dt / std::max(0.01, m_p.replaceDays));
+        wanted += lossTake;
+    }
+    // the losses since the last visit are the rate (the backlog of earlier ones was counted when they happened)
+    intent += c.lossNew;
+    c.lossNew = 0.0;
 
-    Units filled(0), unfilled(0);
+    Units filled(0), unfilled(0), lossUnits(0);
     if (wanted > 0.0) {
         // arrivals of 'lot' units.  many arrivals are grouped (at most 64 walks per visit)
-        uint64_t arrivals(Rng::Poisson(wanted / (double)c.lot, H(c, t, hArrivals)));
+        uint64_t arrivals(Rng::Poisson((wanted - lossTake) / (double)c.lot, H(c, t, hArrivals)));
+        uint64_t lossArrivals((uint64_t)Rng::RoundRandom(lossTake / (double)c.lot, H(c, t, hArrivals, 1)));
+        arrivals += lossArrivals;
+        lossUnits = (Units)lossArrivals * c.lot;
         uint64_t groups(std::min<uint64_t>(arrivals, 64));
         Units total((Units)arrivals * c.lot);
         for (uint64_t g = 0; g < groups; ++g) {
@@ -751,6 +830,13 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
             unfilled += std::max<Units>(0, want);
         }
     }
+    // the replacements bought first come off what consumers still want;  the rest fades
+    if (c.lossWant > 0.0) {
+        c.lossWant = std::max(0.0, c.lossWant - (double)std::min(filled, lossUnits));
+        c.lossWant *= std::exp(-dt * Ln2 / std::max(0.1, m_p.replaceHalfLifeDays));
+        if (c.lossWant < 1e-6)
+            c.lossWant = 0.0;
+    }
     // what couldn't be bought because everything was sold
     bool soldOut(true);
     for (auto& q : quotes)
@@ -760,11 +846,14 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
     /* demand feeds the stock target:  the expected demand at the cell's fair ask (smooth;  a thin type's single sale
      *  would otherwise read as a burst), plus what went unserved because the shelves were empty (PLAN 6.3), kept between
      *  a quarter and four times the calibration */
-    double observed((intent + (soldOut ? (double)unfilled : 0.0)) / dt);
+    // sim actors' purchases here (derived demand, PLAN 6.3)
+    // (the replacements still wanted were counted when the ships were lost:  their shortfall isn't new demand)
+    double observed((intent + (soldOut ? std::max(0.0, (double)unfilled - lossTake) : 0.0) + c.derived) / dt);
+    c.derived = 0.0;
     double alpha(1.0 - std::exp(-dt * Ln2 / std::max(0.1, m_p.demandHalfLifeDays)));
     c.dBar += alpha * (observed - c.dBar);
-    if (c.dc > 0.0)
-        c.dBar = std::min(4.0 * c.dc, std::max(0.25 * c.dc, c.dBar));
+    if (c.dRef > 0.0)
+        c.dBar = std::min(4.0 * c.dRef, std::max(0.25 * c.dRef, c.dBar));
 }
 
 void World::SellToPlayerBids(Cell& c, int64_t t)
@@ -813,10 +902,14 @@ void World::ProducerSupply(Cell& c, int64_t t, double dt, double anchor)
     // capacity:  SupplyFactor x calibrated demand, and enough to refill an empty target in RestockDays
     double cap(std::max(m_p.supplyFactor * c.dc, c.targetStock / std::max(0.1, m_p.restockDays)));
     Units avail((Units)Rng::Poisson(cap * dt, H(c, t, hProduce)));
-    // up to the target stock only
+    // up to the target stock only.  a shelf down to half its target is refilled deterministically within RestockDays (a
+    //  random refill of a thin type, a lot or two a day, leaves some shelf somewhere empty for days)
     {
         const Ledger::Stock* s(m_ledger.FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
         double stock((s == nullptr) ? 0.0 : (double)(s->qty + s->reserved));
+        double gap(c.targetStock - stock);
+        if (gap > 0.5 * c.targetStock)
+            avail = std::max<Units>(avail, (Units)std::ceil(gap * std::min(1.0, dt / std::max(0.01, m_p.restockDays))));
         avail = std::min<Units>(avail, std::max<Units>(0, (Units)std::ceil(c.targetStock - stock)));
     }
     if (avail <= 0)
@@ -864,6 +957,14 @@ void World::ProducerSupply(Cell& c, int64_t t, double dt, double anchor)
     // loot is free to its source, which sells it at its floor
     Cents price(loot ? floor : cost);
     Units q(std::min<Units>(avail, need));
+    // the market maker's money may all be in bids:  this cell's bids give theirs back first (re-posted with the quotes)
+    if ((price > 0) and (q > 0) and (wallet < Econ::MulCents(price, q))) {
+        for (int i = 0; i < MaxLevels; ++i)
+            if (c.bid[i] != 0)
+                CancelOrderNow(c.bid[i]);
+        a = m_ledger.FindAcct(c.mm);
+        wallet = (a == nullptr) ? 0 : a->wallet;
+    }
     if ((price > 0) and (q > 0))
         q = std::min<Units>(q, wallet / price);
     if (q <= 0)
@@ -1439,11 +1540,16 @@ void World::Daily(int64_t t)
 
     // the money controller
     Cents money(m_ledger.Money());
+    /* with the actors most of what consumers spend comes back to them (the miners' and manufacturers' profits are the
+     *  same pilots' wages):  income only has to make up the sinks (fees, taxes, upkeep, lines, the stock model's
+     *  production), a fraction of the spending.  the controller may go that low, and its integral far enough to get
+     *  there (the plan's [0.5, 2] and the phase 2 integral bound fit a stock model that sinks its production cost) */
+    double lo(m_p.actors ? m_p.controllerMinFactor : 0.5), bound(m_p.actors ? 200.0 : 20.0);
     if ((money > 0) and (m_moneyTarget > 0.0)) {
         m_integral += std::log(m_moneyTarget / (double)money);
-        m_integral = std::min(20.0, std::max(-20.0, m_integral));
+        m_integral = std::min(bound, std::max(-bound, m_integral));
     }
-    m_incomeFactor = Econ::ControllerFactor((double)money, m_moneyTarget, m_integral, m_p.controllerKp, m_p.controllerKi);
+    m_incomeFactor = Econ::ControllerFactor((double)money, m_moneyTarget, m_integral, m_p.controllerKp, m_p.controllerKi, lo, 2.0);
 
     // the price index:  Laspeyres over the top-500 isk basket, against the reference prices
     std::vector<std::pair<double, uint32_t>> basket;
@@ -1476,11 +1582,12 @@ void World::Daily(int64_t t)
     m_auditLines.push_back(AuditLine{r.day, "cells.clamped", (int64_t)clamped});
     m_auditLines.push_back(AuditLine{r.day, "orders.live", (int64_t)m_orders.size()});
     m_auditLines.push_back(AuditLine{r.day, "ledger.violations", (int64_t)m_ledger.Violations()});
+    m_auditLines.push_back(AuditLine{r.day, "jobs.live", (int64_t)m_jobs.size()});
 
     // overhead, then profits beyond what an actor needs go back to its region's consumers (a transfer), and a market
     //  maker short of money is topped up from them
     for (auto& a : m_actors) {
-        if ((a.kind != ActorKind::MarketMaker) and (a.kind != ActorKind::Producer))
+        if ((a.kind != ActorKind::MarketMaker) and (a.kind != ActorKind::Producer) and (a.kind < ActorKind::Miner))
             continue;
         const Ledger::Account* acct(m_ledger.FindAcct(a.actorID));
         if (acct == nullptr)
@@ -1504,9 +1611,56 @@ void World::Daily(int64_t t)
             Cents excess(std::min(wallet - keep / 5, money2 - keep));
             if (excess > 0)
                 m_ledger.Transfer(a.actorID, consumer, excess);
-        } else if ((a.kind == ActorKind::MarketMaker) and (money2 < keep / 4)) {
+        } else if (((a.kind == ActorKind::MarketMaker) or (a.kind >= ActorKind::Miner)) and (a.state == 0)
+               and (money2 < (m_p.actors ? (keep / 4) * 3 : keep / 4))) {
+            /* short of money (PLAN 6.4 bankruptcy):  topped up from the region's consumers, a bounded transfer.  with
+             *  the actors every supplier is kept near its working money (to it, at most a quarter of the consumers'
+             *  money a day), so the money the controller meters is where the trade needs it, not with the consumers */
             Cents cwallet(m_ledger.FindAcct(consumer) ? m_ledger.FindAcct(consumer)->wallet : 0);
-            m_ledger.Transfer(consumer, a.actorID, std::min(cwallet / 4, keep / 2 - money2));
+            m_ledger.Transfer(consumer, a.actorID, std::min(cwallet / 4, m_p.actors ? keep - money2 : keep / 2 - money2));
+        }
+    }
+
+    /* the consumers are one population of pilots in several regions:  their money spreads back over the regions in
+     *  proportion to their targets (transfers).  otherwise a region whose trade brings money in (players buying at
+     *  the busiest hub) hoards it while the controller cuts everyone's income, and the small regions starve */
+    if (m_p.actors) {
+        std::vector<uint32_t> consumers;
+        double pool(0.0), targets(0.0);
+        for (auto& a : m_actors) {
+            if ((a.kind != ActorKind::Consumer) or !(a.target > 0.0))
+                continue;
+            const Ledger::Account* acct(m_ledger.FindAcct(a.actorID));
+            consumers.push_back(a.actorID);
+            pool += (acct == nullptr) ? 0.0 : (double)acct->wallet;
+            targets += a.target;
+        }
+        if ((consumers.size() > 1) and (targets > 0.0)) {
+            // what each has over its share goes to those under theirs, in actor order
+            std::vector<std::pair<uint32_t, Cents>> over, under;
+            for (auto id : consumers) {
+                const Ledger::Account* acct(m_ledger.FindAcct(id));
+                Cents have((acct == nullptr) ? 0 : acct->wallet);
+                Cents share((Cents)(pool * m_actors[id - 1].target / targets));
+                if (have > share)
+                    over.push_back(std::make_pair(id, have - share));
+                else if (have < share)
+                    under.push_back(std::make_pair(id, share - have));
+            }
+            size_t o(0);
+            for (auto& u : under) {
+                while ((u.second > 0) and (o < over.size())) {
+                    Cents move(std::min(u.second, over[o].second));
+                    if (m_ledger.Transfer(over[o].first, u.first, move)) {
+                        u.second -= move;
+                        over[o].second -= move;
+                    } else {
+                        over[o].second = 0;
+                    }
+                    if (over[o].second <= 0)
+                        ++o;
+                }
+            }
         }
     }
 
@@ -1534,6 +1688,7 @@ void World::Daily(int64_t t)
         rep.incomeToday = (Cents)std::llround((double)m_income0 * m_incomeFactor);
         rep.liveOrders = (uint32_t)m_orders.size();
         rep.clampedCells = clamped;
+        rep.liveJobs = (uint32_t)m_jobs.size();
         m_onDay(rep);
     }
     if (m_p.pauseOnAuditResidual and ((r.iskResidual != 0) or (r.goodsResidualTypes != 0)))
@@ -1551,6 +1706,9 @@ void World::Hourly(int64_t t)
         for (auto& a : m_actors)
             if (a.kind == ActorKind::Consumer)
                 m_ledger.Faucet(a.actorID, (Cents)std::llround(amount * a.share), Isk::Income);
+        // the ships consumers lost in those hours
+        if (m_p.actors)
+            LossEvents(t, hours);
     }
     // npc vendors restock (PLAN 6.4)
     for (uint32_t i = 0; i < m_vendorSlots.size(); ++i) {
@@ -1749,6 +1907,21 @@ std::string World::Status(int64_t now) const
     out << Fmt("Cell visits %llu, trades with players %llu, backlog %llus, ledger violations %llu.\n",
                (unsigned long long)m_cellVisits, (unsigned long long)m_playerTrades, (unsigned long long)Backlog(now),
                (unsigned long long)m_ledger.Violations());
+    if (m_p.actors) {
+        std::map<uint8_t, uint32_t> kinds;
+        for (auto& a : m_actors)
+            if (a.state == 0)
+                ++kinds[a.kind];
+        double lossShock(LossShockOf(0, now));
+        uint32_t hullShocks(0);
+        for (auto& cur : m_lossShock)
+            if ((cur.first != 0) and (cur.second.second > now))
+                ++hullShocks;
+        out << Fmt("Phase 3:  %u miners, %u reprocessors, %u manufacturers (%u jobs running), %u loot sources;  mining x%.2f%s, losses x%.2f%s.\n",
+                   kinds[ActorKind::Miner], kinds[ActorKind::Reprocessor], kinds[ActorKind::Manufacturer], (uint32_t)m_jobs.size(),
+                   kinds[ActorKind::LootSource], MiningShockOf(now), (MiningShockOf(now) != 1.0) ? " (shocked)" : "", lossShock,
+                   hullShocks ? Fmt(", %u hulls shocked", hullShocks).c_str() : "");
+    }
     for (auto& line : m_auditLines)
         if ((line.category.compare(0, 9, "residual.") == 0) or (line.category == "priceIndex.ppm"))
             out << Fmt("  day %d %s = %lld\n", line.day, line.category.c_str(), (long long)line.amount);
@@ -1790,11 +1963,53 @@ std::string World::ActorInfo(uint32_t actorID) const
         return Fmt("no actor %u.", actorID);
     const Actor& a(m_actors[actorID - 1]);
     const Ledger::Account* acct(m_ledger.FindAcct(actorID));
-    static const char* kinds[] = {"?", "market maker", "producer", "consumer", "vendor"};
     std::ostringstream out;
-    out << Fmt("actor %u, %s (sector/class %u), corp %u, region %u, node %u.  wallet %.2f, reserved %.2f, target %.2f\n",
-               a.actorID, kinds[a.kind <= 4 ? a.kind : 0], a.sector, a.ownerCorpID, a.regionID, a.nodeID,
+    out << Fmt("actor %u, %s (sector/class %u), corp %u, region %u, node %u%s.  wallet %.2f, reserved %.2f, target %.2f\n",
+               a.actorID, ActorKind::Name(a.kind), a.sector, a.ownerCorpID, a.regionID, a.nodeID, (a.state != 0) ? ", retired" : "",
                acct ? Econ::ToIsk(acct->wallet) : 0.0, acct ? Econ::ToIsk(acct->reserved) : 0.0, a.target / 100.0);
+    if (a.kind == ActorKind::Miner) {
+        std::map<uint32_t, MinerPlan>::const_iterator itr = m_minerPlans.find(actorID);
+        if (itr != m_minerPlans.end()) {
+            out << Fmt("  fleet (reference %.0f m3/day, %u ores):", a.capacity, (uint32_t)itr->second.ores.size());
+            for (auto& h : itr->second.fleet)
+                out << Fmt("  type %u %lld of %.0f", h.first, (long long)Held(actorID, a.nodeID, h.first), h.second);
+            out << Fmt(";  %.2f%% of hulls lost a day.  To buy:", 100.0 * itr->second.lossPerHullDay);
+            for (auto& n : itr->second.needs)
+                if (n.second > 0)
+                    out << Fmt("  %u x%lld", n.first, (long long)n.second);
+            const MinerPlan& plan(itr->second);
+            double ref(0.0);
+            for (auto m : plan.mix)
+                ref += m;
+            out << Fmt("\n  last step:  the minerals' needs asked for %.0f m3/day (reference %.0f), the fleet's %.0f m3/day did %.0f",
+                       plan.lastWanted, ref, plan.lastCapacity, plan.lastMined);
+            out << "\n  ores (m3/day at reference, mined now x):";
+            for (size_t o = 0; o < plan.ores.size(); ++o) {
+                if (!(plan.mix[o] > 0.01 * ref) or (o >= plan.lastRel.size()))
+                    continue;
+                out << Fmt("  %u %.0f x%.2f", m_cells[plan.ores[o]].typeID, plan.mix[o], plan.lastRel[o]);
+            }
+            out << "\n  minerals a day (needed / the reference mix gives / mined since the start):";
+            double days(std::max(1.0 / 24.0, (double)(a.lastStep - plan.since) / (double)SecondsPerDay));
+            for (size_t m = 0; m < plan.outputs.size(); ++m) {
+                double got(0.0);
+                for (size_t o = 0; (o < plan.ores.size()) and (o < plan.mined.size()); ++o)
+                    got += plan.yield[o][m] * plan.mined[o];
+                out << Fmt("  %u %.4g/%.4g/%.4g (now %.4g)", m_cells[plan.outputs[m]].typeID, plan.need[m], plan.supply[m], (plan.since > 0) ? got / days : 0.0, (m < plan.lastNeed.size()) ? plan.lastNeed[m] : 0.0);
+            }
+            out << "\n";
+        }
+    } else if (a.kind == ActorKind::Manufacturer) {
+        out << Fmt("  lines %u (%u free), %u products\n", m_capacity->Slots(actorID), m_capacity->Free(actorID, a.nodeID, Activity::Manufacturing, 0),
+                   (m_makerPlans.count(actorID) > 0) ? (uint32_t)m_makerPlans.at(actorID).products.size() : 0);
+        if (m_makerPlans.count(actorID) > 0) {
+            out << "  inputs used since the start:";
+            for (auto& u : m_makerPlans.at(actorID).used)
+                out << Fmt("  %u x%lld", u.first, (long long)u.second);
+            out << "\n";
+        }
+        out << JobList(actorID);
+    }
     std::vector<std::pair<double, Ledger::StockKey>> top;
     for (auto& cur : m_ledger.Stocks()) {
         if (Ledger::KeyActor(cur.first) != actorID)
@@ -1821,8 +2036,9 @@ std::string World::ActorList(int kind) const
         if ((kind > 0) and (a.kind != kind))
             continue;
         const Ledger::Account* acct(m_ledger.FindAcct(a.actorID));
-        out << Fmt("%u kind %u sector %u corp %u node %u:  %.0f ISK (%.0f reserved)\n", a.actorID, a.kind, a.sector,
-                   a.ownerCorpID, a.nodeID, acct ? Econ::ToIsk(acct->wallet) : 0.0, acct ? Econ::ToIsk(acct->reserved) : 0.0);
+        out << Fmt("%u %s (kind %u) sector %u corp %u node %u:  %.0f ISK (%.0f reserved, target %.0f)%s\n", a.actorID, ActorKind::Name(a.kind),
+                   a.kind, a.sector, a.ownerCorpID, a.nodeID, acct ? Econ::ToIsk(acct->wallet) : 0.0, acct ? Econ::ToIsk(acct->reserved) : 0.0,
+                   a.target / 100.0, (a.state != 0) ? " retired" : "");
     }
     return out.str();
 }

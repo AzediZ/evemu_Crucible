@@ -11,6 +11,7 @@
 #ifndef _EVE_SERVER_MARKET_SIM_DB_H__
 #define _EVE_SERVER_MARKET_SIM_DB_H__
 
+#include <array>
 #include <map>
 #include <set>
 #include <string>
@@ -48,7 +49,7 @@ public:
     static void LoadActors(std::vector<ActorRow>& into);
     struct StockRow { uint32 actorID, nodeID; uint16 typeID; int64 qty, reserved; };
     static void LoadInventory(std::vector<StockRow>& into);
-    struct CellRow { uint32 nodeID; uint16 typeID; double lnV, lnAnchor, dBar, targetStock, lastClear; int64 lastTime, nextDue; uint32 flags; uint16 clampDays; };
+    struct CellRow { uint32 nodeID; uint16 typeID; double lnV, lnAnchor, dBar, targetStock, lastClear; int64 lastTime, nextDue; uint32 flags; uint16 clampDays; double lossWant; };
     static void LoadCells(std::vector<CellRow>& into);
     struct OrderRow { uint32 orderID, actorID, nodeID; uint16 typeID; bool bid; uint8 level; bool live; uint32 stationID, regionID, qty; int64 priceCents, issued; };
     static void LoadOrders(std::vector<OrderRow>& into);
@@ -80,6 +81,18 @@ public:
     // npc orders nothing backs (the old seed scripts, Trader Joe):  not players', not the sim's
     static uint32 CountLegacyOrders();
     static uint32 PurgeLegacyOrders(std::set<std::pair<uint32, uint16>>& touched);
+
+    /* phase 3:  the actors */
+    // killmail losses and fits (mktCalLoss, mktCalFit), blueprint times (invBlueprintTypes) and the nodes' refineries
+    //  (staStations).  after LoadCalibration
+    static void LoadIndustry(MktSim::StaticData& data);
+    // per npc corp:  the blueprints it sells of ships, of modules/charges/drones, of mining gear (crpNPCCorporationTrades);
+    //  per (region, corp):  its stations with a full refinery.  for choosing the corps the actors trade as
+    static void LoadActorCorpData(std::map<uint32, std::array<uint32, 3>>& blueprints, std::map<std::pair<uint32, uint32>, uint32>& refineries);
+    struct JobRow { uint32 jobID, actorID; uint8 kind; uint32 lineID, stationID; uint16 typeID; uint32 runs; int64 qtyOut, start, end; };
+    static void LoadJobs(std::vector<JobRow>& into);
+    // mktSimJob, rewritten when the jobs changed (inside Flush's transaction)
+    static bool FlushJobs(MktSim::World& world);
 
     /* history */
     static bool HasHistoryBefore(uint32 regionID, uint16 typeID, int64 fileTime);

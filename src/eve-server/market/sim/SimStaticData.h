@@ -14,8 +14,10 @@
 #ifndef _EVE_SERVER_MARKET_SIM_STATIC_DATA_H__
 #define _EVE_SERVER_MARKET_SIM_STATIC_DATA_H__
 
+#include <array>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -71,7 +73,30 @@ namespace MktSim {
         std::vector<std::pair<uint16_t, double>> bom;
         // per unit refined:  perfect yield outputs (invTypeMaterials / portionSize)
         std::vector<std::pair<uint16_t, double>> refine;
+        // manufacturing:  the blueprint's productionTime per run (one run makes portionSize units).  0 = unknown
+        double   buildSeconds   = 0.0;
     };
+
+    // a ship lost:  what was fitted to it (mktCalFit), per loss
+    struct FitItem {
+        uint16_t typeID;
+        float    qtyPerLoss;
+        float    destroyedShare;            // the rest drops (loot)
+    };
+
+    // mktCalLoss.secBand
+    namespace SecBand {
+        enum : uint8_t { High = 0, Low = 1, Null = 2, WSpace = 3, Count = 4 };
+    }
+
+    // invGroups the actors care about
+    namespace Group {
+        enum : uint16_t {
+            MiningBarge     = 463,
+            Exhumer         = 543,
+            Ice             = 465
+        };
+    }
 
     // mktCalGroup.  NaN = not set (the plan's default is used)
     struct GroupCal {
@@ -106,6 +131,11 @@ namespace MktSim {
         std::map<std::pair<uint32_t, uint8_t>, uint32_t>    mmCorp;         // (nodeID, Sector)
         std::map<std::pair<uint32_t, uint8_t>, uint32_t>    producerCorp;   // (nodeID, SimClass)
         std::map<uint32_t, uint32_t>                        stationOwner;   // node stationID -> owner corp
+        // the npc corp of a node's phase 3 actors (ActorKind, sector).  missing:  the market maker's of the matching sector
+        std::map<std::tuple<uint32_t, uint8_t, uint8_t>, uint32_t> actorCorp;  // (nodeID, kind, sector)
+        // killmails (PLAN 4.2):  public losses per day by security band, and the fits lost with them
+        std::map<uint16_t, std::array<float, SecBand::Count>> losses;      // hullTypeID -> losses per day
+        std::map<uint16_t, std::vector<FitItem>>            fits;           // hullTypeID -> fit
 
         const TypeData* Type(uint16_t typeID) const;
         const GroupCal* Group(uint16_t groupID) const;
@@ -125,6 +155,16 @@ namespace MktSim {
         static uint8_t SectorOf(const TypeData& t);
         uint32_t MarketMakerCorp(uint32_t nodeID, uint8_t sector) const;
         uint32_t ProducerCorp(uint32_t nodeID, uint8_t simClass) const;
+        uint32_t ActorCorp(uint32_t nodeID, uint8_t kind, uint8_t sector) const;
+
+        // a hull the miners fly (their losses are the mining consortia's, not the consumers')
+        static bool IsMiningHull(const TypeData& t)     { return (t.categoryID == Category::Ship) and ((t.groupID == Group::MiningBarge) or (t.groupID == Group::Exhumer)); }
+        // ore and ice as they come out of a belt:  ore refines in batches (compressed ore, which is made, not mined,
+        //  refines per unit)
+        static bool IsMineable(const TypeData& t)       { return (t.simClass == SimClass::Mined) and !t.refine.empty() and (t.volume > 0.0)
+                                                                   and ((t.groupID == Group::Ice) or (t.portionSize >= 100)); }
+        // public losses per day over all bands
+        float LossesPerDay(uint16_t hullTypeID) const;
 
         // problems a loader should report (refPrice <= 0 and the like).  returns the number found
         size_t Validate(std::vector<std::string>& problems) const;

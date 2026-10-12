@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <sstream>
 
 #include "Client.h"
@@ -127,6 +128,19 @@ void MarketSimMgr::ReadParams()
     p.vendorStock = std::max<uint32>(1, c.VendorStock);
     p.maxCatchUpHours = (int)c.MaxCatchUpHours;
     p.pauseOnAuditResidual = c.PauseOnAuditResidual;
+    // phase 3
+    p.actors = c.Actors;
+    p.killmailCoverage = c.KillmailCoverage;
+    p.podLossRate = c.PodLossRate;
+    p.internalSpreadShare = c.InternalSpreadShare;
+    p.minMargin = c.MinMargin;
+    p.productionSlack = std::max(0.0, c.ProductionSlack);
+    p.miningSlack = std::max(0.0, c.MiningSlack);
+    p.miningM3PerHullDay = c.MiningM3PerHullDay;
+    p.maxJobHours = std::max(1.0, c.MaxSimJobHours);
+    p.lineInstallCost = c.LineInstallCost;
+    p.lineCostPerHour = c.LineCostPerHour;
+    p.buildTimeMultiplier = 0.8 * sConfig.ram.ProdTime;     // Industry V, and the server's manufacturing time multiplier
     m_params = p;
 }
 
@@ -185,6 +199,7 @@ bool MarketSimMgr::LoadStatic(std::string& why)
         return false;
     }
     MarketSimDB::LoadMaterials(m_static);
+    MarketSimDB::LoadIndustry(m_static);
     MarketSimDB::LoadVendorOffers(m_static, sConfig.marketSim.VendorStations, m_hubs);
     PickCorps();
 
@@ -222,6 +237,51 @@ void MarketSimMgr::PickCorps()
             }
             m_static.mmCorp[std::make_pair(node.nodeID, sector)] = (best != 0) ? best : owner;
         }
+    }
+
+    /* the phase 3 actors' corps (PLAN 6.4), of the node station's faction:  the ships' manufacturer sells the most ship
+     *  blueprints, the goods' manufacturer the most module/charge/drone blueprints (another corp where there is one), the
+     *  miner the most mining gear blueprints (the most specialised), the reprocessor owns the most full refineries in the
+     *  node's region.  a node whose faction has none of them keeps its market makers' corps */
+    std::map<uint32, std::array<uint32, 3>> blueprints;
+    std::map<std::pair<uint32, uint32>, uint32> refineries;
+    MarketSimDB::LoadActorCorpData(blueprints, refineries);
+    for (auto& node : m_static.nodes) {
+        if (node.factionID == 0)
+            continue;
+        auto best = [&](std::function<double(uint32)> score, uint32 skip) -> uint32 {
+            uint32 pick(0);
+            double top(0.0);
+            for (auto& cur : faction) {
+                if ((cur.second != node.factionID) or (cur.first == skip))
+                    continue;
+                double s(score(cur.first));
+                if (s > top) {
+                    top = s;
+                    pick = cur.first;
+                }
+            }
+            return pick;
+        };
+        auto bp = [&](uint32 corp, int i) -> double {
+            std::map<uint32, std::array<uint32, 3>>::const_iterator itr = blueprints.find(corp);
+            return (itr == blueprints.end()) ? 0.0 : (double)itr->second[i];
+        };
+        uint32 ships(best([&](uint32 corp) { return bp(corp, 0); }, 0));
+        uint32 goods(best([&](uint32 corp) { return bp(corp, 1); }, ships));
+        uint32 miner(best([&](uint32 corp) { return bp(corp, 2) - 0.01 * bp(corp, 1); }, 0));
+        uint32 refiner(best([&](uint32 corp) {
+            std::map<std::pair<uint32, uint32>, uint32>::const_iterator itr = refineries.find(std::make_pair(node.regionID, corp));
+            return (itr == refineries.end()) ? 0.0 : (double)itr->second;
+        }, miner));
+        if (ships != 0)
+            m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Manufacturer, (uint8)Sector::Ships)] = ships;
+        if ((goods != 0) or (ships != 0))
+            m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Manufacturer, (uint8)Sector::Goods)] = (goods != 0) ? goods : ships;
+        if (miner != 0)
+            m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Miner, (uint8)0)] = miner;
+        if ((refiner != 0) or (miner != 0))
+            m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Reprocessor, (uint8)0)] = (refiner != 0) ? refiner : miner;
     }
 }
 
@@ -377,6 +437,7 @@ bool MarketSimMgr::LoadSaved(int64 now)
         c->nextDue = r.nextDue;
         c->flags = (c->flags & CellFlag::Hot) | (r.flags & (CellFlag::Backfilled | CellFlag::Clamped));
         c->clampDays = r.clampDays;
+        c->lossWant = r.lossWant;
     }
     // cells that are new (the calibration grew) start fresh, with their stock
     std::vector<uint32> fresh;
@@ -400,7 +461,42 @@ bool MarketSimMgr::LoadSaved(int64 now)
                 c->shockUntil = until;
             }
         }
+        // phase 3:  ship losses and mining shocks
+        unsigned hull(0);
+        double mult(1.0);
+        long long until(0);
+        if ((std::sscanf(cur.first.c_str(), "shock:loss:%u", &hull) == 1) and (std::sscanf(cur.second.c_str(), "%lf,%lld", &mult, &until) == 2))
+            m_world->LossShocks()[(uint16)hull] = std::make_pair(mult, (int64)until);
+        else if ((cur.first == "shock:mining") and (std::sscanf(cur.second.c_str(), "%lf,%lld", &mult, &until) == 2))
+            m_world->MiningShock() = std::make_pair(mult, (int64)until);
     }
+
+    // the manufacturers' jobs (their inputs were used when they started;  the output comes when they end)
+    m_world->SetNextJobID((uint32)std::strtoul(state["nextJobID"].c_str(), nullptr, 10));
+    std::vector<MarketSimDB::JobRow> jobs;
+    MarketSimDB::LoadJobs(jobs);
+    uint32 jobsLoaded(0);
+    for (auto& r : jobs) {
+        SimJob j;
+        j.jobID = r.jobID;
+        j.actorID = actor(r.actorID);
+        j.activity = r.kind;
+        j.lineID = r.lineID;
+        j.typeID = r.typeID;
+        j.runs = r.runs;
+        j.qtyOut = r.qtyOut;
+        j.start = r.start;
+        j.end = r.end;
+        j.stationID = r.stationID;
+        for (auto& n : m_static.nodes)
+            if (n.stationID == r.stationID)
+                j.nodeID = n.nodeID;
+        if (m_world->LoadJob(j))
+            ++jobsLoaded;
+        else
+            _log(MARKET__SIM, "Market sim:  job %u (actor %u, type %u) has no manufacturer or node any more.  Dropped.", r.jobID, r.actorID, r.typeID);
+    }
+    m_world->MarkJobsChanged();
 
     // the orders:  gone ones are forgotten, those of cells that left are cancelled, the rest are the world's again
     std::vector<MarketSimDB::OrderRow> orders;
@@ -493,8 +589,8 @@ bool MarketSimMgr::LoadSaved(int64 now)
     m_world->Seed(now, 0, true);
     m_world->GetLedger().MarkAllDirty();
     m_world->MarkAllCellsChanged();
-    sLog.Green("    MarketSimMgr", "Market sim loaded:  %u cells (%u new), %u actors, %u orders (%u filled or gone while down, %u dropped).  %s.",
-               (uint32)m_world->Cells().size(), (uint32)fresh.size(), (uint32)m_world->Actors().size(), loaded, gone, dropped, rec.c_str());
+    sLog.Green("    MarketSimMgr", "Market sim loaded:  %u cells (%u new), %u actors, %u orders (%u filled or gone while down, %u dropped), %u jobs.  %s.",
+               (uint32)m_world->Cells().size(), (uint32)fresh.size(), (uint32)m_world->Actors().size(), loaded, gone, dropped, jobsLoaded, rec.c_str());
     return true;
 }
 
@@ -517,6 +613,13 @@ std::map<std::string, std::string> MarketSimMgr::StateMap() const
         if (c.shockUntil > Now())
             s[Fmt("shock:%u:%u", c.nodeID, c.typeID)] = Fmt("%.9g,%lld", c.shockMult, (long long)c.shockUntil);
     }
+    // phase 3
+    s["nextJobID"] = std::to_string(m_world->NextJobID());
+    for (auto& cur : m_world->LossShocks())
+        if (cur.second.second > Now())
+            s[Fmt("shock:loss:%u", cur.first)] = Fmt("%.9g,%lld", cur.second.first, (long long)cur.second.second);
+    if (m_world->MiningShock().second > Now())
+        s["shock:mining"] = Fmt("%.9g,%lld", m_world->MiningShock().first, (long long)m_world->MiningShock().second);
     return s;
 }
 
@@ -541,6 +644,7 @@ void MarketSimMgr::Flush()
         sLog.Error("    MarketSimMgr", "Market sim:  writing its state failed.  It is kept in memory and written again.");
         m_world->MarkAllCellsChanged();
         m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
+        m_world->MarkJobsChanged();
         return;
     }
     m_pendingAudit.clear();
@@ -719,7 +823,8 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
 {
     std::string sub((args.argCount() > 1) ? args.arg(1) : "status");
     std::string usage("usage: /mktsim status | pause | resume | cell <typeID> [stationID] | actor <actorID> | actors [kind] |"
-                      " anchor <typeID> <price> [regionID] | shock <typeID|g:groupID|c:categoryID> <demandMult> <days> |"
+                      " jobs [actorID] | anchor <typeID> <price> [regionID] |"
+                      " shock <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0> <mult> <days> |"
                       " requote <typeID|all> | seed [stationID] | audit [days] | step <ticks> | purge | purgelegacy | export <file>");
     if (sub == "purgelegacy") {
         std::set<std::pair<uint32, uint16>> touched;
@@ -754,8 +859,24 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
             return usage;
         return m_world->ActorInfo((uint32)std::strtoul(args.arg(2).c_str(), nullptr, 10));
     }
-    if (sub == "actors")
-        return m_world->ActorList((args.argCount() > 2) ? std::atoi(args.arg(2).c_str()) : 0);
+    if (sub == "actors") {
+        // a kind by number or name (market maker 1, producer 2, consumer 3, vendor 4, miner 5, reprocessor 6,
+        //  manufacturer 7, loot 8)
+        int kind(0);
+        if (args.argCount() > 2) {
+            std::string k(args.arg(2));
+            kind = std::atoi(k.c_str());
+            for (uint8 i = 1; (kind == 0) and (i < ActorKind::Count); ++i)
+                if (std::string(ActorKind::Name(i)).compare(0, k.size(), k) == 0)
+                    kind = i;
+        }
+        return m_world->ActorList(kind);
+    }
+    if (sub == "jobs") {
+        uint32 actorID((args.argCount() > 2) ? (uint32)std::strtoul(args.arg(2).c_str(), nullptr, 10) : 0);
+        std::string list(m_world->JobList(actorID));
+        return Fmt("%u sim jobs running.\n", (uint32)m_world->Jobs().size()) + list;
+    }
     if (sub == "anchor") {
         if ((args.argCount() < 4) or !args.isNumber(2))
             return usage;
@@ -779,6 +900,17 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
         }
         uint32 id((uint32)std::strtoul(what.c_str(), nullptr, 10));
         double mult(std::strtod(args.arg(3).c_str(), nullptr)), days(std::strtod(args.arg(4).c_str(), nullptr));
+        // phase 3:  ship losses (l:<hullTypeID>, l:0 every hull) and the miners' fleets (m:0)
+        if (((kind == 'l') or (kind == 'm')) and (mult >= 0.0) and (days > 0.0)) {
+            if (kind == 'l')
+                m_world->ShockLosses((uint16)id, mult, days, now);
+            else
+                m_world->ShockMining(mult, days, now);
+            m_pendingAudit.push_back(AuditLine{DayOf(now), Fmt("gm.shock.%c%u.by%u", kind, id, who->GetCharacterID()), (int64)std::llround(mult * 1e6)});
+            _log(MARKET__SIM, "Market sim:  %s set %s x%.3f for %.1f days.", who->GetName(), (kind == 'l') ? "ship losses" : "mining", mult, days);
+            Flush();
+            return Fmt("%s x%.3f for %.1f days.", (kind == 'm') ? "Mining" : (id ? Fmt("Losses of type %u", id).c_str() : "Every hull's losses"), mult, days);
+        }
         if ((id == 0) or !(mult > 0.0) or !(days > 0.0) or ((kind != 't') and (kind != 'g') and (kind != 'c')))
             return usage;
         uint32 n(m_world->Shock(kind, id, mult, days, now));
