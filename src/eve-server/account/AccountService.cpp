@@ -148,6 +148,11 @@ void AccountService::ChargeCSPA(Client* pSender, std::vector<uint32>& recipients
                 .AddISK ("totalCostISK", total)
                 .AddISK ("approvedCostISK", approved);
     }
+    // all or nothing:  charging recipient by recipient would stop part way with some of them paid
+    if (pSender->GetBalance() < total)
+        throw UserError ("NotEnoughMoney")
+                .AddISK ("amount", total)
+                .AddISK ("balance", pSender->GetBalance());
 
     // one journal entry per charged recipient (refCSPA names the character contacted)
     uint32 senderID(pSender->GetCharacterID());

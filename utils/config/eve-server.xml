@@ -37,8 +37,11 @@ boolean can use either 0/1 OR true/false.
 
         <!-- redeem window: items in accRedeemTokens (GM /token) can be claimed into a station hangar -->
         <redeemEnabled>true</redeemEnabled>
-        <!-- comma separated typeIDs that may be put back into the redeem list from a station hangar (empty = none, Crucible) -->
-        <reverseRedeemTypes></reverseRedeemTypes>
+        <!-- comma separated typeIDs that may be put back into the redeem list from a station hangar (unset = none, Crucible).
+             an empty element is a parse error, so leave it commented out for none -->
+        <!--
+        <reverseRedeemTypes>29668</reverseRedeemTypes>
+        -->
         <!-- CONCORD Spam Prevention Act: contacting (mail, chat/calendar/fleet invites, contact notifications) a
              character who isn't on your contact list costs the ISK they set in the mail settings, paid to CONCORD.
              false = no charges (blocking and "only my contacts" still apply) -->

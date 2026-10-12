@@ -111,7 +111,7 @@ uint32 FittingDB::SaveFitting(uint32 ownerID, const FittingData& data)
     uint32 fittingID(0);
     if (!sDatabase.RunQueryLID(err, fittingID,
         "INSERT INTO chrFittings (ownerID, name, description, shipTypeID, savedDate)"
-        " VALUES (%u, '%s', '%s', %u, %lli)", ownerID, name.c_str(), desc.c_str(), data.shipTypeID, GetFileTimeNow())) {
+        " VALUES (%u, '%s', '%s', %u, %lli)", ownerID, name.c_str(), desc.c_str(), data.shipTypeID, (int64)GetFileTimeNow())) {
         codelog(DATABASE__ERROR, "Error in SaveFitting query: %s", err.c_str());
         return 0;
     }
@@ -196,9 +196,10 @@ void FittingDB::Decode(PyRep* rep, FittingData& into)
     PyRep* ship = dict->GetItemString("shipTypeID");
     into.shipTypeID = ((ship == nullptr) or ship->IsNone()) ? 0 : PyRep::IntegerValueU32(ship);
     const ItemType* type(into.shipTypeID ? sItemFactory.GetType(into.shipTypeID) : nullptr);
+    // the client's VerifyFitting passes the ship's typeID as typeName here (and typeID for the modules below)
     if (type == nullptr)
         throw UserError ("InvalidFittingDataTypeID")
-                .AddFormatValue ("typeID", new PyInt(into.shipTypeID));
+                .AddFormatValue ("typeName", new PyInt(into.shipTypeID));
     if (type->categoryID() != EVEDB::invCategories::Ship)
         throw UserError ("InvalidFittingDataShipNotShip")
                 .AddFormatValue ("typeName", new PyString(type->name()));
