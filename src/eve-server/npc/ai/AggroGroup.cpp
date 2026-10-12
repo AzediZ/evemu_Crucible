@@ -10,6 +10,8 @@
 #include "npc/Drone.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "npc/ai/AggroGroup.h"
 
 AggroGroup::AggroGroup(uint64_t key, uint8 mode, uint32 aggroRange, uint64_t linkKey, uint64_t roomKey)
@@ -41,6 +43,21 @@ void AggroGroup::Remove(NPC* pNPC)
     auto itr = std::find(m_members.begin(), m_members.end(), pNPC);
     if (itr != m_members.end())
         m_members.erase(itr);
+}
+
+void AggroGroup::AddSentry(Sentry* pSentry)
+{
+    if (pSentry == nullptr)
+        return;
+    if (std::find(m_sentries.begin(), m_sentries.end(), pSentry) == m_sentries.end())
+        m_sentries.push_back(pSentry);
+}
+
+void AggroGroup::RemoveSentry(Sentry* pSentry)
+{
+    auto itr = std::find(m_sentries.begin(), m_sentries.end(), pSentry);
+    if (itr != m_sentries.end())
+        m_sentries.erase(itr);
 }
 
 uint32 AggroGroup::GetCharID(SystemEntity* pSE)
@@ -79,7 +96,7 @@ bool AggroGroup::IsAggressor(SystemEntity* pSE, int64 now) const
     return false;
 }
 
-void AggroGroup::Alert(NPC* pSource, SystemEntity* pAggressor)
+void AggroGroup::Alert(SystemEntity* pSource, SystemEntity* pAggressor)
 {
     if (pAggressor == nullptr)
         return;
@@ -100,6 +117,13 @@ void AggroGroup::Alert(NPC* pSource, SystemEntity* pAggressor)
             continue;
         pNPC->GetAIMgr()->Aggro(pAggressor);
     }
+    // our sentries answer on their next think (SentryAI queues it, never locks from in here)
+    for (size_t i = 0; i < m_sentries.size(); ++i) {
+        Sentry* pSentry(m_sentries[i]);
+        if ((pSentry == pSource) or pSentry->IsDead() or (pSentry->GetAIMgr() == nullptr))
+            continue;
+        pSentry->GetAIMgr()->OnGroupAlert(pAggressor);
+    }
 }
 
 std::string AggroGroup::Describe(int64 now) const
@@ -107,8 +131,10 @@ std::string AggroGroup::Describe(int64 now) const
     std::ostringstream str;
     static const char* kinds[] = { "?", "belt", "dungeon", "room", "gm", "law" };
     uint8 kind(GetKind());
-    str << (kind < 6 ? kinds[kind] : "?") << " " << (m_key & 0x00FFFFFFFFFFFFFFULL) << ", " << m_members.size() << " members, "
-        << (IsPassive() ? "passive" : "proactive");
+    str << (kind < 6 ? kinds[kind] : "?") << " " << (m_key & 0x00FFFFFFFFFFFFFFULL) << ", " << m_members.size() << " members, ";
+    if (!m_sentries.empty())
+        str << m_sentries.size() << " sentries, ";
+    str << (IsPassive() ? "passive" : "proactive");
     if (IsPassive())
         str << " (range " << GetAggroRange() << "m)";
     if (m_linkKey != 0)

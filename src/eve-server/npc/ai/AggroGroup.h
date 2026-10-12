@@ -18,7 +18,12 @@
   *   members hold the group (shared_ptr);  the registry (one per system, in SpawnMgr) only finds it.  a group goes away with
   *   its last member.
   *   phase 3 hooks:  ForEachMember() for the level-one threat share (5.7) and remote-repair reservations (5.9).
-  *   phase 4:  sentries of a room are not members yet (SentryAI), the room rule covers attacks on them.
+  *   sentries (4.11, 6.5):  pirate and deadspace sentries are members too (AddSentry):  a dungeon spawn group's sentries are
+  *   members of its live group, a room's placed sentries of the room's group, a GM /spawn's of its batch.  an alert reaches
+  *   them through SentryAI::OnGroupAlert, and a sentry that is locked, attacked or acquires a target alerts its group.
+  *   ForEachMember() is the npcs only (sentries don't escort, share threat or get repaired).
+  *   law responses (GroupKind::Law):  one group per LawEnforcement response, for its identity (/npcai) and phase 3's member
+  *   walks.  law npcs never alert or join (they answer only to the ship they were sent for, npc/ai/LawBrain.h)
   */
 
 #ifndef _EVE_NPC_AI_AGGROGROUP_H_
@@ -27,6 +32,7 @@
 #include "eve-server.h"
 
 class NPC;
+class Sentry;
 class SystemEntity;
 
 namespace NpcAI {
@@ -65,17 +71,22 @@ public:
 
     void Add(NPC* pNPC);
     void Remove(NPC* pNPC);
+    void AddSentry(Sentry* pSentry);
+    void RemoveSentry(Sentry* pSentry);
+    // npc members
     size_t Size() const                                 { return m_members.size(); }
+    size_t SentryCount() const                          { return m_sentries.size(); }
+    // the npc members (not the sentries)
     template<typename F>
     void ForEachMember(const F& fn) const {
         for (size_t i = 0; i < m_members.size(); ++i)
             fn(m_members[i]);
     }
 
-    /* pAggressor attacked, ewar'd or locked a member, or a member went after it (pSource:  that member, nullptr = the room).
-     *  the group remembers the pilot and every other idle member joins (NPCAIMgr::OnGroupAlert).  linked groups are told
-     *  by the caller (AggroGroupRegistry::AlertLinked) */
-    void Alert(NPC* pSource, SystemEntity* pAggressor);
+    /* pAggressor attacked, ewar'd or locked a member, or a member went after it (pSource:  that member, an npc or a sentry;
+     *  nullptr = the room).  the group remembers the pilot and every other idle member joins (NPCAIMgr::Aggro,
+     *  SentryAI::OnGroupAlert).  linked groups are told by the caller (AggroGroupRegistry::AlertLinked) */
+    void Alert(SystemEntity* pSource, SystemEntity* pAggressor);
     // the pilot behind pSE (ship pilot, drone owner) aggroed us within npc.GroupAggroMemory
     bool IsAggressor(SystemEntity* pSE, int64 now) const;
     void RememberAggressor(SystemEntity* pSE, int64 now);
@@ -93,6 +104,7 @@ private:
     bool m_alerted;
     int64 m_alertedAt;                                  // ms
     std::vector<NPC*> m_members;                        // we do not own these
+    std::vector<Sentry*> m_sentries;                    // nor these
     std::vector<std::pair<uint32, int64>> m_aggressors; // charID -> last aggression (ms)
 };
 

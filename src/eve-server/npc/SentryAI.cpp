@@ -23,14 +23,22 @@
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/NPCEwar.h"
+#include "npc/ai/AggroGroup.h"
 #include "npc/ai/NpcProfile.h"
 #include "npc/ai/SentryBrain.h"
+#include "system/cosmicMgrs/SpawnMgr.h"
 #include "EVEServerConfig.h"
+
+namespace {
+    // linked groups (dunSpawnGroups.aggroLink) are told at most this often per member (ms), as NPCAIMgr does
+    const int64 c_linkAlertMs = 5000;
+}
 
 SentryAI::SentryAI(Sentry* who)
 : m_state(State::Idle),
 m_primaryID(0),
 m_pendingAggroID(0),
+m_lastLinkAlert(0),
 m_npc(who),
 m_ewar(nullptr),
 m_brain(nullptr)
@@ -50,8 +58,75 @@ m_brain(nullptr)
 
 SentryAI::~SentryAI()
 {
+    if (m_group.get() != nullptr)
+        m_group->RemoveSentry(m_npc);
     SafeDelete(m_ewar);
     SafeDelete(m_brain);
+}
+
+void SentryAI::SetGroup(const std::shared_ptr<AggroGroup>& group)
+{
+    if (m_group.get() == group.get())
+        return;
+    if (m_group.get() != nullptr)
+        m_group->RemoveSentry(m_npc);
+    m_group = group;
+    if (m_group.get() != nullptr)
+        m_group->AddSentry(m_npc);
+}
+
+void SentryAI::AlertGroup(SystemEntity* pAggressor)
+{
+    if ((pAggressor == nullptr) or (m_group.get() == nullptr))
+        return;
+    // players' ships and drones only (npcs never fight npcs)
+    if (!pAggressor->IsShipSE() and !pAggressor->IsDroneSE())
+        return;
+    m_group->Alert(m_npc, pAggressor);
+    // groups linked to ours (dunSpawnGroups.aggroLink) aggro with us
+    if (m_group->GetLinkKey() == 0)
+        return;
+    int64 now(Now());
+    if ((now - m_lastLinkAlert) < c_linkAlertMs)
+        return;
+    m_lastLinkAlert = now;
+    SpawnMgr* pSpawnMgr(m_npc->SystemMgr()->GetSpawnMgr());
+    if (pSpawnMgr != nullptr)
+        pSpawnMgr->GetAggroGroups().AlertLinked(m_group.get(), pAggressor);
+}
+
+bool SentryAI::CheckProximity(SentryContext& ctx)
+{
+    // a passive group aggroes on a player ship or drone that comes within its aggroRange of any member (4.3), us included
+    if ((m_group.get() == nullptr) or !m_group->IsPassive() or (m_npc->SysBubble() == nullptr))
+        return false;
+    double range(m_group->GetAggroRange());
+    SystemEntity* pFound(nullptr);
+    double nearest(0.0);
+    m_npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
+        if (cur->IsDead() or (cur->DestinyMgr() == nullptr) or cur->DestinyMgr()->IsCloaked() or cur->DestinyMgr()->IsWarping())
+            return;
+        if (cur->IsShipSE()) {
+            if (!cur->HasPilot() or cur->GetPilot()->InPod() or cur->GetPilot()->IsInvul())
+                return;
+        } else if (!cur->IsDroneSE() or !IsCharacterID(cur->GetSelf()->ownerID())) {
+            return;
+        }
+        double distance(SurfaceDistance(cur));
+        if ((distance > range) or ((pFound != nullptr) and (distance >= nearest)))
+            return;
+        pFound = cur;
+        nearest = distance;
+    });
+    if (pFound == nullptr)
+        return false;
+    _log(NPC__AI_TRACE, "%s(%u): %s(%u) came within %.0fm of my passive group.", m_npc->GetName(), m_npc->GetID(),
+            pFound->GetName(), pFound->GetID(), nearest);
+    AlertGroup(pFound);
+    // our own guns only reach so far
+    if (m_brain->MayShoot(ctx, pFound))
+        Target(pFound);
+    return !IsIdle();
 }
 
 int64 SentryAI::Now()
@@ -75,10 +150,16 @@ SentryContext SentryAI::MakeContext()
     return ctx;
 }
 
-void SentryAI::OnKilled()
+void SentryAI::OnKilled(SystemEntity* pKiller)
 {
     if (m_ewar != nullptr)
         m_ewar->StopAll();
+    // killed in one volley still aggroes our group (a passive one too, 4.3).  then it stops counting us
+    if (m_group.get() != nullptr) {
+        AlertGroup(pKiller);
+        m_group->RemoveSentry(m_npc);
+        m_group.reset();
+    }
 }
 
 void SentryAI::Process() {
@@ -88,7 +169,8 @@ void SentryAI::Process() {
         // gate and station guns never use ewar (their brain says so).  LawEnforcement sets that role after we're made
         m_ewarChecked = true;
         if (sConfig.npc.UseEwar and m_brain->UsesEwar()) {
-            m_ewar = new NPCEwar(m_npc);
+            // our own rng:  the usage chances (scram, web) are rolled here, once per spawn (npc.EwarUsageRoll 0), like npcs'
+            m_ewar = new NPCEwar(m_npc, &m_rng);
             if (!m_ewar->HasAny())
                 SafeDelete(m_ewar);
         }
@@ -119,10 +201,17 @@ void SentryAI::Process() {
                     break;
                 }
             }
-            // law guns:  a random eligible target.  pirate and deadspace sentries:  the nearest ship in range
+            // a passive group wakes up when someone comes too close (to any member, us too)
+            if (CheckProximity(ctx))
+                break;
+            /* law guns:  a random eligible target.  pirate and deadspace sentries:  the nearest ship in range (a passive group's
+             *  only once it was aggroed, and then only its aggressors).  our group hears about it, like an npc's */
             SystemEntity* pTarget(m_brain->Acquire(ctx));
-            if (pTarget != nullptr)
+            if (pTarget != nullptr) {
                 Target(pTarget);
+                if (!IsIdle())
+                    AlertGroup(pTarget);
+            }
         } break;
         case State::Engaged: {
             m_pendingAggroID = 0;
@@ -355,11 +444,15 @@ void SentryAI::PruneLocks(SentryContext& ctx)
 void SentryAI::Targeted(SystemEntity* pAgressor) {
     // gate and station guns never lock back an innocent (bug B9).  nothing locks back a pod unless npc.TargetPod says so
     Respond(pAgressor);
+    // a lock is aggression:  a passive group aggroes on it (4.3)
+    AlertGroup(pAgressor);
 }
 
 void SentryAI::OnDamaged(SystemEntity* pBy, float amount)
 {
     Respond(pBy);
+    // (in a dungeon the room heard about it already:  DungeonMgr::OnRoomAggression)
+    AlertGroup(pBy);
 }
 
 void SentryAI::OnGroupAlert(SystemEntity* pAggressor)
@@ -483,6 +576,8 @@ std::string SentryAI::Dump(SystemEntity* pViewer, bool verbose)
         << ", rng seed " << m_rng.GetSeed() << "<br>";
     if (m_npc->IsLawSentry())
         str << "guards " << m_npc->GetProtectedID() << " (faction " << m_npc->GetWarFactionID() << ")<br>";
+    str << "group:  " << (m_group.get() != nullptr ? m_group->Describe(ctx.now) : std::string("none"))
+        << ", pending aggro " << m_pendingAggroID << "<br>";
     str << "locks (" << m_npc->TargetMgr()->TargetCount() << "/" << (uint32)p.maxLockedTargets << "):";
     m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
         str << "  " << cur->GetName() << "(" << cur->GetID() << ") ";

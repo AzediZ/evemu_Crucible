@@ -46,6 +46,8 @@
 #include "npc/Drone.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
@@ -497,6 +499,10 @@ PyResult Command_spawn(Client* pClient, CommandDB* db, EVEServiceManager &servic
             NPC* pNPC(pClient->SystemMgr()->GetNPCSE(entity.itemID));
             if ((pNPC != nullptr) and (pNPC->GetAIMgr() != nullptr))
                 pNPC->GetAIMgr()->SetGroup(group);
+            // a pirate or deadspace gun fights with the batch (npc ai plan 4.11).  empire gate guns stay law guns, on their own
+            SystemEntity* pSE(pClient->SystemMgr()->GetSE(entity.itemID));
+            if ((pSE != nullptr) and pSE->IsSentrySE() and !pSE->GetSentrySE()->IsLawSentry())
+                pSE->GetSentrySE()->GetAIMgr()->SetGroup(group);
         }
     }
 

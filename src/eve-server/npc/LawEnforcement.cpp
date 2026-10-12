@@ -15,6 +15,7 @@
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/Sentry.h"
+#include "npc/ai/AggroGroup.h"
 #include "npc/ai/LawRules.h"
 #include "npc/ai/NpcMath.h"
 #include "ship/Ship.h"
@@ -24,6 +25,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/TargetManager.h"
+#include "system/cosmicMgrs/SpawnMgr.h"
 
 namespace {
     // CONCORD police (group 301).  the commander's damage multiplier (100000) makes its weapon effectively one-shot
@@ -94,16 +96,14 @@ namespace {
         }
     }
 
-    // takes an entity out of play: other entities' locks on it, then the system
+    // takes an entity in space out of play: its ewar and group, other entities' locks on it, then the system
     void RemoveLawNPC(SystemManager* pSystem, NPC* pNPC) {
         SystemEntity::SetUnkillable(pNPC->GetID(), false);
-        if (pNPC->IsDead()) {
-            pSystem->RemoveDeadNPC(pNPC);       // already removed from space when it died
-        } else {
-            if (pNPC->TargetMgr() != nullptr)
-                pNPC->TargetMgr()->ClearFromTargets();
-            pSystem->RemoveNPC(pNPC);
-        }
+        // no killer:  nobody is alerted (law npcs never alert anyway)
+        pNPC->GetAIMgr()->OnKilled(nullptr);
+        if (pNPC->TargetMgr() != nullptr)
+            pNPC->TargetMgr()->ClearFromTargets();
+        pSystem->RemoveNPC(pNPC);
         delete pNPC;
     }
 }
@@ -160,7 +160,7 @@ void LawEnforcement::SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID
         m_system->AddEntity(pSentry, false);
         // gate guns can't be destroyed
         SystemEntity::SetUnkillable(pSentry->GetID(), true);
-        m_sentries.push_back(pSentry);
+        m_sentries.push_back(pSentry->GetID());
     }
 }
 
@@ -318,16 +318,23 @@ void LawEnforcement::SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave)
         GetPoliceTypes(factionID, types);
     }
 
+    /* the response is one aggro group (npc ai plan 6.5).  it only gives the ships one identity (/npcai, phase 3's member walks):
+     *  law npcs never alert or join a group, LawEnforcement coordinates them */
+    uint64_t key((uint64_t)r.charID * 4 + r.kind);
+    if ((r.group.get() == nullptr) and (m_system->GetSpawnMgr() != nullptr))
+        r.group = m_system->GetSpawnMgr()->GetAggroGroups().Get(NpcAI::GroupKind::Law, key);
     for (auto typeID : types) {
         GPoint pos(pTarget->GetPosition());
         pos.MakeRandomPointOnSphere(MakeRandomFloat(4000, 9000));
         NPC* pNPC(SpawnNPC(typeID, pos, factionID, corpID, r.shipID, r.kind));
         if (pNPC != nullptr) {
-            r.npcs.push_back(pNPC);
-            m_npcResponse[pNPC] = (uint64_t)r.charID * 4 + r.kind;
+            r.npcs.push_back(pNPC->GetID());
+            m_npcResponse[pNPC->GetID()] = key;
+            if (r.group.get() != nullptr)
+                pNPC->GetAIMgr()->SetGroup(r.group);
             // CONCORD's data tackle (npc ai plan N6)
             if ((r.kind == Law::Concord) and !sConfig.crime.ConcordScriptedTackle)
-                BuildTackle(pNPC, r.tackle[pNPC]);
+                BuildTackle(pNPC, r.tackle[pNPC->GetID()]);
         }
     }
     _log(CRIME__INFO, "%s arrived for %s(%u) in %s (%lu ships).", KindName(r.kind), pTarget->GetName(), r.shipID,
@@ -339,8 +346,53 @@ void LawEnforcement::Retarget(Response& r, uint32 shipID)
     // they're in another ship now (boarded one).  the old one is gone, and so is its tackle
     ReleaseTackle(r);
     r.shipID = shipID;
-    for (auto cur : r.npcs)
-        cur->SetLawTarget(shipID, r.kind);
+    for (auto cur : r.npcs) {
+        NPC* pNPC(GetLawNPC(cur));
+        if (pNPC != nullptr)
+            pNPC->SetLawTarget(shipID, r.kind);
+    }
+}
+
+NPC* LawEnforcement::GetLawNPC(uint32 npcID)
+{
+    SystemEntity* pSE(m_system->GetSE(npcID));
+    if ((pSE == nullptr) or !pSE->IsNPCSE() or pSE->IsDead())
+        return nullptr;
+    return pSE->GetNPCSE();
+}
+
+void LawEnforcement::ForgetLawNPC(uint32 npcID)
+{
+    m_npcResponse.erase(npcID);
+    SystemEntity::SetUnkillable(npcID, false);
+    /* killed, or a GM /unspawn:  out of space already (SystemEntity::Delete()), its item deleted.  the object itself is still
+     *  in the system's npc list (nothing else frees it):  ours to free */
+    NPC* pNPC(m_system->GetNPCSE(npcID));
+    if (pNPC == nullptr)
+        return;
+    m_system->RemoveDeadNPC(pNPC);
+    delete pNPC;
+}
+
+void LawEnforcement::PruneNPCs(Response& r)
+{
+    std::vector<uint32>::iterator nItr = r.npcs.begin();
+    while (nItr != r.npcs.end()) {
+        if (GetLawNPC(*nItr) != nullptr) {
+            ++nItr;
+            continue;
+        }
+        // police can be killed, and a GM can remove any of them
+        std::map<uint32, std::vector<TackleEffect>>::iterator tItr(r.tackle.find(*nItr));
+        if (tItr != r.tackle.end()) {
+            for (auto& fx : tItr->second)
+                if (fx.targetID != 0)
+                    EndTackle(*nItr, fx);
+            r.tackle.erase(tItr);
+        }
+        ForgetLawNPC(*nItr);
+        nItr = r.npcs.erase(nItr);
+    }
 }
 
 void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
@@ -348,11 +400,11 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
     if ((pNPC == nullptr) or (pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return;
     Response* pResponse(nullptr);
-    std::unordered_map<NPC*, uint64_t>::iterator nItr(m_npcResponse.find(pNPC));
+    std::unordered_map<uint32, uint64_t>::iterator nItr(m_npcResponse.find(pNPC->GetID()));
     if (nItr != m_npcResponse.end()) {
         std::map<uint64_t, Response>::iterator rItr(m_responses.find(nItr->second));
         if ((rItr != m_responses.end())
-        and (std::find(rItr->second.npcs.begin(), rItr->second.npcs.end(), pNPC) != rItr->second.npcs.end()))
+        and (std::find(rItr->second.npcs.begin(), rItr->second.npcs.end(), pNPC->GetID()) != rItr->second.npcs.end()))
             pResponse = &rItr->second;
     }
     if ((pResponse == nullptr) or (pResponse->shipID != pTarget->GetID()))
@@ -470,6 +522,7 @@ void LawEnforcement::BuildTackle(NPC* pNPC, std::vector<TackleEffect>& into)
     }
     std::vector<TackleEffect>::iterator itr(into.begin());
     while (itr != into.end()) {
+        itr->typeID = static_cast<uint16>(iRef->typeID());
         if (itr->duration < 1000)
             itr->duration = 1000;
         if (itr->range <= 0.0) {
@@ -485,14 +538,14 @@ void LawEnforcement::ProcessTackle(Response& r, SystemEntity* pTarget)
 {
     int64 now(GetSteadyTime());
     for (auto& cur : r.tackle) {
-        NPC* pNPC(cur.first);
+        NPC* pNPC(GetLawNPC(cur.first));
         // only once it has the ship locked
-        bool locked(!pNPC->IsDead() and (pNPC->TargetMgr() != nullptr)
+        bool locked((pNPC != nullptr) and (pNPC->TargetMgr() != nullptr)
                     and (pNPC->TargetMgr()->GetTarget(pTarget->GetID(), true) != nullptr));
         for (auto& fx : cur.second) {
             if (!locked) {
                 if (fx.targetID != 0)
-                    EndTackle(pNPC, fx);
+                    EndTackle(cur.first, fx);
                 fx.nextAt = 0;
                 continue;
             }
@@ -511,7 +564,7 @@ void LawEnforcement::ProcessTackle(Response& r, SystemEntity* pTarget)
             if ((rng.Uniform() >= fx.chance) or (rng.Uniform() >= NpcMath::EwarRangeChance(surface, fx.range, fx.falloff))) {
                 // not this cycle
                 if (fx.targetID != 0)
-                    EndTackle(pNPC, fx);
+                    EndTackle(cur.first, fx);
                 continue;
             }
             if (fx.targetID == 0)
@@ -545,23 +598,23 @@ void LawEnforcement::StartTackle(NPC* pNPC, TackleEffect& fx, SystemEntity* pTar
         Ewar::SendEwarNotify(true, pNPC->GetID(), pNPC->GetID(), pTarget, "electronic");
 }
 
-void LawEnforcement::EndTackle(NPC* pNPC, TackleEffect& fx)
+void LawEnforcement::EndTackle(uint32 npcID, TackleEffect& fx)
 {
     uint32 targetID(fx.targetID);
     fx.targetID = 0;
     SystemEntity* pTarget(m_system->GetSE(targetID));
     if (pTarget == nullptr)
         return;
-    DestinyManager* pDestiny(pNPC->DestinyMgr() != nullptr ? pNPC->DestinyMgr() : pTarget->DestinyMgr());
+    // the ship that ran it may be gone already (killed, GM /unspawn):  the target's bubble sees the fx stop
+    NPC* pNPC(GetLawNPC(npcID));
+    DestinyManager* pDestiny(((pNPC != nullptr) and (pNPC->DestinyMgr() != nullptr)) ? pNPC->DestinyMgr() : pTarget->DestinyMgr());
     if (pDestiny != nullptr)
-        pDestiny->SendSpecialEffect(pNPC->GetID(), pNPC->GetID(), pNPC->GetSelf()->typeID(), targetID, 0, fx.guid,
-                                    true, false, false, 0, 0);
-    if (fx.kind == Ewar::Jam) {
-        Ewar::EndJam(pNPC, 0, pTarget);
-        Ewar::SendEwarNotify(false, pNPC->GetID(), pNPC->GetID(), pTarget, "electronic");
-    } else if (pTarget->GetEwar() != nullptr) {
-        pTarget->GetEwar()->Remove(pNPC->GetID(), fx.kind);
-    }
+        pDestiny->SendSpecialEffect(npcID, npcID, fx.typeID, targetID, 0, fx.guid, true, false, false, 0, 0);
+    // (Ewar::EndJam() is this Remove() for the jam)
+    if (pTarget->GetEwar() != nullptr)
+        pTarget->GetEwar()->Remove(npcID, fx.kind);
+    if (fx.kind == Ewar::Jam)
+        Ewar::SendEwarNotify(false, npcID, npcID, pTarget, "electronic");
 }
 
 void LawEnforcement::Despawn(Response& r)
@@ -569,10 +622,17 @@ void LawEnforcement::Despawn(Response& r)
     ReleaseTackle(r);
     r.tackle.clear();
     for (auto cur : r.npcs) {
+        NPC* pNPC(GetLawNPC(cur));
+        if (pNPC == nullptr) {
+            ForgetLawNPC(cur);
+            continue;
+        }
         m_npcResponse.erase(cur);
-        RemoveLawNPC(m_system, cur);
+        RemoveLawNPC(m_system, pNPC);
     }
     r.npcs.clear();
+    // the group goes with its last member (a new arrival makes a new one)
+    r.group.reset();
 }
 
 void LawEnforcement::Process()
@@ -584,24 +644,8 @@ void LawEnforcement::Process()
     while (itr != m_responses.end()) {
         Response& r = itr->second;
 
-        // police can be killed
-        std::vector<NPC*>::iterator nItr = r.npcs.begin();
-        while (nItr != r.npcs.end()) {
-            if ((*nItr)->IsDead()) {
-                std::map<NPC*, std::vector<TackleEffect>>::iterator tItr(r.tackle.find(*nItr));
-                if (tItr != r.tackle.end()) {
-                    for (auto& fx : tItr->second)
-                        if (fx.targetID != 0)
-                            EndTackle(*nItr, fx);
-                    r.tackle.erase(tItr);
-                }
-                m_npcResponse.erase(*nItr);
-                RemoveLawNPC(m_system, *nItr);
-                nItr = r.npcs.erase(nItr);
-            } else {
-                ++nItr;
-            }
-        }
+        // police can be killed, and a GM can take any of them out of space
+        PruneNPCs(r);
 
         SystemEntity* pTarget(FindTarget(r.charID));
 
@@ -659,7 +703,8 @@ void LawEnforcement::Process()
         if (pTarget->GetID() != r.shipID)
             Retarget(r, pTarget->GetID());
 
-        if (pTarget->SysBubble() != r.npcs.front()->SysBubble()) {
+        NPC* pFront(GetLawNPC(r.npcs.front()));
+        if ((pFront == nullptr) or (pTarget->SysBubble() != pFront->SysBubble())) {
             if (r.kind == Law::Concord) {
                 // got off the grid.  CONCORD arrives where they went (its tackle goes with it, Despawn)
                 Despawn(r);
@@ -783,11 +828,16 @@ bool LawEnforcement::IsBusy()
 void LawEnforcement::Close()
 {
     // the system deletes every entity, ours included
-    for (auto& cur : m_responses)
-        for (auto npc : cur.second.npcs)
-            SystemEntity::SetUnkillable(npc->GetID(), false);
-    for (auto cur : m_sentries)
-        SystemEntity::SetUnkillable(cur->GetID(), false);
+    for (auto& cur : m_responses) {
+        // (the ones a GM took out of space aren't the system's any more:  ours to free)
+        for (auto npcID : cur.second.npcs)
+            if (GetLawNPC(npcID) == nullptr)
+                ForgetLawNPC(npcID);
+        for (auto npcID : cur.second.npcs)
+            SystemEntity::SetUnkillable(npcID, false);
+    }
+    for (auto sentryID : m_sentries)
+        SystemEntity::SetUnkillable(sentryID, false);
     for (auto cur : m_loggedOff)
         cur.second.pShipSE->GetShipItemRef()->SaveShip();
     m_responses.clear();

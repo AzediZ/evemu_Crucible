@@ -52,12 +52,14 @@ namespace NpcAI {
             MissileCycleTooShort    = 1 << 13,  // effect 569 with missileLaunchDuration under 1s (the placeholder 1):  dgm default 20s
             RangeBeyondAttack       = 1 << 14,  // entityFlyRange beyond 0.9 x entityAttackRange:  the orbit is kept inside it
             SentryNoRange           = 1 << 15,  // sentry turret without maxRange:  entityAttackRange is its optimal
-            Count                   = 16
+            TurretPlaceholder       = 1 << 16,  // effect 10 with the placeholder speed 20,000,000 (5.5 hours):  missile-only
+                                                //  (about 95 sentries and overseer structures, PLAN.md 4.11)
+            Count                   = 17
         };
     }
     const char* GetProblemText(uint32 problemBit);
-    // the problems that are worth a warning (MissileAttrsNoEffect is the correct reading of the data)
-    const uint32 WarnProblems = ~static_cast<uint32>(Problem::MissileAttrsNoEffect);
+    // the problems that are worth a warning (MissileAttrsNoEffect and TurretPlaceholder are the correct reading of the data)
+    const uint32 WarnProblems = ~static_cast<uint32>(Problem::MissileAttrsNoEffect | Problem::TurretPlaceholder);
 
     // where the lock time comes from
     namespace LockFrom {

@@ -71,6 +71,7 @@ private:
 #define sDunDataMgr \
 ( DungeonDataMgr::get() )
 
+class AggroGroup;
 class AnomalyMgr;
 class SpawnMgr;
 class EVEServiceManager;
@@ -303,10 +304,16 @@ private:
     uint32 ResolveFaction(const Dungeon::SpawnParams& params, const Dungeon::Dungeon& dungeon);
     GPoint NextRoomOrigin(const GPoint& from);
     bool IsNPCType(uint32 typeID);
-    uint32 SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius);
+    /* liveGroupID:  a spawn group's object (its sentries, npc ai plan 4.11).  a sentry joins that group's aggro group, or its
+     *  room's when it has none.  factionID:  the group's faction (0 = the instance's) */
+    uint32 SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius,
+                       uint32 liveGroupID = 0, uint32 factionID = 0);
     void PopulateRoom(Instance& inst, uint8 roomIdx);
     void SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group);
     uint32 SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID);
+    /* the aggro group of a live group (with its aggro mode, range and link), or of the room's placed npcs and sentries
+     *  (liveGroupID 0, or a group without a definition).  pDef:  the live group's definition (nullptr for the room) */
+    std::shared_ptr<AggroGroup> GetAggroGroup(Instance& inst, uint8 roomIdx, uint32 liveGroupID, const Dungeon::SpawnGroupDef*& pDef);
     LiveGroup* FindGroup(Instance& inst, uint32 spawnGroupID, uint8& roomIdx);
     void Index(uint32 itemID, uint32 instanceID, uint8 roomIdx)  { m_entityIndex[itemID] = std::make_pair(instanceID, roomIdx); }
     // an entity leaves the instance without dying

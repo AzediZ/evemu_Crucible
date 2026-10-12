@@ -16,6 +16,8 @@
 #include "EntityList.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "ship/Ship.h"
 #include "system/Asteroid.h"
 #include "system/Container.h"
@@ -776,8 +778,11 @@ bool DungeonMgr::MakeDungeon(CosmicSignature& sig, uint32 dungeonID)
     return (SpawnInstance(params, &sig) != 0);
 }
 
-uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius)
+uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, const GPoint& pos, uint32 objectID, double radius,
+                               uint32 liveGroupID/*0*/, uint32 factionID/*0*/)
 {
+    if (factionID == 0)
+        factionID = inst.factionID;
     const ItemType* pType(sItemFactory.GetType(typeID));
     if (pType == nullptr) {
         _log(DUNG__WARNING, "DungeonMgr::SpawnObject() - invalid type %u in dungeon %u", typeID, inst.dungeon->dungeonID);
@@ -811,7 +816,7 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
         return pASE->GetID();
     }
 
-    uint32 ownerID(sDataMgr.GetFactionCorp(inst.factionID));
+    uint32 ownerID(sDataMgr.GetFactionCorp(factionID));
     if (ownerID == 0)
         ownerID = ownerSystem;
     std::string info("livedungeon_" + std::to_string(inst.instanceID));
@@ -831,8 +836,8 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
         entity.categoryID = pType->categoryID();
         entity.ownerID = ownerID;
         entity.corporationID = ownerID;
-        entity.allianceID = inst.factionID;
-        entity.factionID = ((inst.factionID == factionRogueDrones) ? 0 : inst.factionID);
+        entity.allianceID = factionID;
+        entity.factionID = ((factionID == factionRogueDrones) ? 0 : factionID);
         entity.position = pos;
 
     uint32 itemID(iRef->itemID());
@@ -860,10 +865,20 @@ uint32 DungeonMgr::SpawnObject(Instance& inst, uint8 roomIdx, uint32 typeID, con
 
     if (objectID != 0) {
         room.objects[objectID] = itemID;
-    } else {
+    } else if (liveGroupID == 0) {
         room.extraObjects.insert(itemID);
-    }
+    }   // a spawn group's objects are its members (LiveGroup.alive)
     Index(itemID, inst.instanceID, roomIdx);
+
+    /* a sentry defends the pocket (npc ai plan 4.11):  a pirate gun even when it's an empire type (group 99), and a member of
+     *  its spawn group's aggro group or of its room's (group and room aggro reach it, it alerts them) */
+    SystemEntity* pSE(m_system->GetSE(itemID));
+    if ((pSE != nullptr) and pSE->IsSentrySE()) {
+        Sentry* pSentry(pSE->GetSentrySE());
+        pSentry->SetLawSentry(false);
+        const Dungeon::SpawnGroupDef* pDef(nullptr);
+        pSentry->GetAIMgr()->SetGroup(GetAggroGroup(inst, roomIdx, liveGroupID, pDef));
+    }
     return itemID;
 }
 
@@ -885,28 +900,33 @@ uint32 DungeonMgr::SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32
     }
     Index(pNPC->GetID(), inst.instanceID, roomIdx);
 
-    /* its aggro group (npc ai plan 4.3, 6.5):  the live group (with the group's aggro mode, range and link), or the room's
-     *  placed npcs.  rooms are one group key per instance and room;  links count inside the instance only */
+    // its aggro group (npc ai plan 4.3, 6.5):  the live group, or the room's placed npcs
+    const Dungeon::SpawnGroupDef* pDef(nullptr);
+    pNPC->GetAIMgr()->SetGroup(GetAggroGroup(inst, roomIdx, liveGroupID, pDef));
+    /* a wave's first pick may be the weakest ship (4.3).  waves are the trigger-spawned groups (waveNumber isn't usable:
+     *  the anomaly seed numbers its first wave 1, the mission builder 0) */
+    if ((pDef != nullptr) and (pDef->spawnMode == Dungeon::SpawnMode::TriggerOnly))
+        pNPC->GetAIMgr()->SetWave();
+    return pNPC->GetID();
+}
+
+std::shared_ptr<AggroGroup> DungeonMgr::GetAggroGroup(Instance& inst, uint8 roomIdx, uint32 liveGroupID, const Dungeon::SpawnGroupDef*& pDef)
+{
+    /* the live group (with the group's aggro mode, range and link), or the room's placed npcs and sentries.  rooms are one
+     *  group key per instance and room;  links count inside the instance only */
     AggroGroupRegistry& groups(m_spawnMgr->GetAggroGroups());
     uint64_t roomKey((static_cast<uint64_t>(inst.instanceID) << 8) | roomIdx);
-    const Dungeon::SpawnGroupDef* pDef(nullptr);
+    pDef = nullptr;
     if (liveGroupID != 0)
         for (auto& group : inst.rooms[roomIdx].groups)
             if (group.liveGroupID == liveGroupID)
                 pDef = group.def;
-    if (pDef != nullptr) {
-        uint64_t linkKey((pDef->aggroLink != 0) ? ((static_cast<uint64_t>(inst.instanceID) << 32) | pDef->aggroLink) : 0);
-        pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::Dungeon, liveGroupID,
-                (pDef->aggroMode == Dungeon::AggroMode::Passive ? NpcAI::AggroMode::Passive : NpcAI::AggroMode::Proactive),
-                pDef->aggroRange, linkKey, roomKey));
-        /* a wave's first pick may be the weakest ship (4.3).  waves are the trigger-spawned groups (waveNumber isn't usable:
-         *  the anomaly seed numbers its first wave 1, the mission builder 0) */
-        if (pDef->spawnMode == Dungeon::SpawnMode::TriggerOnly)
-            pNPC->GetAIMgr()->SetWave();
-    } else {
-        pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::DungeonRoom, roomKey, NpcAI::AggroMode::Proactive, 0, 0, roomKey));
-    }
-    return pNPC->GetID();
+    if (pDef == nullptr)
+        return groups.Get(NpcAI::GroupKind::DungeonRoom, roomKey, NpcAI::AggroMode::Proactive, 0, 0, roomKey);
+    uint64_t linkKey((pDef->aggroLink != 0) ? ((static_cast<uint64_t>(inst.instanceID) << 32) | pDef->aggroLink) : 0);
+    return groups.Get(NpcAI::GroupKind::Dungeon, liveGroupID,
+            (pDef->aggroMode == Dungeon::AggroMode::Passive ? NpcAI::AggroMode::Passive : NpcAI::AggroMode::Proactive),
+            pDef->aggroRange, linkKey, roomKey);
 }
 
 void DungeonMgr::PopulateRoom(Instance& inst, uint8 roomIdx)
@@ -946,7 +966,11 @@ void DungeonMgr::SpawnGroup(Instance& inst, uint8 roomIdx, LiveGroup& group)
         for (uint16 i = 0; i < cur.quantity; ++i) {
             GPoint pos(center);
             pos.MakeRandomPointOnSphere(MakeRandomFloat(0.0, def.spread));
-            uint32 itemID(SpawnNPC(inst, roomIdx, cur.typeID, factionID, pos, def.warpIn, group.liveGroupID));
+            /* spawn groups hold sentries too (about 350 rows of groups 99 and 383):  they're objects (Sentry, npc ai plan 6.6),
+             *  not npcs, placed where they stand.  still members of the group (its waves and completion wait for them) */
+            uint32 itemID(IsNPCType(cur.typeID)
+                          ? SpawnNPC(inst, roomIdx, cur.typeID, factionID, pos, def.warpIn, group.liveGroupID)
+                          : SpawnObject(inst, roomIdx, cur.typeID, pos, 0, 0, group.liveGroupID, factionID));
             if (itemID != 0)
                 group.alive.insert(itemID);
         }
