@@ -2010,6 +2010,20 @@ uint32 CharacterDB::GetSchoolID(uint32 charID)
     return 0;
 }
 
+uint32 CharacterDB::GetCareerID(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT careerID FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
 uint8 CharacterDB::GetRaceID(uint32 charID)
 {
     DBQueryResult res;

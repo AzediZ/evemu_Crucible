@@ -100,6 +100,8 @@ public:
     void RemoveOffice(uint32 officeID);
     // an impounded office back in use (rented again or released):  into the station's lists, OnOfficeRentalChanged(corp, office, folder)
     void RestoreOffice(OfficeData& odata);
+    // re-reads the station's data (name, rent, reprocessing, owner) after the outpost owner changed it
+    void UpdateSettings();
 
     void LoadStationOffice(uint32 corpID);
     void AddLoadedOffice(uint32 officeID);

@@ -444,9 +444,23 @@ PyRep* CorporationDB::GetMedalStatuses()
     return DBResultToRowset(res);
 }
 
+void CorporationDB::RemoveMedal(uint32 charID, int32 medalID)
+{
+    DBerror err;
+    uint32 affected(0);
+    if (!sDatabase.RunQuery(err, affected, "DELETE FROM chrMedals WHERE recepientID = %u AND medalID = %i", charID, medalID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+        return;
+    }
+    if (affected > 0)
+        sDatabase.RunQuery(err, "UPDATE crpMedals SET noRecepients = GREATEST(0, CAST(noRecepients AS SIGNED) - %u) WHERE medalID = %i", affected, medalID);
+}
+
 void CorporationDB::GiveMedalToCharacters(uint32 issuerID, uint32 corpID, int32 medalID, std::vector< uint32 >& charVec, const std::string& reason)
 {
     // INSERT INTO chrMedals(recepientID, medalID, corpID, issuerID, reason, date, status) VALUES ()
+    std::string eReason;
+    sDatabase.DoEscapeString(eReason, reason);
 
     // loop thru data and add to query
     std::ostringstream query;
@@ -461,13 +475,13 @@ void CorporationDB::GiveMedalToCharacters(uint32 issuerID, uint32 corpID, int32 
             query << ",";
         }
         query << "(" << std::to_string(cur) << "," << std::to_string(medalID) << "," << std::to_string(corpID) << "," << std::to_string(issuerID) << ",";
-        query << std::to_string(GetFileTimeNow()) << ",'" << reason.c_str() << "')";
+        query << std::to_string(GetFileTimeNow()) << ",'" << eReason.c_str() << "')";
     }
 
     if (!first ) {
         DBerror err;
         sDatabase.RunQuery(err, query.str().c_str());
-        sDatabase.RunQuery(err, "UPDATE crpMedals SET noRecepients=noRecepients + 1 WHERE medalID = %u", medalID );
+        sDatabase.RunQuery(err, "UPDATE crpMedals SET noRecepients=noRecepients + %u WHERE medalID = %u", (uint32)charVec.size(), medalID );
     }
 }
 
@@ -1162,23 +1176,44 @@ PyRep* CorporationDB::GetContacts(uint32 corpID)
     return obj;
 }
 
-void CorporationDB::AddContact(uint32 ownerID, int32 contactID, int32 relationshipID)
+void CorporationDB::AddContact(uint32 ownerID, int32 contactID, float relationshipID)
 {
     DBerror err;
     sDatabase.RunQuery(err,
-        "INSERT INTO crpContacts (ownerID, contactID, relationshipID, "
-        " inWatchlist, labelMask) VALUES "
-        " (%u, %u, %i, 0, 0) ",
-        ownerID, contactID, relationshipID);
+        "INSERT INTO crpContacts (ownerID, contactID, relationshipID, inWatchlist, labelMask)"
+        " VALUES (%u, %i, %f, 0, 0)"
+        " ON DUPLICATE KEY UPDATE relationshipID = %f",
+        ownerID, contactID, relationshipID, relationshipID);
 }
 
-void CorporationDB::UpdateContact(int32 relationshipID, uint32 contactID, uint32 ownerID)
+void CorporationDB::UpdateContact(float relationshipID, uint32 contactID, uint32 ownerID)
 {
     DBerror err;
     sDatabase.RunQuery(err,
-        "UPDATE crpContacts SET relationshipID=%i "
+        "UPDATE crpContacts SET relationshipID=%f "
         " WHERE contactID=%u AND ownerID=%u ",
          relationshipID, contactID, ownerID);
+}
+
+void CorporationDB::GetContactLabelMasks(uint32 ownerID, const std::vector<int32>& contactIDs, std::map<int32, int64>& into)
+{
+    if (contactIDs.empty())
+        return;
+    std::ostringstream ids;
+    for (auto cur : contactIDs)
+        ids << "," << cur;
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT contactID, labelMask FROM crpContacts WHERE ownerID = %u AND contactID IN (0%s)",
+                ownerID, ids.str().c_str()))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetInt(0)] = row.GetInt64(1);
 }
 
 void CorporationDB::RemoveContact(uint32 contactID, uint32 ownerID)
@@ -2549,6 +2584,48 @@ PyRep* CorporationDB::GetAssetInventory(uint32 corpID, EVEItemFlags locFlag, con
     return DBResultToCRowset(res);
 }
 
+PyRep* CorporationDB::SearchAssets(uint32 corpID, EVEItemFlags locFlag, const char* flags, uint32 categoryID, uint32 groupID, uint32 typeID, uint32 qty)
+{
+    std::ostringstream filter;
+    if (typeID > 0)
+        filter << " AND e.typeID = " << typeID;
+    if (groupID > 0)
+        filter << " AND t.groupID = " << groupID;
+    if (categoryID > 0)
+        filter << " AND g.categoryID = " << categoryID;
+    if (qty > 0)
+        filter << " AND e.quantity >= " << qty;
+
+    DBQueryResult res;
+    if (locFlag == flagProperty) {
+        if (!sDatabase.RunQuery(res,
+            " SELECT DISTINCT e.locationID FROM entity AS e"
+            " LEFT JOIN invTypes AS t USING (typeID)"
+            " LEFT JOIN invGroups AS g USING (groupID)"
+            " WHERE e.ownerID = %u AND e.flag IN %s AND e.locationID >= %u AND e.locationID <= %u%s",
+            corpID, flags, minPlayerItem, maxPlayerItem, filter.str().c_str()))
+        {
+            codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+            return new PyList();
+        }
+    } else {
+        // offices, impounded and deliveries are listed by station
+        if (!sDatabase.RunQuery(res,
+            " SELECT DISTINCT s.stationID AS locationID FROM entity AS e"
+            " JOIN staOffices AS s ON (s.itemID = e.locationID)"
+            " LEFT JOIN invTypes AS t ON (t.typeID = e.typeID)"
+            " LEFT JOIN invGroups AS g ON (g.groupID = t.groupID)"
+            " WHERE e.ownerID = %u AND e.flag IN %s%s",
+            corpID, flags, filter.str().c_str()))
+        {
+            codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+            return new PyList();
+        }
+    }
+
+    return DBResultToCRowset(res);
+}
+
 PyRep* CorporationDB::GetAssetInventoryForLocation(uint32 corpID, uint32 locationID, const char* flags)
 {
     // this will need to get full item data...locationID sent from GetAssetInventory()
@@ -2688,40 +2765,6 @@ void CorporationDB::UpdateCorpHQ(uint32 corpID, uint32 stationID)
     DBerror err;
     if (!sDatabase.RunQuery(err, "UPDATE crpCorporation SET stationID = %u WHERE corporationID = %u", stationID, corpID))
         codelog(CORP__DB_ERROR, "Error in UpdateCorpHQ query: %s", err.c_str());
-}
-
-void CorporationDB::EditLabel(uint32 corpID, uint32 labelID, uint32 color, std::string name)
-{
-    std::string escaped;
-    sDatabase.DoEscapeString(escaped, name);
-
-    DBQueryResult res;
-    sDatabase.RunQuery(res, "UPDATE crpLabels SET color = %u, name = '%s' WHERE ownerID = %u AND labelID = %u", color, escaped.c_str(), corpID, labelID);
-}
-
-PyRep* CorporationDB::GetLabels(uint32 corpID)
-{
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT labelID, color, name FROM crpLabels WHERE ownerID = %u", corpID)) {
-        codelog(DATABASE__ERROR, "Error on query: %s", res.error.c_str());
-        return nullptr;
-    }
-
-    return DBResultToCIndexedRowset(res, "labelID");
-}
-
-void CorporationDB::SetLabel(uint32 corpID, uint32 color, std::string name)
-{
-    std::string escaped;
-    sDatabase.DoEscapeString(escaped, name);
-
-    DBQueryResult res;
-    sDatabase.RunQuery(res, "INSERT INTO crpLabels (color, name, ownerID) VALUES (%u, '%s', %u)", color, escaped.c_str(), corpID);
-}
-
-void CorporationDB::DeleteLabel(uint32 corpID, uint32 labelID)
-{
-    // not used yet
 }
 
 int32 CorporationDB::GetCorpIDforChar(int32 charID)

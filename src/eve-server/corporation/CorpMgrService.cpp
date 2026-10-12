@@ -41,6 +41,7 @@ CorpMgrService::CorpMgrService() :
     this->Add("GetAssetInventoryForLocation", &CorpMgrService::GetAssetInventoryForLocation);
     this->Add("SearchAssets", &CorpMgrService::SearchAssets);
     this->Add("AuditMember", &CorpMgrService::AuditMember);
+    this->Add("GetCorporationWallet", &CorpMgrService::GetCorporationWallet);
 }
 
 /*
@@ -178,11 +179,44 @@ PyResult CorpMgrService::GetCorporationStations(PyCallArgs &call) {
 }
 
 
-PyResult CorpMgrService::SearchAssets(PyCallArgs &call, PyString* which, std::optional<PyInt*> itemCategoryID, std::optional<PyInt*> itemGroupID, std::optional<PyInt*> itemTypeID, std::optional<PyInt*> quantity) {
+PyResult CorpMgrService::SearchAssets(PyCallArgs &call, PyRep* which, std::optional<PyInt*> itemCategoryID, std::optional<PyInt*> itemGroupID, std::optional<PyInt*> itemTypeID, std::optional<PyInt*> quantity) {
     //   rows = sm.RemoteSvc('corpmgr').SearchAssets(which, itemCategoryID, itemGroupID, itemTypeID, qty)
-    // 'which' is a filter type or None
+    //  rows of locationID (stations for offices, impounded and deliveries, the item holding them for property);  the client then lists
+    //  each location with GetAssetInventoryForLocation and applies the same filter
     _log(CORP__CALL, "CorpMgrService::Handle_SearchAssets()");
     call.Dump(CORP__CALL_DUMP);
 
+    uint32 corpID = call.client->GetCorporationID();
+    if (!IsPlayerCorp(corpID))
+        return new PyList();
+    if ((call.client->GetCorpRole() & Corp::Role::Director) != Corp::Role::Director)
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only directors can search the corporation's assets."));
+
+    std::string what = (which->IsString() or which->IsWString() ? PyRep::StringContent(which) : "offices");
+    EVEItemFlags locFlag = flagNone;
+    std::ostringstream flags;
+    flags << "(";
+    if (what.compare("junk") == 0) {
+        locFlag = flagImpounded;
+        flags << flagImpounded;
+    } else if (what.compare("deliveries") == 0) {
+        locFlag = flagCorpMarket;
+        flags << flagCorpMarket;
+    } else {
+        locFlag = (what.compare("property") == 0 ? flagProperty : flagOffice);
+        flags << flagHangar << "," << flagCorpHangar2 << "," << flagCorpHangar3 << "," << flagCorpHangar4 << "," << flagCorpHangar5;
+        flags  << "," << flagCorpHangar6 << "," << flagCorpHangar7;
+    }
+    flags << ")";
+
+    return m_db.SearchAssets(corpID, locFlag, flags.str().c_str(),
+                             (itemCategoryID.has_value() ? itemCategoryID.value()->value() : 0),
+                             (itemGroupID.has_value() ? itemGroupID.value()->value() : 0),
+                             (itemTypeID.has_value() ? itemTypeID.value()->value() : 0),
+                             (quantity.has_value() ? quantity.value()->value() : 0));
+}
+
+PyResult CorpMgrService::GetCorporationWallet(PyCallArgs &call, std::optional<PyRep*> corporationID) {
+    // wallet.GetWallet() shell lookup;  nothing in the client uses its result
     return nullptr;
 }

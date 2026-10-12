@@ -82,12 +82,12 @@ protected:
     PyResult GetRoleGroups(PyCallArgs& call);
     PyResult GetRoles(PyCallArgs& call);
 
-    PyResult CreateLabel(PyCallArgs& call, PyRep* name, PyRep* color);
+    PyResult CreateLabel(PyCallArgs& call, PyRep* name, std::optional<PyRep*> color);
     PyResult GetLabels(PyCallArgs& call);
-    PyResult DeleteLabel(PyCallArgs& call, PyInt* labelID);
-    PyResult EditLabel(PyCallArgs& call, PyInt* labelID, PyRep* name, PyRep* color);
-    PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
-    PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
+    PyResult DeleteLabel(PyCallArgs& call, PyRep* labelID);
+    PyResult EditLabel(PyCallArgs& call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color);
+    PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelMask);
+    PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelMask);
 
     PyResult GetTitles(PyCallArgs& call);
     PyResult UpdateTitle(PyCallArgs& call,
@@ -114,10 +114,10 @@ protected:
     PyResult ExecuteActions(PyCallArgs& call, PyList* targetIDs, PyList* remoteActions);
 
     PyResult GetCorporateContacts(PyCallArgs& call);
-    PyResult AddCorporateContact(PyCallArgs& call, PyInt* contactID, PyInt* relationshipID);
-    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyInt* relationshipID);
+    PyResult AddCorporateContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID);
+    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyRep* relationshipID);
     PyResult RemoveCorporateContacts(PyCallArgs& call, PyList* contactIDs);
-    PyResult EditCorporateContact(PyCallArgs& call, PyInt* contactID, PyInt* relationshipID);
+    PyResult EditCorporateContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID);
 
     PyResult CreateAlliance(PyCallArgs& call, PyRep* allianceName, PyRep* shortName, PyRep* description, PyRep* url);
     PyResult ApplyToJoinAlliance(PyCallArgs& call, PyInt* allianceID, PyWString* applicationText);
@@ -136,11 +136,6 @@ protected:
     PyResult GetRentalDetailsCorp(PyCallArgs& call);
 
     PyResult UpdateCorporationAbilities(PyCallArgs& call);
-    PyResult UpdateStationManagementSettings(PyCallArgs& call,
-        PyRep* modifiedServiceAccessRulesByServiceID, PyRep* modifiedServiceCostModifiers,
-        PyRep* modifiedRentableItems, PyRep* stationName, PyRep* description,
-        PyRep* dockingCostPerVolume, PyRep* officeRentalCost, PyRep* reprocessingStationsTake,
-        PyRep* reprocessingHangarFlag, PyRep* exitTime, PyRep* standingOwnerID);
     PyResult GetNumberOfPotentialCEOs(PyCallArgs& call);
 
     PyResult CanLeaveCurrentCorporation(PyCallArgs& call);
@@ -156,6 +151,11 @@ protected:
     // mutating calls are for members of this corp only
     void RequireMember(PyCallArgs& call);
     void RequireDirector(PyCallArgs& call);
+    void RequireDiplomat(PyCallArgs& call);
+    // OnOrganizationContactsUpdated(corpID, updates) to the members.  consumes updates
+    void SendContactsUpdated(PyList* updates);
+    // the contacts' current label masks to the members
+    void SendLabelMasks(const std::vector<int32>& contactIDs);
     // CTV_GIVE CTPG_SHARES:  corp treasury shares to a member
     void GiveShares(PyCallArgs& call, uint32 toID, int64 count);
     // UpdateApplicationOffer accept:  the applicant may leave their corp, member limit and allowed races.  throws

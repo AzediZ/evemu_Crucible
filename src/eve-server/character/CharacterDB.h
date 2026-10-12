@@ -265,6 +265,7 @@ public:
     // chrCharacters.schoolID, raceID
     static uint32 GetSchoolID(uint32 charID);
     static uint8 GetRaceID(uint32 charID);
+    static uint32 GetCareerID(uint32 charID);
     static uint32 GetCorpID(uint32 charID);
     static float GetCorpTaxRate(uint32 charID);
     static PyRep* GetMyCorpMates(uint32 corpID);

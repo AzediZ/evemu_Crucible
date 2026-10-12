@@ -418,6 +418,20 @@ void BookmarkDB::MoveBookmarkToFolder(int32 folderID, std::vector<int32>& bookma
     sDatabase.RunQuery(err, "UPDATE bookmarks SET folderID = %i WHERE bookmarkID IN (%s)", folderID, st.str().c_str());
 }
 
+uint32 BookmarkDB::GetBookmarkCount(uint32 ownerID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(bookmarkID) FROM bookmarks WHERE ownerID = %u", ownerID)) {
+        sLog.Error( "BmDB::GetBookmarkCount()", "Failed to count bookmarks of %u: %s.", ownerID, res.error.c_str() );
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
 void BookmarkDB::GetVoucherData( BmData& data ) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,

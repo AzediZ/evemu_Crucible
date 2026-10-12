@@ -30,6 +30,9 @@
 #include "services/Service.h"
 #include "system/BookmarkDB.h"
 
+// const.maxCorpBookmarkCount
+#define maxCorpBookmarkCount 250
+
 class CorpBookmarkMgr : public Service <CorpBookmarkMgr>
 {
 public:
@@ -44,10 +47,15 @@ protected:
     PyResult MoveBookmarksToFolder(PyCallArgs& call, PyInt* folderID, std::optional<PyObjectEx*> bookmarkIDs);
     PyResult CreateFolder(PyCallArgs& call, PyRep* folderName);
     PyResult UpdateFolder(PyCallArgs& call, PyInt* folderID, PyRep* folderName);
-    PyResult CopyBookmarks(PyCallArgs& call, std::optional<PyRep*> bookmarksToCopy, PyInt* folderID);
+    PyResult CopyBookmarks(PyCallArgs& call, std::optional<PyRep*> bookmarksToCopy, std::optional<PyInt*> folderID);
     PyResult DeleteFolder(PyCallArgs& call, PyInt* folderID, PyRep* unused);
     PyResult MoveFoldersToDB(PyCallArgs& call, PyRep* info);
     PyResult DeleteBookmarks(PyCallArgs& call, std::optional<PyObjectEx*> bookmarkIDs);
+
+    // bookmark ids from a list, tuple or set
+    static void ReadIDs(PyRep* rep, std::vector<int32>& into);
+    // the client's bookmark KeyVal
+    static PyObject* MakeBookmark(const BmData& data);
 
 };
 

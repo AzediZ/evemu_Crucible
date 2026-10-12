@@ -68,11 +68,69 @@ PyResult CorpBookmarkMgr::GetBookmarks(PyCallArgs& call)
 
     return(m_manager->cache_service->MakeObjectCachedMethodCallResult(method_id));
     */
+    // bookmarkSvc:  bookmarkCache.update(bookmarks);  folders.update(folders)  -> both {id: KeyVal}
+    PyDict* folders = new PyDict();
+    PyRep* list = m_db.GetFolders(call.client->GetCorporationID());
+    if ((list != nullptr) and list->IsList()) {
+        for (PyList::const_iterator itr = list->AsList()->begin(); itr != list->AsList()->end(); ++itr) {
+            PyRep* folderID = (*itr)->AsObject()->arguments()->AsDict()->GetItemString("folderID");
+            PyIncRef(folderID);
+            PyIncRef(*itr);
+            folders->SetItem(folderID, *itr);
+        }
+    }
+    PySafeDecRef(list);
+
     PyTuple* result = new PyTuple(2);
     result->SetItem(0, m_db.GetBookmarks(call.client->GetCorporationID()));
-    result->SetItem(1, m_db.GetFolders(call.client->GetCorporationID()));
+    result->SetItem(1, folders);
     result->Dump(BOOKMARK__RSP_DUMP, "    ");
     return result;
+}
+
+void CorpBookmarkMgr::ReadIDs(PyRep* rep, std::vector<int32>& into)
+{
+    // a list or tuple of ids, or a set (ObjectEx __builtin__.set:  header (type, (list,)))
+    if (rep == nullptr)
+        return;
+    PyList* list(nullptr);
+    if (rep->IsList()) {
+        list = rep->AsList();
+    } else if (rep->IsTuple()) {
+        for (size_t i = 0; i < rep->AsTuple()->size(); ++i)
+            if (rep->AsTuple()->GetItem(i)->IsInt() or rep->AsTuple()->GetItem(i)->IsLong())
+                into.push_back(PyRep::IntegerValue(rep->AsTuple()->GetItem(i)));
+        return;
+    } else if (rep->IsObjectEx()) {
+        PyRep* header = rep->AsObjectEx()->header();
+        if ((header != nullptr) and header->IsTuple() and (header->AsTuple()->size() > 1) and header->AsTuple()->GetItem(1)->IsTuple()
+        and (header->AsTuple()->GetItem(1)->AsTuple()->size() > 0) and header->AsTuple()->GetItem(1)->AsTuple()->GetItem(0)->IsList())
+            list = header->AsTuple()->GetItem(1)->AsTuple()->GetItem(0)->AsList();
+    }
+    if (list == nullptr)
+        return;
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        if ((*itr)->IsInt() or (*itr)->IsLong())
+            into.push_back(PyRep::IntegerValue(*itr));
+}
+
+PyObject* CorpBookmarkMgr::MakeBookmark(const BmData& data)
+{
+    PyDict* dict = new PyDict();
+        dict->SetItemString("bookmarkID", new PyInt(data.bookmarkID));
+        dict->SetItemString("ownerID", new PyInt(data.ownerID));
+        dict->SetItemString("itemID", new PyInt(data.itemID));
+        dict->SetItemString("typeID", new PyInt(data.typeID));
+        dict->SetItemString("memo", new PyString(data.memo));
+        dict->SetItemString("created", new PyLong(data.created));
+        dict->SetItemString("x", new PyFloat(data.point.x));
+        dict->SetItemString("y", new PyFloat(data.point.y));
+        dict->SetItemString("z", new PyFloat(data.point.z));
+        dict->SetItemString("locationID", new PyInt(data.locationID));
+        dict->SetItemString("note", new PyString(data.note));
+        dict->SetItemString("creatorID", new PyInt(data.creatorID));
+        dict->SetItemString("folderID", (data.folderID > 0 ? (PyRep*)new PyInt(data.folderID) : PyStatic.NewNone()));
+    return new PyObject("util.KeyVal", dict);
 }
 
 PyResult CorpBookmarkMgr::UpdateBookmark(PyCallArgs& call, PyInt* bookmarkID, PyInt* ownerID, PyRep* memo, PyRep* comment, std::optional<PyInt*> folderID) {
@@ -140,10 +198,71 @@ PyResult CorpBookmarkMgr::CreateFolder(PyCallArgs& call, PyRep* folderName)
     return result.Encode();
 }
 
-PyResult CorpBookmarkMgr::CopyBookmarks(PyCallArgs& call, std::optional<PyRep*> bookmarksToCopy, PyInt* folderID)
+PyResult CorpBookmarkMgr::CopyBookmarks(PyCallArgs& call, std::optional<PyRep*> bookmarksToCopy, std::optional<PyInt*> folderID)
 {
+    // newBookmarks, message = corpBookmarkMgr.CopyBookmarks(bookmarksToCopy, folderID):  {bookmarkID: KeyVal}, message tuple or None
     call.Dump(BOOKMARK__CALL_DUMP);
-    return PyStatic.NewNone();
+
+    uint32 corpID = call.client->GetCorporationID();
+    uint32 charID = call.client->GetCharacterID();
+    PyDict* copies = new PyDict();
+    PyTuple* result = new PyTuple(2);
+        result->SetItem(0, copies);
+        result->SetItem(1, PyStatic.NewNone());
+    if (!bookmarksToCopy.has_value())
+        return result;
+
+    std::vector<int32> ids;
+    ReadIDs(bookmarksToCopy.value(), ids);
+
+    // corp bookmarks are limited (const.maxCorpBookmarkCount)
+    uint32 count = m_db.GetBookmarkCount(corpID);
+    if (count >= maxCorpBookmarkCount) {
+        PyDecRef(result);
+        throw UserError("CantCreateCorpBookmarksOverLimit").AddFormatValue("maxLimit", new PyInt(maxCorpBookmarkCount));
+    }
+
+    uint32 copied(0);
+    for (auto cur : ids) {
+        if (count >= maxCorpBookmarkCount)
+            break;
+        BmData data = BmData();
+            data.bookmarkID = cur;
+        m_db.GetVoucherData(data);
+        // only the caller's own bookmarks (or the corp's)
+        if ((data.ownerID != charID) and (data.ownerID != corpID))
+            continue;
+        // "You cannot trade or copy mission bookmarks."
+        if (IsAgent(data.creatorID)) {
+            PyDecRef(result);
+            throw UserError("CantTradeMissionBookmarks");
+        }
+
+        data.ownerID = corpID;
+        data.creatorID = charID;
+        data.folderID = (folderID.has_value() ? folderID.value()->value() : 0);
+        data.created = GetFileTimeNow();
+        m_db.SaveNewBookmark(data);
+        if (data.bookmarkID == (uint32)cur)
+            continue;   // not saved
+        copies->SetItem(new PyInt(data.bookmarkID), MakeBookmark(data));
+        ++count;
+        ++copied;
+    }
+
+    if (copied < ids.size()) {
+        // ('NotAllBookmarksCopiedNotEnoughRoom', {maxLimit, owner, bookmarksCopied})
+        PyDict* args = new PyDict();
+            args->SetItemString("maxLimit", new PyInt(maxCorpBookmarkCount));
+            args->SetItemString("owner", new PyInt(corpID));
+            args->SetItemString("bookmarksCopied", new PyInt(copied));
+        PyTuple* message = new PyTuple(2);
+            message->SetItem(0, new PyString("NotAllBookmarksCopiedNotEnoughRoom"));
+            message->SetItem(1, args);
+        result->SetItem(1, message);
+    }
+
+    return result;
 }
 
 PyResult CorpBookmarkMgr::DeleteFolder(PyCallArgs& call, PyInt* folderID, PyRep* unused)
@@ -171,8 +290,50 @@ PyResult CorpBookmarkMgr::DeleteFolder(PyCallArgs& call, PyInt* folderID, PyRep*
 PyResult CorpBookmarkMgr::MoveFoldersToDB(PyCallArgs& call, PyRep* info)
 {
     //rows, folders = self.corpBookmarkMgr.MoveFoldersToDB(info)
+    //  info = [(set(bookmarkIDs), label), ...]:  the client's old local corp folders become real ones
     call.Dump(BOOKMARK__CALL_DUMP);
-    return PyStatic.NewNone();
+
+    uint32 corpID = call.client->GetCorporationID();
+    PyList* rows = new PyList();
+    PyDict* folders = new PyDict();
+    if (info->IsList()) {
+        for (PyList::const_iterator itr = info->AsList()->begin(); itr != info->AsList()->end(); ++itr) {
+            if (!(*itr)->IsTuple() or ((*itr)->AsTuple()->size() < 2))
+                continue;
+            std::vector<int32> ids, owned;
+            ReadIDs((*itr)->AsTuple()->GetItem(0), ids);
+            for (auto cur : ids) {
+                BmData data = BmData();
+                    data.bookmarkID = cur;
+                m_db.GetVoucherData(data);
+                if (data.ownerID == corpID)
+                    owned.push_back(cur);
+            }
+            if (owned.empty())
+                continue;
+
+            std::string name = PyRep::StringContent((*itr)->AsTuple()->GetItem(1));
+            uint32 folderID = m_db.SaveNewFolder(name, corpID, call.client->GetCharacterID());
+            m_db.MoveBookmarkToFolder(folderID, owned);
+            for (auto cur : owned) {
+                PyDict* dict = new PyDict();
+                    dict->SetItemString("bookmarkID", new PyInt(cur));
+                    dict->SetItemString("folderID", new PyInt(folderID));
+                rows->AddItem(new PyObject("util.KeyVal", dict));
+            }
+            PyDict* folder = new PyDict();
+                folder->SetItemString("ownerID", new PyInt(corpID));
+                folder->SetItemString("folderID", new PyInt(folderID));
+                folder->SetItemString("folderName", new PyString(name));
+                folder->SetItemString("creatorID", new PyInt(call.client->GetCharacterID()));
+            folders->SetItem(new PyInt(folderID), new PyObject("util.KeyVal", folder));
+        }
+    }
+
+    PyTuple* result = new PyTuple(2);
+        result->SetItem(0, rows);
+        result->SetItem(1, folders);
+    return result;
 }
 
 PyResult CorpBookmarkMgr::DeleteBookmarks(PyCallArgs& call, std::optional<PyObjectEx*> bookmarkIDs)

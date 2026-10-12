@@ -18,6 +18,7 @@
 #include "corporation/CorpRegistryBound.h"
 #include "corporation/OfficeSparseBound.h"
 #include "corporation/ItemLockdown.h"
+#include "mail/MailMgr.h"
 #include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 #include "alliance/AllianceDB.h"
@@ -133,7 +134,7 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("GetRentalDetailsCorp", &CorpRegistryBound::GetRentalDetailsCorp);
 
     this->Add("UpdateCorporationAbilities", &CorpRegistryBound::UpdateCorporationAbilities);
-    this->Add("UpdateStationManagementSettings", &CorpRegistryBound::UpdateStationManagementSettings);
+
     this->Add("GetNumberOfPotentialCEOs", &CorpRegistryBound::GetNumberOfPotentialCEOs);
 
     this->Add("CanLeaveCurrentCorporation", &CorpRegistryBound::CanLeaveCurrentCorporation);
@@ -255,8 +256,45 @@ PyResult CorpRegistryBound::GetShareholders(PyCallArgs &call)
 }
 
 PyResult CorpRegistryBound::GetLabels(PyCallArgs &call)
-{   // working
-    return m_db.GetLabels(call.client->GetCorporationID());
+{
+    // addressbook corp contact labels:  dict labelID -> KeyVal(labelID, name, color), labelIDs are bit values
+    return CharacterDB::GetContactLabels("crpLabels", m_corpID);
+}
+
+void CorpRegistryBound::RequireDiplomat(PyCallArgs& call)
+{
+    // corp contacts and their labels:  directors and diplomats (menusvc)
+    RequireMember(call);
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::Diplomat))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be a diplomat or director to manage corporation contacts."));
+}
+
+void CorpRegistryBound::SendContactsUpdated(PyList* updates)
+{
+    // addressbook.OnOrganizationContactsUpdated(ownerID, [(contactID, relationshipID|None, labelMask|None)]);  (id, None, None) = removed
+    if (updates->empty()) {
+        PyDecRef(updates);
+        return;
+    }
+    PyTuple* payload = new PyTuple(2);
+        payload->SetItem(0, new PyInt(m_corpID));
+        payload->SetItem(1, updates);
+    sEntityList.CorpNotify(m_corpID, Notify::Types::CorpNews, "OnOrganizationContactsUpdated", "corpid", payload);
+}
+
+void CorpRegistryBound::SendLabelMasks(const std::vector<int32>& contactIDs)
+{
+    std::map<int32, int64> masks;
+    CorporationDB::GetContactLabelMasks(m_corpID, contactIDs, masks);
+    PyList* updates = new PyList();
+    for (auto cur : masks) {
+        PyTuple* update = new PyTuple(3);
+            update->SetItem(0, new PyInt(cur.first));
+            update->SetItem(1, PyStatic.NewNone());
+            update->SetItem(2, new PyLong(cur.second));
+        updates->AddItem(update);
+    }
+    SendContactsUpdated(updates);
 }
 
 PyResult CorpRegistryBound::CanViewVotes(PyCallArgs &call, PyInt* corporationID)
@@ -2280,35 +2318,76 @@ PyResult CorpRegistryBound::GetLockedItemsByLocation(PyCallArgs& call, PyInt* lo
  * @note   these do absolutely nothing at this time....
  */
 
-PyResult CorpRegistryBound::AddCorporateContact(PyCallArgs &call, PyInt* contactID, PyInt* relationshipID) {
+namespace {
+void ReadContactIDs(PyList* list, std::vector<int32>& into)
+{
+    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+        if ((*itr)->IsInt() or (*itr)->IsLong())
+            into.push_back(PyRep::IntegerValue(*itr));
+}
+
+PyTuple* ContactUpdate(int32 contactID, PyRep* relationship, PyRep* labelMask)
+{
+    PyTuple* update = new PyTuple(3);
+        update->SetItem(0, new PyInt(contactID));
+        update->SetItem(1, relationship);
+        update->SetItem(2, labelMask);
+    return update;
+}
+}
+
+PyResult CorpRegistryBound::AddCorporateContact(PyCallArgs &call, PyInt* contactID, PyRep* relationshipID) {
     //self.GetCorpRegistry().AddCorporateContact(contactID, relationshipID)
     _log(CORP__CALL, "CorpRegistryBound::Handle_AddCorporateContact()");
     call.Dump(CORP__CALL_DUMP);
 
-    m_db.AddContact(m_corpID, contactID->value(), relationshipID->value());
+    RequireDiplomat(call);
+    float level = (float)PyRep::FloatValue(relationshipID);
+    if (relationshipID->IsInt() or relationshipID->IsLong())
+        level = (float)PyRep::IntegerValue(relationshipID);
+    m_db.AddContact(m_corpID, contactID->value(), level);
 
+    PyList* updates = new PyList();
+        updates->AddItem(ContactUpdate(contactID->value(), new PyFloat(level), PyStatic.NewNone()));
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
-PyResult CorpRegistryBound::EditCorporateContact(PyCallArgs &call, PyInt* contactID, PyInt* relationshipID) {
+PyResult CorpRegistryBound::EditCorporateContact(PyCallArgs &call, PyInt* contactID, PyRep* relationshipID) {
     //self.GetCorpRegistry().EditCorporateContact(contactID, relationshipID)
     _log(CORP__CALL, "CorpRegistryBound::Handle_EditCorporateContact()");
     call.Dump(CORP__CALL_DUMP);
 
-    m_db.UpdateContact(relationshipID->value(), contactID->value(), m_corpID);
+    RequireDiplomat(call);
+    float level = (float)PyRep::FloatValue(relationshipID);
+    if (relationshipID->IsInt() or relationshipID->IsLong())
+        level = (float)PyRep::IntegerValue(relationshipID);
+    m_db.UpdateContact(level, contactID->value(), m_corpID);
 
+    PyList* updates = new PyList();
+        updates->AddItem(ContactUpdate(contactID->value(), new PyFloat(level), PyStatic.NewNone()));
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
-PyResult CorpRegistryBound::EditContactsRelationshipID(PyCallArgs &call, PyList* contactIDs, PyInt* relationshipID) {
+PyResult CorpRegistryBound::EditContactsRelationshipID(PyCallArgs &call, PyList* contactIDs, PyRep* relationshipID) {
     //self.GetCorpRegistry().EditContactsRelationshipID(contactIDs, relationshipID)
     _log(CORP__CALL, "CorpRegistryBound::Handle_EditContactsRelationshipID()");
     call.Dump(CORP__CALL_DUMP);
 
-    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr) {
-        m_db.UpdateContact(relationshipID->value(), PyRep::IntegerValueU32(*itr), m_corpID);
-    }
+    RequireDiplomat(call);
+    float level = (float)PyRep::FloatValue(relationshipID);
+    if (relationshipID->IsInt() or relationshipID->IsLong())
+        level = (float)PyRep::IntegerValue(relationshipID);
 
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    PyList* updates = new PyList();
+    for (auto cur : ids) {
+        m_db.UpdateContact(level, cur, m_corpID);
+        updates->AddItem(ContactUpdate(cur, new PyFloat(level), PyStatic.NewNone()));
+    }
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
@@ -2317,10 +2396,15 @@ PyResult CorpRegistryBound::RemoveCorporateContacts(PyCallArgs &call, PyList* co
     _log(CORP__CALL, "CorpRegistryBound::Handle_RemoveCorporateContacts()");
     call.Dump(CORP__CALL_DUMP);
 
-    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr) {
-        m_db.RemoveContact(PyRep::IntegerValueU32(*itr), m_corpID);
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    PyList* updates = new PyList();
+    for (auto cur : ids) {
+        m_db.RemoveContact(cur, m_corpID);
+        updates->AddItem(ContactUpdate(cur, PyStatic.NewNone(), PyStatic.NewNone()));
     }
-
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
@@ -2441,43 +2525,89 @@ PyResult CorpRegistryBound::ExecuteActions(PyCallArgs &call, PyList* targetIDs, 
     return nullptr;
 }
 
-PyResult CorpRegistryBound::CreateLabel(PyCallArgs &call, PyRep* name, PyRep* color) {
-    // return self.GetCorpRegistry().CreateLabel(name, color)
+PyResult CorpRegistryBound::CreateLabel(PyCallArgs &call, PyRep* name, std::optional<PyRep*> color) {
+    // return self.GetCorpRegistry().CreateLabel(name, color)    -> the new labelID (a bit value)
     _log(CORP__CALL, "CorpRegistryBound::Handle_CreateLabel() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
-    return nullptr;
+    RequireDiplomat(call);
+    std::string labelName = PyRep::StringContent(name);
+    if (labelName.empty())
+        throw UserError("MailLabelMustProvideName");
+    MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+    if (CharacterDB::ContactLabelNameExists("crpLabels", m_corpID, labelName))
+        throw UserError("MailLabelNameExists");
+
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    int64 labelID = CharacterDB::CreateContactLabel("crpLabels", m_corpID, labelName, hasColor ? &colorVal : nullptr);
+    if (labelID == 0)
+        throw CustomError("Your corporation has too many contact labels.");
+    return new PyLong(labelID);
 }
 
-PyResult CorpRegistryBound::DeleteLabel(PyCallArgs &call, PyInt* labelID) {
-    // self.GetCorpRegistry().DeleteLabel(labelID)
+PyResult CorpRegistryBound::DeleteLabel(PyCallArgs &call, PyRep* labelID) {
+    // self.GetCorpRegistry().DeleteLabel(labelID)    the label's bit is cleared from every contact
     _log(CORP__CALL, "CorpRegistryBound::Handle_DeleteLabel() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
+    RequireDiplomat(call);
+    CharacterDB::DeleteContactLabel("crpLabels", "crpContacts", m_corpID, PyRep::IntegerValue(labelID));
     return nullptr;
 }
 
-PyResult CorpRegistryBound::EditLabel(PyCallArgs &call, PyInt* labelID, PyRep* name, PyRep* color) {
-    // self.GetCorpRegistry().EditLabel(labelID, name, color)
+PyResult CorpRegistryBound::EditLabel(PyCallArgs &call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color) {
+    // self.GetCorpRegistry().EditLabel(labelID, name, color)    None = unchanged
     _log(CORP__CALL, "CorpRegistryBound::Handle_EditLabel() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
+    RequireDiplomat(call);
+    int64 id = PyRep::IntegerValue(labelID);
+    std::string labelName;
+    bool hasName = !name->IsNone();
+    if (hasName) {
+        labelName = PyRep::StringContent(name);
+        if (labelName.empty())
+            throw UserError("MailLabelMustProvideName");
+        MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+        if (CharacterDB::ContactLabelNameExists("crpLabels", m_corpID, labelName, id))
+            throw UserError("MailLabelNameExists");
+    }
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    CharacterDB::EditContactLabel("crpLabels", m_corpID, id, hasName ? &labelName : nullptr, hasColor ? &colorVal : nullptr);
     return nullptr;
 }
 
-PyResult CorpRegistryBound::AssignLabels(PyCallArgs &call, PyList* contactIDs, PyInt* labelMask) {
+PyResult CorpRegistryBound::AssignLabels(PyCallArgs &call, PyList* contactIDs, PyRep* labelMask) {
     // self.GetCorpRegistry().AssignLabels(contactIDs, labelMask)
     _log(CORP__CALL, "CorpRegistryBound::Handle_AssignLabels() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits("crpContacts", m_corpID, ids, PyRep::IntegerValue(labelMask), true);
+    SendLabelMasks(ids);
     return nullptr;
 }
 
-PyResult CorpRegistryBound::RemoveLabels(PyCallArgs &call, PyList* contactIDs, PyInt* labelMask) {
+PyResult CorpRegistryBound::RemoveLabels(PyCallArgs &call, PyList* contactIDs, PyRep* labelMask) {
     // self.GetCorpRegistry().RemoveLabels(contactIDs, labelMask)
     _log(CORP__CALL, "CorpRegistryBound::Handle_RemoveLabels() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits("crpContacts", m_corpID, ids, PyRep::IntegerValue(labelMask), false);
+    SendLabelMasks(ids);
     return nullptr;
 }
 
@@ -2735,21 +2865,6 @@ PyResult CorpRegistryBound::UpdateCorporationAbilities(PyCallArgs &call) {
 
     sCorpMgr.UpdateAbilities(m_corpID);
     return m_db.GetCorporation(m_corpID);
-}
-
-PyResult CorpRegistryBound::UpdateStationManagementSettings(PyCallArgs &call,
-    PyRep* modifiedServiceAccessRulesByServiceID, PyRep* modifiedServiceCostModifiers,
-    PyRep* modifiedRentableItems, PyRep* stationName, PyRep* description,
-    PyRep* dockingCostPerVolume, PyRep* officeRentalCost, PyRep* reprocessingStationsTake,
-    PyRep* reprocessingHangarFlag, PyRep* exitTime, PyRep* standingOwnerID) {
-    //  self.corpStationMgr.UpdateStationManagementSettings(self.modifiedServiceAccessRulesByServiceID, self.modifiedServiceCostModifiers, self.modifiedRentableItems, self.station.stationName, self.station.description, self.station.dockingCostPerVolume, self.station.officeRentalCost, self.station.reprocessingStationsTake, self.station.reprocessingHangarFlag, self.station.exitTime, self.station.standingOwnerID)
-
-    _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateStationManagementSettings()");
-    call.Dump(CORP__CALL_DUMP);
-
-    // not real sure what this does yet....outpost shit maybe?
-
-    return nullptr;
 }
 
 PyResult CorpRegistryBound::GetNumberOfPotentialCEOs(PyCallArgs &call) {

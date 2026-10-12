@@ -450,8 +450,8 @@ void StationDB::GetStationServiceAccessRule(uint32 stationID, uint32 serviceID, 
 void StationDB::GetStationDetails(uint32 stationID, DBQueryResult& res)
 {
     sDatabase.RunQuery(res, "SELECT stationName, stationID, orbitID, description, "
-    "s.security as security, dockingCostPerVolume, officeRentalCost, reprocessingStationsTake, " 
-    "reprocessingHangarFlag, corporationID as ownerID, maxShipVolumeDockable, upgradeLevel "
+    "s.security as security, dockingCostPerVolume, officeRentalCost, reprocessingStationsTake, "
+    "reprocessingHangarFlag, corporationID as ownerID, maxShipVolumeDockable, upgradeLevel, exitTime, standingOwnerID "
     "FROM staStations s "
     "INNER JOIN mapDenormalize m ON s.stationID = m.itemID "
     "INNER JOIN staOperations USING (operationID) "
@@ -460,25 +460,106 @@ void StationDB::GetStationDetails(uint32 stationID, DBQueryResult& res)
 
 void StationDB::GetRentableItems(uint32 stationID, DBQueryResult& res)
 {
-    sDatabase.RunQuery(res, "SELECT stationID, typeID, "
-    "corporationID as rentedToID, TRUE as publiclyAvailable "
-    "FROM staOffices "
-    "WHERE stationID=%u", stationID);
+    // base_stationmanagement offices tab:  typeID (typeOfficeFolder), number, rentedToID, publiclyAvailable, startDate,
+    //  rentPeriodInDays, periodCost, balanceDueDate.  number is the officeID (UpdateStationManagementSettings sends it back)
+    sDatabase.RunQuery(res, "SELECT 26 AS typeID, itemID AS number, corporationID AS rentedToID, publiclyAvailable,"
+    " (expiryDateTime - %lli) AS startDate, 30 AS rentPeriodInDays, rentalFee AS periodCost, expiryDateTime AS balanceDueDate"
+    " FROM staOffices WHERE stationID = %u AND impounded = 0", (int64)(30 * EvE::Time::Day), stationID);
 }
 
+uint32 StationDB::GetStandingOwner(uint32 stationID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT IFNULL(standingOwnerID, 0) FROM staStations WHERE stationID = %u", stationID)) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
+void StationDB::SetServiceAccessRule(uint32 stationID, uint32 serviceID, double minimumStanding, double minimumCharSecurity,
+                                     double maximumCharSecurity, double minimumCorpSecurity, double maximumCorpSecurity)
+{
+    // staOutpostServiceConfig has no key:  one row per station and service, cost modifiers kept
+    DBQueryResult res;
+    double discount(0), surcharge(0);
+    if (sDatabase.RunQuery(res, "SELECT discountPerGoodStandingPoint, surchargePerBadStandingPoint FROM staOutpostServiceConfig"
+                " WHERE stationID = %u AND serviceID = %u", stationID, serviceID))
+    {
+        DBResultRow row;
+        if (res.GetRow(row)) {
+            discount = row.GetDouble(0);
+            surcharge = row.GetDouble(1);
+        }
+    }
+
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM staOutpostServiceConfig WHERE stationID = %u AND serviceID = %u", stationID, serviceID);
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO staOutpostServiceConfig (stationID, serviceID, minimumStanding, minimumCharSecurity, maximumCharSecurity,"
+        " minimumCorpSecurity, maximumCorpSecurity, discountPerGoodStandingPoint, surchargePerBadStandingPoint)"
+        " VALUES (%u, %u, %f, %f, %f, %f, %f, %f, %f)",
+        stationID, serviceID, minimumStanding, minimumCharSecurity, maximumCharSecurity, minimumCorpSecurity, maximumCorpSecurity, discount, surcharge))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void StationDB::SetServiceCostModifier(uint32 stationID, uint32 serviceID, double discountPerGoodStandingPoint, double surchargePerBadStandingPoint)
+{
+    DBerror err;
+    uint32 affected(0);
+    if (!sDatabase.RunQuery(err, affected,
+        "UPDATE staOutpostServiceConfig SET discountPerGoodStandingPoint = %f, surchargePerBadStandingPoint = %f"
+        " WHERE stationID = %u AND serviceID = %u", discountPerGoodStandingPoint, surchargePerBadStandingPoint, stationID, serviceID))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+        return;
+    }
+    if (affected == 0)
+        sDatabase.RunQuery(err,
+            "INSERT INTO staOutpostServiceConfig (stationID, serviceID, minimumStanding, minimumCharSecurity, maximumCharSecurity,"
+            " minimumCorpSecurity, maximumCorpSecurity, discountPerGoodStandingPoint, surchargePerBadStandingPoint)"
+            " VALUES (%u, %u, -10, 0, 0, 0, 0, %f, %f)", stationID, serviceID, discountPerGoodStandingPoint, surchargePerBadStandingPoint);
+}
+
+void StationDB::UpdateStationSettings(uint32 stationID, const std::string& name, double dockingCostPerVolume, int32 officeRentalCost,
+                                      double reprocessingStationsTake, int32 reprocessingHangarFlag, int32 exitTime, int32 standingOwnerID)
+{
+    std::string eName;
+    sDatabase.DoEscapeString(eName, name);
+    std::string exit = (exitTime < 0 ? "NULL" : std::to_string(exitTime));
+    std::string owner = (standingOwnerID == 0 ? "NULL" : std::to_string(standingOwnerID));
+
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "UPDATE staStations SET stationName = '%s', dockingCostPerVolume = %f, officeRentalCost = %i, reprocessingStationsTake = %f,"
+        " reprocessingHangarFlag = %i, exitTime = %s, standingOwnerID = %s WHERE stationID = %u",
+        eName.c_str(), dockingCostPerVolume, officeRentalCost, reprocessingStationsTake, reprocessingHangarFlag, exit.c_str(), owner.c_str(), stationID))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+void StationDB::SetStationOwner(uint32 stationID, uint32 corpID)
+{
+    // the outpost and its assembly lines
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE staStations SET corporationID = %u, standingOwnerID = NULL WHERE stationID = %u", corpID, stationID);
+    sDatabase.RunQuery(err, "UPDATE ramAssemblyLineStations SET ownerID = %u WHERE stationID = %u", corpID, stationID);
+    sDatabase.RunQuery(err, "UPDATE ramAssemblyLines SET ownerID = %u WHERE containerID = %u", corpID, stationID);
+}
 void StationDB::GetOwnerIDsOfClonesAtStation(uint32 stationID, uint32 corpID, DBQueryResult& res)
 {
+    // medical clones (flagClone) at the station:  characterID, corporationID
     if (corpID == -1) {
-        sDatabase.RunQuery(res, "SELECT ownerID, corporationID FROM entity "
-        "INNER JOIN invTypes USING (typeID) "
+        sDatabase.RunQuery(res, "SELECT entity.ownerID AS characterID, chrCharacters.corporationID FROM entity "
         "INNER JOIN chrCharacters ON entity.ownerID = chrCharacters.characterID "
-        "WHERE groupID=23 AND entity.locationID=%u", stationID);
-    } 
-    else {
-        sDatabase.RunQuery(res, "SELECT ownerID, corporationID FROM entity "
-        "INNER JOIN invTypes USING (typeID) "
+        "WHERE entity.flag = %u AND entity.locationID=%u", flagClone, stationID);
+    } else {
+        sDatabase.RunQuery(res, "SELECT entity.ownerID AS characterID, chrCharacters.corporationID FROM entity "
         "INNER JOIN chrCharacters ON entity.ownerID = chrCharacters.characterID "
-        "WHERE groupID=23 AND entity.locationID=%u AND corporationID=%u", stationID, corpID);
+        "WHERE entity.flag = %u AND entity.locationID=%u AND chrCharacters.corporationID=%u", flagClone, stationID, corpID);
     }
 
 }

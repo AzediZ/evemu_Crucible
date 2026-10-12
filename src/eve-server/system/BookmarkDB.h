@@ -84,6 +84,8 @@ public:
     void GetBookmarkByFolderID(int32 folderID, std::vector< int32 >& bmIDs);
 
     void GetVoucherData(BmData &data);
+    // bookmarks an owner has
+    uint32 GetBookmarkCount(uint32 ownerID);
 };
 
 #endif  // __EVEMU_SYSTEM_BOOKMARKDB_H_

@@ -29,6 +29,7 @@
 
 
 #include "cache/ObjCacheService.h"
+#include "character/CharacterDB.h"
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpRegistryBound.h"
 
@@ -179,7 +180,7 @@ PyResult CorpRegistryService::GetLabels(PyCallArgs &call) {
     _log(CORP__CALL, "CorpRegistryService::Handle_GetLabels()");
     call.Dump(CORP__CALL_DUMP);
 
-    return m_db.GetLabels(call.client->GetCorporationID());
+    return CharacterDB::GetContactLabels("crpLabels", call.client->GetCorporationID());
 }
 
 PyResult CorpRegistryService::CreateLabel(PyCallArgs &call, PyWString* name, std::optional <PyInt*> color) {

@@ -223,6 +223,26 @@ uint32 StationDataMgr::GetStationSystemID(uint32 stationID)
 }
 
 
+void StationDataMgr::UpdateStationSettings(uint32 stationID, const std::string& name, float dockingCostPerVolume, int32 officeRentalFee,
+                                           float reprocessingStationsTake, uint16 reprocessingHangarFlag)
+{
+    std::map<uint32, StationData>::iterator itr = m_stationData.find(stationID);
+    if (itr == m_stationData.end())
+        return;
+    itr->second.name = name;
+    itr->second.dockingCostPerVolume = dockingCostPerVolume;
+    itr->second.officeRentalFee = officeRentalFee;
+    itr->second.reprocessingStationsTake = reprocessingStationsTake;
+    itr->second.reprocessingHangarFlag = reprocessingHangarFlag;
+}
+
+void StationDataMgr::SetStationOwner(uint32 stationID, uint32 corpID)
+{
+    std::map<uint32, StationData>::iterator itr = m_stationData.find(stationID);
+    if (itr != m_stationData.end())
+        itr->second.corporationID = corpID;
+}
+
 bool StationDataMgr::GetStationData(uint32 stationID, StationData& data)
 {
     std::map<uint32, StationData>::iterator itr = m_stationData.find(stationID);

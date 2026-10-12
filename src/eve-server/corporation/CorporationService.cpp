@@ -28,6 +28,9 @@
 
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
+#include "EVE_Mail.h"
+#include "EntityList.h"
+#include "corporation/CorpMgr.h"
 #include "corporation/CorporationService.h"
 #include "station/StationDataMgr.h"
 
@@ -142,28 +145,27 @@ PyResult CorporationService::CreateMedal(PyCallArgs &call, PyWString* name, PyWS
     // destroy = sm.StartService('medals').CreateMedal(mName, mDesc, cMedalData)
     //  destroy = true will close window
 
-    //take the money, send wallet blink event record the transaction in corp journal.
-    // if not enough corp funds, throw from here and avoid the overhead of decoding call...
-    std::string reason = "DESC: Medal Creation by ";
-    reason += call.client->GetName();
-    reason += " in ";   // just extra shit.  this will show in tooltip.  ;)
-    reason += stDataMgr.GetStationName(call.client->GetStationID());
-    AccountService::TransferFunds(
-        call.client->GetCorporationID(),
-        call.client->GetStationID(),
-        sConfig.rates.medalCreateCost,
-        reason.c_str(),
-        Journal::EntryType::MedalCreation,
-        call.client->GetStationID(),
-        Account::KeyType::Cash
-    );
-
     if (name->size() > 30)
         throw UserError ("MedalNameTooLong");
     if (description->size() < 3)
         throw UserError ("MedalDescriptionTooShort");
     if (description->size() > 150)
         throw UserError ("MedalDescriptionTooLong");
+
+    //take the money, send wallet blink event record the transaction in corp journal.  paid to SCC
+    std::string reason = "DESC: Medal Creation by ";
+    reason += call.client->GetName();
+    reason += " in ";   // just extra shit.  this will show in tooltip.  ;)
+    reason += stDataMgr.GetStationName(call.client->GetStationID());
+    AccountService::TransferFunds(
+        call.client->GetCorporationID(),
+        corpSCC,
+        sConfig.rates.medalCreateCost,
+        reason.c_str(),
+        Journal::EntryType::MedalCreation,
+        call.client->GetStationID(),
+        Account::KeyType::Cash
+    );
 
     // not sure of the requirements for these errors....
      // MedalNameInvalid, MedalNameInvalid2, MedalDescriptionInvalid2
@@ -230,10 +232,9 @@ PyResult CorporationService::GetAllCorpMedals(PyCallArgs& call, PyInt* corporati
     _log(CORP__CALL, "CorporationService::Handle_GetAllCorpMedals()");
     call.Dump(CORP__CALL_DUMP);
 
-    // TODO: use the corporationID supplied by the caller?
     PyTuple* res = new PyTuple(2);
-        res->SetItem(0, m_db.GetAllCorpMedals(call.client->GetCorporationID()));
-        res->SetItem(1, m_db.GetCorpMedalData(call.client->GetCorporationID()));
+        res->SetItem(0, m_db.GetAllCorpMedals(corporationID->value()));
+        res->SetItem(1, m_db.GetCorpMedalData(corporationID->value()));
     if (is_log_enabled(CORP__RSP_DUMP))
         res->Dump(CORP__RSP_DUMP, "");
     return res;
@@ -269,25 +270,46 @@ PyResult CorporationService::GiveMedalToCharacters(PyCallArgs &call, PyInt* meda
     call.Dump(CORP__CALL_DUMP);
 
     // can award one medal to multiple chars at once, at 5m isk per award
+    uint32 corpID = call.client->GetCorporationID();
     std::vector< uint32 > charVec;
     for (PyList::const_iterator itr = recipientIDs->begin(); itr != recipientIDs->end(); ++itr)
-        charVec.push_back(PyRep::IntegerValue(*itr));
+        if (IsCharacterID(PyRep::IntegerValue(*itr)))
+            charVec.push_back(PyRep::IntegerValue(*itr));
+    if (charVec.empty())
+        return nullptr;
 
-    uint32 cost = sConfig.rates.medalAwardCost;
+    double cost = sConfig.rates.medalAwardCost;
     cost *= charVec.size();
 
-    //take the money, send wallet blink event record the transaction in corp journal.
+    //take the money, send wallet blink event record the transaction in corp journal.  paid to SCC
     std::string finalReason = "DESC: Awarding Medal by ";
     finalReason += call.client->GetName();
     AccountService::TransferFunds(
-        call.client->GetCorporationID(),
-        call.client->GetStationID(),
+        corpID,
+        corpSCC,
         cost,
         finalReason,
         Journal::EntryType::MedalIssuing
     );
 
-    m_db.GiveMedalToCharacters(call.client->GetCharacterID(), call.client->GetCorporationID(), medalID->value(), charVec, reason->content());
+    m_db.GiveMedalToCharacters(call.client->GetCharacterID(), corpID, medalID->value(), charVec, reason->content());
+
+    // CharMedal {medalID, corpID, reason} and OnMedalIssued() to the recipients, OnCorporationMedalAdded(medalID) to the corp
+    for (auto cur : charVec) {
+        PyDict* data = new PyDict();
+            data->SetItemString("medalID", new PyInt(medalID->value()));
+            data->SetItemString("corpID", new PyInt(corpID));
+            data->SetItemString("reason", new PyWString(reason->content()));
+        sCorpMgr.NotifyChar(cur, Notify::Types::CharMedal, call.client->GetCharacterID(), data);
+        Client* pClient = sEntityList.FindClientByCharID(cur);
+        if (pClient != nullptr) {
+            PyTuple* payload = new PyTuple(0);
+            pClient->SendNotification("OnMedalIssued", "charid", &payload);
+        }
+    }
+    PyTuple* payload = new PyTuple(1);
+        payload->SetItem(0, new PyInt(medalID->value()));
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnCorporationMedalAdded", "corpid", payload);
 
     return nullptr;
 }
@@ -335,7 +357,20 @@ PyResult CorporationService::SetMedalStatus(PyCallArgs &call, PyDict* newStatus)
     _log(CORP__CALL, "CorporationService::Handle_SetMedalStatus()");
     call.Dump(CORP__CALL_DUMP);
 
-    call.client->SendInfoModalMsg("Sorry, %s.  Saving Permissions for Medals isn't functional yet.", call.client->GetName());
+    // {medalID: status}  crpMedalStatus:  1 = remove the award, 2 = private, 3 = public
+    uint32 charID = call.client->GetCharacterID();
+    for (PyDict::const_iterator itr = newStatus->begin(); itr != newStatus->end(); ++itr) {
+        int32 medalID = PyRep::IntegerValue(itr->first);
+        uint8 status = PyRep::IntegerValue(itr->second);
+        if (status == 1) {
+            m_db.RemoveMedal(charID, medalID);
+        } else if ((status == 2) or (status == 3)) {
+            m_db.SetMedalStatus(charID, medalID, status);
+        }
+    }
+
+    PyTuple* payload = new PyTuple(0);
+    call.client->SendNotification("OnMedalStatusChanged", "charid", &payload);
     return nullptr;
 }
 

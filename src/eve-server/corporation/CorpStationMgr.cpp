@@ -48,7 +48,12 @@
 #include "account/AccountService.h"
 #include "chat/LSCService.h"
 #include "corporation/CorpMgr.h"
+#include "EVE_Mail.h"
+#include "corporation/BillingMgr.h"
 #include "corporation/ItemLockdown.h"
+#include "alliance/AllianceDB.h"
+#include "character/CharacterDB.h"
+#include "pos/PosMgrDB.h"
 #include "station/StationOffice.h"
 #include "corporation/CorpStationMgr.h"
 #include "station/Station.h"
@@ -184,6 +189,9 @@ CorpStationMgrIMBound::CorpStationMgrIMBound(EVEServiceManager& mgr, CorpStation
     this->Add("GetRentableItems", &CorpStationMgrIMBound::GetRentableItems);
     this->Add("GetOwnerIDsOfClonesAtStation", &CorpStationMgrIMBound::GetOwnerIDsOfClonesAtStation);
     this->Add("GetStationImprovements", &CorpStationMgrIMBound::GetStationImprovements);
+    this->Add("UpdateStationManagementSettings", &CorpStationMgrIMBound::UpdateStationManagementSettings);
+    this->Add("UpdateStationOwner", &CorpStationMgrIMBound::UpdateStationOwner);
+    this->Add("RevokeCloneContractsAtStation", &CorpStationMgrIMBound::RevokeCloneContractsAtStation);
 
     pStationItem = sEntityList.GetStationByID(station_id).get();
 }
@@ -504,38 +512,262 @@ PyResult CorpStationMgrIMBound::SetHomeStation(PyCallArgs &call, PyInt* newHomeS
  */
 
 PyResult CorpStationMgrIMBound::DoStandingCheckForStationService(PyCallArgs &call, PyInt* stationServiceID) {
-    // not sure what this actually does...
-    //   corpStationMgr.DoStandingCheckForStationService(stationServiceID)
-    /*
-     * 01:09:09 L CorpStationMgrIMBound::Handle_DoStandingCheckForStationService(): size= 1
-     * 01:09:09 [SvcCallDump]   Call Arguments:
-     * 01:09:09 [SvcCallDump]       Tuple: 1 elements
-     * 01:09:09 [SvcCallDump]         [ 0] Integer field: 4096  (repair)
-     * 23:09:41 L Server: DoStandingCheckForStationService call made to
-     * 23:09:41 L CorpStationMgrIMBound::Handle_DoStandingCheckForStationService(): size= 1
-     * 23:09:41 [SvcCall]   Call Arguments:
-     * 23:09:41 [SvcCall]       Tuple: 1 elements
-     * 23:09:41 [SvcCall]         [ 0] Integer field: 8192
-     * 23:09:41 L Server: DoStandingCheckForStationService call made to
-     * 23:09:41 L CorpStationMgrIMBound::Handle_DoStandingCheckForStationService(): size= 1
-     * 23:09:41 [SvcCall]   Call Arguments:
-     * 23:09:41 [SvcCall]       Tuple: 1 elements
-     * 23:09:41 [SvcCall]         [ 0] Integer field: 16384
-     * 18:49:22 L CorpStationMgrIMBound::Handle_DoStandingCheckForStationService(): size= 1
-     * 18:49:22 [SvcCall]   Call Arguments:
-     * 18:49:22 [SvcCall]       Tuple: 1 elements
-     * 18:49:22 [SvcCall]         [ 0] Integer field: 65536  (fitting)
-     * 01:11:32 L CorpStationMgrIMBound::Handle_DoStandingCheckForStationService(): size= 1
-     * 01:11:32 [SvcCallDump]   Call Arguments:
-     * 01:11:32 [SvcCallDump]       Tuple: 1 elements
-     * 01:11:32 [SvcCallDump]         [ 0] Integer field: 1048576  (insurance)
-     */
-
+    //   corpStationMgr.DoStandingCheckForStationService(stationServiceID)     the lobby re-raises what this raises
+    //  outposts:  the owner's access rule for the service (minimum standing, character security range)
     _log(CORP__CALL, "CorpStationMgrIMBound::Handle_DoStandingCheckForStationService()");
     call.Dump(CORP__CALL_DUMP);
 
-    // returns None
-    return PyStatic.NewNone();
+    Client* pClient(call.client);
+    uint32 ownerID = pStationItem->GetOwnerID();
+    if (!IsPlayerCorp(ownerID))
+        return nullptr;
+    // the owner's members and their alliance are never refused
+    if ((uint32)pClient->GetCorporationID() == ownerID)
+        return nullptr;
+    CorpData owner = CorpData();
+        owner.corporationID = ownerID;
+    CorporationDB::GetCorpData(owner);
+    if ((owner.allianceID != 0) and (pClient->GetAllianceID() == owner.allianceID))
+        return nullptr;
+
+    DBQueryResult res;
+    StationDB::GetStationServiceAccessRule(m_stationID, stationServiceID->value(), res);
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return nullptr;
+    float minimumStanding = row.GetFloat(2);
+    float minimumCharSecurity = row.GetFloat(3);
+    float maximumCharSecurity = row.GetFloat(4);
+
+    // standings are those of the station's standing owner (corp or alliance) towards the character, their corp or alliance
+    uint32 standingOwnerID = StationDB::GetStandingOwner(m_stationID);
+    if (standingOwnerID == 0)
+        standingOwnerID = ownerID;
+    std::string ownerName = sDataMgr.GetOwnerName(standingOwnerID);
+
+    float standing = 0;
+    if (!PosMgrDB::GetContactStanding(standingOwnerID, pClient->GetCharacterID(), standing)
+    and !PosMgrDB::GetContactStanding(standingOwnerID, pClient->GetCorporationID(), standing)
+    and !((pClient->GetAllianceID() != 0) and PosMgrDB::GetContactStanding(standingOwnerID, pClient->GetAllianceID(), standing)))
+        standing = 0;
+    if ((minimumStanding > -10) and (standing < minimumStanding))
+        throw CustomError("%s does not like you, your corporation or your alliance. Due to this you are denied access to the requested service at this station.", ownerName.c_str());
+
+    if (maximumCharSecurity > minimumCharSecurity) {
+        float security = pClient->GetSecurityRating();
+        if (security < minimumCharSecurity)
+            throw CustomError("%s regards you as too much of a security liability. Due to this you are denied access to the requested service at this station.", ownerName.c_str());
+        if (security > maximumCharSecurity)
+            throw CustomError("%s think you are regarded too highly by CONCORD. Due to this you are denied access to the requested service at this station.", ownerName.c_str());
+    }
+
+    return nullptr;
+}
+
+void CorpStationMgrIMBound::RequireStationManager(PyCallArgs& call)
+{
+    // outposts are managed by their owner corp's station managers (and directors)
+    if ((uint32)call.client->GetCorporationID() != pStationItem->GetOwnerID())
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Your corporation does not own this station."));
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::StationManager))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be a station manager to manage this station."));
+}
+
+namespace {
+// a column of a KeyVal or a packed row sent back by the client
+PyRep* GetRowValue(PyRep* row, const char* name)
+{
+    if (row == nullptr)
+        return nullptr;
+    if (row->IsObject() and row->AsObject()->arguments()->IsDict())
+        return row->AsObject()->arguments()->AsDict()->GetItemString(name);
+    if (row->IsPackedRow()) {
+        PyPackedRow* packed = row->AsPackedRow();
+        uint32 index = packed->header()->FindColumn(name);
+        if (index < packed->header()->ColumnCount())
+            return packed->GetField(index);
+    }
+    return nullptr;
+}
+
+double RowDouble(PyRep* row, const char* name, double fallback)
+{
+    PyRep* value = GetRowValue(row, name);
+    if (value == nullptr)
+        return fallback;
+    if (value->IsFloat())
+        return PyRep::FloatValue(value);
+    if (value->IsInt() or value->IsLong())
+        return (double)PyRep::IntegerValue(value);
+    return fallback;
+}
+
+double RepDouble(PyRep* value, double fallback)
+{
+    if (value->IsFloat())
+        return PyRep::FloatValue(value);
+    if (value->IsInt() or value->IsLong())
+        return (double)PyRep::IntegerValue(value);
+    return fallback;
+}
+}
+
+PyResult CorpStationMgrIMBound::UpdateStationManagementSettings(PyCallArgs& call,
+    PyRep* modifiedServiceAccessRulesByServiceID, PyRep* modifiedServiceCostModifiers,
+    PyRep* modifiedRentableItems, PyRep* stationName, PyRep* description,
+    PyRep* dockingCostPerVolume, PyRep* officeRentalCost, PyRep* reprocessingStationsTake,
+    PyRep* reprocessingHangarFlag, PyRep* exitTime, PyRep* standingOwnerID)
+{
+    //  base_stationmanagement:  self.corpStationMgr.UpdateStationManagementSettings(modifiedServiceAccessRulesByServiceID,
+    //   modifiedServiceCostModifiers, modifiedRentableItems, stationName, description, dockingCostPerVolume, officeRentalCost,
+    //   reprocessingStationsTake, reprocessingHangarFlag, exitTime, standingOwnerID)
+    _log(CORP__CALL, "CorpStationMgrIMBound::Handle_UpdateStationManagementSettings()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireStationManager(call);
+
+    // service access rules {serviceID: rule}
+    if (modifiedServiceAccessRulesByServiceID->IsDict()) {
+        PyDict* rules = modifiedServiceAccessRulesByServiceID->AsDict();
+        for (PyDict::const_iterator itr = rules->begin(); itr != rules->end(); ++itr) {
+            uint32 serviceID = PyRep::IntegerValueU32(itr->first);
+            StationDB::SetServiceAccessRule(m_stationID, serviceID,
+                RowDouble(itr->second, "minimumStanding", 0), RowDouble(itr->second, "minimumCharSecurity", 0),
+                RowDouble(itr->second, "maximumCharSecurity", 0), RowDouble(itr->second, "minimumCorpSecurity", 0),
+                RowDouble(itr->second, "maximumCorpSecurity", 0));
+        }
+    }
+
+    // service cost modifiers [row(serviceID, discountPerGoodStandingPoint, surchargePerBadStandingPoint)]
+    if (modifiedServiceCostModifiers->IsList()) {
+        PyList* rows = modifiedServiceCostModifiers->AsList();
+        for (PyList::const_iterator itr = rows->begin(); itr != rows->end(); ++itr) {
+            PyRep* serviceID = GetRowValue(*itr, "serviceID");
+            if (serviceID == nullptr)
+                continue;
+            StationDB::SetServiceCostModifier(m_stationID, PyRep::IntegerValueU32(serviceID),
+                RowDouble(*itr, "discountPerGoodStandingPoint", 0), RowDouble(*itr, "surchargePerBadStandingPoint", 0));
+        }
+    }
+
+    // offices still rented out or not [row(typeID, number, publiclyAvailable)];  number is the officeID
+    if (modifiedRentableItems->IsList()) {
+        PyList* rows = modifiedRentableItems->AsList();
+        for (PyList::const_iterator itr = rows->begin(); itr != rows->end(); ++itr) {
+            PyRep* typeID = GetRowValue(*itr, "typeID");
+            PyRep* number = GetRowValue(*itr, "number");
+            PyRep* available = GetRowValue(*itr, "publiclyAvailable");
+            if ((typeID == nullptr) or (number == nullptr) or (available == nullptr) or (PyRep::IntegerValue(typeID) != EVEDB::invTypes::OfficeFolder))
+                continue;
+            OfficeData odata = OfficeData();
+            if (!StationDB::GetOfficeData(PyRep::IntegerValueU32(number), odata) or (odata.stationID != m_stationID))
+                continue;
+            bool publiclyAvailable = (PyRep::IntegerValue(available) != 0);
+            StationDB::SetOfficePublic(odata.officeID, publiclyAvailable);
+            // an office taken off the market gets no further rent bill;  one put back gets its bill again (CorpMgr::ProcessOffices)
+            if (!publiclyAvailable and (odata.billID != 0)) {
+                sBillingMgr.CancelBill(odata.billID);
+                StationDB::SetOfficeLease(odata.officeID, odata.expiryTime, 0);
+            }
+        }
+    }
+
+    // station details
+    std::string name = PyRep::StringContent(stationName);
+    if (name.empty())
+        throw CustomError("The station must have a name.");
+    double docking = RepDouble(dockingCostPerVolume, 0);
+    double rent = RepDouble(officeRentalCost, pStationItem->GetOfficeRentalFee());
+    if (rent < 1)
+        throw CustomError("The office rental cost must be at least 1 ISK.");
+    double take = RepDouble(reprocessingStationsTake, 0);
+    take = std::max(0.0, std::min(1.0, take));
+    int32 hangarFlag = (reprocessingHangarFlag->IsInt() or reprocessingHangarFlag->IsLong() ? PyRep::IntegerValue(reprocessingHangarFlag) : flagHangar);
+    std::optional<int64> exit = Corp::MemberUpdate::Int(exitTime);
+    std::optional<int64> standingOwner = Corp::MemberUpdate::Int(standingOwnerID);
+    StationDB::UpdateStationSettings(m_stationID, name, docking, (int32)rent, take, hangarFlag,
+                                     (exit.has_value() ? (int32)exit.value() : -1), (standingOwner.has_value() ? (int32)standingOwner.value() : 0));
+
+    // the cached station data (office rent, reprocessing) follow
+    stDataMgr.UpdateStationSettings(m_stationID, name, docking, (int32)rent, take, hangarFlag);
+    pStationItem->UpdateSettings();
+    return nullptr;
+}
+
+PyResult CorpStationMgrIMBound::UpdateStationOwner(PyCallArgs& call, PyInt* newOwnerID)
+{
+    // base_stationmanagement.TransferStation:  to another corporation of the caller's alliance
+    _log(CORP__CALL, "CorpStationMgrIMBound::Handle_UpdateStationOwner()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireStationManager(call);
+    uint32 corpID = newOwnerID->value();
+    int32 allianceID = call.client->GetAllianceID();
+    CorpData data = CorpData();
+        data.corporationID = corpID;
+    CorporationDB::GetCorpData(data);
+    if (!IsPlayerCorp(corpID) or (allianceID == 0) or (data.allianceID != allianceID))
+        throw CustomError("The station can only be handed over to another corporation of your alliance.");
+    if (corpID == pStationItem->GetOwnerID())
+        return nullptr;
+
+    StationDB::SetStationOwner(m_stationID, corpID);
+    stDataMgr.SetStationOwner(m_stationID, corpID);
+    pStationItem->UpdateSettings();
+    pStationItem->ChangeOwner(corpID, true);
+
+    _log(CORP__INFO, "CorpStationMgrIMBound::UpdateStationOwner() - station %u handed to corp %u by %u", m_stationID, corpID, call.client->GetCharacterID());
+    return nullptr;
+}
+
+PyResult CorpStationMgrIMBound::RevokeCloneContractsAtStation(PyCallArgs& call, PyInt* corporationID, PyInt* characterID)
+{
+    // "Clone contracts can be removed. They will be placed at the HQ station of the owner of the contract."  (charID -1 = the whole corp)
+    _log(CORP__CALL, "CorpStationMgrIMBound::Handle_RevokeCloneContractsAtStation()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireStationManager(call);
+    uint32 ownerID = pStationItem->GetOwnerID();
+    uint32 corpID = corporationID->value();
+
+    DBQueryResult res;
+    StationDB::GetOwnerIDsOfClonesAtStation(m_stationID, corpID, res);
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        uint32 charID = row.GetUInt(0);
+        if ((characterID->value() != -1) and (charID != (uint32)characterID->value()))
+            continue;
+
+        // to their corp's HQ, or their starting station
+        CorpData data = CorpData();
+            data.corporationID = row.GetUInt(1);
+        CorporationDB::GetCorpData(data);
+        uint32 newStationID = data.corpHQ;
+        if ((newStationID == 0) or (newStationID == m_stationID) or !sDataMgr.IsStation(newStationID))
+            newStationID = CharacterDB::GetStartingStationByCareer(CharacterDB::GetCareerID(charID));
+        if ((newStationID == 0) or (newStationID == m_stationID))
+            continue;
+
+        CharacterDB::ChangeCloneLocation(charID, newStationID);
+        Client* pClient = sEntityList.FindClientByCharID(charID);
+        if (pClient != nullptr) {
+            pClient->UpdateSessionInt("cloneStationID", newStationID);
+            pClient->SendSessionChange();
+        }
+
+        PyDict* notify = new PyDict();
+            notify->SetItemString("corpID", new PyInt(ownerID));
+            notify->SetItemString("newStationID", new PyInt(newStationID));
+        sCorpMgr.NotifyChar(charID, Notify::Types::CloneRevoked2, ownerID, notify);
+    }
+
+    if (characterID->value() == -1) {
+        PyDict* notify = new PyDict();
+            notify->SetItemString("corpID", new PyInt(ownerID));
+            notify->SetItemString("newStationID", new PyInt(0));
+        sCorpMgr.NotifyCorp(corpID, Notify::Types::CloneRevoked1, ownerID, notify);
+    }
+    return nullptr;
 }
 
 PyResult CorpStationMgrIMBound::CancelRentOfOffice(PyCallArgs &call)
@@ -634,8 +866,8 @@ PyResult CorpStationMgrIMBound::GetStationDetails(PyCallArgs &call, PyInt* stati
         dict->SetItemString("reprocessingHangarFlag", new PyInt(row.GetInt(8)));
         dict->SetItemString("corporationID", new PyInt(row.GetInt(9)));
         dict->SetItemString("maxShipVolumeDockable", new PyInt(row.GetInt(10)));
-        dict->SetItemString("exitTime", PyStatic.NewNone());
-        dict->SetItemString("standingOwnerID", new PyInt(row.GetInt(9)));
+        dict->SetItemString("exitTime", (row.IsNull(12) ? PyStatic.NewNone() : (PyRep*)new PyInt(row.GetInt(12))));
+        dict->SetItemString("standingOwnerID", new PyInt((row.IsNull(13) or (row.GetInt(13) == 0)) ? row.GetInt(9) : row.GetInt(13)));
         dict->SetItemString("upgradeLevel", new PyInt(row.GetInt(11)));
     }
     return new PyObject("util.KeyVal", dict);
@@ -727,7 +959,7 @@ PyResult CorpStationMgrIMBound::GetRentableItems(PyCallArgs &call)
     call.Dump(CORP__CALL_DUMP);
 
     DBQueryResult res;
-    StationDB::GetRentableItems(call.client->GetLocationID() ,res);
+    StationDB::GetRentableItems(m_stationID, res);
 
     return DBResultToCRowset(res);    
 }

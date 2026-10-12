@@ -46,7 +46,8 @@ protected:
     PyResult GetAssetInventory(PyCallArgs& call, PyInt* corporationID, PyString* which);
     PyResult GetAssetInventoryForLocation(PyCallArgs& call, PyInt* corporationID, PyInt* stationID, PyString* which);
     PyResult GetCorporationStations(PyCallArgs& call);
-    PyResult SearchAssets(PyCallArgs& call, PyString* which, std::optional<PyInt*> itemCategoryID, std::optional<PyInt*> itemGroupID, std::optional<PyInt*> itemTypeID, std::optional<PyInt*> quantity);
+    PyResult SearchAssets(PyCallArgs& call, PyRep* which, std::optional<PyInt*> itemCategoryID, std::optional<PyInt*> itemGroupID, std::optional<PyInt*> itemTypeID, std::optional<PyInt*> quantity);
+    PyResult GetCorporationWallet(PyCallArgs& call, std::optional<PyRep*> corporationID);
 };
 
 #endif

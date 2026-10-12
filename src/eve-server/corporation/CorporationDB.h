@@ -129,14 +129,11 @@ public:
     PyRep *GetCorpInfo(uint32 corpID);
 
     PyRep* GetContacts(uint32 corpID);
-    void AddContact(uint32 ownerID, int32 contactID, int32 relationshipID);
-    void UpdateContact(int32 relationshipID, uint32 contactID, uint32 ownerID);
+    void AddContact(uint32 ownerID, int32 contactID, float relationshipID);
+    void UpdateContact(float relationshipID, uint32 contactID, uint32 ownerID);
     void RemoveContact(uint32 contactID, uint32 ownerID);
-
-    PyRep* GetLabels(uint32 corpID);
-    void SetLabel(uint32 corpID, uint32 color, std::string name);
-    void EditLabel(uint32 corpID, uint32 labelID, uint32 color, std::string name);
-    void DeleteLabel(uint32 corpID, uint32 labelID);
+    // contactID -> labelMask (labels themselves use the CharacterDB contact label helpers on crpLabels/crpContacts)
+    static void GetContactLabelMasks(uint32 ownerID, const std::vector<int32>& contactIDs, std::map<int32, int64>& into);
 
     bool IsTickerTaken(std::string ticker);
     bool AddCorporation(Call_AddCorporation & corpInfo, Client* pClient, uint32 & corpID);
@@ -166,6 +163,8 @@ public:
     uint16 CreateMedal(uint32 ownerID, uint32 creatorID, const std::string& title, const std::string& description);
     void SaveMedalData(int64 medalID, std::vector< Corp::MedalData >& dataList);
     void SetMedalStatus(uint32 charID, uint16 medalID, uint8 status);
+    // the character gives back an award (SetMedalStatus 1)
+    void RemoveMedal(uint32 charID, int32 medalID);
 
     PyRep* GetAdTypeData();
     PyRep* GetAdGroupData();
@@ -198,6 +197,8 @@ public:
 
     PyRep* GetAssetInventory(uint32 corpID, EVEItemFlags locFlag, const char* flags);
     PyRep* GetAssetInventoryForLocation(uint32 corpID, uint32 locationID, const char* flags);
+    // corpmgr.SearchAssets:  locationIDs holding matching corp items (0 = any category/group/type/quantity)
+    PyRep* SearchAssets(uint32 corpID, EVEItemFlags locFlag, const char* flags, uint32 categoryID, uint32 groupID, uint32 typeID, uint32 qty);
     PyRep* GetKillsAndLosses(uint32 corpID, uint32 number, uint32 offset);
 
     PyRep* GetMktInfo(uint32 corpID);

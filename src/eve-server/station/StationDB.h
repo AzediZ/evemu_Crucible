@@ -61,6 +61,15 @@ public:
     static void GetStationManagementServiceCostModifiers(uint32 stationID, DBQueryResult& res);
     static void GetStationDetails(uint32 stationID, DBQueryResult& res);
     static void GetRentableItems(uint32 stationID, DBQueryResult& res);
+    // outpost management (F21)
+    static uint32 GetStandingOwner(uint32 stationID);
+    static void SetServiceAccessRule(uint32 stationID, uint32 serviceID, double minimumStanding, double minimumCharSecurity,
+                                     double maximumCharSecurity, double minimumCorpSecurity, double maximumCorpSecurity);
+    static void SetServiceCostModifier(uint32 stationID, uint32 serviceID, double discountPerGoodStandingPoint, double surchargePerBadStandingPoint);
+    // exitTime -1 / standingOwnerID 0 = none
+    static void UpdateStationSettings(uint32 stationID, const std::string& name, double dockingCostPerVolume, int32 officeRentalCost,
+                                      double reprocessingStationsTake, int32 reprocessingHangarFlag, int32 exitTime, int32 standingOwnerID);
+    static void SetStationOwner(uint32 stationID, uint32 corpID);
     static void GetOwnerIDsOfClonesAtStation(uint32 stationID, uint32 corpID, DBQueryResult& res);
     static void GetOutpostImprovementStaticData(DBQueryResult& res);
     static void GetOutpostImprovements(uint32 stationID, DBQueryResult& res);

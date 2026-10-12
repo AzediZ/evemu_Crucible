@@ -229,6 +229,13 @@ void StationItem::RestoreOffice(OfficeData& odata)
     PyDecRef(payload);
 }
 
+void StationItem::UpdateSettings()
+{
+    stDataMgr.GetStationData(m_stationID, m_data);
+    if (m_data.officeRentalFee < 10000)
+        m_data.officeRentalFee = 10000;
+}
+
 void StationItem::ImpoundOffice(uint32 officeID)
 {
     std::map<uint32, OfficeData>::iterator itr = m_officeMap.find(officeID);

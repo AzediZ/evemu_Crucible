@@ -86,6 +86,16 @@ protected:
     PyResult GetRentableItems(PyCallArgs& call);
     PyResult GetOwnerIDsOfClonesAtStation(PyCallArgs& call, PyInt* corporationID);
     PyResult GetStationImprovements(PyCallArgs& call);
+    PyResult UpdateStationManagementSettings(PyCallArgs& call,
+        PyRep* modifiedServiceAccessRulesByServiceID, PyRep* modifiedServiceCostModifiers,
+        PyRep* modifiedRentableItems, PyRep* stationName, PyRep* description,
+        PyRep* dockingCostPerVolume, PyRep* officeRentalCost, PyRep* reprocessingStationsTake,
+        PyRep* reprocessingHangarFlag, PyRep* exitTime, PyRep* standingOwnerID);
+    PyResult UpdateStationOwner(PyCallArgs& call, PyInt* newOwnerID);
+    PyResult RevokeCloneContractsAtStation(PyCallArgs& call, PyInt* corporationID, PyInt* characterID);
+
+    // the caller's corp owns this station and the caller is a station manager (or director).  throws
+    void RequireStationManager(PyCallArgs& call);
 
 protected:
     const uint32 GetStationID() const { return this->m_stationID; }
