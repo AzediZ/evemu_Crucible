@@ -58,6 +58,7 @@ m_bubble(nullptr),
 m_destiny(nullptr),
 m_targMgr(nullptr),
 m_ewar(nullptr),
+m_sigMult(1.0f),
 m_killed(false)
 {
     assert(m_system != nullptr);
@@ -80,7 +81,7 @@ m_killed(false)
 SystemEntity::SystemEntity(const SystemEntity* oth) : m_self(oth->m_self),m_services(oth->m_services),m_system(oth->m_system),
 m_bubble(oth->m_bubble),m_destiny(oth->m_destiny),m_targMgr(oth->m_targMgr),m_killed(oth->m_killed),m_warID(oth->m_warID),
 m_allyID(oth->m_allyID),m_corpID(oth->m_corpID),m_fleetID(oth->m_fleetID),m_ownerID(oth->m_ownerID),m_radius(oth->m_radius),
-m_harmonic(oth->m_harmonic),m_ewar(nullptr)
+m_harmonic(oth->m_harmonic),m_ewar(nullptr),m_sigMult(1.0f)
 {
     sLog.Error("SE::SE()", "copy c'tor.");
     // wip
@@ -132,7 +133,7 @@ bool SystemEntity::IsWarpScrambled()
 
 float SystemEntity::GetSignatureRadius()
 {
-    float sig(m_self->GetAttribute(AttrSignatureRadius).get_float());
+    float sig(m_self->GetAttribute(AttrSignatureRadius).get_float() * m_sigMult);
     if (m_ewar != nullptr)
         sig *= m_ewar->GetSigRadiusMult();
     return sig;

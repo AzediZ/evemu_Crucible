@@ -17,6 +17,7 @@
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
+#include "system/TargetManager.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 
@@ -86,6 +87,45 @@ void SpawnMgr::Process() {
         return;
 
     double profileStartTime(GetTimeUSeconds());
+
+    // haulers that got away (npc ai plan 4.4):  gone, not killed.  their spawn forgets them;  a spawn left empty is over
+    if (!m_fled.empty()) {
+        std::vector<uint32> fled;
+        fled.swap(m_fled);
+        for (auto npcID : fled) {
+            NPC* pNPC(m_system->GetNPCSE(npcID));
+            if ((pNPC == nullptr) or pNPC->IsDead())
+                continue;
+            for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
+                if (itr->second.itemID != npcID)
+                    continue;
+                uint16 bubbleID(itr->first);
+                m_spawns.erase(itr);
+                bool empty(true);
+                auto range = m_spawns.equal_range(bubbleID);
+                for (auto rItr = range.first; rItr != range.second; ++rItr)
+                    if (!rItr->second.enabled)
+                        empty = false;
+                if (empty) {
+                    m_spawns.erase(bubbleID);
+                    SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(bubbleID));
+                    std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pBubble);
+                    if (bItr != m_bubbles.end())
+                        m_bubbles.erase(bItr);
+                    if (pBubble != nullptr) {
+                        pBubble->ResetBubbleRatSpawn();
+                        m_system->RemoveSpawnBubble(pBubble);
+                    }
+                }
+                break;
+            }
+            _log(SPAWN__DEPOP, "SpawnMgr::Process() - %s(%u) got away.", pNPC->GetName(), npcID);
+            if (pNPC->TargetMgr() != nullptr)
+                pNPC->TargetMgr()->ClearFromTargets();
+            m_system->RemoveNPC(pNPC);
+            SafeDelete(pNPC);
+        }
+    }
     // called by SystemManager::Process() for each system.  this will need to be fast.
     //  check timers and call appropriate functions as needed.
 
@@ -336,6 +376,13 @@ void SpawnMgr::SpawnKilled(SystemBubble* pBubble, uint32 itemID)
     }
 }
 
+void SpawnMgr::SpawnFled(NPC* pNPC)
+{
+    if ((pNPC == nullptr) or (std::find(m_fled.begin(), m_fled.end(), pNPC->GetID()) != m_fled.end()))
+        return;
+    m_fled.push_back(pNPC->GetID());
+}
+
 // one dungeon npc.  dungeon npcs never respawn (not in m_spawns), their waves are run by DungeonMgr
 NPC* SpawnMgr::SpawnDungeonNPC(SystemBubble* pBubble, uint16 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID)
 {
@@ -442,6 +489,12 @@ bool SpawnMgr::AddClassTypes(uint32 factionID, uint8 sClass, const RatSpawnClass
         SpawnGroup toSpawn = SpawnGroup();
             toSpawn.typeID = randType(shipClass);
             toSpawn.quantity = quantity;
+            // belt haulers flee, belt commanders run when alone (npc ai plan 4.4)
+            if (shipClass == 8) {
+                toSpawn.role = NPCAI::Role::Hauler;
+            } else if ((shipClass >= 10) and (shipClass <= 14)) {
+                toSpawn.role = NPCAI::Role::Commander;
+            }
         if (toSpawn.typeID != 0)
             out.push_back(toSpawn);
     };
@@ -709,6 +762,8 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
 
     NPC* pNPC(nullptr);
     InventoryItemRef iRef(nullptr);
+    // the spawn fights together (npc ai plan 6.5).  respawns join it again (ReSpawn())
+    std::shared_ptr<AggroGroup> group(m_aggroGroups.Get(NpcAI::GroupKind::Belt, static_cast<uint16>(m_spawnID)));
     for (auto cur : m_toSpawn) {
         /*
          *        ItemData( uint32 _typeID, uint32 _ownerID, uint32 _locationID, EVEItemFlags _flag, const char *_name = "",
@@ -736,6 +791,8 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
             }
 
             m_system->AddNPC(pNPC);
+            pNPC->GetAIMgr()->SetGroup(group);
+            pNPC->GetAIMgr()->SetRole(cur.role);
 
             pNPC->DestinyMgr()->SetPosition(startPos);
             //  begin warp.  this may have to be looked into later for timing of large spawns (>6)
@@ -827,6 +884,8 @@ bool SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
     }
 
     m_system->AddNPC(pNPC);
+    // back into its old group (npc ai plan 6.5:  a respawn joins the existing group)
+    pNPC->GetAIMgr()->SetGroup(m_aggroGroups.Get(NpcAI::GroupKind::Belt, spawnEntry.spawnID));
     // it starts off grid and warps in, like the first spawn
     pNPC->DestinyMgr()->SetPosition(startPos);
     pNPC->DestinyMgr()->WarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));

@@ -110,6 +110,24 @@ double RemoteEcmDurationMs(double maxDurationMs, double durationMultiplier, doub
 /* damage per second of a turret:  total base damage x damage multiplier / cycle seconds */
 double TurretDps(double totalDamage, double damageMultiplier, double cycleMs);
 
+/* npc movement mode by surface distance to the primary (5.5):
+ *  d <= 1.5 x orbit range:  orbit at the orbit range (entityFlyRange) at cruise speed
+ *  d <= boost range:        follow at the orbit range at cruise speed
+ *  further:                 follow plus the chase cycle (stall at cruise speed, boost at maxVelocity) */
+namespace Move {
+    enum : uint8_t { None = 0, Orbit = 1, Follow = 2, Chase = 3 };
+}
+uint8_t MoveMode(double distance, double orbitRange, double boostRange);
+
+/* the data leash (5.4):  Hard past wanderRange x hardScale (or hardOverride when > 0), Soft past wanderRange x softScale */
+namespace Leash {
+    enum : uint8_t { None = 0, Soft = 1, Hard = 2 };
+}
+uint8_t LeashState(double distanceFromHome, double wanderRange, double softScale, double hardScale, double hardOverride = 0.0);
+
+/* self-repair (5.9):  the chance a cycle is skipped, the effect's delay chance x its multiplier (1015-1020), 0..1 */
+double RepairSkipChance(double delayChance, double multiplier);
+
 }   // namespace NpcMath
 
 #endif  // _EVE_NPC_AI_NPCMATH_H_

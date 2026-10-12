@@ -14,6 +14,7 @@
 
 #include <unordered_map>
 #include "../../../eve-common/EVE_Spawn.h"
+#include "npc/ai/AggroGroup.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 
 class NPC;
@@ -54,6 +55,12 @@ public:
     bool IsChaining(uint16 bubbleID);
     // this will be used for all spawn types
     void SpawnKilled(SystemBubble* pBubble, uint32 itemID);    // this DOES NOT remove entity from system or bubble.  user must do this BEFORE calling.
+    /* a hauler warped off (npc ai plan 4.4):  it's removed on our next Process() (not counted as killed, no respawn).
+     *  called from inside the npc's own Process(), so the removal waits */
+    void SpawnFled(NPC* pNPC);
+
+    // the aggro groups of this system (belt spawns, dungeon groups, GM batches;  npc ai plan 6.5)
+    AggroGroupRegistry& GetAggroGroups()                { return m_aggroGroups; }
 
     void StartRatTimer();
     void StopRatTimer()                                 { m_ratTimer.Disable(); }
@@ -111,6 +118,9 @@ private:
     RatSpawnClassVec m_ratSpawnClass;               // not used
     //SystemSpawnGroupVec m_spawnGroups;
     RatFactionGroupsMap m_factionGroups;
+
+    AggroGroupRegistry m_aggroGroups;
+    std::vector<uint32> m_fled;     // haulers that got away, removed in Process()
 };
 
 

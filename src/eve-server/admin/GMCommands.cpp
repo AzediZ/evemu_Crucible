@@ -438,6 +438,12 @@ PyResult Command_spawn(Client* pClient, CommandDB* db, EVEServiceManager &servic
     }
 
     GPoint loc;
+    // npcs of one /spawn fight together (npc ai plan 6.5)
+    std::shared_ptr<AggroGroup> group;
+    if ((actualCategoryID == EVEDB::invCategories::Entity) and (pClient->SystemMgr()->GetSpawnMgr() != nullptr)) {
+        AggroGroupRegistry& groups(pClient->SystemMgr()->GetSpawnMgr()->GetAggroGroups());
+        group = groups.Get(NpcAI::GroupKind::GM, groups.NextGMBatch());
+    }
 
     for(spawnIndex=0; spawnIndex < spawnCount; ++spawnIndex)
     {
@@ -486,6 +492,11 @@ PyResult Command_spawn(Client* pClient, CommandDB* db, EVEServiceManager &servic
         // Actually do the spawn using SystemManager's BuildEntity:
         if (!pClient->SystemMgr()->BuildDynamicEntity(entity)) {
             return new PyString("Spawn Failed: typeID or typeName not supported.");
+        }
+        if (group.get() != nullptr) {
+            NPC* pNPC(pClient->SystemMgr()->GetNPCSE(entity.itemID));
+            if ((pNPC != nullptr) and (pNPC->GetAIMgr() != nullptr))
+                pNPC->GetAIMgr()->SetGroup(group);
         }
     }
 

@@ -255,8 +255,8 @@ void NPC::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
 
-    // our ewar ends with us
-    m_AI->OnKilled();
+    // our ewar ends with us, our group hears who did it
+    m_AI->OnKilled(damage.srcSE);
 
     //notify our spawn manager that we are gone.
     if ((m_spawnMgr != nullptr) and (m_self.get() != nullptr))

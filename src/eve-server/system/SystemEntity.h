@@ -236,8 +236,11 @@ public:
     EwarState*                  GetEwar(bool create=false);
     /* warp scramble attribute (CONCORD, warp core stabilizers) plus ewar scrams */
     bool                        IsWarpScrambled();
-    /* signature radius with target painters */
+    /* signature radius with target painters (and an npc's chase bloom) */
     float                       GetSignatureRadius();
+    /* npc mwd signature bloom while chase-boosting (npc ai plan 5.5).  1 = none */
+    void                        SetSigMult(float mult)  { m_sigMult = mult; }
+    float                       GetSigMult() const      { return m_sigMult; }
 
     /* common functions for all entities handled here */
     /* public data queries  */
@@ -319,6 +322,7 @@ protected:
     TargetManager*              m_targMgr;              /* we do not own this. only Destructible items will have it */
     DestinyManager*             m_destiny;              /* we do not own this. only mobile items will have it */
     EwarState*                  m_ewar;                 /* we own this.  nullptr until something applies ewar to us */
+    float                       m_sigMult;              /* signature multiplier (npc chase bloom).  1 = none */
 
     EVEServiceManager&          m_services;
 

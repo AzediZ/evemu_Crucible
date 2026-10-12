@@ -50,7 +50,7 @@ namespace NpcAI {
             MissileNoEffect         = 1 << 12,  // a real missileLaunchDuration and entityMissileTypeID but no effect 569:  no missiles
                                                 //  (rogue drones, some commanders;  the attribute-only gating fired them)
             MissileCycleTooShort    = 1 << 13,  // effect 569 with missileLaunchDuration under 1s (the placeholder 1):  dgm default 20s
-            RangeBeyondAttack       = 1 << 14,  // maxRange or falloff beyond entityAttackRange:  today's movement is kept inside it
+            RangeBeyondAttack       = 1 << 14,  // entityFlyRange beyond 0.9 x entityAttackRange:  the orbit is kept inside it
             SentryNoRange           = 1 << 15,  // sentry turret without maxRange:  entityAttackRange is its optimal
             Count                   = 16
         };
@@ -94,7 +94,7 @@ struct NpcProfile {
     /* ranges and movement (5.4, 5.5) */
     float attackRange;              // entityAttackRange (247):  weapons fire only within this surface distance
     float flyRange;                 // entityFlyRange (416) as in the data
-    float orbitRange;               // r_o:  416, or min(maxRange, R_atk) when that's 0, else 1000
+    float orbitRange;               // r_o:  416 (kept inside 0.9 x R_atk for armed types), or min(maxRange, R_atk) when 0, else 1000
     float chaseMaxDistance;         // entityChaseMaxDistance (665)
     float boostRange;               // r_b = max(665, r_o)
     float cruiseSpeed;              // entityCruiseSpeed (508), 0 = maxVelocity
@@ -104,7 +104,7 @@ struct NpcProfile {
     float sigRadius;                // signatureRadius (552)
     float radius;
     float sigBloom;                 // entityMaxVelocitySignatureRadiusMultiplier (1133):  mwd signature bloom
-    uint32 sightRange;              // today's acquisition range (radius table, 2 x 247 when that's larger).  phase 2: R_acq
+    uint32 acquireRange;            // R_acq = max(entityAttackRange, npc.AcquireRange):  proactive acquisition and lock range
 
     /* targeting (5.3) */
     uint8 maxLockedTargets;         // maxLockedTargets (192)
@@ -137,6 +137,12 @@ struct NpcProfile {
     /* ewar and support effects the type has */
     std::vector<uint16> ewarEffects;
     bool hasSelfRepair;
+    struct SelfRepair {
+        uint16 effectID;            // 876/2192-2194 (shield) or 878/2195-2197 (armor), 0 = none
+        uint32 cycleMs;             // entityShieldBoostDuration (636) / entityArmorRepairDuration (630)
+        float amount;               // entityShieldBoostAmount (637) / entityArmorRepairAmount (631)
+        float skipChance;           // the effect's delay chance (639/638, 1006-1011) x its multiplier (1015-1020)
+    } selfShield, selfArmor;
     bool hasRemoteRepair;
     bool hasGroupAssist;
 

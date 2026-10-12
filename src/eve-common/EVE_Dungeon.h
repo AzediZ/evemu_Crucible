@@ -192,8 +192,17 @@ namespace Dungeon {
         bool warpIn;
         bool isOverseer;
         uint32 lootGroupID;
+        uint8 aggroMode;        // AggroMode::*  (npc ai plan 4.3)
+        uint32 aggroRange;      // m.  a passive group aggroes on ships this close (0 = npc.PassiveAggroRange)
+        uint32 aggroLink;       // groups of one dungeon with the same non-zero link aggro together
         std::vector<std::pair<uint32, uint32>> types;   // typeID, quantity
     };
+    namespace AggroMode {
+        enum {
+            Proactive       = 0,    // acquires on its own ("aggro at warp-in")
+            Passive         = 1     // only when a member is attacked, ewar'd or locked, or a ship comes within aggroRange
+        };
+    }
     namespace SpawnMode {
         enum {
             RoomCreated     = 0,

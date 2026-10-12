@@ -10,12 +10,15 @@
   *      own state (threat, timers) as members;  one brain object per npc.
   *    - the ai manager's 'brain helpers' (NPCAIMgr public section) are the mechanics a brain may use:  candidate
   *      tests, today's target choice, primary repick, queueing an aggressor.
-  *   brains in this phase:
-  *    LegacyBrain   today's Crucible-era rules for standard rats, level-one npcs (sleepers) and law enforcement, moved
-  *                  behind this interface unchanged.  phase 2 replaces it with StandardBrain (4.2, 4.3), phase 3 with
-  *                  LevelOneBrain (4.6, 4.7), phase 4 with LawBrain/SentryBrain (4.8-4.11)
+  *   brains:
+  *    StandardBrain belt, gate, mission and deadspace rats (phase 2, PLAN.md 4.2, 4.3):  nearest player ship or drone in
+  *                  R_acq (passive groups:  only pilots that aggroed them), a wave's first pick may be the weakest ship,
+  *                  retaliation on the drone itself (npc.DroneRetaliation), group joins after the reaction delay on the
+  *                  same target with probability entityReactionFactor, focus until the primary is gone, the drone roll
+  *    LegacyBrain   the phase 0-1 rules, still used by level-one npcs (sleepers, incursion, officers:  phase 3 replaces it
+  *                  with LevelOneBrain, 4.6, 4.7) and law enforcement (phase 4:  LawBrain/SentryBrain, 4.8-4.11)
   *    PassiveBrain  no weapons (haulers, customs officials, convoys):  never acquires or retaliates (unless ewar is all it
-  *                  has:  then it picks targets for its ewar).  phase 2 adds the hauler flee timer
+  *                  has:  then it picks targets for its ewar).  the hauler flee is the state machine's (NPCAI::Role)
   *    InertBrain    no weapons, ewar or support and doesn't move (overseer structures, belongings, props):  no ai at all,
   *                  no lock-back (bug B11)
   */
@@ -79,7 +82,18 @@ public:
     static NpcBrain* Create(const NpcProfile& profile, bool lawEnforcer);
 };
 
-/* today's rules, unchanged (see NPCAIMgr's brain helpers) */
+/* the standard ai (4.2, 4.3) */
+class StandardBrain : public NpcBrain {
+public:
+    virtual const char* GetName() const                 { return "Standard"; }
+    virtual SystemEntity* Acquire(NpcContext& ctx);
+    virtual SystemEntity* OnAggressed(NpcContext& ctx, SystemEntity* pBy);
+    virtual void OnGroupAlert(NpcContext& ctx, SystemEntity* pAggressor);
+    virtual SystemEntity* RepickPrimary(NpcContext& ctx, SystemEntity* pLost);
+    virtual void Think(NpcContext& ctx);
+};
+
+/* the phase 0-1 rules (level-one npcs and law enforcement until phases 3 and 4;  see NPCAIMgr's brain helpers) */
 class LegacyBrain : public NpcBrain {
 public:
     virtual const char* GetName() const                 { return "Legacy"; }

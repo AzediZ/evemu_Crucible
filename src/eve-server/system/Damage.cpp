@@ -170,9 +170,11 @@ bool SystemEntity::ApplyDamage(Damage &d) {
     if (IsInvul())
         return false;
 
-    // dungeon 'attacked' triggers
-    if ((m_system != nullptr) and m_system->GetDungMgr()->IsDungeonEntity(GetID()))
-        m_system->GetDungMgr()->OnEntityAttacked(this, d.srcSE);
+    /* dungeon entities:  shooting an overseer structure or a sentry aggroes its room (even if this shot kills it).  the
+     *  'attacked' triggers come after the damage, only if we survive it (npc ai plan 4.3, N5) */
+    bool dungeonEntity((m_system != nullptr) and m_system->GetDungMgr()->IsDungeonEntity(GetID()));
+    if (dungeonEntity)
+        m_system->GetDungMgr()->OnRoomAggression(this, d.srcSE);
 
     // aggressive drones and drones guarding us respond to this
     DroneSE::OnAggression(this, d.srcSE);
@@ -450,6 +452,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         }
 
         SendDamageStateChanged();
+
+        // dungeon 'attacked' triggers:  we survived the hit
+        if (dungeonEntity)
+            m_system->GetDungMgr()->OnEntityAttacked(this, d.srcSE);
 
         // npcs start repairing, build threat and answer the attack
         if (IsNPCSE())
