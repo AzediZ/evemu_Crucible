@@ -84,6 +84,8 @@ DroneAIMgr::DroneAIMgr(DroneSE* pDrone)
   m_aggressorID(0),
   m_webbedID(0),
   m_jammedID(0),
+  m_ewarID(0),
+  m_ewarKind(0),
   m_moveRange(0.0),
   m_moveSpeed(0.0),
   m_cycleActive(false),
@@ -559,8 +561,64 @@ void DroneAIMgr::StopJam() {
     Ewar::EndJam(m_pDrone, m_pDrone->GetID(), pTarget);
 }
 
+/* sensor dampener, tracking disruptor and target painter drones (after AzediZ's 4c4f1d54, which changed the target's
+ *  attributes).  their effect goes into the target's EwarState like a module's (RemoteEwarModule):  stacking penalized
+ *  there, read by targeting, turret and missile formulas, with the client's ewar icon.  the values are the drone's own
+ *  attributes, as in its info window:
+ *   SD  maxTargetRangeMultiplier, scanResolutionMultiplier     -> Damp v1, v2
+ *   TD  trackingSpeedMultiplier, maxRangeMultiplier            -> TrackDisrupt v1, v2  (fallofMultiplier: the state has no falloff)
+ *   TP  signatureRadiusBonus (%)                               -> Paint v1
+ *  the entry lasts a cycle and a second, refreshed every cycle, and is removed when the drone stops (StopCycle)
+ */
+void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
+    if (m_ewarID != pTarget->GetID())
+        StopEwar();
+    // ewar immune targets (supercapitals, sieged/triaged ships)
+    if (pTarget->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool())
+        return;
+    const ItemType& type(m_pDrone->GetSelf()->type());
+    auto attr = [&](uint16 attrID, float def) -> float {
+        return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_float() : def);
+    };
+    uint8 kind(Ewar::None);
+    float v1(1.0f), v2(1.0f);
+    switch (m_pDrone->Stats().effectID) {
+        case EVEEffectID::sensorBoostTargetedHostile: {
+            kind = Ewar::Damp;
+            v1 = attr(AttrMaxTargetRangeMultiplier, 1.0f);
+            v2 = attr(AttrScanResolutionMultiplier, 1.0f);
+        } break;
+        case EVEEffectID::turretWeaponRangeFalloffTrackingSpeedMultiplyTargetHostile: {
+            kind = Ewar::TrackDisrupt;
+            v1 = attr(AttrTrackingSpeedMultiplier, 1.0f);
+            v2 = attr(AttrMaxRangeMultiplier, 1.0f);
+        } break;
+        case EVEEffectID::ewTargetPaint: {
+            kind = Ewar::Paint;
+            v1 = 1.0f + (attr(AttrSignatureRadiusBonus, 0.0f) / 100.0f);
+            v2 = 0.0f;
+        } break;
+        default:
+            return;
+    }
+    pTarget->GetEwar(true)->Apply(m_pDrone->GetID(), kind, static_cast<uint32>(m_pDrone->Stats().cycleTime) + 1000, v1, v2,
+                                  InventoryItemRef(nullptr), m_pDrone->GetID());
+    m_ewarID = pTarget->GetID();
+    m_ewarKind = kind;
+}
+
+void DroneAIMgr::StopEwar() {
+    if (m_ewarID == 0)
+        return;
+    SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_ewarID));
+    m_ewarID = 0;
+    if ((pTarget != nullptr) and (pTarget->GetEwar() != nullptr))
+        pTarget->GetEwar()->Remove(m_pDrone->GetID(), m_ewarKind, m_pDrone->GetID());
+}
+
 void DroneAIMgr::StopCycle() {
     StopJam();
+    StopEwar();
     if (!m_cycleActive)
         return;
     m_cycleActive = false;
@@ -679,7 +737,11 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
                         m_jammedID = pTarget->GetID();
                     }
                 } break;
-                // damp, tracking disruption and painting drones need target dogma modifiers (F10).  they only show their effect
+                case EVEEffectID::sensorBoostTargetedHostile:
+                case EVEEffectID::turretWeaponRangeFalloffTrackingSpeedMultiplyTargetHostile:
+                case EVEEffectID::ewTargetPaint: {
+                    ApplyEwar(pTarget);
+                } break;
             }
         } break;
     }
