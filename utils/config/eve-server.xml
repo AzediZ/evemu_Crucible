@@ -412,6 +412,15 @@ boolean can use either 0/1 OR true/false.
         <SentriesPerGate>3</SentriesPerGate>
         <SentriesPerStation>2</SentriesPerStation>
         <SentryRange>150000</SentryRange><!-- meters -->
+        <!-- npc ai plan phase 4 (doc/code_and_design_notes/npc-ai/PLAN.md 4.8 - 4.10).  Crimewatch 1 sentries (EVElopedia "Sentry guns", Dec 2011):
+             gate/station guns shoot pilots with a global criminal countdown and pilots who attacked the gate/station they guard (or its guns),
+             with their ships and drones;  every hit lands (no transversal or signature radius).  low-sec guns need a countdown, -5 isn't enough -->
+        <SentryRetarget>30</SentryRetarget><!-- seconds between a gun's random re-picks among its eligible targets -->
+        <SentryAggression>900</SentryAggression><!-- seconds aggression against a gate/station (or its guns) lasts.  each time a gun picks you it starts again.  0 = only the global criminal countdown counts -->
+        <ConcordScriptedTackle>false</ConcordScriptedTackle><!-- bool - false: CONCORD tackles with its data ewar (scram strength 10 at 250km, -95% web, 5s jams at 200km).  true: the old scripted tackle (scram 100, webs, a jam that never misses) -->
+        <FactionNavy>false</FactionNavy><!-- bool - faction navies attack pilots whose standing with the faction is at or below FactionNavyStanding in its high-sec (EVElopedia 2011).  off until navy content is verified (plan decision 11) -->
+        <FactionNavyStanding>-5.0</FactionNavyStanding>
+        <NpcFactionAggression>false</NpcFactionAggression><!-- bool - the NPC aggression timer (EVElopedia "Combat Timers" 2012): attacking an NPC makes its faction's gate/station guns (and its navy, with FactionNavy) hostile for SentryAggression.  off by default (plan decision 11) -->
     </crime>
 
     <sov><!-- sovereignty development indices (Dominion/Crucible rules: one level is 9.6M points, indices decay about a level every 4 days) -->

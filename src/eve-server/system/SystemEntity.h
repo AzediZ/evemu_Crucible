@@ -271,6 +271,8 @@ public:
     /* public generic functions handled in base class. */
     void                        DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner);
     void                        AwardSecurityStatus(InventoryItemRef iRef, Character* pChar);
+    // pays this entity's bounty (entityKillBounty) to its killer (npcs and destructible sentries)
+    void                        AwardBounty(Client* pClient);
     bool                        ApplyDamage(Damage &d); /* This method is defined in Damage.cpp */
     /* blows this entity up the same way combat does (explosion, wreck/pod/killmail, removal).  defined in Damage.cpp */
     void                        Destroy(Damage &d);
@@ -703,7 +705,6 @@ public:
 
 
     /* specific functions handled here. */
-    void                        AwardBounty(Client* pClient);
     void                    SetInvul(bool invul=false)  { m_invul = invul; }
     void                   SetFrozen(bool frozen=false) { m_frozen = frozen; }
 

@@ -447,6 +447,9 @@ void TargetManager::TargetedAdd(SystemEntity *tSE) {
     }
     if (mySE->IsNPCSE())
         mySE->GetNPCSE()->TargetedAdd(tSE);
+    // sentries answer a lock on their next think (npc ai plan phase 4:  pirate guns lock back, law guns only eligible targets)
+    if (mySE->IsSentrySE())
+        mySE->GetSentrySE()->TargetedAdd(tSE);
     if (!mySE->HasPilot())
         return;
     Notify_OnTarget te;

@@ -13,8 +13,12 @@
 #include "inventory/AttributeEnum.h"
 #include "npc/LawEnforcement.h"
 #include "npc/NPC.h"
+#include "npc/NPCAI.h"
 #include "npc/Sentry.h"
+#include "npc/ai/LawRules.h"
+#include "npc/ai/NpcMath.h"
 #include "ship/Ship.h"
+#include "ship/modules/EwarModule.h"
 #include "system/CrimeWatch.h"
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
@@ -31,7 +35,9 @@ namespace {
     const uint8 firstWave     = 1;
     const uint8 commanderWave = 2;
 
-    const float tackleScramble = 100.0f;    // more than any number of warp core stabilizers
+    const float tackleScramble = 100.0f;    // more than any number of warp core stabilizers (crime.ConcordScriptedTackle)
+
+    const uint16 effectConcordTargetJam = 3710;     // concordTargetJam (not in EVEEffectID)
 
     // faction police (group 182): a big ship and two smaller ones per empire
     void GetPoliceTypes(uint32 factionID, std::vector<uint16>& types) {
@@ -44,6 +50,35 @@ namespace {
             case factionGallente:
             default:                types = {11519, 9983, 9984};   break;  // Gallente Police Major, Master Sergeant, Captain
         }
+    }
+
+    /* faction navy (group 288 'Faction Drone'):  a battleship, a cruiser and a frigate with a web per empire.  the ones with
+     *  complete combat data (signature, ewar and repair effects).  none for factions without a navy of their own */
+    void GetNavyTypes(uint32 factionID, std::vector<uint16>& types) {
+        switch (factionID) {
+            case factionAmarr:      types = {11137, 10001, 9998};  break;   // Imperial Navy Fleet Marshall, Colonel, Sergeant
+            case factionAmmatar:    types = {10089, 10669, 10084}; break;   // Ammatar Navy General, Colonel, Sergeant
+            case factionKhanid:     types = {10083, 10082, 10076}; break;   // Khanid Navy General, Colonel, Sergeant
+            case factionCaldari:    types = {11138, 10050, 10651}; break;   // Caldari Navy Fleet Admiral, Vice Admiral, Captain 3rd Rank
+            case factionMinmatar:   types = {11140, 10078, 10663}; break;   // Republic Fleet High Commander, High Captain, Private 1st Rank
+            case factionGallente:   types = {11139, 10056, 10652}; break;   // Federation Navy Fleet General, Fleet Major, First Sergeant
+            default:                types.clear();                 break;
+        }
+    }
+
+    // a value of the type's attribute, or dogma's default when it doesn't have it
+    double AttrOrDefault(InventoryItemRef iRef, uint16 attrID) {
+        EvilNumber value;
+        if (iRef->HasAttribute(attrID, value))
+            return value.get_double();
+        return sDataMgr.GetAttributeDefault(attrID);
+    }
+
+    // a chance attribute:  0..1, a few types use percent
+    float Chance(double value) {
+        if (value > 1.0)
+            value /= 100.0;
+        return static_cast<float>(value);
     }
 
     // gate and station guns (group 99)
@@ -120,7 +155,8 @@ void LawEnforcement::SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID
             fData.corporationID = corpID;
             fData.ownerID = corpID;
         Sentry* pSentry = new Sentry(iRef, m_services, m_system, fData);
-        pSentry->SetLawSentry(true);
+        // Crimewatch 1:  aggression is kept per guarded gate or station
+        pSentry->SetLawSentry(true, pSE->GetID());
         m_system->AddEntity(pSentry, false);
         // gate guns can't be destroyed
         SystemEntity::SetUnkillable(pSentry->GetID(), true);
@@ -133,21 +169,10 @@ void LawEnforcement::SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID
  * ------------------------------------------------------------------------------------------------------------------ */
 uint32 LawEnforcement::ConcordDelay()
 {
-    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5
-    std::vector<uint32> table;
-    std::stringstream ss(sConfig.crime.ConcordResponse);
-    std::string item;
-    while (std::getline(ss, item, ','))
-        table.push_back(atoi(item.c_str()));
-    if (table.size() < 6)
-        table = {2, 5, 10, 15, 20, 25};     // the default:  closest pre-Crucible measurements (npc ai plan, open question 3)
-    float level(CrimeWatch::SecurityLevel(m_system->GetSystemSecurityRating()));
-    int idx((int)roundf((1.0f - level) * 10.0f));
-    if (idx < 0)
-        idx = 0;
-    if (idx > 5)
-        idx = 5;
-    return table[idx];
+    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 (default "2,5,10,15,20,25":  the closest pre-Crucible measurements,
+    //  owner decision 3).  npc/ai/LawRules.h
+    return LawRules::ConcordDelaySeconds(sConfig.crime.ConcordResponse,
+                                         CrimeWatch::SecurityLevel(m_system->GetSystemSecurityRating()));
 }
 
 void LawEnforcement::ReportCriminal(Client* pClient)
@@ -171,7 +196,28 @@ void LawEnforcement::ReportPoliceTarget(Client* pClient)
     Report(pClient->GetCharacterID(), pClient->GetName(), Law::Police, sConfig.crime.PoliceDelay);
 }
 
-void LawEnforcement::Report(uint32 id, const char* name, uint8 kind, uint32 delaySeconds)
+void LawEnforcement::ReportNavyTarget(Client* pClient, uint32 factionID)
+{
+    if (!sConfig.crime.FactionNavy or (pClient == nullptr) or (factionID == 0))
+        return;
+    std::vector<uint16> types;
+    GetNavyTypes(factionID, types);
+    if (types.empty())
+        return;     // no navy of their own
+    Report(pClient->GetCharacterID(), pClient->GetName(), Law::Navy, sConfig.crime.PoliceDelay, factionID);
+}
+
+const char* LawEnforcement::KindName(uint8 kind)
+{
+    switch (kind) {
+        case Law::Concord:  return "CONCORD";
+        case Law::Police:   return "Faction police";
+        case Law::Navy:     return "Faction navy";
+    }
+    return "Law enforcement";
+}
+
+void LawEnforcement::Report(uint32 id, const char* name, uint8 kind, uint32 delaySeconds, uint32 factionID/*0*/)
 {
     uint64_t key((uint64_t)id * 4 + kind);
     if (m_responses.find(key) != m_responses.end())
@@ -179,9 +225,20 @@ void LawEnforcement::Report(uint32 id, const char* name, uint8 kind, uint32 dela
     Response& r = m_responses[key];
     r.kind = kind;
     r.charID = id;
+    r.factionID = factionID;
     r.due = GetFileTimeNow() + (int64)delaySeconds * EvE::Time::Second;
-    _log(CRIME__INFO, "%s dispatched for %s(%u) in %s, arriving in %us.", (kind == Law::Concord ? "CONCORD" : "Faction police"),
-            name, id, m_system->GetName(), delaySeconds);
+    _log(CRIME__INFO, "%s dispatched for %s(%u) in %s, arriving in %us.", KindName(kind), name, id, m_system->GetName(), delaySeconds);
+}
+
+bool LawEnforcement::UsesTypeEwar(NPC* pNPC)
+{
+    if ((pNPC == nullptr) or !pNPC->IsLawEnforcer())
+        return false;
+    // CONCORD's scram, web and jam are LawEnforcement's (concord* effects, or the scripted tackle).  NPCEwar runs its neut
+    if (pNPC->IsConcord())
+        return !sConfig.crime.ConcordScriptedTackle;
+    // police and navy:  their data ewar (scram, web, ecm, damps, neuts), whatever npc.UseEwar says (npc ai plan 4.9)
+    return true;
 }
 
 SystemEntity* LawEnforcement::FindTarget(uint32 charID)
@@ -249,6 +306,10 @@ void LawEnforcement::SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave)
         } else {
             types = {typeConcordCommander};
         }
+    } else if (r.kind == Law::Navy) {
+        factionID = r.factionID;
+        corpID = sDataMgr.GetFactionCorp(factionID);
+        GetNavyTypes(factionID, types);
     } else {
         SystemData data;
         sDataMgr.GetSystemData(m_system->GetID(), data);
@@ -264,10 +325,13 @@ void LawEnforcement::SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave)
         if (pNPC != nullptr) {
             r.npcs.push_back(pNPC);
             m_npcResponse[pNPC] = (uint64_t)r.charID * 4 + r.kind;
+            // CONCORD's data tackle (npc ai plan N6)
+            if ((r.kind == Law::Concord) and !sConfig.crime.ConcordScriptedTackle)
+                BuildTackle(pNPC, r.tackle[pNPC]);
         }
     }
-    _log(CRIME__INFO, "%s arrived for %s(%u) in %s (%lu ships).", (r.kind == Law::Concord ? "CONCORD" : "Faction police"),
-            pTarget->GetName(), r.shipID, m_system->GetName(), r.npcs.size());
+    _log(CRIME__INFO, "%s arrived for %s(%u) in %s (%lu ships).", KindName(r.kind), pTarget->GetName(), r.shipID,
+            m_system->GetName(), r.npcs.size());
 }
 
 void LawEnforcement::Retarget(Response& r, uint32 shipID)
@@ -295,10 +359,14 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
         return;
     Response& r = *pResponse;
 
-    // police pursuit jams cloaks
+    // police pursuit jams cloaks:  out of cloak, and no cloaking while CONCORD is on it
+    m_pursued.insert(r.shipID);
     if (pTarget->IsShipSE() and pTarget->DestinyMgr()->IsModuleCloaked())
         pTarget->GetShipSE()->Decloak("CloakingDisengagedPolicePursuit");
 
+    // the rest is the scripted tackle.  otherwise CONCORD's data ewar does it (ProcessTackle, NPCEwar)
+    if (!sConfig.crime.ConcordScriptedTackle)
+        return;
     // warp scrambled
     if (r.scram <= 0) {
         InventoryItemRef shipRef(pTarget->GetSelf());
@@ -344,11 +412,162 @@ void LawEnforcement::ReleaseTackle(Response& r)
         m_jammed.erase(r.shipID);
         r.jammed = false;
     }
+    m_pursued.erase(r.shipID);
+    // CONCORD's data tackle ends with it (it starts again on the next ship)
+    for (auto& cur : r.tackle)
+        for (auto& fx : cur.second) {
+            if (fx.targetID != 0)
+                EndTackle(cur.first, fx);
+            fx.nextAt = 0;
+        }
+}
+
+/* ------------------------------------------------------------------------------------------------------------------
+ *  CONCORD's data tackle (npc ai plan 4.8, N6)
+ *   concordWarpScramble        entityWarpScrambleChance (per ship)   warpScrambleDuration      warpScrambleRange      strength (105)
+ *   concordModifyTargetSpeed   modifyTargetSpeedChance (per ship)    modifyTargetSpeedDuration modifyTargetSpeedRange speedFactor (20)
+ *   concordTargetJam           entityTargetJamDurationChance (each cycle)  entityTargetJamDuration  936 / 953 falloff
+ *  the usage chances are rolled once per ship (plan decision 6).  the jam has no jammer strength in the data:  it isn't a
+ *  contest with the target's sensors, it lands whenever the cycle's chance and range rolls do
+ * ------------------------------------------------------------------------------------------------------------------ */
+void LawEnforcement::BuildTackle(NPC* pNPC, std::vector<TackleEffect>& into)
+{
+    into.clear();
+    InventoryItemRef iRef(pNPC->GetSelf());
+    const ItemType& type(iRef->type());
+    NpcRng& rng(pNPC->GetAIMgr()->GetRng());
+
+    if (type.HasEffect(EVEEffectID::concordWarpScramble) and (rng.Uniform() < Chance(AttrOrDefault(iRef, AttrEntityWarpScrambleChance)))) {
+        TackleEffect fx;
+            fx.kind = Ewar::Scramble;
+            fx.guid = "effects.WarpScramble";
+            fx.duration = static_cast<uint32>(AttrOrDefault(iRef, AttrWarpScrambleDuration));
+            fx.range = AttrOrDefault(iRef, AttrWarpScrambleRange);
+            fx.strength = static_cast<float>(AttrOrDefault(iRef, AttrWarpScrambleStrength));
+        if (fx.strength <= 0.0f)
+            fx.strength = 1.0f;
+        into.push_back(fx);
+    }
+    if (type.HasEffect(EVEEffectID::concordModifyTargetSpeed) and (iRef->GetAttribute(AttrSpeedFactor).get_float() < 0.0f)
+    and (rng.Uniform() < Chance(AttrOrDefault(iRef, AttrModifyTargetSpeedChance)))) {
+        TackleEffect fx;
+            fx.kind = Ewar::Web;
+            fx.guid = "effects.ModifyTargetSpeed";
+            fx.duration = static_cast<uint32>(AttrOrDefault(iRef, AttrModifyTargetSpeedDuration));
+            fx.range = AttrOrDefault(iRef, AttrModifyTargetSpeedRange);
+        into.push_back(fx);
+    }
+    if (type.HasEffect(effectConcordTargetJam)) {
+        TackleEffect fx;
+            fx.kind = Ewar::Jam;
+            fx.guid = "effects.ElectronicAttributeModifyTarget";     // the effect has no guid:  the player ecm beam
+            fx.duration = static_cast<uint32>(AttrOrDefault(iRef, AttrEntityTargetJamDuration));
+            fx.chance = Chance(AttrOrDefault(iRef, AttrEntityTargetJamDurationChance));
+            fx.range = AttrOrDefault(iRef, AttrEntityTargetJamMaxRange);
+            fx.falloff = AttrOrDefault(iRef, AttrEntityTargetJamFallOff);
+        if (fx.chance > 0.0f)
+            into.push_back(fx);
+    }
+    std::vector<TackleEffect>::iterator itr(into.begin());
+    while (itr != into.end()) {
+        if (itr->duration < 1000)
+            itr->duration = 1000;
+        if (itr->range <= 0.0) {
+            itr = into.erase(itr);
+        } else {
+            ++itr;
+        }
+    }
+    _log(CRIME__TRACE, "%s(%u): %lu CONCORD tackle effects.", pNPC->GetName(), pNPC->GetID(), into.size());
+}
+
+void LawEnforcement::ProcessTackle(Response& r, SystemEntity* pTarget)
+{
+    int64 now(GetSteadyTime());
+    for (auto& cur : r.tackle) {
+        NPC* pNPC(cur.first);
+        // only once it has the ship locked
+        bool locked(!pNPC->IsDead() and (pNPC->TargetMgr() != nullptr)
+                    and (pNPC->TargetMgr()->GetTarget(pTarget->GetID(), true) != nullptr));
+        for (auto& fx : cur.second) {
+            if (!locked) {
+                if (fx.targetID != 0)
+                    EndTackle(pNPC, fx);
+                fx.nextAt = 0;
+                continue;
+            }
+            // the first cycle right away, then every duration (drift free)
+            if (fx.nextAt == 0)
+                fx.nextAt = now;
+            if (now < fx.nextAt)
+                continue;
+            if ((now - fx.nextAt) > (2 * (int64)fx.duration)) {
+                fx.nextAt = now + fx.duration;
+            } else {
+                fx.nextAt += fx.duration;
+            }
+            NpcRng& rng(pNPC->GetAIMgr()->GetRng());
+            double surface(pNPC->GetPosition().distance(pTarget->GetPosition()) - pNPC->GetRadius() - pTarget->GetRadius());
+            if ((rng.Uniform() >= fx.chance) or (rng.Uniform() >= NpcMath::EwarRangeChance(surface, fx.range, fx.falloff))) {
+                // not this cycle
+                if (fx.targetID != 0)
+                    EndTackle(pNPC, fx);
+                continue;
+            }
+            if (fx.targetID == 0)
+                StartTackle(pNPC, fx, pTarget);
+            switch (fx.kind) {
+                case Ewar::Scramble: {
+                    // one second of overlap keeps it from dropping between cycles
+                    pTarget->GetEwar(true)->Apply(pNPC->GetID(), Ewar::Scramble, fx.duration + 1000, fx.strength);
+                } break;
+                case Ewar::Web: {
+                    pTarget->GetEwar(true)->Apply(pNPC->GetID(), Ewar::Web, fx.duration + 1000, 0, 0, pNPC->GetSelf());
+                } break;
+                case Ewar::Jam: {
+                    Ewar::EndJam(pNPC, 0, pTarget);
+                    Ewar::StartJam(pNPC, 0, pTarget, fx.duration);
+                } break;
+            }
+        }
+    }
+}
+
+void LawEnforcement::StartTackle(NPC* pNPC, TackleEffect& fx, SystemEntity* pTarget)
+{
+    fx.targetID = pTarget->GetID();
+    DestinyManager* pDestiny(pNPC->DestinyMgr() != nullptr ? pNPC->DestinyMgr() : pTarget->DestinyMgr());
+    if (pDestiny != nullptr)
+        pDestiny->SendSpecialEffect(pNPC->GetID(), pNPC->GetID(), pNPC->GetSelf()->typeID(), fx.targetID, 0, fx.guid,
+                                    true, true, true, fx.duration, 1000);
+    // EwarState tells the pilot about scrams and webs.  the jammer's icon is ours to send
+    if (fx.kind == Ewar::Jam)
+        Ewar::SendEwarNotify(true, pNPC->GetID(), pNPC->GetID(), pTarget, "electronic");
+}
+
+void LawEnforcement::EndTackle(NPC* pNPC, TackleEffect& fx)
+{
+    uint32 targetID(fx.targetID);
+    fx.targetID = 0;
+    SystemEntity* pTarget(m_system->GetSE(targetID));
+    if (pTarget == nullptr)
+        return;
+    DestinyManager* pDestiny(pNPC->DestinyMgr() != nullptr ? pNPC->DestinyMgr() : pTarget->DestinyMgr());
+    if (pDestiny != nullptr)
+        pDestiny->SendSpecialEffect(pNPC->GetID(), pNPC->GetID(), pNPC->GetSelf()->typeID(), targetID, 0, fx.guid,
+                                    true, false, false, 0, 0);
+    if (fx.kind == Ewar::Jam) {
+        Ewar::EndJam(pNPC, 0, pTarget);
+        Ewar::SendEwarNotify(false, pNPC->GetID(), pNPC->GetID(), pTarget, "electronic");
+    } else if (pTarget->GetEwar() != nullptr) {
+        pTarget->GetEwar()->Remove(pNPC->GetID(), fx.kind);
+    }
 }
 
 void LawEnforcement::Despawn(Response& r)
 {
     ReleaseTackle(r);
+    r.tackle.clear();
     for (auto cur : r.npcs) {
         m_npcResponse.erase(cur);
         RemoveLawNPC(m_system, cur);
@@ -369,6 +588,13 @@ void LawEnforcement::Process()
         std::vector<NPC*>::iterator nItr = r.npcs.begin();
         while (nItr != r.npcs.end()) {
             if ((*nItr)->IsDead()) {
+                std::map<NPC*, std::vector<TackleEffect>>::iterator tItr(r.tackle.find(*nItr));
+                if (tItr != r.tackle.end()) {
+                    for (auto& fx : tItr->second)
+                        if (fx.targetID != 0)
+                            EndTackle(*nItr, fx);
+                    r.tackle.erase(tItr);
+                }
                 m_npcResponse.erase(*nItr);
                 RemoveLawNPC(m_system, *nItr);
                 nItr = r.npcs.erase(nItr);
@@ -435,13 +661,13 @@ void LawEnforcement::Process()
 
         if (pTarget->SysBubble() != r.npcs.front()->SysBubble()) {
             if (r.kind == Law::Concord) {
-                // got off the grid.  CONCORD arrives where they went
+                // got off the grid.  CONCORD arrives where they went (its tackle goes with it, Despawn)
                 Despawn(r);
                 r.started = 0;
                 r.nextWave = 0;
                 r.due = now + 3 * EvE::Time::Second;
             } else {
-                // the police can be escaped
+                // the police (and navy) can be escaped
                 ReleaseTackle(r);
                 r.leaveAt = now + 10 * EvE::Time::Second;
             }
@@ -454,7 +680,12 @@ void LawEnforcement::Process()
             r.nextWave = 0;
         }
 
-        if ((r.kind == Law::Police) and (now > (r.started + (int64)sConfig.crime.PoliceTimeout * EvE::Time::Second)))
+        // CONCORD's data tackle (crime.ConcordScriptedTackle false)
+        if (!r.tackle.empty())
+            ProcessTackle(r, pTarget);
+
+        // police and navy give up after a while
+        if ((r.kind != Law::Concord) and (now > (r.started + (int64)sConfig.crime.PoliceTimeout * EvE::Time::Second)))
             r.leaveAt = now;
 
         ++itr;
@@ -564,4 +795,5 @@ void LawEnforcement::Close()
     m_loggedOff.clear();
     m_sentries.clear();
     m_jammed.clear();
+    m_pursued.clear();
 }

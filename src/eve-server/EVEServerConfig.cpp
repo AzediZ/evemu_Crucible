@@ -361,6 +361,14 @@ EVEServerConfig::EVEServerConfig()
     crime.SentriesPerGate = 3;
     crime.SentriesPerStation = 2;
     crime.SentryRange = 150000 /*m*/;
+    // npc ai plan phase 4 (PLAN.md 4.8 - 4.10).  EVElopedia "Sentry guns" (Dec 2011):  a random target every 30s,
+    //  aggression with the guarded object for 15 minutes, renewed each time a gun picks you
+    crime.SentryRetarget = 30 /*s*/;
+    crime.SentryAggression = 900 /*s*/;
+    crime.ConcordScriptedTackle = false;    // CONCORD uses its data ewar (scram 10, -95% web, 5s jams)
+    crime.FactionNavy = false;              // plan decision 11:  off until navy content is verified
+    crime.FactionNavyStanding = -5.0f;
+    crime.NpcFactionAggression = false;     // plan decision 11 (EVElopedia "Combat Timers" 2012)
 
     // sov
     sov.MilitaryPointsPerBountyISK = 0.1f;
@@ -1260,6 +1268,13 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
     AddValueParser( "SentriesPerGate",      crime.SentriesPerGate );
     AddValueParser( "SentriesPerStation",   crime.SentriesPerStation );
     AddValueParser( "SentryRange",          crime.SentryRange );
+    // npc ai plan phase 4
+    AddValueParser( "SentryRetarget",       crime.SentryRetarget );
+    AddValueParser( "SentryAggression",     crime.SentryAggression );
+    AddValueParser( "ConcordScriptedTackle", crime.ConcordScriptedTackle );
+    AddValueParser( "FactionNavy",          crime.FactionNavy );
+    AddValueParser( "FactionNavyStanding",  crime.FactionNavyStanding );
+    AddValueParser( "NpcFactionAggression", crime.NpcFactionAggression );
 
     const bool result = ParseElementChildren( ele );
 
@@ -1267,7 +1282,8 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
             "LogoffWarpTime", "SecGainWindow", "SecAggressionPenalty", "SecShipKillPenalty", "SecPodKillPenalty",
             "SecPodKillMinPenalty", "CriminalLockdown", "SwitchShipWeaponsTimer", "Concord", "ConcordResponse", "ConcordWaves", "ConcordWaveDelay",
             "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
-            "SentriesPerStation", "SentryRange"})
+            "SentriesPerStation", "SentryRange",
+            "SentryRetarget", "SentryAggression", "ConcordScriptedTackle", "FactionNavy", "FactionNavyStanding", "NpcFactionAggression"})
         RemoveParser( name );
 
     return result;

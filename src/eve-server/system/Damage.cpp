@@ -38,6 +38,8 @@
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/Drone.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "ship/Ship.h"
 #include "ship/modules/GenericModule.h"
 #include "system/Container.h"
@@ -452,6 +454,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // npcs start repairing, build threat and answer the attack
         if (IsNPCSE())
             GetNPCSE()->GetAIMgr()->OnDamaged(d.srcSE, total_damage);
+        // sentries answer an attack too (npc ai plan phase 4:  pirate guns shoot back, law guns only at eligible targets)
+        if (IsSentrySE())
+            GetSentrySE()->GetAIMgr()->OnDamaged(d.srcSE, total_damage);
         // starbases:  reinforcement, attack alerts, the guns' aggressor list
         if (IsPOSSE())
             GetPOSSE()->OnDamaged(d.srcSE);

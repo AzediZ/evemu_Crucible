@@ -7,6 +7,7 @@
 
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/ai/LawBrain.h"
 #include "npc/ai/NpcBrain.h"
 #include "npc/ai/NpcProfile.h"
 
@@ -14,8 +15,9 @@ NpcBrain* NpcBrain::Create(const NpcProfile& profile, bool lawEnforcer)
 {
     if (profile.tier == NpcAI::Tier::Inert)
         return new InertBrain();
+    // CONCORD, faction police and navy (phase 4, npc/ai/LawBrain.h)
     if (lawEnforcer)
-        return new LegacyBrain(true);
+        return new LawBrain();
     if (profile.tier == NpcAI::Tier::Passive)
         return new PassiveBrain();
     // Standard and LevelOne (the legacy rules switch on the profile's level-one flag)
