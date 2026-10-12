@@ -27,6 +27,7 @@
 
 
 #include "system/CalendarDB.h"
+#include "system/CalendarMgrService.h"
 #include "system/CalendarProxy.h"
 
 CalendarProxy::CalendarProxy() :
@@ -51,6 +52,11 @@ PyResult CalendarProxy::GetEventList(PyCallArgs& call, PyInt* month, PyInt* year
     if (res != nullptr)
         list->AddItem(res);
 
+    // personal events of others this character is invited to
+    res = CalendarDB::GetInvitedEventList(call.client->GetCharacterID(), month->value(), year->value());
+    if (res != nullptr)
+        list->AddItem(res);
+
     // get corp events
     res = CalendarDB::GetEventList(call.client->GetCorporationID(), month->value(), year->value());
     if (res != nullptr)
@@ -72,6 +78,9 @@ PyResult CalendarProxy::GetEventList(PyCallArgs& call, PyInt* month, PyInt* year
 PyResult CalendarProxy::GetEventDetails(PyCallArgs& call, PyInt* eventID, PyInt* ownerID)
 {
     // self.eventDetails[eventID] = self.GetCalendarProxy().GetEventDetails(eventID, ownerID)
+    Calendar::EventInfo info = Calendar::EventInfo();
+    if (!CalendarDB::GetEventInfo(eventID->value(), info) or !CalendarMgrService::CanSee(call.client, info))
+        return PyStatic.NewNone();
     return CalendarDB::GetEventDetails(eventID->value());
 }
 
