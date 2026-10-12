@@ -26,6 +26,7 @@
 #include "corporation/CorporationDB.h"
 #include "faction/WarManager.h"
 #include "mail/MailMgr.h"
+#include "system/sov/SovereigntyDataMgr.h"
 #include "StaticDataMgr.h"
 
 /*
@@ -191,6 +192,8 @@ void AllianceManager::LeaveAlliance(uint32 corpID, uint32 allianceID)
     // "you will still be at war with the alliance but also temporarily at war with the corporation that left"
     sWarMgr.OnCorpLeftAlliance(corpID, allianceID);
     UpdateMemberSessions(corpID, 0);
+    // sovereignty is held thru the members' claim units:  the systems this corp claimed for the alliance are lost
+    svDataMgr.DropAllianceClaims(allianceID, corpID);
 
     PyDict* change = new PyDict();
         AddChange(change, "corporationID", new PyInt(corpID), new PyInt(corpID));
@@ -204,8 +207,9 @@ void AllianceManager::LeaveAlliance(uint32 corpID, uint32 allianceID)
         AllianceDB::CloseAlliance(allianceID);
         sWarMgr.OnOwnerClosed(allianceID);
         sBillingMgr.CancelBillsOf(allianceID);
+        // and whatever sovereignty it still claims
+        svDataMgr.DropAllianceClaims(allianceID);
         SendAllianceChanged(allianceID, corpID);
-        /** @todo F14:  sovereignty claims of a closed alliance are not dropped here */
         _log(ALLY__INFO, "AllianceManager::LeaveAlliance() - alliance %u closed, its last member %u left", allianceID, corpID);
     } else {
         SendAllianceChanged(allianceID);
@@ -229,6 +233,7 @@ void AllianceManager::DisbandAlliance(uint32 allianceID)
         AllianceDB::CloseAlliance(allianceID);
         sWarMgr.OnOwnerClosed(allianceID);
         sBillingMgr.CancelBillsOf(allianceID);
+        svDataMgr.DropAllianceClaims(allianceID);
     }
     _log(ALLY__INFO, "AllianceManager::DisbandAlliance() - alliance %u disbanded", allianceID);
 }

@@ -104,10 +104,13 @@ void TCUSE::SetOnline()
     {
         if (cur != nullptr)
         {
-            cur->SendNotification("ProcessSovStatusChanged", "clientID", &data);
+            // the notification consumes its payload
+            PyTuple* copy = data->Clone()->AsTuple();
+            cur->SendNotification("ProcessSovStatusChanged", "clientID", &copy);
             _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
         }
     }
+    PyDecRef(data);
 
     // '{owner} has claimed sovereignty in {system} on behalf of {alliance}'
     PyDict* params = new PyDict();
@@ -132,26 +135,7 @@ void TCUSE::DropClaim()
     if ((sovData.claimID == 0) or (sovData.claimStructureID != m_data.itemID))
         return;
 
-    svDataMgr.RemoveSovClaim(m_system->GetID());
-    SovereigntyDB::LogSovChange(m_system->GetID(), 0, 0, sovData.allianceID);
-
-    //Send ProcessSovStatusChanged Notification
-    _log(SOV__DEBUG, "Sending ProcessSovStatusChanged (removing sov claim) %u", m_system->GetID());
-
-    PyTuple* data = new PyTuple(2);
-        data->SetItem(0, new PyInt(m_system->GetID()));
-        data->SetItem(1, PyStatic.NewNone());
-
-    std::vector<Client*> list;
-    sEntityList.GetClients(list);
-    for (auto cur : list)
-    {
-        if (cur != nullptr)
-        {
-            cur->SendNotification("ProcessSovStatusChanged", "clientID", &data);
-            _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s(%u)", cur->GetName(), cur->GetCharID());
-        }
-    }
+    svDataMgr.DropClaim(m_system->GetID(), sovData.allianceID);
 }
 
 void TCUSE::OnRemovedFromSpace(bool killed)

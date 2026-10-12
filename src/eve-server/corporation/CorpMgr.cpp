@@ -47,6 +47,7 @@
 #include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 #include "station/StationOffice.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 /*
  * CORP__ERROR
@@ -991,8 +992,10 @@ void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
 void CorpMgr::OnSovBillOverdue(const BillData& bill)
 {
     // the alliance was warned with SovAllBillLate ("almost due") before the due date (BillingMgr::ProcessSovBills)
-    /** @todo F14:  an unpaid sovereignty bill should cost the alliance its claim (svDataMgr has no claim-drop hook yet) */
+    //  "failure to pay said bill before the specified due date will result in the immediate cancellation of {corporation} status as sovereign"
     _log(CORP__WARNING, "CorpMgr::OnSovBillOverdue() - alliance %u did not pay sovereignty bill %u for system %i", bill.debtorID, bill.billID, bill.externalID2);
+    if (bill.externalID2 > 0)
+        svDataMgr.DropClaim(bill.externalID2, bill.debtorID);
 }
 
 void CorpMgr::ExpireOffice(uint32 officeID, const std::string& errorText)

@@ -20,12 +20,14 @@
 #include "ship/modules/ModuleItem.h"
 #include "ship/modules/Prospector.h"
 #include "manufacturing/Blueprint.h"
+#include "pos/PosMgrDB.h"
 #include "exploration/Exploration.h"
 #include "system/Container.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/CrimeWatch.h"
 #include "system/Interdiction.h"
 #include "system/SystemManager.h"
+#include "system/sov/SovereigntyDataMgr.h"
 #include "effects/EffectsDataMgr.h"
 
 
@@ -432,8 +434,17 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
             }
             // highsec customs offices, outposts (no sov sieges yet), reinforced structures
             if (m_targetSE->IsInvul()) {
+                // an outpost whose owner's alliance holds sovereignty here says why
+                if (m_targetSE->IsOutpostSE()) {
+                    uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(m_targetSE->SystemMgr()->GetID()));
+                    if ((sovAllianceID > 0) and (PosMgrDB::GetCorpAllianceID(m_targetSE->GetSelf()->ownerID()) == sovAllianceID)) {
+                        Clear();
+                        throw UserError ("DeniedStationInvulnerableSovereign")
+                                .AddFormatValue("module", new PyInt(typeID()))
+                                .AddFormatValue("targetname", new PyString(m_targetSE->GetName()));
+                    }
+                }
                 Clear();
-                /** @todo F14: outposts in sov space take DeniedStationInvulnerableSovereign {module, targetname} instead */
                 throw UserError ("DeniedTargetInvulnerable");
             }
         }

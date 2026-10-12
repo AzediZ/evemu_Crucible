@@ -112,6 +112,14 @@ public:
     uint32 GetSystemAllianceID(uint32 systemID);
     void AddSovClaim(SovereigntyData data);
     void RemoveSovClaim(uint32 systemID);
+    /* the alliance loses its claim on systemID (TCU gone or offline, unpaid sovereignty bill, claiming corp left, alliance closed):
+     *  the claim (with its TCU and hub) is removed, the hub's upgrades go offline, every client gets the map change and the
+     *  alliance (and the claiming corp when no longer a member) get the claim lost notifications.
+     *  allianceID 0 drops whoever holds the claim, else only that alliance's.  returns false when there was nothing to drop
+     */
+    bool DropClaim(uint32 systemID, uint32 allianceID = 0);
+    // every claim of allianceID, or only those claimed by corpID (0 = all)
+    void DropAllianceClaims(uint32 allianceID, uint32 corpID = 0);
     void MarkContested(uint32 systemID, bool contested);
     SovereigntyData GetSovereigntyData(uint32 systemID);
     // every claim (sovereignty bills, F21)

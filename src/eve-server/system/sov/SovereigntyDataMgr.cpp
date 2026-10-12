@@ -12,12 +12,15 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "database/EVEDBUtils.h"
 #include "packets/Sovereignty.h"
+#include "EVE_Mail.h"
 #include "EntityList.h"
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "Client.h"
+#include "alliance/AllianceDB.h"
 #include "inventory/Inventory.h"
 #include "inventory/ItemFactory.h"
+#include "mail/NotificationMgr.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 
@@ -429,6 +432,64 @@ void SovereigntyDataMgr::RemoveSovClaim(uint32 systemID)
     // upgrades need sovereignty
     if (hubID > 0)
         RefreshUpgrades(systemID, hubID);
+}
+
+bool SovereigntyDataMgr::DropClaim(uint32 systemID, uint32 allianceID/*0*/)
+{
+    SovereigntyData sovData = GetSovereigntyData(systemID);
+    if ((sovData.claimID == 0) or ((allianceID > 0) and (sovData.allianceID != allianceID)))
+        return false;
+
+    _log(SOV__INFO, "DropClaim() - alliance %u loses its claim %u on %u", sovData.allianceID, sovData.claimID, systemID);
+    // the TCU and hub leave with the claim record; the hub's upgrades go offline
+    RemoveSovClaim(systemID);
+    // recent sov activity (map.GetRecentSovActivity)
+    SovereigntyDB::LogSovChange(systemID, 0, 0, sovData.allianceID);
+
+    PyTuple* data = new PyTuple(2);
+        data->SetItem(0, new PyInt(systemID));
+        data->SetItem(1, PyStatic.NewNone());
+    std::vector<Client*> list;
+    sEntityList.GetClients(list);
+    for (auto cur : list) {
+        if (cur == nullptr)
+            continue;
+        // the notification consumes its payload
+        PyTuple* copy = data->Clone()->AsTuple();
+        cur->SendNotification("ProcessSovStatusChanged", "clientID", &copy);
+    }
+    PyDecRef(data);
+
+    // 'DED acknowledges that you have lost your claim to sovereignty in the system {solarSystemID}'
+    if (sovData.allianceID > 0) {
+        PyDict* args = new PyDict();
+            args->SetItemString("solarSystemID", new PyInt(systemID));
+        NotificationMgr::SendToAlliance(sovData.allianceID, 0, Notify::Types::SovAllClaimLost, corpCONCORD, args);
+    }
+    // 'Your corporation has lost sovereignty in the system {solarSystemID}':  the claiming corp, when the alliance notice missed it
+    if (IsPlayerCorp(sovData.corporationID)) {
+        std::vector<uint32> members;
+        if (sovData.allianceID > 0)
+            AllianceDB::GetMemberCorps(sovData.allianceID, members);
+        if (std::find(members.begin(), members.end(), sovData.corporationID) == members.end()) {
+            PyDict* args = new PyDict();
+                args->SetItemString("solarSystemID", new PyInt(systemID));
+            NotificationMgr::SendToCorp(sovData.corporationID, 0, Notify::Types::SovCorpClaimLost, corpCONCORD, args);
+        }
+    }
+    return true;
+}
+
+void SovereigntyDataMgr::DropAllianceClaims(uint32 allianceID, uint32 corpID/*0*/)
+{
+    if (allianceID == 0)
+        return;
+    std::vector<uint32> systems;
+    for (auto& cur : boost::make_iterator_range(m_sovData.get<SovDataByAlliance>().equal_range(allianceID)))
+        if ((corpID == 0) or (cur.corporationID == corpID))
+            systems.push_back(cur.solarSystemID);
+    for (auto cur : systems)
+        DropClaim(cur, allianceID);
 }
 
 void SovereigntyDataMgr::UpdateSystemHubID(uint32 systemID, uint32 hubID)
