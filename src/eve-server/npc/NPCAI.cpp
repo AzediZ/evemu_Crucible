@@ -303,7 +303,7 @@ void NPCAIMgr::Process() {
                     return;
                 }
                 // wander, and now and then pick something else to wander around (phase 5)
-                if (sConfig.npc.IdleWander)
+                if (sConfig.npc.IdleWander and !m_idleHome)
                     if (!m_isWandering or m_sched.Due(NpcAct::Wander, now))
                         SetWander();
             }
@@ -768,16 +768,20 @@ bool NPCAIMgr::IdleGoHome()
     double distance(m_npc->GetPosition().distance(m_home));
     if (NpcMath::LeashState(distance, m_profile->wanderRange, sConfig.npc.LeashSoftScale, sConfig.npc.LeashHardScale,
                             static_cast<double>(sConfig.npc.LeashRange)) == NpcMath::Leash::None) {
-        // back inside:  the goto runs on to the home point, then we wander (or hold) as usual
-        m_idleHome = false;
+        /* back inside:  we may look for targets again.  the goto runs on to the home point (wander waits for it, its Stop()
+         *  would leave us at the leash's edge) unless another order replaced it */
+        if (m_idleHome and ((distance <= 5000.0) or !m_destiny->IsGoto()))
+            m_idleHome = false;
         return false;
     }
-    if (!m_idleHome) {
+    // (again) when nothing takes us home:  a telegraph follow, a chase retry or a jam move replaced the goto
+    if (!m_idleHome or !m_destiny->IsGoto() or (m_destiny->GetTargetPoint().distance(m_home) > 1.0)) {
+        if (!m_idleHome)
+            _log(NPC__AI_TRACE, "%s(%u): Idle %.0fm from home (wander range %.0f).  Going back.", m_npc->GetName(),
+                    m_npc->GetID(), distance, m_profile->wanderRange);
         m_idleHome = true;
         m_isWandering = false;
         m_move->GoHome(m_home);
-        _log(NPC__AI_TRACE, "%s(%u): Idle %.0fm from home (wander range %.0f).  Going back.", m_npc->GetName(), m_npc->GetID(),
-                distance, m_profile->wanderRange);
     }
     return true;
 }
@@ -1239,9 +1243,10 @@ void NPCAIMgr::AddThreat(SystemEntity* pSE, float amount)
         return;
     /* a full table only takes a newcomer whose single addition beats its lowest entry, so many small hits never got in.
      *  first forget what has left our bubble (killed, recalled, docked, jumped:  level-one threat outlives idle) */
-    if (m_threat.Full() and (m_threat.Get(pSE->GetID()) == 0.0f)) {
+    SystemBubble* pBubble(m_npc->SysBubble());
+    // (not while we're between bubbles:  everything would count as gone)
+    if (m_threat.Full() and (pBubble != nullptr) and (m_threat.Get(pSE->GetID()) == 0.0f)) {
         SystemManager* pSystem(m_npc->SystemMgr());
-        SystemBubble* pBubble(m_npc->SysBubble());
         m_threat.RemoveIf([&](uint32 id) {
             SystemEntity* pCur(pSystem->GetSE(id));
             return ((pCur == nullptr) or pCur->IsDead() or (pCur->SysBubble() != pBubble));
