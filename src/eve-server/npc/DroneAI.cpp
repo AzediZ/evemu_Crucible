@@ -618,7 +618,8 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
             tRef->SetAttribute(AttrShieldCharge, (charge > capacity ? capacity : charge));
             pTarget->SendDamageStateChanged();
             // level-one npcs fighting the patient take note (npc ai plan 5.7)
-            NotifyRemoteAssist(m_pDrone, pTarget, static_cast<float>((charge > capacity ? capacity : charge) - before));
+            NotifyRemoteAssist((m_pDrone->GetController() != nullptr ? static_cast<SystemEntity*>(m_pDrone->GetController()) : m_pDrone),
+                               pTarget, static_cast<float>((charge > capacity ? capacity : charge) - before));
         } break;
         case DroneAI::Action::RepairArmor: {
             InventoryItemRef tRef(pTarget->GetSelf());
@@ -626,7 +627,8 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
             double damage(before - stats.repairAmount);
             tRef->SetAttribute(AttrArmorDamage, (damage < 0.0 ? 0.0 : damage));
             pTarget->SendDamageStateChanged();
-            NotifyRemoteAssist(m_pDrone, pTarget, static_cast<float>(before - (damage < 0.0 ? 0.0 : damage)));
+            NotifyRemoteAssist((m_pDrone->GetController() != nullptr ? static_cast<SystemEntity*>(m_pDrone->GetController()) : m_pDrone),
+                               pTarget, static_cast<float>(before - (damage < 0.0 ? 0.0 : damage)));
         } break;
         case DroneAI::Action::Web: {
             StartWeb(pTarget);

@@ -94,6 +94,8 @@ private:
     // scratch (no allocation per tick)
     SystemEntity* m_ranked[c_maxRanked];
     double m_rankScore[c_maxRanked];
+    SystemEntity* m_newcomers[c_maxRanked];     // LookAround():  newcomers to lock
+    size_t m_newcomerCount;
 };
 
 #endif  // _EVE_NPC_AI_LEVELONEBRAIN_H_

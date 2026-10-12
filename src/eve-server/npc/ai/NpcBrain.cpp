@@ -47,9 +47,15 @@ void NpcBrain::OnDamage(NpcContext& ctx, SystemEntity* pSource, float hp)
 
 void NpcBrain::OnEwar(NpcContext& ctx, SystemEntity* pSource, uint8 effect, bool jammed)
 {
-    // a cycle of ewar on us counts like a little damage (the jam itself adds nothing more)
-    if ((pSource != nullptr) and !jammed)
-        ctx.ai->AddThreat(pSource, 50.0f);
+    // a cycle of ewar on us counts like a little damage (the jam itself adds nothing more), a drone's pilot half of it
+    if ((pSource == nullptr) or jammed)
+        return;
+    ctx.ai->AddThreat(pSource, 50.0f);
+    if (pSource->IsDroneSE()) {
+        SystemEntity* pController(pSource->GetDroneSE()->GetController());
+        if (pController != nullptr)
+            ctx.ai->AddThreat(pController, 25.0f);
+    }
 }
 
 /* StandardBrain */

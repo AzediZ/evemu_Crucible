@@ -235,19 +235,27 @@ void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* const* pSecondaries,
         pPrimary = nullptr;
     int64 now(GetSteadyTime());
     for (auto& fx : m_effects) {
-        // the first secondary within this effect's reach (surface distance), else the primary
+        /* the first secondary within this effect's reach (surface distance), else the primary.  one it's on already stays
+         *  while it's still a secondary in reach (no flicker when two of them trade places in the order) */
         SystemEntity* pTarget(pPrimary);
+        SystemEntity* pFirst(nullptr);
         double reach(Optimal(fx) + (fx.kind == Ewar::Jam ? 3 * fx.falloff : fx.falloff));
         for (size_t i = 0; i < count; ++i) {
             SystemEntity* pSE(pSecondaries[i]);
             if ((pSE == nullptr) or (pSE == pPrimary) or !IsEwarTarget(pSE))
                 continue;
             double distance(m_self->GetPosition().distance(pSE->GetPosition()) - m_self->GetRadius() - pSE->GetRadius());
-            if (distance <= reach) {
-                pTarget = pSE;
+            if (distance > reach)
+                continue;
+            if (pFirst == nullptr)
+                pFirst = pSE;
+            if (pSE->GetID() == fx.targetID) {
+                pFirst = pSE;
                 break;
             }
         }
+        if (pFirst != nullptr)
+            pTarget = pFirst;
         Step(fx, pTarget, now);
     }
 }

@@ -22,7 +22,7 @@ class SystemEntity;
 
 class NPCEwar {
 public:
-    // pSelf = npc or sentry.  never for law enforcement.  rng:  the npc's own (nullptr = the global one)
+    // pSelf = npc or sentry (law enforcement too when LawEnforcement::UsesTypeEwar() says so).  rng:  the npc's own (nullptr = the global one)
     NPCEwar(SystemEntity* pSelf, NpcRng* rng = nullptr);
     ~NPCEwar()                          { /* StopAll() is the owner's job (it needs our destiny) */ }
 

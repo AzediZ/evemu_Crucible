@@ -52,7 +52,8 @@ LevelOneBrain::LevelOneBrain(const NpcProfile& profile)
   m_nextDecay(0),
   m_jamGotoTarget(0),
   m_jamCuddle(false),
-  m_jamGoto(NULL_ORIGIN)
+  m_jamGoto(NULL_ORIGIN),
+  m_newcomerCount(0)
 {
     // "if it is 0 or below it uses the ship's signature radius instead" (1655)
     if (profile.l1SignatureRadius)
@@ -60,6 +61,7 @@ LevelOneBrain::LevelOneBrain(const NpcProfile& profile)
     for (size_t i = 0; i < c_maxRanked; ++i) {
         m_ranked[i] = nullptr;
         m_rankScore[i] = 0.0;
+        m_newcomers[i] = nullptr;
     }
 }
 
@@ -143,9 +145,11 @@ void LevelOneBrain::Decay(NpcContext& ctx)
     }
     if (ctx.now < m_nextDecay)
         return;
-    // drift free;  after a long sleep only once
-    m_nextDecay = (((ctx.now - m_nextDecay) > (2 * interval)) ? ctx.now : m_nextDecay) + interval;
-    ctx.ai->GetThreatTable().Decay(sConfig.npc.L1ThreatDecay, 1.0f);
+    // every interval that passed (a dormant npc wakes up with what is left after the whole gap), drift free
+    int64 steps(1 + ((ctx.now - m_nextDecay) / interval));
+    m_nextDecay += steps * interval;
+    double factor(std::pow(static_cast<double>(sConfig.npc.L1ThreatDecay), static_cast<double>(std::min<int64>(steps, 10000))));
+    ctx.ai->GetThreatTable().Decay(static_cast<float>(factor), 1.0f);
 }
 
 void LevelOneBrain::AddThreat(NpcContext& ctx, SystemEntity* pSource, float amount, bool share)
@@ -186,6 +190,9 @@ void LevelOneBrain::OnDamage(NpcContext& ctx, SystemEntity* pSource, float hp)
 void LevelOneBrain::OnEwar(NpcContext& ctx, SystemEntity* pSource, uint8 effect, bool jammed)
 {
     // "should the entity watch for effects when choosing targets" (1652)
+    // a new jam:  the jam response starts over (SetIdle stopped us)
+    if (jammed)
+        m_jamGotoTarget = 0;
     if ((pSource == nullptr) or !ctx.profile.l1EffectMultiplier)
         return;
     AddThreat(ctx, pSource, static_cast<float>(NpcMath::L1EffectThreat(effect, jammed, sConfig.npc.L1EffectThreat, ctx.profile.maxHP)), true);
@@ -198,7 +205,8 @@ void LevelOneBrain::OnAssist(NpcContext& ctx, SystemEntity* pRepairer, SystemEnt
         return;
     if ((ctx.npc->TargetMgr()->GetTarget(pPatient->GetID(), false) == nullptr) and !(ctx.ai->GetThreat(pPatient->GetID()) > 0.0f))
         return;
-    AddThreat(ctx, pRepairer, hp * sConfig.npc.L1RepairThreat, true);
+    // every level-one npc that sees it counts it itself (NotifyRemoteAssist):  no group share on top
+    AddThreat(ctx, pRepairer, hp * sConfig.npc.L1RepairThreat, false);
 }
 
 void LevelOneBrain::OnGroupThreat(NpcContext& ctx, SystemEntity* pSource, float amount)
@@ -264,6 +272,7 @@ SystemEntity* LevelOneBrain::RepickPrimary(NpcContext& ctx, SystemEntity* pLost)
 void LevelOneBrain::Think(NpcContext& ctx)
 {
     Decay(ctx);
+    m_jamGotoTarget = 0;
     // a switch whose lock failed (jam, range) is off
     uint32 switchTo(ctx.ai->GetSwitchToID());
     if ((switchTo != 0) and (ctx.npc->TargetMgr()->GetTarget(switchTo, false) == nullptr))
@@ -292,6 +301,7 @@ void LevelOneBrain::LookAround(NpcContext& ctx, SystemEntity* pPrimary)
     if ((!incursion and !sleeper) or (ctx.npc->SysBubble() == nullptr))
         return;
     int64 memory(static_cast<int64>(sConfig.npc.L1NewcomerMemory) * 1000);
+    m_newcomerCount = 0;
     float primaryThreat((pPrimary != nullptr) ? ctx.ai->GetThreat(pPrimary->GetID()) : 0.0f);
     ctx.npc->SysBubble()->ForEachDynamic([&](SystemEntity* cur) {
         if (!IsPilotedShip(cur) or !ctx.ai->IsCandidate(cur, false, true))
@@ -305,12 +315,27 @@ void LevelOneBrain::LookAround(NpcContext& ctx, SystemEntity* pPrimary)
                 ctx.ai->AddThreat(cur, static_cast<float>(add));
                 _log(NPC__AI_TRACE, "%s(%u): Newcomer %s(%u):  threat +%.0f.", ctx.npc->GetName(), ctx.npc->GetID(), cur->GetName(),
                         cur->GetID(), add);
+                m_newcomers[m_newcomerCount < c_maxRanked ? m_newcomerCount++ : (c_maxRanked - 1)] = cur;
             }
         }
         // sleepers call for reinforcements when a capital ship comes into sight (4.6;  the spawn is phase 5's)
         if (sleeper and IsCapitalShip(cur) and (ctx.npc->SystemMgr()->GetDungMgr() != nullptr))
             ctx.npc->SystemMgr()->GetDungMgr()->OnCapitalSighted(ctx.npc, cur);
     });
+    /* newcomers are locked at once (making room if need be):  with both locked, 1.2 x the primary's threat beats it by the
+     *  margin.  one-lock types keep their primary until threat alone wins */
+    TargetManager* pTargMgr(ctx.npc->TargetMgr());
+    for (size_t i = 0; i < m_newcomerCount; ++i) {
+        SystemEntity* pSE(m_newcomers[i]);
+        if ((pTargMgr->GetTarget(pSE->GetID(), false) != nullptr) or (ctx.profile.maxLockedTargets < 2))
+            continue;
+        if (ctx.npc->GetPosition().distance(pSE->GetPosition()) > ctx.ai->LockRange())
+            continue;
+        if ((pTargMgr->TargetCount() >= ctx.profile.maxLockedTargets) and !MakeRoom(ctx, pPrimary, &m_newcomers[i], 1))
+            break;
+        ctx.ai->StartLock(pSE);
+    }
+    m_newcomerCount = 0;
 }
 
 void LevelOneBrain::Switch(NpcContext& ctx, SystemEntity* pPrimary)
@@ -322,6 +347,9 @@ void LevelOneBrain::Switch(NpcContext& ctx, SystemEntity* pPrimary)
     if ((count == 0) or (m_ranked[0] == pPrimary))
         return;
     SystemEntity* pBest(m_ranked[0]);
+    // damped:  it has to be within what we can lock (the state machine closes in on a target we can't lock yet)
+    if (ctx.npc->GetPosition().distance(pBest->GetPosition()) > ctx.ai->LockRange())
+        return;
     double best(m_rankScore[0]), current(Score(ctx, pPrimary));
     int64 timer(SwitchTimerMs(ctx.profile));
     if (!NpcMath::L1ShouldSwitch(best, current, sConfig.npc.L1SwitchMargin, ctx.now, ctx.ai->GetLastSwitch(), timer,
@@ -389,6 +417,9 @@ void LevelOneBrain::RefreshLocks(NpcContext& ctx, SystemEntity* pPrimary)
         SystemEntity* pSE(m_ranked[i]);
         if (pTargMgr->GetTarget(pSE->GetID(), false) != nullptr)
             continue;
+        // never a lock dropped for one we can't get (damps)
+        if (ctx.npc->GetPosition().distance(pSE->GetPosition()) > ctx.ai->LockRange())
+            continue;
         if ((pTargMgr->TargetCount() >= slots) and !MakeRoom(ctx, pPrimary, m_ranked, count))
             break;
         ctx.ai->StartLock(pSE);
@@ -444,7 +475,8 @@ void LevelOneBrain::WhileJammed(NpcContext& ctx, SystemEntity* pJammer, double j
 size_t LevelOneBrain::EwarTargets(NpcContext& ctx, SystemEntity* pPrimary, SystemEntity** out, size_t max)
 {
     // "should use secondary effect on other targets?" (1649):  the best-scoring locked ships that aren't the primary
-    if (!ctx.profile.l1SecondaryTarget or (max == 0))
+    // nothing before the primary is locked (bug B6a)
+    if (!ctx.profile.l1SecondaryTarget or (max == 0) or (pPrimary == nullptr))
         return 0;
     double scores[c_maxRanked];
     if (max > c_maxRanked)

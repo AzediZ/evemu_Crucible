@@ -491,8 +491,11 @@ void NPCAIMgr::ApplyBuff(uint8 kind, float mult, uint32 durationMs)
     if ((kind >= NpcAI::Buff::Count) or !(mult > 0.0f) or (mult == 1.0f))
         return;
     int64 now(Now());
+    // what ran out goes first (Process() may not have got there)
+    if (m_buffsActive)
+        ProcessBuffs(now);
     BuffState& buff(m_buffs[kind]);
-    if (buff.until > now) {
+    if (buff.until != 0) {
         if (buff.mult == mult) {
             buff.until = std::max(buff.until, now + static_cast<int64>(durationMs));
             return;
