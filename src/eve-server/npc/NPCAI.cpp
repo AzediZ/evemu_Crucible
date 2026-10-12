@@ -98,6 +98,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_buffsActive(false),
   m_vanishing(false),
   m_telegraph(false),
+  m_idleHome(false),
   m_role(NPCAI::Role::None),
   m_primaryID(0),
   m_pendingAggroID(0),
@@ -223,8 +224,9 @@ void NPCAIMgr::Process() {
 
     int64 now(Now());
     if (m_sched.Due(NpcAct::WarpOut, now)) {
-        // an idle spawn moves on after a while.  not while its dead members are waiting for a respawn (chained)
-        if (IsIdle() and (m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr)
+        /* an idle spawn moves on after a while.  not while its dead members are waiting for a respawn (chained), nor while it
+         *  chases an attacker or waits to join its group (still idle then) */
+        if (IsQuiet() and (m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr)
         and !m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID()))
             WarpOut();
     }
@@ -285,6 +287,10 @@ void NPCAIMgr::Process() {
             if (!m_sched.Active(NpcAct::Think))
                 m_sched.StartPeriodic(NpcAct::Think, now, 1000);
             if (m_sched.Due(NpcAct::Think, now)) {
+                /* out past our leash with nothing to do:  home first, instead of a new fight that the leash would cut short
+                 *  at once (being shot still gets its answer, the queued aggressor above) */
+                if (IdleGoHome())
+                    break;
                 // a passive group wakes up when someone comes too close
                 if (CheckProximity())
                     return;
@@ -755,6 +761,27 @@ bool NPCAIMgr::CheckLeash(int64 now)
     return true;
 }
 
+bool NPCAIMgr::IdleGoHome()
+{
+    if (m_npc->IsLawEnforcer() or (m_destiny == nullptr) or m_destiny->IsWarping())
+        return false;
+    double distance(m_npc->GetPosition().distance(m_home));
+    if (NpcMath::LeashState(distance, m_profile->wanderRange, sConfig.npc.LeashSoftScale, sConfig.npc.LeashHardScale,
+                            static_cast<double>(sConfig.npc.LeashRange)) == NpcMath::Leash::None) {
+        // back inside:  the goto runs on to the home point, then we wander (or hold) as usual
+        m_idleHome = false;
+        return false;
+    }
+    if (!m_idleHome) {
+        m_idleHome = true;
+        m_isWandering = false;
+        m_move->GoHome(m_home);
+        _log(NPC__AI_TRACE, "%s(%u): Idle %.0fm from home (wander range %.0f).  Going back.", m_npc->GetName(), m_npc->GetID(),
+                distance, m_profile->wanderRange);
+    }
+    return true;
+}
+
 void NPCAIMgr::BeginReturn(bool hard, int64 now)
 {
     double distance(m_npc->GetPosition().distance(m_home));
@@ -1035,6 +1062,9 @@ void NPCAIMgr::SetIdle(bool clearLocks/*true*/) {
     // level-one threat outlives a jam that broke every lock (it fades on its own)
     if ((m_brain == nullptr) or !m_brain->KeepsThreat())
         m_threat.Clear();
+    // the fight may have ended out past our leash:  home, even if we fall asleep on the way (movement runs while dormant)
+    m_idleHome = false;
+    IdleGoHome();
 
     //disallow warpout if anomaly, incursion or mission rat (and by config)
     StartWarpOutTimer();
@@ -1207,6 +1237,16 @@ void NPCAIMgr::AddThreat(SystemEntity* pSE, float amount)
 {
     if ((pSE == nullptr) or !(amount > 0.0f))
         return;
+    /* a full table only takes a newcomer whose single addition beats its lowest entry, so many small hits never got in.
+     *  first forget what has left our bubble (killed, recalled, docked, jumped:  level-one threat outlives idle) */
+    if (m_threat.Full() and (m_threat.Get(pSE->GetID()) == 0.0f)) {
+        SystemManager* pSystem(m_npc->SystemMgr());
+        SystemBubble* pBubble(m_npc->SysBubble());
+        m_threat.RemoveIf([&](uint32 id) {
+            SystemEntity* pCur(pSystem->GetSE(id));
+            return ((pCur == nullptr) or pCur->IsDead() or (pCur->SysBubble() != pBubble));
+        });
+    }
     m_threat.Add(pSE->GetID(), amount);
 }
 
@@ -1478,6 +1518,15 @@ SystemEntity* NPCAIMgr::GetPrimary()
 {
     if (m_primaryID != 0) {
         SystemEntity* pSE(m_npc->TargetMgr()->GetTarget(m_primaryID, false));
+        if ((pSE != nullptr) and m_npc->IsLawEnforcer() and (m_primaryID != m_npc->GetLawTarget())) {
+            /* law enforcement only shoots the ship it was sent for.  the pilot boarded another one (LawEnforcement::Retarget):
+             *  the old, empty ship is let go */
+            m_primaryID = 0;
+            ClearTarget(pSE);
+            if (IsIdle())
+                return nullptr;
+            pSE = nullptr;
+        }
         if (pSE != nullptr)
             return pSE;
     }
@@ -1941,6 +1990,13 @@ void NPCAIMgr::OnRemoved()
         m_group->Remove(m_npc);
         m_group.reset();
     }
+}
+
+bool NPCAIMgr::IsQuiet()
+{
+    if (!IsIdle() or (m_pendingAggroID != 0) or m_telegraph)
+        return false;
+    return (m_npc->TargetMgr() == nullptr) or (m_npc->TargetMgr()->HasNoTargets() and !m_npc->TargetMgr()->IsTargeted());
 }
 
 bool NPCAIMgr::IsBusy()

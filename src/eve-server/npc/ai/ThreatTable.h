@@ -60,6 +60,22 @@ public:
         }
     }
 
+    bool Full() const                                   { return (m_count >= Capacity); }
+
+    // removes every entry whose id gone(id) says has left (killed, recalled, docked, jumped, out of reach)
+    template <class F>
+    void RemoveIf(const F& gone) {
+        size_t i(0);
+        while (i < m_count) {
+            if (gone(m_entries[i].id)) {
+                m_entries[i] = m_entries[m_count - 1];
+                --m_count;
+            } else {
+                ++i;
+            }
+        }
+    }
+
     void Remove(uint32_t id) {
         for (size_t i = 0; i < m_count; ++i)
             if (m_entries[i].id == id) {

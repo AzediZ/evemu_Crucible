@@ -221,8 +221,8 @@ bool SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& wher
         NPC* rNPC(m_system->GetNPCSE(itr->second.itemID));
         if ((rNPC == nullptr) or rNPC->IsDead() or (rNPC->DestinyMgr() == nullptr))
             continue;
-        // the group stays while any of it is busy (fighting, already warping) or pointed
-        if (!rNPC->GetAIMgr()->IsIdle() or rNPC->IsWarpScrambled())
+        // the group stays while any of it is busy (fighting, chasing or about to join, already warping) or pointed
+        if (!rNPC->GetAIMgr()->IsQuiet() or rNPC->IsWarpScrambled())
             return false;
         entries.push_back(itr->second);
         npcs.push_back(rNPC);
@@ -414,7 +414,7 @@ bool SpawnMgr::VanishSpawn(NPC* pNPC)
         NPC* rNPC(m_system->GetNPCSE(itr->second.itemID));
         if ((rNPC == nullptr) or rNPC->IsDead() or (rNPC->DestinyMgr() == nullptr) or (rNPC->GetAIMgr() == nullptr))
             continue;
-        if (!rNPC->GetAIMgr()->IsIdle() or rNPC->IsWarpScrambled())
+        if (!rNPC->GetAIMgr()->IsQuiet() or rNPC->IsWarpScrambled())
             return false;
         npcs.push_back(rNPC);
     }
