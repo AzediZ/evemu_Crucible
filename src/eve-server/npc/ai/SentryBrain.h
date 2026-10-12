@@ -15,7 +15,10 @@
   *                       - never lock back an innocent, never use ewar
   *   PirateSentryBrain  pirate and deadspace sentries:  the nearest player ship within min(entityAttackRange, bubble), lock back
   *                       whoever locks or attacks them (a drone:  the drone, plan decision 7), the shared turret formula with
-  *                       maxRange as optimal, their data ewar.  room aggro comes through SentryAI::OnGroupAlert (phase 2)
+  *                       maxRange as optimal, their data ewar.  members of their dungeon group or room (npc/ai/AggroGroup.h):
+  *                       group and room aggro come through SentryAI::OnGroupAlert, and a passive group's sentry acquires only
+  *                       once the group was aggroed, and then only its aggressors.  a gun of the empire groups placed by a
+  *                       dungeon is one of these (Sentry::SetLawSentry(false))
   */
 
 #ifndef _EVE_NPC_AI_SENTRYBRAIN_H_

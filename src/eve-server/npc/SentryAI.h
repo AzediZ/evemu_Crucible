@@ -9,6 +9,9 @@
   *   sentries).  this class does the mechanics:  locks (capped by maxLockedTargets), an explicit primary, one drift-free
   *   NpcSchedule (think, turret, missile, retarget), the firing gates (completed lock, entityAttackRange), the type's ewar.
   *   the type's data comes from its NpcProfile and every roll from its own NpcRng (npc.RngSeed)
+  *   pirate and deadspace sentries may be members of an aggro group (npc/ai/AggroGroup.h, plan 4.11, 6.5:  their dungeon
+  *   spawn group, their room, a GM /spawn batch):  the group's alerts reach OnGroupAlert, and being locked, attacked, acquiring
+  *   a target or dying alerts the group.  a passive group's sentry waits like its npcs (proximity, aggressors only)
   */
 
 #ifndef __NPC_SENTRY_AI_H
@@ -18,6 +21,7 @@
 #include "npc/ai/NpcRng.h"
 #include "npc/ai/NpcSchedule.h"
 
+class AggroGroup;
 class NPCEwar;
 class Sentry;
 class SentryBrain;
@@ -53,8 +57,12 @@ public:
 
     void ClearAllTargets();
 
-    // called from Sentry::Killed()
-    void OnKilled();
+    // called from Sentry::Killed().  pKiller:  the fatal blow's source (our group hears about it)
+    void OnKilled(SystemEntity* pKiller);
+
+    // our aggro group (we join it;  nullptr leaves the old one).  DungeonMgr, GM /spawn
+    void SetGroup(const std::shared_ptr<AggroGroup>& group);
+    AggroGroup* GetGroup()                              { return m_group.get(); }
 
     bool IsIdle()                                       { return (m_state == State::Idle); }
     bool IsFighting()                                   { return (m_state != State::Idle); }
@@ -83,6 +91,10 @@ protected:
     void Respond(SystemEntity* pSE);
     // drops our locks on what the brain no longer lets us shoot
     void PruneLocks(SentryContext& ctx);
+    // our group (and linked groups) hear about pAggressor (players' ships and drones only)
+    void AlertGroup(SystemEntity* pAggressor);
+    // passive groups:  a player ship or drone came within the group's aggro range of us.  true if we went after it
+    bool CheckProximity(SentryContext& ctx);
 
     double GetTargetTime(SystemEntity* pTarget);
     // surface distance to pTarget
@@ -103,11 +115,13 @@ private:
 
     uint32 m_primaryID;     // weapons target
     uint32 m_pendingAggroID;// someone who locked, attacked or ewar'd us (or our room) while we were idle.  handled on the next think
+    int64 m_lastLinkAlert;  // ms:  linked groups were last told
 
     Sentry* m_npc;
     NPCEwar* m_ewar;            // we own this.  sentries whose brain allows their type's ewar
     SentryBrain* m_brain;       // we own this.  made on the first Process() (LawEnforcement sets the law role after we're made)
     std::shared_ptr<const NpcProfile> m_profile;
+    std::shared_ptr<AggroGroup> m_group;
 
     NpcSchedule m_sched;
     NpcRng m_rng;

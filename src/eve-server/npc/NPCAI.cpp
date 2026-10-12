@@ -257,13 +257,15 @@ void NPCAIMgr::Process() {
     switch(m_state) {
         case NPCAI::State::Idle: {
             if (m_npc->IsLawEnforcer()) {
-                // CONCORD and faction police only go after the ship they were sent for (LawEnforcement moves them if it leaves)
-                SystemEntity* pTarget(m_npc->SystemMgr()->GetSE(m_npc->GetLawTarget()));
-                if ((pTarget == nullptr) or (pTarget->SysBubble() != m_npc->SysBubble()) or (pTarget->DestinyMgr() == nullptr))
+                /* CONCORD, faction police and navy only go after the ship they were sent for (LawBrain;  LawEnforcement moves
+                 *  them if it leaves).  a lock refused for range retries every 2s (Target() queued it), not every tick */
+                if ((m_pendingAggroID != 0) and (now < m_pendingAt))
                     break;
-                if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
-                    break;
-                Target(pTarget);
+                m_pendingAggroID = 0;
+                m_pendingJoined = false;
+                SystemEntity* pTarget(m_brain->Acquire(ctx));
+                if (pTarget != nullptr)
+                    Target(pTarget);
                 break;
             }
             // a jammed npc can't lock anything (EwarState already broke its locks)

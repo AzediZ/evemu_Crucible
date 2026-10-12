@@ -7,8 +7,11 @@
 
 #include "Client.h"
 #include "EVEServerConfig.h"
+#include "npc/Drone.h"
 #include "npc/NPC.h"
 #include "npc/Sentry.h"
+#include "npc/SentryAI.h"
+#include "npc/ai/AggroGroup.h"
 #include "npc/ai/LawRules.h"
 #include "npc/ai/NpcProfile.h"
 #include "npc/ai/NpcRng.h"
@@ -194,6 +197,15 @@ bool PirateSentryBrain::MayShoot(SentryContext& ctx, SystemEntity* pTarget)
 
 SystemEntity* PirateSentryBrain::Acquire(SentryContext& ctx)
 {
+    /* a passive group's sentry (4.3, 4.11) never picks anyone on its own.  once the group was aggroed it goes after the
+     *  pilots who did it (npc.GroupAggroMemory), like StandardBrain.  coming too close wakes it (SentryAI::CheckProximity) */
+    AggroGroup* pGroup(ctx.ai->GetGroup());
+    AggroGroup* pOnly(nullptr);
+    if ((pGroup != nullptr) and pGroup->IsPassive()) {
+        if (!pGroup->WasAlerted())
+            return nullptr;
+        pOnly = pGroup;
+    }
     // the nearest player ship
     SystemBubble* pBubble(ctx.sentry->SysBubble());
     if (pBubble == nullptr)
@@ -203,6 +215,8 @@ SystemEntity* PirateSentryBrain::Acquire(SentryContext& ctx)
     pBubble->ForEachPlayer([&](Client* cur) {
         SystemEntity* pShip(cur->GetShipSE());
         if ((pShip == nullptr) or !MayShoot(ctx, pShip))
+            return;
+        if ((pOnly != nullptr) and !pOnly->IsAggressor(pShip, ctx.now))
             return;
         double distance(ctx.sentry->GetPosition().distance(pShip->GetPosition()));
         if ((pBest == nullptr) or (distance < nearest)) {
@@ -215,7 +229,13 @@ SystemEntity* PirateSentryBrain::Acquire(SentryContext& ctx)
 
 SystemEntity* PirateSentryBrain::OnAggressed(SentryContext& ctx, SystemEntity* pBy)
 {
-    // whoever it was:  a drone gets shot itself (plan decision 7)
+    /* whoever it was:  a drone gets shot itself (plan decision 7, npc.DroneRetaliation 1, as StandardBrain).  0 = its pilot,
+     *  when we can shoot him */
+    if ((pBy != nullptr) and pBy->IsDroneSE() and (sConfig.npc.DroneRetaliation != 1)) {
+        SystemEntity* pController(pBy->GetDroneSE()->GetController());
+        if (MayShoot(ctx, pController))
+            return pController;
+    }
     return (MayShoot(ctx, pBy) ? pBy : nullptr);
 }
 

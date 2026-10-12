@@ -35,6 +35,10 @@ namespace {
         EVEEffectID::NPCGroupArmorAssist
     };
 
+    /* a turret cycle this long is the data's placeholder for "no guns" (speed 20,000,000 = 5.5 hours on ~95 sentries and
+     *  overseer structures, 15,000,000 on one;  real npc cycles are under 20s):  missile-only (PLAN.md 4.11) */
+    const uint32 c_placeholderTurretCycleMs = 10000000;
+
     std::mutex s_cacheMutex;
     std::unordered_map<uint16, std::shared_ptr<const NpcProfile>> s_cache;
 
@@ -125,6 +129,7 @@ const char* NpcAI::GetProblemText(uint32 problemBit)
         case Problem::RangeBeyondAttack:    return "entityFlyRange beyond 0.9 x entityAttackRange -> orbit kept inside it";
         case Problem::SentryNoRange:        return "sentry turret without maxRange -> entityAttackRange as optimal";
         case Problem::MissileNoEffect:      return "missileLaunchDuration and entityMissileTypeID but no effect 569 -> no missiles (they fired without RequireWeaponEffects)";
+        case Problem::TurretPlaceholder:    return "effect 10 with the placeholder speed 20,000,000 -> no turret (missile-only, correct)";
     }
     return "unknown";
 }
@@ -218,7 +223,11 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     r.tracking = static_cast<float>(Attr(type, AttrTrackingSpeed));
     r.sigResolution = static_cast<float>(Attr(type, AttrOptimalSigRadius));
     bool turretEffect(type.HasEffect(EVEEffectID::targetAttack));
-    if (requireEffects) {
+    if (r.turretCycleMs >= c_placeholderTurretCycleMs) {
+        // no guns (whatever the effects and damage say).  the missiles below are its weapon
+        r.problems |= NpcAI::Problem::TurretPlaceholder;
+        r.hasTurret = false;
+    } else if (requireEffects) {
         r.hasTurret = turretEffect;
         if (turretEffect and (r.turretDamage <= 0.0f)) {
             r.problems |= NpcAI::Problem::TurretNoDamage;

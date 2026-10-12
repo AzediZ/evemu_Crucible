@@ -73,8 +73,8 @@ void Sentry::Process() {
 
 bool Sentry::IsLawSentry()
 {
-    if (m_lawSentry)
-        return true;
+    if (m_lawSet)
+        return m_lawSentry;
     // the empire gate and station guns (group 99) are law guns even when they come from the database instead of LawEnforcement
     uint16 groupID(m_self->groupID());
     return ((groupID == EVEDB::invGroups::Sentry_Gun) or (groupID == EVEDB::invGroups::Protective_Sentry_Gun));
@@ -172,8 +172,8 @@ void Sentry::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
 
-    // our ewar ends with us
-    m_AI->OnKilled();
+    // our ewar ends with us, our group hears who did it
+    m_AI->OnKilled(damage.srcSE);
 
     uint32 killerID = 0;
     Client* pClient(nullptr);

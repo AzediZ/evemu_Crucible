@@ -282,7 +282,7 @@ private:
     RecentDamage m_recent;  // entityID -> damage in the last 30s
 
     NPC* m_npc;
-    NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (or we're law enforcement)
+    NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (law enforcement:  LawEnforcement::UsesTypeEwar())
     NpcBrain* m_brain;          // we own this.  made on the first Process()
     NpcMovement* m_move;        // we own this
     DestinyManager* m_destiny;

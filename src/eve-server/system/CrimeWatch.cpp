@@ -243,11 +243,14 @@ bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
         }
         return false;   // rats, police and navies: shooting them is no crime
     } else if (pSE->IsSentrySE()) {
+        // pirate and deadspace guns are rats like the npcs around them (most of them were npc entities until they became
+        //  Sentry objects):  shooting them is no crime
+        if (!pSE->GetSentrySE()->IsLawSentry())
+            return false;
         into.sentry = true;
         into.corpID = pSE->GetSelf()->ownerID();
         // gate and station guns keep aggression per guarded object (Crimewatch 1)
-        if (pSE->GetSentrySE()->IsLawSentry())
-            into.protectedID = pSE->GetSentrySE()->GetProtectedID();
+        into.protectedID = pSE->GetSentrySE()->GetProtectedID();
         return true;
     } else if (pSE->IsPOSSE() or pSE->IsCOSE()) {
         // npc owned (Interbus customs offices) can be shot without penalty.  player structures belong to their corp
@@ -323,8 +326,8 @@ void CrimeWatch::OffensiveAct(Client* pAggressor, SystemEntity* pTarget)
         return;
     Owner target;
     if (!GetOwner(pTarget, target)) {
-        // rats, police and navies:  no crime, but the npc aggression timer
-        if (pTarget->IsNPCSE())
+        // rats (pirate and deadspace sentries too), police and navies:  no crime, but the npc aggression timer
+        if (pTarget->IsNPCSE() or pTarget->IsSentrySE())
             NpcFactionAct(pAggressor, pTarget);
         return;
     }

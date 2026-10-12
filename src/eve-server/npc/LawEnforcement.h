@@ -27,6 +27,7 @@
 
 #include "eve-server.h"
 
+class AggroGroup;
 class Client;
 class EVEServiceManager;
 class NPC;
@@ -77,6 +78,7 @@ private:
      *  concordTargetJam), cycled on its duration while that ship has the criminal locked */
     struct TackleEffect {
         uint8 kind = 0;                 // Ewar::Scramble / Web / Jam
+        uint16 typeID = 0;              // the ship's type (for the fx, when it's gone)
         const char* guid = "";
         uint32 duration = 0;            // ms
         float chance = 1.0f;            // activation chance each cycle
@@ -96,18 +98,22 @@ private:
         int64 started = 0;
         int64 nextWave = 0;             // waves: when the commander arrives
         int64 leaveAt = 0;              // the target is gone: when they leave
-        std::vector<NPC*> npcs;
+        /* its ships, by itemID (looked up in the system each time:  a GM /unspawn or a kill takes one out of space without
+         *  telling us, GetLawNPC() / PruneNPCs()) */
+        std::vector<uint32> npcs;
+        // its aggro group (npc ai plan 6.5, NpcAI::GroupKind::Law):  the response's identity in /npcai;  law npcs never alert
+        std::shared_ptr<AggroGroup> group;
         // tackle applied to the target ship
         float scram = 0.0f;
         std::vector<InventoryItemRef> webs;
         bool jammed = false;
-        // CONCORD's data tackle, per ship
-        std::map<NPC*, std::vector<TackleEffect>> tackle;
+        // CONCORD's data tackle, per ship (itemID)
+        std::map<uint32, std::vector<TackleEffect>> tackle;
     };
     // charID * 4 + kind
     std::map<uint64_t, Response> m_responses;
-    // which response an npc belongs to (OnLawAttack runs on every shot;  npc ai plan 6.7).  checked against Response::npcs
-    std::unordered_map<NPC*, uint64_t> m_npcResponse;
+    // which response an npc (itemID) belongs to (OnLawAttack runs on every shot;  npc ai plan 6.7).  checked against Response::npcs
+    std::unordered_map<uint32, uint64_t> m_npcResponse;
 
     struct LoggedOff {
         ShipSE* pShipSE = nullptr;
@@ -118,7 +124,7 @@ private:
     };
     std::map<uint32, LoggedOff> m_loggedOff;    // shipID
 
-    std::vector<Sentry*> m_sentries;
+    std::vector<uint32> m_sentries;     // itemIDs of the guns we placed
     std::set<uint32> m_jammed;          // scripted jam
     std::set<uint32> m_pursued;         // CONCORD is on them:  no cloaking
 
@@ -132,11 +138,18 @@ private:
     NPC* SpawnNPC(uint16 typeID, const GPoint& pos, uint32 factionID, uint32 corpID, uint32 targetID, uint8 role);
     void Retarget(Response& r, uint32 shipID);
     void ReleaseTackle(Response& r);
+    // one of our ships, in space and alive (nullptr:  it's gone, killed or taken out by a GM)
+    NPC* GetLawNPC(uint32 npcID);
+    // a ship of ours that left space without us (killed, GM /unspawn):  its object is ours to free
+    void ForgetLawNPC(uint32 npcID);
+    // drops the response's ships that are gone (and their tackle)
+    void PruneNPCs(Response& r);
     /* CONCORD's data tackle */
     void BuildTackle(NPC* pNPC, std::vector<TackleEffect>& into);
     void ProcessTackle(Response& r, SystemEntity* pTarget);
     void StartTackle(NPC* pNPC, TackleEffect& fx, SystemEntity* pTarget);
-    void EndTackle(NPC* pNPC, TackleEffect& fx);
+    // npcID:  the ship running it (it may be gone)
+    void EndTackle(uint32 npcID, TackleEffect& fx);
     void Despawn(Response& r);
     void SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID, uint32 factionID, uint32 corpID);
     void ProcessLoggedOff(int64 now);
