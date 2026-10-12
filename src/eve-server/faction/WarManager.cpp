@@ -546,8 +546,8 @@ void WarManager::OnWarBillOverdue(const BillData& bill)
     std::map<uint32, War::Data>::iterator itr = m_wars.find(bill.externalID2);
     if ((itr == m_wars.end()) or (itr->second.billID != bill.billID) or !Active(itr->second))
         return;
+    // EndWar clears billID (the client's row too);  cancelling the already cancelled bill again does nothing
     War::Data& w = itr->second;
-    w.billID = 0;
     EndWarNotify(w, w.declaredByID, War::End::Unpaid);
     _log(WAR__INFO, "WarManager::OnWarBillOverdue() - war %u of %u against %u cancelled, bill %u not paid", w.warID, w.declaredByID, w.againstID, bill.billID);
 }
