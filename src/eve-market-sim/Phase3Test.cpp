@@ -11,8 +11,10 @@
   *                     the T1 ships' prices follow through their cost (some of the cost rise, within 10 days of the
   *                     shock), and both are back (Tritanium within 10%, ships within 5%) 30 days after it ended
   *     Drake shock     consumers lose twice the Drakes for 14 days:  the Drake's price rises (1% at least:  the yards keep up), more Drakes
-  *                     are built (20% at least, over the shock and a week after), the minerals of its bill rise (derived
-  *                     demand), and everything is back (Drake within 10%, the minerals within 3%) 30 days after
+  *                     are built (20% at least, over the shock and a week after), the sim's manufacturers buy more of
+  *                     the minerals of its bill (derived demand, PLAN's 'mineral bids';  their price is shown:  the
+  *                     miners mine to demand, so it hardly moves), and everything is back (Drake within 10%, the
+  *                     minerals' price within 3%) 30 days after
   *     no negatives    no actor's money or stock goes negative, every day of every run
   *     T1 price / BOM  at steady state (the control, day 60 to the end) the median of V / (bill of materials at the
   *                     minerals' V) per category at the first hub, over the T1 built of minerals only (PLAN 4.1's set),
@@ -35,6 +37,7 @@
 #include <vector>
 
 #include "HarnessData.h"
+#include "HarnessFacilities.h"
 #include "HarnessMarket.h"
 #include "market/sim/SimWorld.h"
 
@@ -60,6 +63,7 @@ namespace {
         std::vector<double> drake;          // the Drake's V at the first hub
         std::vector<double> drakeBill;      // the Drake's bill at the minerals' V (its derived demand)
         std::vector<double> drakeMade;      // Drakes built, all nodes, cumulative
+        std::vector<double> drakeInputs;    // the Drake's minerals the sim's actors bought, all nodes, cumulative (isk at refPrice)
         std::map<std::string, std::vector<double>> ratio;   // per category:  the day's median V / bill
         int negatives = 0;
         std::string firstNegative;
@@ -112,7 +116,8 @@ namespace {
         return cost;
     }
 
-    Daily RunOne(const StaticData& data, Params p, uint64_t seed, int days, std::function<void(World&, int, int64_t)> shock)
+    Daily RunOne(const StaticData& data, Params p, uint64_t seed, int days, bool stationLines,
+                 std::function<void(World&, int, int64_t)> shock)
     {
         Daily out;
         p.seed = seed;
@@ -121,6 +126,9 @@ namespace {
         HarnessMarket market(data, p.salesTaxRate);
         World world(data, p, market);
         market.SetWorld(&world);
+        HarnessCapacity lines(data.nodes, p);
+        if (stationLines)
+            world.SetCapacity(lines.Capacity());
         world.Build(StartTime);
         world.Seed(StartTime);
         world.Start(StartTime, false);
@@ -165,6 +173,15 @@ namespace {
             out.drakeBill.push_back((data.Type(Drake) != nullptr) ? Bill(world, *data.Type(Drake), hub) : 0.0);
             std::map<uint16_t, Units>::const_iterator made = world.Made().find(Drake);
             out.drakeMade.push_back((made == world.Made().end()) ? 0.0 : (double)made->second);
+            double inputs(0.0);
+            if (data.Type(Drake) != nullptr)
+                for (auto& in : data.Type(Drake)->bom) {
+                    std::map<uint16_t, Units>::const_iterator b = world.ActorBought().find(in.first);
+                    const TypeData* mt(data.Type(in.first));
+                    if ((b != world.ActorBought().end()) and (mt != nullptr))
+                        inputs += (double)b->second * mt->refPrice;
+                }
+            out.drakeInputs.push_back(inputs);
             // the day's V / bill medians
             std::map<std::string, std::vector<double>> r;
             for (auto& c : world.Cells()) {
@@ -247,12 +264,13 @@ namespace {
     }
 }
 
-int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days)
+int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days, bool stationLines)
 {
     int failures(0);
     if (days < ShockDay + LossShockDays + RecoveryDays + 5)
         days = ShockDay + LossShockDays + RecoveryDays + 5;
-    std::printf("market sim phase 3 acceptance tests:  %d days, shocks on day %d, %zu seed(s)\n", days, ShockDay, seeds.size());
+    std::printf("market sim phase 3 acceptance tests:  %d days, shocks on day %d, %zu seed(s), %s\n", days, ShockDay, seeds.size(),
+                stationLines ? "jobs on the hubs' station lines" : "virtual lines");
 
     // PLAN 4.1:  price / mineral cost medians of T1
     std::map<std::string, double> plan41 = { {"modules", 0.97}, {"charges", 1.18}, {"ships", 1.24}, {"drones", 1.15} };
@@ -273,12 +291,12 @@ int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64
     }
 
     for (auto seed : seeds) {
-        Daily control(RunOne(data, p, seed, days, [](World&, int, int64_t) { }));
-        Daily mining(RunOne(data, p, seed, days, [](World& w, int day, int64_t t) {
+        Daily control(RunOne(data, p, seed, days, stationLines, [](World&, int, int64_t) { }));
+        Daily mining(RunOne(data, p, seed, days, stationLines, [](World& w, int day, int64_t t) {
             if (day == ShockDay)
                 w.ShockMining(0.5, MiningShockDays, t);
         }));
-        Daily losses(RunOne(data, p, seed, days, [](World& w, int day, int64_t t) {
+        Daily losses(RunOne(data, p, seed, days, stationLines, [](World& w, int day, int64_t t) {
             if (day == ShockDay)
                 w.ShockLosses(Drake, 2.0, LossShockDays, t);
         }));
@@ -334,9 +352,13 @@ int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64
             double madeRel((madeC > 0.0) ? madeS / madeC : 0.0);
             Check(madeRel >= 1.2, F("Drake shock:  %.0f Drakes built over the shock and a week after, against %.0f (x%.2f, allowed at least x1.2)",
                   madeS, madeC, madeRel), failures);
+            double boughtS(losses.drakeInputs[lend + 7] - losses.drakeInputs[s - 1]);
+            double boughtC(control.drakeInputs[lend + 7] - control.drakeInputs[s - 1]);
             double billRel(MeanRel(losses.drakeBill, control.drakeBill, s + 3, lend + 7));
-            Check(billRel > 1.0, F("Drake shock:  its minerals (its bill at their V) x%.4f of the control over the shock (allowed above 1)",
-                  billRel), failures);
+            Check((boughtC > 0.0) and (boughtS > boughtC),
+                  F("Drake shock:  its minerals bought by the sim's actors over the shock and a week after x%.4f of the control"
+                    " (allowed above 1);  their price (its bill at their V) x%.4f", (boughtC > 0.0) ? boughtS / boughtC : 0.0,
+                    billRel), failures);
             double drakeBack(MeanRel(losses.drake, control.drake, lend + RecoveryDays - 3, lend + RecoveryDays + 3));
             double billBack(MeanRel(losses.drakeBill, control.drakeBill, lend + RecoveryDays - 3, lend + RecoveryDays + 3));
             Check((std::fabs(drakeBack - 1.0) <= 0.10) and (std::fabs(billBack - 1.0) <= 0.03),

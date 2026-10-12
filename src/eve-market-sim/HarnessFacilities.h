@@ -12,8 +12,11 @@
 
 #include <map>
 #include <utility>
+#include <vector>
 
 #include "market/sim/SimFacilities.h"
+#include "market/sim/SimLineCapacity.h"
+#include "market/sim/SimWorld.h"
 
 class HarnessFacilities : public MktSim::FacilityBook {
 public:
@@ -42,6 +45,22 @@ private:
     double   m_costPerHour;
     uint32_t m_ownerID;
     double   m_playerBusy;
+};
+
+/* the world's capacity in the harness (World::SetCapacity before Build), as the server books it:  a node works at the
+ *  npc stations of its hub's constellation that have lines (SimFacilityMgr::Capacity, Crucible's staStations and
+ *  ramAssemblyLines:  50 manufacturing lines each, none at Rens VI-8), its own station first;  a node at another
+ *  station works there only */
+class HarnessCapacity {
+public:
+    HarnessCapacity(const std::vector<MktSim::NodeData>& nodes, const MktSim::Params& p);
+
+    MktSim::LineCapacity* Capacity()                    { return &m_capacity; }
+    HarnessFacilities& Lines()                          { return m_lines; }
+
+private:
+    HarnessFacilities    m_lines;
+    MktSim::LineCapacity m_capacity;
 };
 
 #endif  // _EVE_MARKET_SIM_HARNESS_FACILITIES_H__

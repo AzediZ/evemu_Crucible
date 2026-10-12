@@ -143,6 +143,12 @@ double LineCapacity::JobCost(const SimJob& job) const
     return (double)Capacity::JobCost(m_probeInstall, m_probePerHour, std::max<int64_t>(0, job.end - job.start)) / 100.0;
 }
 
+double LineCapacity::RefineAllowance(uint32_t stationID, double m3, int64_t now)
+{
+    m_now = std::max(m_now, now);
+    return m_book.RefineAllowance(stationID, m3, now);
+}
+
 uint32_t LineCapacity::CurrentLine(const SimJob& job) const
 {
     uint32_t id(BookJob(job));

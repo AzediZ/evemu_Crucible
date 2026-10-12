@@ -79,6 +79,8 @@ namespace Prod {
         virtual void     Release(const SimJob& job) = 0;
         // isk the job pays the line's owner:  installation plus rent for its hours (a sink)
         virtual double   JobCost(const SimJob& job) const = 0;
+        // m3 of ore the station refines for the sim now, of m3 wanted (a refinery's soft cap:  the rest waits)
+        virtual double   RefineAllowance(uint32_t /*stationID*/, double m3, int64_t /*now*/)  { return m3; }
     };
 
     // PLAN 6.6 mode UseRealAssemblyLines = false:  per actor slot counters, nothing written

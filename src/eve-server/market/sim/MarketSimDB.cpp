@@ -14,6 +14,7 @@
 
 #include "market/sim/MarketSimDB.h"
 #include "market/sim/SimEconomy.h"
+#include "market/sim/SimFacilityMgr.h"
 
 /*
  * MARKET__SIM
@@ -546,12 +547,19 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
         ok = Exec("DELETE FROM mktSimNode") and ok;
     ok = InsertRows("INSERT INTO mktSimNode (nodeID, stationID, solarSystemID, regionID, kind, enabled) VALUES ", rows, "") and ok;
 
+    // the station lines the jobs hold (phase 5):  their times go with mktSimJob and the stock the jobs used
+    bool lines(sSimFacilities.AttachedToSim());
+    if (lines)
+        ok = sSimFacilities.WritePending() and ok;
+
     if (!ok) {
         tx.Rollback();
         return false;
     }
     if (!tx.Commit())
         return false;
+    if (lines)
+        sSimFacilities.PendingWritten();
     world.GetLedger().ClearDirty();
     return true;
 }
@@ -564,8 +572,9 @@ void MarketSimDB::RemapOrders(const std::vector<std::tuple<uint32, uint32, uint3
 
 void MarketSimDB::ClearState()
 {
+    // (the jobs' station lines free themselves at their end times)
     static const char* tables[] = { "mktSimState", "mktSimNode", "mktSimActor", "mktSimInventory", "mktSimCell", "mktSimOrder",
-                                    "mktSimIntake" };
+                                    "mktSimIntake", "mktSimJob" };
     for (auto t : tables)
         Exec(std::string("DELETE FROM ") + t);
 }
@@ -881,6 +890,17 @@ void MarketSimDB::LoadJobs(std::vector<JobRow>& into)
 
 bool MarketSimDB::FlushJobs(World& world)
 {
+    // a player may have moved a job to another station line (phase 5):  the row keeps the line it holds now
+    if (MktSim::LineCapacity* lc = dynamic_cast<MktSim::LineCapacity*>(&world.Capacity())) {
+        std::vector<std::pair<uint32, uint32>> moved;
+        for (auto& cur : world.Jobs()) {
+            uint32 line(lc->CurrentLine(cur.second));
+            if (line != cur.second.lineID)
+                moved.push_back(std::make_pair(cur.first, line));
+        }
+        for (auto& m : moved)
+            world.SetJobLine(m.first, m.second);
+    }
     // the jobs are few (hundreds to a few thousand):  rewritten whole when they changed
     if (!world.TakeJobsChanged())
         return true;

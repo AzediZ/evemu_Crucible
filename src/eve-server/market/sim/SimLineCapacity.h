@@ -20,12 +20,7 @@
 #include <map>
 #include <vector>
 
-// phase 3's interface;  before phase 3 is merged, a copy of it
-#if __has_include("market/sim/SimProduction.h")
 #include "market/sim/SimProduction.h"
-#else
-#include "market/sim/SimCapacityStandIn.h"
-#endif
 #include "market/sim/SimFacilities.h"
 
 namespace MktSim {
@@ -54,6 +49,8 @@ namespace MktSim {
         void     Release(const SimJob& job) override;
         // isk:  the line's install and rent for the job's started hours (Isk::LineCost, to the station owner)
         double   JobCost(const SimJob& job) const override;
+        // the book's refinery cap (FacilityParams::refineryM3PerHour per station)
+        double   RefineAllowance(uint32_t stationID, double m3, int64_t now) override;
 
         // the line the job holds now (a player may have moved it), for mktSimJob.assemblyLineID.  0:  none
         uint32_t CurrentLine(const SimJob& job) const;

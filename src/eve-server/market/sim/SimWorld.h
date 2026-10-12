@@ -340,6 +340,8 @@ namespace MktSim {
         void SetControllerIntegral(double v)            { m_integral = v; }
         double IncomeFactor() const                     { return m_incomeFactor; }
         void SetIncomeFactor(double v)                  { m_incomeFactor = v; }
+        double MoneyDrain() const                       { return m_drain; }
+        void SetMoneyDrain(double v)                    { m_drain = std::max(0.0, v); }
         int64_t LastIncomeTime() const                  { return m_lastIncome; }
         void SetLastIncomeTime(int64_t t)               { m_lastIncome = t; }
         double MoneyTarget() const                      { return m_moneyTarget; }
@@ -373,6 +375,8 @@ namespace MktSim {
         // the jobs changed since the last call (the server's write-behind)
         bool TakeJobsChanged()                          { bool c(m_jobsChanged); m_jobsChanged = false; return c; }
         void MarkJobsChanged()                          { m_jobsChanged = true; }
+        // a player moved the job to another line (the capacity's CurrentLine):  kept, and saved with the next flush
+        void SetJobLine(uint32_t jobID, uint32_t lineID);
         // consumers lose hullTypeID x mult for days (0:  every hull)
         void ShockLosses(uint16_t hullTypeID, double mult, double days, int64_t now);
         // the miners' fleets bring in x mult for days
@@ -495,7 +499,7 @@ namespace MktSim {
         // an actor sells into the market maker's public bids at their prices (a glut).  returns units sold
         Units    SellToBids(uint32_t actorID, Cell& c, Units q, int64_t t);
         // refines what an actor holds of a type (whole batches) at the node's refinery.  returns units used
-        Units    RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q);
+        Units    RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q, int64_t now);
         // what one unit refines into at the node, at the internal sell prices of its outputs (isk)
         double   RefineWorth(uint32_t nodeID, const TypeData& t) const;
         double   NodeYield(uint32_t nodeID) const;
@@ -529,6 +533,7 @@ namespace MktSim {
         double   m_moneyTarget;             // M*, cents
         double   m_integral;
         double   m_incomeFactor;
+        double   m_drain;                   // phase 3:  cents a day the sinks take (average), the income's level
         int64_t  m_lastIncome;
 
         // intake caps:  (day, owner, type) units and (day, owner) isk

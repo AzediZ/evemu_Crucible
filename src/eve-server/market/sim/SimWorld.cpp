@@ -40,6 +40,9 @@ namespace {
         return buf;
     }
 
+    // the money controller's average of the daily drain (phase 3):  the day's weight (about a 3 day half life)
+    const double DrainWeight = 0.2;
+
     // a trade with a player order and the ledger's writes for it, saved together (IPersist::FillBegin)
     struct FillScope {
         IPersist* p;
@@ -57,6 +60,7 @@ World::World(const StaticData& data, const Params& params, IMarketGateway& gatew
   m_moneyTarget(0.0),
   m_integral(0.0),
   m_incomeFactor(1.0),
+  m_drain(0.0),
   m_lastIncome(0),
   m_paused(false),
   m_started(false),
@@ -1549,7 +1553,21 @@ void World::Daily(int64_t t)
         m_integral += std::log(m_moneyTarget / (double)money);
         m_integral = std::min(bound, std::max(-bound, m_integral));
     }
-    m_incomeFactor = Econ::ControllerFactor((double)money, m_moneyTarget, m_integral, m_p.controllerKp, m_p.controllerKi, lo, 2.0);
+    /* with the actors the income's level is what drains from the sim's money a day (the sinks and the net paid to
+     *  players, a few days' average):  fed forward, the controller only corrects around it.  the PI alone lags a change
+     *  of the sinks by months (5-day calibrated volatilities took two thirds of the broker fees and M/M* went to 1.4) */
+    double base(1.0);
+    if (m_p.actors and (m_income0 > 0)) {
+        double drain(0.0);
+        for (uint8_t f = 0; f < Isk::Count; ++f)
+            if ((f != Isk::Income) and (f != Isk::Seed) and (f != Isk::Reconcile))
+                drain -= Isk::Sign(f) * (double)r.isk[f];
+        drain = std::max(0.0, drain);
+        m_drain = (m_drain > 0.0) ? m_drain + DrainWeight * (drain - m_drain) : drain;
+        base = std::max(lo, m_drain / (double)m_income0);
+    }
+    m_incomeFactor = Econ::ControllerFactor((double)money, m_moneyTarget, m_integral, m_p.controllerKp, m_p.controllerKi, lo / base,
+                                            2.0 / base) * base;
 
     // the price index:  Laspeyres over the top-500 isk basket, against the reference prices
     std::vector<std::pair<double, uint32_t>> basket;
@@ -1579,6 +1597,8 @@ void World::Daily(int64_t t)
     m_auditLines.push_back(AuditLine{r.day, "residual.goodsUnits", r.goodsResidualUnits});
     m_auditLines.push_back(AuditLine{r.day, "priceIndex.ppm", (int64_t)std::llround(index * 1e6)});
     m_auditLines.push_back(AuditLine{r.day, "income.factor.ppm", (int64_t)std::llround(m_incomeFactor * 1e6)});
+    if (m_p.actors)
+        m_auditLines.push_back(AuditLine{r.day, "income.drain", (int64_t)std::llround(m_drain)});
     m_auditLines.push_back(AuditLine{r.day, "cells.clamped", (int64_t)clamped});
     m_auditLines.push_back(AuditLine{r.day, "orders.live", (int64_t)m_orders.size()});
     m_auditLines.push_back(AuditLine{r.day, "ledger.violations", (int64_t)m_ledger.Violations()});
@@ -2000,7 +2020,7 @@ std::string World::ActorInfo(uint32_t actorID) const
             out << "\n";
         }
     } else if (a.kind == ActorKind::Manufacturer) {
-        out << Fmt("  lines %u (%u free), %u products\n", m_capacity->Slots(actorID), m_capacity->Free(actorID, a.nodeID, Activity::Manufacturing, 0),
+        out << Fmt("  lines %u (%u free), %u products\n", m_capacity->Slots(actorID), m_capacity->Free(actorID, a.nodeID, Activity::Manufacturing, a.lastStep),
                    (m_makerPlans.count(actorID) > 0) ? (uint32_t)m_makerPlans.at(actorID).products.size() : 0);
         if (m_makerPlans.count(actorID) > 0) {
             out << "  inputs used since the start:";

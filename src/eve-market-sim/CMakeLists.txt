@@ -49,7 +49,6 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimClock.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.h"
-     "${SERVER_SOURCE_DIR}/market/sim/SimCapacityStandIn.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimProduction.h"

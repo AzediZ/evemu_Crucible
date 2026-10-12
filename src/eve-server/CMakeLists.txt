@@ -398,7 +398,6 @@ SET( market_INCLUDE
      "${TARGET_INCLUDE_DIR}/market/sim/SimEconomy.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimFacilities.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimFacilityMgr.h"
-     "${TARGET_INCLUDE_DIR}/market/sim/SimCapacityStandIn.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimLineCapacity.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimLedger.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimProduction.h"
