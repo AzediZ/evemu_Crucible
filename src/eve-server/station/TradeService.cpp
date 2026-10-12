@@ -33,6 +33,7 @@
 
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
+#include "faction/WarManager.h"
 #include "market/MarketMgr.h"
 #include "ship/ShipDB.h"
 #include "station/StationDataMgr.h"
@@ -56,15 +57,6 @@ namespace {
         if (itr == call.byname.end())
             return nullptr;
         return itr->second;
-    }
-
-    // ceo of a corp (0 when unknown)
-    uint32 GetCorpCEO(uint32 corpID) {
-        DBQueryResult res;
-        DBResultRow row;
-        if (sDatabase.RunQuery(res, "SELECT ceoID FROM crpCorporation WHERE corporationID = %u", corpID) and res.GetRow(row))
-            return row.GetUInt(0);
-        return 0;
     }
 }
 
@@ -430,7 +422,9 @@ void TradeBound::ExchangeItems(std::shared_ptr<TradeSession> pSession) {
             m_TSvc->TransferContainerContents(iRef, itemOwnerID);
     }
 
-    /** @todo F22:  a CEO trade with a warID is the war's surrender offer (sWarMgr hook) */
+    // a CEO trade with a warID is the surrender:  the war ends with the 24 hour grace
+    if (ceoTrade)
+        sWarMgr.OnSurrenderTrade(pSession->warID, pSession->myID);
 
     PyTuple* tuple = new PyTuple(2);
         tuple->SetItem(0, new PyString("TradeComplete"));
@@ -613,15 +607,13 @@ PyResult TradeService::InitiateTrade(PyCallArgs &call, PyInt* characterID, std::
             throw CustomError("You are already trading with %s.", target->GetName());
     }
 
-    // CEO surrender trades (form.CEOVCEOTrade) are between the CEOs of the two corps
+    // CEO surrender trades (form.CEOVCEOTrade):  the leader of the side the war was declared on trades with the CEO of the
+    //  other corp, or of the other alliance's executor (windowsvc.StartCEOTradeSession)
     uint32 war(0);
     if (warID.has_value() and !warID.value()->IsNone())
         war = (uint32)PyRep::IntegerValue(warID.value());
-    if (war != 0) {
-        if ((GetCorpCEO(pClient->GetCorporationID()) != (uint32)pClient->GetCharacterID())
-        or (GetCorpCEO(target->GetCorporationID()) != (uint32)target->GetCharacterID()))
-            throw CustomError("Surrender trades are made between the CEOs of the corporations at war.");
-    }
+    if (war != 0)
+        sWarMgr.CheckSurrender(war, pClient->GetCharacterID(), target->GetCharacterID());
 
     std::shared_ptr<TradeSession> pSession(std::make_shared<TradeSession>());
         pSession->containerID = GetTradeSessionID();

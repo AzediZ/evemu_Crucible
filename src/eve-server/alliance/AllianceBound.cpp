@@ -23,6 +23,7 @@
 #include "chat/LSCService.h"
 #include "packets/CorporationPkts.h"
 #include "corporation/CorporationDB.h"
+#include "faction/WarManager.h"
 #include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 
@@ -67,6 +68,9 @@ AllianceBound::AllianceBound(EVEServiceManager& mgr, AllianceRegistry& parent, A
     this->Add("RemoveAllianceContacts", &AllianceBound::RemoveAllianceContacts);
     this->Add("EditContactsRelationshipID", &AllianceBound::EditContactsRelationshipID);
     this->Add("UpdateAlliance", &AllianceBound::UpdateAlliance);
+    this->Add("DeclareWarAgainst", &AllianceBound::DeclareWarAgainst);
+    this->Add("RetractWar", &AllianceBound::RetractWar);
+    this->Add("ChangeMutualWarFlag", &AllianceBound::ChangeMutualWarFlag);
 
     m_allyID = allyID;
     this->m_cache = this->GetServiceManager().Lookup <ObjCacheService>("objectCaching");
@@ -545,5 +549,45 @@ PyResult AllianceBound::UpdateAlliance(PyCallArgs &call, PyWString* description,
     call.client->SendNotification("OnAllianceChanged", "clientID", ac.Encode(), false);
     _log(SOV__DEBUG, "OnAllianceChanged sent to %s(%u)", call.client->GetName(), call.client->GetCharID());
 
+    return nullptr;
+}
+
+void AllianceBound::RequireWarDirector(PyCallArgs& call)
+{
+    // corp_ui_wars.IsInCharge / all_ui_home:  a director of the executor corporation
+    if (!sWarMgr.IsInCharge(m_allyID, call.client))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only directors of the alliance's executor corporation can do that."));
+}
+
+PyResult AllianceBound::DeclareWarAgainst(PyCallArgs &call, PyInt* againstID)
+{
+    //   sm.GetService('alliance').DeclareWarAgainst(againstID)   after WarDeclareConfirm with GetCostOfWarAgainst
+    _log(ALLY__CALL, "AllianceBound::Handle_DeclareWarAgainst() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    RequireWarDirector(call);
+    sWarMgr.DeclareWar(m_allyID, againstID->value(), call.client->GetCharacterID());
+    return nullptr;
+}
+
+PyResult AllianceBound::RetractWar(PyCallArgs &call, PyInt* warID)
+{
+    //   sm.GetService('alliance').RetractWar(warID)
+    _log(ALLY__CALL, "AllianceBound::Handle_RetractWar() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    RequireWarDirector(call);
+    sWarMgr.RetractWar(warID->value(), m_allyID);
+    return nullptr;
+}
+
+PyResult AllianceBound::ChangeMutualWarFlag(PyCallArgs &call, PyInt* warID, PyRep* mutual)
+{
+    //   sm.GetService('alliance').ChangeMutualWarFlag(warID, mutual)
+    _log(ALLY__CALL, "AllianceBound::Handle_ChangeMutualWarFlag() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    RequireWarDirector(call);
+    sWarMgr.SetMutual(warID->value(), m_allyID, PyRep::IntegerValue(mutual) != 0);
     return nullptr;
 }

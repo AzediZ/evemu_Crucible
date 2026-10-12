@@ -62,6 +62,12 @@ protected:
     PyResult GetAlliance(PyCallArgs& call);
     PyResult UpdateAlliance(PyCallArgs& call, PyWString* description, PyWString* url);
 
+    // wars:  directors of the executor corporation
+    PyResult DeclareWarAgainst(PyCallArgs& call, PyInt* againstID);
+    PyResult RetractWar(PyCallArgs& call, PyInt* warID);
+    PyResult ChangeMutualWarFlag(PyCallArgs& call, PyInt* warID, PyRep* mutual);
+    void RequireWarDirector(PyCallArgs& call);
+
     AllianceDB& m_db;
     ObjCacheService* m_cache;
     LSCService* m_lsc;

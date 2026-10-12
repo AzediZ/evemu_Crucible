@@ -119,6 +119,11 @@ protected:
     PyResult RemoveCorporateContacts(PyCallArgs& call, PyList* contactIDs);
     PyResult EditCorporateContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID);
 
+    // bco_wars:  the active CEO of a corporation that isn't in an alliance (an alliance's wars go through the alliance moniker)
+    PyResult RetractWar(PyCallArgs& call, PyInt* warID);
+    PyResult ChangeMutualWarFlag(PyCallArgs& call, PyInt* warID, PyRep* mutual);
+    void RequireWarCEO(PyCallArgs& call);
+
     PyResult CreateAlliance(PyCallArgs& call, PyRep* allianceName, PyRep* shortName, PyRep* description, PyRep* url);
     PyResult ApplyToJoinAlliance(PyCallArgs& call, PyInt* allianceID, PyWString* applicationText);
     PyResult DeleteAllianceApplication(PyCallArgs& call, PyInt* allianceID);

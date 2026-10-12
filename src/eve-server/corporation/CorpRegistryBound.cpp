@@ -120,6 +120,8 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("EditCorporateContact", &CorpRegistryBound::EditCorporateContact);
 
     this->Add("CreateAlliance", &CorpRegistryBound::CreateAlliance);
+    this->Add("RetractWar", &CorpRegistryBound::RetractWar);
+    this->Add("ChangeMutualWarFlag", &CorpRegistryBound::ChangeMutualWarFlag);
     this->Add("ApplyToJoinAlliance", &CorpRegistryBound::ApplyToJoinAlliance);
     this->Add("DeleteAllianceApplication", &CorpRegistryBound::DeleteAllianceApplication);
     this->Add("GetAllianceApplications", &CorpRegistryBound::GetAllianceApplications);
@@ -2702,6 +2704,35 @@ PyResult CorpRegistryBound::CreateAlliance(PyCallArgs &call, PyRep* allianceName
 
     //Return alliance we just created
     return a_db.GetAlliance(allyID);
+}
+
+void CorpRegistryBound::RequireWarCEO(PyCallArgs& call)
+{
+    RequireMember(call);
+    if (!sCorpMgr.IsActiveCEO(m_corpID, call.client->GetCharacterID()))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO can do that."));
+    if (sWarMgr.WarOwnerOf(m_corpID) != m_corpID)
+        throw UserError("CrpCanNotSanctionWarOwner");
+}
+
+PyResult CorpRegistryBound::RetractWar(PyCallArgs &call, PyInt* warID) {
+    // self.GetCorpRegistry().RetractWar(warID)    (bco_wars calls the argument againstID, but corp_ui_wars passes the warID)
+    _log(CORP__CALL, "CorpRegistryBound::Handle_RetractWar()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireWarCEO(call);
+    sWarMgr.RetractWar(warID->value(), m_corpID);
+    return nullptr;
+}
+
+PyResult CorpRegistryBound::ChangeMutualWarFlag(PyCallArgs &call, PyInt* warID, PyRep* mutual) {
+    // self.GetCorpRegistry().ChangeMutualWarFlag(warID, mutual)
+    _log(CORP__CALL, "CorpRegistryBound::Handle_ChangeMutualWarFlag()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireWarCEO(call);
+    sWarMgr.SetMutual(warID->value(), m_corpID, PyRep::IntegerValue(mutual) != 0);
+    return nullptr;
 }
 
 PyResult CorpRegistryBound::ApplyToJoinAlliance(PyCallArgs &call, PyInt* allianceID, PyWString* applicationText) {
