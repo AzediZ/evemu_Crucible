@@ -575,9 +575,15 @@ void PlanetMgr::Commit()
     for (auto& cur : m_depletion)
         m_planet->AddDepletion(cur.first, cur.second);
 
-    // every planet with a colony has a customs office
-    if (m_newCommandCenter and (m_planet->GetCustomsOffice() == nullptr))
-        m_planet->CreateCustomsOffice();
+    // every planet with a colony has a customs office, but a planet gets its npc office only once (piCustomsOfficeSpawn):
+    //  a destroyed Interbus office isn't replaced
+    if (m_newCommandCenter and (m_planet->GetCustomsOffice() == nullptr)) {
+        std::vector<uint32> planetIDs(1, m_planet->GetID());
+        std::set<uint32> spawned;
+        PlanetDB::GetSpawnedCustomsOffices(planetIDs, spawned);
+        if (spawned.empty())
+            m_planet->CreateCustomsOffice();
+    }
 
     if (m_cost > 0) {
         std::string reason = "DESC:  Planetary construction on ";

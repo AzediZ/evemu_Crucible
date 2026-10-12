@@ -22,7 +22,7 @@ class PIResource
 {
 public:
     // bands of the server's maps.  the client gets up to 30 (planetResourceProximityLimits)
-    static const uint8 MaxBands = 30;
+    static constexpr uint8 MaxBands = 30;     // constexpr:  std::min binds it by reference (needs a definition otherwise)
     // const.planetResourceMaxValue * 255 * 0.5:  a resource of this quality fills the client's quality bar
     static const double MaxDisplayQuality;
 

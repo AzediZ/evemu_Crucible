@@ -1,6 +1,8 @@
 -- +migrate Up
 -- F19: colonies are simulated with the client's code.  positions and head radii are doubles like the client's,
 --  route IDs and quantities don't fit 16 bits, the per-planet pin count can pass 127
+-- qtyPerCycle was added nullable (20210514214534); strict mode refuses NOT NULL over existing NULLs
+UPDATE `piPins` SET `qtyPerCycle` = 0 WHERE `qtyPerCycle` IS NULL OR `qtyPerCycle` < 0;
 ALTER TABLE `piPins`
   MODIFY `latitude` DOUBLE NOT NULL DEFAULT 0,
   MODIFY `longitude` DOUBLE NOT NULL DEFAULT 0,

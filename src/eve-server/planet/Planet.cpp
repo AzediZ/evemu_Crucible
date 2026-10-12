@@ -354,7 +354,7 @@ GPoint PlanetSE::GetCustomsOfficePosition()
     float rad = EvE::Trig::Deg2Rad(25);
     pos.x += radius + 700000 * std::sin(rad);
     pos.z += radius + 700000 * std::cos(rad);
-    pos.y += ((m_self->itemID() % 2001) - 1000);   // a little height, per planet
+    pos.y += ((int32)(m_self->itemID() % 2001) - 1000);   // a little height, per planet (signed:  the unsigned sum wrapped to 4e9 m)
     return pos;
 }
 

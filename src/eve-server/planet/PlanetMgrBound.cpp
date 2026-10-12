@@ -292,7 +292,8 @@ PyResult PlanetMgrBound::GetResourceData(PyCallArgs &call, PyObject* info) {
     Call_ResourceDataDict dict;
     PyDict* input = info->arguments()->AsDict();
     //input->Dump(PLANET__DUMP, "   ");
-    if (!dict.Decode(&input)) {
+    // not the consuming Decode(&input):  the dict belongs to the call's KeyVal, which frees it
+    if (!dict.Decode(input)) {
         codelog(SERVICE__ERROR, "PlanetMgrBound: Failed to decode arguments.");
         return nullptr;
     }
