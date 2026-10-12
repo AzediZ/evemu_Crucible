@@ -899,8 +899,9 @@ uint32 DungeonMgr::SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32
         pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::Dungeon, liveGroupID,
                 (pDef->aggroMode == Dungeon::AggroMode::Passive ? NpcAI::AggroMode::Passive : NpcAI::AggroMode::Proactive),
                 pDef->aggroRange, linkKey, roomKey));
-        // a wave's first pick may be the weakest ship (4.3)
-        if ((pDef->spawnMode == Dungeon::SpawnMode::TriggerOnly) or (pDef->waveNumber > 0))
+        /* a wave's first pick may be the weakest ship (4.3).  waves are the trigger-spawned groups (waveNumber isn't usable:
+         *  the anomaly seed numbers its first wave 1, the mission builder 0) */
+        if (pDef->spawnMode == Dungeon::SpawnMode::TriggerOnly)
             pNPC->GetAIMgr()->SetWave();
     } else {
         pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::DungeonRoom, roomKey, NpcAI::AggroMode::Proactive, 0, 0, roomKey));

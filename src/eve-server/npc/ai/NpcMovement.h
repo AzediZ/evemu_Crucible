@@ -52,6 +52,8 @@ public:
     void SetEvasive(bool on)                            { m_evasive = on; }
     // > 0 replaces the orbit range (and the follow range).  0 = the data
     void SetRangeOverride(float range)                  { m_rangeOverride = range; }
+    // orbit and follow at maxVelocity (the phase 0-1 'evasive npcs orbit fast' rule, kept for level-one npcs until phase 3)
+    void SetFastOrbit(bool on)                          { m_fastOrbit = on; }
 
 private:
     void StartStall(int64 now);
@@ -74,6 +76,7 @@ private:
     bool m_boostPhase;          // in the boost phase (maybe blocked)
     bool m_blocked;
     bool m_evasive;
+    bool m_fastOrbit;
     int8 m_evasiveSide;
     uint32 m_targetID;
     float m_rangeOverride;

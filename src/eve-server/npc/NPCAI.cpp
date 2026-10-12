@@ -59,6 +59,7 @@
 #include "ship/modules/TurretFormulas.h"
 #include "system/DestinyManager.h"
 #include "system/Damage.h"
+#include "system/Interdiction.h"
 #include "system/SystemBubble.h"
 
 namespace {
@@ -82,6 +83,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_fleeWanted(false),
   m_hadEscorts(false),
   m_suppressLost(false),
+  m_leashWarp(false),
   m_role(NPCAI::Role::None),
   m_primaryID(0),
   m_pendingAggroID(0),
@@ -184,6 +186,9 @@ void NPCAIMgr::CreateBrain()
     if (m_brain != nullptr)
         return;
     m_brain = NpcBrain::Create(*m_profile, m_npc->IsLawEnforcer());
+    // level-one npcs keep the phase 0-1 movement rule until phase 3:  evasive ones (1414) orbit at full speed
+    if (m_profile->IsLevelOne() and !m_npc->IsLawEnforcer() and (m_profile->evasive > 0))
+        m_move->SetFastOrbit(true);
     _log(NPC__AI_TRACE, "%s(%u): %s brain (%s profile).", m_npc->GetName(), m_npc->GetID(), m_brain->GetName(),
             NpcAI::GetTierName(m_profile->tier));
 }
@@ -345,6 +350,15 @@ void NPCAIMgr::Process() {
                 break;
             // the warp was stopped (scrambled while aligning, or a warp disruption field).  we stay here
             _log(NPC__AI_TRACE, "%s(%u): %s was cut short.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state));
+            if (m_leashWarp) {
+                // the hard leash couldn't warp:  fly home instead (5.4)
+                m_leashWarp = false;
+                m_state = NPCAI::State::Returning;
+                m_returnHard = true;
+                m_move->GoHome(m_home);
+                m_sched.Start(NpcAct::Leash, now, 30000);
+                break;
+            }
             bool fleeing(m_state == NPCAI::State::Fleeing);
             SetIdle();
             if (fleeing)
@@ -773,6 +787,7 @@ void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
     m_threat.Clear();
     m_isWandering = false;
     m_dormant = false;
+    m_leashWarp = false;
     m_destiny->SetMaxVelocity(m_profile->maxVelocity);
     m_state = state;
 }
@@ -781,8 +796,11 @@ void NPCAIMgr::WarpOutComplete()
 {
     m_sched.Stop(NpcAct::WarpOut);
     /* wherever an npc lands is home, the first warp-in of a belt spawn too:  those are created 1000+ km off grid,
-     *  and the leash would otherwise pull every fight back there */
-    m_home = m_npc->GetPosition();
+     *  and the leash would otherwise pull every fight back there.  not after the leash's own warp home (a warp disruption
+     *  field may have pulled it short) */
+    if (!m_leashWarp)
+        m_home = m_npc->GetPosition();
+    m_leashWarp = false;
     if ((m_state != NPCAI::State::WarpOut) and (m_state != NPCAI::State::WarpFollow) and (m_state != NPCAI::State::Fleeing))
         return;
     _log(NPC__AI_TRACE, "%s(%u): %s complete.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state));
@@ -878,8 +896,12 @@ void NPCAIMgr::BeginReturn(bool hard, int64 now)
     m_pendingJoined = false;
     m_threat.Clear();
     m_npc->TargetMgr()->ClearTargets();
-    if ((sConfig.npc.LeashHardMode == 1) and !m_npc->IsWarpScrambled() and (distance >= c_minWarpHome)) {
+    // inside a warp disruption field we can't warp (npc.RespectInterdiction):  fly.  a refused or stopped warp flies too
+    InterdictionMgr* pInterdict(m_npc->SystemMgr()->GetInterdictionMgr());
+    bool disrupted((pInterdict != nullptr) and pInterdict->IsWarpDisrupted(m_npc));
+    if ((sConfig.npc.LeashHardMode == 1) and !m_npc->IsWarpScrambled() and !disrupted and (distance >= c_minWarpHome)) {
         BeginWarp(NPCAI::State::WarpOut);
+        m_leashWarp = true;
         m_destiny->WarpTo(m_home, 0);
         return;
     }
@@ -1115,9 +1137,13 @@ void NPCAIMgr::Target(SystemEntity* pSE, bool joined/*false*/) {
     if (!m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase)) {
         _log(NPC__AI_TRACE, "%s(%u): Targeting of %s(%u) failed%s.", m_npc->GetName(), m_npc->GetID(), pSE->GetName(),
                 pSE->GetID(), (chase ? " (out of range)" : ""));
-        if (fresh) {
-            // nothing changed:  stay idle and look again on the next think
-            m_destiny->SetMaxVelocity(m_profile->cruiseSpeed);
+        if (fresh and chase and CanAggro(pSE)) {
+            /* out of our (maybe dampened) lock range:  close in and try again in 2s (a sniper that hit us, or damps on us).
+             *  the retry is a queued aggro, so wander and acquisition wait for it */
+            m_isWandering = false;
+            m_destiny->SetMaxVelocity(m_profile->maxVelocity);
+            m_destiny->Follow(pSE, static_cast<uint32>(m_move->OrbitRange()));
+            QueueAggro(pSE, now + 2000, joined);
         }
         return;
     }
@@ -1380,7 +1406,16 @@ bool NPCAIMgr::IsCandidate(SystemEntity* pSE, bool drones)
         // players' ships only
         return false;
     }
-    return (m_npc->GetPosition().distance(pSE->GetPosition()) <= m_acquireRange);
+    // within what we can lock (R_acq, dampened like TargetManager::StartTargeting does)
+    return (m_npc->GetPosition().distance(pSE->GetPosition()) <= LockRange());
+}
+
+double NPCAIMgr::LockRange()
+{
+    double range(m_acquireRange);
+    if (m_npc->GetEwar() != nullptr)
+        range *= m_npc->GetEwar()->GetTargetRangeMult();
+    return range;
 }
 
 SystemEntity* NPCAIMgr::ChooseTarget()
@@ -1524,6 +1559,9 @@ void NPCAIMgr::ProcessDroneRoll()
     for (size_t i = 0; i < count; ++i) {
         SystemEntity* pSE(m_npc->SystemMgr()->GetSE(ids[i]));
         if ((pSE == nullptr) or !pSE->IsDroneSE() or !CanAggro(pSE))
+            continue;
+        // one we can lock (we may drop our primary for it below)
+        if (m_npc->GetPosition().distance(pSE->GetPosition()) > LockRange())
             continue;
         if (m_rng.Uniform() >= sConfig.npc.DroneAggroChance)
             continue;
@@ -1794,10 +1832,13 @@ float NPCAIMgr::GetTargetTime(SystemEntity* pSE)
     return static_cast<float>(m_profile->LockTimeMs(sig, mult));
 }
 
-void NPCAIMgr::OnKilled()
+void NPCAIMgr::OnKilled(SystemEntity* pKiller)
 {
     if (m_ewar != nullptr)
         m_ewar->StopAll();
+    // a member killed in one volley still aggroes its group (a passive one too, 4.3)
+    if ((pKiller != nullptr) and (m_brain != nullptr) and m_brain->RunsAI())
+        AlertGroup(pKiller);
     // our group stops counting us now (commanders' escort count, alerts)
     if (m_group.get() != nullptr) {
         m_group->Remove(m_npc);

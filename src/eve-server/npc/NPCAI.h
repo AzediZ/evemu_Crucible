@@ -95,8 +95,8 @@ public:
     void Aggro(SystemEntity* pSE);
     // another sleeper was hurt by pSE (advanced ai only)
     void ShareThreat(SystemEntity* pSE, float amount);
-    // called from NPC::Killed()
-    void OnKilled();
+    // called from NPC::Killed().  pKiller:  the fatal blow's source (our group hears about it)
+    void OnKilled(SystemEntity* pKiller);
 
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
     bool IsFighting();
@@ -165,6 +165,8 @@ public:
     double DrawReactionDelay();
     // damage pSE did to us in the last 30s
     float RecentDamageBy(uint32 entityID);
+    // m.  R_acq x the sensor dampeners on us:  how far we can lock
+    double LockRange();
 
 protected:
     // ms clock for the schedule
@@ -242,6 +244,7 @@ private:
     bool m_fleeWanted       :1;     // a hauler's flee timer ran out (or it was hurt)
     bool m_hadEscorts       :1;     // a commander saw escorts in its group
     bool m_suppressLost     :1;     // we drop a lock ourselves (drone switch):  TargetLost leaves us alone
+    bool m_leashWarp        :1;     // WarpOut is the hard leash's warp home (cut short:  fly;  landing:  home stays)
 
     uint8 m_role;                   // NPCAI::Role
 

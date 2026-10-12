@@ -105,9 +105,9 @@ void AggroGroup::Alert(NPC* pSource, SystemEntity* pAggressor)
 std::string AggroGroup::Describe(int64 now) const
 {
     std::ostringstream str;
-    static const char* kinds[] = { "?", "belt", "dungeon", "room", "gm" };
+    static const char* kinds[] = { "?", "belt", "dungeon", "room", "gm", "law" };
     uint8 kind(GetKind());
-    str << (kind < 5 ? kinds[kind] : "?") << " " << static_cast<uint32>(m_key & 0xFFFFFFFF) << ", " << m_members.size() << " members, "
+    str << (kind < 6 ? kinds[kind] : "?") << " " << (m_key & 0x00FFFFFFFFFFFFFFULL) << ", " << m_members.size() << " members, "
         << (IsPassive() ? "passive" : "proactive");
     if (IsPassive())
         str << " (range " << GetAggroRange() << "m)";

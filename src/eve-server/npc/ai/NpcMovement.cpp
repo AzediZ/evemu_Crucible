@@ -31,6 +31,7 @@ NpcMovement::NpcMovement(NPC* pNPC, const NpcProfile& profile, NpcRng& rng, NpcS
   m_boostPhase(false),
   m_blocked(false),
   m_evasive(false),
+  m_fastOrbit(false),
   m_evasiveSide(1),
   m_targetID(0),
   m_rangeOverride(0.0f),
@@ -76,12 +77,12 @@ void NpcMovement::Engage(SystemEntity* pTarget, int64 now)
     switch (mode) {
         case NpcMath::Move::Orbit: {
             EndChase();
-            pDestiny->SetMaxVelocity(m_profile.cruiseSpeed);
+            pDestiny->SetMaxVelocity(m_fastOrbit ? m_profile.maxVelocity : m_profile.cruiseSpeed);
             pDestiny->Orbit(pTarget, static_cast<uint32>(orbit));      // no update when nothing changed
         } break;
         case NpcMath::Move::Follow: {
             EndChase();
-            pDestiny->SetMaxVelocity(m_profile.cruiseSpeed);
+            pDestiny->SetMaxVelocity(m_fastOrbit ? m_profile.maxVelocity : m_profile.cruiseSpeed);
             pDestiny->Follow(pTarget, static_cast<uint32>(orbit));
         } break;
         case NpcMath::Move::Chase: {

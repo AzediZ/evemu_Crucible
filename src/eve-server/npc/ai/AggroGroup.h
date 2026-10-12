@@ -41,8 +41,9 @@ namespace NpcAI {
         enum : uint8 {
             Belt        = 1,    // SpawnMgr spawn (belt or gate), id = spawnID
             Dungeon     = 2,    // DungeonMgr live group, id = liveGroupID
-            DungeonRoom = 3,    // npcs placed in a dungeon room (no spawn group), id = instanceID
-            GM          = 4     // one /spawn command
+            DungeonRoom = 3,    // npcs placed in a dungeon room (no spawn group), id = (instanceID << 8) | room index
+            GM          = 4,    // one /spawn command, id = AggroGroupRegistry::NextGMBatch()
+            Law         = 5     // one law enforcement response (phase 4, LawEnforcement)
         };
     }
 }
