@@ -1254,19 +1254,18 @@ void World::LossEvents(int64_t t, double hours)
 {
     if (!(hours > 0.0))
         return;
-    uint64_t salt(0);
+    /* the losses (Poisson) become what consumers want back (lossWant);  the expected losses feed the cells' demand rate
+     *  (lossNew):  a thin type's single loss is no burst of demand, its stock target stays where it is */
     for (auto& node : m_static.nodes) {
         uint32_t loot(NodeActor(node.nodeID, ActorKind::LootSource));
         for (auto& cur : m_nodeLosses[node.nodeID - 1]) {
             uint16_t hull(cur.first);
             double mean(cur.second * hours / 24.0 * LossShockOf(hull, t));
             Units lost((Units)Rng::Poisson(mean, Rng::Hash64(m_p.seed, node.nodeID, (uint64_t)t, hLossCount, hull)));
-            if (lost <= 0)
-                continue;
             Cell* hc(FindCell(node.nodeID, hull));
             if (hc != nullptr) {
                 hc->lossWant += (double)lost;
-                hc->lossNew += (double)lost;
+                hc->lossNew += mean;
             }
             std::map<uint16_t, std::vector<FitItem>>::const_iterator fit = m_static.fits.find(hull);
             if (fit == m_static.fits.end())
@@ -1275,12 +1274,14 @@ void World::LossEvents(int64_t t, double hours)
                 Cell* fc(FindCell(node.nodeID, f.typeID));
                 if (fc == nullptr)
                     continue;
-                ++salt;
+                fc->lossNew += mean * f.qtyPerLoss;
+                if (lost <= 0)
+                    continue;
+                uint64_t salt(((uint64_t)hull << 16) | f.typeID);
                 Units q(Rng::RoundRandom((double)lost * f.qtyPerLoss, Rng::Hash64(m_p.seed, node.nodeID, (uint64_t)t, hLossFit, salt)));
                 if (q <= 0)
                     continue;
                 fc->lossWant += (double)q;
-                fc->lossNew += (double)q;
                 Units drop(Rng::RoundRandom((double)q * (1.0 - f.destroyedShare), Rng::Hash64(m_p.seed, node.nodeID, (uint64_t)t, hLossDrop, salt)));
                 if ((drop > 0) and (loot != 0))
                     GoodsTo(loot, node.nodeID, f.typeID, drop, Goods::Dropped);

@@ -208,7 +208,7 @@ namespace MktSim {
         double   dcGen          = 0.0;  // the rest of the final demand:  dc less what losses and derived demand explain
         double   dRef           = 0.0;  // reference demand:  dc, or what the losses and the rest add up to when that's more
         double   lossWant       = 0.0;  // units consumers still want for ships and fits they lost (persisted)
-        double   lossNew        = 0.0;  // of which lost since the last visit (the demand rate)
+        double   lossNew        = 0.0;  // losses expected since the last visit (the demand rate)
         double   derived        = 0.0;  // units sim actors bought here since the last visit
         // GM overrides (persisted in mktSimState)
         double   shockMult      = 1.0;
