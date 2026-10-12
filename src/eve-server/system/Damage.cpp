@@ -240,16 +240,18 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         default: {
             float modifier = d.GetModifier();
             d *= modifier;
-                 if (modifier == 3.0f)   { damageID = 8; }  //strikes perfectly, wrecking
-            else if (modifier > 1.2501f) { damageID = 7; } //places an excellent hit
-            else if (modifier > 0.9999f) { damageID = 6; } //aims well
-            else if (modifier > 0.7501f) { damageID = 5; } //hits
-            else if (modifier > 0.6251f) { damageID = 4; } //lightly hits
-            else if (modifier > 0.4121f) { damageID = 3; } //barely scratches
-            else if (modifier > 0.3751f) { damageID = 2; } //glances off
-            else if (modifier > 0.2501f) { damageID = 1; } //barely misses
-            else                         { damageID = 0; } //misses completely
-            _log(DAMAGE__TRACE, "%s(%u): Modifier: %.3f, damageID: %u.", GetName(), GetID(), modifier, damageID);
+            // the message shows the quality roll (fighter bombers' damage is the explosion factor times it)
+            float quality(d.hitQuality >= 0.0f ? d.hitQuality : modifier);
+                 if (quality == 3.0f)   { damageID = 8; }  //strikes perfectly, wrecking
+            else if (quality > 1.2501f) { damageID = 7; } //places an excellent hit
+            else if (quality > 0.9999f) { damageID = 6; } //aims well
+            else if (quality > 0.7501f) { damageID = 5; } //hits
+            else if (quality > 0.6251f) { damageID = 4; } //lightly hits
+            else if (quality > 0.4121f) { damageID = 3; } //barely scratches
+            else if (quality > 0.3751f) { damageID = 2; } //glances off
+            else if (quality > 0.2501f) { damageID = 1; } //barely misses
+            else                        { damageID = 0; } //misses completely
+            _log(DAMAGE__TRACE, "%s(%u): Modifier: %.3f, quality %.3f, damageID: %u.", GetName(), GetID(), modifier, quality, damageID);
         } break;
     }
 

@@ -112,6 +112,28 @@ int npcai_NpcMathTest( int argc, char* argv[] )
     Near("DRS 1: size term only", MissileDamageFactor(40, 125, 81, 400, 3.2, 1.0), 0.32, 1e-12);
     Near("flight range 3750 m/s x 4000 ms", MissileRange(3750, 4000), 15000, 1e-9);
 
+    ::printf("\n fighter bombers (E 2250, Ve 60, DRF 6.5, DRS 5.5, range 20 km)\n");
+    {
+        BomberShot cap(ResolveBomberShot(5000, 20000, 12000, 2250, 60, 40, 6.5, 5.5, 0.5, 0.01));
+        Near("capital, u 0.5: factor 1", cap.factor, 1.0, 1e-12);
+        Near("capital, u 0.5: quality 0.99", cap.quality, 0.99, 1e-12);
+        Near("capital, u 0.5: damage 0.99", cap.damage, 0.99, 1e-12);
+        BomberShot wreck(ResolveBomberShot(5000, 20000, 12000, 2250, 60, 40, 6.5, 5.5, 0.005, 0.01));
+        Near("capital, u 0.005: wrecking 3x", wreck.damage, 3.0, 0.0);
+        BomberShot light(ResolveBomberShot(5000, 20000, 12000, 2250, 60, 40, 6.5, 5.5, 0.0, 0.0));
+        Near("capital, u 0, no wrecking: lightest hit 0.49", light.damage, 0.49, 1e-12);
+        BomberShot frig(ResolveBomberShot(5000, 20000, 35, 2250, 60, 0, 6.5, 5.5, 0.99, 0.01));
+        Near("frigate (sig 35) stopped: factor S/E", frig.factor, 35.0 / 2250.0, 1e-12);
+        Near("frigate, u 0.99: quality 1.48 (message)", frig.quality, 1.48, 1e-12);
+        Near("frigate, u 0.99: damage factor x quality", frig.damage, 0.023022222, 1e-8);
+        BomberShot bs(ResolveBomberShot(5000, 20000, 470, 2250, 60, 100, 6.5, 5.5, 0.3, 0.01));
+        Near("battleship (sig 470, 100 m/s), u 0.3", bs.damage, 0.080781172, 1e-8);
+        BomberShot edge(ResolveBomberShot(20000, 20000, 12000, 2250, 60, 40, 6.5, 5.5, 0.5, 0.01));
+        Near("at exactly entityAttackRange: hit", edge.damage, 0.99, 1e-12);
+        BomberShot out(ResolveBomberShot(20001, 20000, 12000, 2250, 60, 40, 6.5, 5.5, 0.005, 0.01));
+        True("past entityAttackRange: no hit at all", (out.damage == 0.0) and (out.quality == 0.0) and (out.factor == 0.0));
+    }
+
     ::printf("\n lock time (5.3)\n");
     Near("scanRes 875, sig 400", std::round(LockTimeMs(875, 400)), 1023, 0.0);
     // the plan's appendix lists 22223 here;  40e6 / (100 x asinh(35)^2) is 22159 (its 5.3 table's 22.2s agrees)

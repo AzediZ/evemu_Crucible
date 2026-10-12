@@ -120,6 +120,18 @@ double MissileRange(double velocity, double flightTimeMs)
     return velocity * flightTimeMs / 1000.0;
 }
 
+BomberShot ResolveBomberShot(double surface, double range, double sig, double aoeCloud, double aoeVelocity, double targetSpeed,
+                             double drf, double drs, double u, double wreckingChance)
+{
+    BomberShot shot = BomberShot();
+    if (!Finite(surface) or !Finite(range) or (surface > range))
+        return shot;
+    shot.factor = MissileDamageFactor(sig, aoeCloud, aoeVelocity, targetSpeed, drf, drs);
+    shot.quality = ResolveTurretShot(1.0, u, wreckingChance);
+    shot.damage = shot.factor * shot.quality;
+    return shot;
+}
+
 double LockTimeMs(double scanResolution, double sig, double minMs/*1000*/, double maxMs/*180000*/)
 {
     if (!Finite(scanResolution) or (scanResolution < 1.0))

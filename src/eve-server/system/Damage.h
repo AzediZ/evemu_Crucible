@@ -86,6 +86,9 @@ public:
     InventoryItemRef        weaponRef;
     InventoryItemRef        chargeRef;    // May be null.
     bool                    selfDestruct = false;   // the pilot's self-destruct (no killer)
+    // the shot's quality roll for the hit message, when the modifier is more than that (fighter bombers:  explosion factor x
+    //  quality).  below 0 the modifier is the quality
+    float                   hitQuality = -1.0f;
 
 private:
     float kinetic;
