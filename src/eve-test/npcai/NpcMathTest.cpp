@@ -31,6 +31,7 @@
 #include "NpcRng.h"
 #include "NpcSchedule.h"
 #include "RecentDamage.h"
+#include "SeenList.h"
 #include "ThreatTable.h"
 
 namespace {
@@ -279,6 +280,74 @@ int npcai_NpcMathTest( int argc, char* argv[] )
         uint32_t ids[RecentDamage::Capacity];
         size_t n(r.Sorted(60000, ids, RecentDamage::Capacity));
         True("sorted by damage", (n == 2) and (ids[0] == 8) and (ids[1] == 7));
+    }
+
+    ::printf("\n level-one threat (5.7, phase 3)\n");
+    {
+        using namespace NpcMath;
+        // the plan's sanity check:  a sleeper battleship with ~40k hp, E = 0.02 x 40000 = 800
+        Near("ECM cycle 5 x E", L1EffectThreat(Effect::Ecm, false, 0.02, 40000), 4000, 1e-6);
+        Near("ECM jam adds x2 more (12000 in all)", L1EffectThreat(Effect::Ecm, false, 0.02, 40000)
+             + L1EffectThreat(Effect::Ecm, true, 0.02, 40000), 12000, 1e-6);
+        Near("damp 3 x E", L1EffectThreat(Effect::Damp, false, 0.02, 40000), 2400, 1e-6);
+        Near("TD 2 x E", L1EffectThreat(Effect::TrackDisrupt, false, 0.02, 40000), 1600, 1e-6);
+        Near("neut 2 x E", L1EffectThreat(Effect::Neut, false, 0.02, 40000), 1600, 1e-6);
+        Near("web 1 x E", L1EffectThreat(Effect::Web, false, 0.02, 40000), 800, 1e-6);
+        Near("scram 1 x E", L1EffectThreat(Effect::Scramble, false, 0.02, 40000), 800, 1e-6);
+        Near("painter 1 x E", L1EffectThreat(Effect::Paint, false, 0.02, 40000), 800, 1e-6);
+        Near("unknown 1 x E", L1EffectThreat(Effect::None, false, 0.02, 40000), 800, 1e-6);
+        Near("no hp:  nothing", L1EffectThreat(Effect::Ecm, false, 0.02, 0), 0, 0.0);
+        Near("newcomer:  1.2 x primary 1000", L1NewcomerThreat(0, 1000, 1.2), 1200, 1e-9);
+        Near("newcomer that has 500 already", L1NewcomerThreat(500, 1000, 1.2), 700, 1e-9);
+        Near("newcomer above it already:  nothing", L1NewcomerThreat(1500, 1000, 1.2), 0, 0.0);
+        bool cuddle(false);
+        Near("jam response, frigate:  ecm reach + 5km", L1JamDistance(35, 60000, cuddle), 65000, 1e-9);
+        True("  no cuddle", !cuddle);
+        Near("jam response, battleship (sig 400):  5km", L1JamDistance(400, 60000, cuddle), 5000, 1e-9);
+        True("  cuddle", cuddle);
+        True("sig 300 counts as a battleship", (L1JamDistance(300, 1000, cuddle) == 5000) and cuddle);
+        // the plan's acceptance case 2:  drones switch once drone threat x 1.25 beats the player's score x 1.1
+        L1ScoreInputs drone = L1ScoreInputs(), ship = L1ScoreInputs();
+            drone.threat = 1100; drone.droneRecentDamager = true; drone.inAttackRange = true; drone.inAcquireRange = true;
+            ship.threat = 1000; ship.inAttackRange = true; ship.inAcquireRange = true; ship.locked = true;
+        True("drone 1100 (x1.25) vs locked ship 1000 (x1.1):  switch", L1ShouldSwitch(L1Score(drone), L1Score(ship), 1.1, 70000, 0, 60000, 0.5, 0.0));
+        drone.threat = 1100; drone.droneRecentDamager = false;
+        True("the same drone without recent damage:  no switch", !L1ShouldSwitch(L1Score(drone), L1Score(ship), 1.1, 70000, 0, 60000, 0.5, 0.0));
+    }
+
+    ::printf("\n remote repair (5.9, phase 3)\n");
+    {
+        using namespace NpcMath;
+        True("armor 50% damaged, threshold 0.5:  repair", ArmorRepairNeeded(1000, 500, 0, 0.5));
+        True("armor 49% damaged:  not yet", !ArmorRepairNeeded(1000, 490, 0, 0.5));
+        True("a reserved repair covers it", !ArmorRepairNeeded(1000, 800, 400, 0.5));
+        True("reserved, still below:  repair", ArmorRepairNeeded(1000, 900, 300, 0.5));
+        True("no armor hp:  never", !ArmorRepairNeeded(0, 10, 0, 0.1));
+        True("shield half gone, threshold 0.5:  boost", ShieldRepairNeeded(1000, 500, 0.5));
+        True("shield full:  no", !ShieldRepairNeeded(1000, 1000, 0.1));
+        RepairOrder hiPrio = { 2, false, 0.9 }, fire = { 0, true, 0.6 }, low = { 0, false, 0.2 }, lower = { 0, false, 0.1 };
+        True("priority first", RepairBefore(hiPrio, fire) and !RepairBefore(fire, hiPrio));
+        True("then under fire", RepairBefore(fire, low) and !RepairBefore(low, fire));
+        True("then the lowest layer", RepairBefore(lower, low) and !RepairBefore(low, lower));
+        Near("assist resist -20:  resonance x0.8", AssistResonanceMult(-20), 0.8, 1e-9);
+        Near("assist speed -20:  x1.2", AssistBonusMult(-20), 1.2, 1e-9);
+        Near("assist speed +20 (test npc):  x0.8", AssistBonusMult(20), 0.8, 1e-9);
+        Near("kundalini remote ecm, 30 players:  5 min", RemoteEcmDurationMs(300000, 0.8, 30, 60, 5, 60000), 300000, 1e-9);
+        Near("70 players:  x0.8^2", RemoteEcmDurationMs(300000, 0.8, 70, 60, 5, 60000), 300000 * 0.64, 1e-6);
+        Near("200 players:  the 1 min floor", RemoteEcmDurationMs(300000, 0.8, 200, 60, 5, 60000), 60000, 1e-9);
+    }
+
+    ::printf("\n seen list (4.7 newcomers)\n");
+    {
+        SeenList seen;
+        True("first sight:  newcomer", seen.Touch(7, 1000, 300000));
+        True("seen again soon:  not", !seen.Touch(7, 2000, 300000));
+        True("after 5 min away:  newcomer again", seen.Touch(7, 2000 + 300001, 300000));
+        for (uint32_t i = 100; i < 100 + SeenList::Capacity; ++i)
+            seen.Touch(i, 400000 + i, 300000);
+        True("full:  the oldest made room", seen.Size() == SeenList::Capacity);
+        True("the evicted one is new again", seen.Touch(7, 500000, 300000));
+        True("0 is never anyone", !seen.Touch(0, 500000, 300000));
     }
 
     ::printf("\n%d failure(s)\n", s_failures);

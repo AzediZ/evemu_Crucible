@@ -197,12 +197,12 @@ EVEServerConfig::EVEServerConfig()
     npc.IdleWander = false;
     npc.WarpOut = 600 /*s*/;
     npc.WarpFollowChance = 0.0; // Crucible rats never followed a ship through warp
-    npc.ThreatRadius = 1.0;     // npcs only switch to targets within ThreatRadius x maxTargetRange  (F06)
+    npc.ThreatRadius = 0;       // deprecated (npc ai phase 3):  ignored, a value > 0 logs a warning at boot
     npc.UseEwar = true;
     npc.GroupAggro = true;
     npc.DroneAggroChance = 0.10;
     npc.LeashRange = 0 /*m*/;   // deprecated (npc ai phase 2):  > 0 overrides the data leash's hard range
-    npc.TargetSwitchTime = 15 /*s*/;
+    npc.TargetSwitchTime = 0 /*s*/;    // 0 = the type's AI_TargetSwitchTimer (1416, dgm default 60s)
     npc.RoamingSpawns = false;
     npc.StaticSpawns = false;
     npc.RoamingTimer = 900 /*s*/;
@@ -239,6 +239,18 @@ EVEServerConfig::EVEServerConfig()
     npc.HaulerFleeDelay = 30 /*s*/;     // era: haulers "escape ... typically within 30 seconds if not attacked"
     npc.CommanderFlee = true;           // era (low-med):  commanders run when their escort is gone
     npc.RespectInterdiction = true;     // [DD] npcs can't warp out of (or through) warp disruption fields
+    // npc ai phase 3:  level-one ai (npc ai plan 4.6, 4.7, 5.7-5.9).  the threat numbers are [DD] (plan 5.7), tune with /npcai
+    npc.L1EvalInterval = 5 /*s*/;
+    npc.L1SwitchMargin = 1.10f;
+    npc.L1ThreatDecay = 0.90f;
+    npc.L1ThreatDecayInterval = 10 /*s*/;
+    npc.L1ThreatShare = 0.5f;           // era: sleepers' threat is shared by the group
+    npc.L1EffectThreat = 0.02f;         // era: "ECM generates a very high threat level"
+    npc.L1RepairThreat = 0.5f;          // owner default (plan 10.15)
+    npc.L1DroneControllerShare = 0.25f;
+    npc.L1NewcomerThreat = 1.2f;        // era: incursion sansha "most likely will change targets to any newcomers"
+    npc.L1NewcomerMemory = 300 /*s*/;
+    npc.RemoteEcmJamTime = 5 /*s*/;     // [DD] plan 5.8
 
     // cosmic
     cosmic.PIEnabled = false;
@@ -919,6 +931,18 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "HaulerFleeDelay",          npc.HaulerFleeDelay );
     AddValueParser( "CommanderFlee",            npc.CommanderFlee );
     AddValueParser( "RespectInterdiction",      npc.RespectInterdiction );
+    // npc ai phase 3 (npc ai plan 4.6, 4.7, 5.7-5.9)
+    AddValueParser( "L1EvalInterval",           npc.L1EvalInterval );
+    AddValueParser( "L1SwitchMargin",           npc.L1SwitchMargin );
+    AddValueParser( "L1ThreatDecay",            npc.L1ThreatDecay );
+    AddValueParser( "L1ThreatDecayInterval",    npc.L1ThreatDecayInterval );
+    AddValueParser( "L1ThreatShare",            npc.L1ThreatShare );
+    AddValueParser( "L1EffectThreat",           npc.L1EffectThreat );
+    AddValueParser( "L1RepairThreat",           npc.L1RepairThreat );
+    AddValueParser( "L1DroneControllerShare",   npc.L1DroneControllerShare );
+    AddValueParser( "L1NewcomerThreat",         npc.L1NewcomerThreat );
+    AddValueParser( "L1NewcomerMemory",         npc.L1NewcomerMemory );
+    AddValueParser( "RemoteEcmJamTime",         npc.RemoteEcmJamTime );
 
     const bool result = ParseElementChildren( ele );
 
@@ -965,6 +989,17 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "HaulerFleeDelay" );
     RemoveParser( "CommanderFlee" );
     RemoveParser( "RespectInterdiction" );
+    RemoveParser( "L1EvalInterval" );
+    RemoveParser( "L1SwitchMargin" );
+    RemoveParser( "L1ThreatDecay" );
+    RemoveParser( "L1ThreatDecayInterval" );
+    RemoveParser( "L1ThreatShare" );
+    RemoveParser( "L1EffectThreat" );
+    RemoveParser( "L1RepairThreat" );
+    RemoveParser( "L1DroneControllerShare" );
+    RemoveParser( "L1NewcomerThreat" );
+    RemoveParser( "L1NewcomerMemory" );
+    RemoveParser( "RemoteEcmJamTime" );
 
     return result;
 }

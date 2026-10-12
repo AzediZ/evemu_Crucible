@@ -8,6 +8,8 @@
 #include "Client.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"
+#include "npc/NPC.h"
+#include "npc/NPCAI.h"
 #include "ship/Ship.h"
 #include "system/CrimeWatch.h"
 #include "ship/modules/EwarModule.h"
@@ -268,6 +270,9 @@ void Ewar::StartJam(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarge
     if ((pSource == nullptr) or (pTarget == nullptr) or (pTarget->TargetMgr() == nullptr))
         return;
     pTarget->GetEwar(true)->Apply(pSource->GetID(), Ewar::Jam, durationMs, 0, 0, InventoryItemRef(nullptr), moduleID);
+    // a jammed npc knows who did it (level-one threat and jam response, npc ai plan 4.6, 5.7)
+    if (pTarget->IsNPCSE())
+        NPCAIMgr::JamStarted(pSource, moduleID, pTarget, durationMs);
 }
 
 void Ewar::EndJam(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarget)

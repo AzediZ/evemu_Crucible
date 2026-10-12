@@ -1301,6 +1301,21 @@ void DungeonMgr::OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker)
     m_spawnMgr->GetAggroGroups().AlertRoom(roomKey, pAttacker);
 }
 
+void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital)
+{
+    if ((pSpotter == nullptr) or (pCapital == nullptr))
+        return;
+    auto iItr = m_entityIndex.find(pSpotter->GetID());
+    if (iItr == m_entityIndex.end())
+        return;
+    uint64_t key((static_cast<uint64_t>(iItr->second.first) << 32) | pCapital->GetID());
+    if (!m_capitalsSighted.insert(key).second)
+        return;
+    /** @todo npc ai phase 5:  spawn SleeperCapitalReinforcements battleships per capital in this room */
+    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u):  reinforcements are phase 5.",
+            pSpotter->GetName(), pSpotter->GetID(), iItr->second.first, iItr->second.second, pCapital->GetName(), pCapital->GetID());
+}
+
 void DungeonMgr::OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker)
 {
     auto iItr = m_entityIndex.find(pSE->GetID());

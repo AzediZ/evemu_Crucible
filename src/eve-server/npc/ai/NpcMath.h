@@ -93,6 +93,39 @@ double L1Score(const L1ScoreInputs& in);
 bool L1ShouldSwitch(double bestScore, double primaryScore, double margin, int64_t nowMs, int64_t lastSwitchMs,
                     int64_t switchTimerMs, double u, double chanceToNotSwitch);
 
+/* level-one threat (5.7).  what kind of ewar a player's module or drone ran on an npc */
+namespace Effect {
+    enum : uint8_t { None = 0, Ecm = 1, Damp = 2, TrackDisrupt = 3, Neut = 4, Web = 5, Scramble = 6, Paint = 7 };
+}
+/* the weight of one cycle of that ewar (x E):  ECM 5, damp 3, TD 2, neut/NOS 2, web 1, scram/disruptor 1, painter 1.
+ *  anything else 1 */
+double L1EffectWeight(uint8_t effect);
+/* threat of one ewar cycle on an npc:  weight x effectScale (npc.L1EffectThreat) x the npc's max hp (shield + armor + hull).
+ *  jammed (an ECM cycle that jammed us) adds the 'x2 more' on top:  (weight x 2) x effectScale x maxHP */
+double L1EffectThreat(uint8_t effect, bool jammed, double effectScale, double maxHP);
+/* a newcomer's threat (incursion, 4.7):  what it needs added to have factor x the primary's threat (0 when it has that) */
+double L1NewcomerThreat(double current, double primaryThreat, double factor);
+/* the jam response (4.6):  how far a jammed level-one npc keeps from its jammer.  battleships (signature >= 300) 'cuddle'
+ *  it at 5km (cuddle = true), the others move out to its ecm optimal + falloff + 5km */
+double L1JamDistance(double ownSig, double jammerRange, bool& cuddle);
+
+/* npc remote repair (5.9).  armor:  (damage done - repairs already on their way) / armor hp >= threshold.
+ *  shield:  (1 - charge / capacity) >= threshold */
+bool ArmorRepairNeeded(double armorHP, double damage, double reserved, double threshold);
+bool ShieldRepairNeeded(double capacity, double charge, double threshold);
+// who is repaired first:  npcAssistanceProirity (1451) high first, then under fire (damaged in the last 10s), then the lowest layer
+struct RepairOrder {
+    double priority;
+    bool underFire;
+    double fraction;            // what is left of the layer, 0..1
+};
+bool RepairBefore(const RepairOrder& a, const RepairOrder& b);
+
+/* npc group assists (effects 4686-4689):  "negative values is a bonus so e.g. -20 is a 20% bonus".
+ *  resistances:  the resonance multiplier (-20 -> 0.8).  speed and propulsion jamming range:  the bonus multiplier (-20 -> 1.2) */
+double AssistResonanceMult(double bonus);
+double AssistBonusMult(double bonus);
+
 /* ewar activation chance past optimal (surface distance):  1 inside optimal, 0.5 ^ (((d - optimal) / falloff)^2) past it,
  *  0 past optimal without falloff */
 double EwarRangeChance(double surface, double optimal, double falloff);

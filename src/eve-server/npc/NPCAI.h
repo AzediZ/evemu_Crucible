@@ -28,6 +28,7 @@
 #define __NPCAI_H_INCL__
 
 #include "ship/Missile.h"
+#include "npc/ai/NpcProfile.h"
 #include "npc/ai/NpcRng.h"
 #include "npc/ai/NpcSchedule.h"
 #include "npc/ai/RecentDamage.h"
@@ -62,6 +63,7 @@ class NPC;
 class NPCEwar;
 class NpcBrain;
 class NpcMovement;
+class NpcSupport;
 class SystemEntity;
 struct NpcContext;
 struct NpcProfile;
@@ -89,11 +91,15 @@ public:
 
     // called from SystemEntity::ApplyDamage() when we take damage and survive
     void OnDamaged(SystemEntity* pSE, float amount);
-    // for ewar modules (and neuts) used on us by players
-    void OnEwarBy(SystemEntity* pSE);
+    // a cycle of ewar (or a neut) on us by a player's module or drone.  effect:  NpcMath::Effect (None = unknown)
+    void OnEwarBy(SystemEntity* pSE, uint8 effect = 0);
+    // pSE's ecm (module or drone) jammed us for durationMs.  jammerRange:  its optimal + falloff (from Ewar::StartJam)
+    void OnJammedBy(SystemEntity* pSE, uint32 durationMs, double jammerRange);
+    // pRepairer repaired hp on pPatient, a ship we have locked or threat on (NotifyRemoteAssist)
+    void OnAssistObserved(SystemEntity* pRepairer, SystemEntity* pPatient, float hp);
     // a member of our aggro group was attacked by (or went after) pSE.  we join in if we're idle
     void Aggro(SystemEntity* pSE);
-    // another sleeper was hurt by pSE (advanced ai only)
+    // a member of our aggro group shares amount of its threat on pSE (level one, PLAN.md 5.7)
     void ShareThreat(SystemEntity* pSE, float amount);
     // called from NPC::Killed().  pKiller:  the fatal blow's source (our group hears about it)
     void OnKilled(SystemEntity* pKiller);
@@ -104,6 +110,7 @@ public:
     bool IsDormant() const                              { return m_dormant; }
     uint32 GetPrimaryID()                               { return m_primaryID; }
     float GetThreat(uint32 entityID)                    { return m_threat.Get(entityID); }
+    ThreatTable& GetThreatTable()                       { return m_threat; }
     const NpcProfile& GetProfile() const                { return *m_profile; }
     // this npc's random numbers (every ai roll, turret shots too)
     NpcRng& GetRng()                                    { return m_rng; }
@@ -128,6 +135,21 @@ public:
     // where we were spawned.  the leash pulls us back here
     void SetHome(const GPoint& home)                    { m_home = home; }
 
+    /* what other npcs do for us (npc/ai/NpcSupport.h) */
+    // remote armor repair on its way to us (it lands when the repairer's cycle ends):  reserved, so no one else covers it again
+    float ReservedArmor(int64 now) const;
+    void ReserveArmor(float amount, int64 until);
+    // a group assist (NpcAI::Buff) on us:  x mult for durationMs (a different one of the same kind replaces it)
+    void ApplyBuff(uint8 kind, float mult, uint32 durationMs);
+    // ms (GetSteadyTime) of the last damage we took
+    int64 GetLastDamagedAt() const                      { return m_lastDamagedAt; }
+
+    // the ewar effect kind (NpcMath::Effect) of a module group (None when it isn't ewar)
+    static uint8 EwarEffectOfGroup(uint16 groupID);
+    /* Ewar::StartJam():  pSource's ecm (moduleID, 0 = pSource itself) jammed pTarget.  an npc target is told who did it and
+     *  how far that jammer reaches (level-one threat and jam response) */
+    static void JamStarted(SystemEntity* pSource, uint32 moduleID, SystemEntity* pTarget, uint32 durationMs);
+
     void LaunchMissile(uint16 typeID, SystemEntity* pTargSE);   // us to them
     void MissileLaunched(Missile* pMissile); // them to us
 
@@ -136,12 +158,11 @@ public:
     static const char* GetStateName(int8 stateID);
 
     /* brain helpers (npc/ai/NpcBrain.h).  the mechanics a brain may use;  the policy is the brain's */
-    // a ship (or player drone) we may pick on our own within R_acq (pod rules)
-    bool IsCandidate(SystemEntity* pSE, bool drones);
+    /* a ship (or player drone) we may pick on our own within what we can lock (R_acq x the dampeners on us;  undamped:  R_acq,
+     *  we'd close in first).  pod rules */
+    bool IsCandidate(SystemEntity* pSE, bool drones, bool undamped = false);
     // something that attacked us (or our group) that we can go after.  never pods unless npc.TargetPod allows them
     bool CanAggro(SystemEntity* pSE);
-    // the legacy pick:  nearest ship for regular rats, best score for advanced ai (LegacyBrain)
-    SystemEntity* ChooseTarget();
     /* the standard pick (4.2, 4.3):  the nearest player ship (or player drone when drones) within R_acq, or the weakest ship
      *  (least shield + armor + hull left, never a drone).  aggressorsOnly:  only pilots that group remembers */
     SystemEntity* ChooseStandardTarget(bool drones, bool weakest, AggroGroup* aggressorsOnly);
@@ -152,21 +173,32 @@ public:
     /* go after pSE on our next idle tick at or after atMs (first one wins).  joined:  this is a group join that waited
      *  its reaction delay already (no second delay before the first shot) */
     void QueueAggro(SystemEntity* pSE, int64 atMs = 0, bool joined = false);
-    // threat decay, target switching, secondary (ewar) target  (advanced ai)
-    void ProcessAdvanced();
     /* the standard drone rule (4.2, N2):  every npc.DroneAggroInterval, each drone that hurt us in the last 30s (most damage
      *  first) gets a DroneAggroChance roll;  the first success becomes our primary.  not while our primary's pilot hurt us */
     void ProcessDroneRoll();
-    // (1 + threat) x how well the target's signature suits us.  drones that hurt us +25%
-    float Score(SystemEntity* pSE);
-    // the advanced ai's ewar target (a completed lock), nullptr if none
-    SystemEntity* GetSecondary();
     // reaction delay for a first activation or a group join (5.6), ms.  0 when npc.UseAttackDelay is off
     double DrawReactionDelay();
     // damage pSE did to us in the last 30s
     float RecentDamageBy(uint32 entityID);
     // m.  R_acq x the sensor dampeners on us:  how far we can lock
     double LockRange();
+    // m.  R_acq (5.4)
+    double AcquireRange() const                         { return m_acquireRange; }
+    // threat on pSE, as it is (the brain decides how much, NpcBrain::OnDamage etc.)
+    void AddThreat(SystemEntity* pSE, float amount);
+    // start a lock on pSE (false:  can't, e.g. jammed, out of range or no free slot)
+    bool StartLock(SystemEntity* pSE);
+    // drop our lock on pSE without TargetLost's repick (the primary and pending switch go with it)
+    void DropLock(SystemEntity* pSE);
+    // a deliberate switch to pSE (a lock we have):  the switch timer starts over
+    void SwitchPrimary(SystemEntity* pSE);
+    // the new primary once its lock completes (0 = none)
+    uint32 GetSwitchToID() const                        { return m_switchToID; }
+    void SetSwitchTo(uint32 entityID)                   { m_switchToID = entityID; }
+    // ms of the last deliberate switch (or the start of the fight)
+    int64 GetLastSwitch() const                         { return m_lastSwitch; }
+    // surface distance to pSE
+    double SurfaceDistance(SystemEntity* pSE);
 
 protected:
     // ms clock for the schedule
@@ -192,16 +224,15 @@ protected:
     // the primary (weapons) target among our locks.  picks a new one if it's gone
     SystemEntity* GetPrimary();
     void SetPrimary(SystemEntity* pSE);
-    void AddThreat(SystemEntity* pSE, float amount, uint8 kind);
     // our group (and linked groups) hear about pAggressor
     void AlertGroup(SystemEntity* pAggressor);
     // passive groups:  a player ship or drone came too close to us
     bool CheckProximity();
 
-    SystemEntity* ChooseAdvancedTarget(double range);
-    // NPCRemoteArmorRepair / NPCRemoteShieldBoost on friends
-    void ProcessRemoteRepairs();
-    void RemoteRepair(bool armor);
+    // group assists on us:  expire them
+    void ProcessBuffs(int64 now);
+    // turns a group assist's effect on (or off)
+    void SetBuff(uint8 kind, float mult, bool on);
 
     /* sleep (npc.SleepEmptyBubbles):  true while dormant.  wakes when a player is in the bubble or we're locked or aggressed */
     bool CheckDormant();
@@ -225,9 +256,6 @@ protected:
     // a belt bubble without a spawn to warp to (not ours).  false if there is none
     bool FindBelt(SystemBubble*& pDest, GPoint& where);
 
-    // surface distance to pSE
-    double SurfaceDistance(SystemEntity* pSE);
-
     int8 m_state;
 
 private:
@@ -245,36 +273,24 @@ private:
     bool m_hadEscorts       :1;     // a commander saw escorts in its group
     bool m_suppressLost     :1;     // we drop a lock ourselves (drone switch):  TargetLost leaves us alone
     bool m_leashWarp        :1;     // WarpOut is the hard leash's warp home (cut short:  fly;  landing:  home stays)
+    bool m_buffsActive      :1;     // a group assist is on us
 
     uint8 m_role;                   // NPCAI::Role
 
-    float m_switchTargChance;   //fuzzy logic
-    float m_preferedSigRadius;
-    uint32 m_switchTime;    // ms between target re-evaluations (advanced ai)
-
-    // remote repair (advanced ai)
-    float m_rrAmount;
-    float m_rrChance;
-    float m_rrThreshold;
-    uint32 m_rrDuration;
-    uint8 m_rrMaxTargets;
-    float m_rsAmount;
-    float m_rsChance;
-    float m_rsThreshold;
-    uint32 m_rsDuration;
-    uint8 m_rsMaxTargets;
-
     uint32 m_acquireRange;  // R_acq (5.4)
-    uint32 m_assistRange;   // npcAssistanceRange.  how far remote repair reaches.  0 = R_acq
 
     uint32 m_primaryID;     // weapons target
     uint32 m_pendingAggroID;// someone who attacked us (or our group) while we were idle.  handled in Process()
-    uint32 m_secondaryID;   // advanced ai ewar target
-    uint32 m_switchToID;    // new primary once its lock completes (advanced ai switch, standard drone switch)
+    uint32 m_secondaryID;   // level-one ewar target (the first of the brain's EwarTargets, for /npcai)
+    uint32 m_switchToID;    // new primary once its lock completes (level-one switch, standard drone switch)
+    uint32 m_jammerID;      // who jammed us last (level-one jam response)
+    double m_jammerRange;   // m.  its ecm optimal + falloff
 
     int64 m_pendingAt;      // ms:  the queued aggro happens at or after this
     int64 m_softLeashAfter; // ms:  no soft leash before this (it turned back a moment ago)
     int64 m_lastLinkAlert;  // ms:  linked groups were last told
+    int64 m_lastSwitch;     // ms:  the last deliberate target switch (or the start of the fight)
+    int64 m_lastDamagedAt;  // ms:  the last damage we took
 
     GPoint m_home;          // where we spawned (or last arrived by warp)
 
@@ -285,6 +301,7 @@ private:
     NPCEwar* m_ewar;            // we own this.  nullptr when our type has no ewar (or we're law enforcement)
     NpcBrain* m_brain;          // we own this.  made on the first Process()
     NpcMovement* m_move;        // we own this
+    NpcSupport* m_support;      // we own this.  nullptr when our type has no remote repair, group assist or remote ecm
     DestinyManager* m_destiny;
     InventoryItemRef m_self;
     std::shared_ptr<const NpcProfile> m_profile;
@@ -293,12 +310,21 @@ private:
     NpcSchedule m_sched;
     NpcRng m_rng;
 
-    // scratch space, reused (no allocation per tick)
-    struct Patient { NPC* pNPC; float priority; float fraction; };
-    std::vector<Patient> m_patients;
+    // remote armor repairs reserved on us (5.9)
+    struct Reservation { float amount; int64 until; };
+    static const size_t c_reservations = 4;
+    Reservation m_reserved[c_reservations];
+    // group assists on us (NpcAI::Buff)
+    struct BuffState { float mult; int64 until; };
+    BuffState m_buffs[NpcAI::Buff::Count];
 };
 
 /* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */
 void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget);
+
+/* pRepairer (a player's ship or drone) repaired hp on pPatient (remote armor repair, shield transfer, remote hull repair,
+ *  repair drones).  level-one npcs that have pPatient locked or threat on it count it as threat on pRepairer (PLAN.md 5.7,
+ *  owner decision 15) */
+void NotifyRemoteAssist(SystemEntity* pRepairer, SystemEntity* pPatient, float hp);
 
 #endif

@@ -32,7 +32,8 @@
 NPCEwar::NPCEwar(SystemEntity* pSelf, NpcRng* rng/*nullptr*/)
 : m_self(pSelf),
 m_rng(rng),
-m_selfRef(pSelf->GetSelf())
+m_selfRef(pSelf->GetSelf()),
+m_tackleMult(1.0f)
 {
     m_effects.clear();
 
@@ -173,8 +174,8 @@ double NPCEwar::GetMaxRange() const
 {
     double range(0.0);
     for (auto& cur : m_effects)
-        if ((cur.range + cur.falloff) > range)
-            range = cur.range + cur.falloff;
+        if ((Optimal(cur) + cur.falloff) > range)
+            range = Optimal(cur) + cur.falloff;
     return range;
 }
 
@@ -195,18 +196,26 @@ bool NPCEwar::IsEwarTarget(SystemEntity* pTarget) const
     return true;
 }
 
+double NPCEwar::Optimal(const Effect& fx) const
+{
+    if ((fx.kind == Ewar::Scramble) or (fx.kind == Ewar::Web))
+        return fx.range * m_tackleMult;
+    return fx.range;
+}
+
 bool NPCEwar::InRange(const Effect& fx, SystemEntity* pTarget)
 {
     double distance(m_self->GetPosition().distance(pTarget->GetPosition()) - m_self->GetRadius() - pTarget->GetRadius());
-    if (distance <= fx.range)
+    double optimal(Optimal(fx));
+    if (distance <= optimal)
         return true;
     if (fx.falloff <= 0.0)
         return false;
     // the jam roll handles falloff itself (Ewar::RollJam).  the jammer keeps trying out to 3x falloff, like a module
     if (fx.kind == Ewar::Jam)
-        return (distance <= (fx.range + (3 * fx.falloff)));
+        return (distance <= (optimal + (3 * fx.falloff)));
     // the client's range chance past optimal: 2^(-((d - range) / falloff)^2)
-    return (Rand() < NpcMath::EwarRangeChance(distance, fx.range, fx.falloff));
+    return (Rand() < NpcMath::EwarRangeChance(distance, optimal, fx.falloff));
 }
 
 void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* pSecondary/*nullptr*/)
@@ -216,24 +225,51 @@ void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* pSecondary/*nullptr*
         pTarget = nullptr;
 
     int64 now(GetSteadyTime());
+    for (auto& fx : m_effects)
+        Step(fx, pTarget, now);
+}
+
+void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* const* pSecondaries, size_t count)
+{
+    if (!IsEwarTarget(pPrimary))
+        pPrimary = nullptr;
+    int64 now(GetSteadyTime());
     for (auto& fx : m_effects) {
-        // target changed or gone
-        if ((fx.targetID != 0) and ((pTarget == nullptr) or (fx.targetID != pTarget->GetID())))
-            EndSession(fx);
-        if (pTarget == nullptr) {
-            fx.nextAt = 0;
-            continue;
-        }
-        // the first roll comes right away, then every duration (drift free, like NpcSchedule)
-        if (fx.nextAt != 0) {
-            if (now < fx.nextAt)
+        // the first secondary within this effect's reach (surface distance), else the primary
+        SystemEntity* pTarget(pPrimary);
+        double reach(Optimal(fx) + (fx.kind == Ewar::Jam ? 3 * fx.falloff : fx.falloff));
+        for (size_t i = 0; i < count; ++i) {
+            SystemEntity* pSE(pSecondaries[i]);
+            if ((pSE == nullptr) or (pSE == pPrimary) or !IsEwarTarget(pSE))
                 continue;
-            fx.nextAt = (((now - fx.nextAt) > (2 * static_cast<int64>(fx.duration))) ? now : fx.nextAt) + fx.duration;
-        } else {
-            fx.nextAt = now + fx.duration;
+            double distance(m_self->GetPosition().distance(pSE->GetPosition()) - m_self->GetRadius() - pSE->GetRadius());
+            if (distance <= reach) {
+                pTarget = pSE;
+                break;
+            }
         }
-        Cycle(fx, pTarget);
+        Step(fx, pTarget, now);
     }
+}
+
+void NPCEwar::Step(Effect& fx, SystemEntity* pTarget, int64 now)
+{
+    // target changed or gone
+    if ((fx.targetID != 0) and ((pTarget == nullptr) or (fx.targetID != pTarget->GetID())))
+        EndSession(fx);
+    if (pTarget == nullptr) {
+        fx.nextAt = 0;
+        return;
+    }
+    // the first roll comes right away, then every duration (drift free, like NpcSchedule)
+    if (fx.nextAt != 0) {
+        if (now < fx.nextAt)
+            return;
+        fx.nextAt = (((now - fx.nextAt) > (2 * static_cast<int64>(fx.duration))) ? now : fx.nextAt) + fx.duration;
+    } else {
+        fx.nextAt = now + fx.duration;
+    }
+    Cycle(fx, pTarget);
 }
 
 bool NPCEwar::Uses(Effect& fx, SystemEntity* pTarget)

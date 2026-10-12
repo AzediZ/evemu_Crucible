@@ -35,8 +35,14 @@ public:
     /* primary = our weapons target.  secondary = the advanced ai's ewar target (nullptr = use primary)
      * called every process tick while we're fighting */
     void Process(SystemEntity* pPrimary, SystemEntity* pSecondary = nullptr);
+    /* the level-one secondary target (PLAN.md 5.7, 1649):  each effect goes on the first of the secondaries (best first) that is
+     *  within its range (optimal + falloff), else on the primary */
+    void Process(SystemEntity* pPrimary, SystemEntity* const* pSecondaries, size_t count);
     // ends every live session (idle, death, warp, leash)
     void StopAll();
+    // a group's propulsion jamming assist (NPCGroupPropJamAssist, 4688):  our scram and web reach x mult (1 = none)
+    void SetTackleRangeMult(float mult)  { m_tackleMult = (mult > 0.0f ? mult : 1.0f); }
+    float GetTackleRangeMult() const    { return m_tackleMult; }
 
 private:
     // kinds beyond EwarState's (things that don't last)
@@ -64,6 +70,10 @@ private:
     bool IsEwarTarget(SystemEntity* pTarget) const;
     // surface distance check, with the client's falloff roll past optimal
     bool InRange(const Effect& fx, SystemEntity* pTarget);
+    // optimal of fx (scram and web x the propulsion jamming assist)
+    double Optimal(const Effect& fx) const;
+    // one cycle of fx on pTarget (nullptr = none) when it's due
+    void Step(Effect& fx, SystemEntity* pTarget, int64 now);
     void Cycle(Effect& fx, SystemEntity* pTarget);
     // the usage chance allows this effect on pTarget now (npc.EwarUsageRoll)
     bool Uses(Effect& fx, SystemEntity* pTarget);
@@ -82,6 +92,7 @@ private:
     NpcRng* m_rng;                      // we do not own this (nullptr = MakeRandomFloat)
     InventoryItemRef m_selfRef;
     std::vector<Effect> m_effects;
+    float m_tackleMult;
 };
 
 #endif  // _EVE_NPC_NPCEWAR_H_

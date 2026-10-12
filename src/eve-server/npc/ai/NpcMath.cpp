@@ -197,6 +197,84 @@ bool L1ShouldSwitch(double bestScore, double primaryScore, double margin, int64_
     return (u >= chanceToNotSwitch);
 }
 
+double L1EffectWeight(uint8_t effect)
+{
+    switch (effect) {
+        case Effect::Ecm:           return 5.0;
+        case Effect::Damp:          return 3.0;
+        case Effect::TrackDisrupt:  return 2.0;
+        case Effect::Neut:          return 2.0;
+    }
+    // web, scram, painter, anything else
+    return 1.0;
+}
+
+double L1EffectThreat(uint8_t effect, bool jammed, double effectScale, double maxHP)
+{
+    if (!Finite(effectScale) or !Finite(maxHP) or (effectScale <= 0.0) or (maxHP <= 0.0))
+        return 0.0;
+    double weight(L1EffectWeight(effect));
+    // the jam itself is the 'x2 more' (the cycle's own x1 came with the cycle)
+    if (jammed)
+        weight *= 2.0;
+    return weight * effectScale * maxHP;
+}
+
+double L1NewcomerThreat(double current, double primaryThreat, double factor)
+{
+    if (!Finite(current) or !Finite(primaryThreat) or !Finite(factor))
+        return 0.0;
+    return std::max(0.0, (factor * primaryThreat) - std::max(0.0, current));
+}
+
+double L1JamDistance(double ownSig, double jammerRange, bool& cuddle)
+{
+    cuddle = (Finite(ownSig) and (ownSig >= 300.0));
+    if (cuddle)
+        return 5000.0;
+    return (Finite(jammerRange) ? std::max(0.0, jammerRange) : 0.0) + 5000.0;
+}
+
+bool ArmorRepairNeeded(double armorHP, double damage, double reserved, double threshold)
+{
+    if (!Finite(armorHP) or !Finite(damage) or (armorHP <= 0.0))
+        return false;
+    double left(damage - (Finite(reserved) ? std::max(0.0, reserved) : 0.0));
+    if (left <= 0.0)
+        return false;
+    return ((left / armorHP) >= threshold);
+}
+
+bool ShieldRepairNeeded(double capacity, double charge, double threshold)
+{
+    if (!Finite(capacity) or !Finite(charge) or (capacity <= 0.0) or (charge >= capacity))
+        return false;
+    return ((1.0 - (charge / capacity)) >= threshold);
+}
+
+bool RepairBefore(const RepairOrder& a, const RepairOrder& b)
+{
+    if (a.priority != b.priority)
+        return (a.priority > b.priority);
+    if (a.underFire != b.underFire)
+        return a.underFire;
+    return (a.fraction < b.fraction);
+}
+
+double AssistResonanceMult(double bonus)
+{
+    if (!Finite(bonus))
+        return 1.0;
+    return std::min(10.0, std::max(0.01, 1.0 + (bonus / 100.0)));
+}
+
+double AssistBonusMult(double bonus)
+{
+    if (!Finite(bonus))
+        return 1.0;
+    return std::min(10.0, std::max(0.0, 1.0 - (bonus / 100.0)));
+}
+
 double EwarRangeChance(double surface, double optimal, double falloff)
 {
     if (!Finite(surface) or (surface <= optimal))
