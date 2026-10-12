@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "HarnessData.h"
+#include "HarnessFacilities.h"
 #include "HarnessMarket.h"
 #include "market/sim/SimEconomy.h"
 #include "market/sim/SimRng.h"
@@ -136,6 +137,9 @@ namespace {
         HarnessMarket market(data, p.salesTaxRate);
         World world(data, p, market);
         market.SetWorld(&world);
+        // the manufacturers on the hubs' station lines (phase 5), as in the phase 3 tests
+        HarnessCapacity lines(data.nodes, p);
+        world.SetCapacity(lines.Capacity());
         world.Build(StartTime);
         world.Seed(StartTime);
         world.Start(StartTime, false);
