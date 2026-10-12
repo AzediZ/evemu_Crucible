@@ -60,7 +60,7 @@ void BeltMgr::RegisterBelt(InventoryItemRef itemRef)
 }
 
 //not used
-void BeltMgr::ClearBelt(uint16 bubbleID)
+void BeltMgr::ClearBelt(uint32 bubbleID)
 {
     //ClearAll();
 }
@@ -76,7 +76,7 @@ void BeltMgr::ClearAll() {
     m_belts.clear();
 }
 
-void BeltMgr::CheckSpawn(uint16 bubbleID)
+void BeltMgr::CheckSpawn(uint32 bubbleID)
 {
     if (IsSpawned(bubbleID))
         return;
@@ -93,7 +93,7 @@ void BeltMgr::CheckSpawn(uint16 bubbleID)
     }
 }
 
-bool BeltMgr::IsSpawned(uint16 bubbleID)
+bool BeltMgr::IsSpawned(uint32 bubbleID)
 {
     uint32 beltID = sBubbleMgr.GetBeltID(bubbleID);
     std::map<uint32, bool>::iterator itr = m_spawned.find(beltID);
@@ -102,7 +102,7 @@ bool BeltMgr::IsSpawned(uint16 bubbleID)
     return false;
 }
 
-bool BeltMgr::IsActive(uint16 bubbleID)
+bool BeltMgr::IsActive(uint32 bubbleID)
 {
     uint32 beltID = sBubbleMgr.GetBeltID(bubbleID);
     std::map<uint32, bool>::iterator itr = m_active.find(beltID);
@@ -111,7 +111,7 @@ bool BeltMgr::IsActive(uint16 bubbleID)
     return false;
 }
 
-void BeltMgr::SetActive(uint16 bubbleID, bool active/*true*/)
+void BeltMgr::SetActive(uint32 bubbleID, bool active/*true*/)
 {
     uint32 beltID = sBubbleMgr.GetBeltID(bubbleID);
     std::map<uint32, bool>::iterator itr = m_active.find(beltID);
@@ -171,7 +171,7 @@ void BeltMgr::OnMined(AsteroidSE* pASE, double units, bool depleted)
         itr->second(pASE, units, depleted);
 }
 
-bool BeltMgr::Load(uint16 bubbleID) {
+bool BeltMgr::Load(uint32 bubbleID) {
     std::vector<AsteroidData> entities;
     entities.clear();
     uint32 beltID = sBubbleMgr.GetBeltID(bubbleID);
@@ -293,7 +293,7 @@ bool BeltMgr::Create(CosmicSignature& sig, std::unordered_multimap<float, uint16
     return true;
 }
 
-void BeltMgr::SpawnBelt(uint16 bubbleID, std::unordered_multimap<float, uint16>& roidTypes, int type/*0*/, bool anomaly/*false*/)
+void BeltMgr::SpawnBelt(uint32 bubbleID, std::unordered_multimap<float, uint16>& roidTypes, int type/*0*/, bool anomaly/*false*/)
 {
     if (IsSpawned(bubbleID))
         return;

@@ -175,7 +175,7 @@ void SpawnMgr::MoveSpawn(NPC* pNPC, SystemBubble* pBubble)
     for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
         if (itr->second.itemID != npcID)
             continue;
-        uint16 oldID(itr->first);
+        uint32 oldID(itr->first);
         if (oldID == pBubble->GetID())
             return;
         _log(SPAWN__TRACE, "MoveSpawn() called by %s(%u) from bubbleID %u to bubbleID %u", pNPC->GetName(), npcID, oldID, pBubble->GetID() );
@@ -209,7 +209,7 @@ bool SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& wher
     SystemBubble* pOld(pNPC->SysBubble());
     if (pOld == pBubble)
         return false;
-    uint16 oldID(pOld->GetID());
+    uint32 oldID(pOld->GetID());
 
     // collect the group first.  (erasing while walking the range was undefined behaviour)
     std::vector<SpawnEntry> entries;
@@ -254,7 +254,7 @@ bool SpawnMgr::WarpOutSpawn(NPC* pNPC, SystemBubble* pBubble, const GPoint& wher
     return true;
 }
 
-bool SpawnMgr::HasSpawn(uint16 bubbleID)
+bool SpawnMgr::HasSpawn(uint32 bubbleID)
 {
     return (m_spawns.find(bubbleID) != m_spawns.end());
 }
@@ -366,7 +366,7 @@ bool SpawnMgr::DropEntry(uint32 npcID)
     for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
         if (itr->second.itemID != npcID)
             continue;
-        uint16 bubbleID(itr->first);
+        uint32 bubbleID(itr->first);
         m_spawns.erase(itr);
         // members waiting for a respawn don't keep the spawn without a live one
         bool empty(true);
@@ -942,7 +942,7 @@ bool SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
     return true;
 }
 
-bool SpawnMgr::FindSpawnForBubble(uint16 bubbleID) {
+bool SpawnMgr::FindSpawnForBubble(uint32 bubbleID) {
     if (m_spawns.find(bubbleID) != m_spawns.end())
         return true;
 
@@ -958,7 +958,7 @@ uint16 SpawnMgr::GetRandTypeID(uint8 sClass)
     return sDataMgr.GetRandRatType(sClass, groupID);
 }
 
-bool SpawnMgr::IsChaining(uint16 bubbleID)
+bool SpawnMgr::IsChaining(uint32 bubbleID)
 {
     bool rsp = false;
     auto range = m_spawns.equal_range(bubbleID);
@@ -972,7 +972,7 @@ bool SpawnMgr::IsChaining(uint16 bubbleID)
     return rsp;
 }
 
-void SpawnMgr::RemoveSpawn(uint16 bubbleID, uint32 itemID)
+void SpawnMgr::RemoveSpawn(uint32 bubbleID, uint32 itemID)
 {
     auto range = m_spawns.equal_range(bubbleID);
     auto itr = range.first;

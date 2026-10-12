@@ -228,7 +228,7 @@ protected:
     SystemEntity* const mySE;			//we do not own this.
     /* bubble at the warp exit point.  pinned (SystemBubble::AddArrival()) so it stays while empty, and kept by ID only:
      *  use GetTargBubble()/SetTargBubble() */
-    uint16 m_targBubbleID;
+    uint32 m_targBubbleID;
 
     bool m_hasSentShipUpdates;
 

@@ -162,7 +162,7 @@ struct OreTypeChance {
 /* POD structure for cosmic signatures/anomalies */
 struct CosmicSignature {
     uint8 dungeonType;          // internal for creation checks
-    uint16 bubbleID;            // internal for .siglist command
+    uint32 bubbleID;            // internal for .siglist command
     // typeID of signal
     uint16 sigTypeID;           // type name if scanGroupID is not sig or anom and certainty > 0.75
     // groupID of signal

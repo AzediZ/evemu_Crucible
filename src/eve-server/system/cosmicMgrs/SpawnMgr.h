@@ -38,7 +38,7 @@ public:
     // update SpawnMgr on npcs new location (change bubbles)
     void MoveSpawn(NPC* pNPC, SystemBubble* pBubble);
     // a spawn (alive or waiting for a respawn) lives in this bubble
-    bool HasSpawn(uint16 bubbleID);
+    bool HasSpawn(uint32 bubbleID);
 
     std::string GetSpawnClassName(int8 sClass);
     std::string GetSpawnGroupName(int8 sGroup);
@@ -52,7 +52,7 @@ public:
     NPC* SpawnDungeonNPC(SystemBubble* pBubble, uint16 typeID, uint32 factionID, const GPoint& pos, bool warpIn, uint32 liveGroupID);
 
     // primitive test for chained spawns
-    bool IsChaining(uint16 bubbleID);
+    bool IsChaining(uint32 bubbleID);
     // this will be used for all spawn types
     void SpawnKilled(SystemBubble* pBubble, uint32 itemID);    // this DOES NOT remove entity from system or bubble.  user must do this BEFORE calling.
     /* a hauler warped off (npc ai plan 4.4):  it's removed on our next Process() (not counted as killed, no respawn).
@@ -78,12 +78,12 @@ public:
 
 
 protected:
-    bool FindSpawnForBubble(uint16 bubbleID);
+    bool FindSpawnForBubble(uint32 bubbleID);
     bool PrepSpawn(SystemBubble* pBubble, uint8 sClass = Spawn::Class::None, uint8 level = 0);
     void MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, uint8 level, bool anomaly=false);
     // false when nothing was spawned (it is tried again later)
     bool ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry);
-    void RemoveSpawn(uint16 bubbleID, uint32 itemID);
+    void RemoveSpawn(uint32 bubbleID, uint32 itemID);
     /* npcID's entry goes, wherever it is filed (no respawn).  a bubble left without live members loses its spawn.
      *  false if npcID had no entry */
     bool DropEntry(uint32 npcID);
@@ -100,7 +100,7 @@ protected:
     typedef std::vector<RatSpawnClass> RatSpawnClassVec;
     typedef std::vector<RatFactionGroups> RatFactionGroupsVec;
     typedef std::map<uint8, uint16> RatFactionGroupsMap;    //map to enable 'find'  shipClass is key
-    typedef std::multimap<uint16, SpawnEntry> SpawnEntryDef;    //bubbleID is key
+    typedef std::multimap<uint32, SpawnEntry> SpawnEntryDef;    //bubbleID is key
     //typedef std::vector<uint32, SystemSpawnGroup> SystemSpawnGroupVec;  //systemID is key  *unused at this time*
 
 private:

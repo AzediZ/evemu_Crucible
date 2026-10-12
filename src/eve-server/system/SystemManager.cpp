@@ -141,6 +141,9 @@ SystemManager::~SystemManager() {
 
     if (m_loaded)
         UnloadSystem();
+    // a system that couldn't be unloaded still has its bubbles:  free their marker cans while we're here to remove them
+    //  (after a real unload there are no bubbles left, and this does nothing)
+    sBubbleMgr.RemoveMarkers(m_data.systemID);
 
     SafeDelete(m_dungMgr);
     SafeDelete(m_anomMgr);
@@ -392,6 +395,10 @@ void SystemManager::UnloadSystem() {
         return;
 
     sLog.Magenta("    SystemManager", "UnloadSystem() called for %s(%u).", m_data.name.c_str(), m_data.systemID);
+
+    // .bubbletrack marker cans go the normal way first (their temp items too).  the global center marker isn't in
+    //  m_staticEntities, so the entity loop below can't take it
+    sBubbleMgr.RemoveMarkers(m_data.systemID);
 
     // system is being unloaded.  pay bounties now (PayBounties doesn't throw)
     PayBounties();
@@ -1399,6 +1406,27 @@ void SystemManager::AddMarker(SystemEntity* pSE, bool sendBall/*false*/, bool ad
     }
 
     //cleanup
+    PySafeDecRef(up);
+}
+
+void SystemManager::RemoveMarkerBall(SystemEntity* pSE) {
+    // (at shutdown the clients are gone, though they may still be listed)
+    if ((pSE == nullptr) or !m_loaded or sConsole.IsShutdown() or m_clients.empty())
+        return;
+
+    std::vector<Client*> inBubble;
+    if (pSE->SysBubble() != nullptr)
+        pSE->SysBubble()->GetPlayers(inBubble);
+
+    RemoveBallsFromBP removeball;
+        removeball.balls.push_back(pSE->GetID());
+    PyTuple* up = removeball.Encode();
+    for (auto cur : m_clients) {
+        if (std::find(inBubble.begin(), inBubble.end(), cur.second) != inBubble.end())
+            continue;
+        PyIncRef(up);
+        cur.second->QueueDestinyUpdate(&up);
+    }
     PySafeDecRef(up);
 }
 

@@ -959,18 +959,31 @@ void SystemBubble::CmdDropLoot() {
 }
 
 
+/* the marker cans go the way any container does (ContainerSE::Process()):  deleting the item takes its entity out of the
+ *  system (CargoContainer::Delete() -> SystemEntity::Delete() -> SystemManager::RemoveEntity():  system maps, bubble,
+ *  signal, and the RemoveBalls to the bubble's players), then the entity is freed */
 void SystemBubble::RemoveMarkers() {
-    if (m_hasMarkers) {
-        for (auto cur : m_markers) {
-            m_system->RemoveEntity(cur.second);
-            cur.second->Delete(); // delete marker cans here
-            SafeDelete(cur.second);
-        }
-    }
-
-    m_markers.clear();
+    std::map<uint32, SystemEntity*> markers;
+    markers.swap(m_markers);
+    ContainerSE* pCenter(m_centerSE);
     m_centerSE = nullptr;
     m_hasMarkers = false;
+
+    for (auto cur : markers) {
+        SystemEntity* pSE(cur.second);
+        if (pSE == nullptr)
+            continue;
+        // every client in the system was sent the center marker (AddMarker())
+        if (pSE == pCenter)
+            m_system->RemoveMarkerBall(pSE);
+        InventoryItemRef iRef(pSE->GetSelf());
+        if (iRef.get() != nullptr) {
+            iRef->Delete();
+        } else {
+            m_system->RemoveEntity(pSE);
+        }
+        SafeDelete(pSE);
+    }
 }
 
 

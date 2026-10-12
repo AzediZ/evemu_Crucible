@@ -94,7 +94,7 @@ public:
     double x() const                                    { return m_center.x; }
     double y() const                                    { return m_center.y; }
     double z() const                                    { return m_center.z; }
-    uint16 GetID()                                      { return m_bubbleID; }
+    uint32 GetID()                                      { return m_bubbleID; }
     uint32 GetSystemID()                                { return m_systemID; }
     GPoint GetCenter()                                  { return m_center; }
     ContainerSE* GetCenterMarker()                      { return m_centerSE; }
@@ -211,7 +211,7 @@ private:
 
     bool m_hasMarkers :1;
 
-    uint16 m_bubbleID;
+    uint32 m_bubbleID;
     uint32 m_systemID;
     uint32 m_arrivals;      // warps headed here (see AddArrival())
 

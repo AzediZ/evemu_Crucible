@@ -63,7 +63,7 @@ public:
     SystemBubble* FindBubble(SystemEntity *ent) const;
     //call to find the bubble containing the GPoint specified, if no bubble does, return NULL
     SystemBubble* FindBubble(uint32 systemID, const GPoint &pos) const;
-    SystemBubble* FindBubbleByID(uint16 bubbleID);
+    SystemBubble* FindBubbleByID(uint32 bubbleID);
     //find the bubble containing the GPoint specified.  will call create to make new bubble if none found.
     //  this is preferred method to create new bubble.
     SystemBubble* GetBubble(SystemManager* sysMgr, const GPoint &pos);
@@ -79,9 +79,9 @@ public:
     uint32 GetBubbleID()                                { return ++m_bubbleID; }
 
     // for spawn system     -allan 15April16
-    void AddSpawnID(uint16 bubbleID, uint32 spawnID);
-    void RemoveSpawnID(uint16 bubbleID, uint32 spawnID);
-    uint32 GetBeltID(uint16 bubbleID);
+    void AddSpawnID(uint32 bubbleID, uint32 spawnID);
+    void RemoveSpawnID(uint32 bubbleID, uint32 spawnID);
+    uint32 GetBeltID(uint32 bubbleID);
 
     // for .list command
     uint32 GetBubbleCount(uint32 systemID);
@@ -106,7 +106,7 @@ private:
     uint32 m_bubbleID;
 
     /* map of bubbleID, spawnID */
-    std::map<uint16, uint32> m_spawnIDs;
+    std::map<uint32, uint32> m_spawnIDs;
 
     std::list<SystemBubble*> m_bubbles;                 //for proc only.
     std::vector<SystemEntity*> m_wanderers;             //entities that are no longer in their bubble, but not removed
