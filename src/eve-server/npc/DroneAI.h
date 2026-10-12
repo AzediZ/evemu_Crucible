@@ -108,6 +108,13 @@ private:
     void ApproachTarget(SystemEntity* pTarget, double range, double speed);
     void StopMoving();
 
+    /* fighters and bombers only (FighterWarpRules.h):  warps after pAnchor (our controlling ship, or a target we follow) when it
+     *  is in warp or in another bubble, showing 'state' meanwhile.  true if we are warping, about to, or waiting for it where it
+     *  is going;  false if there is nothing to warp for or we can't (carry on as a drone) */
+    bool WarpAfter(SystemEntity* pAnchor, uint8 state);
+    // an engaged fighter keeps its target when it warps off or leaves control range:  the controlling pilot's "Fighter attack and follow"
+    bool FollowsTarget();
+
     // effects of one cycle of our main effect
     void Fire(SystemEntity* pTarget);
     void FinishMiningCycle(ShipSE* pController, SystemEntity* pRoid);
@@ -138,6 +145,7 @@ private:
     uint8 m_ewarKind;           //  and its Ewar:: kind
     double m_moveRange;
     double m_moveSpeed;
+    GPoint m_warpDest;          // where our last WarpAfter() warp went (FighterWarp::NeedsNewWarp)
 
     bool m_cycleActive;
     Timer m_cycleTimer;         // weapon/mining/repair cycle

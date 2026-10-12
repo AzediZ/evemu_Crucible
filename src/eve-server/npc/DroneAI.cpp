@@ -10,7 +10,10 @@
 /* How drones behave (Crucible)
  *
  *  - idle drones orbit their controlling ship at their orbit range and orbit velocity.  if the ship warps off or
- *     leaves their bubble they wait where they are
+ *     leaves their bubble they wait where they are.  fighters and fighter bombers warp after it within the system
+ *     (WarpAfter), and with "Fighter attack and follow" (the controlling pilot's attribute 1283) they keep an engaged
+ *     target that warps off or leaves control range:  they warp after it and fight on where it lands.  they don't
+ *     follow into rooms past an acceleration gate, nor while warp scrambled
  *  - engaging: approach the target at full speed, then orbit it at the drone's orbit range (entityFlyRange) and
  *     orbit velocity (entityCruiseSpeed), using the main effect once the target is in range and locked.
  *     the target has to stay within the pilot's drone control range; if it leaves, the drones return and orbit
@@ -23,7 +26,7 @@
  *     makes them weak against subcapitals).  choosing a target themselves, they prefer one they hit in full
  *     (DroneSE::PrefersTarget)
  *
- * Movement is done with ordinary destiny Orbit/Follow commands, which the client simulates the same way we do.
+ * Movement is done with ordinary destiny Orbit/Follow (and, for fighters, WarpTo) commands, which the client simulates the same way we do.
  *  each call below is idempotent (destiny ignores a command that changes nothing), so they are simply repeated every tick.
  */
 
@@ -43,6 +46,7 @@
 #include "npc/NPCAI.h"
 #include "npc/Sentry.h"
 #include "npc/SentryAI.h"
+#include "npc/ai/FighterWarpRules.h"
 #include "npc/ai/NpcMath.h"
 #include "ship/Ship.h"
 #include "ship/modules/EwarModule.h"
@@ -91,6 +95,7 @@ DroneAIMgr::DroneAIMgr(DroneSE* pDrone)
   m_ewarKind(0),
   m_moveRange(0.0),
   m_moveSpeed(0.0),
+  m_warpDest(NULL_ORIGIN),
   m_cycleActive(false),
   m_cycleTimer(0)
 {
@@ -106,6 +111,10 @@ void DroneAIMgr::Process() {
         return;
     }
     m_action = m_pDrone->Stats().action;
+
+    // a fighter in warp:  nothing to do until it drops out (and nobody can command it out here)
+    if (m_pDrone->DestinyMgr()->IsWarping())
+        return;
 
     switch (m_order) {
         case DroneAI::Order::Idle:              ProcessIdle(pController);           break;
@@ -224,6 +233,13 @@ void DroneAIMgr::TargetLost(SystemEntity* pTarget) {
     if ((pTarget == nullptr) or (pTarget->GetID() != m_targetID))
         return;
     _log(DRONE__AI_TRACE, "Drone %s(%u): lost lock on %s(%u)", m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+    // the target warped off (that clears every lock on it).  a fighter following it keeps it:  ProcessEngage() warps after it
+    if (FollowsTarget() and !pTarget->IsDead() and (pTarget->DestinyMgr() != nullptr)
+    and (pTarget->DestinyMgr()->IsWarping() or pTarget->DestinyMgr()->IsAligningForWarp())) {
+        StopCycle();
+        StopWeb();
+        return;
+    }
     if ((m_order == DroneAI::Order::Guard) or (m_order == DroneAI::Order::Assist)) {
         StopCycle();
         StopWeb();
@@ -245,8 +261,13 @@ void DroneAIMgr::Aggressed(SystemEntity* pAttacker) {
  * ====================================================================================== */
 
 void DroneAIMgr::ProcessIdle(ShipSE* pController) {
-    // our ship has gone elsewhere.  wait here
+    // our ship has gone elsewhere.  fighters warp after it, other drones wait here
     if ((pController->SysBubble() != m_pDrone->SysBubble()) or pController->DestinyMgr()->IsWarping()) {
+        if (WarpAfter(pController, DroneAI::State::Returning)) {
+            // on landing, fly the rest at full speed (an idle drone orbits at its slow cruise speed)
+            SetOrder(DroneAI::Order::ReturnHome);
+            return;
+        }
         StopMoving();
         SetState(DroneAI::State::Idle);
         return;
@@ -269,6 +290,8 @@ void DroneAIMgr::ProcessIdle(ShipSE* pController) {
 
 void DroneAIMgr::ProcessReturn(ShipSE* pController, bool toBay) {
     if ((pController->SysBubble() != m_pDrone->SysBubble()) or pController->DestinyMgr()->IsWarping()) {
+        if (WarpAfter(pController, (toBay ? DroneAI::State::ReturningToBay : DroneAI::State::Returning)))
+            return;
         StopMoving();
         return;
     }
@@ -294,6 +317,12 @@ void DroneAIMgr::ProcessReturn(ShipSE* pController, bool toBay) {
 
 void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
+    // fighters with "attack and follow" go after a target that warped off (or landed elsewhere).  if they can't, it's gone
+    bool follow(FollowsTarget());
+    if (follow and (pTarget != nullptr) and !pTarget->IsDead() and (pTarget->DestinyMgr() != nullptr) and !pTarget->DestinyMgr()->IsCloaked()
+    and ((pTarget->SysBubble() != m_pDrone->SysBubble()) or pTarget->DestinyMgr()->IsWarping()))
+        if (WarpAfter(pTarget, DroneAI::State::Following))
+            return;
     bool usable((pTarget != nullptr) and !pTarget->IsDead() and (pTarget->SysBubble() == m_pDrone->SysBubble()));
     if (usable and (pTarget->DestinyMgr() != nullptr))
         if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
@@ -312,8 +341,9 @@ void DroneAIMgr::ProcessEngage(ShipSE* pController) {
         return;
     }
 
-    // the target must stay within the pilot's drone control range
-    if (Gap(pController, pTarget) > m_pDrone->ControlRange()) {
+    // the target must stay within the pilot's drone control range (fighters following it don't let go:  "the only escape from
+    //  fighters is to jump system or to dock")
+    if (!follow and (Gap(pController, pTarget) > m_pDrone->ControlRange())) {
         _log(DRONE__AI_TRACE, "Drone %s(%u): target %s(%u) left control range", m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
         ReturnHome();
         return;
@@ -535,7 +565,70 @@ void DroneAIMgr::ApproachTarget(SystemEntity* pTarget, double range, double spee
 }
 
 void DroneAIMgr::StopMoving() {
+    // a fighter in warp proper can't stop (destiny refuses):  it lands where it was going
+    if (m_pDrone->DestinyMgr()->IsWarping())
+        return;
     m_pDrone->DestinyMgr()->Stop();
+}
+
+/* fighters and bombers warping after their controlling ship or a target they follow (FighterWarpRules.h).  an anchor in warp
+ *  is followed to its exit point (fixed once it is in warp proper:  DestinyManager::RealWarp()), one that has landed elsewhere
+ *  to where it is.  we come out FighterWarp::WarpInRange short.  the warp is an ordinary destiny WarpTo, so the client gets
+ *  a WarpTo with our own warp speed (fighters have no warpSpeedMultiplier:  its default, 1, against a carrier's 0.5) and the
+ *  warp effect;  the client and DestinyManager then fly it.  entering warp clears our locks and everyone's on us
+ *  (OnWarpActivated), and we move from bubble to bubble like any warping ship (UpdateWarpBubble)
+ */
+bool DroneAIMgr::WarpAfter(SystemEntity* pAnchor, uint8 state) {
+    if ((pAnchor == nullptr) or !m_pDrone->IsFighter())
+        return false;
+    DestinyManager* pAnchorDestiny(pAnchor->DestinyMgr());
+    DestinyManager* pDestiny(m_pDrone->DestinyMgr());
+    if ((pAnchorDestiny == nullptr) or (pDestiny == nullptr) or (pAnchor->SysBubble() == nullptr))
+        return false;
+
+    FighterWarp::Situation s;
+        s.canWarp = m_pDrone->CanWarp();
+        s.sameBubble = (pAnchor->SysBubble() == m_pDrone->SysBubble());
+        s.anchorAligning = pAnchorDestiny->IsAligningForWarp();
+        s.anchorWarping = pAnchorDestiny->IsWarping();
+    GPoint dest(s.anchorWarping ? pAnchorDestiny->GetTargetPoint() : pAnchor->GetPosition());
+        s.destinationBlocked = (s.canWarp and !m_pDrone->CanWarpTo(dest));
+        s.distance = m_pDrone->GetPosition().distance(dest);
+
+    FighterWarp::Step step(FighterWarp::Decide(s));
+    if (step == FighterWarp::Step::Stay)
+        return false;
+
+    // weapons, webs and ewar stop:  we are leaving, or waiting for the anchor to arrive
+    StopCycle();
+    StopWeb();
+    SetState(state);
+    if (step == FighterWarp::Step::Wait)
+        return true;
+
+    bool underWay(pDestiny->IsAligningForWarp() or pDestiny->IsWarping() or pDestiny->IsGoto());
+    if (!FighterWarp::NeedsNewWarp(underWay, m_warpDest.distance(dest)))
+        return true;
+
+    _log(DRONE__AI_TRACE, "Drone %s(%u): warping after %s(%u)%s, %.0f km away", m_pDrone->GetName(), m_pDrone->GetID(),
+         pAnchor->GetName(), pAnchor->GetID(), (s.anchorWarping ? " (to its warp exit)" : ""), s.distance / 1000.0);
+    m_warpDest = dest;
+    // full speed:  aligning needs over 75% of it, and the client drops us out of warp once below it
+    pDestiny->SetMaxVelocity(static_cast<float>(m_pDrone->Stats().maxVelocity));
+    pDestiny->WarpTo(dest, static_cast<int32>(FighterWarp::WarpInRange));
+    return true;
+}
+
+bool DroneAIMgr::FollowsTarget() {
+    if (!m_pDrone->IsFighter())
+        return false;
+    Client* pClient(m_pDrone->GetControllerClient());
+    if ((pClient == nullptr) or (pClient->GetChar().get() == nullptr))
+        return false;
+    // set by the client's drone settings (dogmaIM.ChangeDroneSettings, sent before every launch).  on by default (dgm default 1)
+    EvilNumber value(EvilZero);
+    bool on(pClient->GetChar()->HasAttribute(AttrFightersAttackAndFollow, value) ? (value.get_int() != 0) : true);
+    return FighterWarp::FollowsTarget(true, on);
 }
 
 /* ======================================================================================
