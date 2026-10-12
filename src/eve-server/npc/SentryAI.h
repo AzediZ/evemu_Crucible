@@ -59,6 +59,11 @@ public:
 
     // called from Sentry::Killed().  pKiller:  the fatal blow's source (our group hears about it)
     void OnKilled(SystemEntity* pKiller);
+    // we leave space without dying (GM /unspawn;  SystemManager::OnNPCRemoved):  ewar off, out of our group, no alert
+    void OnRemoved();
+    /* a player's ewar module or drone cycled on us (ActiveModule, DroneAI):  aggression like a lock or a shot.  we answer
+     *  on our next think, our group (and linked groups) hear about it */
+    void OnEwarBy(SystemEntity* pBy);
 
     // our aggro group (we join it;  nullptr leaves the old one).  DungeonMgr, GM /spawn
     void SetGroup(const std::shared_ptr<AggroGroup>& group);

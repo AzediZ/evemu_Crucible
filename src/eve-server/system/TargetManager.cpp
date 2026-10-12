@@ -353,8 +353,11 @@ void TargetManager::TargetLost(SystemEntity *tSE) {
     }
     _log(TARGET__INFO, "%s(%u) has lost lock on %s(%u)", mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
 
-    if (mySE->IsSentrySE())
+    // sentries don't move (no follow target to drop) and have no pilot to tell.  their ai picks its next primary
+    if (mySE->IsSentrySE()) {
+        mySE->GetSentrySE()->TargetLost(tSE);
         return;
+    }
 
     mySE->DestinyMgr()->EntityRemoved(tSE);
     if (mySE->IsNPCSE())

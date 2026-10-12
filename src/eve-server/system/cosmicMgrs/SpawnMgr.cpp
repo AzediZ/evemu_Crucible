@@ -94,31 +94,9 @@ void SpawnMgr::Process() {
         fled.swap(m_fled);
         for (auto npcID : fled) {
             NPC* pNPC(m_system->GetNPCSE(npcID));
-            if ((pNPC == nullptr) or pNPC->IsDead())
+            if ((pNPC == nullptr) or pNPC->IsDead() or (m_system->GetSE(npcID) == nullptr))
                 continue;
-            for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
-                if (itr->second.itemID != npcID)
-                    continue;
-                uint16 bubbleID(itr->first);
-                m_spawns.erase(itr);
-                bool empty(true);
-                auto range = m_spawns.equal_range(bubbleID);
-                for (auto rItr = range.first; rItr != range.second; ++rItr)
-                    if (!rItr->second.enabled)
-                        empty = false;
-                if (empty) {
-                    m_spawns.erase(bubbleID);
-                    SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(bubbleID));
-                    std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pBubble);
-                    if (bItr != m_bubbles.end())
-                        m_bubbles.erase(bItr);
-                    if (pBubble != nullptr) {
-                        pBubble->ResetBubbleRatSpawn();
-                        m_system->RemoveSpawnBubble(pBubble);
-                    }
-                }
-                break;
-            }
+            DropEntry(npcID);
             _log(SPAWN__DEPOP, "SpawnMgr::Process() - %s(%u) got away.", pNPC->GetName(), npcID);
             if (pNPC->TargetMgr() != nullptr)
                 pNPC->TargetMgr()->ClearFromTargets();
@@ -381,6 +359,72 @@ void SpawnMgr::SpawnFled(NPC* pNPC)
     if ((pNPC == nullptr) or (std::find(m_fled.begin(), m_fled.end(), pNPC->GetID()) != m_fled.end()))
         return;
     m_fled.push_back(pNPC->GetID());
+}
+
+bool SpawnMgr::DropEntry(uint32 npcID)
+{
+    for (auto itr = m_spawns.begin(); itr != m_spawns.end(); ++itr) {
+        if (itr->second.itemID != npcID)
+            continue;
+        uint16 bubbleID(itr->first);
+        m_spawns.erase(itr);
+        // members waiting for a respawn don't keep the spawn without a live one
+        bool empty(true);
+        auto range = m_spawns.equal_range(bubbleID);
+        for (auto rItr = range.first; rItr != range.second; ++rItr)
+            if (!rItr->second.enabled)
+                empty = false;
+        if (empty) {
+            m_spawns.erase(bubbleID);
+            SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(bubbleID));
+            std::vector<SystemBubble*>::iterator bItr = std::find(m_bubbles.begin(), m_bubbles.end(), pBubble);
+            if (bItr != m_bubbles.end())
+                m_bubbles.erase(bItr);
+            if (pBubble != nullptr) {
+                pBubble->ResetBubbleRatSpawn();
+                m_system->RemoveSpawnBubble(pBubble);
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+void SpawnMgr::SpawnRemoved(uint32 itemID)
+{
+    // not a kill:  no respawn
+    if (DropEntry(itemID))
+        _log(SPAWN__DEPOP, "SpawnMgr::SpawnRemoved() - %u left space without dying.  Its entry is gone.", itemID);
+    // a hauler that got away is already out of space
+    std::vector<uint32>::iterator fItr = std::find(m_fled.begin(), m_fled.end(), itemID);
+    if (fItr != m_fled.end())
+        m_fled.erase(fItr);
+}
+
+bool SpawnMgr::VanishSpawn(NPC* pNPC)
+{
+    if ((pNPC == nullptr) or (pNPC->SysBubble() == nullptr))
+        return false;
+    // the whole group, as for a warp to another belt (WarpOutSpawn)
+    std::vector<NPC*> npcs;
+    auto range = m_spawns.equal_range(pNPC->SysBubble()->GetID());
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        if (itr->second.enabled)
+            continue;   // dead, waiting for a respawn (WarpOut doesn't come while chaining)
+        NPC* rNPC(m_system->GetNPCSE(itr->second.itemID));
+        if ((rNPC == nullptr) or rNPC->IsDead() or (rNPC->DestinyMgr() == nullptr) or (rNPC->GetAIMgr() == nullptr))
+            continue;
+        if (!rNPC->GetAIMgr()->IsIdle() or rNPC->IsWarpScrambled())
+            return false;
+        npcs.push_back(rNPC);
+    }
+    if (npcs.empty())
+        return false;
+    _log(SPAWN__TRACE, "VanishSpawn() called by %s(%u): %u npcs leave bubble %u for good.", pNPC->GetName(), pNPC->GetID(),
+            (uint32)npcs.size(), pNPC->SysBubble()->GetID());
+    for (auto cur : npcs)
+        cur->GetAIMgr()->Vanish();
+    return true;
 }
 
 // one dungeon npc.  dungeon npcs never respawn (not in m_spawns), their waves are run by DungeonMgr

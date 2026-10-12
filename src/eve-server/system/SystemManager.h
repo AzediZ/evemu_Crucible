@@ -31,6 +31,7 @@
 #include "system/SolarSystem.h"
 #include "system/SystemDB.h"
 #include "chat/LSCService.h"
+#include "npc/ai/NpcTelemetry.h"
 
 
 class PyRep;
@@ -143,6 +144,13 @@ public:
     void RemoveNPC(NPC* pNPC);
     // an NPC that was destroyed (and so already removed from space) is going away
     void RemoveDeadNPC(NPC* pNPC);
+    /* npc ai (doc/code_and_design_notes/npc-ai/PLAN.md phase 5):  npcs and sentries that leave space (killed, GM /unspawn)
+     *  without an owner freeing them are freed at the start of the next tick.  their destructor calls this (someone else
+     *  freed them first:  forget them, here and in the npc list) */
+    void ForgetRemovedNPC(SystemEntity* pSE);
+    // this system's npc ai telemetry window (npc/ai/NpcTelemetry.h) and tick counter (level of detail)
+    NpcStats& GetNpcStats()                             { return m_npcStats; }
+    uint64_t GetAiTick() const                          { return m_aiTick; }
     void AddEntity(SystemEntity* pSE, bool addSignal=true);    // add entity to system, and (optionally) add signal to AnomalyMgr
     void RemoveEntity(SystemEntity* pSE);   // this also removes SE* from bubble and sig from AnomalyMgr (if applicable)
     void AddClient(Client* pClient, bool count=false, bool jump=false);
@@ -306,6 +314,15 @@ private:
     static bool IsDroneControlledBy(DroneSE* pDrone, uint32 shipID);
     std::vector<uint32> m_droneReturns;                 // drones to move into their ship's drone bay after this tick
     void ProcessDroneReturns();
+
+    /* npc ai (npc ai plan phase 5):  npcs and sentries out of space that nobody else frees (killed, GM /unspawn).  we own
+     *  these;  freed at the start of the next tick (FreeRemovedNPCs), when nothing of this tick holds them any more */
+    std::map<uint32, SystemEntity*> m_removedNPCs;
+    // an npc or sentry leaves space:  out of its group, spawn and dungeon, its locks and the modules on it gone, then freed later
+    void OnNPCRemoved(SystemEntity* pSE);
+    void FreeRemovedNPCs();
+    NpcStats m_npcStats;                                // telemetry window (NPC__AI_STATS every npc.StatsInterval)
+    uint64_t m_aiTick;                                  // ticks so far (npc level of detail)
 
     // running self-destructs
     struct SelfDestructData {

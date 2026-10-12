@@ -21,8 +21,28 @@ AggroGroup::AggroGroup(uint64_t key, uint8 mode, uint32 aggroRange, uint64_t lin
   m_linkKey(linkKey),
   m_roomKey(roomKey),
   m_alerted(false),
-  m_alertedAt(0)
+  m_fighting(false),
+  m_alertedAt(0),
+  m_fightingSec(-1)
 {
+}
+
+bool AggroGroup::AnyFighting(int64 now, int64 underFireMs)
+{
+    int64 sec(now / 1000);
+    if (sec == m_fightingSec)
+        return m_fighting;
+    m_fightingSec = sec;
+    m_fighting = false;
+    for (auto pNPC : m_members) {
+        if (pNPC->IsDead() or (pNPC->GetAIMgr() == nullptr))
+            continue;
+        if (!pNPC->GetAIMgr()->IsIdle() or ((now - pNPC->GetAIMgr()->GetLastDamagedAt()) < underFireMs)) {
+            m_fighting = true;
+            break;
+        }
+    }
+    return m_fighting;
 }
 
 uint32 AggroGroup::GetAggroRange() const

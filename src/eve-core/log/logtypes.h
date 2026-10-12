@@ -475,6 +475,7 @@ LOG_TYPE( NPC, INFO, DISABLED, "NPC Info" )
 LOG_TYPE( NPC, TRACE, DISABLED, "NPC Trace" )
 LOG_TYPE( NPC, AI_TRACE, DISABLED, "NPC AI Trace" )
 LOG_TYPE( NPC, AI_WARN, ENABLED, "NPC AI Warning" )    // npc type data problems, once per type (npc/ai/NpcProfile)
+LOG_TYPE( NPC, AI_STATS, DISABLED, "NPC AI Stats" )    // one line per system every npc.StatsInterval (npc/ai/NpcTelemetry.h)
 
 LOG_CATEGORY( PHYSICS )
 LOG_TYPE( PHYSICS, ERROR, ENABLED, "PhysicsError" )

@@ -33,6 +33,7 @@ namespace NpcAct {
         WarpOut,            // idle spawn moves to another belt
         Flee,               // haulers and commanders leaving (phase 2)
         Reaction,           // reaction delay before the first activation (phase 2)
+        Wander,             // an idle belt rat picks something new to orbit (phase 5)
         Count
     };
 }
@@ -140,6 +141,7 @@ public:
             case NpcAct::WarpOut:       return "warpOut";
             case NpcAct::Flee:          return "flee";
             case NpcAct::Reaction:      return "reaction";
+            case NpcAct::Wander:        return "wander";
         }
         return "unknown";
     }

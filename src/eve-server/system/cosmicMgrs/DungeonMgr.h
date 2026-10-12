@@ -192,9 +192,13 @@ public:
     // pSE is about to be hit:  an overseer structure or sentry aggroes its whole room (npc ai plan 4.3)
     void OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker);
     /* a sleeper (pSpotter) of a dungeon room saw a capital ship (npc ai plan 4.6:  "the sleepers will immediately call for
-     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance.  the
-     *  reinforcement spawn is phase 5's;  for now it is logged */
+     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance:
+     *  npc.SleeperCapitalReinforcements sleeper battleships warp in next to the capital on our next Process() (the spotter
+     *  calls this from inside its bubble walk), join the spotter's group and go for the capital */
     void OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital);
+    /* itemID (an npc, sentry or object of ours) left space without dying (GM /unspawn;  SystemManager::OnNPCRemoved):  it
+     *  is no longer a member (like WarpShipAway), and the dungeon may be complete now (checked on our next Process()) */
+    void OnEntityRemoved(uint32 itemID);
     void OnPlayerKilled(ShipSE* pShip, uint32 charID);
     // Dungeon::Trigger::HackingSuccess..ArchaeologyFailure (11-16), ItemPlacedInMissionContainer (23),
     //  ItemRemovedFromSpawnContainer (32), ItemInCargo (33) on the dungeon object itemID (typeID for item triggers)
@@ -303,6 +307,13 @@ private:
         const Dungeon::EventDef* event;
         Ctx ctx;
     };
+    // sleeper capital escalation (OnCapitalSighted), spawned on the next Process()
+    struct Reinforcement {
+        uint32 instanceID;
+        uint8 roomIdx;
+        uint32 spotterID;
+        uint32 capitalID;
+    };
 
     // instance building
     uint32 ResolveFaction(const Dungeon::SpawnParams& params, const Dungeon::Dungeon& dungeon);
@@ -340,6 +351,11 @@ private:
     void DropLoot(uint32 lootGroupID, uint32 wreckID, const GPoint& pos, uint32 ownerID);
     uint32 FindWreck(uint32 deadItemID, const GPoint& pos);
 
+    // sleeper battleships for a capital (npc ai plan 4.6, phase 5)
+    void SpawnReinforcements(const Reinforcement& r);
+    // the types to spawn them from:  npc.SleeperReinforcementTypes, the room's sleepless battleships, the Sleepless Patroller group
+    void GetReinforcementTypes(Instance& inst, uint8 roomIdx, std::vector<uint32>& into);
+
     // entity removal
     void RemoveEntity(uint32 itemID, bool explode);
     void WarpAway(uint32 itemID, bool comeBack, Instance& inst, uint8 roomIdx);
@@ -368,7 +384,9 @@ private:
 
     std::map<uint32, Instance> m_instances;
     std::map<uint32, std::pair<uint32, uint8>> m_entityIndex;  // itemID -> (instanceID, roomIdx):  npcs, objects, asteroids
-    std::set<uint64_t> m_capitalsSighted;                       // (instanceID << 32) | capital shipID (OnCapitalSighted)
+    std::set<uint64_t> m_capitalsSighted;                       // (instanceID << 32) | capital shipID (OnCapitalSighted).  pruned with the instance
+    std::vector<Reinforcement> m_reinforcements;                // OnCapitalSighted:  to spawn on the next Process()
+    std::set<uint32> m_completionChecks;                        // OnEntityRemoved:  instances to check for completion
     std::map<uint32, LiveGate> m_gates;                         // gate itemID ->
     std::deque<PendingTrigger> m_pending;
     std::multimap<int64, PendingEvent> m_delayed;               // due time (FILETIME) ->

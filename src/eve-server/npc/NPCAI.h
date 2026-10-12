@@ -31,6 +31,7 @@
 #include "npc/ai/NpcProfile.h"
 #include "npc/ai/NpcRng.h"
 #include "npc/ai/NpcSchedule.h"
+#include "npc/ai/NpcTelemetry.h"
 #include "npc/ai/RecentDamage.h"
 #include "npc/ai/ThreatTable.h"
 
@@ -103,6 +104,16 @@ public:
     void ShareThreat(SystemEntity* pSE, float amount);
     // called from NPC::Killed().  pKiller:  the fatal blow's source (our group hears about it)
     void OnKilled(SystemEntity* pKiller);
+    /* we leave space without dying (GM /unspawn, a despawn, a hauler that got away;  SystemManager::OnNPCRemoved):  our ewar
+     *  and support stop, our group stops counting us (no alert) */
+    void OnRemoved();
+    // our idle spawn leaves for good (SpawnMgr::VanishSpawn, npc.WarpOutVanishChance):  off grid, gone when we land
+    void Vanish();
+    /* level of detail (npc/ai/NpcLod.h):  something to do that can't wait for the slow think of npcs away from players
+     *  (not idle, law enforcement, something queued) */
+    bool IsBusy();
+    // our last turret shots with every term (fairness audit, /npcai verbose)
+    const NpcShotLog& GetShotLog() const                { return m_shots; }
 
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
     bool IsFighting();
@@ -188,6 +199,8 @@ public:
     void AddThreat(SystemEntity* pSE, float amount);
     // start a lock on pSE (false:  can't, e.g. jammed, out of range or no free slot)
     bool StartLock(SystemEntity* pSE);
+    // the same, telling why it can't (chase:  out of range) and counting it (telemetry)
+    bool BeginLock(SystemEntity* pSE, bool& chase);
     // drop our lock on pSE without TargetLost's repick (the primary and pending switch go with it)
     void DropLock(SystemEntity* pSE);
     // a deliberate switch to pSE (a lock we have):  the switch timer starts over
@@ -209,6 +222,8 @@ protected:
     void SetIdle(bool clearLocks = true);
     void WarpOut();
     void SetWander();
+    // what an idle belt rat orbits:  a random asteroid of its bubble, or now and then the belt itself (phase 5)
+    SystemEntity* PickWanderTarget(SystemBubble* pBubble);
     void ClearTarget(SystemEntity* pTargSE);
     void AttackTarget(SystemEntity* pTargSE);
     // too far (R_acq) or move toward it, then shoot (turrets)
@@ -217,6 +232,8 @@ protected:
     void FireMissile(SystemEntity* pTargSE, bool locked);
     // the first activation of this fight waited its reaction delay (5.6)
     bool Reacted(int64 now);
+    // our ewar on the primary (pLocked:  our completed lock on it, or nullptr) or the brain's secondaries
+    void ProcessEwar(NpcContext& ctx, SystemEntity* pLocked, int64 now);
 
     float GetTargetTime(SystemEntity* pTargSE);
     void ProcessRepairs();
@@ -274,6 +291,8 @@ private:
     bool m_suppressLost     :1;     // we drop a lock ourselves (drone switch):  TargetLost leaves us alone
     bool m_leashWarp        :1;     // WarpOut is the hard leash's warp home (cut short:  fly;  landing:  home stays)
     bool m_buffsActive      :1;     // a group assist is on us
+    bool m_vanishing        :1;     // our spawn leaves for good (Vanish()):  gone when we land
+    bool m_telegraph        :1;     // we turned toward a group join's target while its reaction delay runs (npc.TelegraphJoin)
 
     uint8 m_role;                   // NPCAI::Role
 
@@ -309,6 +328,7 @@ private:
 
     NpcSchedule m_sched;
     NpcRng m_rng;
+    NpcShotLog m_shots;
 
     // remote armor repairs reserved on us (5.9)
     struct Reservation { float amount; int64 until; };
@@ -319,8 +339,9 @@ private:
     BuffState m_buffs[NpcAI::Buff::Count];
 };
 
-/* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers) */
-void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget);
+/* fires an npc-type missile (launcher = npc or sentry, self = its item for the missile multipliers).  damageMult:  the
+ *  difficulty preset's (npc.Difficulty) */
+void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget, float damageMult = 1.0f);
 
 /* pRepairer (a player's ship or drone) repaired hp on pPatient (remote armor repair, shield transfer, remote hull repair,
  *  repair drones).  level-one npcs that have pPatient locked or threat on it count it as threat on pRepairer (PLAN.md 5.7,

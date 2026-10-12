@@ -16,6 +16,7 @@
 #include "EntityList.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/ai/NpcProfile.h"
 #include "npc/Sentry.h"
 #include "npc/SentryAI.h"
 #include "ship/Ship.h"
@@ -1105,6 +1106,10 @@ void DungeonMgr::DespawnInstance(uint32 instanceID, bool notifyAnomMgr/*true*/)
 
     Ctx ctx;
     Notify(inst, Dungeon::Engine::Despawned, 0, ctx);
+    // the capitals its sleepers saw (OnCapitalSighted) and what was still to do for it
+    m_capitalsSighted.erase(m_capitalsSighted.lower_bound(static_cast<uint64_t>(instanceID) << 32),
+                            m_capitalsSighted.lower_bound((static_cast<uint64_t>(instanceID) + 1) << 32));
+    m_completionChecks.erase(instanceID);
     m_instances.erase(itr);
 }
 
@@ -1124,6 +1129,9 @@ void DungeonMgr::Close()
     m_warpedAway.clear();
     m_gates.clear();
     m_entityIndex.clear();
+    m_capitalsSighted.clear();
+    m_reinforcements.clear();
+    m_completionChecks.clear();
 }
 
 void DungeonMgr::ClearListener(Dungeon::DungeonListener* pListener)
@@ -1335,9 +1343,121 @@ void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital
     uint64_t key((static_cast<uint64_t>(iItr->second.first) << 32) | pCapital->GetID());
     if (!m_capitalsSighted.insert(key).second)
         return;
-    /** @todo npc ai phase 5:  spawn SleeperCapitalReinforcements battleships per capital in this room */
-    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u):  reinforcements are phase 5.",
-            pSpotter->GetName(), pSpotter->GetID(), iItr->second.first, iItr->second.second, pCapital->GetName(), pCapital->GetID());
+    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u):  %u reinforcements.",
+            pSpotter->GetName(), pSpotter->GetID(), iItr->second.first, iItr->second.second, pCapital->GetName(), pCapital->GetID(),
+            sConfig.npc.SleeperCapitalReinforcements);
+    if (sConfig.npc.SleeperCapitalReinforcements == 0)
+        return;
+    // we're inside the spotter's walk over its bubble:  the spawn waits for our Process()
+    Reinforcement r = Reinforcement();
+        r.instanceID = iItr->second.first;
+        r.roomIdx = iItr->second.second;
+        r.spotterID = pSpotter->GetID();
+        r.capitalID = pCapital->GetID();
+    m_reinforcements.push_back(r);
+}
+
+void DungeonMgr::GetReinforcementTypes(Instance& inst, uint8 roomIdx, std::vector<uint32>& into)
+{
+    into.clear();
+    // the operator's list
+    const std::string& list(sConfig.npc.SleeperReinforcementTypes);
+    size_t start(0);
+    while (start < list.size()) {
+        size_t end(list.find(',', start));
+        if (end == std::string::npos)
+            end = list.size();
+        uint32 typeID(static_cast<uint32>(std::strtoul(list.substr(start, end - start).c_str(), nullptr, 10)));
+        if ((typeID != 0) and IsNPCType(typeID))
+            into.push_back(typeID);
+        start = end + 1;
+    }
+    if (!into.empty())
+        return;
+    // the sleepless (battleship, signature 400) sleepers of this room
+    LiveRoom& room = inst.rooms[roomIdx];
+    auto consider = [&](uint32 itemID) {
+        SystemEntity* pSE(m_system->GetSE(itemID));
+        if ((pSE == nullptr) or !pSE->IsNPCSE() or pSE->IsDead() or (pSE->GetNPCSE()->GetAIMgr() == nullptr))
+            return;
+        const NpcProfile& p(pSE->GetNPCSE()->GetAIMgr()->GetProfile());
+        if ((p.l1Family != NpcAI::L1Family::Sleeper) or (p.sigRadius < 300.0f))
+            return;
+        if (std::find(into.begin(), into.end(), p.typeID) == into.end())
+            into.push_back(p.typeID);
+    };
+    for (auto& group : room.groups)
+        for (auto itemID : group.alive)
+            consider(itemID);
+    for (auto itemID : room.extraNPCs)
+        consider(itemID);
+    if (!into.empty())
+        return;
+    // the Sleepless Patroller group (983):  Patroller, Watchman, Escort, Outguard
+    into = { 30188, 30189, 30190, 30191 };
+}
+
+void DungeonMgr::SpawnReinforcements(const Reinforcement& r)
+{
+    auto itr = m_instances.find(r.instanceID);
+    if ((itr == m_instances.end()) or (r.roomIdx >= itr->second.rooms.size()))
+        return;
+    Instance& inst = itr->second;
+    // the capital left (or died) meanwhile:  no one to call them for
+    SystemEntity* pCapital(m_system->GetSE(r.capitalID));
+    if ((pCapital == nullptr) or pCapital->IsDead() or (pCapital->SysBubble() == nullptr))
+        return;
+    std::vector<uint32> types;
+    GetReinforcementTypes(inst, r.roomIdx, types);
+    if (types.empty())
+        return;
+    // the spotter's group and faction (they fight with it:  threat share, repairs), else the room's and the instance's
+    uint32 liveGroupID(0), factionID(inst.factionID);
+    SystemEntity* pSpotter(m_system->GetSE(r.spotterID));
+    if ((pSpotter != nullptr) and !pSpotter->IsDead() and (pSpotter->GetWarFactionID() != 0))
+        factionID = pSpotter->GetWarFactionID();
+    for (auto& group : inst.rooms[r.roomIdx].groups)
+        if (group.alive.find(r.spotterID) != group.alive.end())
+            liveGroupID = group.liveGroupID;
+
+    uint32 count(0);
+    for (uint32 i = 0; i < sConfig.npc.SleeperCapitalReinforcements; ++i) {
+        // they warp in 15-25km from the capital
+        GPoint pos(pCapital->GetPosition());
+        pos.MakeRandomPointOnSphere(MakeRandomFloat(15000.0, 25000.0));
+        uint32 typeID(types[std::min<size_t>(static_cast<size_t>(MakeRandomFloat(0.0, 1.0) * types.size()), types.size() - 1)]);
+        uint32 itemID(SpawnNPC(inst, r.roomIdx, typeID, factionID, pos, true, liveGroupID));
+        if (itemID == 0)
+            continue;
+        // extra npcs of the room:  the room isn't clear (nor the dungeon complete) while they live;  waves don't wait for them
+        inst.rooms[r.roomIdx].extraNPCs.insert(itemID);
+        SystemEntity* pSE(m_system->GetSE(itemID));
+        if ((pSE != nullptr) and pSE->IsNPCSE() and (pSE->GetNPCSE()->GetAIMgr() != nullptr)) {
+            // they came for the capital (once they land;  the wave rule doesn't apply)
+            pSE->GetNPCSE()->GetAIMgr()->SetWave(false);
+            pSE->GetNPCSE()->GetAIMgr()->QueueAggro(pCapital);
+        }
+        ++count;
+    }
+    m_system->GetNpcStats().reinforcements += count;
+    _log(DUNG__MESSAGE, "DungeonMgr: %u sleeper reinforcements for the capital %s(%u) in %s room %u.", count, pCapital->GetName(),
+            pCapital->GetID(), inst.name.c_str(), inst.rooms[r.roomIdx].roomID);
+}
+
+void DungeonMgr::OnEntityRemoved(uint32 itemID)
+{
+    auto iItr = m_entityIndex.find(itemID);
+    if (iItr == m_entityIndex.end())
+        return;
+    auto itr = m_instances.find(iItr->second.first);
+    if (itr == m_instances.end()) {
+        m_entityIndex.erase(iItr);
+        return;
+    }
+    // gone like a ship that warped away for good:  not a member, no Exploding trigger
+    ForgetEntity(itr->second, itemID);
+    m_warpedAway.erase(itemID);
+    m_completionChecks.insert(itr->first);
 }
 
 void DungeonMgr::OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker)
@@ -2063,6 +2183,23 @@ void DungeonMgr::Process()
             pGroup->alive.insert(itemID);
         } else {
             inst.rooms[entry.roomIdx].extraNPCs.insert(itemID);
+        }
+    }
+
+    // sleepers' calls for help (OnCapitalSighted), and sites that lost members without a kill (OnEntityRemoved)
+    if (!m_reinforcements.empty()) {
+        std::vector<Reinforcement> calls;
+        calls.swap(m_reinforcements);
+        for (auto& cur : calls)
+            SpawnReinforcements(cur);
+    }
+    if (!m_completionChecks.empty()) {
+        std::set<uint32> checks;
+        checks.swap(m_completionChecks);
+        for (auto id : checks) {
+            auto itr = m_instances.find(id);
+            if (itr != m_instances.end())
+                CheckImplicitCompletion(itr->second);
         }
     }
 

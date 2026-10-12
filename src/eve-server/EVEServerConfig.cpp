@@ -251,6 +251,23 @@ EVEServerConfig::EVEServerConfig()
     npc.L1NewcomerThreat = 1.2f;        // era: incursion sansha "most likely will change targets to any newcomers"
     npc.L1NewcomerMemory = 300 /*s*/;
     npc.RemoteEcmJamTime = 5 /*s*/;     // [DD] plan 5.8
+    // npc ai phase 5:  polish (npc ai plan phase 5, 6.7).  [DD] unless noted
+    npc.SoftLeashCooldown = 20 /*s*/;   // [DD] phase 2's constant:  without it a soft-leashed npc could never resume the chase
+    npc.LinkAlertInterval = 5 /*s*/;    // [DD] phase 2's constant
+    npc.SleeperCapitalReinforcements = 2;   // era (high):  "several battleships for each capital will spawn" (plan 4.6, phase 5)
+    npc.SleeperReinforcementTypes = "";
+    npc.TelegraphJoin = true;           // plan phase 5 readability:  npcs turn toward their target before the lock completes
+    npc.WarpOutVanishChance = 0.04f;    // era (med):  "run-away spawns", "1 in 25 vanish"
+    npc.WanderRepickMin = 60 /*s*/;     // plan phase 5:  U(60, 180) s
+    npc.WanderRepickMax = 180 /*s*/;
+    npc.LodFarInterval = 4 /*s*/;       // plan 6.7:  every 4s when players are only in the system
+    npc.LodEmptySystem = true;          // plan 6.7:  nothing in empty systems
+    npc.TickBudget = 50000 /*us*/;      // [DD] 5% of a tick per system;  only npcs away from players wait for the next tick
+    npc.StatsInterval = 60 /*s*/;       // plan phase 5 telemetry (the line needs NPC__AI_STATS enabled)
+    npc.Difficulty = 1.0f;              // plan phase 5:  1.0 = Crucible
+    npc.DifficultyDamage = 0.0f;
+    npc.DifficultyLockTime = 0.0f;
+    npc.DifficultyReactionTime = 0.0f;
 
     // cosmic
     cosmic.PIEnabled = false;
@@ -943,6 +960,23 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "L1NewcomerThreat",         npc.L1NewcomerThreat );
     AddValueParser( "L1NewcomerMemory",         npc.L1NewcomerMemory );
     AddValueParser( "RemoteEcmJamTime",         npc.RemoteEcmJamTime );
+    // npc ai phase 5 (npc ai plan phase 5, 6.7)
+    AddValueParser( "SoftLeashCooldown",        npc.SoftLeashCooldown );
+    AddValueParser( "LinkAlertInterval",        npc.LinkAlertInterval );
+    AddValueParser( "SleeperCapitalReinforcements", npc.SleeperCapitalReinforcements );
+    AddValueParser( "SleeperReinforcementTypes",    npc.SleeperReinforcementTypes );
+    AddValueParser( "TelegraphJoin",            npc.TelegraphJoin );
+    AddValueParser( "WarpOutVanishChance",      npc.WarpOutVanishChance );
+    AddValueParser( "WanderRepickMin",          npc.WanderRepickMin );
+    AddValueParser( "WanderRepickMax",          npc.WanderRepickMax );
+    AddValueParser( "LodFarInterval",           npc.LodFarInterval );
+    AddValueParser( "LodEmptySystem",           npc.LodEmptySystem );
+    AddValueParser( "TickBudget",               npc.TickBudget );
+    AddValueParser( "StatsInterval",            npc.StatsInterval );
+    AddValueParser( "Difficulty",               npc.Difficulty );
+    AddValueParser( "DifficultyDamage",         npc.DifficultyDamage );
+    AddValueParser( "DifficultyLockTime",       npc.DifficultyLockTime );
+    AddValueParser( "DifficultyReactionTime",   npc.DifficultyReactionTime );
 
     const bool result = ParseElementChildren( ele );
 
@@ -1000,6 +1034,22 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "L1NewcomerThreat" );
     RemoveParser( "L1NewcomerMemory" );
     RemoveParser( "RemoteEcmJamTime" );
+    RemoveParser( "SoftLeashCooldown" );
+    RemoveParser( "LinkAlertInterval" );
+    RemoveParser( "SleeperCapitalReinforcements" );
+    RemoveParser( "SleeperReinforcementTypes" );
+    RemoveParser( "TelegraphJoin" );
+    RemoveParser( "WarpOutVanishChance" );
+    RemoveParser( "WanderRepickMin" );
+    RemoveParser( "WanderRepickMax" );
+    RemoveParser( "LodFarInterval" );
+    RemoveParser( "LodEmptySystem" );
+    RemoveParser( "TickBudget" );
+    RemoveParser( "StatsInterval" );
+    RemoveParser( "Difficulty" );
+    RemoveParser( "DifficultyDamage" );
+    RemoveParser( "DifficultyLockTime" );
+    RemoveParser( "DifficultyReactionTime" );
 
     return result;
 }

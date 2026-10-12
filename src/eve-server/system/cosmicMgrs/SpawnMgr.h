@@ -58,6 +58,12 @@ public:
     /* a hauler warped off (npc ai plan 4.4):  it's removed on our next Process() (not counted as killed, no respawn).
      *  called from inside the npc's own Process(), so the removal waits */
     void SpawnFled(NPC* pNPC);
+    /* npc itemID left space without dying (GM /unspawn;  SystemManager::OnNPCRemoved):  its entry goes, no respawn.  a spawn
+     *  left without live members is over (its bubble may spawn again) */
+    void SpawnRemoved(uint32 itemID);
+    /* npc ai phase 5 ("run-away spawns", npc.WarpOutVanishChance):  pNPC's whole idle spawn warps off grid and is gone when
+     *  it lands (like a hauler that got away).  false when the group can't go now (busy, scrambled) */
+    bool VanishSpawn(NPC* pNPC);
 
     // the aggro groups of this system (belt spawns, dungeon groups, GM batches;  npc ai plan 6.5)
     AggroGroupRegistry& GetAggroGroups()                { return m_aggroGroups; }
@@ -78,6 +84,9 @@ protected:
     // false when nothing was spawned (it is tried again later)
     bool ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry);
     void RemoveSpawn(uint16 bubbleID, uint32 itemID);
+    /* npcID's entry goes, wherever it is filed (no respawn).  a bubble left without live members loses its spawn.
+     *  false if npcID had no entry */
+    bool DropEntry(uint32 npcID);
 
     uint8 GetSpawnGroup(uint8 sClass);
     // appends the npc types of one class row for this faction.  false if nothing was added
