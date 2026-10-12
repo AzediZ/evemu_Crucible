@@ -406,6 +406,10 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
             into.cycleMs = static_cast<uint32>(std::max(1000.0, Attr(type, cycleAttr)));
             into.skipChance = static_cast<float>(NpcMath::RepairSkipChance(Attr(type, list[i].chanceAttr),
                                                  (list[i].multAttr != 0 ? Attr(type, list[i].multAttr) : 1.0)));
+            /* every cycle skipped is no repair:  its timer would never stop itself (NPC::UseShieldRecharge), and the npc would
+             *  count as busy for good (level of detail, dormancy).  no Crucible type has this;  a data edit could */
+            if (into.skipChance >= 1.0f)
+                into = NpcProfile::SelfRepair();
             return;
         }
     };

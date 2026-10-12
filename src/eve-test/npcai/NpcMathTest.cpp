@@ -234,6 +234,15 @@ int npcai_NpcMathTest( int argc, char* argv[] )
         True("top", (t.Top() != nullptr) and (t.Top()->id == 101));
         t.Decay(0.1f, 1.0f);
         True("decay drops entries below 1", (t.Get(3) == 0.0f) and (t.Get(101) > 4.9f));
+
+        ThreatTable f;
+        for (uint32_t id = 1; id <= ThreatTable::Capacity; ++id)
+            f.Add(id, 100.0f);
+        True("full again", f.Full());
+        f.RemoveIf([](uint32_t id) { return ((id % 2) == 0); });
+        True("remove-if drops what has left", (f.Size() == ThreatTable::Capacity / 2) and (f.Get(2) == 0.0f) and (f.Get(3) == 100.0f));
+        f.Add(200, 1.0f);
+        True("room for a small newcomer again", f.Get(200) == 1.0f);
     }
 
     ::printf("\n movement mode (5.5)\n");

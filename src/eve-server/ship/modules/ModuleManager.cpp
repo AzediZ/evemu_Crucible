@@ -1862,6 +1862,9 @@ bool ModuleManager::VerifySlotExchange(EVEItemFlags slot1, EVEItemFlags slot2)
 
 void ModuleManager::UpdateChargeQty() {
     for (auto cur : m_charges) {
+        // a damaged crystal is a singleton:  it has no quantity to alter (SetQuantity refuses it, with an error line each)
+        if (cur.second->isSingleton())
+            continue;
         cur.second->AlterQuantity(+1, false);
         cur.second->AlterQuantity(-1, false);
     }

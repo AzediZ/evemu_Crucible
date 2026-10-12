@@ -116,6 +116,9 @@ public:
     const NpcShotLog& GetShotLog() const                { return m_shots; }
 
     bool IsIdle()                                       { return (m_state == NPCAI::State::Idle); }
+    /* idle with nothing going on:  no queued aggressor or group join (a chase after an attacker out of lock range is idle
+     *  too), no locks either way.  a spawn only moves on or vanishes when every member is (WarpOut, SpawnMgr) */
+    bool IsQuiet();
     bool IsFighting();
     // asleep in a bubble without players (npc.SleepEmptyBubbles)
     bool IsDormant() const                              { return m_dormant; }
@@ -261,6 +264,9 @@ protected:
     bool TryWarpFollow(SystemEntity* pSE);
     /* the data leash (5.4):  soft past entityMaxWanderRange x LeashSoftScale, hard past x LeashHardScale.  true if we turned back */
     bool CheckLeash(int64 now);
+    /* idle out past the leash (the fight ended there:  the target warped off or outran us, a soft leash was cut short):
+     *  fly home, still able to answer an attack.  true while we're on our way */
+    bool IdleGoHome();
     void BeginReturn(bool hard, int64 now);
     void ProcessReturn(int64 now);
     // the soft leash is over:  back to the fight
@@ -293,6 +299,7 @@ private:
     bool m_buffsActive      :1;     // a group assist is on us
     bool m_vanishing        :1;     // our spawn leaves for good (Vanish()):  gone when we land
     bool m_telegraph        :1;     // we turned toward a group join's target while its reaction delay runs (npc.TelegraphJoin)
+    bool m_idleHome         :1;     // idle out past our leash (the fight ended there):  flying home (5.4)
 
     uint8 m_role;                   // NPCAI::Role
 
