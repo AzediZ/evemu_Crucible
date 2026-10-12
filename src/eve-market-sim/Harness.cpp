@@ -1,0 +1,705 @@
+
+ /**
+  * @name Harness.cpp
+  *   the offline harness (PLAN 11, phase 2):  runs the market sim against an in-memory market for a simulated year with
+  *   scripted players, and checks the phase 2 acceptance tests
+  *     (a) conservation:  the audit residual is exactly 0 cents and 0 units every day (and the ledger never goes negative,
+  *         the reservations always match the live orders, the book matches the world)
+  *     (b) stability:  the Laspeyres index of the top-500 isk basket stays in [0.8, 1.25] of day 0;  no cell sits at the
+  *         Kmax clamp for more than 3 consecutive days unless shocked
+  *     (c) money:  M/M* in [0.7, 1.4] after day 30
+  *     (d) noise:  per category, the median daily log-return sd of the hub's daily average price is within x0.5..x2 of
+  *         the calibrated volatility's median (PLAN 4.1)
+  *     (e) exploit bots:  a dumper earns no more than the intake caps allow;  a wash trader, a round-tripper, an
+  *         insurance farmer and a reprocessing looper net <= 0
+  *     (f) determinism:  the same seed gives identical audit csv
+  *
+  * @date:          13Oct26
+  *
+  */
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <functional>
+#include <map>
+#include <set>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include "HarnessData.h"
+#include "HarnessMarket.h"
+#include "market/sim/SimEconomy.h"
+#include "market/sim/SimWorld.h"
+
+using namespace MktSim;
+using namespace MktHarness;
+
+namespace {
+
+    const int64_t StartTime = 1325462400;       // 2012-01-02 00:00 UTC, a Monday in the calibration window
+    const double MinTradesPerDay = 5.0;         // (d) compares cells with at least this many trades a day
+
+    struct Options {
+        std::string staticPath;                 // empty:  synthetic
+        double      scale       = 1.0;
+        int         days        = 365;
+        std::vector<uint64_t> seeds;
+        std::string scenario;
+        std::string auditCsv;
+        bool        bots        = true;
+        bool        verbose     = false;
+        uint16_t    trace       = 0;            // print this type's cell every day
+        uint32_t    traceNode   = 1;            // at this node
+        std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
+    };
+
+    struct ShockSpec {
+        int    day;
+        char   kind;
+        uint32_t id;
+        double mult;
+        double days;
+    };
+
+    // a scenario file:  'key = value' lines (the Params names below) and 'shock = <day> <typeID|g:groupID|c:categoryID> <mult> <days>'
+    bool ApplyScenario(const std::string& path, Params& p, Options& o, std::vector<ShockSpec>& shocks, std::string& err)
+    {
+        std::ifstream f(path.c_str());
+        if (!f) {
+            err = "can't open " + path;
+            return false;
+        }
+        std::map<std::string, std::function<void(double)>> setters = {
+            {"EconomyScale", [&](double v) { p.economyScale = v; }},
+            {"QuoteLevels", [&](double v) { p.quoteLevels = (int)v; }},
+            {"QuoteDepthDays", [&](double v) { p.quoteDepthDays = v; }},
+            {"RequoteThreshold", [&](double v) { p.requoteThreshold = v; }},
+            {"MinHalfSpread", [&](double v) { p.minHalfSpread = v; }},
+            {"MaxPriceDeviation", [&](double v) { p.kMax = v; }},
+            {"FairValueHalfLifeDays", [&](double v) { p.fairValueHalfLifeDays = v; }},
+            {"MarketNoise", [&](double v) { p.marketNoise = v; }},
+            {"PlayerTradeWeight", [&](double v) { p.playerTradeWeight = v; }},
+            {"BuyBand", [&](double v) { p.buyBand = v; }},
+            {"SellBand", [&](double v) { p.sellBand = v; }},
+            {"IntakeShareCounterparty", [&](double v) { p.intakeShareCounterparty = v; }},
+            {"MaxIskToCounterpartyPerDay", [&](double v) { p.maxIskToCounterpartyPerDay = v; }},
+            {"IntakeDays", [&](double v) { p.intakeDays = v; }},
+            {"SimPaysFees", [&](double v) { p.simPaysFees = (v != 0.0); }},
+            {"MoneyDaysTarget", [&](double v) { p.moneyDaysTarget = v; }},
+            {"ControllerKp", [&](double v) { p.controllerKp = v; }},
+            {"ControllerKi", [&](double v) { p.controllerKi = v; }},
+            {"SupplyFactor", [&](double v) { p.supplyFactor = v; }},
+            {"HotCellMinutes", [&](double v) { p.hotCellMinutes = (int)v; }},
+            {"ColdCellMinutes", [&](double v) { p.coldCellMinutes = (int)v; }},
+            {"Days", [&](double v) { o.days = (int)v; }},
+        };
+        std::string line;
+        while (std::getline(f, line)) {
+            size_t hash(line.find('#'));
+            if (hash != std::string::npos)
+                line.erase(hash);
+            size_t eq(line.find('='));
+            if (eq == std::string::npos)
+                continue;
+            std::string key(line.substr(0, eq)), val(line.substr(eq + 1));
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t\r") + 1);
+            if (key == "shock") {
+                std::istringstream in(val);
+                ShockSpec s = ShockSpec();
+                std::string what;
+                in >> s.day >> what >> s.mult >> s.days;
+                s.kind = 't';
+                if ((what.size() > 2) and (what[1] == ':')) {
+                    s.kind = what[0];
+                    what.erase(0, 2);
+                }
+                s.id = (uint32_t)std::strtoul(what.c_str(), nullptr, 10);
+                shocks.push_back(s);
+                continue;
+            }
+            std::map<std::string, std::function<void(double)>>::iterator itr = setters.find(key);
+            if (itr == setters.end()) {
+                err = "unknown scenario key '" + key + "'";
+                return false;
+            }
+            itr->second(std::strtod(val.c_str(), nullptr));
+        }
+        return true;
+    }
+
+    struct BotResult {
+        const char* name;
+        double net         = 0.0;   // isk over the run, goods left valued at the sim's bid
+        double worstDay    = 0.0;   // dumper:  the largest day's revenue against its cap
+        uint64_t trades    = 0;
+    };
+
+    struct RunResult {
+        uint64_t seed               = 0;
+        std::string auditCsv;
+        // (a)
+        int      residualDays       = 0;
+        int      invariantFailures  = 0;
+        uint64_t violations         = 0;
+        std::string firstProblem;
+        // (b)
+        double   indexMin           = 1.0;
+        double   indexMax           = 1.0;
+        int      maxClampDays       = 0;
+        std::string clampWhere;
+        int      cellsOverClamp     = 0;
+        // (c)
+        double   moneyMin           = 1e9;
+        double   moneyMax           = 0.0;
+        // (d)
+        std::map<std::string, std::pair<double, double>> noise;    // category -> (realised median, calibrated median)
+        // (e)
+        std::vector<BotResult> bots;
+        // coverage
+        uint64_t playerTrades       = 0;
+        uint64_t cellVisits         = 0;
+        uint64_t orderWrites        = 0;
+        size_t   liveOrders         = 0;
+        double   seconds            = 0.0;
+        double   undercutFilled     = 0.0;
+        double   bidderFilled       = 0.0;
+    };
+
+    double Median(std::vector<double> v)
+    {
+        if (v.empty())
+            return 0.0;
+        std::sort(v.begin(), v.end());
+        size_t n(v.size());
+        return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    }
+
+    const char* NoiseCategory(const TypeData& t)
+    {
+        switch (t.categoryID) {
+            case Category::Ship:        return "Ships";
+            case Category::Material:
+            case Category::Asteroid:    return "Materials";
+            case Category::PIResource:
+            case Category::PICommodity: return "PI";
+            case Category::Implant:     return "Implants";
+            case Category::Module:      return "Modules";
+            case Category::Commodity:   return "Commodities";
+            case Category::Charge:      return "Charges";
+        }
+        return nullptr;
+    }
+
+    // reservations behind the live orders must be exactly the ledger's reserved columns
+    int CheckInvariants(World& w, std::string& first)
+    {
+        int bad(0);
+        std::map<uint32_t, Cents> isk;
+        std::map<Ledger::StockKey, Units> qty;
+        for (auto& cur : w.Orders()) {
+            const SimOrder& o(cur.second);
+            if (o.cell == VendorCell)
+                continue;
+            const Cell& c(w.Cells()[o.cell]);
+            if (o.bid)
+                isk[o.actorID] += o.price * (Cents)o.qty;
+            else
+                qty[Ledger::Key(o.actorID, (uint16_t)c.nodeID, c.typeID)] += o.qty;
+        }
+        for (auto& cur : w.GetLedger().Accounts()) {
+            if ((cur.second.wallet < 0) or (cur.second.reserved < 0) or (cur.second.reserved != isk[cur.first])) {
+                if (bad++ == 0)
+                    first = "actor " + std::to_string(cur.first) + " reserved " + std::to_string(cur.second.reserved)
+                          + " but its bids hold " + std::to_string(isk[cur.first]) + " (wallet " + std::to_string(cur.second.wallet) + ")";
+            }
+        }
+        for (auto& cur : w.GetLedger().Stocks()) {
+            if ((cur.second.qty < 0) or (cur.second.reserved < 0) or (cur.second.reserved != qty[cur.first])) {
+                if (bad++ == 0)
+                    first = "stock of actor " + std::to_string(Ledger::KeyActor(cur.first)) + " type " + std::to_string(Ledger::KeyType(cur.first))
+                          + " reserved " + std::to_string(cur.second.reserved) + " but its asks hold " + std::to_string(qty[cur.first]);
+            }
+        }
+        return bad;
+    }
+
+    RunResult Run(const StaticData& data, Params p, uint64_t seed, const Options& opt, const std::vector<ShockSpec>& shocks)
+    {
+        RunResult res;
+        res.seed = seed;
+        p.seed = seed;
+        p.pauseOnAuditResidual = false;
+        std::chrono::steady_clock::time_point started(std::chrono::steady_clock::now());
+
+        HarnessMarket market(data, p.salesTaxRate);
+        World world(data, p, market);
+        market.SetWorld(&world);
+        world.Build(StartTime);
+        world.Seed(StartTime);
+        world.Start(StartTime, false);
+        market.SetNow(StartTime);
+
+        std::ostringstream csv;
+        int dayNo(0);
+        std::vector<double> v0;              // day 0 values of the index basket
+        std::vector<uint32_t> basket;
+        {
+            std::vector<std::pair<double, uint32_t>> order;
+            for (auto& c : world.Cells())
+                order.push_back(std::make_pair(c.d0 * c.refLocal, c.index));
+            std::sort(order.begin(), order.end(), [](const std::pair<double, uint32_t>& a, const std::pair<double, uint32_t>& b) {
+                return (a.first != b.first) ? (a.first > b.first) : (a.second < b.second);
+            });
+            for (size_t i = 0; (i < order.size()) and (i < 500); ++i)
+                basket.push_back(order[i].second);
+        }
+
+        world.SetDayHook([&](const DayReport& rep) {
+            for (auto& line : world.AuditLines())
+                csv << line.day << "," << line.category << "," << line.amount << "\n";
+            if ((rep.audit.iskResidual != 0) or (rep.audit.goodsResidualTypes != 0)) {
+                if (res.residualDays++ == 0)
+                    res.firstProblem = "day " + std::to_string(rep.day) + ":  isk residual " + std::to_string(rep.audit.iskResidual)
+                                     + ", goods residual in " + std::to_string(rep.audit.goodsResidualTypes) + " types";
+            }
+            ++dayNo;
+            double m(rep.moneyTarget > 0.0 ? (double)rep.money / rep.moneyTarget : 0.0);
+            if (dayNo > 30) {
+                res.moneyMin = std::min(res.moneyMin, m);
+                res.moneyMax = std::max(res.moneyMax, m);
+            }
+            if (opt.verbose)
+                std::printf("  day %3d  M/M* %.3f  income x%.3f  orders %u  clamped %u  residual %lld/%zu\n", dayNo, m, rep.incomeFactor,
+                            rep.liveOrders, rep.clampedCells, (long long)rep.audit.iskResidual, rep.audit.goodsResidualTypes);
+        });
+
+        // daily average prices of the first node (the Forge)
+        uint32_t forge(data.nodes[0].regionID), jita(data.nodes[0].stationID);
+        std::map<uint16_t, std::vector<std::pair<int32_t, double>>> series;
+        std::map<uint16_t, uint64_t> seriesTrades;
+
+        // the scripted players
+        enum { Dumper = 101, RoundTrip = 102, WashA = 103, WashB = 104, Reprocess = 105, Insurance = 106, Undercut = 107, Bidder = 108 };
+        std::vector<uint16_t> modules, ships, refinables;
+        uint16_t dumpType(0);
+        double dumpBest(0.0);
+        // the bots trade the hub's busiest types of each kind
+        std::vector<const Cell*> hub;
+        for (auto& c : world.Cells())
+            if (c.nodeID == data.nodes[0].nodeID)
+                hub.push_back(&c);
+        std::sort(hub.begin(), hub.end(), [](const Cell* a, const Cell* b) {
+            return (a->dc != b->dc) ? (a->dc > b->dc) : (a->typeID < b->typeID);
+        });
+        for (auto c : hub) {
+            const TypeData& t(*data.Type(c->typeID));
+            if ((t.categoryID == Category::Material) and (c->d0 * c->refLocal > dumpBest)) {
+                dumpBest = c->d0 * c->refLocal;
+                dumpType = c->typeID;
+            }
+            if ((t.simClass == SimClass::MfgT1) and (t.categoryID == Category::Module) and (modules.size() < 6))
+                modules.push_back(c->typeID);
+            if ((t.simClass == SimClass::MfgT1) and (t.categoryID == Category::Ship) and (ships.size() < 4))
+                ships.push_back(c->typeID);
+            if (!t.refine.empty() and (t.categoryID != Category::Material) and (refinables.size() < 8))
+                refinables.push_back(c->typeID);
+        }
+        BotResult dumper{"dumper"}, roundTrip{"round-tripper"}, wash{"wash trader"}, reproc{"reprocessing looper"}, insure{"insurance farmer"};
+        double dumpCapWorst(0.0);
+        double undercutSold(0.0), undercutListed(0.0), bidderBought(0.0), bidderBid(0.0);
+
+        size_t shockIdx(0);
+        for (int day = 0; day < opt.days; ++day) {
+            for (; shockIdx < shocks.size() and (shocks[shockIdx].day <= day); ++shockIdx)
+                world.Shock(shocks[shockIdx].kind, shocks[shockIdx].id, shocks[shockIdx].mult, shocks[shockIdx].days, StartTime + (int64_t)day * SecondsPerDay);
+            for (int tick = 0; tick < 96; ++tick) {
+                int64_t t(StartTime + (int64_t)day * SecondsPerDay + tick * 900);
+                market.SetNow(t);
+                world.Step(t);
+                if ((tick == 48) and opt.bots) {
+                    Player& before(market.GetPlayer(Dumper));
+                    // (e) dumper:  ten days of demand into the sim's bids, at any price
+                    if (dumpType != 0) {
+                        Cell* c(world.FindCell(data.nodes[0].nodeID, dumpType));
+                        Units q((Units)std::ceil(10.0 * c->dBar));
+                        before.goods[dumpType] += q;
+                        Cents was(before.fromSim);
+                        Units sold(market.Sell(Dumper, jita, dumpType, q, 1));
+                        Cents got(market.GetPlayer(Dumper).fromSim - was);
+                        double cap(p.maxIskToCounterpartyPerDay * world.MoneyTarget());
+                        double unitCap(p.intakeShareCounterparty * std::max(c->dBar, (double)c->lot) + c->lot);
+                        dumpCapWorst = std::max(dumpCapWorst, std::max((double)got / cap, (double)sold / unitCap));
+                        dumper.trades += (sold > 0);
+                        dumper.net += Econ::ToIsk(got);
+                        // the rest stays outside (it was never the sim's)
+                        market.GetPlayer(Dumper).goods[dumpType] = 0;
+                    }
+                    // round-tripper:  buy a lot at the sim's ask, sell it straight back into its bids
+                    for (auto typeID : modules) {
+                        Cents ask(market.SimAsk(jita, typeID));
+                        if (ask == 0)
+                            continue;
+                        Units got(market.Buy(RoundTrip, jita, typeID, 1, ask));
+                        if (got > 0)
+                            market.Sell(RoundTrip, jita, typeID, got, 1);
+                        roundTrip.trades += (got > 0);
+                    }
+                    // wash trader:  two alts trade one module between them at twice the price, then sell to the sim
+                    if (!modules.empty()) {
+                        uint16_t typeID(modules[day % modules.size()]);
+                        Cents ask(market.SimAsk(jita, typeID));
+                        if ((ask > 0) and (market.Buy(WashA, jita, typeID, 1, ask) > 0)) {
+                            market.Place(WashA, jita, typeID, false, ask * 2, 1);
+                            market.Buy(WashB, jita, typeID, 1, ask * 2);
+                            market.Place(WashB, jita, typeID, false, ask * 3, 1);
+                            market.Buy(WashA, jita, typeID, 1, ask * 3);
+                            Player& a(market.GetPlayer(WashA));
+                            market.Sell(WashA, jita, typeID, a.goods[typeID], 1);
+                            ++wash.trades;
+                        }
+                        market.CancelPlayerOrders(WashA);
+                        market.CancelPlayerOrders(WashB);
+                    }
+                    // reprocessing looper:  buy at the sim's ask, refine at perfect yield, sell the minerals to its bids
+                    for (auto typeID : refinables) {
+                        Cents ask(market.SimAsk(jita, typeID));
+                        if (ask == 0)
+                            continue;
+                        if (market.Buy(Reprocess, jita, typeID, 1, ask) == 0)
+                            continue;
+                        Player& me(market.GetPlayer(Reprocess));
+                        me.goods[typeID] -= 1;
+                        for (auto& out : data.Type(typeID)->refine) {
+                            Units q((Units)std::floor(out.second));
+                            me.goods[out.first] += q;
+                            market.Sell(Reprocess, jita, out.first, me.goods[out.first], 1);
+                        }
+                        ++reproc.trades;
+                    }
+                    // insurance farmer:  buy a ship, insure it platinum, lose it
+                    for (auto typeID : ships) {
+                        Cents ask(market.SimAsk(jita, typeID));
+                        if ((ask == 0) or (market.Buy(Insurance, jita, typeID, 1, ask) == 0))
+                            continue;
+                        Player& me(market.GetPlayer(Insurance));
+                        me.goods[typeID] -= 1;
+                        me.wallet += Econ::ToCents(market.InsuranceNet(typeID));
+                        ++insure.trades;
+                    }
+                    // honest players:  an ask a cent under the sim's (consumers should lift it), a bid a little over the
+                    //  sim's (the sim should sell into it)
+                    if (!modules.empty()) {
+                        uint16_t typeID(modules[(day + 1) % modules.size()]);
+                        Player& u(market.GetPlayer(Undercut));
+                        Cents ask(market.SimAsk(jita, typeID));
+                        Cell* c(world.FindCell(data.nodes[0].nodeID, typeID));
+                        if ((ask > 1) and (c != nullptr)) {
+                            Units q(std::max<Units>(1, (Units)std::ceil(c->dBar * 0.2)));
+                            u.goods[typeID] += q;
+                            undercutListed += (double)q;
+                            Units had(u.goods[typeID]);
+                            market.Place(Undercut, jita, typeID, false, ask - 1, q);
+                            (void)had;
+                        }
+                        uint16_t bidType(modules[(day + 2) % modules.size()]);
+                        Cents bid(market.SimBid(jita, bidType));
+                        Cell* bc(world.FindCell(data.nodes[0].nodeID, bidType));
+                        if ((bid > 0) and (bc != nullptr)) {
+                            Cents price((Cents)std::ceil(std::exp(bc->lnV) * (1.0 - bc->h / 4.0) * 100.0));
+                            Units q(std::max<Units>(1, (Units)std::ceil(bc->dBar * 0.1)));
+                            bidderBid += (double)q;
+                            market.Place(Bidder, jita, bidType, true, price, q);
+                        }
+                    }
+                }
+                if ((tick == 95) and opt.bots) {
+                    // the day's leftovers of the honest players are withdrawn
+                    Player& u(market.GetPlayer(Undercut));
+                    Units before(0);
+                    for (auto& g : u.goods)
+                        before += g.second;
+                    market.CancelPlayerOrders(Undercut);
+                    Units after(0);
+                    for (auto& g : u.goods)
+                        after += g.second;
+                    undercutSold += 0.0 * (double)(after - before);
+                    market.CancelPlayerOrders(Bidder);
+                }
+            }
+
+            // end of the day:  the day's prices, the index, the clamp, the books
+            std::vector<HistoryRow> rows;
+            world.TakeFinishedHistory(rows);
+            for (auto& r : rows)
+                if ((r.regionID == forge) and (r.volume > 0))
+                {
+                    series[r.typeID].push_back(std::make_pair(r.day, (double)r.sumValue / (double)r.volume / 100.0));
+                    seriesTrades[r.typeID] += r.trades;
+                }
+            double num(0.0), den(0.0);
+            if (v0.empty())
+                for (auto idx : basket)
+                    v0.push_back(std::exp(world.Cells()[idx].lnV));
+            for (size_t i = 0; i < basket.size(); ++i) {
+                const Cell& c(world.Cells()[basket[i]]);
+                num += std::exp(c.lnV) * c.d0;
+                den += v0[i] * c.d0;
+            }
+            double index(den > 0.0 ? num / den : 1.0);
+            if (opt.trace != 0) {
+                Cell* tc(world.FindCell(opt.traceNode, opt.trace));
+                if (tc != nullptr) {
+                    const Ledger::Stock* s(world.GetLedger().FindInv(tc->mm, (uint16_t)tc->nodeID, tc->typeID));
+                    double avg(0.0);
+                    Units vol(0);
+                    for (auto& r : rows)
+                        if ((r.regionID == forge) and (r.typeID == opt.trace)) {
+                            avg = (double)r.sumValue / (double)r.volume / 100.0;
+                            vol = r.volume;
+                        }
+                    std::printf("  trace day %3d  V %.4f  anchor %.4f  stock %lld (%lld on asks) of %.0f  dBar %.1f d0 %.1f  avg %.4f vol %lld  clamp %u\n",
+                                day, std::exp(tc->lnV), std::exp(tc->lnAnchor), (long long)(s ? s->qty + s->reserved : 0), (long long)(s ? s->reserved : 0),
+                                tc->targetStock, tc->dBar, tc->d0, avg, (long long)vol, tc->clampDays);
+                }
+            }
+            res.indexMin = std::min(res.indexMin, index);
+            res.indexMax = std::max(res.indexMax, index);
+            for (auto& c : world.Cells())
+                if (c.clampDays > res.maxClampDays) {
+                    res.maxClampDays = c.clampDays;
+                    const TypeData& ct(*data.Type(c.typeID));
+                    res.clampWhere = "type " + std::to_string(c.typeID) + " (class " + std::to_string(ct.simClass) + ", category "
+                                   + std::to_string(ct.categoryID) + ") at node " + std::to_string(c.nodeID) + " on day " + std::to_string(day)
+                                   + ", demand " + std::to_string(c.dBar) + "/day, target stock " + std::to_string(c.targetStock);
+                }
+            std::string problem;
+            int bad(CheckInvariants(world, problem));
+            if (bad > 0) {
+                if (res.invariantFailures++ == 0 and res.firstProblem.empty())
+                    res.firstProblem = "day " + std::to_string(day) + ":  " + problem;
+            }
+            if (market.CheckMirror(problem) > 0) {
+                if (res.invariantFailures++ == 0 and res.firstProblem.empty())
+                    res.firstProblem = "day " + std::to_string(day) + ":  book and world differ at " + problem;
+            }
+        }
+        for (auto& c : world.Cells())
+            if (c.clampDays > 3)
+                ++res.cellsOverClamp;
+        res.violations = world.GetLedger().Violations();
+
+        // (d) noise per category:  sd of the daily log-returns of the hub's daily average, against the calibration
+        std::map<std::string, std::vector<double>> realised, calibrated;
+        for (auto& cur : series) {
+            const TypeData& t(*data.Type(cur.first));
+            const char* cat(NoiseCategory(t));
+            // a daily average needs trades to average:  at EconomyScale 0.01 a typical ship sells a few times a
+            //  week at a hub, and its 'daily average' is one print at the ask or the bid.  only cells with at least
+            //  MinTradesPerDay internal trades on their trading days are compared
+            if ((cat == nullptr) or (cur.second.size() < 30)
+            or ((double)seriesTrades[cur.first] / (double)cur.second.size() < MinTradesPerDay))
+                continue;
+            std::vector<double> r;
+            for (size_t i = 1; i < cur.second.size(); ++i)
+                if (cur.second[i].first == cur.second[i - 1].first + 1)
+                    r.push_back(std::log(cur.second[i].second / cur.second[i - 1].second));
+            if (r.size() < 20)
+                continue;
+            // the calibration's estimator (PLAN 4.5):  1.4826 x the median absolute deviation
+            double med(Median(r));
+            std::vector<double> dev;
+            for (auto x : r)
+                dev.push_back(std::fabs(x - med));
+            realised[cat].push_back(1.4826 * Median(dev));
+            calibrated[cat].push_back(t.volatility);
+        }
+        for (auto& cur : realised)
+            if (cur.second.size() >= 3)
+            res.noise[cur.first] = std::make_pair(Median(cur.second), Median(calibrated[cur.first]));
+
+        // (e) the bots' net:  isk, plus what they hold at the sim's bid
+        auto net = [&](std::initializer_list<uint32_t> ids) {
+            double total(0.0);
+            for (auto id : ids) {
+                Player& pl(market.GetPlayer(id));
+                total += Econ::ToIsk(pl.wallet);
+                for (auto& g : pl.goods)
+                    if (g.second > 0)
+                        total += Econ::ToIsk(market.SimBid(jita, g.first)) * (double)g.second;
+            }
+            return total;
+        };
+        dumper.worstDay = dumpCapWorst;
+        roundTrip.net = net({RoundTrip});
+        wash.net = net({WashA, WashB});
+        reproc.net = net({Reprocess});
+        insure.net = net({Insurance});
+        res.bots = {dumper, roundTrip, wash, reproc, insure};
+        Player& u(market.GetPlayer(Undercut));
+        res.undercutFilled = (undercutListed > 0.0) ? (double)u.fromSim : 0.0;
+        res.bidderFilled = (double)market.GetPlayer(Bidder).toSim;
+        (void)undercutSold;
+        (void)bidderBought;
+
+        res.playerTrades = world.TradesWithPlayers();
+        res.cellVisits = world.CellVisits();
+        res.orderWrites = market.Writes();
+        res.liveOrders = world.LiveOrders();
+        if (!opt.exportCsv.empty())
+            world.ExportCsv(opt.exportCsv);
+        res.auditCsv = csv.str();
+        res.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        return res;
+    }
+
+    bool Check(bool ok, const char* what, int& failures)
+    {
+        std::printf("  [%s] %s\n", ok ? "PASS" : "FAIL", what);
+        if (!ok)
+            ++failures;
+        return ok;
+    }
+
+    void Usage()
+    {
+        std::printf("usage: eve-market-sim [--static export.json | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
+                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose]\n"
+                    "       eve-market-sim --test <name>\n");
+    }
+}
+
+int HarnessMain(int argc, char** argv)
+{
+    Options opt;
+    for (int i = 1; i < argc; ++i) {
+        std::string a(argv[i]);
+        auto next = [&]() -> const char* { return (i + 1 < argc) ? argv[++i] : ""; };
+        if (a == "--static")
+            opt.staticPath = next();
+        else if (a == "--synthetic") {
+            if ((i + 1 < argc) and (argv[i + 1][0] != '-'))
+                opt.scale = std::strtod(next(), nullptr);
+        } else if (a == "--days")
+            opt.days = std::atoi(next());
+        else if (a == "--seed")
+            opt.seeds.push_back(std::strtoull(next(), nullptr, 10));
+        else if (a == "--seeds") {
+            int n(std::atoi(next()));
+            for (int k = 1; k <= n; ++k)
+                opt.seeds.push_back((uint64_t)k);
+        } else if (a == "--scenario")
+            opt.scenario = next();
+        else if (a == "--audit-csv")
+            opt.auditCsv = next();
+        else if (a == "--no-bots")
+            opt.bots = false;
+        else if (a == "--verbose")
+            opt.verbose = true;
+        else if (a == "--trace")
+            opt.trace = (uint16_t)std::atoi(next());
+        else if (a == "--trace-node")
+            opt.traceNode = (uint32_t)std::atoi(next());
+        else if (a == "--export")
+            opt.exportCsv = next();
+        else {
+            Usage();
+            return 2;
+        }
+    }
+    if (opt.seeds.empty())
+        opt.seeds.push_back(1);
+
+    Params p;
+    std::vector<ShockSpec> shocks;
+    std::string err;
+    if (!opt.scenario.empty() and !ApplyScenario(opt.scenario, p, opt, shocks, err)) {
+        std::printf("scenario:  %s\n", err.c_str());
+        return 2;
+    }
+    StaticData data;
+    if (!opt.staticPath.empty()) {
+        if (!LoadExport(opt.staticPath, data, err)) {
+            std::printf("static data:  %s\n", err.c_str());
+            return 2;
+        }
+    } else {
+        BuildSynthetic(data, 20111129, opt.scale);
+    }
+    std::vector<std::string> problems;
+    data.Validate(problems);
+    for (auto& s : problems)
+        std::printf("static data:  %s\n", s.c_str());
+    std::printf("market sim harness:  %zu types, %zu nodes, %zu vendor offers, %d days, %zu seed(s), EconomyScale %g\n",
+                data.types.size(), data.nodes.size(), data.vendors.size(), opt.days, opt.seeds.size(), p.economyScale);
+
+    int failures(0);
+    std::vector<RunResult> results;
+    for (auto seed : opt.seeds) {
+        RunResult r(Run(data, p, seed, opt, shocks));
+        std::printf("\nseed %llu:  %.1fs, %llu cell visits, %llu order writes, %zu live orders at the end, %llu trades with players\n",
+                    (unsigned long long)seed, r.seconds, (unsigned long long)r.cellVisits, (unsigned long long)r.orderWrites,
+                    r.liveOrders, (unsigned long long)r.playerTrades);
+        if (!r.firstProblem.empty())
+            std::printf("  first problem:  %s\n", r.firstProblem.c_str());
+        char buf[512];
+        std::snprintf(buf, sizeof(buf), "(a) conservation:  %d days with a residual, %d invariant failures, %llu ledger violations",
+                      r.residualDays, r.invariantFailures, (unsigned long long)r.violations);
+        Check((r.residualDays == 0) and (r.invariantFailures == 0) and (r.violations == 0), buf, failures);
+        std::snprintf(buf, sizeof(buf), "(b) stability:  price index in [%.3f, %.3f] of day 0 (allowed [0.8, 1.25]);  longest clamp %d days, %d cells over 3",
+                      r.indexMin, r.indexMax, r.maxClampDays, r.cellsOverClamp);
+        if (r.maxClampDays > 3)
+            std::printf("  longest clamp:  %s\n", r.clampWhere.c_str());
+        Check((r.indexMin >= 0.8) and (r.indexMax <= 1.25) and (r.cellsOverClamp == 0) and (shocks.empty() ? (r.maxClampDays <= 3) : true), buf, failures);
+        if (opt.days > 30) {
+            std::snprintf(buf, sizeof(buf), "(c) money:  M/M* in [%.3f, %.3f] after day 30 (allowed [0.7, 1.4])", r.moneyMin, r.moneyMax);
+            Check((r.moneyMin >= 0.7) and (r.moneyMax <= 1.4), buf, failures);
+        }
+        bool noiseOk(!r.noise.empty());
+        std::string noise;
+        for (auto& cur : r.noise) {
+            double ratio(cur.second.second > 0.0 ? cur.second.first / cur.second.second : 0.0);
+            std::snprintf(buf, sizeof(buf), " %s %.3f/%.3f=x%.2f", cur.first.c_str(), cur.second.first, cur.second.second, ratio);
+            noise += buf;
+            if ((ratio < 0.5) or (ratio > 2.0))
+                noiseOk = false;
+        }
+        std::snprintf(buf, sizeof(buf), "(d) noise (realised/calibrated daily log-return sd, allowed x0.5..x2):%s", noise.c_str());
+        Check(noiseOk, buf, failures);
+        if (opt.bots) {
+            for (auto& b : r.bots) {
+                if (std::strcmp(b.name, "dumper") == 0) {
+                    std::snprintf(buf, sizeof(buf), "(e) %s:  %.0f ISK over %llu days of dumping;  worst day at %.2f of its intake cap",
+                                  b.name, b.net, (unsigned long long)b.trades, b.worstDay);
+                    Check(b.worstDay <= 1.0 + 1e-9, buf, failures);
+                } else {
+                    std::snprintf(buf, sizeof(buf), "(e) %s:  net %.0f ISK over %llu rounds (%.0f ISK/day)", b.name, b.net,
+                                  (unsigned long long)b.trades, b.net / std::max(1, opt.days));
+                    Check(b.net <= 0.0, buf, failures);
+                }
+            }
+            std::printf("  [info] consumers paid an undercutting player %.0f ISK;  the sim sold %.0f ISK into a player's bids\n",
+                        r.undercutFilled / 100.0, r.bidderFilled / 100.0);
+        }
+        results.push_back(r);
+    }
+    // (f) determinism:  the first seed again
+    {
+        RunResult again(Run(data, p, opt.seeds[0], opt, shocks));
+        char buf[256];
+        std::snprintf(buf, sizeof(buf), "(f) determinism:  seed %llu twice gives %s audit csv (%zu bytes)", (unsigned long long)opt.seeds[0],
+                      (again.auditCsv == results[0].auditCsv) ? "identical" : "DIFFERENT", results[0].auditCsv.size());
+        Check(again.auditCsv == results[0].auditCsv, buf, failures);
+    }
+    if (!opt.auditCsv.empty()) {
+        std::ofstream f(opt.auditCsv.c_str(), std::ios::out | std::ios::trunc | std::ios::binary);
+        f << "day,category,amount\n" << results[0].auditCsv;
+    }
+    std::printf("\n%s (%d failure%s)\n", failures ? "ACCEPTANCE TESTS FAILED" : "all acceptance tests passed", failures, failures == 1 ? "" : "s");
+    return failures ? 1 : 0;
+}
