@@ -400,12 +400,12 @@ PyRep *AllianceDB::GetEmploymentRecord(uint32 corpID)
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
                             "SELECT startDate, allianceID, deleted FROM ("
-                            "  SELECT e.startDate AS startDate, NULLIF(e.allianceID, 0) AS allianceID, CAST(IFNULL(a.deleted, 0) AS SIGNED) AS deleted, 0 AS ord"
+                            "  SELECT CAST(e.startDate AS SIGNED) AS startDate, NULLIF(e.allianceID, 0) AS allianceID, CAST(IFNULL(a.deleted, 0) AS SIGNED) AS deleted, 0 AS ord"
                             "   FROM crpEmployment AS e LEFT JOIN alnAlliance AS a ON a.allianceID = e.allianceID"
                             "   WHERE e.corporationID = %u"
                             "  UNION ALL"
-                            "  SELECT IFNULL((SELECT MIN(c.startDate) FROM chrEmployment AS c WHERE c.corporationID = %u),"
-                            "         IFNULL((SELECT MIN(e2.startDate) FROM crpEmployment AS e2 WHERE e2.corporationID = %u), 0)), NULL, 0, 1"
+                            "  SELECT CAST(IFNULL((SELECT MIN(c.startDate) FROM chrEmployment AS c WHERE c.corporationID = %u),"
+                            "         IFNULL((SELECT MIN(e2.startDate) FROM crpEmployment AS e2 WHERE e2.corporationID = %u), 0)) AS SIGNED), NULL, 0, 1"
                             " ) AS h ORDER BY ord, startDate DESC",
                             corpID, corpID, corpID))
     {
