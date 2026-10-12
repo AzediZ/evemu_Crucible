@@ -440,7 +440,8 @@ bool MarketDB::RecordTransaction(Market::TxData &data) {
         " ) VALUES ("
         " %lli, %u, %u, %u, %.2f,"
         " %u, %u, %u, %u, %u, %u, %u)",
-        GetFileTimeNow(), data.typeID, data.accountKey, data.quantity, data.price,
+        // GetFileTimeNow() is a double:  passed to %lli as it is, its bit pattern was stored (year ~17000)
+        (int64)GetFileTimeNow(), data.typeID, data.accountKey, data.quantity, data.price,
         data.isBuy > 0?1:0, data.ownerID, data.clientID, data.regionID, data.stationID, data.isCorp ? 1:0, data.memberID)
     ) {
         codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());

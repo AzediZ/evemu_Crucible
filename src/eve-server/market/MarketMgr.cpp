@@ -294,7 +294,7 @@ void MarketMgr::UpdateMaterialIndex()
         "SELECT typeID, price, quantity FROM mktTransactions"
         " WHERE transactionType = 0 AND transactionDate > %lli AND typeID IN (%s)"
         " ORDER BY typeID, price",
-        GetFileTimeNow() - (EvE::Time::Day * sConfig.market.InsuranceIndexDays), types.c_str()))
+        (int64)GetFileTimeNow() - (EvE::Time::Day * sConfig.market.InsuranceIndexDays), types.c_str()))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return;
