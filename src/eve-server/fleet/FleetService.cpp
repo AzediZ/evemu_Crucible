@@ -557,6 +557,15 @@ bool FleetService::UpdateMember(uint32 charID, uint32 fleetID, int32 newWingID, 
     return true;
 }
 
+// a squad member gets the squad's boost when they have a ship in space in the booster's system.
+//  docked members have no ship, and neither does a member who is undocking until their ship is made.
+static bool CanTakeBoost(Client* pMember, Client* pBooster)
+{
+    if ((pMember == nullptr) or (pBooster == nullptr) or (pMember->GetShipSE() == nullptr))
+        return false;
+    return (pMember->GetSystemID() == pBooster->GetSystemID());
+}
+
 void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& wing, std::list<int32>& squad)
 {
     double start = GetTimeUSeconds();
@@ -597,7 +606,8 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                     }
                 // this is for FC only.  will always get own skill, and here they get their fleet boost, also
                 fData.leader = fItr->second.leader->GetChar()->GetSkillLevel(EvESkill::Leadership);
-                if (fItr->second.leader->IsInSpace())
+                // an undocking FC is already "in space" before their ship is made.  their fleet timer applies the boost once it is
+                if (fItr->second.leader->GetShipSE() != nullptr)
                     fItr->second.leader->GetShipSE()->ApplyBoost(fData);
             }
     }
@@ -633,7 +643,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                 SquadData sData = SquadData();
                 GetSquadData(squadID, sData);
                 for (auto cur : sData.members)  // SC is a member
-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                    if (sboost and CanTakeBoost(cur.second, sData.booster))
                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
             }
         }
@@ -663,7 +673,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
                 SquadData sData = SquadData();
                 GetSquadData(squadID, sData);
                 for (auto cur : sData.members)
-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                    if (sboost and CanTakeBoost(cur.second, sData.booster))
                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
             }
         }
@@ -687,7 +697,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
             bool sboost(false);
             SetSquadBoostData(squadID, bData, sboost);
             for (auto cur : sData.members)
-                if (sboost and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
+                if (sboost and CanTakeBoost(cur.second, sData.booster))
                     memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
         }
     }
@@ -737,7 +747,8 @@ void FleetService::SetWingBoostData(uint32 wingID, BoostData& bData)
                 }
             // this is for WC only.  will always get own skill, and here they get their wing boost, also
             wItr->second.boost.leader   = leader;
-            wItr->second.leader->GetShipSE()->ApplyBoost(wItr->second.boost);
+            if (wItr->second.leader->GetShipSE() != nullptr)    // no ship yet while undocking
+                wItr->second.leader->GetShipSE()->ApplyBoost(wItr->second.boost);
         }
 
     if (!boost)
