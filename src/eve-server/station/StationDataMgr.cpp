@@ -147,6 +147,16 @@ void StationDataMgr::AddOffice(uint32 stationID, OfficeData& data)
     m_stationOfficeData.emplace(stationID, data);
 }
 
+void StationDataMgr::RemoveOffice(uint32 stationID, uint32 officeID)
+{
+    auto range = m_stationOfficeData.equal_range(stationID);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        if (itr->second.officeID == officeID) {
+            m_stationOfficeData.erase(itr);
+            return;
+        }
+}
+
 void StationDataMgr::LoadOffices(uint32 stationID, std::map<uint32, OfficeData>& data)
 {
     auto range = m_stationOfficeData.equal_range(stationID);

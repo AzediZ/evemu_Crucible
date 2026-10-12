@@ -70,15 +70,52 @@ public:
     // corp member title text
     static std::string GetMemberTitle(uint32 charID);
 
+    // a member's corp data, online or from the db.  false when the character isn't found
+    static bool LoadMemberData(uint32 charID, CorpData& data);
+    // saves a member's corp data (and their session when online)
+    static void SaveMemberData(uint32 charID, CorpData& data);
+
+    /* membership */
+    // CanLeaveCurrentCorporation:  false with the client's message key and its arguments (args is consumed by the caller)
+    bool CanLeave(uint32 charID, std::string& errorKey, PyDict*& args);
+    // CanBeKickedOut for someone else.  reason is set when false
+    bool CanBeKicked(Client* pCaller, uint32 corpID, uint32 charID, std::string& reason);
+    // moves the member to newCorpID (no roles, titles or base), employment history, corp events, member change broadcasts
+    void MoveMemberToCorp(uint32 charID, uint32 newCorpID);
+    // to the character's starter (school) NPC corp, with the corp's notifications
+    void LeaveCorp(uint32 charID, bool kicked, uint32 kickerID);
+    // the starter NPC corp of a character (school corp)
+    static uint32 GetDefaultCorp(uint32 charID);
+
     /* CEO */
     // charID is the corp's CEO and a CEO vote is open (roles revoked for the vote)
     bool IsCEORevoked(uint32 corpID, uint32 charID);
     void InvalidateCEOVote(uint32 corpID)               { m_ceoVote.erase(corpID); }
+    // skills, shares and the CEO vote cooldown (CantRunForCEOAtTheMoment)
+    bool CanRunForCEO(uint32 corpID, uint32 charID);
+    // members who could take over as CEO (Corporation Management and a skill member limit covering the corp)
+    void GetPotentialCEOs(uint32 corpID, std::vector<uint32>& out);
+    void ChangeCEO(uint32 corpID, uint32 newCeoID, bool byVote);
+    // closes the corp:  wallet paid to the character shareholders, members to their starter corps, offices and their contents go
+    void LiquidateCorp(uint32 corpID, uint32 byCharID);
+    // member limit and allowed races from the CEO's skills (UpdateCorporationAbilities)
+    void UpdateAbilities(uint32 corpID);
+    // sum of level x corporationMemberBonus over the corp management skills
+    static uint32 GetSkillMemberLimit(uint32 charID);
+    static uint8 GetSkillLevel(uint32 charID, uint16 skillTypeID);
+    // OnCorporationChanged(corpID, {column: (old, new)}) to the online members.  consumes change
+    void BroadcastCorpChange(uint32 corpID, PyDict* change);
 
     /* notifications (persistent, delivered at login) */
     // members of a player corp holding any of roleMask (0 = all, directors always).  consumes data
     void NotifyCorp(uint32 corpID, uint16 notifyType, uint32 senderID, PyDict* data, int64 roleMask = 0);
     void NotifyChar(uint32 charID, uint16 notifyType, uint32 senderID, PyDict* data);
+
+    /* offices */
+    // deletes every office of the corp with its contents (closed corp)
+    void ReleaseOffices(uint32 corpID);
+    // deletes an item and everything inside it
+    static void DeleteTree(InventoryItemRef iRef);
 
 private:
     void LoadTitles(uint32 corpID);

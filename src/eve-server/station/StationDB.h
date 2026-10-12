@@ -35,6 +35,9 @@ public:
     static void GetStationConstellation(DBQueryResult& res);
 
     static int32 GetOfficeCount(uint32 corpID);
+    // officeID -> stationID of the corp's offices
+    static void GetCorpOffices(uint32 corpID, std::map<uint32, uint32>& into);
+    static void DeleteOffice(uint32 officeID);
 
     static void LoadOffices(OwnerData &od, std::vector<uint32> &into);
     static void CreateOutpost(StationData& data);

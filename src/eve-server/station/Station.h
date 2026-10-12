@@ -96,6 +96,8 @@ public:
     uint32 GetID()                                      { return m_data.stationID; }
     void RentOffice(OfficeData& odata);
     uint32 GetOfficeID(uint32 corpID);
+    // the office is no longer rented here (closed corp, expired or cancelled rent):  out of the station's lists, OnOfficeRentalChanged(corp, None, None)
+    void RemoveOffice(uint32 officeID);
 
     void LoadStationOffice(uint32 corpID);
     void AddLoadedOffice(uint32 officeID);

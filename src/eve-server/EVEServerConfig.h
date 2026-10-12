@@ -472,7 +472,7 @@ public:
     // From <corp>  (F21: corporation management)
     struct {
         uint32 StasisHours;                 // hours after a member's roles are removed before they may quit or be kicked.  0 = no stasis
-        uint32 CEOVoteMinSharePercent;      // % of the corporation's shares a member needs to run for CEO.  0 = any shareholder
+        uint32 CEOVoteMinSharePercent;      // % of the corporation's shares a member needs to run for CEO.  0 = no share requirement
         uint32 CEOVoteCooldownDays;         // days after a CEO vote opens before another may be opened
         uint32 SanctionDays;                // days the CEO has to implement a passed sanctionable vote
         bool EnforceRaceLimit;              // allowedMemberRaceIDs and the Ethnic Relations quota on application acceptance

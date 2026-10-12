@@ -31,6 +31,7 @@ public:
     void                Close();
     void                GetInfo();
     void                AddOffice(uint32 stationID, OfficeData& data);
+    void                RemoveOffice(uint32 stationID, uint32 officeID);
     void                LoadOffices(uint32 stationID, std::map<uint32, OfficeData>& data);
     // this will check for locationID type and retrieve appropriate data
     void                GetStationOfficeIDs(uint32 locationID, std::vector<OfficeData> &data);

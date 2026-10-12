@@ -35,6 +35,25 @@ void StationDB::UpdateOfficeData(OfficeData& data)
     sDatabase.RunQuery(err, "UPDATE staOffices SET lockDown = %u, rentalFee = %u, expiryDateTime = %lli)", data.lockDown, data.rentalFee, data.expiryTime);
 }
 
+void StationDB::GetCorpOffices(uint32 corpID, std::map<uint32, uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID, stationID FROM staOffices WHERE corporationID = %u", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = row.GetUInt(1);
+}
+
+void StationDB::DeleteOffice(uint32 officeID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM staOffices WHERE itemID = %u", officeID);
+}
+
 int32 StationDB::GetOfficeCount(uint32 corpID)
 {
     DBQueryResult res;

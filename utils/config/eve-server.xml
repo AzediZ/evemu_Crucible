@@ -410,7 +410,7 @@ boolean can use either 0/1 OR true/false.
 
     <corp><!-- corporation management (Crucible: 24 hour corporate stasis, share-weighted votes, 30 day office rent bills, 2M isk per corp monthly alliance maintenance) -->
         <StasisHours>24</StasisHours><!-- hours after a member's roles and titles are removed before they may quit or be kicked (the "Prepare to Quit Corp" stasis).  0 = no stasis -->
-        <CEOVoteMinSharePercent>5</CEOVoteMinSharePercent><!-- percent of the corporation's shares a member must hold to run for CEO.  0 = any shareholder -->
+        <CEOVoteMinSharePercent>5</CEOVoteMinSharePercent><!-- percent of the corporation's shares a member must hold to run for CEO.  0 = no share requirement -->
         <CEOVoteCooldownDays>14</CEOVoteCooldownDays><!-- days after a CEO vote opens before another may be opened -->
         <SanctionDays>7</SanctionDays><!-- days the CEO has to implement a passed sanctionable vote (shares, kick, lockdown) -->
         <EnforceRaceLimit>true</EnforceRaceLimit><!-- bool - applicants must be of a race the corporation allows (CEO's race, all with Ethnic Relations), other races capped at 20% of the member limit per Ethnic Relations level -->

@@ -140,9 +140,32 @@ uint32 StationItem::GetOfficeID(uint32 corpID)
     if (!IsPlayerCorp(corpID))
         return 0;
     for (auto cur : m_officeMap)
-        if (cur.second.corporationID = corpID)
+        if (cur.second.corporationID == corpID)
             return cur.first;
     return 0;
+}
+
+void StationItem::RemoveOffice(uint32 officeID)
+{
+    std::map<uint32, OfficeData>::iterator itr = m_officeMap.find(officeID);
+    if (itr == m_officeMap.end())
+        return;
+    uint32 corpID = itr->second.corporationID;
+    m_officeMap.erase(itr);
+    m_officeLoaded.erase(officeID);
+    PySafeDecRef(m_officePyData);
+    m_officePyData = StationDB::GetOffices(m_stationID);
+
+    // bco_locations.OnOfficeRentalChanged(corporationID, officeID, officeFolderID):  None, None = office gone
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, PyStatic.NewNone());
+        payload->SetItem(2, PyStatic.NewNone());
+    for (auto cur : m_guestList) {
+        PyIncRef(payload);
+        cur.second->SendNotification("OnOfficeRentalChanged", "stationid", &payload, false);
+    }
+    PyDecRef(payload);
 }
 
 void StationItem::AddLoadedOffice(uint32 officeID)

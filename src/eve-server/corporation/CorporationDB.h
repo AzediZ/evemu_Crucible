@@ -173,7 +173,8 @@ public:
     static std::string GetCorpName(uint32 corpID);
     static std::string GetDivisionName(uint32 corpID, uint16 acctKey);
     bool UpdateDivisionNames(uint32 corpID, const Call_UpdateDivisionNames & divs, PyDict * notif);
-    bool UpdateCorporation(uint32 corpID, const std::string& description, const std::string& url, double taxRate, PyDict* notif);
+    // isRecruiting -1 = unchanged
+    bool UpdateCorporation(uint32 corpID, const std::string& description, const std::string& url, double taxRate, int8 isRecruiting, PyDict* notif);
     bool UpdateLogo(uint32 corpID, const Call_UpdateLogo & upd, PyDict * notif);
 
     PyRep* GetAssetInventory(uint32 corpID, EVEItemFlags locFlag, const char* flags);
@@ -191,6 +192,23 @@ public:
     static bool GetCorporationBySchool(uint32 schoolID, uint32 &corporationID);
     static bool GetLocationCorporationByCareer(CharacterData &cdata, uint32 &corporationID);
     static bool DoesCorporationExist(uint32 corpID);
+
+    /* F21 corporation management */
+    // comma separated short names of the roles in mask (crpRoles)
+    static std::string GetRoleNames(int64 mask);
+    static void SetCEO(uint32 corpID, uint32 ceoID);
+    static int64 GetLastCEOVote(uint32 corpID);
+    static void SetLastCEOVote(uint32 corpID, int64 time);
+    // shares of corpID held by holderID / issued by corpID
+    static uint32 GetSharesHeld(uint32 holderID, uint32 corpID);
+    static uint32 GetCorpShares(uint32 corpID);
+    // holderID -> shares of corpID
+    static void GetShareholders(uint32 corpID, std::map<uint32, uint32>& into);
+    static void GetAbilities(uint32 corpID, uint16& memberLimit, uint8& raceMask);
+    static void SetAbilities(uint32 corpID, uint16 memberLimit, uint8 raceMask);
+    static uint16 GetOtherRaceMemberCount(uint32 corpID, uint8 raceID);
+    // marks the corp deleted, drops its shares, closes its votes and applications
+    static void CloseCorporation(uint32 corpID);
 
     /* corp item lockdown (crpLockedItems:  itemID, ownerID, locationID = stationID, locked)  (F20 ItemLockdown) */
     static void GetLockedItemIDs(std::set<uint32>& into);

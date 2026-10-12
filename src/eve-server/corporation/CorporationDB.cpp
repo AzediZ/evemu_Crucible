@@ -525,15 +525,11 @@ bool CorporationDB::AddCorporation(Call_AddCorporation & corpInfo, Client* pClie
     uint32 charID = pClient->GetCharacterID();
     uint8 raceID = (uint8)pChar->race();
 
-    // set member limit based on creator's skills
-    uint16 mLimit = (pChar->GetSkillLevel(EvESkill::CorporationManagement) * 20);//101
-    mLimit += (pChar->GetSkillLevel(EvESkill::MegacorpManagement) * 100);        //601
-    mLimit += (pChar->GetSkillLevel(EvESkill::EmpireControl) * 400);             //2601
-    mLimit += (pChar->GetSkillLevel(EvESkill::Sovereignty) * 2000);              //12601
-
-    /** @todo  allowedMemberRaceIDs will need to be bitwise...it is a flag.
-     * also called 'raceMask' and isnt implemented yet.
-     */
+    // member limit from the creator's skills (corporationMemberBonus per level); CorpMgr::UpdateAbilities sets the races after creation
+    uint16 mLimit = (pChar->GetSkillLevel(EvESkill::CorporationManagement) * 10);
+    mLimit += (pChar->GetSkillLevel(EvESkill::MegacorpManagement) * 50);
+    mLimit += (pChar->GetSkillLevel(EvESkill::EmpireControl) * 200);
+    mLimit += (pChar->GetSkillLevel(EvESkill::Sovereignty) * 1000);
     DBerror err;
     if (!sDatabase.RunQueryLID(err, corpID,
         " INSERT INTO crpCorporation ( "
@@ -1865,11 +1861,11 @@ std::string CorporationDB::GetDivisionName(uint32 corpID, uint16 acctKey)
 }
 
 
-bool CorporationDB::UpdateCorporation(uint32 corpID, const std::string& description, const std::string& url, double taxRate, PyDict * notif) {
+bool CorporationDB::UpdateCorporation(uint32 corpID, const std::string& description, const std::string& url, double taxRate, int8 isRecruiting, PyDict * notif) {
     DBQueryResult res;
 
     if (!sDatabase.RunQuery(res,
-        " SELECT description, url, taxRate "
+        " SELECT description, url, taxRate, isRecruiting "
         " FROM crpCorporation "
         " WHERE corporationID = %u ", corpID))
     {
@@ -1887,6 +1883,8 @@ bool CorporationDB::UpdateCorporation(uint32 corpID, const std::string& descript
     ProcessStringChange("description", row.GetText(0), description, notif, dbQ);
     ProcessStringChange("url", row.GetText(1), url, notif, dbQ);
     ProcessRealChange("taxRate", row.GetDouble(2), taxRate, notif, dbQ);
+    if (isRecruiting >= 0)
+        ProcessIntChange("isRecruiting", row.GetUInt(3), isRecruiting, notif, dbQ);
 
     std::string query = " UPDATE crpCorporation SET ";
 
@@ -2647,6 +2645,148 @@ int32 CorporationDB::GetCorpIDforChar(int32 charID)
 
     _log(DATABASE__MESSAGE, "No data found for character's %u corporation.", charID);
     return 0;
+}
+
+std::string CorporationDB::GetRoleNames(int64 mask)
+{
+    std::string names;
+    if (mask == 0)
+        return names;
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT roleID, shortDescription FROM crpRoles ORDER BY roleIID")) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return names;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        int64 roleID = row.GetInt64(0);
+        if ((roleID == 0) or ((mask & roleID) != roleID))
+            continue;
+        if (!names.empty())
+            names += ", ";
+        names += row.GetText(1);
+    }
+    return names;
+}
+
+void CorporationDB::SetCEO(uint32 corpID, uint32 ceoID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "UPDATE crpCorporation SET ceoID = %u WHERE corporationID = %u", ceoID, corpID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+}
+
+int64 CorporationDB::GetLastCEOVote(uint32 corpID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT lastCEOVoteDateTime FROM crpCorporation WHERE corporationID = %u", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetInt64(0);
+    return 0;
+}
+
+void CorporationDB::SetLastCEOVote(uint32 corpID, int64 time)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE crpCorporation SET lastCEOVoteDateTime = %lli WHERE corporationID = %u", time, corpID);
+}
+
+uint32 CorporationDB::GetSharesHeld(uint32 holderID, uint32 corpID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT SUM(shares) FROM crpShares WHERE corporationID = %u AND shareholderID = %u", corpID, holderID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row) and !row.IsNull(0))
+        return row.GetUInt(0);
+    return 0;
+}
+
+uint32 CorporationDB::GetCorpShares(uint32 corpID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT shares FROM crpCorporation WHERE corporationID = %u", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
+void CorporationDB::GetShareholders(uint32 corpID, std::map<uint32, uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT shareholderID, SUM(shares) FROM crpShares WHERE corporationID = %u GROUP BY shareholderID", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        if (row.GetUInt(1) > 0)
+            into[row.GetUInt(0)] = row.GetUInt(1);
+}
+
+void CorporationDB::GetAbilities(uint32 corpID, uint16& memberLimit, uint8& raceMask)
+{
+    memberLimit = 0;
+    raceMask = 0;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT memberLimit, allowedMemberRaceIDs FROM crpCorporation WHERE corporationID = %u", corpID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row)) {
+        memberLimit = row.GetUInt(0);
+        raceMask = row.GetUInt(1);
+    }
+}
+
+void CorporationDB::SetAbilities(uint32 corpID, uint16 memberLimit, uint8 raceMask)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "UPDATE crpCorporation SET memberLimit = %u, allowedMemberRaceIDs = %u WHERE corporationID = %u",
+                memberLimit, raceMask, corpID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+}
+
+uint16 CorporationDB::GetOtherRaceMemberCount(uint32 corpID, uint8 raceID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(characterID) FROM chrCharacters WHERE corporationID = %u AND raceID != %u", corpID, raceID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
+void CorporationDB::CloseCorporation(uint32 corpID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE crpCorporation SET deleted = 1, memberCount = 0, ceoID = 0 WHERE corporationID = %u", corpID);
+    sDatabase.RunQuery(err, "DELETE FROM crpShares WHERE corporationID = %u", corpID);
+    // open votes close with the corp
+    sDatabase.RunQuery(err, "UPDATE crpVoteItems SET status = 1 WHERE corporationID = %u AND status = 2", corpID);
+    sDatabase.RunQuery(err, "DELETE FROM crpApplications WHERE corporationID = %u", corpID);
 }
 
 void CorporationDB::GetLockedItemIDs(std::set<uint32>& into)

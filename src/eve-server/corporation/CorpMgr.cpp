@@ -27,13 +27,23 @@
 #include "EVE_Corp.h"
 #include "EVE_Mail.h"
 
+#include "EVE_Skills.h"
+
 #include "Client.h"
 #include "EntityList.h"
+#include "account/AccountDB.h"
+#include "account/AccountService.h"
 #include "character/Character.h"
 #include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
 #include "corporation/CorpMgr.h"
+#include "corporation/ItemLockdown.h"
+#include "inventory/ItemFactory.h"
 #include "mail/NotificationMgr.h"
+#include "station/Station.h"
+#include "station/StationDB.h"
+#include "station/StationDataMgr.h"
+#include "station/StationOffice.h"
 
 /*
  * CORP__ERROR
@@ -391,6 +401,491 @@ bool CorpMgr::UpdateMember(Client* pCaller, uint32 corpID, const Corp::MemberUpd
 
     _log(CORP__INFO, "CorpMgr::UpdateMember() - %s(%u) updated member %u of corp %u", pCaller->GetName(), callerID, upd.charID, corpID);
     return true;
+}
+
+bool CorpMgr::LoadMemberData(uint32 charID, CorpData& data)
+{
+    Client* pClient = sEntityList.FindClientByCharID(charID);
+    if ((pClient != nullptr) and (pClient->GetChar().get() != nullptr)) {
+        data = pClient->GetChar()->GetCorpData();
+        return true;
+    }
+    data = CorpData();
+    return CharacterDB::GetCharCorpData(charID, data);
+}
+
+void CorpMgr::SaveMemberData(uint32 charID, CorpData& data)
+{
+    Client* pClient = sEntityList.FindClientByCharID(charID);
+    if ((pClient != nullptr) and (pClient->GetChar().get() != nullptr)) {
+        pClient->GetChar()->UpdateCorpData(data);
+    } else {
+        CharacterDB::SaveCorpData(charID, data);
+    }
+}
+
+/* membership */
+bool CorpMgr::CanLeave(uint32 charID, std::string& errorKey, PyDict*& args)
+{
+    // corp_ui_home:  canLeave, error, errorDetails = CanLeaveCurrentCorporation();  the Quit button raises UserError(error, errorDetails)
+    args = nullptr;
+    CorpData data = CorpData();
+    if (!LoadMemberData(charID, data))
+        return false;
+
+    if (!IsPlayerCorp(data.corporationID)) {
+        errorKey = "CrpCantQuitDefaultCorporation";
+        args = new PyDict();
+        return false;
+    }
+    if (CorporationDB::GetCorporationCEO(data.corporationID) == charID) {
+        errorKey = "CrpCantQuitCEO";
+        args = new PyDict();
+        return false;
+    }
+
+    // a member with roles must 'Prepare to Quit' first (removes the roles and starts the stasis)
+    int64 roles = data.corpRole | data.rolesAtAll | data.rolesAtHQ | data.rolesAtBase | data.rolesAtOther;
+    int64 grantable = data.grantableRoles | data.grantableRolesAtHQ | data.grantableRolesAtBase | data.grantableRolesAtOther;
+    if ((roles | grantable | data.titleMask) != 0) {
+        std::string rolelist = CorporationDB::GetRoleNames(roles | grantable);
+        if (rolelist.empty())
+            rolelist = "Titles";
+        errorKey = "CrpCantQuitNotInStasis";
+        args = new PyDict();
+            args->SetItemString("char", new PyInt(charID));
+            args->SetItemString("rolelist", new PyString(rolelist));
+        return false;
+    }
+
+    // 24 hours of corporate stasis after the last roles went
+    if ((sConfig.corp.StasisHours > 0) and (data.rolesClearedDateTime > 0)) {
+        int64 elapsed = (GetFileTimeNow() - data.rolesClearedDateTime) / EvE::Time::Hour;
+        if (elapsed < 0)
+            elapsed = 0;
+        if (elapsed < (int64)sConfig.corp.StasisHours) {
+            errorKey = "CrpCantQuitNotCompletedStasisPeriod";
+            args = new PyDict();
+                args->SetItemString("char", new PyInt(charID));
+                args->SetItemString("hour", new PyInt((int32)elapsed));
+                args->SetItemString("hoursleft", new PyInt((int32)(sConfig.corp.StasisHours - elapsed)));
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool CorpMgr::CanBeKicked(Client* pCaller, uint32 corpID, uint32 charID, std::string& reason)
+{
+    if (pCaller->GetCorporationID() != (int32)corpID) {
+        reason = "You are not a member of this corporation.";
+        return false;
+    }
+    if ((pCaller->GetRolesAtAll() & Corp::Role::Director) != Corp::Role::Director) {
+        reason = "Only the CEO and directors can kick members out of the corporation.";
+        return false;
+    }
+
+    CorpData data = CorpData();
+    if (!LoadMemberData(charID, data) or (data.corporationID != corpID)) {
+        reason = "That character is not a member of this corporation.";
+        return false;
+    }
+    if (CorporationDB::GetCorporationCEO(corpID) == charID) {
+        reason = "The CEO cannot be kicked out of the corporation.";
+        return false;
+    }
+
+    // members with roles have their roles removed first, then go through the same stasis as when quitting
+    int64 roles = data.corpRole | data.rolesAtAll | data.rolesAtHQ | data.rolesAtBase | data.rolesAtOther
+                | data.grantableRoles | data.grantableRolesAtHQ | data.grantableRolesAtBase | data.grantableRolesAtOther | data.titleMask;
+    if (roles != 0) {
+        reason = "This member still holds roles or titles.  Remove them first; the member can be kicked out once their corporate stasis period is over.";
+        return false;
+    }
+    if ((sConfig.corp.StasisHours > 0) and (data.rolesClearedDateTime > 0)
+    and ((GetFileTimeNow() - data.rolesClearedDateTime) < ((int64)sConfig.corp.StasisHours * EvE::Time::Hour))) {
+        reason = "This member recently held roles and is still in corporate stasis.";
+        return false;
+    }
+
+    return true;
+}
+
+uint32 CorpMgr::GetDefaultCorp(uint32 charID)
+{
+    // "join one of the starter NPC corporations" (ConfirmQuitCorporation):  the character's school corp
+    uint32 corpID(0);
+    if (CorporationDB::GetCorporationBySchool(CharacterDB::GetSchoolID(charID), corpID) and IsNPCCorp(corpID))
+        return corpID;
+    if (IsNPCCorp(sConfig.character.startCorporation))
+        return sConfig.character.startCorporation;
+    return 1000044;     // School of Applied Knowledge
+}
+
+void CorpMgr::MoveMemberToCorp(uint32 charID, uint32 newCorpID)
+{
+    CorpData old = CorpData();
+    if (!LoadMemberData(charID, old))
+        return;
+    uint32 oldCorpID = old.corporationID;
+    if (oldCorpID == newCorpID)
+        return;
+
+    // a new member starts without roles, titles or base
+    CorpData data = CorpData();
+        data.corporationID = newCorpID;
+        data.corpAccountKey = Account::KeyType::Cash;
+        data.startDateTime = GetFileTimeNow();
+    CorporationDB::GetCorpData(data);
+
+    Client* pClient = sEntityList.FindClientByCharID(charID);
+    if ((pClient != nullptr) and (pClient->GetChar().get() != nullptr)) {
+        pClient->GetChar()->SetCorpTitle("");
+        pClient->GetChar()->JoinCorporation(data);   // employment history, session, save
+    } else {
+        CharacterDB::AddEmployment(charID, newCorpID, oldCorpID);
+        CharacterDB::SaveCorpData(charID, data);
+        CharacterDB::SetTitle(charID, "");
+    }
+
+    CorporationDB cdb;
+    if (IsPlayerCorp(oldCorpID))
+        cdb.AddItemEvent(oldCorpID, charID, Corp::EventType::LeftCorporation);
+    if (IsPlayerCorp(newCorpID))
+        cdb.AddItemEvent(newCorpID, charID, Corp::EventType::JoinedCorporation);
+
+    // both corps' member lists:  OnCorporationMemberChanged(charID, {corporationID: (old, new), startDateTime: (old, new)})
+    PyDict* change = new PyDict();
+        AddChange(change, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
+        AddChange(change, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
+    if (IsPlayerCorp(oldCorpID)) {
+        PyIncRef(change);
+        SendMemberChanged(oldCorpID, charID, change);
+    }
+    SendMemberChanged(newCorpID, charID, change);
+
+    _log(CORP__INFO, "CorpMgr::MoveMemberToCorp() - %u moved from corp %u to %u", charID, oldCorpID, newCorpID);
+}
+
+void CorpMgr::LeaveCorp(uint32 charID, bool kicked, uint32 kickerID)
+{
+    CorpData old = CorpData();
+    if (!LoadMemberData(charID, old))
+        return;
+    uint32 oldCorpID = old.corporationID;
+
+    MoveMemberToCorp(charID, GetDefaultCorp(charID));
+
+    PyDict* data = new PyDict();
+        data->SetItemString("charID", new PyInt(charID));
+        data->SetItemString("corpID", new PyInt(oldCorpID));
+    NotifyCorp(oldCorpID, Notify::Types::CharLeftCorp, charID, data);
+
+    if (kicked) {
+        data = new PyDict();
+            data->SetItemString("corpID", new PyInt(oldCorpID));
+        NotifyChar(charID, Notify::Types::CorpKicked, kickerID, data);
+    }
+}
+
+uint8 CorpMgr::GetSkillLevel(uint32 charID, uint16 skillTypeID)
+{
+    Client* pClient = sEntityList.FindClientByCharID(charID);
+    if ((pClient != nullptr) and (pClient->GetChar().get() != nullptr)) {
+        int8 level = pClient->GetChar()->GetSkillLevel(skillTypeID);
+        return (level > 0 ? level : 0);
+    }
+    return CharacterDB::GetSkillLevel(charID, skillTypeID);
+}
+
+uint32 CorpMgr::GetSkillMemberLimit(uint32 charID)
+{
+    // corporationMemberBonus (attribute 191) of the skills, per level
+    uint32 limit = GetSkillLevel(charID, EvESkill::CorporationManagement) * 10;
+    limit += GetSkillLevel(charID, EvESkill::MegacorpManagement) * 50;
+    limit += GetSkillLevel(charID, EvESkill::EmpireControl) * 200;
+    limit += GetSkillLevel(charID, EvESkill::Sovereignty) * 1000;
+    return limit;
+}
+
+void CorpMgr::BroadcastCorpChange(uint32 corpID, PyDict* change)
+{
+    if (change == nullptr)
+        return;
+    if (change->empty() or !IsPlayerCorp(corpID)) {
+        PyDecRef(change);
+        return;
+    }
+
+    // bco_corporations.OnCorporationChanged(corpID, change)
+    PyTuple* payload = new PyTuple(2);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, change);
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnCorporationChanged", "corpid", payload);
+}
+
+void CorpMgr::UpdateAbilities(uint32 corpID)
+{
+    uint32 ceoID = CorporationDB::GetCorporationCEO(corpID);
+    if (!IsCharacterID(ceoID))
+        return;
+
+    uint16 oldLimit(0);
+    uint8 oldRaces(0);
+    CorporationDB::GetAbilities(corpID, oldLimit, oldRaces);
+
+    uint32 limit = GetSkillMemberLimit(ceoID);
+    if (limit > 0xffff)
+        limit = 0xffff;
+    // the client tests race.raceID & allowedMemberRaceIDs (Caldari 1, Minmatar 2, Amarr 4, Gallente 8);  Ethnic Relations opens all of them
+    uint8 races = CharacterDB::GetRaceID(ceoID);
+    if (GetSkillLevel(ceoID, EvESkill::EthnicRelations) > 0)
+        races |= (1 | 2 | 4 | 8);
+
+    if ((limit == oldLimit) and (races == oldRaces))
+        return;
+
+    CorporationDB::SetAbilities(corpID, limit, races);
+    PyDict* change = new PyDict();
+    if (limit != oldLimit)
+        AddChange(change, "memberLimit", new PyInt(oldLimit), new PyInt(limit));
+    if (races != oldRaces)
+        AddChange(change, "allowedMemberRaceIDs", new PyInt(oldRaces), new PyInt(races));
+    BroadcastCorpChange(corpID, change);
+}
+
+/* CEO */
+bool CorpMgr::CanRunForCEO(uint32 corpID, uint32 charID)
+{
+    if (!IsPlayerCorp(corpID))
+        return false;
+    if (CorporationDB::GetCorporationCEO(corpID) == charID)
+        return false;
+
+    // skills:  Corporation Management, and enough to manage the corp's current members
+    if (GetSkillLevel(charID, EvESkill::CorporationManagement) < 1)
+        return false;
+    CorporationDB cdb;
+    if (GetSkillMemberLimit(charID) < cdb.GetMemberCount(corpID))
+        return false;
+
+    // shares
+    if (sConfig.corp.CEOVoteMinSharePercent > 0) {
+        int64 needed = ((int64)CorporationDB::GetCorpShares(corpID) * sConfig.corp.CEOVoteMinSharePercent + 99) / 100;
+        if (CorporationDB::GetSharesHeld(charID, corpID) < needed)
+            return false;
+    }
+
+    // "You cannot run for CEO as there has been a CEO vote issued within the last two weeks."
+    int64 last = CorporationDB::GetLastCEOVote(corpID);
+    if ((last > 0) and ((GetFileTimeNow() - last) < ((int64)sConfig.corp.CEOVoteCooldownDays * EvE::Time::Day)))
+        return false;
+
+    return true;
+}
+
+void CorpMgr::GetPotentialCEOs(uint32 corpID, std::vector<uint32>& out)
+{
+    out.clear();
+    uint32 ceoID = CorporationDB::GetCorporationCEO(corpID);
+    CorporationDB cdb;
+    uint16 members = cdb.GetMemberCount(corpID);
+
+    std::vector<uint32> ids;
+    CorporationDB::GetMemberIDs(corpID, ids, true);
+    std::vector<uint32> offline;
+    CorporationDB::GetMemberIDs(corpID, offline, false);
+    ids.insert(ids.end(), offline.begin(), offline.end());
+
+    for (auto cur : ids) {
+        if (cur == ceoID)
+            continue;
+        if (GetSkillLevel(cur, EvESkill::CorporationManagement) < 1)
+            continue;
+        if (GetSkillMemberLimit(cur) < members)
+            continue;
+        out.push_back(cur);
+    }
+}
+
+void CorpMgr::ChangeCEO(uint32 corpID, uint32 newCeoID, bool byVote)
+{
+    uint32 oldCeoID = CorporationDB::GetCorporationCEO(corpID);
+    if (oldCeoID == newCeoID)
+        return;
+
+    CorporationDB::SetCEO(corpID, newCeoID);
+    InvalidateCEOVote(corpID);
+
+    // the new CEO holds every role
+    CorpData data = CorpData();
+    if (LoadMemberData(newCeoID, data)) {
+        data.corpRole = data.rolesAtAll = data.rolesAtHQ = data.rolesAtBase = data.rolesAtOther = Corp::Role::Admin;
+        data.grantableRoles = data.grantableRolesAtHQ = data.grantableRolesAtBase = data.grantableRolesAtOther = Corp::Role::Admin;
+        data.blockRoles = false;
+        SaveMemberData(newCeoID, data);
+    }
+
+    // a CEO voted out loses every role;  one who resigns keeps theirs
+    if (IsCharacterID(oldCeoID) and LoadMemberData(oldCeoID, data) and (data.corporationID == corpID)) {
+        if (byVote) {
+            data.corpRole = data.rolesAtAll = data.rolesAtHQ = data.rolesAtBase = data.rolesAtOther = 0;
+            data.grantableRoles = data.grantableRolesAtHQ = data.grantableRolesAtBase = data.grantableRolesAtOther = 0;
+            data.titleMask = 0;
+            data.rolesClearedDateTime = GetFileTimeNow();
+        }
+        SaveMemberData(oldCeoID, data);
+    }
+
+    CorporationDB cdb;
+    cdb.AddItemEvent(corpID, newCeoID, Corp::EventType::BecameCEOOfCorporation);
+    if (IsCharacterID(oldCeoID))
+        cdb.AddItemEvent(corpID, oldCeoID, Corp::EventType::LeftCEOPositionOfCorporation);
+
+    PyDict* change = new PyDict();
+        AddChange(change, "ceoID", new PyInt(oldCeoID), new PyInt(newCeoID));
+    BroadcastCorpChange(corpID, change);
+
+    PyDict* notify = new PyDict();
+        notify->SetItemString("corpID", new PyInt(corpID));
+        notify->SetItemString("oldCeoID", new PyInt(oldCeoID));
+        notify->SetItemString("newCeoID", new PyInt(newCeoID));
+    NotifyCorp(corpID, Notify::Types::CorpNewCEO, newCeoID, notify);
+
+    // member limit and races follow the CEO's skills
+    UpdateAbilities(corpID);
+
+    _log(CORP__INFO, "CorpMgr::ChangeCEO() - corp %u CEO %u -> %u (%s)", corpID, oldCeoID, newCeoID, (byVote ? "vote" : "resigned"));
+}
+
+void CorpMgr::LiquidateCorp(uint32 corpID, uint32 byCharID)
+{
+    if (!IsPlayerCorp(corpID))
+        return;
+
+    // "all your corporation's assets will be acquired by the local authorities":  the wallet goes to the character shareholders
+    std::map<uint32, uint32> holders;
+    CorporationDB::GetShareholders(corpID, holders);
+    int64 held(0);
+    for (std::map<uint32, uint32>::iterator itr = holders.begin(); itr != holders.end(); ) {
+        if (!IsCharacterID(itr->first)) {
+            itr = holders.erase(itr);
+            continue;
+        }
+        held += itr->second;
+        ++itr;
+    }
+
+    std::map<uint32, double> payouts;
+    std::string reason = "Liquidation of ";
+    reason += CorporationDB::GetCorpName(corpID);
+    if (held > 0) {
+        for (uint16 key = Account::KeyType::Cash; key <= Account::KeyType::Cash7; ++key) {
+            double balance = AccountDB::GetCorpBalance(corpID, key);
+            if (balance < 0.01)
+                continue;
+            for (auto cur : holders) {
+                double amount = std::floor(balance * cur.second / held * 100) / 100;
+                if (amount < 0.01)
+                    continue;
+                try {
+                    AccountService::TransferFunds(corpID, cur.first, amount, reason, Journal::EntryType::CorporationDividendPayment, corpID, key);
+                    payouts[cur.first] += amount;
+                } catch (...) {
+                    _log(CORP__ERROR, "CorpMgr::LiquidateCorp() - payout of %.2f to %u from corp %u failed", amount, cur.first, corpID);
+                }
+            }
+        }
+    }
+
+    // members to their starter corps, the one closing the corp last
+    std::vector<uint32> members, offline;
+    CorporationDB::GetMemberIDs(corpID, members, true);
+    CorporationDB::GetMemberIDs(corpID, offline, false);
+    members.insert(members.end(), offline.begin(), offline.end());
+
+    std::set<uint32> told;
+    for (auto cur : payouts) {
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(corpID));
+            data->SetItemString("payout", new PyFloat(cur.second));
+        NotifyChar(cur.first, Notify::Types::CorpLiquidation, byCharID, data);
+        told.insert(cur.first);
+    }
+    for (auto cur : members) {
+        if (told.find(cur) != told.end())
+            continue;
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(corpID));
+            data->SetItemString("payout", new PyFloat(0));
+        NotifyChar(cur, Notify::Types::CorpLiquidation, byCharID, data);
+    }
+
+    // offices and their contents go with the corp
+    ReleaseOffices(corpID);
+
+    for (auto cur : members)
+        if (cur != byCharID)
+            MoveMemberToCorp(cur, GetDefaultCorp(cur));
+    if (IsCharacterID(byCharID))
+        MoveMemberToCorp(byCharID, GetDefaultCorp(byCharID));
+
+    CorporationDB cdb;
+    cdb.AddItemEvent(corpID, byCharID, Corp::EventType::DeletedCorporation);
+    CorporationDB::CloseCorporation(corpID);
+    InvalidateCEOVote(corpID);
+    InvalidateTitles(corpID);
+
+    _log(CORP__INFO, "CorpMgr::LiquidateCorp() - corp %u closed by %u, %u members moved", corpID, byCharID, members.size());
+}
+
+void CorpMgr::DeleteTree(InventoryItemRef iRef)
+{
+    // containers (and their contents) go first, the item itself last
+    if (iRef->GetMyInventory() != nullptr) {
+        iRef->GetMyInventory()->LoadContents();
+        std::vector<InventoryItemRef> items;
+        iRef->GetMyInventory()->GetInventoryVec(items);
+        for (auto cur : items)
+            DeleteTree(cur);
+    }
+    if (ItemLockdown::IsLocked(iRef->itemID())) {
+        try {
+            ItemLockdown::Unlock(iRef->ownerID(), iRef->itemID());
+        } catch (...) { }
+    }
+    iRef->Delete();
+}
+
+void CorpMgr::ReleaseOffices(uint32 corpID)
+{
+    // every office of the corp and its contents are gone
+    std::map<uint32, uint32> offices;
+    StationDB::GetCorpOffices(corpID, offices);
+    for (auto cur : offices) {
+        StationOfficeRef oRef = sItemFactory.GetOfficeRef(cur.first);
+        if (oRef.get() != nullptr) {
+            if (oRef->GetMyInventory() != nullptr) {
+                oRef->GetMyInventory()->LoadContents();
+                std::vector<InventoryItemRef> items;
+                oRef->GetMyInventory()->GetInventoryVec(items);
+                for (auto item : items)
+                    DeleteTree(item);
+            }
+        }
+
+        StationItemRef sRef = sEntityList.GetStationByID(cur.second);
+        if (sRef.get() != nullptr)
+            sRef->RemoveOffice(cur.first);
+        stDataMgr.RemoveOffice(cur.second, cur.first);
+        StationDB::DeleteOffice(cur.first);
+        if (oRef.get() != nullptr)
+            oRef->Delete();
+
+        _log(CORP__INFO, "CorpMgr::ReleaseOffices() - office %u of corp %u in station %u removed", cur.first, corpID, cur.second);
+    }
 }
 
 /* CEO */

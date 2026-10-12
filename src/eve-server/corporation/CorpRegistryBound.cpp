@@ -136,6 +136,10 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("GetNumberOfPotentialCEOs", &CorpRegistryBound::GetNumberOfPotentialCEOs);
 
     this->Add("CanLeaveCurrentCorporation", &CorpRegistryBound::CanLeaveCurrentCorporation);
+    this->Add("CanBeKickedOut", &CorpRegistryBound::CanBeKickedOut);
+    this->Add("KickOutMember", &CorpRegistryBound::KickOutMember);
+    this->Add("MemberCanRunForCEO", &CorpRegistryBound::MemberCanRunForCEO);
+    this->Add("ResignFromCEO", &CorpRegistryBound::ResignFromCEO);
 
     m_corpID = corpID;
 
@@ -469,6 +473,8 @@ PyResult CorpRegistryBound::UpdateDivisionNames(PyCallArgs &call,
         return PyStatic.NewNone();
     }
 
+    RequireDirector(call);
+
     Notify_IntRaw notif;
         notif.key = m_corpID;
         notif.data = new PyDict();
@@ -479,15 +485,8 @@ PyResult CorpRegistryBound::UpdateDivisionNames(PyCallArgs &call,
         return PyStatic.NewNone();
     }
 
-    // Only send notification if it is needed...
-    if (notif.data->items.size()) {
-        /** @todo update this to use CorpNotify() */
-        MulticastTarget mct;
-            mct.corporations.insert(notif.key);
-        PyTuple * answer = notif.Encode();
-        sEntityList.Multicast("OnCorporationChanged", "corpid", &answer, mct);
-        call.client->SendNotification("OnCorporationChanged", "clientID", &answer);
-    }
+    sCorpMgr.BroadcastCorpChange(m_corpID, notif.data);
+    notif.data = nullptr;
 
     // returns nodeID and timestamp
     return this->GetOID();
@@ -633,6 +632,8 @@ PyResult CorpRegistryBound::AddCorporation(PyCallArgs &call,
         data.grantableRolesAtOther = Corp::Role::Admin;
     // update corp data and refresh session data.
     pClient->GetChar()->JoinCorporation(data);
+    // member limit and allowed races from the founder's skills
+    sCorpMgr.UpdateAbilities(corpID);
 
     // Here we send a notification about creating a new corporation...
     OnCorporationChanged cc;
@@ -749,30 +750,53 @@ PyResult CorpRegistryBound::UpdateTitles(PyCallArgs &call, PyObject* titles) {
     return nullptr;
 }
 
-PyResult CorpRegistryBound::UpdateCorporation(PyCallArgs &call, PyRep* description, PyRep* url, PyFloat* tax) {
+PyResult CorpRegistryBound::UpdateCorporation(PyCallArgs &call, PyRep* description, PyRep* url, PyRep* tax, std::optional<PyRep*> acceptApplications) {
+    // bco_corporations.UpdateCorporation(description, url, taxRate, acceptApplications)
     _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateCorporation() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
-    Notify_IntRaw notif;
-    notif.key = m_corpID;
-    notif.data = new PyDict();
 
-    if (!m_db.UpdateCorporation(notif.key, PyRep::StringContent(description), PyRep::StringContent (url), tax->value(), notif.data)) {
-        codelog(SERVICE__ERROR, "%s: Failed to update corporation data for corp %u", call.client->GetName(), notif.key);
-        PyDecRef( notif.data );
-        return PyStatic.NewNone();
+    RequireDirector(call);
+
+    double taxRate(0);
+    if (tax->IsFloat()) {
+        taxRate = PyRep::FloatValue(tax);
+    } else if (tax->IsInt() or tax->IsLong()) {
+        taxRate = (double)PyRep::IntegerValue(tax);
+    }
+    taxRate = EvE::max(0.0, EvE::min(1.0, taxRate));
+
+    int8 recruiting(-1);
+    if (acceptApplications.has_value()) {
+        std::optional<int64> value = Corp::MemberUpdate::Int(acceptApplications.value());
+        if (value.has_value())
+            recruiting = (value.value() ? 1 : 0);
     }
 
-    // Only send notification if it is needed...
-    if (notif.data->items.size()) {
-        /** @todo update this to use CorpNotify() */
-        MulticastTarget mct;
-        mct.corporations.insert(notif.key);
-        PyTuple * answer = notif.Encode();
-        sEntityList.Multicast("OnCorporationChanged", "corpid", &answer, mct);
-        call.client->SendNotification("OnCorporationChanged", "clientID", &answer);
+    PyDict* change = new PyDict();
+    if (!m_db.UpdateCorporation(m_corpID, PyRep::StringContent(description), PyRep::StringContent(url), taxRate, recruiting, change)) {
+        codelog(SERVICE__ERROR, "%s: Failed to update corporation data for corp %u", call.client->GetName(), m_corpID);
+        PyDecRef(change);
+        return nullptr;
     }
 
-    return PyStatic.NewNone();
+    // tax rate change:  notification, and the members' cached tax rate (bounty and reward taxes)
+    PyRep* taxChange = change->GetItemString("taxRate");
+    if ((taxChange != nullptr) and taxChange->IsTuple()) {
+        double oldRate = PyRep::FloatValue(taxChange->AsTuple()->GetItem(0));
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(m_corpID));
+            data->SetItemString("oldTaxRate", new PyFloat(oldRate * 100));
+            data->SetItemString("newTaxRate", new PyFloat(taxRate * 100));
+        sCorpMgr.NotifyCorp(m_corpID, Notify::Types::CorpTaxChange, call.client->GetCharacterID(), data);
+
+        std::vector<Client*> list;
+        sEntityList.GetCorpClients(list, m_corpID);
+        for (auto cur : list)
+            sCorpMgr.RefreshMemberSession(cur->GetCharacterID(), true);
+    }
+
+    sCorpMgr.BroadcastCorpChange(m_corpID, change);
+    return nullptr;
 }
 
 PyResult CorpRegistryBound::UpdateLogo(PyCallArgs &call,
@@ -786,6 +810,8 @@ PyResult CorpRegistryBound::UpdateLogo(PyCallArgs &call,
         codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
         return nullptr;
     }
+
+    RequireDirector(call);
 
     Notify_IntRaw notif;
     notif.key = m_corpID;
@@ -817,12 +843,8 @@ PyResult CorpRegistryBound::UpdateLogo(PyCallArgs &call,
         Account::KeyType::Cash
     ); // main wallet
 
-    // Send notification to those in the station
-    /** @todo update this to use CorpNotify() */
-    MulticastTarget mct;
-    mct.locations.insert(call.client->GetLocationID());
-    PyTuple *answer = notif.Encode();
-    sEntityList.Multicast("OnCorporationChanged", "corpid", &answer, mct);
+    sCorpMgr.BroadcastCorpChange(m_corpID, notif.data);
+    notif.data = nullptr;
 
     return m_db.GetCorporation(notif.key);
 }
@@ -1521,6 +1543,14 @@ PyResult CorpRegistryBound::UpdateApplicationOffer(PyCallArgs &call, PyInt* char
     if (!IsPlayerCorp(m_corpID))
         return nullptr;
 
+    // applications are handled by personnel managers (and directors)
+    RequireMember(call);
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::PersonnelManager))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only personnel managers and directors can handle applications."));
+
+    if (status->value() == Corp::AppStatus::AcceptedByCorporation)
+        CheckCanAccept(characterID->value());
+
     Corp::ApplicationInfo oldInfo = Corp::ApplicationInfo();
         oldInfo.valid = true;
         oldInfo.appText = PyRep::StringContent(applicationText);
@@ -1551,63 +1581,22 @@ PyResult CorpRegistryBound::UpdateApplicationOffer(PyCallArgs &call, PyInt* char
     FillOCApplicationChange(ocac, oldInfo, newInfo);
 
     if (status->value() == Corp::AppStatus::AcceptedByCorporation) {
-        MemberAttributeUpdate change;
-        if (!m_db.CreateMemberAttributeUpdate(oldInfo.corpID, characterID->value(), change)) {
-            codelog(SERVICE__ERROR, "%s: Failed to update application for char %u corp %u", call.client->GetName(), characterID->value(), m_corpID);
-            return nullptr;
-        }
-
         sEntityList.CorpNotify(m_corpID, Notify::Types::CorpAppAccept, "OnCorporationApplicationChanged", "*corpid&corprole", ocac.Encode());
 
-        // this should come from the SparseRowset instance, not from here...
-        // OnObjectPublicAttributesUpdated event        <<<---  needs to be updated. do search in packet logs
-        OnObjectPublicAttributesUpdated opau;
-            opau.realRowCount = m_db.GetMemberCount(m_corpID); // for this call, this is corp membership
-            opau.bindID = this->GetIDString();
-            opau.changePKIndexValue = characterID->value();    // logs show this as charID, but cant find anything about it in code as to why.
-            opau.changes = change.Encode();
-        sEntityList.CorpNotify(m_corpID, Notify::Types::CorpNews, "OnObjectPublicAttributesUpdated", "objectID", opau.Encode());
+        // the applicant joins:  employment history, member lists of both corps, corp events
+        sCorpMgr.MoveMemberToCorp(characterID->value(), m_corpID);
 
-        // OnCorporationMemberChanged event
-        OnCorpMemberChange ocmc;
-            ocmc.charID = characterID->value();
-            ocmc.newCorpID = PyRep::IntegerValue(change.corporationIDNew);
-            ocmc.oldCorpID = PyRep::IntegerValue(change.corporationIDOld);
-            ocmc.newDate = (int64)GetFileTimeNow(); //PyRep::IntegerValue(OCAC.applicationDateTimeNew);
-            ocmc.oldDate = oldInfo.appTime; // PyRep::IntegerValue(OCAC.applicationDateTimeOld);
-
-        // both corporations' members will be notified about the change
-        sEntityList.CorpNotify(m_corpID, Notify::Types::CorpNews, "OnCorporationMemberChanged", "corpid", ocmc.Encode());
-        // old corp MAY be NPC corp...
-        if (IsPlayerCorp(ocmc.oldCorpID))
-            sEntityList.CorpNotify(ocmc.oldCorpID, Notify::Types::CorpNews, "OnCorporationMemberChanged", "corpid", ocmc.Encode());
-
-        CorpData data = CorpData();
-        CharacterDB::GetCharCorpData(characterID->value(), data);
-            data.corpAccountKey = Account::KeyType::Cash;
-            data.corpRole = Corp::Role::Member;
-            data.rolesAtAll = Corp::Role::Member;
-            data.rolesAtBase = Corp::Role::Member;
-            data.rolesAtHQ = Corp::Role::Member;
-            data.rolesAtOther = Corp::Role::Member;
-            data.grantableRoles = Corp::Role::Member;
-            data.grantableRolesAtBase = Corp::Role::Member;
-            data.grantableRolesAtHQ = Corp::Role::Member;
-            data.grantableRolesAtOther = Corp::Role::Member;
-            data.corporationID = m_corpID;
-        Client* recruit = sEntityList.FindClientByCharID(ocmc.charID);   // this returns nullptr for offline chars
-        if (recruit != nullptr) {
-            recruit->GetChar()->JoinCorporation(data);
-        } else {
-            CharacterDB::AddEmployment(characterID->value(), m_corpID, ocmc.oldCorpID);
-        }
-
-        // add corp events for changing both corps
-        m_db.AddItemEvent(m_corpID, characterID->value(), Corp::EventType::JoinedCorporation);
-        if (IsPlayerCorp(ocmc.oldCorpID))
-            m_db.AddItemEvent(ocmc.oldCorpID, characterID->value(), Corp::EventType::LeftCorporation);
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(m_corpID));
+            data->SetItemString("charID", new PyInt(characterID->value()));
+        sCorpMgr.NotifyChar(characterID->value(), Notify::Types::CorpAppAccept, call.client->GetCharacterID(), data);
     } else if (status->value() == Corp::AppStatus::RejectedByCorporation) {
         sEntityList.CorpNotify(m_corpID, Notify::Types::CorpAppReject, "OnCorporationApplicationChanged", "*corpid&corprole", ocac.Encode());
+
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(m_corpID));
+            data->SetItemString("charID", new PyInt(characterID->value()));
+        sCorpMgr.NotifyChar(characterID->value(), Notify::Types::CorpAppReject, call.client->GetCharacterID(), data);
     } else if (status->value() == Corp::AppStatus::RenegotiatedByCorporation) {
         // i dont see this option in client code...may not be able to reneg app.
         _log(CORP__MESSAGE, "CorpRegistryBound::Handle_UpdateApplicationOffer() hit AppStatus::RenegotiatedByCorporation by %s ", call.client->GetName() );
@@ -1653,6 +1642,48 @@ PyResult CorpRegistryBound::DeleteApplication(PyCallArgs & call, PyInt* corporat
     sEntityList.CorpNotify(m_corpID, Notify::Types::CorpAppNew, "OnCorporationApplicationChanged", "*corpid&corprole", ocac.Encode());
 
     return PyStatic.NewTrue();
+}
+
+void CorpRegistryBound::CheckCanAccept(uint32 charID)
+{
+    std::string corpName = CorporationDB::GetCorpName(m_corpID);
+
+    // the applicant must be free to leave their current corp (not a CEO, no roles, stasis over)
+    CorpData data = CorpData();
+    if (!CorpMgr::LoadMemberData(charID, data))
+        throw CustomError("That character could not be found.");
+    if (IsPlayerCorp(data.corporationID)) {
+        std::string errorKey;
+        PyDict* args(nullptr);
+        bool canLeave = sCorpMgr.CanLeave(charID, errorKey, args);
+        PySafeDecRef(args);
+        if (!canLeave)
+            throw CustomError("The applicant cannot leave their current corporation at this time.");
+    }
+
+    // member limit (the CEO's corporation management skills)
+    uint16 memberLimit(0);
+    uint8 races(0);
+    CorporationDB::GetAbilities(m_corpID, memberLimit, races);
+    if (m_db.GetMemberCount(m_corpID) + 1 > memberLimit)
+        throw CustomError("%s cannot accept any new members at this time.", corpName.c_str());
+
+    if (!sConfig.corp.EnforceRaceLimit)
+        return;
+
+    // allowedMemberRaceIDs is a race bit mask (Caldari 1, Minmatar 2, Amarr 4, Gallente 8)
+    uint8 raceID = CharacterDB::GetRaceID(charID);
+    if ((races & raceID) == 0)
+        throw CustomError("%s does not accept members of that race.", corpName.c_str());
+
+    // Ethnic Relations:  members of other races than the CEO's up to 20% of the member limit per level
+    uint32 ceoID = CorporationDB::GetCorporationCEO(m_corpID);
+    uint8 ceoRace = CharacterDB::GetRaceID(ceoID);
+    if (raceID != ceoRace) {
+        uint32 quota = memberLimit * CorpMgr::GetSkillLevel(ceoID, EvESkill::EthnicRelations) / 5;
+        if (CorporationDB::GetOtherRaceMemberCount(m_corpID, ceoRace) + 1 > quota)
+            throw CustomError("%s cannot accept any more members of other races than its CEO's at this time.", corpName.c_str());
+    }
 }
 
 void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged& OCAC, const Corp::ApplicationInfo& Old, const Corp::ApplicationInfo& New)
@@ -2666,12 +2697,16 @@ PyResult CorpRegistryBound::GetRentalDetailsCorp(PyCallArgs &call) {
 }
 
 PyResult CorpRegistryBound::UpdateCorporationAbilities(PyCallArgs &call) {
+    // corp_dlg_editcorpdetails 'Update with my skills':  None = nothing done;  the client re-reads memberLimit and allowedMemberRaceIDs
     _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateCorporationAbilities()");
     call.Dump(CORP__CALL_DUMP);
 
-    //this will need to update corp memberlimit, allowed races, and then update all members with new data
+    RequireMember(call);
+    if (CorporationDB::GetCorporationCEO(m_corpID) != call.client->GetCharacterID())
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO can update the corporation with their skills."));
 
-    return nullptr;
+    sCorpMgr.UpdateAbilities(m_corpID);
+    return m_db.GetCorporation(m_corpID);
 }
 
 PyResult CorpRegistryBound::UpdateStationManagementSettings(PyCallArgs &call,
@@ -2690,12 +2725,10 @@ PyResult CorpRegistryBound::UpdateStationManagementSettings(PyCallArgs &call,
 }
 
 PyResult CorpRegistryBound::GetNumberOfPotentialCEOs(PyCallArgs &call) {
-    //  return self.GetCorpRegistry().GetNumberOfPotentialCEOs()
-    _log(CORP__CALL, "CorpRegistryBound::Handle_GetNumberOfPotentialCEOs()");
-    call.Dump(CORP__CALL_DUMP);
-
-
-    return nullptr;
+    //  return self.GetCorpRegistry().GetNumberOfPotentialCEOs()     compared > 0 by the resign dialog
+    std::vector<uint32> candidates;
+    sCorpMgr.GetPotentialCEOs(m_corpID, candidates);
+    return new PyInt(candidates.size());
 }
 
 void CorpRegistryBound::GiveShares(PyCallArgs& call, uint32 toID, int64 count)
@@ -2705,14 +2738,115 @@ void CorpRegistryBound::GiveShares(PyCallArgs& call, uint32 toID, int64 count)
 
 PyResult CorpRegistryBound::CanLeaveCurrentCorporation(PyCallArgs &call) {
     //  canLeave, error, errorDetails = corpSvc.CanLeaveCurrentCorporation()
-    // error:  CrpCantQuitNotInStasis  and canLeave=false for member that has roles
+    //  the Quit button raises UserError(error, errorDetails);  CrpCantQuitNotInStasis shows 'Prepare to Quit Corp' instead
+    std::string errorKey;
+    PyDict* args(nullptr);
+    bool canLeave = sCorpMgr.CanLeave(call.client->GetCharacterID(), errorKey, args);
 
     PyTuple* tuple = new PyTuple(3);
-        tuple->SetItem(0, PyStatic.NewTrue());  //canLeave - set this to timer or w/e to deter corp jumpers
+    if (canLeave) {
+        tuple->SetItem(0, PyStatic.NewTrue());
         tuple->SetItem(1, PyStatic.NewNone());
         tuple->SetItem(2, PyStatic.NewNone());
+    } else {
+        tuple->SetItem(0, PyStatic.NewFalse());
+        tuple->SetItem(1, (errorKey.empty() ? (PyRep*)PyStatic.NewNone() : (PyRep*)new PyString(errorKey)));
+        tuple->SetItem(2, (args == nullptr ? (PyRep*)new PyDict() : (PyRep*)args));
+    }
 
     return tuple;
+}
+
+PyResult CorpRegistryBound::CanBeKickedOut(PyCallArgs &call, PyInt* characterID) {
+    // base_corporation.CanKickOut(charID):  self (quitting) or by a director
+    if (characterID->value() == call.client->GetCharacterID()) {
+        std::string errorKey;
+        PyDict* args(nullptr);
+        bool canLeave = sCorpMgr.CanLeave(characterID->value(), errorKey, args);
+        PySafeDecRef(args);
+        return new PyBool(canLeave);
+    }
+
+    std::string reason;
+    return new PyBool(sCorpMgr.CanBeKicked(call.client, m_corpID, characterID->value(), reason));
+}
+
+PyResult CorpRegistryBound::KickOutMember(PyCallArgs &call, PyInt* characterID) {
+    // base_corporation.KickOut(charID):  self in a session change ('corp.kickself'), others plain
+    RequireMember(call);
+    uint32 charID = characterID->value();
+
+    if (charID == call.client->GetCharacterID()) {
+        if (!call.client->IsDocked())
+            throw UserError("CrpCanNotChangeCorpInSpace");
+        std::string errorKey;
+        PyDict* args(nullptr);
+        if (!sCorpMgr.CanLeave(charID, errorKey, args)) {
+            UserError err(errorKey.c_str());
+            if (args != nullptr) {
+                for (PyDict::const_iterator itr = args->begin(); itr != args->end(); ++itr) {
+                    PyIncRef(itr->second);
+                    err.AddFormatValue(PyRep::StringContent(itr->first).c_str(), itr->second);
+                }
+                PyDecRef(args);
+            }
+            throw err;
+        }
+        sCorpMgr.LeaveCorp(charID, false, charID);
+        return nullptr;
+    }
+
+    std::string reason;
+    if (!sCorpMgr.CanBeKicked(call.client, m_corpID, charID, reason))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString(reason));
+
+    // "You can not kick out this member of your corporation as they are currently in space."
+    Client* pTarget = sEntityList.FindClientByCharID(charID);
+    if ((pTarget != nullptr) and !pTarget->IsDocked())
+        throw UserError("CrpCanNotKickMemberInSpace");
+
+    sCorpMgr.LeaveCorp(charID, true, call.client->GetCharacterID());
+    return nullptr;
+}
+
+PyResult CorpRegistryBound::MemberCanRunForCEO(PyCallArgs &call) {
+    // bco_members.MemberCanRunForCEO:  cached by the client until skills, member limit, shares or CEO votes change
+    return new PyBool(sCorpMgr.CanRunForCEO(m_corpID, call.client->GetCharacterID()));
+}
+
+PyResult CorpRegistryBound::ResignFromCEO(PyCallArgs &call, std::optional<PyInt*> newCeoID) {
+    // base_corporation.ResignFromCEO, in a session change:  None on success, or the list of members who could take over
+    //  (the client lets the CEO pick one and calls again).  no candidates:  the corporation closes
+    RequireMember(call);
+    uint32 charID = call.client->GetCharacterID();
+    if (CorporationDB::GetCorporationCEO(m_corpID) != charID)
+        throw UserError("OnlyCEOCanResign");
+    if (!call.client->IsDocked())
+        throw UserError("CrpCanNotChangeCorpInSpace");
+
+    std::vector<uint32> candidates;
+    sCorpMgr.GetPotentialCEOs(m_corpID, candidates);
+
+    if (newCeoID.has_value()) {
+        uint32 newID = newCeoID.value()->value();
+        if (std::find(candidates.begin(), candidates.end(), newID) == candidates.end())
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("That member cannot take over as CEO."));
+        sCorpMgr.ChangeCEO(m_corpID, newID, false);
+        return nullptr;
+    }
+
+    if (!candidates.empty()) {
+        PyList* list = new PyList();
+        for (auto cur : candidates)
+            list->AddItem(new PyInt(cur));
+        return list;
+    }
+
+    // "all your corporation's assets will be acquired by the local authorities"
+    if (call.client->GetAllianceID() != 0)
+        throw UserError("CanNotDestroyCorpInAlliance");
+    sCorpMgr.LiquidateCorp(m_corpID, charID);
+    return nullptr;
 }
 
 

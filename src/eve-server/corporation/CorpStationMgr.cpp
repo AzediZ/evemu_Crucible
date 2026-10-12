@@ -47,6 +47,7 @@
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
 #include "chat/LSCService.h"
+#include "corporation/CorpMgr.h"
 #include "corporation/CorpStationMgr.h"
 #include "station/Station.h"
 #include "station/StationDataMgr.h"
@@ -379,10 +380,20 @@ PyResult CorpStationMgrIMBound::MoveCorpHQHere(PyCallArgs &call)
         throw UserError ("CorpHQIsAtThisStation");
 
     uint32 corpID = call.client->GetCorporationID();
+    if (!IsPlayerCorp(corpID) or ((call.client->GetRolesAtAll() & Corp::Role::Director) != Corp::Role::Director))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO and directors can move the corporation's headquarters."));
+
+    uint32 oldHQ = call.client->GetCorpHQ();
     CorporationDB::UpdateCorpHQ(corpID, m_stationID);
 
-    // update all online members with new hq change.  no OnCorporationChanged bcast
-    /** @todo update this */
+    PyDict* change = new PyDict();
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyInt(oldHQ));
+        tuple->SetItem(1, new PyInt(m_stationID));
+    change->SetItemString("stationID", tuple);
+    sCorpMgr.BroadcastCorpChange(corpID, change);
+
+    // update all online members with new hq change
     Client* pClient(nullptr);
     std::vector<uint32> ids;
     CorporationDB::GetMemberIDs(corpID, ids, true);

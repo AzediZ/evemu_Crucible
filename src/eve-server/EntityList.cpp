@@ -504,7 +504,11 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
     switch (bCastType) {
         case CorpNews:
         case CorpNewCEO:
-        case CharLeftCorp: {
+        case CharLeftCorp:
+        case CorpTaxChange:
+        case CorpDividend:
+        case CorpLiquidation:
+        case CloneRevoked1: {
             // all members?
             while (itr != end) {
                 cMap.emplace(itr->first->GetCharacterID(), itr->first);
@@ -517,9 +521,19 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
             // who else wants/needs this?
             // PersonnelManager is only role that can view corp applications
             while (itr != end) {
-                //if ((itr->second & Corp::Role::Director) == Corp::Role::Director)
-                //    cMap.insert(std::make_pair(std::make_pair(itr->first->GetCharacterID(), itr->first)));
-                if ((itr->second & Corp::Role::PersonnelManager) == Corp::Role::PersonnelManager)
+                if (CorpMgr::HasRole(itr->second, Corp::Role::PersonnelManager))
+                    cMap.emplace(itr->first->GetCharacterID(), itr->first);
+                ++itr;
+            }
+        } break;
+        case AllMaintenanceBill:
+        case CorpAllBill:
+        case BillOutOfMoney:
+        case BillPaidCorpAll:
+        case CorpOfficeExpiration: {
+            // bills go to the accountants (and directors)
+            while (itr != end) {
+                if (CorpMgr::HasRole(itr->second, Corp::Role::Accountant) or CorpMgr::HasRole(itr->second, Corp::Role::JuniorAccountant))
                     cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 ++itr;
             }
@@ -538,20 +552,14 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
             }
         } break;
 
-        // unused yet.  (not coded or not understood  ...mostly the latter at this point in corp code)
+        // character notifications (CorpMgr::NotifyChar), wars (F22), sovereignty, starbases and FW:  not routed to corps here
         case CharMedal:
-        case AllMaintenanceBill:
         case AllWarDeclared:
         case AllWarSurrender:
         case AllWarRetracted:
         case AllWarInvalidated:
         case CharBill:
-        case CorpAllBill:
-        case BillOutOfMoney:
         case BillPaidChar:
-        case BillPaidCorpAll:
-        case CorpTaxChange:
-        case CorpDividend:
         case CorpVoteCEORevoked:
         case CorpWarDeclared:
         case CorpWarFightingLegal:
@@ -572,7 +580,6 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
         case AllStrucInvulnerable:
         case SovDisruptor:
         case CorpStructLost:
-        case CorpOfficeExpiration:
         case FWCorpJoin:
         case FWCorpLeave:
         case FWCorpKick:
@@ -595,7 +602,6 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
         case FacWarCorpLeaveRequest:
         case FacWarCorpJoinWithdraw:
         case FacWarCorpLeaveWithdraw:
-        case CorpLiquidation:
         case SovereigntyTCUDamage:
         case SovereigntySBUDamage:
         case SovereigntyIHDamage:
@@ -612,7 +618,7 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
             // who else wants/needs this?
             //  lets start with factory manager, and may have to add later
             while (itr != end) {
-                if ((itr->second & Corp::Role::FactoryManager) == Corp::Role::FactoryManager)
+                if (CorpMgr::HasRole(itr->second, Corp::Role::FactoryManager))
                     cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 ++itr;
             }
@@ -620,19 +626,16 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
         case MarketOrder: {
             // corp orders are handled by traders and accountants (quote.py useCorp checkbox)
             while (itr != end) {
-                if ((itr->second & (Corp::Role::Trader | Corp::Role::Accountant)) != 0)
+                if (CorpMgr::HasRole(itr->second, Corp::Role::Trader) or CorpMgr::HasRole(itr->second, Corp::Role::Accountant))
                     cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 ++itr;
             }
         } break;
         case WalletChange: {
             while (itr != end) {
-                if ((itr->second & Corp::Role::Accountant) == Corp::Role::Accountant)
-                    cMap.emplace(itr->first->GetCharacterID(), itr->first);
-                if ((itr->second & Corp::Role::Auditor) == Corp::Role::Auditor)
-                    cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 // this may need to check if player has access to division changed - will require a LOT more code
-                if ((itr->second & Corp::Role::JuniorAccountant) == Corp::Role::JuniorAccountant)
+                if (CorpMgr::HasRole(itr->second, Corp::Role::Accountant) or CorpMgr::HasRole(itr->second, Corp::Role::Auditor)
+                or CorpMgr::HasRole(itr->second, Corp::Role::JuniorAccountant))
                     cMap.emplace(itr->first->GetCharacterID(), itr->first);
                 ++itr;
             }
