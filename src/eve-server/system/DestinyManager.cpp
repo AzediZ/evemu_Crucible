@@ -104,7 +104,7 @@ namespace {
 
 DestinyManager::DestinyManager(SystemEntity *self)
 : mySE(self),
-m_targBubble(nullptr),
+m_targBubbleID(0),
 m_frozen(false)
 {
     m_hasSentShipUpdates = false;
@@ -157,6 +157,8 @@ m_frozen(false)
 }
 
 DestinyManager::~DestinyManager() {
+    // a warp that never ended (entity destroyed or removed meanwhile) lets go of its exit bubble
+    SetTargBubble(nullptr);
 }
 
 // called once per tic by SystemEntity::Process(), after this tic's movement has been simulated
@@ -332,6 +334,10 @@ void DestinyManager::PostEvolve() {
         m_warpExited = false;
         OnWarpExited();
     }
+
+    // a warp given up before it got there (approach, orbit, too short to warp...) lets go of its exit bubble
+    if ((m_targBubbleID != 0) and (m_ballMode != Destiny::Ball::Mode::WARP))
+        SetTargBubble(nullptr);
 
     if ((m_ballMode == Destiny::Ball::Mode::FOLLOW) or (m_ballMode == Destiny::Ball::Mode::ORBIT))
         IsTargetInvalid();
@@ -699,7 +705,7 @@ void DestinyManager::OnWarpExited() {
     // the client makes the ball massive when it drops out of warp.  put it back to what it should be
     SendMassive();
 
-    m_targBubble = nullptr;
+    SetTargBubble(nullptr);
 
     if (mySE->IsShipSE() and mySE->HasPilot()) {
         _log(AUTOPILOT__MESSAGE, "Destiny::OnWarpExited(): %s(%u) - Warp complete.", mySE->GetName(), mySE->GetID());
@@ -749,12 +755,9 @@ void DestinyManager::UpdateWarpBubble() {
     if ((pCurrent != nullptr) and pCurrent->InBubble(m_position, true))
         return;
 
-    SystemBubble* pNext(nullptr);
-    if ((m_targBubble != nullptr) and m_targBubble->InBubble(m_position, true)) {
-        pNext = m_targBubble;
-    } else {
+    SystemBubble* pNext(GetTargBubble());
+    if ((pNext == nullptr) or !pNext->InBubble(m_position, true))
         pNext = sBubbleMgr.GetBubble(mySE->SystemMgr(), m_position);
-    }
 
     if ((pNext == nullptr) or (pNext == pCurrent))
         return;
@@ -766,6 +769,33 @@ void DestinyManager::UpdateWarpBubble() {
     if (pCurrent != nullptr)
         pCurrent->Remove(mySE);
     pNext->Add(mySE);
+}
+
+SystemBubble* DestinyManager::GetTargBubble() const {
+    if (m_targBubbleID == 0)
+        return nullptr;
+    // by ID, so a bubble that is gone is never touched.  (IDs wrap:  a namesake in another system isn't ours)
+    SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(m_targBubbleID));
+    if ((pBubble == nullptr) or (mySE->SystemMgr() == nullptr) or (pBubble->GetSystemID() != mySE->SystemMgr()->GetID()))
+        return nullptr;
+    return pBubble;
+}
+
+void DestinyManager::SetTargBubble(SystemBubble* pBubble) {
+    if ((pBubble != nullptr) and (pBubble->GetID() == m_targBubbleID) and (sBubbleMgr.FindBubbleByID(m_targBubbleID) == pBubble))
+        return;
+    // unpin the old one, if it is still there (no SystemMgr() here:  this runs in our entity's destructor too)
+    if (m_targBubbleID != 0) {
+        SystemBubble* pOld(sBubbleMgr.FindBubbleByID(m_targBubbleID));
+        if (pOld != nullptr)
+            pOld->RemoveArrival();
+        m_targBubbleID = 0;
+    }
+    // (0 means none.  a bubble whose ID wrapped to 0 just isn't pinned)
+    if ((pBubble != nullptr) and (pBubble->GetID() != 0)) {
+        pBubble->AddArrival();
+        m_targBubbleID = pBubble->GetID();
+    }
 }
 
 /* ======================================================================================
@@ -851,7 +881,7 @@ void DestinyManager::Stop() {
     }
 
     ApplyStop();
-    m_targBubble = nullptr;
+    SetTargBubble(nullptr);
     m_capNeeded = 0;
     m_stateStamp = sEntityList.GetStamp();
 
@@ -874,7 +904,7 @@ void DestinyManager::Halt(bool notify/*true*/) {
     m_followRange = 0.0f;
     m_effectStamp = 0;
     m_warpDistance = -1.0;
-    m_targBubble = nullptr;
+    SetTargBubble(nullptr);
     m_capNeeded = 0;
     m_stateStamp = 0;
     m_resetSpeedOnMove = true;
@@ -1177,12 +1207,13 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     GVector back(destination, m_position);
     back.normalize();
     GPoint exitPoint(destination + (back * minRange));
-    m_targBubble = sBubbleMgr.GetBubble(mySE->SystemMgr(), exitPoint);
+    //  (it is likely empty until we arrive:  the pin keeps RemoveEmpty() off it meanwhile)
+    SetTargBubble(sBubbleMgr.GetBubble(mySE->SystemMgr(), exitPoint));
 
     if (is_log_enabled(DESTINY__WARP_TRACE))
         _log(DESTINY__WARP_TRACE, "Destiny::WarpTo() - %s(%u) to %.2f,%.2f,%.2f at range %i (%.4f AU).  target bubble: %u",
             mySE->GetName(), mySE->GetID(), destination.x, destination.y, destination.z, distance,
-            warpDistance / DST_AU, (m_targBubble == nullptr ? 0 : m_targBubble->GetID()));
+            warpDistance / DST_AU, m_targBubbleID);
 
     // send client updates
     std::vector<PyTuple*> updates;

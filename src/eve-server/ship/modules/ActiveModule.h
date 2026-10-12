@@ -16,6 +16,7 @@
 #include "system/SystemManager.h"
 
 class MiningLaser;
+class ShipSE;
 
 class ActiveModule : public GenericModule
 {
@@ -88,11 +89,15 @@ public:
 
 protected:
     // we do not own any of these next 5
-    SystemBubble*       m_bubble;
+    ShipSE*             m_shipSE;       // our ship in space.  its bubble is looked up when needed (see Bubble())
     SystemEntity*       m_targetSE;
     DestinyManager*     m_destinyMgr;
     SystemManager*      m_sysMgr;
     TargetManager*      m_targMgr;
+
+    /* our ship's current bubble (nullptr if none).  not cached:  the ship changes bubbles while a module cycles, and an
+     *  empty bubble is freed (BubbleManager::RemoveEmpty()) */
+    SystemBubble*       Bubble() const;
 
     void                Clear();
     /* generic activation rules: reactivation delay and group limits.  throws, before any state is changed */

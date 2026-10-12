@@ -74,7 +74,8 @@ bool SmartBombModule::CanActivate()
 uint32 SmartBombModule::DoCycle()
 {
     uint32 cycleTime(ActiveModule::DoCycle());
-    if ((cycleTime == 0) or !m_shipRef->HasPilot() or (m_bubble == nullptr) or (m_sysMgr == nullptr))
+    SystemBubble* pBubble(Bubble());
+    if ((cycleTime == 0) or !m_shipRef->HasPilot() or (pBubble == nullptr) or (m_sysMgr == nullptr))
         return cycleTime;
 
     Client* pPilot(m_shipRef->GetPilot());
@@ -90,7 +91,7 @@ uint32 SmartBombModule::DoCycle()
     const GPoint& pos(pShip->GetPosition());
     std::vector<uint32> ids;
     std::map<uint32, SystemEntity*> entities;
-    m_bubble->GetAllEntities(entities);
+    pBubble->GetAllEntities(entities);
     for (auto cur : entities) {
         SystemEntity* pSE(cur.second);
         if ((pSE == pShip) or pSE->IsDead() or pSE->IsInvul())

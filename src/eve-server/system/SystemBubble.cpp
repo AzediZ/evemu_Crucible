@@ -51,6 +51,7 @@ m_sbuSE(nullptr),
 m_ihubSE(nullptr),
 m_towerSE(nullptr),
 m_centerSE(nullptr),
+m_arrivals(0),
 m_spawnTimer(0)
 {
     m_ice = false;
@@ -76,11 +77,8 @@ m_spawnTimer(0)
 
 SystemBubble::~SystemBubble()
 {
-    if (m_hasMarkers)
-        for (auto cur : m_markers) {
-            cur.second->Delete(); // delete marker cans here
-            SafeDelete(cur.second);
-        }
+    /* marker cans are not freed here:  they are in the system's entity list, which frees them on unload (before the
+     *  bubbles go, see BubbleManager::ClearSystemBubbles()).  BubbleManager::RemoveEmpty() keeps a bubble with markers */
 }
 
 void SystemBubble::clear() {

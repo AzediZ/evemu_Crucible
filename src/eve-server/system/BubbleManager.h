@@ -53,7 +53,7 @@ public:
     int Initialize();
     void Process();
 
-    // call to check for and remove empty bubbles from bubble vector
+    // call to check for and free empty bubbles (see the ownership note there)
     void RemoveEmpty();
     //call whenever an entity may have left its bubble.
     void CheckBubble(SystemEntity* ent);

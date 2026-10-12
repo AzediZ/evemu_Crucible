@@ -365,7 +365,8 @@ uint32 EcmModule::DoCycle()
 
 void EcmModule::Burst(const GPoint& center, double centerRadius, SystemEntity* pCenterSE)
 {
-    if ((m_bubble == nullptr) or (m_sysMgr == nullptr))
+    SystemBubble* pBubble(Bubble());
+    if ((pBubble == nullptr) or (m_sysMgr == nullptr))
         return;
     Client* pPilot(m_shipRef->GetPilot());
     ShipSE* pShip(pPilot->GetShipSE());
@@ -374,8 +375,8 @@ void EcmModule::Burst(const GPoint& center, double centerRadius, SystemEntity* p
     // ships, drones, npcs and sentries, friend or foe.  only their locks are broken
     std::vector<uint32> ids;
     std::map<uint32, SystemEntity*> entities;
-    m_bubble->GetEntities(entities);
-    if ((pCenterSE != nullptr) and (pCenterSE->SysBubble() != nullptr) and (pCenterSE->SysBubble() != m_bubble))
+    pBubble->GetEntities(entities);
+    if ((pCenterSE != nullptr) and (pCenterSE->SysBubble() != nullptr) and (pCenterSE->SysBubble() != pBubble))
         pCenterSE->SysBubble()->GetEntities(entities);
     for (auto cur : entities) {
         SystemEntity* pSE(cur.second);

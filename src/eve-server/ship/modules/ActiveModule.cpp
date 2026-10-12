@@ -57,7 +57,7 @@ ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
 : GenericModule(mRef, sRef),
 m_timer(0, true),
 m_reloadTimer(0),
-m_bubble(nullptr),
+m_shipSE(nullptr),
 m_sysMgr(nullptr),
 m_targMgr(nullptr),
 m_targetSE(nullptr),
@@ -247,7 +247,7 @@ void ActiveModule::Clear()
     m_repeat = 1;
     m_targetID = 0;
     m_effectID = 0;
-    m_bubble = nullptr;
+    m_shipSE = nullptr;
     m_sysMgr = nullptr;
     m_targMgr = nullptr;
     m_targetSE = nullptr;
@@ -454,7 +454,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     m_isWarpSafe = sFxDataMgr.isWarpSafe(m_effectID);
 
     ShipSE* pShip = m_shipRef->GetPilot()->GetShipSE();
-    m_bubble = pShip->SysBubble();
+    m_shipSE = pShip;
     m_sysMgr = pShip->SystemMgr();
     m_targMgr = pShip->TargetMgr();
     m_destinyMgr = pShip->DestinyMgr();
@@ -565,10 +565,14 @@ void ActiveModule::Deactivate(std::string effect/*""*/)
 }
 
 void ActiveModule::SetSlaveData(ShipSE* pShip) {
-    m_bubble = pShip->SysBubble();
+    m_shipSE = pShip;
     m_sysMgr = pShip->SystemMgr();
     m_targMgr = pShip->TargetMgr();
     m_destinyMgr = pShip->DestinyMgr();
+}
+
+SystemBubble* ActiveModule::Bubble() const {
+    return (m_shipSE == nullptr ? nullptr : m_shipSE->SysBubble());
 }
 
 void ActiveModule::CrimeCheck()
@@ -906,7 +910,8 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
                 m_targetSE->GetEwar()->Remove(m_shipRef->itemID(), Ewar::Scramble, itemID());
         } break;
         case EVEDB::invGroups::Survey_Scanner: {
-            if (abort) {
+            SystemBubble* pBubble(Bubble());
+            if (abort or (pBubble == nullptr)) {
                 Clear();
                 return;
             }
@@ -915,9 +920,9 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
             result->SetItem(0, new PyString("OnSurveyScanComplete"));
             PyList* list = new PyList();
             std::vector<AsteroidSE*> vList;
-            m_sysMgr->GetBeltMgr()->GetList(sBubbleMgr.GetBeltID(m_bubble->GetID()), vList);
+            m_sysMgr->GetBeltMgr()->GetList(sBubbleMgr.GetBeltID(pBubble->GetID()), vList);
             // when roids are spawned, BeltMgr sets this bubble "IsBelt = true", even in anomalies
-            if (m_bubble->IsBelt()) {
+            if (pBubble->IsBelt()) {
                 float m_range = GetAttribute(AttrSurveyScanRange).get_float();
                 float distance = 0;
                 for (auto pASE : vList) {
@@ -932,7 +937,7 @@ void ActiveModule::DeactivateCycle(bool abort/*false*/)
                         list->AddItem(tuple2);
                     }
                 }
-            } else if (m_bubble->IsIce()) {
+            } else if (pBubble->IsIce()) {
                 // allow ice scanning without a radius check....may change later.
                 for (auto pASE : vList) {
                     PyTuple* tuple2 = new PyTuple(3);
@@ -1695,12 +1700,13 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
     PyTuple* tuple = shipEff.Encode();
     if (is_log_enabled(EFFECTS__DUMP))
         tuple->Dump(EFFECTS__DUMP, "");
+    SystemBubble* pBubble(Bubble());
     if ((m_destinyMgr == nullptr)
-    or  (m_bubble == nullptr)
+    or  (pBubble == nullptr)
     or   m_destinyMgr->IsWarping()) {
         m_shipRef->GetPilot()->QueueDestinyEvent(&tuple);
     } else {
-        m_bubble->BubblecastDestinyEvent(&tuple, "destiny");
+        pBubble->BubblecastDestinyEvent(&tuple, "destiny");
     }
 }
 /*

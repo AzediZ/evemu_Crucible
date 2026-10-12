@@ -226,7 +226,9 @@ public:
 
 protected:
     SystemEntity* const mySE;			//we do not own this.
-    SystemBubble* m_targBubble;         //we do not own this.  bubble at the warp exit point
+    /* bubble at the warp exit point.  pinned (SystemBubble::AddArrival()) so it stays while empty, and kept by ID only:
+     *  use GetTargBubble()/SetTargBubble() */
+    uint16 m_targBubbleID;
 
     bool m_hasSentShipUpdates;
 
@@ -314,6 +316,9 @@ private:
     void OnWarpActivated();
     void OnWarpExited();
     void UpdateWarpBubble();
+    // the warp's exit bubble (nullptr if none, or gone).  setting one unpins the old one;  nullptr just unpins
+    SystemBubble* GetTargBubble() const;
+    void SetTargBubble(SystemBubble* pBubble);
     void SendMassive() const;           // tells clients our current massive flag
 };
 
