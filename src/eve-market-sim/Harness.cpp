@@ -100,6 +100,7 @@ namespace {
             {"ControllerKp", [&](double v) { p.controllerKp = v; }},
             {"ControllerKi", [&](double v) { p.controllerKi = v; }},
             {"SupplyFactor", [&](double v) { p.supplyFactor = v; }},
+            {"Actors", [&](double v) { p.actors = (v != 0.0); }},
             {"HotCellMinutes", [&](double v) { p.hotCellMinutes = (int)v; }},
             {"ColdCellMinutes", [&](double v) { p.coldCellMinutes = (int)v; }},
             {"Days", [&](double v) { o.days = (int)v; }},
