@@ -98,6 +98,8 @@ public:
     static bool SaveCharacter(uint32 charID, const CharacterData &data);
     static bool SaveCorpData(uint32 charID, const CorpData &data);
     static void DeleteCharacter(uint32 charID);
+    // the character is on this account and its biomass queue time (PrepareCharacterForDelete) has passed
+    static bool CanDeleteCharacter(uint32 accountID, uint32 charID);
     // this changes corp member counts, adds employment history, and updates char's corp and start date
     static void AddEmployment(uint32 charID, uint32 corpID, uint32 oldCorpID=0);
     static bool GetCharacterData(uint32 characterID, CharacterData &into);

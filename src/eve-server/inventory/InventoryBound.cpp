@@ -97,15 +97,34 @@ PyResult InventoryBound::GetItem(PyCallArgs &call) {
     return m_self->GetItem();
 }
 
+// the bound ship (the hangar menu and fitting window work on any of my ships where i am docked), if i may refit it
+static ShipItem* GetFittableShip(Client* pClient, InventoryItemRef self)
+{
+    ShipItem* pShip(self->GetShipItem());
+    if (pShip == nullptr)
+        throw CustomError("That is not a ship.");
+    if (pShip->ownerID() != pClient->GetCharacterID())
+        throw CustomError("You do not own that ship.");
+    if ((pShip->itemID() != pClient->GetShipID())
+    and (!pClient->IsDocked() or (pShip->locationID() != pClient->GetStationID())))
+        throw CustomError("That ship is not in the station you are docked in.");
+    return pShip;
+}
+
 PyResult InventoryBound::StripFitting(PyCallArgs &call)
 {
-    call.client->GetShip()->StripFitting();
+    GetFittableShip(call.client, m_self)->StripFitting();
     return nullptr;
 }
 
 PyResult InventoryBound::DestroyFitting(PyCallArgs &call, PyInt* itemID) {
     _log(INV__MESSAGE, "Calling InventoryBound::DestroyFitting() for %s(%u)", m_self->name(), m_itemID);
-    call.client->GetShip()->RemoveRig(sItemFactory.GetItemRef(itemID->value()));
+    ShipItem* pShip(GetFittableShip(call.client, m_self));
+    // only a rig fitted to this ship
+    InventoryItemRef iRef(sItemFactory.GetItemRef(itemID->value()));
+    if ((iRef.get() == nullptr) or (iRef->locationID() != pShip->itemID()) or !IsRigSlot(iRef->flag()))
+        return nullptr;
+    pShip->RemoveRig(iRef);
 
     return nullptr;
 }

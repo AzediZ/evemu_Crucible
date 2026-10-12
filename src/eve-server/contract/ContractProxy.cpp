@@ -1611,6 +1611,14 @@ PyResult ContractProxy::GetContractListForOwner(PyCallArgs &call, PyInt* ownerID
     sLog.White( "ContractProxy::Handle_GetContractListForOwner()", "size=%lu", call.tuple->size());
     call.Dump(SERVICE__CALL_DUMP);
 
+    // only my own contracts, or my corp's with the contract manager role (the client lets you type any owner name)
+    Client* pClient(call.client);
+    int64 owner(PyRep::IntegerValue(ownerID));
+    if ((owner != pClient->GetCharacterID())
+    and ((owner != pClient->GetCorporationID()) or !IsPlayerCorp(pClient->GetCorporationID())
+        or ((pClient->GetCorpRole() & (Corp::Role::ContractManager | Corp::Role::Director)) == 0)))
+        return ContractUtils::BuildContractList(" WHERE 1 = 0");
+
     return ContractUtils::GetContractListForOwner(ownerID, contractStatus, contractType, issuedToBy);
     /*
      *  client call....

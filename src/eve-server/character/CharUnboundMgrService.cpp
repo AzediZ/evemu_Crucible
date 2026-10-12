@@ -32,6 +32,8 @@
 #include "account/AccountService.h"
 #include "cache/ObjCacheService.h"
 #include "character/CharUnboundMgrService.h"
+#include "corporation/CorpMgr.h"
+#include "corporation/CorporationDB.h"
 #include "imageserver/ImageServer.h"
 #include "station/StationDataMgr.h"
 
@@ -72,7 +74,32 @@ PyResult CharUnboundMgrService::GetCharactersToSelect(PyCallArgs &call)
 
 PyResult CharUnboundMgrService::DeleteCharacter(PyCallArgs &call, PyInt* characterID)
 {
-    CharacterDB::DeleteCharacter(characterID->value());
+    // charsel.Terminate:  a returned (msgKey, args) is shown with eve.Message
+    uint32 charID(characterID->value());
+    if (!CharacterDB::CanDeleteCharacter(call.client->GetUserID(), charID)) {
+        _log(CLIENT__ERROR, "DeleteCharacter: account %i may not delete character %u (not its own, or not through the biomass queue yet).",
+             call.client->GetUserID(), charID);
+        PyDict* args = new PyDict();
+            args->SetItemString("info", new PyString("This character can not be deleted yet."));
+        PyTuple* error = new PyTuple(2);
+            error->SetItem(0, new PyString("CustomInfo"));
+            error->SetItem(1, args);
+        return error;
+    }
+
+    // a CEO hands the corp over first (corp_ui_home CrpCantQuitCEO); anyone else leaves the corp like a quit
+    CorpData data = CorpData();
+    if (CorpMgr::LoadMemberData(charID, data) and IsPlayerCorp(data.corporationID)) {
+        if (CorporationDB::GetCorporationCEO(data.corporationID) == charID) {
+            PyTuple* error = new PyTuple(2);
+                error->SetItem(0, new PyString("CrpCantQuitCEO"));
+                error->SetItem(1, new PyDict());
+            return error;
+        }
+        sCorpMgr.LeaveCorp(charID, false, charID);
+    }
+
+    CharacterDB::DeleteCharacter(charID);
     return nullptr;
 }
 

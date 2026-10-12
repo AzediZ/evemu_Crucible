@@ -1143,6 +1143,14 @@ PyResult ShipBound::AssembleShip(PyCallArgs &call, PyList* itemIDs) {
             continue;
         }
 
+        // mine, or my corp's (an office or corporate hangar array division i may take from)
+        if (ship->ownerID() != call.client->GetCharacterID()) {
+            uint32 locationID(call.client->IsDocked() ? call.client->GetStationID() : call.client->GetLocationID());
+            if ((ship->ownerID() != call.client->GetCorporationID())
+            or  !Inventory::CanTakeFromCorpHangar(call.client, locationID, ship->flag()))
+                throw CustomError ("You are not allowed to assemble the %s.", ship->name());
+        }
+
         //check if the ship is a stack
         if (ship->quantity() > 1) {
             // Split the stack into a new inventory item with quantity of one, cast to ShipItemRef then assembled:

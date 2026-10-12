@@ -222,6 +222,19 @@ int64 CharacterDB::PrepareCharacterForDelete(uint32 accountID, uint32 charID)
     return deleteTime;
 }
 
+bool CharacterDB::CanDeleteCharacter(uint32 accountID, uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT characterID FROM chrCharacters"
+                                 " WHERE accountID = %u AND characterID = %u AND deletePrepareDateTime > 0 AND deletePrepareDateTime <= %lli",
+                                 accountID, charID, (int64)GetFileTimeNow()))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+    return (res.GetRowCount() == 1);
+}
+
 void CharacterDB::CancelCharacterDeletePrepare(uint32 accountID, uint32 charID)
 {
     DBerror error;
@@ -1435,7 +1448,8 @@ bool CharacterDB::ChangeCloneType(uint32 characterID, uint32 typeID)
         sLog.Error( "CharacterDB::ChangeCloneType()", "Could not find Clone typeID = %u in invTypes table.", typeID );
         return false;
     }
-    std::string typeNameString = row.GetText(0);
+    std::string typeNameString;
+    sDatabase.DoEscapeString(typeNameString, row.GetText(0));
 
     if (!sDatabase.RunQuery(res.error,
         "UPDATE "
