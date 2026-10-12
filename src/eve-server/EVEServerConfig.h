@@ -298,6 +298,24 @@ public:
         float L1NewcomerThreat;     // incursion:  a newcomer gets at least this x the primary's threat
         uint32 L1NewcomerMemory;    // s.  a ship not seen this long counts as a newcomer again
         uint32 RemoteEcmJamTime;    // s.  how long the incursion capitals' remote ecm burst jams every ship on grid
+        // npc ai phase 5:  polish (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, 6.7;  OPERATING.md)
+        uint32 SoftLeashCooldown;   // s.  after a soft leash an npc chases at least this long before it turns back again
+        uint32 LinkAlertInterval;   // s.  linked groups (dunSpawnGroups.aggroLink) are told at most this often per member
+        uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for each capital a sleeper sees.  0 = off
+        std::string SleeperReinforcementTypes;  // typeIDs to pick them from (comma separated).  0 or empty = the room's own sleepless battleships
+        bool TelegraphJoin;         // a group member that will join after its reaction delay turns toward the target meanwhile
+        float WarpOutVanishChance;  // chance an idle belt spawn's warp-out is off grid for good (the spawn is gone)
+        uint32 WanderRepickMin;     // s.  an idle wandering belt rat picks a new asteroid (or the belt) after U(min, max)
+        uint32 WanderRepickMax;     // s
+        float BeltSpawnCap;         // a system holds at most this x its belt count of belt spawns at once.  0 = one per belt
+        uint32 LodFarInterval;      // s.  idle npcs in a bubble without players think this often.  0 = every tick
+        bool LodEmptySystem;        // idle npcs in a system without players don't think at all
+        uint32 TickBudget;          // us per system and tick for the ai of idle npcs where no player is (players' bubbles and busy npcs always run).  0 = none
+        uint32 StatsInterval;       // s.  how often each system writes its NPC__AI_STATS line.  0 = never
+        float Difficulty;           // > 1 harder:  npc damage x this, npc lock and reaction time / this.  1 = Crucible
+        float DifficultyDamage;     // npc damage multiplier.  0 = from Difficulty
+        float DifficultyLockTime;   // npc lock time multiplier.  0 = from Difficulty
+        float DifficultyReactionTime;   // npc reaction delay multiplier.  0 = from Difficulty
     } npc;
 
     // From <database>

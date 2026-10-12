@@ -35,7 +35,9 @@
 #include "map/MapDB.h"
 #include "npc/Drone.h"
 #include "npc/NPC.h"
+#include "npc/NPCAI.h"
 #include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "packets/Destiny.h"
 #include "planet/Planet.h"
 #include "planet/Moon.h"
@@ -99,7 +101,8 @@ m_secValue(1.1f),
 m_tutorialSiteID(0),
 m_droneIndexStamp(0),
 m_droneIndexBusy(0),
-m_droneIndexDirty(true)
+m_droneIndexDirty(true),
+m_aiTick(0)
 {
     m_minutes = 0;
 
@@ -250,6 +253,15 @@ bool SystemManager::LoadCosmicMgrs()
 bool SystemManager::ProcessTic() {
     double profileStartTime(GetTimeUSeconds());
 
+    // npcs and sentries that left space last tick (killed, GM /unspawn):  nothing holds them now
+    if (!m_removedNPCs.empty())
+        FreeRemovedNPCs();
+    // npc ai:  the level of detail's clock, the budget and telemetry of this tick (npc/ai/NpcLod.h, NpcTelemetry.h)
+    ++m_aiTick;
+    if (m_npcStats.windowStart == 0)
+        m_npcStats.Reset(GetSteadyTime());
+    m_npcStats.BeginTick();
+
     /* the idea here is entities map NEVER has invalid items in it, but our iterator may become invalid
      *      when SE->Process() returns because Process() will add/remove from the map as needed
      *      (new objects, destroyed objects, moved objects, etc)
@@ -304,6 +316,17 @@ bool SystemManager::ProcessTic() {
     ProcessDroneReturns();
     // self-destruct timers (outside the entity loop, as a ship may explode here)
     ProcessSelfDestructs();
+
+    // npc ai telemetry (npc ai plan phase 5):  one NPC__AI_STATS line per system every npc.StatsInterval
+    m_npcStats.EndTick();
+    if (sConfig.npc.StatsInterval > 0) {
+        int64 now(GetSteadyTime());
+        if ((now - m_npcStats.windowStart) >= (static_cast<int64>(sConfig.npc.StatsInterval) * 1000)) {
+            if (!m_npcStats.Empty() and is_log_enabled(NPC__AI_STATS))
+                _log(NPC__AI_STATS, "%s", m_npcStats.Format(m_data.name.c_str(), m_data.systemID, now).c_str());
+            m_npcStats.Reset(now);
+        }
+    }
 
     // process planets for PI
     if (m_minutetimer.Check()) {
@@ -398,6 +421,9 @@ void SystemManager::UnloadSystem() {
     m_droneIndexStamp = 0;
     m_droneIndexDirty = true;
     m_droneReturns.clear();
+
+    // npcs and sentries already out of space (killed, removed):  ours to free
+    FreeRemovedNPCs();
 
     // remove static and dynamic entities
     std::map<uint32, SystemEntity*>::iterator itr = m_entities.begin();
@@ -1218,6 +1244,9 @@ void SystemManager::AddEntity(SystemEntity* pSE, bool addSignal/*true*/) {
             m_drones[itemID] = pSE->GetDroneSE();
             m_droneIndexDirty = true;
         }
+        // every npc is in the npc list (GetNPCSE()), the ones GM /spawn and the database make too (AddNPC() isn't used there)
+        if (pSE->IsNPCSE())
+            m_npcs[itemID] = pSE->GetNPCSE();
     }
     sBubbleMgr.Add(pSE);
     // add item to our AnomalyMgr
@@ -1239,6 +1268,10 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
         m_droneIndexDirty = true;
     // a field source leaving space (probe expired, deployable destroyed or scooped, HIC docked/jumped/died) takes its field along
     m_interdiction->RemoveField(pSE->GetID());
+    /* an npc or sentry:  out of its group, spawn and dungeon, freed next tick (npc ai plan phase 5).  while it is still in its
+     *  bubble, so the end of its ewar and beams reaches the clients there */
+    if ((pSE->IsNPCSE() or pSE->IsSentrySE()) and (m_entities.find(pSE->GetID()) != m_entities.end()))
+        OnNPCRemoved(pSE);
     sBubbleMgr.Remove(pSE);
     // Remove Entity's Item Ref from Solar System Dynamic Inventory:
     RemoveItemFromInventory(pSE->GetSelf());
@@ -1251,6 +1284,75 @@ void SystemManager::RemoveEntity(SystemEntity* pSE) {
 
     // remove from anomaly map, if exists
     m_anomMgr->RemoveSignal(itemID);
+}
+
+void SystemManager::OnNPCRemoved(SystemEntity* pSE)
+{
+    /* killed:  its OnKilled() alerted its group and left it, SpawnKilled() and the dungeon's OnEntityDestroyed() ran, its
+     *  target manager is gone.  anything else (GM /unspawn, a despawn, a hauler that got away) leaves quietly here:  no
+     *  alert, and its spawn entry and dungeon membership go (commanders' escort counts, waves and completion stop waiting
+     *  for it).  owners that free their npcs at once (DungeonMgr, SpawnMgr, LawEnforcement) do that after this;  the
+     *  destructor takes it off our list again (ForgetRemovedNPC) */
+    uint32 itemID(pSE->GetID());
+    bool killed(pSE->IsDead());
+    bool owned(false);
+    if (pSE->IsNPCSE()) {
+        NPC* pNPC(pSE->GetNPCSE());
+        if (!killed) {
+            if (pNPC->GetAIMgr() != nullptr)
+                pNPC->GetAIMgr()->OnRemoved();
+            if (pNPC->GetSpawnMgr() != nullptr)
+                pNPC->GetSpawnMgr()->SpawnRemoved(itemID);
+            m_dungMgr->OnEntityRemoved(itemID);
+        }
+        // law enforcement frees its own ships (LawEnforcement::PruneNPCs, ForgetLawNPC)
+        owned = pNPC->IsLawEnforcer();
+    } else {
+        Sentry* pSentry(pSE->GetSentrySE());
+        if (!killed) {
+            if (pSentry->GetAIMgr() != nullptr)
+                pSentry->GetAIMgr()->OnRemoved();
+            m_dungMgr->OnEntityRemoved(itemID);
+        }
+    }
+    // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed
+    if (pSE->TargetMgr() != nullptr) {
+        pSE->TargetMgr()->ClearModules();
+        pSE->TargetMgr()->ClearAllTargets(false);
+    }
+    if (!owned)
+        m_removedNPCs[itemID] = pSE;
+    _log(NPC__TRACE, "%s(%u): %s, out of space%s.", pSE->GetName(), itemID, (killed ? "killed" : "removed"),
+            (owned ? "" : " (freed next tick)"));
+}
+
+void SystemManager::FreeRemovedNPCs()
+{
+    std::map<uint32, SystemEntity*> removed;
+    removed.swap(m_removedNPCs);
+    for (auto& cur : removed) {
+        // back in space meanwhile (nothing does that today):  not freed while it is there (its destructor takes it off the list)
+        if (m_entities.find(cur.first) != m_entities.end()) {
+            m_removedNPCs.insert(cur);
+            continue;
+        }
+        if (cur.second->IsNPCSE())
+            RemoveDeadNPC(cur.second->GetNPCSE());
+        delete cur.second;
+    }
+}
+
+void SystemManager::ForgetRemovedNPC(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return;
+    auto itr = m_removedNPCs.find(pSE->GetID());
+    if ((itr != m_removedNPCs.end()) and (itr->second == pSE))
+        m_removedNPCs.erase(itr);
+    // freed without RemoveNPC() / RemoveDeadNPC():  the npc list mustn't keep it
+    auto nItr = m_npcs.find(pSE->GetID());
+    if ((nItr != m_npcs.end()) and (static_cast<SystemEntity*>(nItr->second) == pSE))
+        m_npcs.erase(nItr);
 }
 
 void SystemManager::AddMarker(SystemEntity* pSE, bool sendBall/*false*/, bool addSignal/*false*/) {
@@ -1377,7 +1479,12 @@ void SystemManager::DoSpawnForBubble(SystemBubble* pBubble)
              pBubble->GetID(), sBubbleMgr.GetBeltID(pBubble->GetID()), m_data.name.c_str(), \
              m_data.systemID, m_data.securityRating, m_data.regionID);
 
-    if ((m_activeRatSpawns < m_beltCount ) or (pBubble->IsGate())) {
+    /* belt spawns at once:  about half the belt count (npc ai plan phase 5 spawn generation, [Era, med];  npc.BeltSpawnCap,
+     *  0 = one per belt as before) */
+    uint32 cap(m_beltCount);
+    if (sConfig.npc.BeltSpawnCap > 0.0f)
+        cap = std::max<uint32>(1, std::min<uint32>(m_beltCount, static_cast<uint32>(std::ceil(m_beltCount * sConfig.npc.BeltSpawnCap))));
+    if ((m_activeRatSpawns < cap) or (pBubble->IsGate())) {
         if (m_spawnMgr->DoSpawnForBubble(pBubble)) {
             m_ratBubbles.emplace(pBubble->GetID(), pBubble);
             if (is_log_enabled(SPAWN__TRACE))

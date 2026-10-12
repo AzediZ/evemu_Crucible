@@ -15,6 +15,8 @@
 #include "inventory/AttributeEnum.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "ship/Missile.h"
 #include "ship/modules/ActiveModule.h"
 #include "ship/modules/EwarModule.h"
@@ -681,6 +683,9 @@ uint32 ActiveModule::DoCycle() {
     // npcs remember who uses ewar (and neuts) on them, like damage, and which kind (level-one effect threat, npc ai plan 5.7)
     if ((m_targetSE != nullptr) and m_targetSE->IsNPCSE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
         m_targetSE->GetNPCSE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE(), NPCAIMgr::EwarEffectOfGroup(groupID()));
+    // ...and sentries:  it's aggression, their group hears about it (npc ai phase 5)
+    if ((m_targetSE != nullptr) and m_targetSE->IsSentrySE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
+        m_targetSE->GetSentrySE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE());
     // remote repair of someone a level-one npc fights is threat (npc ai plan 5.7)
     double assistBefore(RemoteAssistHP(groupID(), m_targetSE));
 

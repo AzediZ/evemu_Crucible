@@ -29,7 +29,8 @@ SET( ship_SOURCE
      "ship/ChargeRulesTest.cpp" )
 SET( npcai_SOURCE
      "npcai/LawRulesTest.cpp"
-     "npcai/NpcMathTest.cpp" )
+     "npcai/NpcMathTest.cpp"
+     "npcai/NpcPolishTest.cpp" )
 SET( utils_SOURCE
      "utils/EvilNumberTest.cpp" )
 
@@ -89,3 +90,5 @@ ADD_TEST( NAME "NpcMathTest"
           COMMAND "${TARGET_NAME}" "npcai/NpcMathTest" )
 ADD_TEST( NAME "LawRulesTest"
           COMMAND "${TARGET_NAME}" "npcai/LawRulesTest" )
+ADD_TEST( NAME "NpcPolishTest"
+          COMMAND "${TARGET_NAME}" "npcai/NpcPolishTest" )

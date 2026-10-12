@@ -7,6 +7,8 @@
  *                                            top threat, next-due timers, profile values (ranges, lock time to you,
  *                                            reaction delay), group and rng seed
  *   /npcai audit [log]                       the profile validation summary over every npc type
+ *   /npcai stats                             this system's npc ai telemetry since its last NPC__AI_STATS line
+ *   verbose adds the home point, the type's data problems and the last turret shots with every term (fairness audit)
  */
 
 #include "eve-server.h"
@@ -40,6 +42,14 @@ PyResult Command_npcai(Client* pClient, CommandDB* db, EVEServiceManager& servic
         return new PyString("npc profile audit done");
     }
 
+    if ((what == "stats") and (pClient->SystemMgr() != nullptr)) {
+        // this system's telemetry window so far (the NPC__AI_STATS line, npc/ai/NpcTelemetry.h)
+        SystemManager* pSys(pClient->SystemMgr());
+        std::string line(pSys->GetNpcStats().Format(pSys->GetName(), pSys->GetID(), GetSteadyTime()));
+        pClient->SendInfoModalMsg("%s", line.c_str());
+        return new PyString(line);
+    }
+
     if (!pClient->IsInSpace() or (pClient->GetShipSE() == nullptr) or (pClient->SystemMgr() == nullptr))
         throw CustomError ("npcai: you have to be in space.");
     SystemEntity* pShip(pClient->GetShipSE());
@@ -53,7 +63,7 @@ PyResult Command_npcai(Client* pClient, CommandDB* db, EVEServiceManager& servic
             what = "near";
     } else if (what != "near") {
         if (!args.isNumber(1))
-            throw CustomError ("Correct Usage: /npcai [itemID|target|near] [verbose]  or  /npcai audit [log]");
+            throw CustomError ("Correct Usage: /npcai [itemID|target|near] [verbose]  or  /npcai audit [log]  or  /npcai stats");
         pSE = pClient->SystemMgr()->GetSE(atoi(args.arg(1).c_str()));
         if (pSE == nullptr)
             throw CustomError ("npcai: %s isn't in your system.", args.arg(1).c_str());

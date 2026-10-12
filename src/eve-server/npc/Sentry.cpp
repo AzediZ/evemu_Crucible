@@ -54,6 +54,9 @@ Sentry::Sentry(InventoryItemRef self, EVEServiceManager& services, SystemManager
 }
 
 Sentry::~Sentry() {
+    // freed by someone else than the system's removed list (SystemManager::FreeRemovedNPCs)
+    if (m_system != nullptr)
+        m_system->ForgetRemovedNPC(this);
     SafeDelete(m_destiny);
     SafeDelete(m_AI);
 }
@@ -65,7 +68,10 @@ void Sentry::Process() {
 
     /*  Enable base call to Process Targeting and Movement  */
     SystemEntity::Process();
+    // (sentries do nothing without players in their bubble:  no level of detail needed.)  telemetry:  their ai time
+    double aiStartTime(GetTimeUSeconds());
     m_AI->Process();
+    m_system->GetNpcStats().AddRun(GetTimeUSeconds() - aiStartTime);
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::npc, GetTimeUSeconds() - profileStartTime);

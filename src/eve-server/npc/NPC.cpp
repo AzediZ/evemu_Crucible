@@ -32,7 +32,9 @@
 #include "map/MapDB.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/ai/NpcLod.h"
 #include "system/Container.h"
+#include "system/SystemBubble.h"
 #include "system/Damage.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
@@ -76,6 +78,9 @@ m_lawRole(Law::None)
 }
 
 NPC::~NPC() {
+    // freed by someone else than the system's removed list (SystemManager::FreeRemovedNPCs):  it forgets us
+    if (m_system != nullptr)
+        m_system->ForgetRemovedNPC(this);
     SafeDelete(m_AI);
 }
 
@@ -101,7 +106,29 @@ void NPC::Process() {
     /*  Enable base call to Process Targeting and Movement  */
     SystemEntity::Process();
 
-    m_AI->Process();
+    /* the ai, by level of detail:  every tick near players, every npc.LodFarInterval elsewhere in the system, not at all in a
+     *  system without players, busy npcs always.  idle npcs away from players also skip the tick once the system used
+     *  npc.TickBudget us of npc ai in it (npc/ai/NpcLod.h, doc/code_and_design_notes/npc-ai/PLAN.md 6.7) */
+    NpcStats& stats(m_system->GetNpcStats());
+    ++stats.curNpcs;
+    uint8 tier(NpcLod::TierOf((m_bubble != nullptr) and m_bubble->HasPlayers(), m_system->PlayerCount() > 0));
+    bool busy(m_AI->IsBusy());
+    if (!NpcLod::RunsThisTick(tier, busy, m_system->GetAiTick(), GetID(), sConfig.npc.LodFarInterval,
+                              sConfig.npc.LodEmptySystem)) {
+        ++stats.lodSkipped;
+    } else if (NpcLod::OverBudget(tier, busy, stats.curUs, sConfig.npc.TickBudget)) {
+        ++stats.budgetDeferred;
+    } else {
+        double aiStartTime(GetTimeUSeconds());
+        m_AI->Process();
+        stats.AddRun(GetTimeUSeconds() - aiStartTime);
+    }
+    // telemetry:  how many fight (NPC__AI_STATS)
+    if (!m_killed and m_AI->IsFighting()) {
+        ++stats.curEngaged;
+        if (m_AI->GetProfile().IsLevelOne())
+            ++stats.curEngagedL1;
+    }
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::npc, GetTimeUSeconds() - profileStartTime);

@@ -55,6 +55,7 @@
 #include "npc/NPCEwar.h"
 #include "npc/ai/AggroGroup.h"
 #include "npc/ai/NpcBrain.h"
+#include "npc/ai/NpcLod.h"
 #include "npc/ai/NpcMath.h"
 #include "npc/ai/NpcMovement.h"
 #include "npc/ai/NpcProfile.h"
@@ -67,12 +68,18 @@
 #include "system/SystemBubble.h"
 
 namespace {
-    // [DD] after a soft leash an npc chases again for at least this long before it turns back again (ms)
-    const int64 c_softLeashCooldownMs = 20000;
-    // linked groups (dunSpawnGroups.aggroLink) are told at most this often per member (ms)
-    const int64 c_linkAlertMs = 5000;
     // the hard leash flies (instead of warping) when home is closer than this (m)
     const double c_minWarpHome = 150000.0;
+    // a wandering belt rat orbits the belt itself instead of an asteroid with this chance (phase 5 wander variety)
+    const double c_wanderBeltChance = 0.25;
+    /* the soft leash's cooldown (npc.SoftLeashCooldown) and the link alert throttle (npc.LinkAlertInterval), ms.
+     *  [DD] phase 2's 20s and 5s */
+    int64 SoftLeashCooldownMs()                 { return static_cast<int64>(sConfig.npc.SoftLeashCooldown) * 1000; }
+    int64 LinkAlertMs()                         { return static_cast<int64>(sConfig.npc.LinkAlertInterval) * 1000; }
+    // difficulty (npc.Difficulty, npc/ai/NpcLod.h).  law enforcement is never scaled
+    double DifficultyDamage(NPC* pNPC) {
+        return (pNPC->IsLawEnforcer() ? 1.0 : NpcLod::DamageMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyDamage));
+    }
 }
 
 NPCAIMgr::NPCAIMgr(NPC* who)
@@ -89,6 +96,8 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_suppressLost(false),
   m_leashWarp(false),
   m_buffsActive(false),
+  m_vanishing(false),
+  m_telegraph(false),
   m_role(NPCAI::Role::None),
   m_primaryID(0),
   m_pendingAggroID(0),
@@ -265,6 +274,12 @@ void NPCAIMgr::Process() {
                     Target(pAggressor, joined);
                     break;
                 }
+                // we turned toward someone who is gone now (npc.TelegraphJoin)
+                if (m_telegraph) {
+                    m_telegraph = false;
+                    m_move->Calm();
+                    m_destiny->Stop();
+                }
             }
             // look around on the think cadence
             if (!m_sched.Active(NpcAct::Think))
@@ -281,8 +296,9 @@ void NPCAIMgr::Process() {
                         AlertGroup(pTarget);
                     return;
                 }
+                // wander, and now and then pick something else to wander around (phase 5)
                 if (sConfig.npc.IdleWander)
-                    if (!m_isWandering)
+                    if (!m_isWandering or m_sched.Due(NpcAct::Wander, now))
                         SetWander();
             }
             StartWarpOutTimer();
@@ -318,16 +334,7 @@ void NPCAIMgr::Process() {
             // ewar and missiles need a completed lock on the primary (bug B6a) and the reaction delay (5.6).
             //  level-one npcs put their ewar on a secondary target (1649)
             SystemEntity* pLocked(m_npc->TargetMgr()->GetTarget(targetID, true));
-            if ((m_ewar != nullptr) and Reacted(now)) {
-                SystemEntity* secondaries[8];
-                size_t count(m_brain->EwarTargets(ctx, pLocked, secondaries, 8));
-                m_secondaryID = (count > 0 ? secondaries[0]->GetID() : 0);
-                if (count > 0) {
-                    m_ewar->Process(pLocked, secondaries, count);
-                } else {
-                    m_ewar->Process(pLocked);
-                }
-            }
+            ProcessEwar(ctx, pLocked, now);
             FireMissile(pSE, (pLocked != nullptr));
             m_brain->Think(ctx);
         } break;
@@ -352,6 +359,8 @@ void NPCAIMgr::Process() {
                 break;
             }
             bool fleeing(m_state == NPCAI::State::Fleeing);
+            // a spawn that ran off and couldn't stays (it may roll again on its next warp-out)
+            m_vanishing = false;
             SetIdle();
             if (fleeing)
                 m_sched.Start(NpcAct::Flee, now, 10000);
@@ -623,6 +632,11 @@ void NPCAIMgr::WarpOut()
         StartWarpOutTimer();
         return;
     }
+    /* now and then a belt spawn runs off for good instead (phase 5, era:  "run-away spawns", "1 in 25 vanish"):  the belt is
+     *  free for a new spawn */
+    if ((sConfig.npc.WarpOutVanishChance > 0.0f) and m_npc->SysBubble()->IsBelt()
+    and (m_rng.Uniform() < sConfig.npc.WarpOutVanishChance) and m_npc->GetSpawnMgr()->VanishSpawn(m_npc))
+        return;
     // the whole spawn group warps to another belt that has no spawn
     SystemBubble* pDest(nullptr);
     GPoint where;
@@ -662,6 +676,8 @@ void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
     m_isWandering = false;
     m_dormant = false;
     m_leashWarp = false;
+    m_telegraph = false;
+    m_sched.Stop(NpcAct::Wander);
     m_destiny->SetMaxVelocity(m_profile->maxVelocity);
     m_state = state;
 }
@@ -682,8 +698,8 @@ void NPCAIMgr::WarpOutComplete()
     m_state = NPCAI::State::Idle;
     m_move->Calm();
     m_destiny->SetMaxVelocity(m_profile->cruiseSpeed);
-    // a hauler that got away is gone (no kill, no respawn).  SpawnMgr removes it on its next tick
-    if (fled and (m_role == NPCAI::Role::Hauler) and (m_npc->GetSpawnMgr() != nullptr)) {
+    // a hauler that got away (or a spawn that ran off for good) is gone (no kill, no respawn).  SpawnMgr removes it on its next tick
+    if (fled and ((m_role == NPCAI::Role::Hauler) or m_vanishing) and (m_npc->GetSpawnMgr() != nullptr)) {
         m_npc->GetSpawnMgr()->SpawnFled(m_npc);
         return;
     }
@@ -811,8 +827,13 @@ void NPCAIMgr::ProcessReturn(int64 now)
         uint32 targetID(pPrimary->GetID());
         Attack(pPrimary);
         pPrimary = m_npc->SystemMgr()->GetSE(targetID);
-        if ((pPrimary != nullptr) and !pPrimary->IsDead() and (m_state == NPCAI::State::Returning))
-            FireMissile(pPrimary, (m_npc->TargetMgr()->GetTarget(targetID, true) != nullptr));
+        if ((pPrimary != nullptr) and !pPrimary->IsDead() and (m_state == NPCAI::State::Returning)) {
+            SystemEntity* pLocked(m_npc->TargetMgr()->GetTarget(targetID, true));
+            // our ewar keeps going too (its effects and their fx would otherwise run on without cycles)
+            NpcContext ctx(MakeContext());
+            ProcessEwar(ctx, pLocked, now);
+            FireMissile(pPrimary, (pLocked != nullptr));
+        }
     }
     if ((m_state == NPCAI::State::Returning) and m_sched.Due(NpcAct::Leash, now))
         EndReturn(now);
@@ -821,7 +842,7 @@ void NPCAIMgr::ProcessReturn(int64 now)
 void NPCAIMgr::EndReturn(int64 now)
 {
     m_sched.Stop(NpcAct::Leash);
-    m_softLeashAfter = now + c_softLeashCooldownMs;
+    m_softLeashAfter = now + SoftLeashCooldownMs();
     m_move->Calm();
     bool locked((m_primaryID != 0) and (m_npc->TargetMgr()->GetTarget(m_primaryID, true) != nullptr));
     m_state = (locked ? NPCAI::State::Engaged : NPCAI::State::Acquiring);
@@ -907,6 +928,37 @@ bool NPCAIMgr::Flee()
     return true;
 }
 
+void NPCAIMgr::Vanish()
+{
+    // off grid, anywhere:  gone when we land (WarpOutComplete -> SpawnMgr::SpawnFled)
+    GPoint where(m_npc->GetPosition());
+    where.MakeRandomPointOnSphere(m_rng.Range(0.3, 0.6) * ONE_AU_IN_METERS);
+    _log(NPC__AI_TRACE, "%s(%u): My spawn leaves for good.", m_npc->GetName(), m_npc->GetID());
+    BeginWarp(NPCAI::State::Fleeing);
+    m_vanishing = true;
+    m_destiny->WarpTo(where, static_cast<int32>(m_rng.Range(5, 30)) * 1000);
+}
+
+SystemEntity* NPCAIMgr::PickWanderTarget(SystemBubble* pBubble)
+{
+    /* a random asteroid of the bubble, or (now and then, or when there is none) the belt itself (phase 5 wander variety:  it
+     *  used to be the first wreck or object in map order) */
+    SystemEntity* pBelt(m_npc->SystemMgr()->GetSE(sBubbleMgr.GetBeltID(pBubble->GetID())));
+    if ((pBelt != nullptr) and (m_rng.Uniform() < c_wanderBeltChance))
+        return pBelt;
+    SystemEntity* pPick(nullptr);
+    uint32 seen(0);
+    pBubble->ForEachDynamic([&](SystemEntity* cur) {
+        if (!cur->IsAsteroidSE() or cur->IsDead())
+            return;
+        // reservoir sampling:  each asteroid with the same chance, no list
+        ++seen;
+        if (m_rng.Uniform() * seen < 1.0)
+            pPick = cur;
+    });
+    return (pPick != nullptr ? pPick : pBelt);
+}
+
 void NPCAIMgr::SetWander()
 {
     if (m_npc->GetSpawnMgr() == nullptr)
@@ -924,11 +976,9 @@ void NPCAIMgr::SetWander()
     if (pBubble->IsAnomaly() or pBubble->IsIncursion() or pBubble->IsMission()) {
         // dungeon npcs hold their position (5.5)
         return;
-    } else if (pBubble->HasDynamics() and pBubble->IsBelt()) {
-        // pick random entity and loosely orbit it.  if no entity found, orbit center of belt
-        SystemEntity* pSE = pBubble->GetRandomEntity();
-        if (pSE == nullptr)
-            pSE = m_npc->SystemMgr()->GetSE(sBubbleMgr.GetBeltID(pBubble->GetID()));
+    } else if (pBubble->IsBelt()) {
+        // loosely orbit a random asteroid or the belt, and pick again after a while
+        SystemEntity* pSE(PickWanderTarget(pBubble));
         if (pSE == nullptr) {
             _log(NPC__ERROR, "%s(%u): Wandering:  No Target or beltSE found.", m_npc->GetName(), m_npc->GetID());
             // nothing here...leave bubble
@@ -938,8 +988,15 @@ void NPCAIMgr::SetWander()
         m_destiny->SetMaxVelocity(m_profile->cruiseSpeed);
         uint32 orbitDistance = static_cast<uint32>(m_rng.Range(10000, 20001));
         m_destiny->Orbit(pSE, orbitDistance);
-        _log(NPC__AI_TRACE, "%s(%u):  Just for shits-n-giggles, I\'m gonna orbit %s(%u) at %um.", \
-                m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID(), orbitDistance);
+        uint32 lo(std::min(sConfig.npc.WanderRepickMin, sConfig.npc.WanderRepickMax));
+        uint32 hi(std::max(sConfig.npc.WanderRepickMin, sConfig.npc.WanderRepickMax));
+        if (hi > 0) {
+            m_sched.Start(NpcAct::Wander, Now(), static_cast<int64>(m_rng.Range(static_cast<double>(lo), static_cast<double>(hi)) * 1000.0));
+        } else {
+            m_sched.Stop(NpcAct::Wander);
+        }
+        _log(NPC__AI_TRACE, "%s(%u): Wandering around %s(%u) at %um.", m_npc->GetName(), m_npc->GetID(), pSE->GetName(),
+                pSE->GetID(), orbitDistance);
     } else {
         /** @todo  figure out a way for npc to wander 'aimlessly' around their bubble */
         m_destiny->Stop();
@@ -1009,8 +1066,9 @@ void NPCAIMgr::Target(SystemEntity* pSE, bool joined/*false*/) {
     int64 now(Now());
     bool fresh(m_state == NPCAI::State::Idle);
     bool chase = false;
+    m_telegraph = false;
 
-    if (!m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase)) {
+    if (!BeginLock(pSE, chase)) {
         _log(NPC__AI_TRACE, "%s(%u): Targeting of %s(%u) failed%s.", m_npc->GetName(), m_npc->GetID(), pSE->GetName(),
                 pSE->GetID(), (chase ? " (out of range)" : ""));
         if (fresh and chase and CanAggro(pSE)) {
@@ -1091,7 +1149,7 @@ void NPCAIMgr::Targeted(SystemEntity* pSE) {
             if (!pSE->IsShipSE() or !CanAggro(pSE))
                 break;
             bool chase = false;
-            m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase);
+            BeginLock(pSE, chase);
             AlertGroup(pSE);
         } break;
     }
@@ -1267,6 +1325,15 @@ void NPCAIMgr::QueueAggro(SystemEntity* pSE, int64 atMs/*0*/, bool joined/*false
     m_pendingAggroID = pSE->GetID();
     m_pendingAt = atMs;
     m_pendingJoined = joined;
+    /* readability (phase 5):  a group member that joins after its reaction delay turns toward the target meanwhile, so the
+     *  pilot sees it coming (an npc going after someone itself moves at once, Target()).  the lock waits for the delay */
+    if (joined and sConfig.npc.TelegraphJoin and IsIdle() and (atMs > Now()) and !m_npc->IsLawEnforcer() and CanAggro(pSE)
+    and !m_destiny->IsWarping() and ((m_npc->GetEwar() == nullptr) or !m_npc->GetEwar()->IsJammed())) {
+        m_telegraph = true;
+        m_isWandering = false;
+        m_destiny->SetMaxVelocity(m_profile->cruiseSpeed);
+        m_destiny->Follow(pSE, static_cast<uint32>(m_move->OrbitRange()));
+    }
 }
 
 void NPCAIMgr::AlertGroup(SystemEntity* pAggressor)
@@ -1280,7 +1347,7 @@ void NPCAIMgr::AlertGroup(SystemEntity* pAggressor)
     // groups linked to ours (dunSpawnGroups.aggroLink) aggro with us
     if (m_group->GetLinkKey() != 0) {
         int64 now(Now());
-        if ((now - m_lastLinkAlert) >= c_linkAlertMs) {
+        if ((now - m_lastLinkAlert) >= LinkAlertMs()) {
             m_lastLinkAlert = now;
             SpawnMgr* pSpawnMgr(m_npc->SystemMgr()->GetSpawnMgr());
             if (pSpawnMgr != nullptr)
@@ -1459,7 +1526,17 @@ bool NPCAIMgr::StartLock(SystemEntity* pSE)
     if (pSE == nullptr)
         return false;
     bool chase = false;
-    return m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase);
+    return BeginLock(pSE, chase);
+}
+
+bool NPCAIMgr::BeginLock(SystemEntity* pSE, bool& chase)
+{
+    double lockMs(GetTargetTime(pSE));
+    if (!m_npc->TargetMgr()->StartTargeting(pSE, static_cast<float>(lockMs), m_profile->maxLockedTargets, m_acquireRange, chase))
+        return false;
+    // telemetry:  the locks npcs start and how long they take (NPC__AI_STATS)
+    m_npc->SystemMgr()->GetNpcStats().AddLock(lockMs);
+    return true;
 }
 
 void NPCAIMgr::DropLock(SystemEntity* pSE)
@@ -1484,6 +1561,13 @@ void NPCAIMgr::SwitchPrimary(SystemEntity* pSE)
     SetPrimary(pSE);
     m_switchToID = 0;
     m_lastSwitch = Now();
+    // telemetry:  level-one switches per minute should stay at 1 per npc or below, standard ones near 0 (plan phase 5)
+    NpcStats& stats(m_npc->SystemMgr()->GetNpcStats());
+    if (m_profile->IsLevelOne()) {
+        ++stats.switchesL1;
+    } else {
+        ++stats.switchesStandard;
+    }
 }
 
 void NPCAIMgr::ProcessDroneRoll()
@@ -1522,6 +1606,7 @@ void NPCAIMgr::ProcessDroneRoll()
         if (m_npc->TargetMgr()->GetTarget(pSE->GetID(), false) != nullptr) {
             if (m_npc->TargetMgr()->GetTarget(pSE->GetID(), true) != nullptr) {
                 SetPrimary(pSE);
+                ++m_npc->SystemMgr()->GetNpcStats().switchesStandard;
             } else {
                 m_switchToID = pSE->GetID();
             }
@@ -1549,9 +1634,10 @@ void NPCAIMgr::ProcessDroneRoll()
                 m_primaryID = 0;
         }
         bool chase = false;
-        if (m_npc->TargetMgr()->StartTargeting(pSE, GetTargetTime(pSE), m_profile->maxLockedTargets, m_acquireRange, chase)) {
+        if (BeginLock(pSE, chase)) {
             if (m_primaryID == 0) {
                 SetPrimary(pSE);
+                ++m_npc->SystemMgr()->GetNpcStats().switchesStandard;
             } else {
                 m_switchToID = pSE->GetID();
             }
@@ -1567,13 +1653,30 @@ double NPCAIMgr::DrawReactionDelay()
     if (!sConfig.npc.UseAttackDelay)
         return 0.0;
     double factor(sConfig.npc.UseReactionFactor ? m_profile->reactionFactor : 1.0);
-    return NpcMath::ReactionDelayMs(m_profile->attackDelayMin, m_profile->attackDelayMax, factor, sConfig.npc.AttackDelayScale,
-                                    m_rng.Uniform());
+    // x npc.Difficulty's reaction part (private servers)
+    double scale(sConfig.npc.AttackDelayScale * NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyReactionTime));
+    return NpcMath::ReactionDelayMs(m_profile->attackDelayMin, m_profile->attackDelayMax, factor, scale, m_rng.Uniform());
 }
 
 float NPCAIMgr::RecentDamageBy(uint32 entityID)
 {
     return m_recent.Get(entityID, Now());
+}
+
+void NPCAIMgr::ProcessEwar(NpcContext& ctx, SystemEntity* pLocked, int64 now)
+{
+    // ewar needs a completed lock on the primary (bug B6a) and the reaction delay (5.6).  level-one npcs put it on a secondary
+    //  target (1649).  every session's fx starts with its first cycle and stops with it (NPCEwar)
+    if ((m_ewar == nullptr) or !Reacted(now))
+        return;
+    SystemEntity* secondaries[8];
+    size_t count(m_brain->EwarTargets(ctx, pLocked, secondaries, 8));
+    m_secondaryID = (count > 0 ? secondaries[0]->GetID() : 0);
+    if (count > 0) {
+        m_ewar->Process(pLocked, secondaries, count);
+    } else {
+        m_ewar->Process(pLocked);
+    }
 }
 
 bool NPCAIMgr::Reacted(int64 now)
@@ -1683,20 +1786,31 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
                                  pSE->GetID(),0,guid,1,1,
                                  1,m_profile->turretCycleMs,0,gfxID);
 
+    // the shot, with every term for /npcai verbose (fairness audit) and the telemetry's hit ratio
     TurretFormulas formula;
+    NpcShotRecord shot;
+    float quality(formula.GetNPCToHit(m_npc, pSE, &shot));
+    // (no roll without a destiny on the target:  nothing to show)
+    if (shot.atMs != 0)
+        m_shots.Add(shot);
+    m_npc->SystemMgr()->GetNpcStats().AddShot(quality);
     Damage d(m_npc,
              m_self,
              m_npc->GetKinetic(),
              m_npc->GetThermal(),
              m_npc->GetEM(),
              m_npc->GetExplosive(),
-             formula.GetNPCToHit(m_npc, pSE),
+             quality,
              EVEEffectID::targetAttack
             );
 
     if (sConfig.npc.UseDamageMultiplier or m_npc->IsLawEnforcer())
         if (m_profile->damageMultiplier > 0)
             d *= m_profile->damageMultiplier;
+    // npc.Difficulty (private servers;  never law enforcement)
+    float difficulty(static_cast<float>(DifficultyDamage(m_npc)));
+    if (difficulty != 1.0f)
+        d *= difficulty;
 
     // CONCORD scrambles, webs and jams its target first
     if (m_npc->IsConcord())
@@ -1718,10 +1832,10 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
 
 void NPCAIMgr::LaunchMissile(uint16 typeID, SystemEntity* pSE)
 {
-    LaunchEntityMissile(m_npc, m_self, typeID, pSE);
+    LaunchEntityMissile(m_npc, m_self, typeID, pSE, static_cast<float>(DifficultyDamage(m_npc)));
 }
 
-void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget)
+void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 typeID, SystemEntity* pTarget, float damageMult/*1*/)
 {
     if ((typeID == 0) or (pLauncher == nullptr) or (pTarget == nullptr))
         return;
@@ -1744,6 +1858,14 @@ void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 
         missileRef->MultiplyAttribute(AttrAoeCloudSize, self->GetAttribute(AttrMissileEntityAoeCloudSizeMultiplier));
     if (self->HasAttribute(AttrMissileEntityAoeFalloffMultiplier))
         missileRef->MultiplyAttribute(AttrAoeFalloff, self->GetAttribute(AttrMissileEntityAoeFalloffMultiplier));
+    // npc.Difficulty (private servers)
+    if ((damageMult > 0.0f) and (damageMult != 1.0f)) {
+        EvilNumber mult(damageMult);
+        missileRef->MultiplyAttribute(AttrEmDamage, mult);
+        missileRef->MultiplyAttribute(AttrThermalDamage, mult);
+        missileRef->MultiplyAttribute(AttrKineticDamage, mult);
+        missileRef->MultiplyAttribute(AttrExplosiveDamage, mult);
+    }
 
     SystemManager* pSystem = pLauncher->SystemMgr();
     // Missile(InventoryItemRef self, PyServiceMgr &services, SystemManager* system, InventoryItemRef module, SystemEntity* target, SystemEntity* launcher);
@@ -1754,6 +1876,9 @@ void LaunchEntityMissile(SystemEntity* pLauncher, InventoryItemRef self, uint16 
     // the missile flies itself (see DestinyManager).  it hits when its path reaches the target
     pMissile->SetSpeed(missileRef->GetAttribute(AttrMaxVelocity).get_float());
     pMissile->DestinyMgr()->MakeMissile(pMissile);
+
+    // telemetry (NPC__AI_STATS)
+    ++pSystem->GetNpcStats().missiles;
 
     // tell target a missile has been launched at them.. (defender missile trigger for ship, tower, pos, npc, others?)
     if (typeID != 265)  // but only if it's NOT a defender missile
@@ -1781,7 +1906,11 @@ float NPCAIMgr::GetTargetTime(SystemEntity* pSE)
             sig = pSE->GetRadius();
     }
     double mult(m_npc->GetEwar() != nullptr ? m_npc->GetEwar()->GetScanResMult() : 1.0);
-    return static_cast<float>(m_profile->LockTimeMs(sig, mult));
+    double ms(m_profile->LockTimeMs(sig, mult));
+    // npc.Difficulty (private servers;  never law enforcement)
+    if (!m_npc->IsLawEnforcer())
+        ms *= NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyLockTime);
+    return static_cast<float>(ms);
 }
 
 void NPCAIMgr::OnKilled(SystemEntity* pKiller)
@@ -1796,6 +1925,35 @@ void NPCAIMgr::OnKilled(SystemEntity* pKiller)
         m_group->Remove(m_npc);
         m_group.reset();
     }
+}
+
+void NPCAIMgr::OnRemoved()
+{
+    // out of space without dying:  nothing of ours runs on, and nobody is alerted
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
+    if (m_support != nullptr)
+        m_support->StopAll();
+    m_pendingAggroID = 0;
+    m_pendingJoined = false;
+    m_telegraph = false;
+    if (m_group.get() != nullptr) {
+        m_group->Remove(m_npc);
+        m_group.reset();
+    }
+}
+
+bool NPCAIMgr::IsBusy()
+{
+    // the first Process() makes the brain;  law enforcement and brains that never sleep always run
+    if ((m_brain == nullptr) or !m_brain->CanSleep() or m_npc->IsLawEnforcer())
+        return true;
+    if (!IsIdle() or (m_pendingAggroID != 0) or m_telegraph)
+        return true;
+    // something going on with us:  locks either way, a self repair to finish
+    if (!m_npc->TargetMgr()->HasNoTargets() or m_npc->TargetMgr()->IsTargeted())
+        return true;
+    return (m_sched.Active(NpcAct::ShieldRep) or m_sched.Active(NpcAct::ArmorRep));
 }
 
 void NPCAIMgr::DisableRepTimers(bool shield/*true*/, bool armor/*true*/)
@@ -1933,10 +2091,26 @@ std::string NPCAIMgr::Dump(SystemEntity* pViewer, bool verbose)
         << (m_npc->GetSpawnMgr() != nullptr ? ", spawn manager" : "") << ", respawn chance " << std::setprecision(2)
         << p.groupRespawnChance << std::setprecision(0) << "<br>";
     str << "rng seed " << m_rng.GetSeed() << "<br>";
+    /* phase 5:  level of detail, difficulty, readability */
+    SystemBubble* pBubble(m_npc->SysBubble());
+    uint8 tier(NpcLod::TierOf((pBubble != nullptr) and pBubble->HasPlayers(), m_npc->SystemMgr()->PlayerCount() > 0));
+    static const char* tiers[] = { "near", "far", "empty system" };
+    str << "level of detail:  " << tiers[tier < 3 ? tier : 0] << (IsBusy() ? ", busy (every tick)" : "") << ", difficulty damage x"
+        << std::setprecision(2) << DifficultyDamage(m_npc) << " lock x"
+        << (m_npc->IsLawEnforcer() ? 1.0 : NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyLockTime)) << " reaction x"
+        << (m_npc->IsLawEnforcer() ? 1.0 : NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyReactionTime))
+        << std::setprecision(0)
+        << (m_telegraph ? ", turned toward its group's target" : "") << (m_vanishing ? ", leaving for good" : "") << "<br>";
     if (verbose) {
         str << "home " << m_home.x << "," << m_home.y << "," << m_home.z << "<br>";
         if (p.problems != 0)
             str << "data:  " << NpcProfile::ProblemList(p.problems) << "<br>";
+        // the fairness audit:  every term of our last shots (PLAN.md 5.1;  DAMAGE__TRACE_NPC logs each one)
+        if (m_shots.Size() > 0) {
+            str << "last shots:<br>";
+            for (size_t i = 0; i < m_shots.Size(); ++i)
+                str << "  " << NpcShotLog::Format(m_shots.Newest(i), ctx.now) << "<br>";
+        }
     }
     return str.str();
 }

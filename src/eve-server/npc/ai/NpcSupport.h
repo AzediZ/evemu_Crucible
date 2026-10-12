@@ -40,9 +40,10 @@ public:
     // a type with remote repair, group assists or remote ecm
     static bool Needed(const NpcProfile& profile);
 
-    // every tick while we're awake.  engaged:  we're fighting
+    /* every tick while we're awake.  engaged:  we're fighting.  bounded (phase 5):  the group's combat state is worked out
+     *  only when a repair poll or an assist is due, and once a second for the whole group (AggroGroup::AnyFighting) */
     void Process(int64 now, bool engaged);
-    // we leave (warp) or die:  pending repairs are lost, the timers stop
+    // we leave (warp) or die:  pending repairs are lost, the timers stop, the beams of a running cycle go off
     void StopAll();
 
     std::string Describe(int64 now) const;
@@ -52,6 +53,7 @@ private:
         int64 cycleEnd;         // ms.  0 = not cycling
         int64 pollAt;           // ms.  next look for patients while not cycling
         uint32 cycles;          // for /npcai
+        std::vector<uint32> beams;  // the patients of the running cycle (their beam runs for the cycle)
     };
     struct Pending {
         uint32 patientID;
@@ -64,6 +66,12 @@ private:
     };
 
     void ProcessRepair(bool armor, RepairState& state, int64 now, bool combat);
+    // a cycle ended or a poll for patients is due
+    bool RepairDue(bool armor, const RepairState& state, int64 now) const;
+    // an assist runs out (or isn't running:  it starts with the fight)
+    bool AssistDue(int64 now) const;
+    // the beams of a running cycle go off
+    void StopBeams(bool armor, RepairState& state);
     // a new cycle:  roll, pick the patients, repair (shield) or reserve (armor).  false:  nobody needs it
     bool StartCycle(bool armor, int64 now);
     // armor repairs whose cycle ended

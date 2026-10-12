@@ -263,6 +263,24 @@ boolean can use either 0/1 OR true/false.
         <L1NewcomerThreat>1.2</L1NewcomerThreat><!-- incursion sansha:  a ship coming into sight that wasn't seen for L1NewcomerMemory gets at least this x the primary's threat (era:  "they most likely will change targets to any newcomers").  1.2 default -->
         <L1NewcomerMemory>300</L1NewcomerMemory><!-- s.  300 default -->
         <RemoteEcmJamTime>5</RemoteEcmJamTime><!-- s.  the incursion capitals' remote ecm burst (every 5 min, sooner with more than 60 players) jams every player ship on grid this long.  [DD]  5 default -->
+        <!-- npc ai phase 5:  polish, level of detail, telemetry, difficulty (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, 6.7;  operator guide:  doc/code_and_design_notes/npc-ai/OPERATING.md) -->
+        <SoftLeashCooldown>20</SoftLeashCooldown><!-- s.  after the soft leash turned an npc back it chases at least this long before it may turn back again.  [DD]  20 default -->
+        <LinkAlertInterval>5</LinkAlertInterval><!-- s.  an npc or sentry tells the groups linked to its own (dunSpawnGroups.aggroLink) at most this often.  [DD]  5 default -->
+        <SleeperCapitalReinforcements>2</SleeperCapitalReinforcements><!-- sleeper battleships that warp in for each capital ship a sleeper sees (once per capital and site;  era:  "several battleships for each capital").  0 = off.  2 default -->
+        <SleeperReinforcementTypes>0</SleeperReinforcementTypes><!-- typeIDs (comma separated) the reinforcements are picked from.  0 = the sleepless battleships of the room, else the Sleepless Patroller group (983).  (never leave it empty:  the config parser refuses an empty element.)  0 default -->
+        <TelegraphJoin>true</TelegraphJoin><!-- bool  a group member that joins a fight after its reaction delay turns toward the target meanwhile (readability).  true default -->
+        <WarpOutVanishChance>0.04</WarpOutVanishChance><!-- chance an idle belt spawn's group warp-out (WarpOut) is off grid for good:  the spawn is gone and the belt free (era:  "run-away spawns", "1 in 25 vanish").  0 = never.  0.04 default -->
+        <WanderRepickMin>60</WanderRepickMin><!-- s.  an idle belt rat orbits a random asteroid (or the belt) at 10-20 km and picks a new one after U(WanderRepickMin, WanderRepickMax).  60 default -->
+        <WanderRepickMax>180</WanderRepickMax><!-- s.  180 default -->
+        <BeltSpawnCap>0.5</BeltSpawnCap><!-- a system holds at most this x its number of belts of belt spawns at once (at least 1;  era:  about half as many spawns as belts).  0 = one per belt (the old cap).  0.5 default -->
+        <LodFarInterval>4</LodFarInterval><!-- s.  level of detail:  idle npcs in a bubble without players think this often (players' bubbles:  every second;  busy npcs always run).  0 = every second.  4 default -->
+        <LodEmptySystem>true</LodEmptySystem><!-- bool  idle npcs in a system without players don't think at all (movement still runs).  true default -->
+        <TickBudget>50000</TickBudget><!-- us of npc ai per system and tick for npcs where no player is:  past it idle ones skip the tick.  npcs in bubbles with players, and busy ones (fighting, going home, warping), always run.  0 = no budget.  50000 default -->
+        <StatsInterval>60</StatsInterval><!-- s.  each system with npcs writes one NPC__AI_STATS line this often (engaged npcs, lock times, hit ratio, switches per minute, ai time).  enable NPC__AI_STATS in log.ini.  0 = never.  60 default -->
+        <Difficulty>1.0</Difficulty><!-- private servers:  > 1 makes npcs harder (damage x Difficulty, lock and reaction time / Difficulty), < 1 easier.  CONCORD, police and gate guns are never scaled.  1.0 default (Crucible) -->
+        <DifficultyDamage>0</DifficultyDamage><!-- npc damage multiplier (turrets, missiles, sentries).  0 = from Difficulty.  0 default -->
+        <DifficultyLockTime>0</DifficultyLockTime><!-- npc lock time multiplier.  0 = from Difficulty.  0 default -->
+        <DifficultyReactionTime>0</DifficultyReactionTime><!-- npc reaction delay multiplier.  0 = from Difficulty.  0 default -->
     </npc>
 
     <standings><!-- these are in percent. do not modify.  not fully debugged -->

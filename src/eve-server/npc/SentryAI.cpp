@@ -24,14 +24,19 @@
 #include "npc/NPCAI.h"
 #include "npc/NPCEwar.h"
 #include "npc/ai/AggroGroup.h"
+#include "npc/ai/NpcLod.h"
 #include "npc/ai/NpcProfile.h"
 #include "npc/ai/SentryBrain.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "EVEServerConfig.h"
 
 namespace {
-    // linked groups (dunSpawnGroups.aggroLink) are told at most this often per member (ms), as NPCAIMgr does
-    const int64 c_linkAlertMs = 5000;
+    // linked groups (dunSpawnGroups.aggroLink) are told at most this often per member (npc.LinkAlertInterval), as NPCAIMgr does
+    int64 LinkAlertMs()                         { return static_cast<int64>(sConfig.npc.LinkAlertInterval) * 1000; }
+    // npc.Difficulty (private servers):  pirate and deadspace sentries only, never gate and station guns
+    double DifficultyDamage(Sentry* pSentry) {
+        return (pSentry->IsLawSentry() ? 1.0 : NpcLod::DamageMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyDamage));
+    }
 }
 
 SentryAI::SentryAI(Sentry* who)
@@ -87,7 +92,7 @@ void SentryAI::AlertGroup(SystemEntity* pAggressor)
     if (m_group->GetLinkKey() == 0)
         return;
     int64 now(Now());
-    if ((now - m_lastLinkAlert) < c_linkAlertMs)
+    if ((now - m_lastLinkAlert) < LinkAlertMs())
         return;
     m_lastLinkAlert = now;
     SpawnMgr* pSpawnMgr(m_npc->SystemMgr()->GetSpawnMgr());
@@ -160,6 +165,25 @@ void SentryAI::OnKilled(SystemEntity* pKiller)
         m_group->RemoveSentry(m_npc);
         m_group.reset();
     }
+}
+
+void SentryAI::OnRemoved()
+{
+    // out of space without dying (GM /unspawn):  our ewar stops, our group forgets us, nobody is alerted
+    if (m_ewar != nullptr)
+        m_ewar->StopAll();
+    m_pendingAggroID = 0;
+    if (m_group.get() != nullptr) {
+        m_group->RemoveSentry(m_npc);
+        m_group.reset();
+    }
+}
+
+void SentryAI::OnEwarBy(SystemEntity* pBy)
+{
+    // a player's ewar module or drone cycled on us:  aggression, like a lock or a shot (law guns:  only eligible targets)
+    Respond(pBy);
+    AlertGroup(pBy);
 }
 
 void SentryAI::Process() {
@@ -297,11 +321,13 @@ bool SentryAI::SetPrimary(SentryContext& ctx, SystemEntity* pTarget)
             }
         }
         bool chase(false);
-        if (!m_npc->TargetMgr()->StartTargeting(pTarget, GetTargetTime(pTarget), m_profile->maxLockedTargets,
+        double lockMs(GetTargetTime(pTarget));
+        if (!m_npc->TargetMgr()->StartTargeting(pTarget, static_cast<float>(lockMs), m_profile->maxLockedTargets,
                                                 m_brain->AcquireRange(ctx), chase)) {
             _log(NPC__AI_TRACE, "%s(%u): Targeting of %s(%u) failed.", m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
             return false;
         }
+        m_npc->SystemMgr()->GetNpcStats().AddLock(lockMs);
     }
     m_primaryID = pTarget->GetID();
     m_brain->OnPicked(ctx, pTarget);
@@ -387,7 +413,7 @@ void SentryAI::FireMissile(SystemEntity* pTarget)
         return;
     }
     m_sched.Due(NpcAct::Missile, now);
-    LaunchEntityMissile(m_npc, m_npc->GetSelf(), m_profile->missileTypeID, pTarget);
+    LaunchEntityMissile(m_npc, m_npc->GetSelf(), m_profile->missileTypeID, pTarget, static_cast<float>(DifficultyDamage(m_npc)));
 }
 
 void SentryAI::ClearTarget(SystemEntity* pTarget) {
@@ -527,6 +553,7 @@ void SentryAI::AttackTarget(SentryContext& ctx, SystemEntity* pTarget) {
     /* gate and station guns:  every shot lands with quality 1.0, unaffected by transversal and signature radius (no wrecking).
      *  pirate and deadspace sentries:  the shared turret formula with maxRange as optimal */
     float toHit(m_brain->TurretHit(ctx, pTarget));
+    m_npc->SystemMgr()->GetNpcStats().AddShot(toHit);
     Damage d(m_npc,
              m_npc->GetSelf(),
              m_npc->GetKinetic(),
@@ -540,6 +567,9 @@ void SentryAI::AttackTarget(SentryContext& ctx, SystemEntity* pTarget) {
     // the type's damageMultiplier as it is (bug B9:  it was read as an integer, 3.5 became 3)
     if (m_profile->damageMultiplier > 0)
         d *= m_profile->damageMultiplier;
+    float difficulty(static_cast<float>(DifficultyDamage(m_npc)));
+    if (difficulty != 1.0f)
+        d *= difficulty;
     pTarget->ApplyDamage(d);
 }
 
@@ -553,7 +583,11 @@ double SentryAI::GetTargetTime(SystemEntity* pTarget)
             sig = pTarget->GetRadius();
     }
     double mult(m_npc->GetEwar() != nullptr ? m_npc->GetEwar()->GetScanResMult() : 1.0);
-    return m_profile->LockTimeMs(sig, mult);
+    double ms(m_profile->LockTimeMs(sig, mult));
+    // npc.Difficulty:  pirate and deadspace sentries only
+    if (!m_npc->IsLawSentry())
+        ms *= NpcLod::TimeMult(sConfig.npc.Difficulty, sConfig.npc.DifficultyLockTime);
+    return ms;
 }
 
 std::string SentryAI::GetStateName(SentryAI::State name)

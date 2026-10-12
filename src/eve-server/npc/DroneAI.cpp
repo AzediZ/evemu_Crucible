@@ -38,6 +38,8 @@
 #include "npc/DroneAI.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/Sentry.h"
+#include "npc/SentryAI.h"
 #include "npc/ai/NpcMath.h"
 #include "ship/Ship.h"
 #include "ship/modules/EwarModule.h"
@@ -582,14 +584,22 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
         if (m_action == DroneAI::Action::Web) {
             effect = NpcMath::Effect::Web;
         } else if (m_action == DroneAI::Action::Ewar) {
-            if (stats.effectID == EVEEffectID::ewTestEffectJam)
-                effect = NpcMath::Effect::Ecm;
-            else if (stats.effectID == EVEEffectID::energyDestabilizationNew)
-                effect = NpcMath::Effect::Neut;
+            // the Crucible ewar drones' effects (EC, EV, SD, TD, TP drones of groups 639 and 544)
+            switch (stats.effectID) {
+                case EVEEffectID::ewTestEffectJam:              effect = NpcMath::Effect::Ecm;          break;
+                case EVEEffectID::energyDestabilizationNew:     effect = NpcMath::Effect::Neut;         break;
+                case EVEEffectID::sensorBoostTargetedHostile:   effect = NpcMath::Effect::Damp;         break;
+                case EVEEffectID::turretWeaponRangeFalloffTrackingSpeedMultiplyTargetHostile:
+                                                                effect = NpcMath::Effect::TrackDisrupt; break;
+                case EVEEffectID::ewTargetPaint:                effect = NpcMath::Effect::Paint;        break;
+            }
         }
         if ((m_action == DroneAI::Action::Web) or (m_action == DroneAI::Action::Ewar))
             pTarget->GetNPCSE()->GetAIMgr()->OnEwarBy(m_pDrone, effect);
     }
+    // ...and sentries:  aggression their group hears about (npc ai phase 5)
+    if (pTarget->IsSentrySE() and ((m_action == DroneAI::Action::Web) or (m_action == DroneAI::Action::Ewar)))
+        pTarget->GetSentrySE()->GetAIMgr()->OnEwarBy(m_pDrone);
 
     switch (m_action) {
         case DroneAI::Action::Attack: {

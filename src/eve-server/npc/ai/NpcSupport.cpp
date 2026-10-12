@@ -51,6 +51,8 @@ bool NpcSupport::Needed(const NpcProfile& profile)
 
 void NpcSupport::StopAll()
 {
+    StopBeams(true, m_armor);
+    StopBeams(false, m_shield);
     m_armor.cycleEnd = 0;
     m_shield.cycleEnd = 0;
     m_pending.clear();
@@ -78,17 +80,35 @@ bool NpcSupport::InCombat(int64 now, bool engaged)
 {
     if (engaged or ((now - m_ai->GetLastDamagedAt()) < c_underFireMs))
         return true;
+    // the group's answer is worked out once a second for all of its members
     AggroGroup* pGroup(m_ai->GetGroup());
-    if (pGroup == nullptr)
+    return ((pGroup != nullptr) and pGroup->AnyFighting(now, c_underFireMs));
+}
+
+bool NpcSupport::RepairDue(bool armor, const RepairState& state, int64 now) const
+{
+    if ((armor ? m_profile.remoteArmor.effectID : m_profile.remoteShield.effectID) == 0)
         return false;
-    bool combat(false);
-    pGroup->ForEachMember([&](NPC* pNPC) {
-        if (combat or pNPC->IsDead() or (pNPC->GetAIMgr() == nullptr))
-            return;
-        if (!pNPC->GetAIMgr()->IsIdle() or ((now - pNPC->GetAIMgr()->GetLastDamagedAt()) < c_underFireMs))
-            combat = true;
-    });
-    return combat;
+    return ((state.cycleEnd != 0) ? (now >= state.cycleEnd) : (now >= state.pollAt));
+}
+
+bool NpcSupport::AssistDue(int64 now) const
+{
+    for (auto at : m_assistAt)
+        if ((at == 0) or (now >= at))
+            return true;
+    return false;
+}
+
+void NpcSupport::StopBeams(bool armor, RepairState& state)
+{
+    // a cycle still running:  its beams stop with it (they'd run on to the end of the cycle otherwise)
+    if ((state.cycleEnd != 0) and (m_npc->DestinyMgr() != nullptr))
+        for (auto patientID : state.beams)
+            m_npc->DestinyMgr()->SendSpecialEffect(m_npc->GetID(), m_npc->GetID(), m_npc->GetSelf()->typeID(), patientID, 0,
+                                                   (armor ? "effects.RemoteArmourRepair" : "effects.ShieldTransfer"), false,
+                                                   false, false, 0, 0);
+    state.beams.clear();
 }
 
 void NpcSupport::Process(int64 now, bool engaged)
@@ -97,11 +117,18 @@ void NpcSupport::Process(int64 now, bool engaged)
         return;
     if (!m_pending.empty())
         LandPending(now);
-    bool combat(InCombat(now, engaged));
-    ProcessRepair(true, m_armor, now, combat);
-    ProcessRepair(false, m_shield, now, combat);
-    if (!m_assistAt.empty())
-        ProcessAssists(now, combat);
+    /* our group's combat state (a walk over its members) only when something needs it:  a repair cycle ended, a poll for
+     *  patients (1s in a fight, 5s out of one) or an assist is due.  otherwise this is a few comparisons a tick */
+    bool armor(RepairDue(true, m_armor, now)), shield(RepairDue(false, m_shield, now)), assist(AssistDue(now));
+    if (armor or shield or assist) {
+        bool combat(InCombat(now, engaged));
+        if (armor)
+            ProcessRepair(true, m_armor, now, combat);
+        if (shield)
+            ProcessRepair(false, m_shield, now, combat);
+        if (assist)
+            ProcessAssists(now, combat);
+    }
     if (m_profile.remoteEcm.has)
         ProcessRemoteEcm(now, engaged);
 }
@@ -114,8 +141,9 @@ void NpcSupport::ProcessRepair(bool armor, RepairState& state, int64 now, bool c
     if (state.cycleEnd != 0) {
         if (now < state.cycleEnd)
             return;
-        // that cycle is over:  the next one follows at once when someone needs it
+        // that cycle is over (its beams ended with it):  the next one follows at once when someone needs it
         state.cycleEnd = 0;
+        state.beams.clear();
     } else {
         // not cycling:  look for patients now and then
         if (now < state.pollAt)
@@ -177,8 +205,11 @@ bool NpcSupport::StartCycle(bool armor, int64 now)
 
     DestinyManager* pDestiny(m_npc->DestinyMgr());
     size_t count(std::min(m_patients.size(), static_cast<size_t>(rr.maxTargets)));
+    RepairState& state(armor ? m_armor : m_shield);
+    state.beams.clear();
     for (size_t i = 0; i < count; ++i) {
         NPC* pNPC(m_patients[i].pNPC);
+        state.beams.push_back(pNPC->GetID());
         if (armor) {
             // the repair lands at the end of the cycle.  until then it's reserved, so nobody else covers it again
             Pending pending = Pending();

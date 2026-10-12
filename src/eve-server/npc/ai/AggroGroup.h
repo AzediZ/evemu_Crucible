@@ -90,6 +90,9 @@ public:
     void Alert(SystemEntity* pSource, SystemEntity* pAggressor);
     // the pilot behind pSE (ship pilot, drone owner) aggroed us within npc.GroupAggroMemory
     bool IsAggressor(SystemEntity* pSE, int64 now) const;
+    /* a member npc fights, or was hurt within underFireMs (NpcSupport).  worked out once a second for the whole group, so
+     *  its repairers don't each walk it every tick (phase 5) */
+    bool AnyFighting(int64 now, int64 underFireMs);
     void RememberAggressor(SystemEntity* pSE, int64 now);
     // charID of the pilot behind a ship or drone (0 = none)
     static uint32 GetCharID(SystemEntity* pSE);
@@ -103,7 +106,9 @@ private:
     uint64_t m_linkKey;
     uint64_t m_roomKey;
     bool m_alerted;
+    bool m_fighting;                                    // AnyFighting()'s answer for the second m_fightingSec
     int64 m_alertedAt;                                  // ms
+    int64 m_fightingSec;                                // s (ms / 1000).  -1 = not worked out yet
     std::vector<NPC*> m_members;                        // we do not own these
     std::vector<Sentry*> m_sentries;                    // nor these
     std::vector<std::pair<uint32, int64>> m_aggressors; // charID -> last aggression (ms)

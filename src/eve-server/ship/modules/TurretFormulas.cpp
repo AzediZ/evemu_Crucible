@@ -21,6 +21,7 @@
 #include "npc/SentryAI.h"
 #include "npc/ai/NpcMath.h"
 #include "npc/ai/NpcProfile.h"
+#include "npc/ai/NpcTelemetry.h"
 #include "ship/modules/TurretFormulas.h"
 #include "ship/modules/TurretModule.h"
 #include "system/EwarState.h"
@@ -42,7 +43,7 @@ namespace {
 }
 
 float TurretFormulas::Roll(SystemEntity* pShooter, SystemEntity* pTarget, double optimal, double falloff, double tracking,
-                           double sigRes, double u, LogType logType, const char* who)
+                           double sigRes, double u, LogType logType, const char* who, NpcShotRecord* record/*nullptr*/)
 {
     if ((pShooter == nullptr) or (pTarget == nullptr))
         return 0.0f;
@@ -60,8 +61,26 @@ float TurretFormulas::Roll(SystemEntity* pShooter, SystemEntity* pTarget, double
     NpcMath::TurretTerms terms = NpcMath::TurretTerms();
     double chance(NpcMath::TurretChanceToHit(in, &terms));
     double shot(NpcMath::ResolveTurretShot(chance, u, sConfig.rates.WreckingChance));
+    if (record != nullptr) {
+        record->atMs = GetSteadyTime();
+        record->targetID = pTarget->GetID();
+        record->surface = g.surface;
+        record->optimal = optimal;
+        record->falloff = falloff;
+        record->transversal = g.transversal;
+        record->angular = g.angular;
+        record->tracking = tracking;
+        record->sigRes = sigRes;
+        record->sig = in.targetSig;
+        record->track = terms.track;
+        record->range = terms.range;
+        record->chance = chance;
+        record->u = u;
+        record->quality = shot;
+    }
+    // (angular and tracking with 7 decimals:  utils/npcai/check_shots.py recomputes the chance from this line)
     if (is_log_enabled(logType))
-        _log(logType, "%s::ToHit %s(%u) -> %s(%u):  surface %.0fm (optimal %.0f, falloff %.0f), transversal %.1fm/s, angular %.5f (tracking %.5f),"
+        _log(logType, "%s::ToHit %s(%u) -> %s(%u):  surface %.0fm (optimal %.0f, falloff %.0f), transversal %.1fm/s, angular %.7f (tracking %.7f),"
                 " sigRes %.0f vs sig %.1f -> track %.4f, range %.4f, chance %.5f, u %.5f -> %.3f (%s)",
                 who, pShooter->GetName(), pShooter->GetID(), pTarget->GetName(), pTarget->GetID(), g.surface, optimal, falloff,
                 g.transversal, g.angular, tracking, sigRes, in.targetSig, terms.track, terms.range, chance, u, shot,
@@ -88,7 +107,7 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
                 pMod->GetAttribute(AttrOptimalSigRadius).get_double(), MakeRandomFloat(), DAMAGE__TRACE, "Turret");
 }
 
-float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget)
+float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
 {
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
@@ -100,7 +119,7 @@ float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget)
         tracking *= pNPC->GetEwar()->GetTrackingMult();
     }
     return Roll(pNPC, pTarget, optimal, p.falloff, tracking, p.sigResolution, pNPC->GetAIMgr()->GetRng().Uniform(),
-                DAMAGE__TRACE_NPC, "NPC");
+                DAMAGE__TRACE_NPC, "NPC", record);
 }
 
 /* the drone's skill-adjusted stats */
@@ -126,7 +145,7 @@ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, fl
     return Roll(pSource, pTarget, optimal, falloff, tracking, sigRes, MakeRandomFloat(), DAMAGE__TRACE, "Structure");
 }
 
-float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
+float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
 {
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
@@ -138,5 +157,5 @@ float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
         tracking *= pSentry->GetEwar()->GetTrackingMult();
     }
     return Roll(pSentry, pTarget, optimal, p.falloff, tracking, p.sigResolution, pSentry->GetAIMgr()->GetRng().Uniform(),
-                DAMAGE__TRACE_NPC, "Sentry");
+                DAMAGE__TRACE_NPC, "Sentry", record);
 }
