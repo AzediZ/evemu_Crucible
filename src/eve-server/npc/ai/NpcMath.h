@@ -66,6 +66,21 @@ double MissileDamageFactor(double sig, double aoeCloud, double aoeVelocity, doub
 // flight range in m:  velocity (m/s) x flight time (ms) / 1000
 double MissileRange(double velocity, double flightTimeMs);
 
+/* fighter bomber volley.  since Incursion bombers fire "fake missiles" whose "damage output now varies like a turret does
+ *  rather be constant like old missiles (they can wreck or lightly hit now for example)" (CCP Chronotis, 2010-10-18):
+ *   outside range (surface distance > range):  no hit (everything 0)
+ *   factor  = MissileDamageFactor(sig, aoeCloud, aoeVelocity, targetSpeed, drf, drs)
+ *   quality = ResolveTurretShot(1, u, wreckingChance):  always a hit, 0.49 .. 1.49, or 3 on a wrecking roll
+ *   damage  = factor x quality
+ *  the hit message comes from the quality, not from the damage (a full-quality volley on a frigate is still a good shot) */
+struct BomberShot {
+    double factor;
+    double quality;
+    double damage;
+};
+BomberShot ResolveBomberShot(double surface, double range, double sig, double aoeCloud, double aoeVelocity, double targetSpeed,
+                             double drf, double drs, double u, double wreckingChance);
+
 /* lock time in ms:  40,000,000 / (scanResolution * asinh(sig)^2), clamped to [minMs, maxMs].  scan resolution and
  *  signature below 1 count as 1.  players use the same formula without the clamp (pass 0 / 0 to disable it) */
 double LockTimeMs(double scanResolution, double sig, double minMs = 1000.0, double maxMs = 180000.0);

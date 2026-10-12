@@ -70,6 +70,9 @@ DroneSE::DroneSE(InventoryItemRef drone, EVEServiceManager &services, SystemMana
   m_controllerID(0),
   m_controllerOwnerID(0),
   m_returnRequested(false),
+  m_ownerStatsKnown(false),
+  m_hullKnown(false),
+  m_hpMult(1.0),
   m_stats()
 {
     assert (m_system != nullptr);
@@ -98,8 +101,14 @@ DroneSE::DroneSE(InventoryItemRef drone, EVEServiceManager &services, SystemMana
 
     SetResists();
 
+    // a hitpoint bonus left on the item (a server stop while in space) is taken off by the first ApplyHitpointBonus()
+    double typeHP(m_self->type().HasAttribute(AttrHP) ? m_self->type().GetAttribute(AttrHP).get_double() : 0.0);
+    double itemHP(m_self->GetAttribute(AttrHP).get_double());
+    if ((typeHP > 0.0) and (itemHP > 0.0))
+        m_hpMult = itemHP / typeHP;
+
     m_AI = new DroneAIMgr(this);
-    UpdateStats(nullptr);
+    UpdateStats();
     m_destiny->UpdateShipVariables();
 
     _log(DRONE__TRACE, "Created Drone object for %s (%u)", drone.get()->name(), drone.get()->itemID());
@@ -124,27 +133,42 @@ void DroneSE::Process() {
         sProfiler.AddTime(Profile::drone, GetTimeUSeconds() - profileStartTime);
 }
 
-/* works out the drone's working numbers from its type (not its item, which holds our modified values) and the
- *  pilot's skills.  bonus sizes are from the skills' own attributes in the static data:
- *   Drone Interfacing          +20% damage and mining yield (all drones)
+/* works out the drone's working numbers from its type (not its item, which holds our modified values), its owner's
+ *  skills and its owner's ship.  bonus sizes are from the skills' own attributes in the static data:
+ *   Drone Interfacing          +20% damage (drones requiring Drones)
  *   Combat Drone Operation     +5% damage, drones requiring Scout Drone Operation (light/medium)
  *   Heavy Drone Operation      +5% damage, heavy drones
  *   Sentry Drone Interfacing   +5% damage, sentries
  *   racial specializations     +2% damage, drones requiring them
- *   Drone Navigation           +5% max velocity
- *   Drone Sharpshooting        +5% optimal range
+ *   Drone Navigation           +5% max velocity (drones requiring Drones)
+ *   Drone Sharpshooting        +5% optimal range (drones requiring Drones)
+ *   Drone Interfacing          +20% mining yield (miningDroneAmountPercent, all mining drones)
  *   Mining Drone Operation     +5% mining yield, Mining Drone Specialization +3%
  *   Repair Drone Operation     +5% repair amount
  *   Fighters, Fighter Bombers  +20% damage, fighters and fighter bombers
- *  carrier hull bonuses to fighter damage are applied (see below); other ship bonuses to drones (Vexor, Ishtar...) are not.
+ *  Drone Interfacing (2148), Drone Navigation (2013) and Drone Sharpshooting (2014) are "CurrentChar[Drones]" effects in the
+ *  client's dogma:  they modify drones that require the Drones skill.  fighters (Fighters only), fighter bombers (Fighter
+ *  Bombers only) and mining drones don't, and before Kronos fighters and bombers got none of these ("we are expanding all
+ *  universal drone bonuses from skills and modules to Fighters and Fighter Bombers", CCP Fozzie, 2014-05-30).
+ *
+ *  every one of these bonuses modifies items owned by the character (CurrentChar[skill]), and a delegated fighter is still
+ *   its owner's:  the skills and ship bonuses are the owner's, never the controller's.  the owner's ship counts while it
+ *   is in space in our system.  otherwise (docked, elsewhere, logged off) we keep the last values we had.
+ *  carrier hull bonuses to fighters are applied (see below); other ship bonuses to drones (Vexor, Ishtar...) are not.
  */
-void DroneSE::UpdateStats(Client* pController) {
+void DroneSE::UpdateStats() {
     using namespace EvESkill;
     const ItemType& type(m_self->type());
     auto base = [&](uint16 attrID, double def) -> double {
         return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_double() : def);
     };
-    Character* pChar((pController == nullptr) ? nullptr : pController->GetChar().get());
+    Client* pOwner(GetOwnerClient());
+    Character* pChar((pOwner == nullptr) ? nullptr : pOwner->GetChar().get());
+    if ((pChar == nullptr) and m_ownerStatsKnown)
+        return;     // owner logged off:  keep what we have
+    ShipSE* pOwnerShip(nullptr);
+    if ((pChar != nullptr) and pOwner->IsInSpace() and (pOwner->GetShipSE() != nullptr) and (pOwner->GetShipSE()->SystemMgr() == m_system))
+        pOwnerShip = pOwner->GetShipSE();
     auto level = [&](uint16 skillID) -> double {
         if (pChar == nullptr)
             return 0.0;
@@ -158,6 +182,8 @@ void DroneSE::UpdateStats(Client* pController) {
                 return true;
         return false;
     };
+    const DroneStats last(m_stats);
+    bool drone(needsSkill(Drones));
 
     DroneStats s = DroneStats();
 
@@ -183,13 +209,52 @@ void DroneSE::UpdateStats(Client* pController) {
     s.assistance = effect.isAssistance;
     s.effectGuid = effect.guid;
 
-    double navBonus(1.0 + 0.05 * level(DroneNavigation));
-    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus;
+    /* fighters and fighter bombers:  the owner's ship's bonuses (all "CurrentChar[Fighters]" / "CurrentChar[Fighter Bombers]"
+     *  effects on the hull), worked out first because speed and range use them
+     *   carrierGallenteDroneOwnDmg2 (2332) / carrierGallenteBomberDroneOwnDmg2 (4720)   damage, carrierGallenteBonus2 (5%) per Gallente Carrier level (Thanatos, Nyx)
+     *   shipFighterDamagePirateSupercarrier (4736) / shipFighterBomberDamagePirateSupercarrier (4735)   damage, shipBonusPirateFaction (100%), flat (Revenant)
+     *   carrierAmarrFighterMaxVelocity2 (4755) / carrierAmarrFighterBomberMaxVelocity2 (4756)   max velocity, carrierAmarrBonus2 (10%) per Amarr Carrier level (Revenant)
+     *   shipFighterHitpointsPirateSupercarrier (4752) / shipFighterBomberHitpointsPirateSupercarrier (4754)   shield, armor and structure, shipBonusPirateFaction (100%), flat (Revenant)
+     *   carrierFighterControlRangeBonus (2406)   control range x droneRangeBonus (3, "200% bonus"), every carrier and supercarrier.  fighters only:  bombers don't require Fighters
+     */
+    bool fighter(needsSkill(Fighters)), bomber(needsSkill(FighterBombers));
+    s.hullDamage = s.hullVelocity = s.hullHP = s.controlRangeMult = 1.0;
+    if ((fighter or bomber) and (pOwnerShip != nullptr)) {
+        const ItemType& hull(pOwnerShip->GetSelf()->type());
+        auto hullAttr = [&](uint16 attrID) -> double {
+            return (hull.HasAttribute(attrID) ? hull.GetAttribute(attrID).get_double() : 0.0);
+        };
+        std::vector<TypeEffects> hullFx;
+        sFxDataMgr.GetTypeEffect(hull.id(), hullFx);
+        for (auto cur : hullFx) {
+            switch (cur.effectID) {
+                case 2332:  /* carrierGallenteDroneOwnDmg2 */                   if (fighter) s.hullDamage *= 1.0 + hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier) / 100.0; break;
+                case 4720:  /* carrierGallenteBomberDroneOwnDmg2 */             if (bomber)  s.hullDamage *= 1.0 + hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier) / 100.0; break;
+                case 4736:  /* shipFighterDamagePirateSupercarrier */           if (fighter) s.hullDamage *= 1.0 + hullAttr(AttrShipBonusPirateFaction) / 100.0; break;
+                case 4735:  /* shipFighterBomberDamagePirateSupercarrier */     if (bomber)  s.hullDamage *= 1.0 + hullAttr(AttrShipBonusPirateFaction) / 100.0; break;
+                case 4755:  /* carrierAmarrFighterMaxVelocity2 */               if (fighter) s.hullVelocity *= 1.0 + hullAttr(AttrCarrierAmarrBonus2) * level(AmarrCarrier) / 100.0; break;
+                case 4756:  /* carrierAmarrFighterBomberMaxVelocity2 */         if (bomber)  s.hullVelocity *= 1.0 + hullAttr(AttrCarrierAmarrBonus2) * level(AmarrCarrier) / 100.0; break;
+                case 4752:  /* shipFighterHitpointsPirateSupercarrier */        if (fighter) s.hullHP *= 1.0 + hullAttr(AttrShipBonusPirateFaction) / 100.0; break;
+                case 4754:  /* shipFighterBomberHitpointsPirateSupercarrier */  if (bomber)  s.hullHP *= 1.0 + hullAttr(AttrShipBonusPirateFaction) / 100.0; break;
+                case 2406:  /* carrierFighterControlRangeBonus */               if (fighter and (hullAttr(AttrDroneRangeBonus) > 0.0)) s.controlRangeMult *= hullAttr(AttrDroneRangeBonus); break;
+            }
+        }
+        m_hullKnown = true;
+    } else if ((fighter or bomber) and m_hullKnown) {
+        // the owner's ship isn't here:  keep its last bonuses
+        s.hullDamage = last.hullDamage;
+        s.hullVelocity = last.hullVelocity;
+        s.hullHP = last.hullHP;
+        s.controlRangeMult = last.controlRangeMult;
+    }
+
+    double navBonus(drone ? 1.0 + 0.05 * level(DroneNavigation) : 1.0);
+    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus * s.hullVelocity;
     s.orbitVelocity = base(AttrEntityCruiseSpeed, 0.0);
     if ((s.orbitVelocity <= 0.0) or (s.orbitVelocity > s.maxVelocity))
         s.orbitVelocity = s.maxVelocity;
 
-    s.optimalRange = base(AttrMaxRange, 0.0) * (1.0 + 0.05 * level(DroneSharpshooting));
+    s.optimalRange = base(AttrMaxRange, 0.0) * (drone ? 1.0 + 0.05 * level(DroneSharpshooting) : 1.0);
     s.falloff = base(AttrFalloff, 0.0);
     s.tracking = base(AttrTrackingSpeed, 0.0);
     s.sigResolution = base(AttrOptimalSigRadius, 40.0);
@@ -237,7 +302,9 @@ void DroneSE::UpdateStats(Client* pController) {
     if (s.cycleTime <= 0.0)
         s.cycleTime = 5000.0;
 
-    s.damageMultiplier = base(AttrDamageMultiplier, 1.0) * (1.0 + 0.20 * level(DroneInterfacing));
+    s.damageMultiplier = base(AttrDamageMultiplier, 1.0);
+    if (drone)
+        s.damageMultiplier *= (1.0 + 0.20 * level(DroneInterfacing));
     if (needsSkill(ScoutDroneOperation))
         s.damageMultiplier *= (1.0 + 0.05 * level(CombatDroneOperation));
     if (needsSkill(HeavyDroneOperation))
@@ -247,36 +314,12 @@ void DroneSE::UpdateStats(Client* pController) {
     for (auto spec : { AmarrDroneSpecialization, MinmatarDroneSpecialization, GallenteDroneSpecialization, CaldariDroneSpecialization })
         if (needsSkill(spec))
             s.damageMultiplier *= (1.0 + 0.02 * level(spec));
-
-    /* fighters and fighter bombers.  each skill gives +20% damage per level (its damageMultiplierBonus).
-     *  hull bonuses come from the controlling ship's own effects:
-     *   carrierGallenteDroneOwnDmg2 / carrierGallenteBomberDroneOwnDmg2   carrierGallenteBonus2 (5%) per Gallente Carrier level (Thanatos, Nyx)
-     *   shipFighterDamagePirateSupercarrier / shipFighterBomberDamagePirateSupercarrier   shipBonusPirateFaction (100%), flat (Revenant)
-     */
-    bool fighter(needsSkill(Fighters)), bomber(needsSkill(FighterBombers));
+    // fighters and fighter bombers:  each skill gives +20% damage per level (its damageMultiplierBonus), then the hull bonuses
     if (fighter)
         s.damageMultiplier *= (1.0 + 0.20 * level(Fighters));
     if (bomber)
         s.damageMultiplier *= (1.0 + 0.20 * level(FighterBombers));
-    if ((fighter or bomber) and (pController != nullptr) and (pController->GetShip().get() != nullptr)) {
-        const ItemType& hull(pController->GetShip()->type());
-        auto hullAttr = [&](uint16 attrID) -> double {
-            return (hull.HasAttribute(attrID) ? hull.GetAttribute(attrID).get_double() : 0.0);
-        };
-        std::vector<TypeEffects> hullFx;
-        sFxDataMgr.GetTypeEffect(hull.id(), hullFx);
-        for (auto cur : hullFx) {
-            double bonus(0.0);
-            switch (cur.effectID) {
-                case 2332:  /* carrierGallenteDroneOwnDmg2 */                   if (fighter) bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
-                case 4720:  /* carrierGallenteBomberDroneOwnDmg2 */             if (bomber)  bonus = hullAttr(AttrCarrierGallenteBonus2) * level(GallenteCarrier); break;
-                case 4736:  /* shipFighterDamagePirateSupercarrier */           if (fighter) bonus = hullAttr(AttrShipBonusPirateFaction); break;
-                case 4735:  /* shipFighterBomberDamagePirateSupercarrier */     if (bomber)  bonus = hullAttr(AttrShipBonusPirateFaction); break;
-            }
-            if (bonus != 0.0)
-                s.damageMultiplier *= (1.0 + bonus / 100.0);
-        }
-    }
+    s.damageMultiplier *= s.hullDamage;
 
     s.miningAmount = base(AttrMiningAmount, 0.0) * (1.0 + 0.20 * level(DroneInterfacing)) * (1.0 + 0.05 * level(MiningDroneOperation));
     if (needsSkill(MiningDroneSpecialization))
@@ -291,40 +334,51 @@ void DroneSE::UpdateStats(Client* pController) {
 
     s.bandwidth = base(AttrDroneBandwidthUsed, 0.0);
     m_stats = s;
+    if (pChar != nullptr)
+        m_ownerStatsKnown = true;
 
     // the movement code caps our speed at this attribute.  it is recomputed from the type each time, so never compounds
     m_self->SetAttribute(AttrMaxVelocity, s.maxVelocity, false);
+    ApplyHitpointBonus(s.hullHP);
 
-    _log(DRONE__TRACE, "Drone %s(%u) stats: action %u (%s), speed %.0f/%.0f, orbit %.0f, range %.0f+%.0f (use %.0f), cycle %.0fms, dmg x%.3f, mine %.1f, rep %.1f",
-         GetName(), GetID(), s.action, effect.effectName.c_str(), s.maxVelocity, s.orbitVelocity, s.orbitRange, s.optimalRange,
-         s.falloff, s.effectRange, s.cycleTime, s.damageMultiplier, s.miningAmount, s.repairAmount);
+    _log(DRONE__TRACE, "Drone %s(%u) stats (owner %u%s%s): action %u (%s), speed %.0f/%.0f, orbit %.0f, range %.0f+%.0f (use %.0f), cycle %.0fms, dmg x%.3f, mine %.1f, rep %.1f, hull dmg x%.2f speed x%.2f hp x%.2f control x%.1f",
+         GetName(), GetID(), m_ownerID, (pChar == nullptr ? ", not online" : ""), (pOwnerShip == nullptr ? ", ship not here" : ""),
+         s.action, effect.effectName.c_str(), s.maxVelocity, s.orbitVelocity, s.orbitRange, s.optimalRange,
+         s.falloff, s.effectRange, s.cycleTime, s.damageMultiplier, s.miningAmount, s.repairAmount,
+         s.hullDamage, s.hullVelocity, s.hullHP, s.controlRangeMult);
 }
 
-bool DroneSE::CanAttack(SystemEntity* pTarget) const {
-    if (!m_stats.bomber)
+/* the Revenant's fighter and bomber hitpoint bonus.  the shield, armor and structure maximums are the type's times mult;
+ *  the shield charge and the damage are scaled with them, so the drone keeps its health fractions.  mult 1 restores the
+ *  type's values (before the drone goes back into a bay)
+ */
+void DroneSE::ApplyHitpointBonus(double mult) {
+    if (!(mult > 0.0))
+        mult = 1.0;
+    if (mult == m_hpMult)
+        return;
+    double scale((m_hpMult > 0.0) ? mult / m_hpMult : 1.0);
+    const ItemType& type(m_self->type());
+    static const uint16 layers[3][2] = { { AttrHP, AttrDamage }, { AttrArmorHP, AttrArmorDamage }, { AttrShieldCapacity, AttrShieldCharge } };
+    for (auto& layer : layers) {
+        if (!type.HasAttribute(layer[0]))
+            continue;
+        m_self->SetAttribute(layer[0], type.GetAttribute(layer[0]).get_double() * mult, false);
+        m_self->SetAttribute(layer[1], m_self->GetAttribute(layer[1]).get_double() * scale, false);
+    }
+    m_hpMult = mult;
+}
+
+/* bombers do little to subcapitals (their explosion radius is 2250 m), so when they choose a target themselves they take
+ *  one their volleys hit in full if there is one:  a signature at least their explosion radius (capitals, control towers,
+ *  stations).  a direct order is always obeyed.  every other drone takes anything
+ */
+bool DroneSE::PrefersTarget(SystemEntity* pTarget) const {
+    if (!m_stats.bomber or (m_stats.aoeCloudSize <= 0.0))
         return true;
-    if ((pTarget == nullptr) or (pTarget->GetSelf().get() == nullptr))
+    if (pTarget == nullptr)
         return false;
-    InventoryItemRef tRef(pTarget->GetSelf());
-    switch (tRef->categoryID()) {
-        case EVEDB::invCategories::Station:
-        case EVEDB::invCategories::Structure:
-        case EVEDB::invCategories::SovereigntyStructure:
-            return true;
-    }
-    // carriers, dreadnoughts, supercarriers, titans, freighters and the Rorqual
-    if (tRef->type().HasAttribute(AttrIsCapitalSize) and (tRef->type().GetAttribute(AttrIsCapitalSize).get_int() != 0))
-        return true;
-    // NPC capitals
-    switch (tRef->groupID()) {
-        case 865:   // Mission Amarr Empire Carrier
-        case 866:   // Mission Caldari State Carrier
-        case 867:   // Mission Gallente Federation Carrier
-        case 868:   // Mission Minmatar Republic Carrier
-        case 1052:  // Incursion Sansha's Nation Capital
-            return true;
-    }
-    return false;
+    return (pTarget->GetSignatureRadius() >= m_stats.aoeCloudSize);
 }
 
 /* ======================================================================================
@@ -357,7 +411,8 @@ void DroneSE::SetController(ShipSE* pShip) {
     Client* pClient(pShip->GetPilot());
     m_controllerID = pShip->GetID();
     m_controllerOwnerID = pClient->GetCharacterID();
-    UpdateStats(pClient);
+    // the owner's skills and ship, not the controller's (a delegated fighter is still its owner's)
+    UpdateStats();
     m_AI->SetIdle();
     SendStateChange();
     UpdateBandwidthLoad(pShip);
@@ -438,11 +493,21 @@ double DroneSE::ControllerDistance() {
 }
 
 double DroneSE::ControlRange() {
-    Client* pClient(GetControllerClient());
-    if (pClient == nullptr)
-        return DRONE_BASE_CONTROL_RANGE;
-    double range(pClient->GetChar()->GetAttribute(AttrDroneControlDistance).get_double());
-    return (range > 0.0 ? range : DRONE_BASE_CONTROL_RANGE);
+    return ControlRangeFor(GetControllerClient());
+}
+
+/* the pilot's drone control range (base 20 km plus their skills).  carriers' fighters get x3 (carrierFighterControlRangeBonus,
+ *  "200% bonus to Fighter control range"):  in the client's dogma it multiplies the fighters' own droneControlDistance, whose
+ *  default is the 20 km base range, so we multiply the pilot's range by it
+ */
+double DroneSE::ControlRangeFor(Client* pPilot) {
+    double range(DRONE_BASE_CONTROL_RANGE);
+    if ((pPilot != nullptr) and (pPilot->GetChar().get() != nullptr)) {
+        double pilotRange(pPilot->GetChar()->GetAttribute(AttrDroneControlDistance).get_double());
+        if (pilotRange > 0.0)
+            range = pilotRange;
+    }
+    return range * m_stats.controlRangeMult;
 }
 
 uint32 DroneSE::GetBounty() {
@@ -492,6 +557,8 @@ void DroneSE::ScoopTo(ShipSE* pShip, EVEItemFlags flag) {
     shipRef->GetMyInventory()->ValidateAddItem(flag, iRef);
 
     uint32 oldShipID(m_controllerID);
+    // back to the type's hitpoints in the bay (the Revenant's bonus is for fighters in space)
+    ApplyHitpointBonus(1.0);
     ReleaseControl();
 
     iRef->ChangeOwner(pClient->GetCharacterID(), true);

@@ -50,7 +50,7 @@ class DestinyManager;
 class SystemManager;
 class Damage;
 
-// a drone's working numbers, from its type and the controlling pilot's skills
+// a drone's working numbers, from its type and its owner's skills and ship
 struct DroneStats {
     uint8 action;               // DroneAI::Action
     uint16 effectID;            // main effect (weapon, mining laser, repairer...)
@@ -77,6 +77,11 @@ struct DroneStats {
     double aoeVelocity;
     double aoeDrf;              // aoeDamageReductionFactor
     double aoeDrs;              // aoeDamageReductionSensitivity
+    // fighters and bombers:  the owner's carrier's bonuses (multipliers, already in the numbers above)
+    double hullDamage;
+    double hullVelocity;
+    double hullHP;              // Revenant (ApplyHitpointBonus)
+    double controlRangeMult;    // carriers' fighter control range bonus (ControlRange)
 };
 
 class DroneSE
@@ -112,7 +117,7 @@ public:
     ShipSE* GetController();                            // nullptr if the controlling ship is gone
     Client* GetControllerClient();
     Client* GetOwnerClient();
-    // takes control of the drone for this ship.  works out the drone's stats from the pilot's skills
+    // takes control of the drone for this ship.  works out the drone's stats again (from the owner's skills and ship)
     void SetController(ShipSE* pShip);
     // control lost.  the drone stops where it is and is dropped from the pilot's drone list
     void ReleaseControl();
@@ -121,7 +126,8 @@ public:
 
     // distance between our surface and the controlling ship's, or -1 if not controlled
     double ControllerDistance();
-    double ControlRange();                              // controlling pilot's drone control range
+    double ControlRange();                              // controlling pilot's drone control range (x3 for carriers' fighters)
+    double ControlRangeFor(Client* pPilot);             //  the same for this pilot
 
     /* return to bay.  the AI asks for this when it reaches the ship; the system does the move after its tick */
     void RequestReturnToBay();
@@ -132,8 +138,9 @@ public:
 
     DroneAIMgr* GetAI()                                 { return m_AI; }
     const DroneStats& Stats() const                     { return m_stats; }
-    // fighter bombers only attack capital ships, stations and structures; everything else can attack anything
-    bool CanAttack(SystemEntity* pTarget) const;
+    /* any drone may attack anything.  when choosing a target itself (aggressive, focus fire, guard, assist) a fighter bomber
+     *  prefers one its volleys hit in full (signature >= its explosion radius); every other drone takes anything */
+    bool PrefersTarget(SystemEntity* pTarget) const;
 
     uint8 GetState()                                    { return m_AI->GetState(); }
     uint32 GetTargetID()                                { return m_AI->GetTargetID(); }
@@ -156,13 +163,18 @@ protected:
     SystemManager* m_system;    //we do not own this
 
 private:
-    void UpdateStats(Client* pController);
+    // from the owner's skills and ship (see Drone.cpp).  keeps the last values while they can't be had
+    void UpdateStats();
+    void ApplyHitpointBonus(double mult);
     void SetResists();
     void SendStateChangeTo(Client* pClient, bool remove);
 
     uint32 m_controllerID;
     uint32 m_controllerOwnerID;
     bool m_returnRequested;
+    bool m_ownerStatsKnown;     // stats worked out with the owner online
+    bool m_hullKnown;           //  and with their ship here
+    double m_hpMult;            // hitpoint bonus on our item now
 
     DroneStats m_stats;
 };

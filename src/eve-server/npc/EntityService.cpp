@@ -127,12 +127,6 @@ EntityBound::EntityBound(EVEServiceManager &mgr, EntityService& parent, SystemMa
  */
 
 namespace {
-    // control range of a pilot's drones
-    double PilotControlRange(Client* pClient) {
-        double range(pClient->GetChar()->GetAttribute(AttrDroneControlDistance).get_double());
-        return (range > 0.0 ? range : 20000.0);
-    }
-
     double Gap(SystemEntity* pA, SystemEntity* pB) {
         return pA->GetPosition().distance(pB->GetPosition()) - pA->GetRadius() - pB->GetRadius();
     }
@@ -186,7 +180,7 @@ namespace {
         or  (pDrone->GetControllerOwnerID() != static_cast<uint32>(pClient->GetCharacterID())))
             return DroneError("EntityNotYoursToCommand", pDrone);
         //{'FullPath': u'UI/Messages', 'label': u'EntityDistantCommandBody'}(u'{targetTypeName} is too far away and will not respond to the command you are giving it (must be within {distance} meters from it).')
-        double range(PilotControlRange(pClient));
+        double range(pDrone->ControlRange());
         if ((pDrone->SysBubble() != pShip->SysBubble()) or (Gap(pDrone, pShip) > range))
             return MakeError("EntityDistantCommand", {{"targetTypeName", new PyString(pDrone->GetName())}, {"distance", new PyInt(static_cast<int32>(range))}});
         return nullptr;
@@ -198,7 +192,7 @@ namespace {
         if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->SysBubble() != pDrone->SysBubble()))
             return DroneError("EntityTargetNotPresent", pDrone);
         //{'FullPath': u'UI/Messages', 'label': u'EntityTargetTooDistantBody'}(u'The drones fail to execute your commands as the target {targetTypeName} is not within your {distance} m drone command range.')
-        double range(PilotControlRange(pClient));
+        double range(pDrone->ControlRange());
         if (Gap(pClient->GetShipSE(), pTarget) > range)
             return MakeError("EntityTargetTooDistant", {{"targetTypeName", new PyString(pTarget->GetName())}, {"distance", new PyInt(static_cast<int32>(range))}});
         //{'FullPath': u'UI/Messages', 'label': u'EntityCurrentlyMiningBody'}(u'{targetTypeName} is currently mining an asteroid and cannot take commands until it has finished. It will return home and await further orders when it is finished.')
@@ -252,8 +246,6 @@ PyResult EntityBound::CmdEngage(PyCallArgs &call, PyList* droneIDs, PyInt* targe
             //{'FullPath': u'UI/Messages', 'label': u'EntityUnknownCommandBody'}(u'{targetTypeName} does not recognize the command you are trying to give it.')
             if ((action == DroneAI::Action::None) or (action == DroneAI::Action::Mine)) {
                 err = DroneError("EntityUnknownCommand", pDrone);
-            } else if (!pDrone->CanAttack(pTarget)) {
-                err = MakeError("CustomError", {{"error", new PyString(std::string(pDrone->GetName()) + " can only attack capital ships, stations and structures.")}});
             } else if (pShip->TargetMgr()->GetTarget(pTarget->GetID(), true) == nullptr) {
                 //{'FullPath': u'UI/Messages', 'label': u'EntityTargetMustBeTargetedBody'}(u'{targetTypeName} requires the target be locked onto by you, which it is not.')
                 err = DroneError("EntityTargetMustBeTargeted", pDrone);
@@ -394,7 +386,6 @@ PyResult EntityBound::CmdReconnectToDrones(PyCallArgs &call, PyList* droneCandid
         return errors;
     uint32 charID(pClient->GetCharacterID());
     uint32 maxDrones(pClient->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32());
-    double range(PilotControlRange(pClient));
     double bandwidth(pShip->GetShipItemRef()->GetAttribute(AttrDroneBandwidth).get_double());
 
     for (auto droneID : GetIDs(droneCandidates)) {
@@ -404,6 +395,8 @@ PyResult EntityBound::CmdReconnectToDrones(PyCallArgs &call, PyList* droneCandid
         DroneSE* pDrone(pSE->GetDroneSE());
         if ((pDrone->GetOwnerID() != charID) or pDrone->IsControlled())
             continue;
+        // our drone control range (x3 for a carrier's fighters)
+        double range(pDrone->ControlRangeFor(pClient));
         if ((pDrone->SysBubble() != pShip->SysBubble()) or (Gap(pDrone, pShip) > range)) {
             PyDict* args = new PyDict();
                 args->SetItemString("targetTypeName", new PyString(pDrone->GetName()));
@@ -472,6 +465,11 @@ PyResult EntityBound::CmdDelegateControl(PyCallArgs &call, PyList* droneIDs, PyI
             uint32 maxDrones(pOther->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32());
             if (pDrone->GetOwnerID() != static_cast<uint32>(pClient->GetCharacterID())) {
                 err = DroneError("EntityNotYoursToCommand", pDrone);
+            } else if (pDrone->GetSelf()->groupID() != EVEDB::invGroups::Fighter_Drone) {
+                /* only fighters can be delegated (the client's menu offers it for group 549 only).  fighter bombers "have to
+                 *  be directly controlled by the Supercarrier's pilot, unlike standard fighters, and cannot be delegated to
+                 *  anyone else" (Dominion 1.1 patch notes, 2010-01-21).  the client has no message of its own for this */
+                err = DroneError("EntityUnknownCommand", pDrone);
             } else if (pOther == pClient) {
                 //{'FullPath': u'UI/Messages', 'label': u'EntityTargetAlreadyHasControlBody'}(u'Control of the {item} cannot be delegated to {whom} because they already have control of it.')
                 err = MakeError("EntityTargetAlreadyHasControl", {{"item", new PyString(pDrone->GetName())}, {"whom", new PyString(pOther->GetName())}});
@@ -482,6 +480,11 @@ PyResult EntityBound::CmdDelegateControl(PyCallArgs &call, PyList* droneIDs, PyI
                 //{'FullPath': u'UI/Messages', 'label': u'EntityNoTargetDroneManagementAbilitiesLeftBody'}(u'Control of the {item} cannot be delegated to {whom} because they only have the skill to control {[numeric]limit} drones and they are already controlling that many.')
                 err = MakeError("EntityNoTargetDroneManagementAbilitiesLeft", {{"item", new PyString(pDrone->GetName())}, {"whom", new PyString(pOther->GetName())},
                                                                                {"limit", new PyInt(maxDrones)}});
+            } else if (pOther->GetShipSE()->SysBubble() != pDrone->SysBubble()) {
+                /* in Crucible fighters warped to their controller within the system.  ours can't warp yet, so they could
+                 *  never reach a pilot outside their bubble:  refuse with the client's message for a pilot they can't warp to */
+                //{'FullPath': u'UI/Messages', 'label': u'EntityTargetWarpDisruptedBody'}(u'Control of the {[item]item.name} cannot be delegated to someone who the drones cannot warp to.')
+                err = MakeError("EntityTargetWarpDisrupted", {{"item", new PyInt(pDrone->GetSelf()->typeID())}});
             }
         }
         if (err != nullptr) {

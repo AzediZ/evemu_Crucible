@@ -123,32 +123,40 @@ float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget, NpcShotRecor
 }
 
 /* the drone's skill-adjusted stats */
-float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
+float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, float* quality/*nullptr*/)
 {
+    if (quality != nullptr)
+        *quality = 0.0f;
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
     const DroneStats& stats(pDrone->Stats());
-    /* fighter bombers (after AzediZ):  their missile always hits a target within missile range (entityAttackRange, surface
-     *  to surface), never one outside it.  the damage is scaled like a missile's (NpcMath::MissileDamageFactor):
-     *   min(1, S/E, ((S/E) * (Ve/Vt)) ^ (ln drf / ln drs))   S = target signature (with painters), E = explosion radius,
-     *   Ve = explosion velocity, Vt = target speed
+    /* fighter bombers (after AzediZ, Incursion rules):  their "fake missile" always hits a target within entityAttackRange
+     *  (surface to surface), never one outside it.  the damage is a missile's explosion factor (NpcMath::MissileDamageFactor,
+     *  min(1, S/E, ((S/E) * (Ve/Vt)) ^ (ln drf / ln drs)), S = target signature with painters, E = explosion radius,
+     *  Ve = explosion velocity, Vt = target speed) times a turret-like quality roll, so they "can wreck or lightly hit"
+     *  (NpcMath::ResolveBomberShot).  their optimalSigRadius (2500) is not used:  nothing says what it did after Incursion,
+     *  and the explosion radius already gives the subcapital penalty CCP described
      */
     if (stats.bomber) {
         NpcMath::TurretGeometry g(NpcMath::Geometry(PositionOf(pDrone), VelocityOf(pDrone), pDrone->GetRadius(),
                                                     PositionOf(pTarget), VelocityOf(pTarget), pTarget->GetRadius()));
-        if (g.surface > stats.optimalRange) {
-            _log(DAMAGE__TRACE, "Drone::ToHit bomber %s(%u) -> %s(%u):  out of range, %.0fm > %.0f", pDrone->GetName(), pDrone->GetID(),
-                 pTarget->GetName(), pTarget->GetID(), g.surface, stats.optimalRange);
-            return 0;
-        }
-        double sig(pTarget->GetSignatureRadius()), speed(pTarget->GetVelocity().length());
-        double factor(NpcMath::MissileDamageFactor(sig, stats.aoeCloudSize, stats.aoeVelocity, speed, stats.aoeDrf, stats.aoeDrs));
-        _log(DAMAGE__TRACE, "Drone::ToHit bomber %s(%u) -> %s(%u):  hit at %.0fm, sig %.0f, explosion %.0f, speed %.0f -> damage x%.3f",
-             pDrone->GetName(), pDrone->GetID(), pTarget->GetName(), pTarget->GetID(), g.surface, sig, stats.aoeCloudSize, speed, factor);
-        return static_cast<float>(factor);
+        double sig(pTarget->GetSignatureRadius()), speed(pTarget->GetVelocity().length()), u(MakeRandomFloat());
+        NpcMath::BomberShot shot(NpcMath::ResolveBomberShot(g.surface, stats.optimalRange, sig, stats.aoeCloudSize, stats.aoeVelocity,
+                                                            speed, stats.aoeDrf, stats.aoeDrs, u, sConfig.rates.WreckingChance));
+        if (is_log_enabled(DAMAGE__TRACE))
+            _log(DAMAGE__TRACE, "Drone::ToHit bomber %s(%u) -> %s(%u):  surface %.0fm (range %.0f), sig %.1f, explosion %.0f, speed %.1f"
+                 " -> factor %.4f, u %.5f -> quality %.3f, damage x%.4f (%s)", pDrone->GetName(), pDrone->GetID(), pTarget->GetName(),
+                 pTarget->GetID(), g.surface, stats.optimalRange, sig, stats.aoeCloudSize, speed, shot.factor, u, shot.quality, shot.damage,
+                 (shot.quality <= 0.0 ? "out of range" : (shot.quality >= 3.0 ? "wrecking" : "hit")));
+        if (quality != nullptr)
+            *quality = static_cast<float>(shot.quality);
+        return static_cast<float>(shot.damage);
     }
-    return Roll(pDrone, pTarget, stats.optimalRange, stats.falloff, stats.tracking, stats.sigResolution, MakeRandomFloat(),
-                DAMAGE__TRACE, "Drone");
+    float shot(Roll(pDrone, pTarget, stats.optimalRange, stats.falloff, stats.tracking, stats.sigResolution, MakeRandomFloat(),
+                    DAMAGE__TRACE, "Drone"));
+    if (quality != nullptr)
+        *quality = shot;
+    return shot;
 }
 
 float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget)

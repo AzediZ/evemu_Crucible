@@ -26,7 +26,9 @@ public:
     float GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEntity* pTarget);
     // record:  gets every term of the shot (npc ai fairness audit, /npcai verbose)
     float GetNPCToHit(NPC* pNPC, SystemEntity* pTarget, NpcShotRecord* record = nullptr);
-    float GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget);
+    /* fighter bombers:  the volley's damage factor (explosion factor x quality roll, NpcMath::ResolveTurretShot).  quality
+     *  (optional) gets the roll alone, for the hit message;  for turret drones it is the same as the result */
+    float GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, float* quality = nullptr);
     // pirate and deadspace sentries:  maxRange is their optimal (gate and station guns always hit, SentryAI)
     float GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget, NpcShotRecord* record = nullptr);
     // starbase turrets:  the standard formula with the battery's (tower-bonused) optimal and falloff, tracking and signature

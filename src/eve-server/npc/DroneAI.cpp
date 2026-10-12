@@ -19,6 +19,9 @@
  *  - mining drones fly to the asteroid and mine one cycle.  at the end of the cycle the ore goes straight into the
  *     ship's cargo hold, provided the ship is within the drone's range.  mine repeatedly keeps going
  *  - return to bay: fly to the ship and enter the drone bay on arrival
+ *  - fighter bombers attack whatever they are told to (Crucible had no capital-only rule:  their 2250m explosion radius
+ *     makes them weak against subcapitals).  choosing a target themselves, they prefer one they hit in full
+ *     (DroneSE::PrefersTarget)
  *
  * Movement is done with ordinary destiny Orbit/Follow commands, which the client simulates the same way we do.
  *  each call below is idempotent (destiny ignores a command that changes nothing), so they are simply repeated every tick.
@@ -292,8 +295,6 @@ void DroneAIMgr::ProcessReturn(ShipSE* pController, bool toBay) {
 void DroneAIMgr::ProcessEngage(ShipSE* pController) {
     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
     bool usable((pTarget != nullptr) and !pTarget->IsDead() and (pTarget->SysBubble() == m_pDrone->SysBubble()));
-    if (usable and !m_pDrone->CanAttack(pTarget))
-        usable = false;
     if (usable and (pTarget->DestinyMgr() != nullptr))
         if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
             usable = false;
@@ -415,14 +416,22 @@ void DroneAIMgr::ProcessGuard(ShipSE* pController) {
     if (m_targetID == 0) {
         SystemEntity* pTarget(nullptr);
         if (m_order == DroneAI::Order::Assist) {
-            // go for whatever the assisted pilot's drones are engaging
+            // go for whatever the assisted pilot's drones are engaging (bombers:  a target their volleys hit in full first)
+            SystemEntity* pAny(nullptr);
             for (auto cur : m_pDrone->SystemMgr()->GetDrones())
                 if ((cur.second->GetControllerOwnerID() == m_activityCharID) and (cur.second->GetAI()->GetOrder() == DroneAI::Order::Engage)) {
-                    pTarget = m_pDrone->SystemMgr()->GetSE(cur.second->GetAI()->GetTargetID());
-                    if ((pTarget != nullptr) and m_pDrone->CanAttack(pTarget))
+                    SystemEntity* pSE(m_pDrone->SystemMgr()->GetSE(cur.second->GetAI()->GetTargetID()));
+                    if (pSE == nullptr)
+                        continue;
+                    if (pAny == nullptr)
+                        pAny = pSE;
+                    if (m_pDrone->PrefersTarget(pSE)) {
+                        pTarget = pSE;
                         break;
-                    pTarget = nullptr;
+                    }
                 }
+            if (pTarget == nullptr)
+                pTarget = pAny;
         } else {
             pTarget = PickAggressor();
         }
@@ -455,13 +464,16 @@ SystemEntity* DroneAIMgr::PickAggressor() {
     auto usable = [&](SystemEntity* pSE) -> bool {
         if ((pSE == nullptr) or pSE->IsDead() or (pSE->SysBubble() != m_pDrone->SysBubble()))
             return false;
-        if (!m_pDrone->CanAttack(pSE))
-            return false;
         if ((pSE->DestinyMgr() != nullptr) and (pSE->DestinyMgr()->IsCloaked() or pSE->DestinyMgr()->IsWarping()))
             return false;
         return (Gap(pController, pSE) <= m_pDrone->ControlRange());
     };
 
+    /* any drone can go for any target.  bombers do little to subcapitals, so when there is a choice they take a target
+     *  their volleys hit in full (DroneSE::PrefersTarget):  a focus fire target or our attacker, before one that isn't.
+     *  every other drone prefers anything, so it takes the first focus fire target, then the attacker, as before
+     */
+    SystemEntity* pFocus(nullptr);
     if (pController->GetPilot()->GetChar()->GetAttribute(AttrDroneFocusFire).get_int() != 0)
         for (auto cur : pSystem->GetDrones()) {
             DroneSE* pDrone(cur.second);
@@ -470,18 +482,25 @@ SystemEntity* DroneAIMgr::PickAggressor() {
             if (pDrone->GetAI()->GetOrder() != DroneAI::Order::Engage)
                 continue;
             SystemEntity* pTarget(pSystem->GetSE(pDrone->GetAI()->GetTargetID()));
-            if (usable(pTarget))
+            if (!usable(pTarget))
+                continue;
+            if (m_pDrone->PrefersTarget(pTarget))
                 return pTarget;
+            if (pFocus == nullptr)
+                pFocus = pTarget;
         }
 
-    if (m_aggressorID == 0)
-        return nullptr;
-    SystemEntity* pTarget(pSystem->GetSE(m_aggressorID));
-    if (!usable(pTarget)) {
-        m_aggressorID = 0;
-        return nullptr;
+    SystemEntity* pAggressor(nullptr);
+    if (m_aggressorID != 0) {
+        pAggressor = pSystem->GetSE(m_aggressorID);
+        if (!usable(pAggressor)) {
+            m_aggressorID = 0;
+            pAggressor = nullptr;
+        }
     }
-    return pTarget;
+    if ((pAggressor != nullptr) and m_pDrone->PrefersTarget(pAggressor))
+        return pAggressor;
+    return (pFocus != nullptr ? pFocus : pAggressor);
 }
 
 /* ======================================================================================
@@ -685,14 +704,17 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
             auto base = [&](uint16 attrID) -> float {
                 return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_float() : 0.0f);
             };
+            float quality(0.0f);
             Damage d(m_pDrone,
                      m_pDrone->GetSelf(),
                      base(AttrKineticDamage),
                      base(AttrThermalDamage),
                      base(AttrEmDamage),
                      base(AttrExplosiveDamage),
-                     m_formula.GetDroneToHit(m_pDrone, pTarget),
+                     m_formula.GetDroneToHit(m_pDrone, pTarget, &quality),
                      stats.effectID);
+            // bombers:  the hit message shows the quality roll, not explosion factor x quality
+            d.hitQuality = quality;
             d *= static_cast<float>(stats.damageMultiplier);
             // rates.damageRate is applied once, in SystemEntity::ApplyDamage() (bug B15:  it was applied here too)
             // this may destroy the target, and with it our lock
