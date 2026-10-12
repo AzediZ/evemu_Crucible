@@ -114,7 +114,7 @@ const char* NpcAI::GetProblemText(uint32 problemBit)
     switch (problemBit) {
         case Problem::TurretNoDamage:       return "effect 10 but zero damage -> turret disabled";
         case Problem::DamageNoTurretEffect: return "damage attributes but no effect 10 -> no turret";
-        case Problem::MissileAttrsNoEffect: return "missileLaunchDuration and entityMissileTypeID but no effect 569 -> no missiles (correct)";
+        case Problem::MissileAttrsNoEffect: return "missileLaunchDuration 1 and entityMissileTypeID but no effect 569 -> no missiles (correct)";
         case Problem::MissileNoDuration:    return "effect 569 without missileLaunchDuration -> 20s default";
         case Problem::NoScanResolution:     return "missing scanResolution -> scanSpeed fallback";
         case Problem::NoLockData:           return "missing scanResolution and scanSpeed -> radius table";
@@ -124,6 +124,7 @@ const char* NpcAI::GetProblemText(uint32 problemBit)
         case Problem::MissileTypeMissing:   return "effect 569 but no usable missile type -> no missiles";
         case Problem::L1LevelTwo:           return "AI_ShouldUseTargetSwitching 2 -> treated as 1";
         case Problem::NoTracking:           return "turret without trackingSpeed -> hits only targets without angular velocity";
+        case Problem::MissileNoEffect:      return "missileLaunchDuration and entityMissileTypeID but no effect 569 -> no missiles (they fired without RequireWeaponEffects)";
     }
     return "unknown";
 }
@@ -247,7 +248,7 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
         if (missileEffect and !hasDuration)
             r.problems |= NpcAI::Problem::MissileNoDuration;    // the dgm default (20s) is already in missileCycleMs
         if (!missileEffect and hasDuration and (r.missileTypeID > 0))
-            r.problems |= NpcAI::Problem::MissileAttrsNoEffect;
+            r.problems |= ((r.missileCycleMs == 1) ? NpcAI::Problem::MissileAttrsNoEffect : NpcAI::Problem::MissileNoEffect);
     } else {
         r.hasMissile = (r.missileCycleMs > 100) and (r.missileTypeID > 0);
     }

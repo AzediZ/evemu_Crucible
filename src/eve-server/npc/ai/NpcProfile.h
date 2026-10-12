@@ -37,7 +37,7 @@ namespace NpcAI {
         enum : uint32 {
             TurretNoDamage          = 1 << 0,   // effect 10 but no damage:  turret disabled
             DamageNoTurretEffect    = 1 << 1,   // damage attributes but no effect 10:  no turret
-            MissileAttrsNoEffect    = 1 << 2,   // missileLaunchDuration and entityMissileTypeID but no effect 569:  no missiles (correct)
+            MissileAttrsNoEffect    = 1 << 2,   // missileLaunchDuration 1 and entityMissileTypeID but no effect 569:  no missiles (correct)
             MissileNoDuration       = 1 << 3,   // effect 569 without missileLaunchDuration:  dgm default 20s
             NoScanResolution        = 1 << 4,   // no scanResolution:  lock time from scanSpeed
             NoLockData              = 1 << 5,   // neither scanResolution nor scanSpeed:  lock time from the radius table
@@ -47,7 +47,9 @@ namespace NpcAI {
             MissileTypeMissing      = 1 << 9,   // effect 569 but no usable missile type:  no missiles
             L1LevelTwo              = 1 << 10,  // AI_ShouldUseTargetSwitching 2 (type 2943):  treated as 1
             NoTracking              = 1 << 11,  // turret without trackingSpeed:  hits only targets without angular velocity
-            Count                   = 12
+            MissileNoEffect         = 1 << 12,  // a real missileLaunchDuration and entityMissileTypeID but no effect 569:  no missiles
+                                                //  (rogue drones, some commanders;  the attribute-only gating fired them)
+            Count                   = 13
         };
     }
     const char* GetProblemText(uint32 problemBit);

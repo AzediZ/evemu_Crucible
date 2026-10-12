@@ -1033,6 +1033,7 @@ void NPCAIMgr::CheckDistance(SystemEntity* pSE)
 
     m_isWandering = false;
 
+    int8 oldState(m_state);
     if (dist < m_flyRange) {
         SetEngaged(pSE);
     } else if (dist < m_boostRange) {
@@ -1041,8 +1042,11 @@ void NPCAIMgr::CheckDistance(SystemEntity* pSE)
         SetChasing(pSE);
     }
 
-    _log(NPC__AI_TRACE, "%s(%u): CheckDistance:  target: %s(%u), state: %s, dist: %.0fm, flyRange: %u, boostRange: %u.", \
-            m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID(), GetStateName(m_state), dist, m_flyRange, m_boostRange);
+    // one line per state change, not one per tick (npc ai plan 6.9)
+    if (oldState != m_state)
+        _log(NPC__AI_TRACE, "%s(%u): CheckDistance:  target: %s(%u), %s -> %s, dist: %.0fm, flyRange: %u, boostRange: %u.", \
+                m_npc->GetName(), m_npc->GetID(), pSE->GetName(), pSE->GetID(), GetStateName(oldState), GetStateName(m_state),
+                dist, m_flyRange, m_boostRange);
 
     Attack(pSE);
 }
