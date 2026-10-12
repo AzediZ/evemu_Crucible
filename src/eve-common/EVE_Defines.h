@@ -99,9 +99,6 @@
 #define maxNPCCorporation       1100000
 #define minAgent                3000000
 #define maxAgent                3999999
-#define npcTraderJoe            4000000
-#define minTrader               4000001
-#define maxTrader               5000000
 #define minRegion               10000000
 #define maxRegion               19999999
 #define minWHRegion             11000000
@@ -392,11 +389,6 @@
 (((itemID >= minNPC) && (itemID <= maxNPC)) \
 || ((itemID >= minTempItemID) && (itemID < minPIStructure)) \
 
-#define IsTraderJoe(itemID) \
-(itemID == npcTraderJoe)
-
-#define IsTrader(itemID) \
-((itemID >= minTrader) && (itemID <= maxTrader))
 
 
 /*

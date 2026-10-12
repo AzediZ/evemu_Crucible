@@ -297,6 +297,23 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         CheckSkillRange(pClient, orderStationID, EvESkill::Procurement);
         CheckOrderCount(pClient);
 
+        /* a buy order priced at or above sell orders its range reaches buys from them first, cheapest first (TQ matched
+         *  at placement).  only the remainder rests.  a buyer that can't pay for the first fill gets NotEnoughMoney */
+        uint32 bought = sMktMgr.BuyFromSellOrders(pClient, orderTypeID, qty, orderPrice, orderStationID, orderRange->value(), corpOrder, accountKey);
+        if (bought >= qty)
+            return nullptr;
+        if (bought > 0) {
+            qty -= bought;
+            // whatever couldn't be paid for stops here
+            double rest(orderPrice * qty);
+            if (sConfig.market.UseMarginTrading)
+                rest *= std::pow(0.75, pClient->GetChar()->GetSkillLevel(EvESkill::MarginTrading));
+            if (MarketMgr::GetWalletBalance(walletOwnerID, accountKey) < rest + GetBrokerFee(pClient, orderStationID, orderPrice * qty)) {
+                pClient->SendNotifyMsg("%u units were bought right away.  There is not enough ISK left to place an order for the other %u.", bought, qty);
+                return nullptr;
+            }
+        }
+
         // Margin Trading:  only part of the order's value goes into escrow
         double value(orderPrice * qty);
         double escrow(value);
@@ -315,7 +332,7 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         // set save data
         Market::SaveData data = Market::SaveData();
         data.accountKey         = accountKey;
-        data.minVolume          = std::max(1, std::min(minVolume->value(), quantity->value()));
+        data.minVolume          = std::max(1, std::min(minVolume->value(), (int32)qty));
         data.issued             = GetFileTimeNow();
         data.bid                = true;
         data.isCorp             = corpOrder;
@@ -426,10 +443,25 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     // they will be placing a sell order:
     CheckOrderCount(pClient);
 
+    // a sell order priced at or below buy orders that reach this station sells into them first, best price first (TQ
+    //  matched at placement).  only the remainder rests
+    uint32 sold = sMktMgr.SellToBuyOrders(pClient, iRef, qty, orderPrice, orderStationID, corpOrder, accountKey);
+    if (sold >= qty)
+        return nullptr;
+    qty -= sold;
+    if ((uint32)iRef->quantity() < qty) {
+        _log(MARKET__ERROR, "PlaceCharOrder - %s(%u) has %i left after selling %u, the order needs %u.", iRef->name(), iRef->itemID(), iRef->quantity(), sold, qty);
+        throw CustomError("Unable to find item to sell.");
+    }
+
     // broker fee on the order's value, using the standings of the order's station owner (taxes are paid when it sells)
     double total = orderPrice * qty;
     double fee = GetBrokerFee(pClient, orderStationID, total);
     _log(MARKET__DEBUG, "PlaceCharOrder(sell) - %s: Total: %.2f, Fee: %.2f", corpOrder ? "Corp" : "Player", total, fee);
+    if ((sold > 0) and (MarketMgr::GetWalletBalance(walletOwnerID, accountKey) < fee)) {
+        pClient->SendNotifyMsg("%u units were sold right away.  There is not enough ISK left for the broker's fee of an order for the other %u.", sold, qty);
+        return nullptr;
+    }
     MarketMgr::CheckFunds(walletOwnerID, accountKey, fee);
 
     // set save data

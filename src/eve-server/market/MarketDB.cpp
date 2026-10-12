@@ -411,31 +411,15 @@ PyRep *MarketDB::GetTransactions(uint32 ownerID, Market::TxData& data, bool isCo
 
     DBQueryResult res;
 
-    // Because the game client tries to resolve the identities of automated
-    // trader NPCs when using the wallet view, there's a possibility that trader
-    // NPCs won't exist like a typical player/corp, which causes errors when the
-    // server tries to look up identity information about the client. So if a
-    // trader NPC is the transaction's client, we instead replace it with the
-    // owner's ID as a workaround - this means that the player will see
-    // themselves as the client when looking at their wallet transactions, but
-    // the database is still storing the actual value.
-    //
-    // A different solution to this issue could be to instead seed the database
-    // with trader NPCs, but that hasn't been done yet and/or may not be
-    // warranted.
+    // the npc counterparties (the market sim's orders) are real npc corporations, which the client resolves itself
     if (!sDatabase.RunQuery(
         res,
         "SELECT"
         " transactionID, transactionDate, typeID, keyID, quantity, price,"
-        " transactionType, "
-        " CASE WHEN clientID >= %i AND clientID <= %i THEN %u ELSE clientID END AS clientID,"
-        " regionID, stationID, corpTransaction, characterID"
+        " transactionType, clientID, regionID, stationID, corpTransaction, characterID"
         " FROM mktTransactions "
         " WHERE ownerID=%u AND corpTransaction=%u AND quantity>=%u AND price>=%.2f AND transactionDate>=%lli%s"
         " ORDER BY transactionDate DESC LIMIT 1000",
-        minTrader-1, // includes trader joe
-        maxTrader,
-        ownerID,
         ownerID,
         isCorp ? 1 : 0,
         data.quantity,

@@ -89,7 +89,6 @@ while you are warping. `/tr` and `/halt` stay allowed so you can get out of a br
 | `/load` | Creates an item in your cargo hold or hangar (the client's /load form). | `me (typeID\|"Type Name") [qty]` | me: literal word (any value is accepted and ignored).<br>typeID / "Type Name": the type to create.<br>qty: how many (default 1). | `VIP` |
 | `/location` | Shows your current location in space. | none | - | `PLAYER` |
 | `/loop` | Runs another slash command several times. | `(count) (command...)` | count: number of runs (max 100).<br>command...: the command to run, e.g. /loop 3 /fit me 2048. /loop can't run /loop. | `VIP` |
-| `/marketbot_run` | Forces the MarketBot to refresh its orders now. | none | - | `PROGRAMMER` |
 | `/missioncomplete` | Completes the kill objective of an accepted mission. | `(agentID) [charID]` | agentID: the mission's agent.<br>charID: the character (default you). | `GML` |
 | `/nukem` | Kills every NPC in your bubble (same as /killallnpcs). | none | - | `ADMIN` |
 | `/online` | Onlines all modules on a ship. | `(me\|charID\|shipID)` | me: your ship.<br>charID: that character's ship.<br>shipID: that ship. | `VIP` |

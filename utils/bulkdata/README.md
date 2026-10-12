@@ -12,7 +12,7 @@ python -I utils/bulkdata/gen_client_sync.py --client "<EVE client folder>" [--su
 | File | Role |
 |------|------|
 | `evemarshal.py` | Reads EVE marshal streams, including packed DBRows. It is a port of `src/eve-common/marshal/EVEUnmarshal.cpp` and reads the string table from that source. Currency (`CY`) columns are scaled by 10000. |
-| `serverdata.py` | Gives a static table as a fresh install has it: the `sql/base` dump plus the Up sections of the migrations, leaving out this generator's own files. It understands INSERT/REPLACE, simple UPDATE/DELETE, ALTER ADD/DROP/MODIFY, and the F16 `UPDATE ... JOIN invTypes`. Statements it can't follow are listed as unhandled. |
+| `serverdata.py` | Gives a static table as a fresh install has it: the `sql/base` dump plus the Up sections of the migrations, leaving out this generator's own files. It understands INSERT/REPLACE, simple UPDATE/DELETE, ALTER ADD/DROP/MODIFY, and the F16 `UPDATE ... JOIN invTypes`. Statements it can't follow are listed as unhandled. `load_synced(name)` adds this generator's own files back (their `cs_`/`csn_` staging rows), which gives the table exactly as the database has it after all migrations. |
 | `specs.py` | Pairs each client table with its server table or tables, and holds the column renames, keys and per-table rules. |
 | `compare.py` | The comparison and the report. |
 | `gen_client_sync.py` | Writes the migrations, one per group: inventory, dogma, industry, map, stations, characters, certificates, planets, resources. |

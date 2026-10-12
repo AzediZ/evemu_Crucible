@@ -44,7 +44,6 @@ EVEServerConfig::EVEServerConfig()
     // items with /*x*/ behind them denote time identifier, with x = (s=seconds, m=minutes, etc)
 
     // server
-    server.TraderJoe = false;//N
     server.maxPlayers = 500;    // max authenticated sessions; 0 = unlimited.  VIP/GM roles bypass, others get a logon queue position
     server.BulkDataOD = false;
     server.BulkDataAutoVersion = true;  // derive the bulk data changeID from table checksums
@@ -424,7 +423,6 @@ EVEServerConfig::EVEServerConfig()
     files.logSettings = "../etc/log.ini";
     files.cacheDir = "../server_cache/";
     files.imageDir = "../image_cache/";
-    files.marketBotSettings = "../etc/MarketBot.xml";
 
     // net
     net.port = 26000;
@@ -509,7 +507,6 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
 bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
 {
     AddValueParser( "DisableIGB",           server.DisableIGB );
-    AddValueParser( "TraderJoe",            server.TraderJoe );
     AddValueParser( "maxPlayers",           server.maxPlayers );
     AddValueParser( "NoobShipCheck",        server.NoobShipCheck );
     AddValueParser( "BulkDataOD",           server.BulkDataOD );
@@ -535,7 +532,6 @@ bool EVEServerConfig::ProcessServer( const TiXmlElement* ele )
     const bool result = ParseElementChildren( ele );
 
     RemoveParser( "DisableIGB" );
-    RemoveParser( "TraderJoe" );
     RemoveParser( "maxPlayers" );
     RemoveParser( "NoobShipCheck" );
     RemoveParser( "BulkDataOD" );

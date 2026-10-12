@@ -53,7 +53,7 @@ sql/
     contains this README and the tool
 
 sql/seed_and_clean/
-    contains market seeding sql scripts and scripts to clean the db
+    contains scripts to clean the db (market orders come from the market simulation, see doc/code_and_design_notes/market-sim/PLAN.md)
 
 sql/base/
     contains all the base db tables for the server emulator for EVEmu stored in GZipped format. These should NEVER be updated/modified.

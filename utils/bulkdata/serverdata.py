@@ -444,3 +444,81 @@ def load(name, skip_migrations=()):
                 table.unhandled.append((fn, st[:200]))
     _cache[key] = table
     return table
+
+
+_CS_TABLE = re.compile(r'CREATE TEMPORARY TABLE `(csn?)_(\w+)` \((.*?)\n\);', re.S)
+
+
+def synced_files():
+    """the migrations gen_client_sync.py wrote, in order"""
+    for fn, p in migration_files():
+        with open(p, encoding='utf-8', errors='replace', newline='') as f:
+            if f.read(len(SKIP_HEADER)) == SKIP_HEADER:
+                yield fn, p
+
+
+def load_synced(name):
+    """the table as a fresh install has it with the client-sync migrations too:  load() plus the rows those files stage
+    in their temporary tables:  csn_<table> holds whole new rows;  in cs_<table> op 'i' inserts a row, 'd' deletes it,
+    'u' sets the columns whose bit is set in mask (bit i = the i-th non-key column of cs_<table>).  The sync files are
+    replayed after every other migration, which is right as long as no later hand-written migration changes the same
+    rows.  Returns a new Table (load()'s cached one is left alone);  t.sources lists the sync files that had rows for
+    it."""
+    key = ('synced', name)
+    if key in _cache:
+        return _cache[key]
+    base = load(name)
+    t = Table(base.name, list(base.columns), dict(base.types), list(base.pk))
+    t.notnull, t.defaults, t.autoinc = set(base.notnull), dict(base.defaults), set(base.autoinc)
+    t.rows = [dict(r) for r in base.rows]
+    t.unhandled = list(base.unhandled)
+    t.sources = list(base.sources)
+    for fn, p in synced_files():
+        up = up_section(open(p, encoding='utf-8', errors='replace', newline='').read())
+        for m in _CS_TABLE.finditer(up):
+            if m.group(2).lower() != name.lower():
+                continue
+            tmp = m.group(1) + '_' + m.group(2)
+            body = m.group(3)
+            cols = re.findall(r'^\s*`(\w+)`', body, re.M)
+            pkm = re.search(r'PRIMARY KEY \(([^)]*)\)', body)
+            pk = [c.strip().strip('`') for c in pkm.group(1).split(',')] if pkm else list(t.pk)
+            data_cols = [c for c in cols if c not in ('op', 'mask') and c not in pk]
+            index = {tuple(str(r.get(t.lc(k))) for k in pk): r for r in t.rows}
+            pat = re.compile(r'INSERT INTO `%s` \(([^)]*)\) VALUES\s*' % re.escape(tmp))
+            # the staging rows sit between this CREATE and the temporary table's DROP
+            end = up.find('DROP TEMPORARY TABLE `%s`' % tmp, m.end())
+            section = up[m.end():] if end < 0 else up[m.end():end]
+            for im in pat.finditer(section):
+                icols = [c.strip().strip('`') for c in im.group(1).split(',')]
+                rows, _ = parse_values(section, im.end())
+                for rv in rows:
+                    r = dict(zip(icols, rv))
+                    k = tuple(str(r[c]) for c in pk)
+                    op = r.get('op', 'i')
+                    if op == 'd':
+                        old = index.pop(k, None)
+                        if old is not None:
+                            t.rows.remove(old)
+                    elif op == 'i':
+                        row = dict.fromkeys(t.columns)
+                        row.update(t.defaults)
+                        for c in icols:
+                            if c not in ('op', 'mask') and t.lc(c):
+                                row[t.lc(c)] = r[c]
+                        old = index.pop(k, None)
+                        if old is not None:
+                            t.rows.remove(old)
+                        t.rows.append(row)
+                        index[k] = row
+                    else:
+                        row = index.get(k)
+                        if row is None:
+                            continue
+                        for bit, c in enumerate(data_cols):
+                            if int(r['mask']) & (1 << bit) and t.lc(c):
+                                row[t.lc(c)] = r.get(c)
+                if fn not in t.sources:
+                    t.sources.append(fn)
+    _cache[key] = t
+    return t
