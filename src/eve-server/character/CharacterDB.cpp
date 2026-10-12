@@ -897,6 +897,25 @@ void CharacterDB::SetCharacterOnlineStatus(uint32 char_id, bool online) {
         sDatabase.RunQuery(err, "UPDATE srvStatus SET Connections = Connections + 1");
 }
 
+uint32 CharacterDB::GetFreeSkillPoints(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT freeSkillPoints FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in GetFreeSkillPoints query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void CharacterDB::SetFreeSkillPoints(uint32 charID, uint32 points)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrCharacters SET freeSkillPoints = %u WHERE characterID = %u", points, charID);
+}
+
 PyRep* CharacterDB::GetContacts(uint32 charID)
 {
     // inWatchlist is a bit(1) column; cast so it arrives as an int

@@ -93,16 +93,17 @@ uint32 Skill::GetCurrentSP(Character* ch, int64 startTime/*0*/)
     if (level > EvESkill::MAXSKILLLEVEL)
         level = EvESkill::MAXSKILLLEVEL;
 
-    /** @todo this isnt completely right.... */
-    // at this point, the skill is in training.  calculate accumulated sp and return
-    uint32 delta(0);
-    uint32 timeElapsed((GetFileTimeNow() - startTime) / EvE::Time::Second);
-    // skill in training - return updated SP based on elapsed training
-    delta = (timeElapsed / 60) * ch->GetSPPerMin(this);
+    // at this point, the skill is in training.  calculate accumulated sp (client: spm * elapsed minutes, unrounded)
+    double elapsedSec(double(GetFileTimeNow() - startTime) / EvE::Time::Second);
+    uint32 delta((uint32)(elapsedSec * ch->GetSPPerMin(this) / 60.0));
     currentSP += delta;
+    // never accrue past the level being trained
+    uint32 maxSP(GetSPForLevel(level));
+    if (currentSP > maxSP)
+        currentSP = maxSP;
 
-    _log(SKILL__TRACE, "Skill::GetCurrentSP() for %s is %u - delta: %u, elapsed time: %us", \
-            name(), currentSP, delta, timeElapsed);
+    _log(SKILL__TRACE, "Skill::GetCurrentSP() for %s is %u - delta: %u, elapsed time: %.0fs", \
+            name(), currentSP, delta, elapsedSec);
 
     return currentSP;
 }
@@ -116,15 +117,13 @@ uint32 Skill::GetRemainingSP(Character* ch, int64 curTime/*0*/)
     if (curTime == 0)
         curTime = GetFileTimeNow();
 
-    // get full sp needed for next level
-    uint32 remainingSP(GetSPForLevel(level) - GetAttribute(AttrSkillPoints).get_uint32());
-
-    float timeLeft((ch->GetEndOfTraining() - curTime) / EvE::Time::Second);
-    // if remaining time > 1m, subtract spm from total to get remaining
-    if (timeLeft > 60)
-        remainingSP -= ((timeLeft / 60) * ch->GetSPPerMin(this));
-
-    return remainingSP;
+    // remaining sp = what is still to be trained at the current rate until the end of training
+    double timeLeft(double(ch->GetEndOfTraining() - curTime) / EvE::Time::Second);
+    if (timeLeft <= 0)
+        return 0;
+    uint32 remainingSP((uint32)ceil(timeLeft * ch->GetSPPerMin(this) / 60.0));
+    uint32 maxRemaining(GetSPForLevel(level) - GetAttribute(AttrSkillPoints).get_uint32());
+    return std::min(remainingSP, maxRemaining);
 }
 
 uint32 Skill::GetTrainingTime(Character* ch, int64 startTime/*0*/)
@@ -133,20 +132,25 @@ uint32 Skill::GetTrainingTime(Character* ch, int64 startTime/*0*/)
     if (level > EvESkill::MAXSKILLLEVEL)
         return 0;
 
+    float spm(ch->GetSPPerMin(this));
+    if (spm <= 0)
+        return 0;
     // get full sp needed for next level
     uint32 remainingSP(GetSPForLevel(level) - GetAttribute(AttrSkillPoints).get_uint32());
-    // divide by spm to get time and convert to seconds
-    uint32 timeLeft((remainingSP / ch->GetSPPerMin(this)) * 60);
+    // divide by spm to get minutes and convert to seconds (unrounded, like the client)
+    double timeLeft(double(remainingSP) / spm * 60.0);
 
     if (startTime == 0)
-        return timeLeft;
+        return (uint32)ceil(timeLeft);
 
-    uint32 delta = (uint32)ceil((GetFileTimeNow() -  startTime) / EvE::Time::Second);
-    if (delta < 1)
-        return timeLeft;
+    double delta(double(GetFileTimeNow() - startTime) / EvE::Time::Second);
+    if (delta <= 0)
+        return (uint32)ceil(timeLeft);
+    if (delta >= timeLeft)
+        return 0;
 
     // this skill is currently training.  subtract accumulated time from total and return
-    return timeLeft - delta;
+    return (uint32)ceil(timeLeft - delta);
 }
 
 void Skill::VerifyAttribs()
@@ -223,6 +227,25 @@ bool Skill::SkillPrereqsComplete(Character &ch) {
     }
 
     return test;
+}
+
+void Skill::GetMissingPrereqs(Character &ch, std::vector<std::pair<uint16, uint8>>& missing)
+{
+    static const uint16 reqAttrs[6][2] = {
+        {AttrRequiredSkill1, AttrRequiredSkill1Level}, {AttrRequiredSkill2, AttrRequiredSkill2Level},
+        {AttrRequiredSkill3, AttrRequiredSkill3Level}, {AttrRequiredSkill4, AttrRequiredSkill4Level},
+        {AttrRequiredSkill5, AttrRequiredSkill5Level}, {AttrRequiredSkill6, AttrRequiredSkill6Level}
+    };
+    EvilNumber skillID(0);
+    for (uint8 i = 0; i < 6; ++i) {
+        if (!HasAttribute(reqAttrs[i][0], skillID))
+            continue;
+        if (skillID.get_uint32() == 0)
+            continue;
+        uint8 level(GetAttribute(reqAttrs[i][1]).get_uint32());
+        if (ch.GetSkillLevel(skillID.get_uint32()) < level)
+            missing.push_back(std::make_pair((uint16)skillID.get_uint32(), level));
+    }
 }
 
 bool Skill::FitModuleSkillCheck(InventoryItemRef iRef, CharacterRef cRef) {

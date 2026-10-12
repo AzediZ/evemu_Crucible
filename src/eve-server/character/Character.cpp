@@ -247,6 +247,7 @@ Character::Character(
   m_loaded(false),
   m_fleetData(CharFleetData()),
   m_freePoints(0),
+  m_lastFreeApply(0),
   m_loginTime(0)
 {
     // enforce characters to be singletons
@@ -255,6 +256,7 @@ Character::Character(
     if (!IsAgent(m_itemID)) {
         m_loginTime = sEntityList.GetStamp();
         pInventory = new Inventory(InventoryItemRef(this));
+        m_freePoints = CharacterDB::GetFreeSkillPoints(m_itemID);
     }
 }
 
@@ -1242,10 +1244,10 @@ void Character::ClearSkillFlags()
         cur->SetFlag(flagSkill, false);
 }
 
-uint8 Character::GetSPPerMin(Skill* skill)
+float Character::GetSPPerMin(Skill* skill)
 {
-    uint8 primary = GetAttribute(skill->GetAttribute(AttrPrimaryAttribute).get_uint32()).get_uint32();
-    uint8 secondary = GetAttribute(skill->GetAttribute(AttrSecondaryAttribute).get_uint32()).get_uint32();
+    float primary = GetAttribute(skill->GetAttribute(AttrPrimaryAttribute).get_uint32()).get_float();
+    float secondary = GetAttribute(skill->GetAttribute(AttrSecondaryAttribute).get_uint32()).get_float();
     return EvEMath::Skill::PointsPerMinute(primary, secondary);
 }
 
@@ -1327,13 +1329,25 @@ int64 Character::GetEndOfTraining() {
 
 void Character::RemoveFromQueue(SkillRef sRef)
 {
+    // drop queue entries for levels of this skill that are already trained
+    uint32 level(sRef->GetAttribute(AttrSkillLevel).get_uint32());
     SkillQueue::iterator itr = m_skillQueue.begin();
     while (itr != m_skillQueue.end()) {
-        if (sRef->typeID() == itr->typeID)
-            if (sRef->GetAttribute(AttrSkillLevel).get_uint32() >= itr->level)
-                itr = m_skillQueue.erase(itr);
+        if ((sRef->typeID() == itr->typeID) and (itr->level <= level)) {
+            itr = m_skillQueue.erase(itr);
+        } else {
+            ++itr;
+        }
     }
     SkillQueueLoop();
+}
+
+bool Character::IsSkillQueued(uint16 typeID) const
+{
+    for (auto cur : m_skillQueue)
+        if (cur.typeID == typeID)
+            return true;
+    return false;
 }
 
 void Character::ClearSkillQueue(bool update/*false*/)
@@ -1358,6 +1372,24 @@ PyTuple *Character::SendSkillQueue() {
         tuple->SetItem(0, list);
         tuple->SetItem(1, new PyInt(m_freePoints));
     return tuple;
+}
+
+void Character::AddFreeSkillPoints(int32 delta)
+{
+    int64 newFree(int64(m_freePoints) + delta);
+    if (newFree < 0)
+        newFree = 0;
+    if (newFree > 0xFFFFFFFFLL)
+        newFree = 0xFFFFFFFFLL;
+    m_freePoints = (uint32)newFree;
+    CharacterDB::SetFreeSkillPoints(m_itemID, m_freePoints);
+
+    // m_pClient is stale after logoff
+    if ((m_pClient == nullptr) or (sEntityList.FindClientByCharID(m_itemID) != m_pClient))
+        return;
+    PyTuple* tmp = new PyTuple(1);
+        tmp->SetItem(0, new PyInt(m_freePoints));
+    m_pClient->SendNotification("OnFreeSkillPointsChanged", "charid", &tmp, false);
 }
 
 uint32 Character::GetTotalSP() {
@@ -1460,33 +1492,30 @@ uint8 Character::InjectSkillIntoBrain(SkillRef skill) {
     // returns
     // 1=success, 2=prereqs, 3=already known, 4=split fail, 5=load fail
 
+    // the caller (SkillMgrBound::InjectSkillIntoBrain) turns failures into the client's UserErrors
     SkillRef oldSkill(GetCharSkillRef(skill->typeID()));
-    if (oldSkill.get() != nullptr) {
-        /** @todo: build and send proper UserError for CharacterAlreadyKnowsSkill. */
-        m_pClient->SendNotifyMsg("You already know this skill.");
+    if (oldSkill.get() != nullptr)
         return 3;
-    }
 
     /** @todo config option (later) to check if another character on this account is training a skill.
      *  If so, send error, cancel inject and return. (flagID=61).
      */
 
     if (!skill->SkillPrereqsComplete(*this)) {
-        /** @todo need to send back a response to the client.  need packet specs. */
         _log(SKILL__DEBUG, "%s(%u): Requested to inject %s (%u/%u) but prereq not complete.", \
                 name(), m_itemID, skill->name(), skill->typeID(), skill->itemID());
-        m_pClient->SendNotifyMsg("Injection failed.  Skill prerequisites incomplete.");
         return 2;
     }
 
     // are we injecting from a stack of skills?
     if (skill->quantity() > 1) {
         // split the stack to obtain single item
-        skill = SkillRef::StaticCast(skill->Split(1));
-        if (skill.get() == nullptr ) {
+        SkillRef single(SkillRef::StaticCast(skill->Split(1)));
+        if (single.get() == nullptr ) {
             _log(ITEM__ERROR, "%s (%u): Unable to split stack of %s (%u).", name(), m_itemID, skill->name(), skill->itemID());
             return 4;
         }
+        skill = single;
     }
 
     skill->ChangeSingleton(true);

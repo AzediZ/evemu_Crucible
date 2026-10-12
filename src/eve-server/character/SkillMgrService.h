@@ -62,6 +62,7 @@ protected:
     PyResult CharStartTrainingSkill(PyCallArgs& call, PyInt* itemID, PyInt* locationID);
     PyResult AddToEndOfSkillQueue(PyCallArgs& call, PyInt* skillID, PyInt* nextLevel);
     PyResult InjectSkillIntoBrain(PyCallArgs& call, PyList* skillItemIDs, PyInt* stationID);
+    PyResult ApplyFreeSkillPoints(PyCallArgs& call, PyInt* skillTypeID, PyInt* points);
     PyResult SaveSkillQueue(PyCallArgs& call, PyList* skillQueue);
     PyResult CharStartTrainingSkillByTypeID(PyCallArgs& call, PyInt* skillTypeID);
     PyResult RespecCharacter(PyCallArgs& call, PyInt* charisma, PyInt* intelligence, PyInt* memory, PyInt* perception, PyInt* willpower);

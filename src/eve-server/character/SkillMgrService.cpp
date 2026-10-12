@@ -51,6 +51,7 @@ SkillMgrBound::SkillMgrBound(EVEServiceManager &mgr, SkillMgrService& parent, Ch
     m_db(db)
 {
     this->Add("InjectSkillIntoBrain", &SkillMgrBound::InjectSkillIntoBrain);
+    this->Add("ApplyFreeSkillPoints", &SkillMgrBound::ApplyFreeSkillPoints);
     this->Add("GetSkillQueueAndFreePoints", &SkillMgrBound::GetSkillQueueAndFreePoints);
     this->Add("SaveSkillQueue", &SkillMgrBound::SaveSkillQueue);
     this->Add("AddToEndOfSkillQueue", &SkillMgrBound::AddToEndOfSkillQueue);
@@ -119,71 +120,146 @@ PyResult SkillMgrBound::InjectSkillIntoBrain(PyCallArgs &call, PyList* skillItem
         skillItemIDsList.push_back(t->value());
     }
 
-    // make a list of skills successfully injected to display after injection
-    // name, ret value  where 1=success, 2=prereqs, 3=already known, 4=split fail, 5=load fail
-    std::map<std::string, uint8> skills;
-    SkillRef skill(nullptr);
+    // inject every skill; the first failure is reported to the client with its own message after the loop
+    //  ret values: 1=success, 2=prereqs, 3=already known, 4=split fail, 5=load fail, 6=not a skill
+    uint8 failCode(0);
+    uint16 failTypeID(0);
+    std::vector<std::pair<uint16, uint8>> missing;
+    bool injected(false);
     CharacterRef cRef(call.client->GetChar());
     for (auto cur : skillItemIDsList)  {
-        skill = sItemFactory.GetSkillRef(cur);
-        if (skill.get() == nullptr) {
+        InventoryItemRef iRef(sItemFactory.GetItemRef(cur));
+        if ((iRef.get() == nullptr) or (iRef->ownerID() != call.client->GetCharacterID())) {
             _log( ITEM__ERROR, "%s: failed to load skill %u for injection.", call.client->GetName(), cur);
-            std::string str = "Invalid Name #";
-            str += std::to_string(cur);
-            skills.emplace(str, 5);
+            if (failCode == 0)
+                failCode = 5;
+            continue;
+        }
+        if (iRef->categoryID() != EVEDB::invCategories::Skill) {
+            if (failCode == 0) {
+                failCode = 6;
+                failTypeID = iRef->typeID();
+            }
+            continue;
+        }
+        SkillRef skill(sItemFactory.GetSkillRef(cur));
+        if (skill.get() == nullptr) {
+            if (failCode == 0)
+                failCode = 5;
             continue;
         }
 
-        skills.emplace(skill->itemName(), cRef->InjectSkillIntoBrain(skill));
+        uint8 ret(cRef->InjectSkillIntoBrain(skill));
+        if (ret == 1) {
+            injected = true;
+            continue;
+        }
+        if (failCode == 0) {
+            failCode = ret;
+            failTypeID = skill->typeID();
+            if (ret == 2)
+                skill->GetMissingPrereqs(*cRef, missing);
+        }
     }
 
-    // build and populate status reply
-    if (skills.empty())
-        return nullptr;
+    if (injected) {
+        PyTuple* tmp = new PyTuple(1);
+        tmp->SetItem(0, new PyString("OnSkillInjected"));
+        call.client->QueueDestinyEvent(&tmp);
+    }
 
-    if (skills.size() == 1) {
-        std::string status;
-        switch (skills.begin()->second) {
-            //1=success, 2=prereqs, 3=already known, 4=split fail, 5=load fail
-            case 1: status = "<color=green>Success.</color>"; break;
-            case 2: status = "<color=red>Failed:</color> <color=yellow>Prerequisites incomplete.</color>"; break;
-            case 3: status = "<color=red>Failed:</color> <color=cyan>Skill already known.</color>"; break;
-            case 4: status = "<color=red>Failed:</color> <color=red>Stack split failure.</color>"; break;
-            case 5: status = "<color=red>Failed:</color> <color=maroon>Skill loading failure.</color>"; break;
-            default: status = "<color=red>Failed:</color> <color=red>Unknown Error.</color>"; break;
-        }
-        call.client->SendInfoModalMsg("Injection of %s:  %s", skills.begin()->first.c_str(), status.c_str());
-    } else {
-        std::string status;
-        std::ostringstream str;
-        str.clear();
-        str << "The Injection of %u skills for %s has resulted in the following outcome.<br><br>"; //40
-
-        for (auto cur : skills) {
-            switch (cur.second) {
-                //1=success, 2=prereqs, 3=already known, 4=split fail, 5=load fail
-                case 1: status = "<color=green>Success.</color>"; break;
-                case 2: status = "<color=red>Failed:</color> <color=yellow>Prerequisites incomplete.</color>"; break;
-                case 3: status = "<color=red>Failed:</color> <color=cyan>Skill already known.</color>"; break;
-                case 4: status = "<color=red>Failed:</color> <color=red>Stack split failure.</color>"; break;
-                case 5: status = "<color=red>Failed:</color> <color=maroon>Skill loading failure.</color>"; break;
-                default: status = "<color=red>Failed:</color> <color=red>Unknown Error.</color>"; break;
+    switch (failCode) {
+        case 0:
+        case 1:
+            break;
+        case 2: {
+            std::string list;
+            for (auto cur : missing) {
+                if (!list.empty())
+                    list += ", ";
+                list += sDataMgr.GetTypeName(cur.first);
+                list += " ";
+                list += std::to_string(cur.second);
             }
-            str << cur.first << " - " << status << "<br>"; //40 for name, 80 for status (120)
+            throw UserError ("SkillHasPrerequisites")
+                    .AddAmount ("skillCount", (int)missing.size())
+                    .AddFormatValue ("requiredSkills", new PyString(list));
         }
-
-        int size = skills.size() * 120;
-        size += 100;    // for header, including char name
-        char* reply = Memory::Allocator::NewArray<char>(&sAllocators.tickAllocator, size);
-        snprintf(reply, size, str.str().c_str(), skills.size(), call.client->GetName());
-
-        call.client->SendInfoModalMsg(reply);
+        case 3:
+            throw UserError ("CharacterAlreadyKnowsSkill")
+                    .AddFormatValue ("skillName", new PyInt(failTypeID));
+        case 6:
+            throw UserError ("ItemNotASkill")
+                    .AddFormatValue ("skillName", new PyInt(failTypeID));
+        case 4:
+        default:
+            throw CustomError ("Injection of %s failed.", (failTypeID ? sDataMgr.GetTypeName(failTypeID) : "the skill"));
     }
 
-    PyTuple* tmp = new PyTuple(1);
-    tmp->SetItem(0, new PyString("OnSkillInjected"));
-    call.client->QueueDestinyEvent(&tmp);
     return nullptr;
+}
+
+PyResult SkillMgrBound::ApplyFreeSkillPoints(PyCallArgs &call, PyInt* skillTypeID, PyInt* points)
+{
+    // client skillsvc.ApplyFreeSkillPoints() checks most of this; enforce it here as well.  returns the new free point total
+    CharacterRef cRef(call.client->GetChar());
+    int64 now(GetFileTimeNow());
+    int64 wait(cRef->GetLastFreeSkillPointApply() + EvE::Time::Second * 10 - now);
+    if (wait > 0) {
+        uint32 sec((uint32)((wait + EvE::Time::Second - 1) / EvE::Time::Second));
+        std::string time(std::to_string(sec));
+        time += (sec == 1 ? " second" : " seconds");
+        throw UserError ("CannotApplyFreePointsPleaseWait")
+                .AddFormatValue ("remainingTime", new PyString(time));
+    }
+
+    uint32 pool(cRef->GetFreeSkillPoints());
+    if (pool == 0)
+        throw UserError ("CannotApplyFreePointsYouHaveNone");
+    if (cRef->GetSkillInTraining() != nullptr)
+        throw UserError ("CannotApplyFreePointsWhileQueueActive");
+
+    uint16 typeID(skillTypeID->value());
+    SkillRef sRef(cRef->GetCharSkillRef(typeID));
+    if (sRef.get() == nullptr)
+        throw UserError ("CannotApplyFreePointsDoNotHaveSkill")
+                .AddFormatValue ("skillName", new PyString(sDataMgr.GetTypeName(typeID)));
+
+    if (cRef->IsSkillQueued(typeID))
+        throw UserError ("CannotApplyFreePointsToQueuedSkill")
+                .AddFormatValue ("skillName", new PyString(sDataMgr.GetTypeName(typeID)));
+
+    uint32 currentSP(sRef->GetAttribute(AttrSkillPoints).get_uint32());
+    uint32 maxSP(sRef->GetSPForLevel(EvESkill::MAXSKILLLEVEL));
+    if (currentSP >= maxSP)
+        throw UserError ("CannotApplyFreePointsSkillAtMaxLevel")
+                .AddFormatValue ("skillName", new PyString(sDataMgr.GetTypeName(typeID)));
+
+    int32 requested(points->value());
+    if (requested <= 0)
+        return new PyInt(pool);
+    uint32 apply(std::min((uint32)requested, maxSP - currentSP));
+    if (apply > pool)
+        throw UserError ("CannotApplyFreePointsNotEnoughRemaining")
+                .AddAmount ("pointsRequested", apply)
+                .AddAmount ("pointsRemaining", pool);
+
+    uint32 newSP(currentSP + apply);
+    uint8 newLevel(sRef->GetLevelForSP(newSP));
+    if (newLevel > EvESkill::MAXSKILLLEVEL)
+        newLevel = EvESkill::MAXSKILLLEVEL;
+    sRef->SetAttribute(AttrSkillPoints, newSP, true);
+    sRef->SetAttribute(AttrSkillLevel, newLevel, true);
+    sRef->SaveItem();
+    cRef->SaveSkillHistory(EvESkill::Event::SkillPointsApplied, now, cRef->itemID(), typeID, newLevel, newSP);
+    cRef->SetLastFreeSkillPointApply(now);
+    cRef->AddFreeSkillPoints(-(int32)apply);
+    cRef->GetTotalSP();
+
+    _log(SKILL__INFO, "%s(%u): applied %u free skill points to %s (%u -> %u sp, level %u).", \
+            cRef->name(), cRef->itemID(), apply, sRef->name(), currentSP, newSP, newLevel);
+
+    return new PyInt(cRef->GetFreeSkillPoints());
 }
 
 PyResult SkillMgrBound::SaveSkillQueue(PyCallArgs &call, PyList* skillQueue) {

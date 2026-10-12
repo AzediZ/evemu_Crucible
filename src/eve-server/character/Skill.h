@@ -79,6 +79,8 @@ public:
     // returns remaining time in seconds to train this skill to next level
     uint32 GetTrainingTime(Character* ch, int64 startTime=0);
     bool SkillPrereqsComplete(Character &ch);
+    // fills 'missing' with (skillTypeID, requiredLevel) of every prerequisite the character hasnt trained yet
+    void GetMissingPrereqs(Character &ch, std::vector<std::pair<uint16, uint8>>& missing);
     static bool FitModuleSkillCheck(InventoryItemRef item, CharacterRef ch);
 
     void VerifySP();

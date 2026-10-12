@@ -33,21 +33,25 @@ uint8 EvEMath::Skill::LevelForPoints(uint32 currentSP, uint8 rank)
     return (uint8)EvE::min(ret, EvESkill::MAXSKILLLEVEL);
 }
 
-uint8 EvEMath::Skill::PointsPerMinute(uint8 pAttr, uint8 sAttr)
+float EvEMath::Skill::PointsPerMinute(float pAttr, float sAttr)
 {
-    return (pAttr + (0.5f * sAttr));
+    return (pAttr + (sAttr / 2.0f));
 }
 
-int64 EvEMath::Skill::StartTime(uint32 currentSP, uint32 nextSP, uint8 SPMin, int64 timeNow)
+int64 EvEMath::Skill::StartTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow)
 {
-    return (timeNow - (((nextSP - currentSP) / SPMin) * EvE::Time::Minute));
+    if ((SPMin <= 0) or (currentSP >= nextSP))
+        return timeNow;
+    return (timeNow - (int64)(double(nextSP - currentSP) / SPMin * EvE::Time::Minute));
 }
 
-int64 EvEMath::Skill::EndTime(uint32 currentSP, uint32 nextSP, uint8 SPMin, int64 timeNow)
+int64 EvEMath::Skill::EndTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow)
 {
     if (currentSP >= nextSP)
         return 0;
-    return ((((nextSP - currentSP) / SPMin) * EvE::Time::Minute) + timeNow);
+    if (SPMin <= 0)
+        return timeNow;
+    return (timeNow + (int64)(double(nextSP - currentSP) / SPMin * EvE::Time::Minute));
 }
 
 

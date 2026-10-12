@@ -159,6 +159,34 @@ PyResult Command_giveisk(Client* who, CommandDB* db, EVEServiceManager &services
     return new PyString("Operation successful.");
 }
 
+PyResult Command_freesp(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (args.argCount() < 3)
+        throw CustomError ("Correct Usage: /freesp [charID|me] [amount]");
+
+    uint32 charID(0);
+    if (args.arg(1) == "me") {
+        charID = who->GetCharacterID();
+    } else if (args.isNumber(1)) {
+        charID = atol(args.arg(1).c_str());
+    } else {
+        throw CustomError ("Argument 1 should be a character ID ('me'=self)");
+    }
+    if (!IsCharacterID(charID))
+        throw CustomError ("%u is not a character ID", charID);
+
+    int32 amount(atoi(args.arg(2).c_str()));
+    if (amount == 0)
+        throw CustomError ("Argument 2 should be a non-zero amount of skill points");
+
+    // works for offline characters too
+    CharacterRef cRef(sItemFactory.GetCharacterRef(charID));
+    if (cRef.get() == nullptr)
+        throw CustomError ("Character %u not found", charID);
+    cRef->AddFreeSkillPoints(amount);
+    return new PyString("Operation successful.");
+}
+
 PyResult Command_pop(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
     if (4 != args.argCount())

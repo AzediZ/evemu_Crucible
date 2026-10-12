@@ -244,7 +244,7 @@ public:
     void            GetSkillsList(std::vector<InventoryItemRef>& skills) const;
     void            VerifySP();
     uint32          GetTotalSPTrained()                 { return m_charData.skillPoints; };
-    uint8           GetSPPerMin(Skill* skill);
+    float           GetSPPerMin(Skill* skill);
     int64           GetEndOfTraining();
     uint8           InjectSkillIntoBrain(SkillRef skill);
     void            AddToSkillQueue(uint16 typeID, uint8 level);
@@ -257,6 +257,7 @@ public:
     void            UpdateSkillQueue();
     void            UpdateSkillQueueEndTime();
     void            RemoveFromQueue(SkillRef sRef);
+    bool            IsSkillQueued(uint16 typeID) const;
     void            ClearSkillFlags();
     /* takes one level's worth of skill points off a skill, which drops a level (T3 ship loss, clone penalty).
      *  spAmount > 0 takes that many skill points instead (the level follows the points).
@@ -265,6 +266,12 @@ public:
 
     PyRep*          GetSkillHistory();
     uint32          GetTotalSP();
+
+    // unallocated skill points.  AddFreeSkillPoints clamps at 0, saves and tells the client (OnFreeSkillPointsChanged)
+    uint32          GetFreeSkillPoints()                { return m_freePoints; }
+    void            AddFreeSkillPoints(int32 delta);
+    int64           GetLastFreeSkillPointApply()        { return m_lastFreeApply; }
+    void            SetLastFreeSkillPointApply(int64 time)  { m_lastFreeApply = time; }
 
     /* Certificates */
     void            GrantCertificate( uint32 certificateID );
@@ -494,6 +501,7 @@ private:
     Skill* m_inTraining;      // holder for training skill, as inventory maps wont work right.
     SkillQueue m_skillQueue;    //std::vector<QueuedSkill>
     uint32 m_freePoints;
+    int64 m_lastFreeApply;      // last ApplyFreeSkillPoints (filetime), client allows one every 10s
 
     CertMap m_certificates;     // std::map<uint16, CharCerts>
 

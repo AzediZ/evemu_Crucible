@@ -11,6 +11,8 @@ COMMAND( search, Acct::Role::VIP,
          "(text) - Search for items matching the specified query" )
 COMMAND( giveisk, Acct::Role::GMH,
          "(entityID) (amount) - Give the specified amount of cash to the specified character. 0=self." )
+COMMAND( freesp, Acct::Role::GMH,
+         "(charID|me) (amount) - adds (or with a negative amount takes) unallocated skill points" )
 COMMAND( pop, Acct::Role::ADMIN,
          "(type) (key) (value) - Send an OnRemoteMessage" )
 COMMAND( setbpattr, Acct::Role::CONTENT,

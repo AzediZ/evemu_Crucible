@@ -27,10 +27,11 @@ namespace EvEMath {
     }
     namespace Skill {
         uint32 PointsAtLevel(uint8 level, float rank);
-        uint8 PointsPerMinute(uint8 pAttr, uint8 sAttr);
+        // client skillUtil.GetSkillPointsPerMinute (float, no rounding)
+        float PointsPerMinute(float pAttr, float sAttr);
         uint8 LevelForPoints(uint32 currentSP, uint8 rank);
-        int64 EndTime(uint32 currentSP, uint32 nextSP, uint8 SPMin, int64 timeNow);
-        int64 StartTime(uint32 currentSP, uint32 nextSP, uint8 SPMin, int64 timeNow);
+        int64 EndTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow);
+        int64 StartTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow);
     }
 
     namespace RAM {
