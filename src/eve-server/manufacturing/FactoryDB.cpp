@@ -104,7 +104,15 @@ void FactoryDB::GetRAMMaterials(DBQueryResult& res)
 
 void FactoryDB::GetRAMRequirements(DBQueryResult& res)
 {
-    if (!sDatabase.RunQuery(res, "SELECT typeID, activityID, requiredTypeID, quantity, damagePerJob, extra FROM ramTypeRequirements"))
+    /* Crucible invention hands the data interface back when the job ends.  the static data (client and db alike)
+     *  says damagePerJob 1 for it, so the interface's damage is zeroed here:  it is taken at install and returned on
+     *  delivery like any other item that is not used up (StaticDataMgr::GetRamReturns) */
+    if (!sDatabase.RunQuery(res,
+        "SELECT r.typeID, r.activityID, r.requiredTypeID, r.quantity,"
+        "  IF(r.activityID = %u AND t.groupID = %u, 0, r.damagePerJob) AS damagePerJob, r.extra"
+        " FROM ramTypeRequirements AS r"
+        " LEFT JOIN invTypes AS t ON t.typeID = r.requiredTypeID",
+        EvERam::Activity::Invention, EVEDB::invGroups::Data_Interfaces))
         codelog(DATABASE__ERROR, "Error in GetRAMRequirements query: %s", res.error.c_str());
 }
 
