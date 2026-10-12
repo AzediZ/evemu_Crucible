@@ -17,6 +17,7 @@
 #include "TestCheck.h"
 #include "market/sim/SimEconomy.h"
 #include "market/sim/SimLedger.h"
+#include "market/sim/SimProduction.h"
 #include "market/sim/SimRng.h"
 #include "market/sim/SimWorld.h"
 
@@ -178,5 +179,125 @@ int WorldTest()
         T_CHECK_EQ(cur.second.reserved, 0);
     for (auto& cur : world.GetLedger().Stocks())
         T_CHECK_EQ(cur.second.reserved, 0);
+    return MktTest::failures;
+}
+
+int ProductionTest()
+{
+    // refining:  whole batches, the yield, the station's take
+    T_CHECK(std::fabs(Prod::RefineYield(0.5) - 1.0) < 1e-12);
+    T_CHECK(std::fabs(Prod::RefineYield(0.25) - (0.25 + 0.375 * 1.1 * 1.2 * 1.25)) < 1e-12);
+    TypeData ore;
+    ore.typeID = 1230;
+    ore.portionSize = 333;
+    ore.refine.push_back(std::make_pair((uint16_t)34, 1000.0 / 333.0));
+    Prod::RefineResult r;
+    Prod::Refine(ore, 1000, 1.0, 0.05, r);
+    T_CHECK_EQ(r.used, 999);
+    T_CHECK((r.gross.size() == 1) and (r.gross[0].second == 3000));
+    T_CHECK((r.tax.size() == 1) and (r.tax[0].second == 150));
+    Prod::Refine(ore, 332, 1.0, 0.05, r);
+    T_CHECK_EQ(r.used, 0);
+    // build time:  per unit, with the multiplier;  a default for unknown blueprints
+    TypeData ship;
+    ship.portionSize = 1;
+    ship.buildSeconds = 7200.0;
+    T_CHECK(std::fabs(Prod::BuildHours(ship, 0.8, 3600.0) - 1.6) < 1e-12);
+    ship.buildSeconds = 0.0;
+    T_CHECK(std::fabs(Prod::BuildHours(ship, 1.0, 3600.0) - 1.0) < 1e-12);
+
+    // virtual lines:  a slot count, a cost per job
+    Prod::VirtualCapacity cap(1000.0, 333.0);
+    cap.SetSlots(7, 2);
+    SimJob j;
+    j.actorID = 7;
+    j.start = 0;
+    j.end = 3 * 3600;
+    T_CHECK(cap.Reserve(j, 0));
+    T_CHECK(cap.Reserve(j, 0));
+    T_CHECK(!cap.Reserve(j, 0));
+    T_CHECK_EQ(cap.Free(7, 1, Activity::Manufacturing, 0), 0);
+    cap.Release(j);
+    T_CHECK_EQ(cap.Free(7, 1, Activity::Manufacturing, 0), 1);
+    T_CHECK(std::fabs(cap.JobCost(j) - (1000.0 + 3.0 * 333.0)) < 1e-9);
+
+    // the mining mix.  ore 0:  10 Tritanium a m3;  ore 1:  2 Tritanium and 1 Pyerite a m3
+    std::vector<std::vector<double>> y = { { 10.0, 0.0 }, { 2.0, 1.0 } };
+    std::vector<double> need = { 100.0, 10.0 };
+    std::vector<double> x(Prod::CoverMix(y, need, 1000.0, std::vector<bool>(2, true), 2000));
+    T_CHECK((x[0] * 10.0 + x[1] * 2.0 >= 99.0) and (x[1] >= 9.9));
+    T_CHECK(x[0] + x[1] <= 19.5);                   // no m3 for what is covered already
+    x = Prod::CoverMix(y, need, 10.0, std::vector<bool>(2, true), 1000);
+    T_CHECK(std::fabs(x[0] + x[1] - 10.0) < 1e-6);  // short of m3:  all of it is used
+    x = Prod::CoverMix(y, need, 1000.0, std::vector<bool>{ true, false }, 1000);
+    T_CHECK(x[1] == 0.0);
+    // the least squares fit meets what it can
+    std::vector<double> fit(Prod::FitMix(y, need, std::vector<double>{ 1.0, 1.0 }, 2000));
+    T_CHECK(std::fabs(fit[0] * 10.0 + fit[1] * 2.0 - 100.0) < 1.0);
+    T_CHECK(std::fabs(fit[1] - 10.0) < 0.2);
+    return MktTest::failures;
+}
+
+int ActorsTest()
+{
+    // a short run of the synthetic world with the phase 3 actors:  the books close, the actors work, nothing goes negative
+    StaticData data;
+    MktHarness::BuildSynthetic(data, 7, 0.25);
+    Params p;
+    p.pauseOnAuditResidual = false;
+    MktHarness::HarnessMarket market(data, p.salesTaxRate);
+    World world(data, p, market);
+    market.SetWorld(&world);
+    const int64_t t0(1325462400);
+    world.Build(t0);
+    world.Seed(t0);
+    world.Start(t0, false);
+    std::vector<int64_t> residuals;
+    world.SetDayHook([&](const DayReport& r) {
+        residuals.push_back(r.audit.iskResidual);
+        residuals.push_back((int64_t)r.audit.goodsResidualTypes);
+    });
+    std::map<uint8_t, int> kinds;
+    for (auto& a : world.Actors())
+        ++kinds[a.kind];
+    T_CHECK(kinds[ActorKind::Miner] == (int)data.nodes.size());
+    T_CHECK(kinds[ActorKind::Manufacturer] > 0);
+    T_CHECK(kinds[ActorKind::Reprocessor] > 0);
+    T_CHECK(kinds[ActorKind::LootSource] > 0);
+    size_t mostJobs(0);
+    for (int day = 0; day < 8; ++day) {
+        for (int tick = 0; tick < 96; ++tick) {
+            int64_t t(t0 + day * SecondsPerDay + tick * 900);
+            market.SetNow(t);
+            world.Step(t);
+            mostJobs = std::max(mostJobs, world.Jobs().size());
+        }
+        if (day == 2)
+            world.ShockMining(0.5, 2.0, t0 + day * SecondsPerDay);
+    }
+    T_CHECK(!residuals.empty());
+    for (auto r : residuals)
+        T_CHECK_EQ(r, 0);
+    T_CHECK(mostJobs > 0);
+    T_CHECK(!world.Made().empty());
+    T_CHECK(!world.MinedUnits().empty());
+    T_CHECK_EQ(world.GetLedger().Violations(), 0);
+    for (auto& cur : world.GetLedger().Accounts())
+        T_CHECK((cur.second.wallet >= 0) and (cur.second.reserved >= 0));
+    for (auto& cur : world.GetLedger().Stocks())
+        T_CHECK((cur.second.qty >= 0) and (cur.second.reserved >= 0));
+    std::string first;
+    T_CHECK_EQ(market.CheckMirror(first), 0);
+    // a job saved and loaded again holds its line and ends with its output
+    if (!world.Jobs().empty()) {
+        SimJob j(world.Jobs().begin()->second);
+        World again(data, p, market);
+        again.Build(t0);
+        j.jobID = 0;
+        T_CHECK(again.LoadJob(j));
+        T_CHECK_EQ(again.Jobs().size(), 1);
+        j.actorID = 1;                              // not a manufacturer
+        T_CHECK(!again.LoadJob(j));
+    }
     return MktTest::failures;
 }

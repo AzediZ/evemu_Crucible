@@ -198,6 +198,16 @@ def sources_digest(srcs):
     return h.hexdigest()
 
 
+def build_time_json(st, cal):
+    """the market sim's phase 3 manufacturers (the harness snapshot):  the blueprint's productionTime per run (seconds,
+    one run makes portionSize units) of every calibrated type that is built"""
+    out = {}
+    for t in sorted(st.bp):
+        if t in cal.types and st.bp[t].get('productionTime'):
+            out[str(t)] = int(st.bp[t]['productionTime'])
+    return out
+
+
 def export_json(path, st, cal, rows):
     types = {}
     for t in sorted(cal.types):
@@ -219,6 +229,7 @@ def export_json(path, st, cal, rows):
     cal_json = {name: {'columns': [c for c, _ in cols], 'rows': rows[name]} for name, cols in TABLES}
     doc = {'generator': 'utils/market-calibration/gen_market_calibration.py', 'attribution': ATTRIBUTION,
            'types': types, 'bom': bom, 'refine': refine, 'calibration': cal_json}
+    doc['buildTime'] = build_time_json(st, cal)
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(doc, f, sort_keys=True, separators=(',', ':'))
         f.write('\n')

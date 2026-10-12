@@ -86,6 +86,10 @@ ADD_TEST( NAME "MarketSimLedgerTest"
           COMMAND "${TARGET_NAME}" --test ledger )
 ADD_TEST( NAME "MarketSimWorldTest"
           COMMAND "${TARGET_NAME}" --test world )
+ADD_TEST( NAME "MarketSimProductionTest"
+          COMMAND "${TARGET_NAME}" --test production )
+ADD_TEST( NAME "MarketSimActorsTest"
+          COMMAND "${TARGET_NAME}" --test actors )
 # the phase 2 acceptance tests:  a simulated year at EconomyScale 0.01, five seeds, plus a determinism rerun
 ADD_TEST( NAME "MarketSimAcceptance"
           COMMAND "${TARGET_NAME}" --synthetic --days 365 --seeds 5 )

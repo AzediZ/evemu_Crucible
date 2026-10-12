@@ -24,6 +24,8 @@ int MatchTest();
 int EconomyTest();
 int LedgerTest();
 int WorldTest();
+int ProductionTest();
+int ActorsTest();
 int HarnessMain(int argc, char** argv);
 
 namespace {
@@ -37,6 +39,8 @@ namespace {
         { "economy",    &EconomyTest },
         { "ledger",     &LedgerTest },
         { "world",      &WorldTest },
+        { "production", &ProductionTest },
+        { "actors",     &ActorsTest },
     };
 }
 

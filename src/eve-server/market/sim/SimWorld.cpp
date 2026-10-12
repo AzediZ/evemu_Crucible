@@ -1876,6 +1876,21 @@ std::string World::Status(int64_t now) const
     out << Fmt("Cell visits %llu, trades with players %llu, backlog %llus, ledger violations %llu.\n",
                (unsigned long long)m_cellVisits, (unsigned long long)m_playerTrades, (unsigned long long)Backlog(now),
                (unsigned long long)m_ledger.Violations());
+    if (m_p.actors) {
+        std::map<uint8_t, uint32_t> kinds;
+        for (auto& a : m_actors)
+            if (a.state == 0)
+                ++kinds[a.kind];
+        double lossShock(LossShockOf(0, now));
+        uint32_t hullShocks(0);
+        for (auto& cur : m_lossShock)
+            if ((cur.first != 0) and (cur.second.second > now))
+                ++hullShocks;
+        out << Fmt("Phase 3:  %u miners, %u reprocessors, %u manufacturers (%u jobs running), %u loot sources;  mining x%.2f%s, losses x%.2f%s.\n",
+                   kinds[ActorKind::Miner], kinds[ActorKind::Reprocessor], kinds[ActorKind::Manufacturer], (uint32_t)m_jobs.size(),
+                   kinds[ActorKind::LootSource], MiningShockOf(now), (MiningShockOf(now) != 1.0) ? " (shocked)" : "", lossShock,
+                   hullShocks ? Fmt(", %u hulls shocked", hullShocks).c_str() : "");
+    }
     for (auto& line : m_auditLines)
         if ((line.category.compare(0, 9, "residual.") == 0) or (line.category == "priceIndex.ppm"))
             out << Fmt("  day %d %s = %lld\n", line.day, line.category.c_str(), (long long)line.amount);
