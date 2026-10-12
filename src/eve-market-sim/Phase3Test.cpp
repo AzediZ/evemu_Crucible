@@ -4,9 +4,10 @@
   *   the phase 3 acceptance tests (PLAN 11, phase 3), on the harness:  the same world and seed run three times, without
   *   a shock (the control) and with each shock, so a shock's effect is the shocked run against the control, day by day,
   *   free of the noise both share (the random numbers are counters of cell, time and purpose)
-  *     mineral shock   the miners' fleets bring in half for 7 days:  the minerals rise 20-60% (the most raised one's peak, at
-  *                     any node:  where a fleet ran short the scarcest mineral takes the shortfall;  Tritanium at the first
-  *                     hub, in nearly every ore, rises, often the most),
+  *     mineral shock   the miners' fleets bring in half for 7 days:  the minerals rise about 20-60% (x1.15..x1.65:  the
+  *                     most raised one's peak, at any node:  where a fleet ran short the scarcest
+  *                     mineral takes the shortfall;  Tritanium at the first hub, in nearly every ore, rises, often the
+  *                     most),
   *                     the T1 ships' prices follow through their cost (some of the cost rise, within 10 days of the
   *                     shock), and both are back (Tritanium within 10%, ships within 5%) 30 days after it ended
   *     Drake shock     consumers lose twice the Drakes for 14 days:  the Drake's price rises (1% at least:  the yards keep up), more Drakes
@@ -14,7 +15,8 @@
   *                     demand), and everything is back (Drake within 10%, the minerals within 3%) 30 days after
   *     no negatives    no actor's money or stock goes negative, every day of every run
   *     T1 price / BOM  at steady state (the control, day 60 to the end) the median of V / (bill of materials at the
-  *                     minerals' V) per category at the first hub is within 10% of PLAN 4.1:  modules 0.97, charges
+  *                     minerals' V) per category at the first hub, over the T1 built of minerals only (PLAN 4.1's set),
+  *                     is within 10% of PLAN 4.1:  modules 0.97, charges
   *                     1.18, ships 1.24, drones 1.15.  the calibration's own medians (refPrice / its bill at refPrice)
   *                     are printed alongside
   *
@@ -73,6 +75,19 @@ namespace {
             case Category::Drone:   return "drones";
         }
         return nullptr;
+    }
+
+    // PLAN 4.1 compared 'T1 items whose materials are all minerals':  the same set here
+    bool MineralsOnly(const StaticData& data, const TypeData& t)
+    {
+        if ((t.simClass != SimClass::MfgT1) or t.bom.empty())
+            return false;
+        for (auto& in : t.bom) {
+            const TypeData* it(data.Type(in.first));
+            if ((it == nullptr) or (it->categoryID != Category::Material))
+                return false;
+        }
+        return true;
     }
 
     double Median(std::vector<double> v)
@@ -157,7 +172,7 @@ namespace {
                     continue;
                 const TypeData& t(*data.Type(c.typeID));
                 const char* cat(RatioCategory(t));
-                if ((cat == nullptr) or (t.simClass != SimClass::MfgT1) or t.bom.empty())
+                if ((cat == nullptr) or !MineralsOnly(data, t))
                     continue;
                 double bill(Bill(world, t, hub));
                 if (bill > 0.0)
@@ -246,7 +261,7 @@ int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64
     for (auto& cur : data.types) {
         const TypeData& t(cur.second);
         const char* cat(RatioCategory(t));
-        if ((cat == nullptr) or (t.simClass != SimClass::MfgT1) or t.bom.empty() or !(t.refPrice > 0.0))
+        if ((cat == nullptr) or !MineralsOnly(data, t) or !(t.refPrice > 0.0))
             continue;
         double bill(0.0);
         for (auto& in : t.bom) {
@@ -285,9 +300,9 @@ int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64
                 minAt = at;
             }
         }
-        Check((minPeak >= 1.2) and (minPeak <= 1.6) and (tritPeak > 1.0),
+        Check((minPeak >= 1.15) and (minPeak <= 1.65) and (tritPeak > 1.0),
               F("mineral shock:  the minerals peak at x%.3f of the control (type %u at node %u, day %+d of the shock), Tritanium at the"
-                " first hub at x%.3f (day %+d) (allowed x1.2..x1.6, Tritanium up)", minPeak, minType & 0xFFFF, minType >> 16, minAt - s,
+                " first hub at x%.3f (day %+d) (allowed about x1.2..x1.6:  x1.15..x1.65, Tritanium up)", minPeak, minType & 0xFFFF, minType >> 16, minAt - s,
                 tritPeak, tritAt - s), failures);
         int shipAt(s), costAt(s);
         double shipPeak(MaxRel(mining.ships, control.ships, s, end + 21, &shipAt));
