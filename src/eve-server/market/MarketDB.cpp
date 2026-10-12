@@ -204,8 +204,8 @@ static void FillOrderInfo(DBResultRow& row, Market::OrderInfo& oInfo)
     oInfo.accountKey    = row.GetUInt(10);
     oInfo.issued        = row.GetInt64(11);
     oInfo.escrow        = row.GetDouble(12);
-    // unsigned column.  the station range (-1) is stored as 4294967295
-    oInfo.orderRange    = (int32)row.GetUInt(13);
+    // the station range is -1 (4294967295 before the column was signed)
+    oInfo.orderRange    = (int32)row.GetInt64(13);
     oInfo.minVolume     = row.GetUInt(14);
     oInfo.solarSystemID = row.GetUInt(15);
     oInfo.duration      = row.GetUInt(16);
@@ -360,7 +360,7 @@ uint32 MarketDB::StoreOrder(Market::SaveData &data) {
         " bid, price, escrow, minVolume, volEntered, volRemaining,"
         " issued, contraband, duration, jumps, isCorp, accountKey, memberID"
         " ) VALUES ("
-        "    %u, %u, %u, %u, %u, %u,"
+        "    %u, %u, %u, %u, %u, %i,"
         "    %u, %.2f, %.2f, %u, %u, %u,"
         "    %lli, %u, %u, %u, %u, %u, %u"
         " )",
@@ -440,7 +440,8 @@ bool MarketDB::RecordTransaction(Market::TxData &data) {
         " ) VALUES ("
         " %lli, %u, %u, %u, %.2f,"
         " %u, %u, %u, %u, %u, %u, %u)",
-        GetFileTimeNow(), data.typeID, data.accountKey, data.quantity, data.price,
+        // GetFileTimeNow() is a double:  passed to %lli as it is, its bit pattern was stored (year ~17000)
+        (int64)GetFileTimeNow(), data.typeID, data.accountKey, data.quantity, data.price,
         data.isBuy > 0?1:0, data.ownerID, data.clientID, data.regionID, data.stationID, data.isCorp ? 1:0, data.memberID)
     ) {
         codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());

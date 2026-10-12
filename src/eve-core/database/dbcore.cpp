@@ -54,7 +54,11 @@ pReconnect(false),
 pProfile(false),
 pCompress(false),
 pSSL(false),
-pPort(3306)
+pPort(3306),
+pTxDepth(0),
+pTxFailed(false),
+pTxRollback(false),
+pTxThreadID(0)
 {
     mysql_thread_init();    // this is for each thread used for db connections
     mysql = mysql_init(nullptr);
@@ -139,6 +143,11 @@ void DBcore::Connect(uint* errnum, char* errbuf)
 
 bool DBcore::Reconnect()
 {
+    // the server rolls back what an open transaction sent on the old connection.  the rest of it must not be committed alone
+    if ((pTxDepth > 0) and !pTxFailed) {
+        pTxFailed = true;
+        sLog.Error("         DBCore", "Database connection lost inside transaction '%s'.  It is rolled back and fails.", TxName().c_str());
+    }
     _log(DATABASE__MESSAGE, "DBCore attempting to recover...");
     Close();
     mysql = mysql_init(nullptr);
@@ -313,9 +322,29 @@ bool DBcore::RunQueryLID(DBerror &err, uint32 &last_insert_id, const char *query
     return true;
 }
 
+bool DBcore::TxRefused_locked(DBerror &err, const char *query)
+{
+    if (pTxDepth <= 0)
+        return false;
+    // the client library reconnected by itself (MYSQL_OPT_RECONNECT):  the transaction is gone with the old connection
+    if (!pTxFailed and (mysql != nullptr) and (pStatus == Connected) and (mysql_thread_id(mysql) != pTxThreadID)) {
+        pTxFailed = true;
+        sLog.Error("         DBCore", "Database connection changed inside transaction '%s'.  It is rolled back and fails.", TxName().c_str());
+    }
+    if (!pTxFailed)
+        return false;
+    // what is left of a failed transaction would be committed on its own
+    err.SetError(CR_SERVER_LOST, "Refused:  the transaction of this query failed (database connection lost)");
+    _log(DATABASE__ERROR, "DBCore Query - refused, transaction '%s' failed: %.300s", TxName().c_str(), query);
+    return true;
+}
+
 bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool retry/*true*/)
 {
     double profileStartTime = GetTimeUSeconds();
+
+    if (TxRefused_locked(err, query))
+        return false;
 
     if (mysql == nullptr) {
         pStatus = Error;
@@ -330,12 +359,28 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool 
         if (!Reconnect())
             return false;
     }
+    // a reconnect just now failed the transaction
+    if (TxRefused_locked(err, query))
+        return false;
 
     if (is_log_enabled(DATABASE__QUERIES))
         _log(DATABASE__QUERIES, "DBcore Query - %s", query);
 
     if (mysql_real_query(mysql, query, querylen)) {
         uint num = mysql_errno(mysql);
+        /* inside a transaction, an error the server reports about the statement (duplicate key, strict mode, ...) failed
+         *  only that statement:  the connection is fine.  reconnecting for it (below, on the next query) would roll back
+         *  everything the transaction sent before.  a deadlock rolls back the whole transaction on the server */
+        bool clientError(((num >= 2000) and (num < 3000)) or (num >= 5000));    // CR_* and MariaDB's CER_*
+        if ((pTxDepth > 0) and (num > 0) and !clientError) {
+            if (num == ER_LOCK_DEADLOCK) {
+                pTxFailed = true;
+                sLog.Error("         DBCore", "Deadlock inside transaction '%s'.  It is rolled back and fails.", TxName().c_str());
+            }
+            err.SetError(num, mysql_error(mysql));
+            codelog(DATABASE__ERROR, "DBCore Query - #%u in '%s': %s", err.GetErrNo(), query, err.c_str());
+            return false;
+        }
         if (num > 0)
             pStatus = Error;
 
@@ -356,10 +401,106 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool 
 
     err.ClearError();
 
+    // a statement that commits implicitly (DDL, LOCK TABLES, ...) ended the transaction:  the rest of it runs in a new one
+    if ((pTxDepth > 0) and ((mysql->server_status & SERVER_STATUS_IN_TRANS) == 0)) {
+        sLog.Error("         DBCore", "Transaction '%s' was committed early by '%.120s'.  The rest of it is a new transaction.", TxName().c_str(), query);
+        static const char sql[] = "START TRANSACTION";
+        if (mysql_real_query(mysql, sql, (int)(sizeof(sql) - 1)) != 0)
+            pStatus = Error;    // the next query reconnects, which fails the transaction
+    }
+
     if (pProfile)
         sProfiler.AddTime(9, GetTimeUSeconds() - profileStartTime);
 
     return true;
+}
+
+bool DBcore::StartTransaction(const char* what)
+{
+    MutexLock lock(MDatabase);
+    if (pTxDepth > 0) {
+        ++pTxDepth;
+        pTxNames.push_back((what == nullptr) ? "" : what);
+        return !pTxFailed;
+    }
+
+    pTxNames.assign(1, (what == nullptr) ? "" : what);
+    pTxFailed = false;
+    pTxRollback = false;
+    // sent before the depth is set:  a connection lost while idle is recovered here, before anything of it was sent
+    DBerror err;
+    static const char sql[] = "START TRANSACTION";
+    bool ok(DoQuery_locked(err, sql, (int)(sizeof(sql) - 1)));
+    pTxDepth = 1;
+    if (!ok) {
+        // without a database nothing of it can be written anyway.  its queries are refused rather than sent one by one
+        pTxFailed = true;
+        sLog.Error("         DBCore", "Can't start transaction '%s':  %s.", TxName().c_str(), err.c_str());
+        return false;
+    }
+    pTxThreadID = mysql_thread_id(mysql);
+    return true;
+}
+
+bool DBcore::CommitTransaction()
+{
+    MutexLock lock(MDatabase);
+    if (pTxDepth <= 0) {
+        _log(DATABASE__ERROR, "DBCore - CommitTransaction() without a transaction.");
+        return false;
+    }
+    if (--pTxDepth > 0) {
+        pTxNames.pop_back();
+        return true;
+    }
+    return EndTransaction_locked(true);
+}
+
+void DBcore::RollbackTransaction()
+{
+    MutexLock lock(MDatabase);
+    if (pTxDepth <= 0) {
+        _log(DATABASE__ERROR, "DBCore - RollbackTransaction() without a transaction.");
+        return;
+    }
+    pTxRollback = true;
+    if (--pTxDepth > 0) {
+        pTxNames.pop_back();
+        return;
+    }
+    EndTransaction_locked(false);
+}
+
+bool DBcore::EndTransaction_locked(bool commit)
+{
+    // the depth is 0 here, so these are plain queries.  neither is sent again on a new connection
+    bool failed(pTxFailed), ok(false);
+    pTxFailed = false;
+    DBerror err;
+    if (commit and !failed and !pTxRollback) {
+        static const char sql[] = "COMMIT";
+        ok = DoQuery_locked(err, sql, (int)(sizeof(sql) - 1), false);
+        if (!ok)
+            sLog.Error("         DBCore", "Committing transaction '%s' failed:  %s.  It may not have been saved.", TxName().c_str(), err.c_str());
+    } else {
+        // after a lost connection there is nothing left to roll back;  this only ends it
+        static const char sql[] = "ROLLBACK";
+        DoQuery_locked(err, sql, (int)(sizeof(sql) - 1), false);
+        if (failed)
+            sLog.Error("         DBCore", "Transaction '%s' failed:  none of it was saved.", TxName().c_str());
+    }
+    pTxRollback = false;
+    pTxNames.clear();
+    return ok;
+}
+
+std::string DBcore::TxName() const
+{
+    // outermost > ... > innermost
+    std::string name;
+    for (auto& cur : pTxNames)
+        name += (name.empty() ? "" : " > ") + cur;
+    return name;
 }
 
 

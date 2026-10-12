@@ -171,6 +171,19 @@ public:
 
     eStatus GetStatus() const { return pStatus; }
 
+    /* transactions (use DBTransaction below).  they nest:  only the outermost Start/Commit reaches the server.  they make
+     *  a piece of work all-or-nothing for a crash:  the server's objects in memory are not rolled back, so callers commit
+     *  what they wrote, also when an exception ends the work early.
+     *  a connection lost inside one fails it (the server rolled back what was sent so far):  every later query is refused
+     *  and the outermost Commit returns false, so half of the work is never committed.
+     *  what:  its name in the log */
+    bool    StartTransaction(const char* what);
+    // false:  nothing was committed (lost connection, or rolled back)
+    bool    CommitTransaction();
+    // at once in the outermost transaction;  in a nested one, the outermost is rolled back when it ends
+    void    RollbackTransaction();
+    bool    InTransaction() const       { return (pTxDepth > 0); }
+
 protected:
     MYSQL*  getMySQL()              { return mysql; }
 
@@ -182,6 +195,12 @@ protected:
 private:
     //MDatabase must be locked before these calls:
     bool    DoQuery_locked(DBerror &err, const char *query, int querylen, bool retry = true);
+    // true (err set):  the query belongs to a transaction that failed, and is not sent
+    bool    TxRefused_locked(DBerror &err, const char *query);
+    // ends the outermost transaction (COMMIT, or ROLLBACK when it failed or was rolled back)
+    bool    EndTransaction_locked(bool commit);
+    // the open transactions' names, for the log
+    std::string TxName() const;
 
     MYSQL*  mysql;
     Mutex   MDatabase;
@@ -199,9 +218,37 @@ private:
     std::string pUser;
     std::string pPassword;
     std::string pDatabase;
+
+    // transactions:  depth, failed (connection lost, or START failed), rolled back by a nested one, the connection it runs
+    //  on, the names of the open ones (outermost first)
+    int32   pTxDepth;
+    bool    pTxFailed;
+    bool    pTxRollback;
+    unsigned long pTxThreadID;
+    std::vector<std::string> pTxNames;
 };
 
 #define sDatabase \
 ( DBcore::get() )
+
+/* a transaction around a block of code:  committed when the block is left, also by an exception (what the block changed
+ *  in memory stays changed, so what it wrote must stay written).  it makes the block all-or-nothing for a crash or a lost
+ *  connection only */
+class DBTransaction
+{
+public:
+    explicit DBTransaction(const char* what)    : m_done(false) { sDatabase.StartTransaction(what); }
+    ~DBTransaction()                            { if (!m_done) sDatabase.CommitTransaction(); }
+
+    // false:  nothing was committed (only known in the outermost transaction;  a nested one returns true)
+    bool Commit()                               { m_done = true; return sDatabase.CommitTransaction(); }
+    void Rollback()                             { m_done = true; sDatabase.RollbackTransaction(); }
+
+private:
+    DBTransaction(const DBTransaction&) = delete;
+    DBTransaction& operator=(const DBTransaction&) = delete;
+
+    bool m_done;
+};
 
 #endif /* !__DATABASE__DBCORE_H__INCL__ */

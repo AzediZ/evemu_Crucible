@@ -129,6 +129,9 @@ public:
     static double GetWalletBalance(uint32 ownerID, uint16 accountKey);
     // throws NotEnoughMoney / NotEnoughMoneyCorp when the wallet holds less than amount
     static void CheckFunds(uint32 walletOwnerID, uint16 accountKey, double amount);
+    /* saves a stack the market split or shrank, when world saveOnUpdate is off (its quantity would be saved at shutdown,
+     *  while the part sold or put on the market is saved at once:  a crash would hand the seller those units again) */
+    static void SaveStack(InventoryItemRef iRef);
 
     bool NeedsUpdate()                                  { return m_historyDay + EvE::Time::Day <= GetMidnight(); }
 

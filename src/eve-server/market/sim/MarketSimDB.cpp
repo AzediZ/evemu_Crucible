@@ -447,8 +447,7 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
                         const std::map<std::string, std::string>& state, const std::vector<AuditLine>& audit,
                         bool replaceInventory/*false*/)
 {
-    if (!Exec("START TRANSACTION"))
-        return false;
+    DBTransaction tx("market sim flush");
     bool ok(true);
     std::vector<std::string> rows;
     // rows under old actor/node numbers would come back as stock of whatever has that number next time
@@ -540,10 +539,10 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
     ok = InsertRows("INSERT INTO mktSimNode (nodeID, stationID, solarSystemID, regionID, kind, enabled) VALUES ", rows, "") and ok;
 
     if (!ok) {
-        Exec("ROLLBACK");
+        tx.Rollback();
         return false;
     }
-    if (!Exec("COMMIT"))
+    if (!tx.Commit())
         return false;
     world.GetLedger().ClearDirty();
     return true;
@@ -601,15 +600,15 @@ void MarketSimDB::ForgetOrder(uint32 orderID)
 
 bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids, bool multiRow)
 {
-    if (!Exec("START TRANSACTION"))
-        return false;
+    // a lost connection fails it as a whole:  ids of posts the server rolled back are never handed out
+    DBTransaction tx("market sim orders");
     bool ok(true);
     // posts:  the sim's orders are npc corp orders, station range for asks, 90 days, no escrow (the sim's ledger holds it)
     std::vector<std::string> rows;
     for (auto& n : batch.posts) {
-        uint32 range((n.range < 0) ? 4294967295u : (uint32)n.range);
-        rows.push_back(Fmt("(%u,%u,%u,%u,%u,%u,%u,%s,0,%u,%u,%u,%lld,0,90,1,0,1000,0)", n.typeID, n.ownerID, n.regionID, n.stationID,
-                           n.systemID, range, n.bid ? 1 : 0, IskText(n.price).c_str(), n.minVolume, n.qty, n.qty, (long long)ToFileTime(n.issued)));
+        // orderRange is signed:  the station range is -1
+        rows.push_back(Fmt("(%u,%u,%u,%u,%u,%i,%u,%s,0,%u,%u,%u,%lld,0,90,1,0,1000,0)", n.typeID, n.ownerID, n.regionID, n.stationID,
+                           n.systemID, (int)n.range, n.bid ? 1 : 0, IskText(n.price).c_str(), n.minVolume, n.qty, n.qty, (long long)ToFileTime(n.issued)));
     }
     static const char* postHead = "INSERT INTO mktOrders (typeID, ownerID, regionID, stationID, solarSystemID, orderRange, bid, price,"
                                   " escrow, minVolume, volEntered, volRemaining, issued, contraband, duration, jumps, isCorp, accountKey,"
@@ -670,11 +669,11 @@ bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids,
         ok = Exec("DELETE FROM mktOrders WHERE orderID IN (" + in + ")") and Exec("DELETE FROM mktSimOrder WHERE orderID IN (" + in + ")");
     }
     if (!ok) {
-        Exec("ROLLBACK");
+        tx.Rollback();
         ids.clear();
         return false;
     }
-    if (!Exec("COMMIT")) {
+    if (!tx.Commit()) {
         ids.clear();
         return false;
     }
@@ -717,7 +716,7 @@ void MarketSimDB::PlayerOrders(uint32 regionID, uint16 typeID, std::vector<Playe
         o.price = (Cents)std::llround(row.GetDouble(5) * 100.0);
         o.qty = row.GetUInt(6);
         o.minVolume = row.GetUInt(7);
-        o.range = (int32)row.GetUInt(8);
+        o.range = (int32)row.GetInt64(8);       // -1 (station), or 4294967295 before the column was signed
         o.issued = ToUnix(row.GetInt64(9));
         (o.bid ? bids : asks).push_back(o);
     }

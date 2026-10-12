@@ -280,6 +280,10 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
     }
     uint32 walletOwnerID(corpOrder ? corpID : pClient->GetCharacterID());
 
+    /* what placing the order writes (the fills it matches at once, the order, its fee and escrow, the items it takes) is
+     *  saved together:  a crash in between never leaves an order without its escrow or items, or the other way round */
+    DBTransaction tx("market order placement");
+
     if (isBuy) {
         if (duration->value() == 0) {
             // immediate.  fill from the cheapest sell orders the range (around the chosen station) reaches
@@ -511,6 +515,8 @@ PyResult MarketProxyService::PlaceCharOrder(PyCallArgs &call, PyInt* stationID, 
         // the items stay with the seller, so the order must go.  the fee was the price of trying
         MarketDB::DeleteOrder(orderID);
         throw CustomError("Failed to take the items for the order.");
+    } else {
+        MarketMgr::SaveStack(iRef);
     }
 
     //notify client about new order.
@@ -578,6 +584,8 @@ PyResult MarketProxyService::ModifyCharOrder(PyCallArgs &call, PyInt* orderID, P
     }
     // check both, so the fee isn't taken when the escrow can't be
     MarketMgr::CheckFunds(walletOwnerID, accountKey, fee + EvE::max(delta, 0.0));
+    // the fee, the escrow change and the new price are saved together
+    DBTransaction tx("market order modification");
     AccountService::TransferFunds(walletOwnerID, stationOwnerID, fee, reason.c_str(), Journal::EntryType::Brokerfee, oInfo.orderID, accountKey, Account::KeyType::Cash, call.client);
 
     if (delta >= 0.01) {
