@@ -38,6 +38,19 @@ public:
     // officeID -> stationID of the corp's offices
     static void GetCorpOffices(uint32 corpID, std::map<uint32, uint32>& into);
     static void DeleteOffice(uint32 officeID);
+    // rent lifecycle (F21):  impounded offices keep their row and contents (flagImpounded) but are out of the station's office lists
+    static void SetOfficeImpounded(uint32 officeID, bool impounded);
+    static void SetOfficeLease(uint32 officeID, int64 expiryDateTime, uint32 billID);
+    static void SetOfficePublic(uint32 officeID, bool publiclyAvailable);
+    // the corp's office in the station (active or impounded).  0 = none
+    static uint32 GetCorpOffice(uint32 corpID, uint32 stationID, bool impounded);
+    // active offices still to be billed (publicly available, no bill)
+    static void GetOfficesWithoutBill(std::vector<uint32>& into);
+    // active offices past their lease and without a bill
+    static void GetLapsedOffices(int64 now, std::vector<uint32>& into);
+    // active offices whose open rent bill is due before 'before'
+    static void GetOfficesWithBillDue(int64 before, std::vector<uint32>& into);
+    static uint32 CountImpoundedItems(uint32 officeID);
 
     static void LoadOffices(OwnerData &od, std::vector<uint32> &into);
     static void CreateOutpost(StationData& data);

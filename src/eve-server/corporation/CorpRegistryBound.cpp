@@ -2711,7 +2711,8 @@ PyResult CorpRegistryBound::GetRentalDetailsPlayer(PyCallArgs &call) {
     _log(CORP__CALL, "CorpRegistryBound::Handle_GetRentalDetailsPlayer()");
     call.Dump(CORP__CALL_DUMP);
 
-    return nullptr;
+    // factory and research slot rentals are not offered here;  the wallet's rentals tab lists nothing
+    return new PyList();
 }
 
 PyResult CorpRegistryBound::GetRentalDetailsCorp(PyCallArgs &call) {
@@ -2719,7 +2720,8 @@ PyResult CorpRegistryBound::GetRentalDetailsCorp(PyCallArgs &call) {
     _log(CORP__CALL, "CorpRegistryBound::Handle_GetRentalDetailsCorp()");
     call.Dump(CORP__CALL_DUMP);
 
-    return nullptr;
+    // factory and research slot rentals are not offered here;  the wallet's rentals tab lists nothing
+    return new PyList();
 }
 
 PyResult CorpRegistryBound::UpdateCorporationAbilities(PyCallArgs &call) {

@@ -32,7 +32,100 @@ uint32 StationDB::CreateOffice(ItemData& idata, OfficeData& odata)
 void StationDB::UpdateOfficeData(OfficeData& data)
 {
     DBerror err;
-    sDatabase.RunQuery(err, "UPDATE staOffices SET lockDown = %u, rentalFee = %u, expiryDateTime = %lli)", data.lockDown, data.rentalFee, data.expiryTime);
+    sDatabase.RunQuery(err, "UPDATE staOffices SET lockDown = %u, rentalFee = %lli, expiryDateTime = %lli, impounded = %u, publiclyAvailable = %u, billID = %u"
+        " WHERE itemID = %u", (data.lockDown ? 1 : 0), data.rentalFee, data.expiryTime, (data.impounded ? 1 : 0), (data.publiclyAvailable ? 1 : 0),
+        data.billID, data.officeID);
+}
+
+void StationDB::SetOfficeImpounded(uint32 officeID, bool impounded)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE staOffices SET impounded = %u, billID = 0 WHERE itemID = %u", (impounded ? 1 : 0), officeID);
+}
+
+void StationDB::SetOfficeLease(uint32 officeID, int64 expiryDateTime, uint32 billID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE staOffices SET expiryDateTime = %lli, billID = %u WHERE itemID = %u", expiryDateTime, billID, officeID);
+}
+
+void StationDB::SetOfficePublic(uint32 officeID, bool publiclyAvailable)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE staOffices SET publiclyAvailable = %u WHERE itemID = %u", (publiclyAvailable ? 1 : 0), officeID);
+}
+
+uint32 StationDB::GetCorpOffice(uint32 corpID, uint32 stationID, bool impounded)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID FROM staOffices WHERE corporationID = %u AND stationID = %u AND impounded = %u",
+                corpID, stationID, (impounded ? 1 : 0)))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
+void StationDB::GetOfficesWithoutBill(std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID FROM staOffices WHERE impounded = 0 AND billID = 0 AND publiclyAvailable = 1")) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void StationDB::GetLapsedOffices(int64 now, std::vector<uint32>& into)
+{
+    // offices past their lease with no bill to extend it (no longer publicly available)
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemID FROM staOffices WHERE impounded = 0 AND billID = 0 AND expiryDateTime > 0 AND expiryDateTime <= %lli", now)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void StationDB::GetOfficesWithBillDue(int64 before, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT o.itemID FROM staOffices o JOIN bills b ON b.billID = o.billID"
+        " WHERE o.impounded = 0 AND b.paid = 0 AND b.dueDateTime <= %lli", before))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+uint32 StationDB::CountImpoundedItems(uint32 officeID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(itemID) FROM entity WHERE locationID = %u AND flag = %u", officeID, flagImpounded)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
 }
 
 void StationDB::GetCorpOffices(uint32 corpID, std::map<uint32, uint32>& into)
@@ -57,7 +150,7 @@ void StationDB::DeleteOffice(uint32 officeID)
 int32 StationDB::GetOfficeCount(uint32 corpID)
 {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT COUNT(itemID) FROM staOffices WHERE corporationID = %u ", corpID)) {
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(itemID) FROM staOffices WHERE corporationID = %u AND impounded = 0", corpID)) {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return 0;
     }
@@ -77,7 +170,7 @@ PyRep* StationDB::GetOffices(uint32 stationID)
         "SELECT"
         " corporationID, itemID, officeFolderID"
         " FROM staOffices"
-        " WHERE stationID = %u", stationID)
+        " WHERE stationID = %u AND impounded = 0", stationID)
     )
         codelog(DATABASE__ERROR, "Error in GetOffices query: %s", res.error.c_str());
 
@@ -89,7 +182,7 @@ bool StationDB::GetOfficeData(uint32 officeID, OfficeData& odata)
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT"
-        " corporationID, stationID, typeID, lockDown, rentalFee, expiryDateTime, officeFolderID"
+        " corporationID, stationID, typeID, lockDown, rentalFee, expiryDateTime, officeFolderID, impounded, publiclyAvailable, billID"
         " FROM staOffices"
         " WHERE itemID = %u", officeID)
     ) {
@@ -109,6 +202,9 @@ bool StationDB::GetOfficeData(uint32 officeID, OfficeData& odata)
     odata.rentalFee     = row.GetInt64(4);
     odata.expiryTime    = row.GetInt64(5);
     odata.folderID      = row.GetInt(6);
+    odata.impounded     = (row.GetInt(7) != 0);
+    odata.publiclyAvailable = (row.GetInt(8) != 0);
+    odata.billID        = row.GetUInt(9);
     return true;
 }
 
@@ -118,7 +214,7 @@ void StationDB::GetStationOfficeData(DBQueryResult& res)
     if (!sDatabase.RunQuery(res,
         "SELECT"
         " itemID, corporationID, stationID, typeID, lockDown, rentalFee, expiryDateTime, officeFolderID"
-        " FROM staOffices")
+        " FROM staOffices WHERE impounded = 0")
     )
         codelog(DATABASE__ERROR, "Error in GetStationOfficeData query: %s", res.error.c_str());
 }
@@ -128,10 +224,10 @@ PyRep* StationDB::GetStationOfficeIDs(uint32 locationID, uint32 corpID, const ch
     DBQueryResult res;
     if (sDataMgr.IsStation(locationID)) {
         sDatabase.RunQuery(res, "SELECT itemID AS officeID, stationID, officeFolderID"
-        " FROM staOffices WHERE stationID = %u", locationID);
+        " FROM staOffices WHERE stationID = %u AND impounded = 0", locationID);
     } else if (IsOfficeFolder(locationID)) {
         sDatabase.RunQuery(res, "SELECT itemID AS officeID, stationID, officeFolderID"
-        " FROM staOffices WHERE officeFolderID = %u",
+        " FROM staOffices WHERE officeFolderID = %u AND impounded = 0",
             locationID - STATION_OFFICE_OFFSET);
     } else if (IsOfficeID(locationID)) {
         sDatabase.RunQuery(res, "SELECT itemID AS officeID, stationID, officeFolderID"

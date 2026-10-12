@@ -29,7 +29,10 @@
 
 #include "StaticDataMgr.h"
 #include "cache/ObjCacheService.h"
+#include "alliance/AllianceDB.h"
 #include "corporation/BillMgr.h"
+#include "corporation/BillingMgr.h"
+#include "corporation/CorpMgr.h"
 
 BillMgr::BillMgr() :
     Service("billMgr")
@@ -50,100 +53,123 @@ PyResult BillMgr::GetBillTypes(PyCallArgs& call) {
 }
 
 PyResult BillMgr::GetCorporationBills(PyCallArgs &call) {
-    return m_db.GetCorporationBills(call.client->GetCorporationID(), true);
+    // wallet:  bills payable by the corp (accountants)
+    return BillingMgr::GetBillsPayable(call.client->GetCorporationID());
 }
 
 PyResult BillMgr::GetCorporationBillsReceivable(PyCallArgs &call) {
-    return m_db.GetCorporationBills(call.client->GetCorporationID(), false);
+    return BillingMgr::GetBillsReceivable(call.client->GetCorporationID());
 }
-
 
 PyResult BillMgr::CharPayBill(PyCallArgs &call, PyInt* billID) {
     //   sm.RemoteSvc('billMgr').CharPayBill(bill.billID)
-    sLog.Warning("BillMgr", "Handle_CharPayBill() size=%lli", call.tuple->size());
-    call.Dump(CORP__CALL_DUMP);
-
-    // returns nothing
+    sBillingMgr.PayBill(call.client, billID->value(), Account::KeyType::Cash);
     return nullptr;
 }
 
 PyResult BillMgr::CharGetBills(PyCallArgs &call) {
     //   return sm.RemoteSvc('billMgr').CharGetBills()
-    sLog.Warning("BillMgr", "Handle_CharGetBills() size=%lli", call.tuple->size());
-    call.Dump(CORP__CALL_DUMP);
-
-    // returns nothing
-    return nullptr;
+    return BillingMgr::GetBillsPayable(call.client->GetCharacterID());
 }
 
 PyResult BillMgr::CharGetBillsReceivable(PyCallArgs &call) {
     //   bills = sm.RemoteSvc('billMgr').CharGetBillsReceivable()
-    sLog.Warning("BillMgr", "Handle_CharGetBillsReceivable() size=%lli", call.tuple->size());
-    call.Dump(CORP__CALL_DUMP);
-
-    // returns nothing
-    return nullptr;
+    return BillingMgr::GetBillsReceivable(call.client->GetCharacterID());
 }
 
 PyResult BillMgr::PayCorporationBill(PyCallArgs &call, PyInt* billID) {
     //  sm.RemoteSvc('billMgr').PayCorporationBill(bill.billID, fromAccountKey=eve.session.corpAccountKey)
-    sLog.Warning("BillMgr", "Handle_PayCorporationBill() size=%lli", call.tuple->size());
-    call.Dump(CORP__CALL_DUMP);
+    uint16 fromKey = call.client->GetCorpAccountKey();
+    std::map<std::string, PyRep*>::iterator itr = call.byname.find("fromAccountKey");
+    if ((itr != call.byname.end()) and (itr->second->IsInt() or itr->second->IsLong()))
+        fromKey = PyRep::IntegerValue(itr->second);
 
-    // returns nothing
+    sBillingMgr.PayBill(call.client, billID->value(), fromKey);
     return nullptr;
 }
-
 
 PyResult BillMgr::SendAutomaticPaySettings(PyCallArgs &call, PyDict* automaticPaymentSettings) {
     //    sm.RemoteSvc('billMgr').SendAutomaticPaySettings(self.automaticPaymentSettings)
+    //  {ownerID: {billTypeID: bool, ..., 'divisionID': walletKey}}  (the corp, and the alliance when the corp is its executor)
+    uint32 corpID = call.client->GetCorporationID();
+    if (!IsPlayerCorp(corpID))
+        return nullptr;
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::Accountant))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be an accountant to change the automatic payments."));
 
-    // if corp in alliance, get settings for all 6, else ignore AllianceMaintainanceBill (5)
+    DBQueryResult res;
+    m_db.GetAutoPay(corpID, res);
+    bool flags[7] = {false, false, false, false, false, false, false};
+    uint16 divisionID = Account::KeyType::Cash;
+    DBResultRow row;
+    if (res.GetRow(row)) {
+        for (uint8 i = 0; i < 6; ++i)
+            flags[i + 1] = (!row.IsNull(i) and (row.GetInt(i) != 0));
+        divisionID = row.GetUInt(6);
+    }
 
-    /*
-     * 19:07:55 [CorpCallDump]   Call Arguments:
-     * 19:07:55 [CorpCallDump]      Tuple: 1 elements
-     * 19:07:55 [CorpCallDump]       [ 0]  Dictionary: 1 entries
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0]   Key:    Integer: 98000001
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:  Dictionary: 6 entries
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 0]   Key:    Integer: 6
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 0] Value:    Boolean: false
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 1]   Key:    Integer: 4
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 1] Value:    Boolean: true
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 2]   Key:     String: 'divisionID'  << wallet to use
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 2] Value:    Integer: 1003
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 3]   Key:    Integer: 3
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 3] Value:    Boolean: true
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 4]   Key:    Integer: 2
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 4] Value:    Boolean: true
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 5]   Key:    Integer: 1
-     * 19:07:55 [CorpCallDump]       [ 0]   [ 0] Value:   [ 5] Value:    Boolean: false
-     */
+    uint32 allianceID = call.client->GetAllianceID();
+    for (PyDict::const_iterator itr = automaticPaymentSettings->begin(); itr != automaticPaymentSettings->end(); ++itr) {
+        uint32 ownerID = PyRep::IntegerValueU32(itr->first);
+        if (!itr->second->IsDict())
+            continue;
+        // the alliance's bills are paid by its executor
+        bool alliance = ((ownerID == allianceID) and (allianceID != 0) and (AllianceDB::GetExecutorID(allianceID) == corpID));
+        if ((ownerID != corpID) and !alliance)
+            continue;
+        PyDict* settings = itr->second->AsDict();
+        for (PyDict::const_iterator sItr = settings->begin(); sItr != settings->end(); ++sItr) {
+            if (sItr->first->IsString() or sItr->first->IsWString()) {
+                if ((PyRep::StringContent(sItr->first).compare("divisionID") == 0) and (ownerID == corpID))
+                    divisionID = PyRep::IntegerValue(sItr->second);
+                continue;
+            }
+            int64 type = PyRep::IntegerValue(sItr->first);
+            if ((type < Corp::BillType::MarketFine) or (type > Corp::BillType::SovereigntyMarker))
+                continue;
+            if (alliance and (type != Corp::BillType::AllianceMaintainanceBill))
+                continue;
+            flags[type] = (PyRep::IntegerValue(sItr->second) != 0);
+        }
+    }
+    if ((divisionID < Account::KeyType::Cash) or (divisionID > Account::KeyType::Cash7))
+        divisionID = Account::KeyType::Cash;
 
-    // returns nothing
+    CorporationDB::SetAutoPay(corpID, flags[Corp::BillType::MarketFine], flags[Corp::BillType::RentalBill], flags[Corp::BillType::BrokerBill],
+                              flags[Corp::BillType::WarBill], flags[Corp::BillType::AllianceMaintainanceBill], flags[Corp::BillType::SovereigntyMarker],
+                              divisionID);
     return nullptr;
 }
-
 PyResult BillMgr::GetAutomaticPaySettings(PyCallArgs &call) {
     //    ambSettings = sm.RemoteSvc('billMgr').GetAutomaticPaySettings()
     // returns t/f for bill types
     DBQueryResult res;
     m_db.GetAutoPay(call.client->GetCorporationID(), res);
 
+    auto flag = [](DBResultRow& r, uint32 i) -> PyBool* { return new PyBool(!r.IsNull(i) and (r.GetInt(i) != 0)); };
+
     DBResultRow row;
     PyDict* sets = new PyDict();
+    PyDict* allianceSets(nullptr);
     if (res.GetRow(row)) {
-        sets->SetItem(new PyInt(Corp::BillType::MarketFine), new PyBool(row.GetBool(0)));
-        sets->SetItem(new PyInt(Corp::BillType::RentalBill), new PyBool(row.GetBool(1)));
-        sets->SetItem(new PyInt(Corp::BillType::BrokerBill), new PyBool(row.GetBool(2)));
-        sets->SetItem(new PyInt(Corp::BillType::WarBill), new PyBool(row.GetBool(3)));
-        if (call.client->GetAllianceID())
-            sets->SetItem(new PyInt(Corp::BillType::AllianceMaintainanceBill), new PyBool(row.GetBool(4)));
-        sets->SetItem(new PyInt(Corp::BillType::SovereigntyMarker), new PyBool(row.GetBool(5)));
+        sets->SetItem(new PyInt(Corp::BillType::MarketFine), flag(row, 0));
+        sets->SetItem(new PyInt(Corp::BillType::RentalBill), flag(row, 1));
+        sets->SetItem(new PyInt(Corp::BillType::BrokerBill), flag(row, 2));
+        sets->SetItem(new PyInt(Corp::BillType::WarBill), flag(row, 3));
+        sets->SetItem(new PyInt(Corp::BillType::SovereigntyMarker), flag(row, 5));
+        sets->SetItemString("divisionID", new PyInt(row.GetUInt(6)));
+        // the alliance's maintenance bills are listed under the alliance (wallet.ShowBillsIn looks them up by debtorID)
+        uint32 allianceID = call.client->GetAllianceID();
+        if ((allianceID != 0) and (AllianceDB::GetExecutorID(allianceID) == (uint32)call.client->GetCorporationID())) {
+            allianceSets = new PyDict();
+            allianceSets->SetItem(new PyInt(Corp::BillType::AllianceMaintainanceBill), flag(row, 4));
+        }
     }
 
     PyDict* dict = new PyDict();
         dict->SetItem(new PyInt(call.client->GetCorporationID()), sets);
+    if (allianceSets != nullptr)
+        dict->SetItem(new PyInt(call.client->GetAllianceID()), allianceSets);
 
     if (is_log_enabled(CORP__RSP_DUMP))
         dict->Dump(CORP__RSP_DUMP, "");

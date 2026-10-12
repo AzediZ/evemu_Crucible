@@ -419,6 +419,9 @@ struct StationData {
 // this is used by multiple systems.  keep here instead of in corpData.h
 struct OfficeData {
     bool lockDown :1;
+    bool impounded :1;          // rent lapsed:  contents impounded, office not in the station's lists
+    bool publiclyAvailable :1;  // outpost owner still rents it out (no new bill when false)
+    uint32 billID;              // the open rent bill
     uint32 officeID;
     uint32 folderID;
     uint16 typeID;

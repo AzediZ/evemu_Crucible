@@ -19,6 +19,7 @@
 #include "alliance/AllianceDB.h"
 #include "alliance/AllianceData.h"
 #include "cache/ObjCacheService.h"
+#include "corporation/BillingMgr.h"
 #include "chat/LSCService.h"
 #include "packets/CorporationPkts.h"
 #include "corporation/CorporationDB.h"
@@ -59,6 +60,7 @@ AllianceBound::AllianceBound(EVEServiceManager& mgr, AllianceRegistry& parent, A
     this->Add("PayBill", &AllianceBound::PayBill);
     this->Add("GetBills", &AllianceBound::GetBills);
     this->Add("GetBillsReceivable", &AllianceBound::GetBillsReceivable);
+    this->Add("GetBillBalance", &AllianceBound::GetBillBalance);
     this->Add("GetAllianceContacts", &AllianceBound::GetAllianceContacts);
     this->Add("AddAllianceContact", &AllianceBound::AddAllianceContact);
     this->Add("EditAllianceContact", &AllianceBound::EditAllianceContact);
@@ -342,20 +344,28 @@ PyResult AllianceBound::AddToVoiceChat(PyCallArgs &call, PyString* channelName)
 
 PyResult AllianceBound::PayBill(PyCallArgs &call, PyInt* billID, PyInt* fromAccountKey)
 {
-    //   return self.GetMoniker().PayBill(billID, fromAccountKey)
+    //   return self.GetMoniker().PayBill(billID, fromAccountKey)    an accountant of the executor corp
     _log(ALLY__CALL, "AllianceBound::Handle_PayBill() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
+    BillData bill = BillData();
+    if (!BillingMgr::GetBill(billID->value(), bill) or (bill.debtorID != m_allyID))
+        throw CustomError("That bill could not be found.");
+
+    sBillingMgr.PayBill(call.client, billID->value(), fromAccountKey->value());
     return nullptr;
 }
 
 PyResult AllianceBound::GetBillBalance(PyCallArgs &call, PyInt* billID)
 {
-    //   return self.GetMoniker().GetBillBalance(billID)
+    //   return self.GetMoniker().GetBillBalance(billID)     what is still owed on the bill
     _log(ALLY__CALL, "AllianceBound::Handle_GetBillBalance() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    return nullptr;
+    BillData bill = BillData();
+    if (!BillingMgr::GetBill(billID->value(), bill) or (bill.debtorID != m_allyID))
+        return new PyFloat(0);
+    return new PyFloat(bill.paid == 0 ? bill.amount + bill.interest : 0);
 }
 
 PyResult AllianceBound::GetBills(PyCallArgs &call)
@@ -364,7 +374,7 @@ PyResult AllianceBound::GetBills(PyCallArgs &call)
     _log(ALLY__CALL, "AllianceBound::Handle_GetBills() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    return nullptr;
+    return BillingMgr::GetBillsPayable(m_allyID);
 }
 
 PyResult AllianceBound::GetBillsReceivable(PyCallArgs &call)
@@ -373,7 +383,7 @@ PyResult AllianceBound::GetBillsReceivable(PyCallArgs &call)
     _log(ALLY__CALL, "AllianceBound::Handle_GetBillsReceivable() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    return nullptr;
+    return BillingMgr::GetBillsReceivable(m_allyID);
 }
 
 PyResult AllianceBound::AddBulletin(PyCallArgs &call, PyWString* title, PyWString* body)

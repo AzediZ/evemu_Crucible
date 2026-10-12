@@ -198,6 +198,7 @@ SET( contract_SOURCE
 
 SET( corporation_INCLUDE
      "${TARGET_INCLUDE_DIR}/corporation/BillMgr.h"
+     "${TARGET_INCLUDE_DIR}/corporation/BillingMgr.h"
      "${TARGET_INCLUDE_DIR}/corporation/CorpBookmarkMgr.h"
      "${TARGET_INCLUDE_DIR}/corporation/CorpMgr.h"
      "${TARGET_INCLUDE_DIR}/corporation/CorpMgrService.h"
@@ -213,6 +214,7 @@ SET( corporation_INCLUDE
      "${TARGET_INCLUDE_DIR}/corporation/OfficeSparseBound.h" )
 SET( corporation_SOURCE
      "${TARGET_SOURCE_DIR}/corporation/BillMgr.cpp"
+     "${TARGET_SOURCE_DIR}/corporation/BillingMgr.cpp"
      "${TARGET_SOURCE_DIR}/corporation/CorpBookmarkMgr.cpp"
      "${TARGET_SOURCE_DIR}/corporation/CorpMgr.cpp"
      "${TARGET_SOURCE_DIR}/corporation/CorpMgrService.cpp"

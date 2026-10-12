@@ -33,6 +33,7 @@
 #include "EntityList.h"
 #include "account/AccountDB.h"
 #include "account/AccountService.h"
+#include "alliance/AllianceDB.h"
 #include "character/Character.h"
 #include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
@@ -72,6 +73,14 @@ CorpMgr::CorpMgr()
 
 int CorpMgr::Initialize()
 {
+    // office rent and alliance maintenance bills
+    sBillingMgr.RegisterHandlers(Corp::BillType::RentalBill,
+        [this](const BillData& bill) { OnRentPaid(bill); },
+        [this](const BillData& bill) { OnRentOverdue(bill); });
+    sBillingMgr.RegisterHandlers(Corp::BillType::AllianceMaintainanceBill,
+        nullptr,
+        [this](const BillData& bill) { OnAllianceBillOverdue(bill); });
+
     sLog.Blue("          CorpMgr", "Corporation Manager Initialized.");
     return 1;
 }
@@ -79,6 +88,7 @@ int CorpMgr::Initialize()
 void CorpMgr::Process()
 {
     ProcessVotes();
+    ProcessOffices();
 }
 
 /* roles */
@@ -824,8 +834,9 @@ void CorpMgr::LiquidateCorp(uint32 corpID, uint32 byCharID)
         NotifyChar(cur, Notify::Types::CorpLiquidation, byCharID, data);
     }
 
-    // offices and their contents go with the corp
+    // offices and their contents go with the corp, and so do its bills
     ReleaseOffices(corpID);
+    sBillingMgr.CancelBillsOf(corpID);
 
     for (auto cur : members)
         if (cur != byCharID)
@@ -877,15 +888,219 @@ void CorpMgr::ReleaseOffices(uint32 corpID)
             }
         }
 
-        StationItemRef sRef = sEntityList.GetStationByID(cur.second);
-        if (sRef.get() != nullptr)
-            sRef->RemoveOffice(cur.first);
-        stDataMgr.RemoveOffice(cur.second, cur.first);
-        StationDB::DeleteOffice(cur.first);
-        if (oRef.get() != nullptr)
-            oRef->Delete();
+        DeleteOffice(cur.first);
 
         _log(CORP__INFO, "CorpMgr::ReleaseOffices() - office %u of corp %u in station %u removed", cur.first, corpID, cur.second);
+    }
+}
+
+namespace {
+// const.rentalPeriodOffice (days)
+const int64 OfficeRentalPeriod = 30 * EvE::Time::Day;
+// the rent bill warning before an office expires
+const int64 OfficeExpiryWarning = 3 * EvE::Time::Day;
+
+void SendOfficeChanged(uint32 corpID, uint32 officeID, uint32 folderID)
+{
+    // bco_locations.OnOfficeRentalChanged(corporationID, officeID, officeFolderID):  None, None = office gone
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, (officeID ? (PyRep*)new PyInt(officeID) : PyStatic.NewNone()));
+        payload->SetItem(2, (folderID ? (PyRep*)new PyInt(folderID) : PyStatic.NewNone()));
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnOfficeRentalChanged", "corpid", payload);
+}
+
+void NotifyOfficeExpiration(const OfficeData& odata, const std::string& errorText)
+{
+    // CorpOfficeExpiration {typeID, stationID, dueDate, rentPeriod, errorText} (typeOfficeFolder = the office)
+    PyDict* data = new PyDict();
+        data->SetItemString("typeID", new PyInt(26));
+        data->SetItemString("stationID", new PyInt(odata.stationID));
+        data->SetItemString("dueDate", new PyLong(odata.expiryTime));
+        data->SetItemString("rentPeriod", new PyInt(30));
+        data->SetItemString("errorText", new PyString(errorText));
+    sCorpMgr.NotifyCorp(odata.corporationID, Notify::Types::CorpOfficeExpiration, stDataMgr.GetOwnerID(odata.stationID), data,
+                        Corp::Role::Accountant | Corp::Role::JuniorAccountant);
+}
+}
+
+void CorpMgr::IssueRentBill(uint32 officeID)
+{
+    OfficeData odata = OfficeData();
+    if (!StationDB::GetOfficeData(officeID, odata) or odata.impounded or !odata.publiclyAvailable)
+        return;
+
+    // "the corporation will immediately receive a bill for the next 30 days", due when the current period ends
+    double fee = stDataMgr.GetOfficeRentalFee(odata.stationID);
+    if (fee < 10000)
+        fee = 10000;
+    uint32 billID = sBillingMgr.CreateBill(Corp::BillType::RentalBill, odata.corporationID, stDataMgr.GetOwnerID(odata.stationID), fee,
+                                           odata.expiryTime, EVEDB::invTypes::Office, odata.stationID);
+    StationDB::SetOfficeLease(officeID, odata.expiryTime, billID);
+}
+
+void CorpMgr::OnRentPaid(const BillData& bill)
+{
+    // another 30 days from the end of the current lease, and the bill for the period after that
+    uint32 officeID = StationDB::GetCorpOffice(bill.debtorID, bill.externalID2, false);
+    OfficeData odata = OfficeData();
+    if ((officeID == 0) or !StationDB::GetOfficeData(officeID, odata))
+        return;
+
+    int64 expiry = EvE::max(odata.expiryTime, (int64)GetFileTimeNow()) + OfficeRentalPeriod;
+    StationDB::SetOfficeLease(officeID, expiry, 0);
+    m_warnedOffices.erase(officeID);
+    IssueRentBill(officeID);
+}
+
+void CorpMgr::OnRentOverdue(const BillData& bill)
+{
+    uint32 officeID = StationDB::GetCorpOffice(bill.debtorID, bill.externalID2, false);
+    if (officeID != 0)
+        ExpireOffice(officeID, "");
+}
+
+void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
+{
+    // "If this is ever unpaid, the alliance will be closed at the following downtime."
+    uint32 executorID = AllianceDB::GetExecutorID(bill.debtorID);
+    PyDict* data = new PyDict();
+        data->SetItemString("allianceID", new PyInt(bill.debtorID));
+    NotifyCorp(executorID, Notify::Types::AllMaintenanceBill, corpCONCORD, data);
+
+    if (sConfig.corp.CloseAllianceOnUnpaidBill) {
+        /** @todo F22:  sAllianceMgr.DisbandAlliance(bill.debtorID) once alliances can be closed */
+        _log(CORP__WARNING, "CorpMgr::OnAllianceBillOverdue() - alliance %u did not pay its maintenance bill %u; closing alliances is not available yet",
+             bill.debtorID, bill.billID);
+    }
+}
+
+void CorpMgr::ExpireOffice(uint32 officeID, const std::string& errorText)
+{
+    OfficeData odata = OfficeData();
+    if (!StationDB::GetOfficeData(officeID, odata) or odata.impounded)
+        return;
+
+    // "the corporation loses office access":  the hangar contents are impounded where they are
+    bool empty(true);
+    StationOfficeRef oRef = sItemFactory.GetOfficeRef(officeID);
+    if ((oRef.get() != nullptr) and (oRef->GetMyInventory() != nullptr)) {
+        oRef->GetMyInventory()->LoadContents();
+        std::vector<InventoryItemRef> items;
+        oRef->GetMyInventory()->GetInventoryVec(items);
+        for (auto cur : items) {
+            empty = false;
+            if (IsHangarFlag(cur->flag()))
+                cur->SetFlag(flagImpounded, true);
+        }
+    }
+
+    StationItemRef sRef = sEntityList.GetStationByID(odata.stationID);
+    if (sRef.get() != nullptr)
+        sRef->RemoveOffice(officeID);
+    stDataMgr.RemoveOffice(odata.stationID, officeID);
+    sBillingMgr.CancelBill(odata.billID);
+    m_warnedOffices.erase(officeID);
+
+    if (empty) {
+        StationDB::DeleteOffice(officeID);
+        if (oRef.get() != nullptr)
+            oRef->Delete();
+    } else {
+        StationDB::SetOfficeImpounded(officeID, true);
+    }
+
+    SendOfficeChanged(odata.corporationID, 0, 0);
+    NotifyOfficeExpiration(odata, errorText);
+
+    _log(CORP__INFO, "CorpMgr::ExpireOffice() - office %u of corp %u in station %u %s", officeID, odata.corporationID, odata.stationID,
+         (empty ? "removed" : "impounded"));
+}
+
+void CorpMgr::ReactivateOffice(uint32 officeID)
+{
+    OfficeData odata = OfficeData();
+    if (!StationDB::GetOfficeData(officeID, odata) or !odata.impounded)
+        return;
+
+    StationDB::SetOfficeImpounded(officeID, false);
+    odata.impounded = false;
+    odata.billID = 0;
+    odata.expiryTime = GetFileTimeNow() + OfficeRentalPeriod;
+    StationDB::SetOfficeLease(officeID, odata.expiryTime, 0);
+
+    // impounded items return to the first hangar division
+    StationOfficeRef oRef = sItemFactory.GetOfficeRef(officeID);
+    if ((oRef.get() != nullptr) and (oRef->GetMyInventory() != nullptr)) {
+        oRef->GetMyInventory()->LoadContents();
+        std::vector<InventoryItemRef> items;
+        oRef->GetMyInventory()->GetItemsByFlag(flagImpounded, items);
+        for (auto cur : items)
+            cur->SetFlag(flagHangar, true);
+    }
+
+    StationItemRef sRef = sEntityList.GetStationByID(odata.stationID);
+    if (sRef.get() != nullptr)
+        sRef->RestoreOffice(odata);
+    stDataMgr.AddOffice(odata.stationID, odata);
+    SendOfficeChanged(odata.corporationID, officeID, odata.folderID);
+
+    IssueRentBill(officeID);
+    _log(CORP__INFO, "CorpMgr::ReactivateOffice() - office %u of corp %u in station %u in use again", officeID, odata.corporationID, odata.stationID);
+}
+
+void CorpMgr::DeleteOffice(uint32 officeID)
+{
+    OfficeData odata = OfficeData();
+    if (!StationDB::GetOfficeData(officeID, odata))
+        return;
+
+    StationOfficeRef oRef = sItemFactory.GetOfficeRef(officeID);
+    StationItemRef sRef = sEntityList.GetStationByID(odata.stationID);
+    if (sRef.get() != nullptr)
+        sRef->RemoveOffice(officeID);
+    stDataMgr.RemoveOffice(odata.stationID, officeID);
+    sBillingMgr.CancelBill(odata.billID);
+    StationDB::DeleteOffice(officeID);
+    if (oRef.get() != nullptr)
+        oRef->Delete();
+    SendOfficeChanged(odata.corporationID, 0, 0);
+}
+
+void CorpMgr::ProcessOffices()
+{
+    if (!sConfig.corp.BillsEnabled)
+        return;
+
+    int64 now = GetFileTimeNow();
+
+    // offices without a rent bill (rented before bills existed):  billed for their next period, with a week to pay when the lease already ran out
+    std::vector<uint32> ids;
+    StationDB::GetOfficesWithoutBill(ids);
+    for (auto cur : ids) {
+        OfficeData odata = OfficeData();
+        if (!StationDB::GetOfficeData(cur, odata))
+            continue;
+        if (odata.expiryTime < now + EvE::Time::Day)
+            StationDB::SetOfficeLease(cur, now + 7 * EvE::Time::Day, 0);
+        IssueRentBill(cur);
+    }
+
+    // offices the outpost owner no longer rents out end with their lease
+    ids.clear();
+    StationDB::GetLapsedOffices(now, ids);
+    for (auto cur : ids)
+        ExpireOffice(cur, "The station owner no longer makes this office available.");
+
+    // the rent is due soon and still unpaid
+    ids.clear();
+    StationDB::GetOfficesWithBillDue(now + OfficeExpiryWarning, ids);
+    for (auto cur : ids) {
+        if (!m_warnedOffices.insert(cur).second)
+            continue;
+        OfficeData odata = OfficeData();
+        if (StationDB::GetOfficeData(cur, odata))
+            NotifyOfficeExpiration(odata, "");
     }
 }
 

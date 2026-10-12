@@ -211,6 +211,24 @@ void StationItem::LoadStationOffice(uint32 corpID)
     m_officeLoaded.emplace(officeID, true);
 }
 
+void StationItem::RestoreOffice(OfficeData& odata)
+{
+    m_officeMap[odata.officeID] = odata;
+    m_officeLoaded[odata.officeID] = true;
+    PySafeDecRef(m_officePyData);
+    m_officePyData = StationDB::GetOffices(m_stationID);
+
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(odata.corporationID));
+        payload->SetItem(1, new PyInt(odata.officeID));
+        payload->SetItem(2, new PyInt(odata.folderID));
+    for (auto cur : m_guestList) {
+        PyIncRef(payload);
+        cur.second->SendNotification("OnOfficeRentalChanged", "stationid", &payload, false);
+    }
+    PyDecRef(payload);
+}
+
 void StationItem::ImpoundOffice(uint32 officeID)
 {
     std::map<uint32, OfficeData>::iterator itr = m_officeMap.find(officeID);

@@ -76,7 +76,9 @@ protected:
     PyResult GetCorporateStationOffice(PyCallArgs& call);
     PyResult DoesPlayersCorpHaveJunkAtStation(PyCallArgs& call);
     PyResult GetQuoteForGettingCorpJunkBack(PyCallArgs& call);
-    PyResult PayForReturnOfCorpJunk(PyCallArgs& call, PyFloat* cost);
+    PyResult PayForReturnOfCorpJunk(PyCallArgs& call, PyRep* cost);
+    // impound release fee (JunkReleaseFraction of the office rent)
+    int32 GetJunkReleaseCost();
     PyResult GetStationServiceIdentifiers(PyCallArgs& call);
     PyResult GetStationDetails(PyCallArgs& call, PyInt* stationID);
     PyResult GetStationServiceAccessRule(PyCallArgs& call, PyInt* stationID, PyInt* serviceID);

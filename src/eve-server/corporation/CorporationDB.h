@@ -120,7 +120,7 @@ public:
     static uint32 GetInEffectLockdown(uint32 corpID, uint32 itemID);
 
     void GetAutoPay(uint32 corpID, DBQueryResult& res);
-    void SetAutoPay();
+    static void SetAutoPay(uint32 corpID, bool market, bool rental, bool broker, bool war, bool alliance, bool sov, uint16 divisionID);
 
     //PyObject *ListStationOffices(uint32 station_id);
     PyObject *ListStationCorps(uint32 station_id);
@@ -145,8 +145,6 @@ public:
 
     bool FetchOfficesKeys (uint32 corporationID, DBQueryResult& res);
     bool FetchOffices(uint32 corpID, uint32 from, uint32 count, DBQueryResult& res);
-
-    PyObject* GetCorporationBills(uint32 corpID, bool payable);
 
     int32 GetCorpIDforChar(int32 charID);
     uint32 GetStationOwner(uint32 stationID);

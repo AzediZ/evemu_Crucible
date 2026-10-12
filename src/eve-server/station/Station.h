@@ -98,6 +98,8 @@ public:
     uint32 GetOfficeID(uint32 corpID);
     // the office is no longer rented here (closed corp, expired or cancelled rent):  out of the station's lists, OnOfficeRentalChanged(corp, None, None)
     void RemoveOffice(uint32 officeID);
+    // an impounded office back in use (rented again or released):  into the station's lists, OnOfficeRentalChanged(corp, office, folder)
+    void RestoreOffice(OfficeData& odata);
 
     void LoadStationOffice(uint32 corpID);
     void AddLoadedOffice(uint32 officeID);

@@ -48,6 +48,8 @@
 #include "account/AccountService.h"
 #include "chat/LSCService.h"
 #include "corporation/CorpMgr.h"
+#include "corporation/ItemLockdown.h"
+#include "station/StationOffice.h"
 #include "corporation/CorpStationMgr.h"
 #include "station/Station.h"
 #include "station/StationDataMgr.h"
@@ -273,12 +275,16 @@ PyResult CorpStationMgrIMBound::SetCloneTypeID(PyCallArgs &call, PyInt* cloneTyp
 }
 
 PyResult CorpStationMgrIMBound::RentOffice(PyCallArgs &call, PyInt* amount) {
-    // corp role is checked in client before this button is shown.  no need to check here.
-    // 1 param, corp rent price
+    // lobby.RentOffice:  AskPayOfficeRentalFee {cost, duration} then RentOffice(cost);  returns the officeID
     Client* pClient = call.client;
+    uint32 corpID = pClient->GetCorporationID();
+    if (!IsPlayerCorp(corpID))
+        throw CustomError("Only player corporations can rent offices.");
+    if (!CorpMgr::HasRole(pClient->GetCorpRole(), Corp::Role::CanRentOffice))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You need the Rent Office role to rent an office."));
 
     // see if corp has office in station already.
-    if (pStationItem->GetOfficeID(pClient->GetCorporationID()))
+    if (pStationItem->GetOfficeID(corpID))
         throw UserError ("RentingYouHaveAnOfficeHere");
 
     // this may not be needed, as rental fee is queried immediately prior to this call
@@ -286,30 +292,27 @@ PyResult CorpStationMgrIMBound::RentOffice(PyCallArgs &call, PyInt* amount) {
         _log(CORP__WARNING, "RentOffice() - Was quoted %i but station reports %u for office rental at %s", \
             amount->value(), pStationItem->GetOfficeRentalFee(), pStationItem->name());
 
-    // check if the corp has enough money
-    // remove the money and record the transaction
+    // the first 30 days are paid now (throws NotEnoughMoneyCorp)
     std::string reason = "Office Rental at ";
     reason += pStationItem->itemName();
     reason += " by ";
     reason += pClient->GetCharName();
+    AccountService::TransferFunds(corpID, pStationItem->GetOwnerID(), pStationItem->GetOfficeRentalFee(), reason.c_str(), Journal::EntryType::OfficeRentalFee, m_stationID);
 
-    AccountService::TransferFunds(pClient->GetCorporationID(), pStationItem->GetOwnerID(), amount->value(), reason.c_str(), Journal::EntryType::OfficeRentalFee);
-
-/** @note  why is this disabled?
-    int64 balance = AccountDB::GetCorpBalance(pClient->GetCorporationID(), Account::KeyType::Cash);
-    if (balance < arg.arg) {
-        std::map<std::string, PyRep *> args;
-        args["amount"] = new PyFloat(arg.arg);
-        args["balance"] = new PyFloat(balance);
-        throw PyException(MakeUserError("NotEnoughMoney", args));
+    // renting where the corp's property is impounded gives that office (and its contents) back
+    uint32 impoundedID = StationDB::GetCorpOffice(corpID, m_stationID, true);
+    if (impoundedID != 0) {
+        sCorpMgr.ReactivateOffice(impoundedID);
+        return new PyInt(impoundedID);
     }
-*/
+
     OfficeData odata = OfficeData();
         odata.ticker = pClient->GetChar()->corpTicker();
-        odata.corporationID = pClient->GetCorporationID();
-        odata.expiryTime = Win32TimeNow() + EvE::Time::Month;
+        odata.corporationID = corpID;
+        odata.expiryTime = Win32TimeNow() + 30 * EvE::Time::Day;
         odata.lockDown = false;
-        odata.rentalFee = amount->value();
+        odata.publiclyAvailable = true;
+        odata.rentalFee = pStationItem->GetOfficeRentalFee();
         odata.typeID = 27;  // office typeID
     pStationItem->RentOffice(odata);
 
@@ -318,17 +321,11 @@ PyResult CorpStationMgrIMBound::RentOffice(PyCallArgs &call, PyInt* amount) {
         return nullptr;
     }
 
-    // send data to bill mgr for creating bill and notifications
+    // "the corporation will immediately receive a bill for the next 30 days"
+    if (sConfig.corp.BillsEnabled)
+        sCorpMgr.IssueRentBill(odata.officeID);
 
-    /*
-     *        [PyString "OnNotificationReceived"]
-     *        [PyList 0 items]
-     *        [PyString "clientID"]           << Notify::Types::
-     */
-
-    /** @todo update this to use corpNotify */
     // This has to be sent to everyone in the station
-    //  are corp members notified?
     OfficeAttributeUpdate change;
         change.oldOfficeFolderID = PyStatic.NewNone();
         change.oldOfficeID = PyStatic.NewNone();
@@ -449,23 +446,28 @@ PyResult CorpStationMgrIMBound::GetPotentialHomeStations(PyCallArgs &call) {
 
 PyResult CorpStationMgrIMBound::GetQuoteForGettingCorpJunkBack(PyCallArgs &call)
 {   //cost = corpStationMgr.GetQuoteForGettingCorpJunkBack()
+    //  "an impound fee, which is equivalent to 50% of the cost of the rental price for an office"
     _log(CORP__CALL, "CorpStationMgrIMBound::Handle_GetQuoteForGettingCorpJunkBack()");
     call.Dump(CORP__CALL_DUMP);
 
-    // office rental fee (with multiplier?  config option for multiplier?)
-    //stDataMgr.GetOfficeRentalFee(m_stationID);
-    return new PyInt(pStationItem->GetOfficeRentalFee());
+    return new PyInt(GetJunkReleaseCost());
+}
+
+int32 CorpStationMgrIMBound::GetJunkReleaseCost()
+{
+    return (int32)std::round(pStationItem->GetOfficeRentalFee() * sConfig.corp.JunkReleaseFraction);
 }
 
 PyResult CorpStationMgrIMBound::DoesPlayersCorpHaveJunkAtStation(PyCallArgs &call)
 {   //if corpStationMgr.DoesPlayersCorpHaveJunkAtStation():
+    //  opening the corp hangar without an office:  the impounded property can be paid back
     _log(CORP__CALL, "CorpStationMgrIMBound::Handle_DoesPlayersCorpHaveJunkAtStation()");
     call.Dump(CORP__CALL_DUMP);
 
-    // query station for (officeID:flagimpounded)
-
-    // returns boolean
-    return PyStatic.NewFalse();
+    uint32 officeID = StationDB::GetCorpOffice(call.client->GetCorporationID(), m_stationID, true);
+    if (officeID == 0)
+        return PyStatic.NewFalse();
+    return new PyBool(StationDB::CountImpoundedItems(officeID) > 0);
 }
 
 PyResult CorpStationMgrIMBound::SetHomeStation(PyCallArgs &call, PyInt* newHomeStationID) {
@@ -537,25 +539,64 @@ PyResult CorpStationMgrIMBound::DoStandingCheckForStationService(PyCallArgs &cal
 }
 
 PyResult CorpStationMgrIMBound::CancelRentOfOffice(PyCallArgs &call)
-{   //  corpStationMgr.CancelRentOfOffice()
+{   //  corpStationMgr.CancelRentOfOffice()     crpUnrentOfficeWithContent:  "Unrenting the office will cause the content to be impounded"
     _log(CORP__CALL, "CorpStationMgrIMBound::Handle_CancelRentOfOffice()");
     call.Dump(CORP__CALL_DUMP);
 
-    /* this will need to search for items in office hangar.
-     *   if none, then no worries
-     *   if items, move them to 'impounded' (flagImpounded - corp junk)
-     *
-     *  not sure if the items change locations from corp officeID to stationID
-     *   if so, cannot remove officeID from office map, but will need a flag to show it as 'not rented'
-     */
+    uint32 corpID = call.client->GetCorporationID();
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::CanRentOffice))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You need the Rent Office role to unrent an office."));
+
+    uint32 officeID = StationDB::GetCorpOffice(corpID, m_stationID, false);
+    if (officeID == 0)
+        throw CustomError("Your corporation does not rent an office here.");
+
+    // the current period is not refunded;  the open rent bill is cancelled
+    sCorpMgr.ExpireOffice(officeID, "");
     return nullptr;
 }
 
-PyResult CorpStationMgrIMBound::PayForReturnOfCorpJunk(PyCallArgs &call, PyFloat* cost)
-{   //    corpStationMgr.PayForReturnOfCorpJunk(cost)
+PyResult CorpStationMgrIMBound::PayForReturnOfCorpJunk(PyCallArgs &call, PyRep* cost)
+{   //    corpStationMgr.PayForReturnOfCorpJunk(cost)     after CrpJunkAcceptCost {cost}
     _log(CORP__CALL, "CorpStationMgrIMBound::Handle_PayForReturnOfCorpJunk()");
     call.Dump(CORP__CALL_DUMP);
 
+    uint32 corpID = call.client->GetCorporationID();
+    if ((call.client->GetCorpRole() & Corp::Role::Director) != Corp::Role::Director)
+        throw UserError("CrpJunkOnlyAvailableToDirector");
+
+    uint32 officeID = StationDB::GetCorpOffice(corpID, m_stationID, true);
+    if ((officeID == 0) or (StationDB::CountImpoundedItems(officeID) == 0))
+        throw CustomError("Your corporation has no impounded property here.");
+
+    // locked items stay impounded until a vote unlocks them
+    StationOfficeRef oRef = sItemFactory.GetOfficeRef(officeID);
+    if ((oRef.get() != nullptr) and (oRef->GetMyInventory() != nullptr)) {
+        oRef->GetMyInventory()->LoadContents();
+        std::vector<InventoryItemRef> items;
+        oRef->GetMyInventory()->GetItemsByFlag(flagImpounded, items);
+        for (auto cur : items)
+            if (ItemLockdown::IsLocked(cur->itemID()))
+                throw UserError("CrpJunkContainsLockedItem");
+    }
+
+    int32 quote = GetJunkReleaseCost();
+    double offered(0);
+    if (cost->IsFloat()) {
+        offered = PyRep::FloatValue(cost);
+    } else if (cost->IsInt() or cost->IsLong()) {
+        offered = (double)PyRep::IntegerValue(cost);
+    }
+    if (offered < quote)
+        throw CustomError("The release fee is %i ISK.", quote);
+
+    std::string reason = "Release of impounded property at ";
+    reason += pStationItem->itemName();
+    AccountService::TransferFunds(corpID, pStationItem->GetOwnerID(), quote, reason.c_str(), Journal::EntryType::ReleaseOfImpoundedProperty,
+                                  m_stationID, call.client->GetCorpAccountKey());
+
+    // the property comes back with the office, for a new lease (and its rent bill)
+    sCorpMgr.ReactivateOffice(officeID);
     return nullptr;
 }
 
@@ -723,9 +764,9 @@ PyResult CorpStationMgrIMBound::GetStationImprovements(PyCallArgs &call)
         while (res.GetRow(row))
             for (int i = 0; i < 6; i++)
                 if (row.GetInt(i) == 0)
-                    imp[i] == new PyNone();
+                    imp[i] = new PyNone();
                 else 
-                    imp[i] == new PyInt(row.GetInt(i));
+                    imp[i] = new PyInt(row.GetInt(i));
 
     dict->SetItemString("improvementTier2aTypeID", imp[0]);
     dict->SetItemString("improvementTier3aTypeID", imp[1]);

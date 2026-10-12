@@ -36,6 +36,7 @@
 #include "EVE_Roles.h"
 #include "POD_containers.h"
 #include "corporation/CorpData.h"
+#include "corporation/BillingMgr.h"
 
 class Client;
 class PyDict;
@@ -142,9 +143,26 @@ public:
     void ReleaseOffices(uint32 corpID);
     // deletes an item and everything inside it
     static void DeleteTree(InventoryItemRef iRef);
+    // rent lapsed or cancelled:  hangar contents impounded (flagImpounded), the office out of the station's lists, CorpOfficeExpiration.
+    //  an office with nothing in it is simply removed
+    void ExpireOffice(uint32 officeID, const std::string& errorText);
+    // an impounded office in use again for a new lease (rented again or released), impounded contents back in hangar 1
+    void ReactivateOffice(uint32 officeID);
+    // removes one office for good (it must be empty)
+    void DeleteOffice(uint32 officeID);
+    // the rent bill for the office's next period, due at its expiry
+    void IssueRentBill(uint32 officeID);
+    // every ~5 minutes:  first bills for offices without one, lapsed offices, expiry warnings
+    void ProcessOffices();
 
 private:
     void LoadTitles(uint32 corpID);
+    // bill handlers (BillingMgr)
+    void OnRentPaid(const BillData& bill);
+    void OnRentOverdue(const BillData& bill);
+    void OnAllianceBillOverdue(const BillData& bill);
+
+    std::set<uint32> m_warnedOffices;       // offices told their rent is due soon (once per server run)
 
     std::map<uint32, std::map<int64, Corp::TitleRoles>> m_titles;   // corpID -> titleID -> roles
     std::map<uint32, bool> m_ceoVote;                               // corpID -> open CEO vote

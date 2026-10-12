@@ -51,6 +51,7 @@
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "corporation/CorporationDB.h"
+#include "corporation/BillingMgr.h"
 #include "corporation/CorpMgr.h"
 
 #include <random>
@@ -294,7 +295,8 @@ void EntityList::Process() {
                 sWHMgr.Process();
                 sMktMgr.Process();  // market order expiry, daily price history rollup
                 ContractUtils::ProcessExpiry();  // optional contract cleanup and courier failure
-                sCorpMgr.Process();  // vote cases, sanctioned actions
+                sCorpMgr.Process();  // vote cases, sanctioned actions, office rent
+                sBillingMgr.Process();  // auto-pay, overdue bills, alliance maintenance
                 for (auto cur : m_systems)
                     cur.second->UpdateData();   // update active system timers and dynamic data every 5m
             }

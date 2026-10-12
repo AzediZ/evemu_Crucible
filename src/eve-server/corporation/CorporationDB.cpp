@@ -290,30 +290,6 @@ PyRep *CorporationDB::GetCorporations(uint32 corpID) {
     return DBRowToPackedRow(row);
 }
 
-PyObject* CorporationDB::GetCorporationBills(uint32 corpID, bool payable)
-{
-    DBQueryResult res;
-    if (payable) {
-        if (!sDatabase.RunQuery(res,
-            "SELECT billID, billTypeID, debtorID, creditorID, amount, dueDateTime, interest,"
-            "externalID, paid externalID2 FROM billsPayable WHERE debtorID = %u", corpID))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            return nullptr;
-        }
-    } else {
-        if (!sDatabase.RunQuery(res,
-            "SELECT billID, billTypeID, debtorID, creditorID, amount, dueDateTime, interest,"
-            "externalID, paid externalID2 FROM billsReceivable WHERE creditorID = %u", corpID))
-        {
-            codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
-            return nullptr;
-        }
-    }
-
-    return DBResultToRowset(res);
-}
-
 PyObject *CorporationDB::GetEmploymentRecord(uint32 charID) {
     DBQueryResult res;
     //do we really need this order by??
@@ -1260,14 +1236,14 @@ PyObject *CorporationDB::GetStations(uint32 corpID) {
 
 
 bool CorporationDB::FetchOfficesKeys (uint32 corporationID, DBQueryResult& res) {
-    return sDatabase.RunQuery (res, "SELECT itemID FROM staOffices WHERE corporationID = %u", corporationID);
+    return sDatabase.RunQuery (res, "SELECT itemID FROM staOffices WHERE corporationID = %u AND impounded = 0", corporationID);
 }
 
 bool CorporationDB::FetchOffices (uint32 corpID, uint32 from, uint32 count, DBQueryResult& res) {
     return sDatabase.RunQuery(res,
         "SELECT itemID, stationID, stationTypeID, officeFolderID, typeID"
         " FROM staOffices "
-        " WHERE corporationID = %u "
+        " WHERE corporationID = %u AND impounded = 0"
         " LIMIT %u, %u ",
         corpID, from, count
         );
@@ -1989,12 +1965,17 @@ PyRep* CorporationDB::GetMemberTrackingInfoSimple(uint32 corpID)
 
 void CorporationDB::GetAutoPay(uint32 corpID, DBQueryResult& res)
 {
-    sDatabase.RunQuery(res, "SELECT market, rental, broker, war, alliance, sov FROM crpAutoPay WHERE corporationID = %u", corpID);
+    sDatabase.RunQuery(res, "SELECT market, rental, broker, war, alliance, sov, divisionID FROM crpAutoPay WHERE corporationID = %u", corpID);
 }
 
-void CorporationDB::SetAutoPay()
+void CorporationDB::SetAutoPay(uint32 corpID, bool market, bool rental, bool broker, bool war, bool alliance, bool sov, uint16 divisionID)
 {
-    //UPDATE crpAutoPay SET corporationID=[value-1],market=[value-2],rental=[value-3],broker=[value-4],war=[value-5],alliance=[value-6],sov=[value-7] WHERE 1
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM crpAutoPay WHERE corporationID = %u", corpID);
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO crpAutoPay (corporationID, market, rental, broker, war, alliance, sov, divisionID) VALUES (%u, %u, %u, %u, %u, %u, %u, %u)",
+        corpID, (market ? 1 : 0), (rental ? 1 : 0), (broker ? 1 : 0), (war ? 1 : 0), (alliance ? 1 : 0), (sov ? 1 : 0), divisionID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
 }
 
 void CorporationDB::AddItemEvent(uint32 corpID, uint32 charID, uint16 eTypeID)
