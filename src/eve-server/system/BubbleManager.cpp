@@ -66,6 +66,11 @@ int BubbleManager::Initialize() {
 void BubbleManager::clear() {
     for (auto cur : m_bubbles)
         SafeDelete(cur);
+    // nothing may find the freed bubbles
+    m_bubbles.clear();
+    m_bubbleIDMap.clear();
+    m_sysBubbleMap.clear();
+    m_spawnIDs.clear();
 
     sLog.Warning("        BubbleMgr", "Bubble Manager has been closed." );
 }
@@ -140,14 +145,27 @@ void BubbleManager::CheckBubble(SystemEntity *pSE) {
     Add(pSE);
 }
 
+/* bubble ownership:  BubbleManager owns every bubble.  MakeBubble() makes it, and only RemoveEmpty(), ClearSystemBubbles()
+ *  (system unload) and clear() (shutdown) free it, each taking it out of m_bubbles, m_bubbleIDMap and m_sysBubbleMap first.
+ *  nobody else keeps a bubble pointer past the current call, except
+ *   - the entities in it (SysBubble(), cleared when they leave it), so an empty bubble has none
+ *   - a warp headed there (DestinyManager pins its exit bubble with AddArrival(), and keeps only its ID):  kept while pinned
+ *  bubbles with .bubbletrack markers are kept too (the cans belong to the system).  everything else refers to a bubble by
+ *  ID (FindBubbleByID() returns nullptr once it's gone) or looks it up by position each time */
 void BubbleManager::RemoveEmpty()
 {
     std::list<SystemBubble*>::iterator itr = m_bubbles.begin();
     while (itr != m_bubbles.end()) {
-        if ((*itr)->IsEmpty()) {
-            _log(DESTINY__BUBBLE_DEBUG, "BubbleManager::RemoveEmpty() - Bubble %u is empty and is being deleted from the system.", (*itr)->GetID() );
-            RemoveBubble((*itr)->GetSystem()->GetID(), (*itr));
+        SystemBubble* pBubble(*itr);
+        if (pBubble == nullptr) {
             itr = m_bubbles.erase(itr);
+            continue;
+        }
+        if (pBubble->IsEmpty() and !pBubble->HasArrivals() and !pBubble->HasMarkers()) {
+            _log(DESTINY__BUBBLE_DEBUG, "BubbleManager::RemoveEmpty() - Bubble %u is empty and is being deleted from the system.", pBubble->GetID() );
+            RemoveBubble(pBubble->GetSystemID(), pBubble);
+            itr = m_bubbles.erase(itr);
+            SafeDelete(pBubble);
         } else {
             ++itr;
         }
@@ -213,6 +231,7 @@ void BubbleManager::Remove(SystemEntity *ent) {
         std::list<SystemBubble *>::iterator itr = m_bubbles.begin();
         while (itr != m_bubbles.end()) {
             if (*itr == nullptr) {
+                ++itr;
                 continue;
             }
 
@@ -299,28 +318,36 @@ SystemBubble* BubbleManager::FindBubbleByID(uint16 bubbleID)
     return nullptr;
 }
 
+// system unload.  its entities (and marker cans) are gone already, so nothing in the system refers to these any more
 void BubbleManager::ClearSystemBubbles(uint32 systemID)
 {
+    std::vector<SystemBubble*> bubbles;
     auto range = m_sysBubbleMap.equal_range(systemID);
-    for (auto itr = range.first; itr != range.second; ++itr){
-        m_bubbles.remove(itr->second);
-        m_bubbleIDMap.erase(itr->second->GetID());
-    }
+    for (auto itr = range.first; itr != range.second; ++itr)
+        bubbles.push_back(itr->second);
 
-    m_sysBubbleMap.erase(systemID);
+    for (auto cur : bubbles) {
+        RemoveBubble(systemID, cur);
+        m_bubbles.remove(cur);
+        SafeDelete(cur);
+    }
 }
 
+// takes the bubble out of the lookup maps (not m_bubbles).  it doesn't free it
 void BubbleManager::RemoveBubble(uint32 systemID, SystemBubble* pSB)
 {
     auto range = m_sysBubbleMap.equal_range(systemID);
     for (auto itr = range.first; itr != range.second; ++itr)
         if (itr->second == pSB) {
             m_sysBubbleMap.erase(itr);
-            return;
+            break;
         }
+    // (bubble IDs wrap.  only this bubble's entries go)
     std::map<uint32, SystemBubble*>::iterator itr = m_bubbleIDMap.find(pSB->GetID());
-    if (itr != m_bubbleIDMap.end())
+    if ((itr != m_bubbleIDMap.end()) and (itr->second == pSB)) {
         m_bubbleIDMap.erase(itr);
+        m_spawnIDs.erase(pSB->GetID());
+    }
 }
 
 /* for beltmgr */

@@ -82,6 +82,12 @@ public:
 
     /* used for bubble management */
     bool IsEmpty() const                                { return (m_entities.empty() ? m_dynamicEntities.empty() : false); }
+    /* warps headed here (DestinyManager pins its warp's exit bubble).  BubbleManager::RemoveEmpty() keeps a bubble with
+     *  arrivals pending, so the bubble made for a warp's exit point is still there (and findable) when the warp ends */
+    void AddArrival()                                   { ++m_arrivals; }
+    void RemoveArrival()                                { if (m_arrivals > 0) --m_arrivals; }
+    bool HasArrivals() const                            { return (m_arrivals > 0); }
+    bool HasMarkers() const                             { return !m_markers.empty(); }
     bool HasPlayers() const                             { return !m_players.empty(); }
     bool HasStatics() const                             { return !m_entities.empty(); }
     bool HasDynamics() const                            { return !m_dynamicEntities.empty(); }
@@ -207,9 +213,12 @@ private:
 
     uint16 m_bubbleID;
     uint32 m_systemID;
+    uint32 m_arrivals;      // warps headed here (see AddArrival())
 
     std::map<uint32, Client*> m_players;                // testing with bubble player list (in std::map)
-    std::map<uint32, SystemEntity*> m_markers;          // bubble marker cans.  we do own these.
+    /* bubble marker cans (.bubbletrack).  RemoveMarkers() frees them;  otherwise they are in the system's entity list, and
+     *  UnloadSystem() frees them with the rest (so the destructor doesn't) */
+    std::map<uint32, SystemEntity*> m_markers;
     std::map<uint32, SystemEntity*> m_dynamicEntities;  //entities which may/may not move. we do not own these.
     std::map<uint32, SystemEntity*> m_entities;         //we do not own these.
 
