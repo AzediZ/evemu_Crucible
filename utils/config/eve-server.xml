@@ -173,7 +173,7 @@ boolean can use either 0/1 OR true/false.
          sell orders at the trade hubs, priced from Crucible-era market history (the mktCal* tables), and trade with
          players through the normal market.  every ISK and item it trades is accounted for (/mktsim audit).  GM: /mktsim -->
     <marketSim>
-        <Enabled>false</Enabled><!-- bool - master switch.  off leaves the sim's orders in place (still backed; /mktsim purge removes them) -->
+        <Enabled>true</Enabled><!-- bool - master switch (needs the mktCal* calibration;  without it the sim logs why and stays off).  off leaves the sim's orders in place (still backed; /mktsim purge removes them)  default: true (the phase 2 acceptance tests pass) -->
         <Seed>20111129</Seed><!-- integer - random seed (Crucible's release date).  the same seed and inputs give the same market -->
         <EconomyScale>0.01</EconomyScale><!-- float - fraction of Tranquility's volumes and income this server represents.  a small private server may want 0.002-0.005  default: 0.01 -->
         <Hubs>60003760,60008494,60011866,60004588,60005686</Hubs><!-- stationIDs of the hubs (Jita IV-4, Amarr VIII, Dodixie IX-20, Rens VI-8, Hek VIII-12) -->
