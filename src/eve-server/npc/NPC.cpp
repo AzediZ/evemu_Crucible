@@ -224,6 +224,7 @@ void NPC::SaveNPC()
 void NPC::RemoveNPC()
 {
     //this is called from SystemManager::RemoveNPC() which calls other SE* methods as needed
+    m_AI->ClearEwar();
     m_self->Delete();
 }
 
@@ -249,6 +250,9 @@ void NPC::SetResists() {
 void NPC::Killed(Damage &damage) {
     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
         return; // make error here?
+
+    // let go of anyone we're pointing, webbing or painting
+    m_AI->ClearEwar();
 
     //notify our spawn manager that we are gone.
     if ((m_spawnMgr != nullptr) and (m_self.get() != nullptr))

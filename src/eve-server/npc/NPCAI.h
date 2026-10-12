@@ -84,6 +84,19 @@ public:
     void LaunchMissile(uint16 typeID, SystemEntity* pTargSE);   // us to them
     void MissileLaunched(Missile* pMissile); // them to us
 
+    // Sansha incursion ships (NPCEwar.cpp)
+    bool IsIncursion()                                  { return m_incursion; }
+    // drop every point, web and painter this ship has on others.  called when it dies or is removed
+    void ClearEwar();
+    // shield repair from another Sansha ship or structure
+    void RepairShield(float amount, SystemEntity* pFrom = nullptr);
+    // stop or restart this ship's remote repairs (a hacked logistics array turns them off)
+    void SetRepairsDisabled(bool set)                   { m_repairsDisabled = set; }
+    // a hacked mothership logistics array also turns Sansha logistics onto the pilots
+    void SetRepairPlayers(bool set)                     { m_repairPlayers = set; }
+    // warp off the grid (a site is over, or a control relay sent this ship away).  the site removes the ship later
+    void LeaveGrid(const GPoint& to);
+
 protected:
     void Attack(SystemEntity* pTargSE);
     void SetIdle();
@@ -100,6 +113,19 @@ protected:
 
     float GetTargetTime();
 
+    // Sansha incursion ships (NPCEwar.cpp)
+    void InitIncursion();
+    void FlyIncursion(SystemEntity* pTargSE, double dist);
+    void SetPropulsion(bool on);
+    void ProcessIncursion(SystemEntity* pTargSE);
+    void ProcessEwar(SystemEntity* pTargSE);
+    void ProcessRepairs();
+    void RemoteEcmBurst();
+    SystemEntity* PickIncursionTarget(SystemEntity* pCurrent = nullptr);
+    void StopPoint();
+    void StopWeb();
+    void StopPaint();
+
     int8 m_state;
 
     std::string GetStateName(int8 stateID);
@@ -111,6 +137,11 @@ private:
     bool m_useSigRadius     :1;
     bool m_useTargSwitching :1;
     bool m_useSecondTarget  :1;
+    bool m_incursion        :1;     // Sansha incursion ship.  flies and uses EWAR like a player (NPCEwar.cpp)
+    bool m_propOn           :1;     // incursion ship's propulsion module is running
+    bool m_repairsDisabled  :1;
+    bool m_repairPlayers    :1;
+    bool m_leaving          :1;
 
     float m_switchTargChance;   //fuzzy logic
     uint16 m_preferedSigRadius;
@@ -159,6 +190,18 @@ private:
     Timer m_warpOutTimer;
     Timer m_warpScramblerTimer;
     Timer m_webifierTimer;
+
+    // incursion EWAR state.  times are GetTimeMSeconds()
+    uint32 m_pointID;       // ship we hold a warp disruptor on
+    int32 m_pointStrength;
+    uint32 m_webID;         // ship we web
+    uint32 m_paintID;       // ship we paint
+    double m_paintFactor;
+    double m_nextNeut;
+    double m_nextJam;
+    double m_nextRep;
+    double m_nextBurst;
+    double m_nextSwitch;
 };
 
 #endif

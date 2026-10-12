@@ -29,6 +29,7 @@
 
 #include "StaticDataMgr.h"
 #include "map/MapData.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "map/MapService.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
@@ -238,21 +239,7 @@ PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
      *        for solarSystemID, sceneType in participatingSystems:
      *            -- (sceneType = staging, vanguard)
      */
-
-    // copy format from GetLinkableJumpArrays()
-    DBQueryResult res;
-    //PosMgrDB::GetAllianceBeacons(call.client->GetCorporationID(), res);
-    PyList* list = new PyList();
-    DBResultRow row;
-    while (res.GetRow(row)) {
-        // SELECT systemID, sceneType
-        PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyInt(row.GetInt(0)));   //solarSystemID
-        tuple->SetItem(1, new PyInt(row.GetInt(1)));   //sceneType
-        list->AddItem(tuple);
-    }
-
-    return list;
+    return sIncursionMgr.GetSystems();
 }
 
 PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
@@ -261,21 +248,7 @@ PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
      *        for solarSystemID, sceneType in participatingSystems:
      *            -- (sceneType = staging, vanguard, assault, headquarters)
      */
-
-    // copy format from GetLinkableJumpArrays()
-    DBQueryResult res;
-    //PosMgrDB::GetAllianceBeacons(call.client->GetCorporationID(), res);
-    PyList* list = new PyList();
-    DBResultRow row;
-    while (res.GetRow(row)) {
-        // SELECT systemID, sceneType
-        PyTuple* tuple = new PyTuple(2);
-        tuple->SetItem(0, new PyInt(row.GetInt(0)));    //solarSystemID
-        tuple->SetItem(1, new PyInt(row.GetInt(1)));    //sceneType
-        list->AddItem(tuple);
-    }
-
-    return list;
+    return sIncursionMgr.GetSystems();
 }
 
 //05:52:07 L MapService::Handle_GetIncursionGlobalReport(): size= 0
@@ -336,10 +309,7 @@ PyResult MapService::GetIncursionGlobalReport(PyCallArgs &call) {
               [PyIntegerVar 129493861959830226]
               [PyInt -950263469]
               */
-    sLog.Warning( "MapService::Handle_GetIncursionGlobalReport()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    return PyStatic.NewNone();
+    return sIncursionMgr.GetGlobalReport();
 }
 
 //   factional warfare shit

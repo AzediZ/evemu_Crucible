@@ -12,6 +12,7 @@
 #include "ship/modules/Prospector.h"
 #include "system/Container.h"
 #include "system/SystemManager.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 /* this class is for all salvage and data mining types */
 
@@ -91,7 +92,9 @@ uint32 Prospector::DoCycle()
         SendFailure();
         CheckSuccess();
     } else if (m_success) {
-        DropSalvage();
+        // incursion logistics arrays do their own thing when cracked
+        if (!m_dataMiner or !sIncursionMgr.Hacked(m_shipRef->GetPilot(), m_targetSE))
+            DropSalvage();
         AbortCycle();
         return 0;
     } else {
@@ -192,7 +195,8 @@ void Prospector::DropSalvage()
         }
     }
 
-    if (!m_targetSE->GetSelf()->GetMyInventory()->IsEmpty()) {
+    // only wrecks get turned into a loot container
+    if (m_targetSE->IsWreckSE() and !m_targetSE->GetSelf()->GetMyInventory()->IsEmpty()) {
         //{'FullPath': u'UI/Messages', 'messageID': 258062, 'label': u'SalvageTooMuchLootBody'}(u'You cannot salvage this wreck because it contains too much loot to fit into a single cargo container. <br>\r\nThe wreck contains <b>{[numeric]volume, useGrouping} m3</b> but can contain no more than <b>{[numeric]maxvolume, useGrouping} m3</b> to be salvageable.', None, {u'{[numeric]maxvolume, useGrouping}': {'conditionalValues': [], 'variableType': 9, 'propertyName': None, 'args': 32, 'kwargs': {}, 'variableName': 'maxvolume'}, u'{[numeric]volume, useGrouping}': {'conditionalValues': [], 'variableType': 9, 'propertyName': None, 'args': 32, 'kwargs': {}, 'variableName': 'volume'}})
 
         // tell wreck it's being salvaged, so do not broadcast slim updates...may no longer need this.  jetcan set to initial location 0

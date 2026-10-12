@@ -317,6 +317,10 @@ void Inventory::List(CRowSet* into, EVEItemFlags flag, uint32 ownerID) const {
             cur.second->GetItemRow(row);
         }
     } else {
+        // containers in space show everything in them, whoever owns it (site containers, jetcans with mixed loot)
+        if (sDataMgr.IsSolarSystem(m_self->locationID())
+        and ((m_self->categoryID() == EVEDB::invCategories::Celestial) or (m_self->categoryID() == EVEDB::invCategories::Entity)))
+            ownerID = 0;
         for (auto cur : mContents) {
             if (((ownerID == 0)        or (cur.second->ownerID() == ownerID))
             and ((flag == flagNone) or (cur.second->flag() == flag))) {

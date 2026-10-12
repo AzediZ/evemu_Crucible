@@ -16,6 +16,7 @@
 #include "character/Character.h"
 #include "inventory/Inventory.h"
 #include "ship/Ship.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "ship/modules/MiningLaser.h"
 //#include "system/SystemBubble.h"
 //#include "system/SystemManager.h"
@@ -221,6 +222,9 @@ void MiningLaser::ProcessCycle(bool abort/*false*/)
 
     if (oreAmount <= 0)
         return;
+
+    // incursion ore can bring Sansha guards
+    sIncursionMgr.OreMined(m_targetSE);
 
     roidQuantity -= oreAmount;
     _log(MINING__TRACE, "new roidQuantity %.3f", roidQuantity);

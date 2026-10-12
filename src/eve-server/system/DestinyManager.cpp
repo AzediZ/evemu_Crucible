@@ -111,6 +111,7 @@ m_frozen(false)
     m_massMKg = 0.000001f;
     m_alignTime = 1.0f;
     m_maxShipSpeed = 100.0f;
+    m_webFactor = 1.0f;
     m_shipWarpSpeed = 1.0f;
     m_timeToEnterWarp = 10.0f;
     m_shipMaxAccelTime = 0.0f;
@@ -1347,6 +1348,8 @@ void DestinyManager::SetMaxVelocity(float maxVelocity)
     } else {
         m_maxShipSpeed = maxVelocity;
     }
+    // webs stay on through speed changes
+    m_maxShipSpeed *= m_webFactor;
 
     // the client simulates with this speed too, so keep it informed once we are in space
     if ((oldSpeed != m_maxShipSpeed) and (mySE->SysBubble() != nullptr)) {
@@ -1368,7 +1371,7 @@ void DestinyManager::SpeedBoost(bool deactivate/*false*/)
     m_alignTime = (-log(0.25) * m_shipAgility);
     m_shipMaxAccelTime = (-log(0.0001) * m_shipAgility);
     m_timeToEnterWarp = m_alignTime;
-    m_maxShipSpeed = mySE->GetSelf()->GetAttribute(AttrMaxVelocity).get_float();
+    m_maxShipSpeed = mySE->GetSelf()->GetAttribute(AttrMaxVelocity).get_float() * m_webFactor;
 
     // send out updated ship data
     std::vector<PyTuple*> updates;
@@ -1394,10 +1397,15 @@ void DestinyManager::SpeedBoost(bool deactivate/*false*/)
 
 void DestinyManager::WebbedMe(InventoryItemRef modRef, bool apply/*false*/)
 {
+    float factor(1 + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+    if (factor <= 0.0f)
+        return;
     if (apply) {
-        m_maxShipSpeed *= (1 + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+        m_maxShipSpeed *= factor;
+        m_webFactor *= factor;
     } else {
-        m_maxShipSpeed /= (1 + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+        m_maxShipSpeed /= factor;
+        m_webFactor /= factor;
     }
     std::vector<PyTuple*> updates;
     SetBallSpeed sbms;
@@ -1434,13 +1442,13 @@ Battleships 0.155
     if (sRef->HasAttribute(AttrInetia))
         m_shipInertia = sRef->GetAttribute(AttrInetia).get_float();
     if (sRef->HasAttribute(AttrMaxVelocity))
-        m_maxShipSpeed = sRef->GetAttribute(AttrMaxVelocity).get_float();
+        m_maxShipSpeed = sRef->GetAttribute(AttrMaxVelocity).get_float() * m_webFactor;
     if (sRef->HasAttribute(AttrWarpCapacitorNeed))
         m_warpCapacitorNeed = sRef->GetAttribute(AttrWarpCapacitorNeed).get_float() *2;
 
     // drones set their own speed for what they are doing (see DroneAIMgr)
     if (mySE->IsNPCSE())
-        m_maxShipSpeed = sRef->GetAttribute(AttrEntityCruiseSpeed).get_float();
+        m_maxShipSpeed = sRef->GetAttribute(AttrEntityCruiseSpeed).get_float() * m_webFactor;
 
     /* The product of Mass and the Inertia Modifier gives the ship's agility
      * Agility = Mass x Inertia Modifier

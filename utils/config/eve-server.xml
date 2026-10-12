@@ -216,19 +216,25 @@ boolean can use either 0/1 OR true/false.
     </cosmic>
 
     <incursion>
-        <Enabled>true</Enabled><!-- bool  Sansha incursions (vanguard, assault, headquarters and mothership sites.  no system penalty yet) -->
+        <Enabled>true</Enabled><!-- bool  Sansha incursions: overview beacons, acceleration gates, pockets and the wiki's site mechanics.  no constellation penalties yet -->
         <AutoStart>true</AutoStart><!-- bool  start incursions automatically.  GMs can always use /incursion -->
         <MaxActive>1</MaxActive><!-- incursions running at once -->
         <FleetScale>100</FleetScale><!-- percent of full fleet size the sites are scaled to (vanguard 10 pilots, assault 20, headquarters 40, mothership 80).  lower it for small fleets -->
         <Strength>100</Strength><!-- percent HP and damage of Sansha ships -->
-        <SitesPerSystem>3</SitesPerSystem><!-- live sites per vanguard, assault and headquarters system -->
-        <SiteRespawn>180</SiteRespawn><!-- seconds before a cleared site is replaced -->
+        <VanguardSites>7</VanguardSites><!-- live sites per vanguard system (wiki: up to 7) -->
+        <AssaultSites>5</AssaultSites><!-- live sites per assault system (wiki: up to 5) -->
+        <HQSites>5</HQSites><!-- live sites per headquarters system, plus the mothership (wiki: up to 5) -->
+        <SiteRespawn>180</SiteRespawn><!-- seconds before a completed site is replaced -->
+        <DelayedLP>true</DelayedLP><!-- bool  site LP goes into the incursion's pool and is paid to everyone who ran sites when the mothership dies (wiki).  false pays it with each site -->
+        <GateRestrictions>false</GateRestrictions><!-- bool  true makes the Nation Consolidation Network's cruiser and battleship gates check ship class, as on the wiki.  off by default so any ship, supercarriers included, can take either gate -->
         <MinSecurity>0.45</MinSecurity><!-- float  lowest system security an automatic incursion may cover -->
         <StartDelay>60</StartDelay><!-- minutes between one incursion ending and the next starting -->
-        <MobilizeAfter>120</MobilizeAfter><!-- hours until the incursion turns from established to mobilizing -->
-        <Lifetime>168</Lifetime><!-- hours before the Sansha withdraw on their own -->
-        <WithdrawTime>1440</WithdrawTime><!-- minutes the withdrawal lasts before the incursion ends.  the mothership appears for this long when influence is broken -->
-        <RegenDelay>30</RegenDelay><!-- minutes without a cleared site before Sansha influence starts to recover -->
+        <MobilizeAfter>120</MobilizeAfter><!-- hours established before the incursion is mobilizing (wiki: up to 5 days) -->
+        <Lifetime>168</Lifetime><!-- hours before the Sansha withdraw (wiki: 5 days established plus 48 hours mobilizing) -->
+        <WithdrawTime>1440</WithdrawTime><!-- minutes the withdrawal lasts before the incursion ends (wiki: 24 hours) -->
+        <MothershipDelayHigh>72</MothershipDelayHigh><!-- hours from the start before the mothership can appear in high-sec (wiki: 3 days).  /incursion mothership skips it -->
+        <MothershipDelayLow>24</MothershipDelayLow><!-- hours for low-sec (wiki: 1 day).  null-sec has no delay -->
+        <RegenDelay>30</RegenDelay><!-- minutes without a completed site before Sansha influence starts to recover -->
         <RegenRate>1.0</RegenRate><!-- float  influence recovered, percent per hour -->
     </incursion>
 

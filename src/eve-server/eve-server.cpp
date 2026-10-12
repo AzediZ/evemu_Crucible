@@ -93,6 +93,7 @@
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpStationMgr.h"
 #include "corporation/LPService.h"
+#include "map/RewardMgrService.h"
 #include "corporation/LPStore.h"
 // dogmaim services
 #include "dogmaim/DogmaIMService.h"
@@ -686,6 +687,7 @@ int main( int argc, char* argv[] )
     newSvcMgr.Register(new DungeonService());
     newSvcMgr.Register(new LookupService());
     newSvcMgr.Register(new MapService());
+    newSvcMgr.Register(new RewardMgrService());
     newSvcMgr.Register(new CalendarMgrService());
     newSvcMgr.Register(new AgentMgrService(newSvcMgr));
     newSvcMgr.Register(new ScanMgrService(newSvcMgr));

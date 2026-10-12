@@ -1520,6 +1520,20 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
     }
 }
 
+void SystemManager::RemoveGlobalBall(uint32 itemID)
+{
+    if (m_clients.empty())
+        return;
+    RemoveBallsFromBP removeball;
+    removeball.balls.push_back(itemID);
+    PyTuple* rsp = removeball.Encode();
+    for (auto cur : m_clients) {
+        PyIncRef(rsp);
+        cur.second->QueueDestinyUpdate(&rsp);
+    }
+    PySafeDecRef(rsp);
+}
+
 void SystemManager::SendStaticBall(SystemEntity* pSE)
 {
     if (m_clients.empty())

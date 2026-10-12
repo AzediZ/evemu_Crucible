@@ -348,12 +348,14 @@ SET( map_INCLUDE
      "${TARGET_INCLUDE_DIR}/map/MapConnections.h"
      "${TARGET_INCLUDE_DIR}/map/MapDB.h"
      "${TARGET_INCLUDE_DIR}/map/MapData.h"
-     "${TARGET_INCLUDE_DIR}/map/MapService.h" )
+     "${TARGET_INCLUDE_DIR}/map/MapService.h"
+     "${TARGET_INCLUDE_DIR}/map/RewardMgrService.h" )
 SET( map_SOURCE
      "${TARGET_SOURCE_DIR}/map/MapConnections.cpp"
      "${TARGET_SOURCE_DIR}/map/MapDB.cpp"
      "${TARGET_SOURCE_DIR}/map/MapData.cpp"
-     "${TARGET_SOURCE_DIR}/map/MapService.cpp" )
+     "${TARGET_SOURCE_DIR}/map/MapService.cpp"
+     "${TARGET_SOURCE_DIR}/map/RewardMgrService.cpp" )
 
 SET( market_INCLUDE
      "${TARGET_INCLUDE_DIR}/market/MarketBotConf.h"
@@ -395,6 +397,7 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/EntityService.cpp"
      "${TARGET_SOURCE_DIR}/npc/NPC.cpp"
      "${TARGET_SOURCE_DIR}/npc/NPCAI.cpp"
+     "${TARGET_SOURCE_DIR}/npc/NPCEwar.cpp"
      "${TARGET_SOURCE_DIR}/npc/Sentry.cpp"
      "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp" )
 
@@ -628,6 +631,7 @@ SET( system_managers_SOURCE
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/DungeonMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/IncursionDB.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/IncursionMgr.cpp"
+     "${TARGET_SOURCE_DIR}/system/cosmicMgrs/IncursionSites.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/ManagerDB.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/SpawnMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/WormholeMgr.cpp")

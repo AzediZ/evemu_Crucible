@@ -281,7 +281,14 @@ public:
         uint8 MaxActive;        // incursions running at once
         uint16 FleetScale;      // percent of each site's full fleet size the waves are scaled to
         uint16 Strength;        // percent HP and damage of Sansha ships
-        uint8 SitesPerSystem;   // live sites per vanguard, assault and headquarters system
+        uint8 SitesPerSystem;   // no longer used (VanguardSites, AssaultSites, HQSites); still read so old configs load
+        uint8 VanguardSites;    // live sites per vanguard system (wiki: up to 7)
+        uint8 AssaultSites;     // live sites per assault system (wiki: up to 5)
+        uint8 HQSites;          // live sites per headquarters system, not counting the mothership (wiki: up to 5)
+        bool DelayedLP;         // site LP goes into the incursion's pool, paid when the mothership dies (wiki); false pays it per site
+        bool GateRestrictions;  // the Consolidation Network's cruiser and battleship gates check ship class (wiki); off by default
+        uint16 MothershipDelayHigh; // hours from the start before the mothership can appear in high-sec (wiki: 3 days)
+        uint16 MothershipDelayLow;  // the same for low-sec (wiki: 1 day).  null-sec has none
         uint16 SiteRespawn;     // seconds before a cleared site is replaced
         float MinSecurity;      // lowest system security an automatic incursion may cover
         uint16 StartDelay;      // minutes between one incursion ending and the next starting

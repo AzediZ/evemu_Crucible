@@ -41,6 +41,7 @@
 
 #include "eve-server.h"
 
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/KeeperService.h"
 #include "system/SystemManager.h"
 #include "dungeon/DungeonDB.h"
@@ -101,6 +102,16 @@ PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID
     call.Dump(DUNG__CALL_DUMP);
 
     Client *pClient(call.client);
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr))
+        return nullptr;
+
+    // incursion gates know where they go (throws to refuse)
+    if (sIncursionMgr.UseGate(pClient, itemID->value()))
+        return new PyLong(Win32TimeNow());
+
+    // gates dont work on a disrupted warp drive
+    if (pClient->GetShip()->GetAttribute(AttrWarpScrambleStatus).get_float() > 0)
+        throw CustomError("Your warp drive is disrupted. The acceleration gate cannot accelerate your ship.");
 
     // Send gate activation effect
     pClient->GetShipSE()->DestinyMgr()->SendSpecialEffect10(itemID->value(), 0, "effects.WarpGateEffect", 0, 1, 0);
@@ -112,10 +123,9 @@ PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID
     deltaPosition.y = 0;
     deltaPosition.z = 0;
 
+    // the second argument is the warp-to range from the destination, so 0 lands on the point
     GPoint warpToPoint(currentPosition+deltaPosition);
-    GVector vectorToDestination(currentPosition, warpToPoint);
-    double distanceToDestination = vectorToDestination.length();
-    pClient->GetShipSE()->DestinyMgr()->WarpTo(warpToPoint, distanceToDestination);
+    pClient->GetShipSE()->DestinyMgr()->WarpTo(warpToPoint, 0);
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */
     return new PyLong(Win32TimeNow());

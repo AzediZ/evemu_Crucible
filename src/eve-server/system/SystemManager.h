@@ -135,6 +135,8 @@ public:
 
     /* this is to send new global ball added to system AFTER SetState has been sent */
     void SendStaticBall(SystemEntity* pSE);
+    // tell every pilot in the system a global ball is gone (incursion site beacons).  bubbles only tell their own pilots
+    void RemoveGlobalBall(uint32 itemID);
     void MakeSetState(const SystemBubble* pBubble, SetState& into) const;
     // the balls a client in this bubble knows about (used for collisions)
     void GetBallparkEntities(const SystemBubble* pBubble, std::map<uint32, SystemEntity*>& into) const;

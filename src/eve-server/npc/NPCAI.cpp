@@ -65,7 +65,22 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_missileTypeID(0),
   m_webber(false),
   m_warpScram(false),
-  m_isWandering(false)
+  m_isWandering(false),
+  m_incursion(false),
+  m_propOn(false),
+  m_repairsDisabled(false),
+  m_repairPlayers(false),
+  m_leaving(false),
+  m_pointID(0),
+  m_pointStrength(0),
+  m_webID(0),
+  m_paintID(0),
+  m_paintFactor(1.0),
+  m_nextNeut(0),
+  m_nextJam(0),
+  m_nextRep(0),
+  m_nextBurst(0),
+  m_nextSwitch(0)
 {
     assert(m_self.get() != nullptr);
     m_damageMultiplier = m_self->GetAttribute(AttrDamageMultiplier).get_float();
@@ -263,6 +278,8 @@ NPCAIMgr::NPCAIMgr(NPC* who)
 
     // maybe this can be used to tell spawnMgr to respawn this npc as required....
     //    AttrEntityGroupRespawnChance = 640,
+
+    InitIncursion();
 }
 
 void NPCAIMgr::RefreshWeaponStats() {
@@ -273,7 +290,7 @@ void NPCAIMgr::RefreshWeaponStats() {
 }
 
 void NPCAIMgr::Process() {
-    if (m_destiny->IsWarping())
+    if (m_destiny->IsWarping() or m_leaving)
         return;
 
     if (m_warpOutTimer.Check(false)) {
@@ -320,6 +337,11 @@ void NPCAIMgr::Process() {
                     if (m_npc->GetPosition().distance(cur->GetShipSE()->GetPosition()) > m_sightRange)
                         continue;
 
+                    if (m_incursion) {
+                        SystemEntity* pPick(PickIncursionTarget());
+                        Target(pPick != nullptr ? pPick : cur->GetShipSE());
+                        return;
+                    }
                     Target(cur->GetShipSE());
                     return;
                 }
@@ -352,6 +374,8 @@ void NPCAIMgr::Process() {
             CheckDistance(pSE);
             if (m_missileTimer.Check())
                 LaunchMissile(m_missileTypeID, pSE);
+            if (m_incursion)
+                ProcessIncursion(pSE);
         } break;
         case NPCAI::State::WarpOut:
         case NPCAI::State::WarpFollow:
@@ -362,6 +386,10 @@ void NPCAIMgr::Process() {
             // not sure how im gonna do these
         } break;
     }
+
+    // Sansha logistics rep their friends whether or not they have a target of their own
+    if (m_incursion)
+        ProcessRepairs();
 
     if (m_shieldBoosterTimer.Enabled())
         if (m_shieldBoosterTimer.Check())
@@ -455,6 +483,10 @@ void NPCAIMgr::SetIdle() {
 
     _log(NPC__AI_TRACE, "%s(%u): Idle: returning to idle.", m_npc->GetName(), m_npc->GetID());
     m_state = NPCAI::State::Idle;
+    if (m_incursion) {
+        ClearEwar();
+        SetPropulsion(false);
+    }
     m_destiny->Stop();
     m_destiny->SetMaxVelocity(m_orbitSpeed);
 
@@ -571,6 +603,12 @@ void NPCAIMgr::CheckDistance(SystemEntity* pSE)
     }
 
     m_isWandering = false;
+
+    if (m_incursion) {
+        FlyIncursion(pSE, dist);
+        Attack(pSE);
+        return;
+    }
 
     if (dist < m_flyRange) {
         SetEngaged(pSE);

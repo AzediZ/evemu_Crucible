@@ -16,7 +16,7 @@ class IncursionDB
 public:
     // incSiteTypes (siteTypeID, siteName, sceneType, designFleet, iskReward, lpReward, influence)
     static void GetSiteTypes(DBQueryResult& res);
-    // incSiteObjects (siteTypeID, wave, typeID, quantity, x, y, z)
+    // incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z)
     static void GetSiteObjects(DBQueryResult& res);
 
     static void GetIncursions(DBQueryResult& res);
@@ -24,8 +24,14 @@ public:
     // returns new incursionID, 0 on failure
     static uint32 CreateIncursion(uint32 constellationID, uint32 stagingSystemID, uint32 now);
     static void AddIncursionSystem(uint32 incursionID, uint32 systemID, uint8 sceneType);
-    static void SaveIncursion(uint32 incursionID, uint8 state, double influence, uint32 stateTime, uint32 lastProgress);
+    static void SaveIncursion(uint32 incursionID, uint8 state, double influence, uint32 stateTime, uint32 lastProgress, bool hasBoss, bool hqRun);
     static void DeleteIncursion(uint32 incursionID);
+
+    // incLPPool: LP earned in an incursion, paid when its mothership dies
+    static void AddPoolLP(uint32 incursionID, uint32 characterID, uint32 lp);
+    // characterID, lp
+    static void GetPool(DBQueryResult& res, uint32 incursionID);
+    static uint32 GetPoolLP(uint32 incursionID, uint32 characterID);
 
     // constellations that can host an incursion (empire space, all systems at or above minSec, at least minSystems systems, a station)
     static void GetCandidateConstellations(DBQueryResult& res, float minSec, uint8 minSystems);

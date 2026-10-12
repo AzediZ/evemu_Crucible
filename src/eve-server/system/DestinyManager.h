@@ -204,6 +204,7 @@ protected:
     float m_massMKg;                    //in Mkg  - millions of kg
     float m_alignTime;                  //in s      - time to reach 75% of max speed from a stop
     float m_maxShipSpeed;               //in m/s
+    float m_webFactor;                  //stasis webs on this ball: product of their speed factors (1 = none)
     float m_shipWarpSpeed;              //in au/s
     float m_timeToEnterWarp;            //in s
     float m_shipMaxAccelTime;           //in s      - time to reach 99.99% of max speed from a stop

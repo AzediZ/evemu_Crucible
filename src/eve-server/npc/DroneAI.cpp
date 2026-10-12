@@ -45,6 +45,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "packets/General.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 namespace {
     // shows one of the client's own messages (a 'notify' popup for the mining ones)
@@ -820,6 +821,8 @@ void DroneAIMgr::FinishMiningCycle(ShipSE* pController, SystemEntity* pRoid) {
     }
     oRef->MergeTypesInCargo(shipRef.get(), flagCargoHold);
     sStatMgr.Add(Stat::oreMined, units * oreVolume);
+    // incursion ore can bring Sansha guards
+    sIncursionMgr.OreMined(pRoid);
 
     roidQuantity -= units;
     if (roidQuantity > 0.0) {

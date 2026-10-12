@@ -20,16 +20,16 @@ void IncursionDB::GetSiteTypes(DBQueryResult& res)
 void IncursionDB::GetSiteObjects(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,
-        "SELECT siteTypeID, wave, typeID, quantity, x, y, z"
+        "SELECT siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z"
         " FROM incSiteObjects"
-        " ORDER BY siteTypeID, wave, objectID"))
+        " ORDER BY siteTypeID, room, wave, objectID"))
         _log(DATABASE__ERROR, "Error in GetSiteObjects query: %s", res.error.c_str());
 }
 
 void IncursionDB::GetIncursions(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,
-        "SELECT incursionID, constellationID, stagingSystemID, state, influence, startTime, stateTime, lastProgress"
+        "SELECT incursionID, constellationID, stagingSystemID, state, influence, startTime, stateTime, lastProgress, hasBoss, hqRun"
         " FROM incIncursions"))
         _log(DATABASE__ERROR, "Error in GetIncursions query: %s", res.error.c_str());
 }
@@ -63,12 +63,12 @@ void IncursionDB::AddIncursionSystem(uint32 incursionID, uint32 systemID, uint8 
         _log(DATABASE__ERROR, "Error in AddIncursionSystem query: %s", err.c_str());
 }
 
-void IncursionDB::SaveIncursion(uint32 incursionID, uint8 state, double influence, uint32 stateTime, uint32 lastProgress)
+void IncursionDB::SaveIncursion(uint32 incursionID, uint8 state, double influence, uint32 stateTime, uint32 lastProgress, bool hasBoss, bool hqRun)
 {
     DBerror err;
     if (!sDatabase.RunQuery(err,
-        "UPDATE incIncursions SET state = %u, influence = %f, stateTime = %u, lastProgress = %u WHERE incursionID = %u",
-        state, influence, stateTime, lastProgress, incursionID))
+        "UPDATE incIncursions SET state = %u, influence = %f, stateTime = %u, lastProgress = %u, hasBoss = %u, hqRun = %u WHERE incursionID = %u",
+        state, influence, stateTime, lastProgress, hasBoss ? 1 : 0, hqRun ? 1 : 0, incursionID))
         _log(DATABASE__ERROR, "Error in SaveIncursion query: %s", err.c_str());
 }
 
@@ -76,7 +76,35 @@ void IncursionDB::DeleteIncursion(uint32 incursionID)
 {
     DBerror err;
     sDatabase.RunQuery(err, "DELETE FROM incSystems WHERE incursionID = %u", incursionID);
+    sDatabase.RunQuery(err, "DELETE FROM incLPPool WHERE incursionID = %u", incursionID);
     sDatabase.RunQuery(err, "DELETE FROM incIncursions WHERE incursionID = %u", incursionID);
+}
+
+void IncursionDB::AddPoolLP(uint32 incursionID, uint32 characterID, uint32 lp)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO incLPPool (incursionID, characterID, lp) VALUES (%u, %u, %u)"
+        " ON DUPLICATE KEY UPDATE lp = lp + %u",
+        incursionID, characterID, lp, lp))
+        _log(DATABASE__ERROR, "Error in AddPoolLP query: %s", err.c_str());
+}
+
+void IncursionDB::GetPool(DBQueryResult& res, uint32 incursionID)
+{
+    if (!sDatabase.RunQuery(res, "SELECT characterID, lp FROM incLPPool WHERE incursionID = %u", incursionID))
+        _log(DATABASE__ERROR, "Error in GetPool query: %s", res.error.c_str());
+}
+
+uint32 IncursionDB::GetPoolLP(uint32 incursionID, uint32 characterID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT lp FROM incLPPool WHERE incursionID = %u AND characterID = %u", incursionID, characterID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
 }
 
 void IncursionDB::GetCandidateConstellations(DBQueryResult& res, float minSec, uint8 minSystems)
