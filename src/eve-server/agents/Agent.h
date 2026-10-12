@@ -26,7 +26,7 @@ public:
     bool Load();
 
     PyDict* GetLocationWrap();
-    PyObject* GetInfoServiceDetails();
+    PyObject* GetInfoServiceDetails(Client* pClient);
 
     bool IsLocator()                                    { return m_agentData.locator; }
     bool IsResearch()                                   { return m_agentData.research; }
@@ -75,6 +75,14 @@ public:
     void SendMissionUpdate(Client* pClient, std::string action);
 
     bool CanUseAgent(Client* pClient);
+    // the client's UI/Agents/Incompatible/* reply (label, kwargs) for a pilot CanUseAgent() refuses
+    PyTuple* GetCantUseRsp(Client* pClient);
+    // the pilot's effective personal standing with this agent (social skills included)
+    float GetEffectiveCharStanding(Client* pClient);
+
+    // research fields (agtSkillLevel)
+    const std::map<uint16, uint8>& GetSkills()          { return m_skills; }
+    uint8 GetSkillLevel(uint16 skillID);
 
     // standing/quality/level/reward methods...
     // sharers:  the pilots sharing a completed mission (MissionRewards::GetSharers), the completer included
@@ -82,6 +90,8 @@ public:
 
 protected:
     std::string GetMinReqStanding(uint8 level);
+    // effective faction/corp/agent standings of the pilot (eveCfg.CanUseAgent) and the level's requirement m
+    void GetUseStandings(Client* pClient, float& facChr, float& corpChr, float& charChr, float& m);
     // destination, expiry and agent data of a new offer, then saved.  false if it can't be placed
     bool FinishOffer(uint32 charID, uint8 level, MissionOffer& offer);
     const uint32 m_agentID;

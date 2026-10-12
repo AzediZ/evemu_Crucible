@@ -186,6 +186,7 @@
 #include "system/cosmicMgrs/WormholeMgr.h"
 // database cleaner service
 #include "DBCleaner.h"
+#include "agents/AgentServices.h"
 
 static const char* const SRV_CONFIG_FILE = EVEMU_ROOT "/etc/eve-server.xml";
 
@@ -810,6 +811,7 @@ int main( int argc, char* argv[] )
     sDataMgr.Initialize();
     std::printf("\n");     // spacer
     sMissionDataMgr.Initialize();
+    sResearchMgr.Initialize();
     std::printf("\n");     // spacer
     sBillingMgr.Initialize();
     sCorpMgr.Initialize();

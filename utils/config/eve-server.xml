@@ -354,6 +354,13 @@ boolean can use either 0/1 OR true/false.
         <GateRestrictions>true</GateRestrictions><!-- bool  mission acceleration gates enforce the mission level's ship restrictions.  default true -->
     </missions>
 
+    <agents><!-- research (R&D) and locator agents (F24) -->
+        <researchDatacoreRP>100</researchDatacoreRP><!-- research points a datacore costs.  default 100 -->
+        <researchDatacoreISK>0</researchDatacoreISK><!-- ISK a datacore costs on top.  default 0 (Crucible; Inferno, May 2012, made it 10000) -->
+        <researchFieldMultipliers>true</researchFieldMultipliers><!-- bool  pre-Inferno research field multipliers (starship engineering x3, graviton/plasma physics x2).  false = every field x1 -->
+        <locatorEnabled>true</locatorEnabled><!-- bool  locator agents find characters.  default true -->
+    </agents>
+
     <testing><!-- switches for various incomplete/testing code sections -->
         <EnableDrones>true</EnableDrones><!-- bool -->
     </testing>

@@ -55,6 +55,7 @@
 #include "agents/AgentBound.h"
 #include "agents/AgentMgrService.h"
 #include "missions/MissionDataMgr.h"
+#include "agents/AgentServices.h"
 #include "services/ServiceManager.h"
 
 AgentMgrService::AgentMgrService(EVEServiceManager& mgr) :
@@ -147,9 +148,8 @@ PyResult AgentMgrService::GetMyJournalDetails(PyCallArgs &call) {
     }
     tuple->SetItem(0, missions);
 
-    //research:
-    PyList* research = new PyList();
-    tuple->SetItem(1, research);
+    //research:  (agentID, skillTypeID, pointsPerDay, points, agentLevel, quality, stationID)
+    tuple->SetItem(1, sResearchMgr.GetJournalRows(call.client->GetCharacterID()));
 
     if (is_log_enabled(AGENT__RSP_DUMP))
         tuple->Dump(AGENT__RSP_DUMP, "   ");

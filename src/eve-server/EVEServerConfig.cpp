@@ -288,6 +288,12 @@ EVEServerConfig::EVEServerConfig()
     missions.StorylineEvery = 16;
     missions.GateRestrictions = true;
 
+    // agents
+    agents.researchDatacoreRP = 100;
+    agents.researchDatacoreISK = 0.0;
+    agents.researchFieldMultipliers = true;
+    agents.locatorEnabled = true;
+
     // standings
     //  - mission
     standings.MissionBonus = 1.0;
@@ -438,6 +444,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
     AddMemberParser( "dungeon",     &EVEServerConfig::ProcessDungeon );
     AddMemberParser( "missions",    &EVEServerConfig::ProcessMissions );
+    AddMemberParser( "agents",      &EVEServerConfig::ProcessAgents );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
@@ -467,6 +474,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "exploring" );
     RemoveParser( "dungeon" );
     RemoveParser( "missions" );
+    RemoveParser( "agents" );
     RemoveParser( "crime" );
     RemoveParser( "sov" );
     RemoveParser( "pos" );
@@ -1025,6 +1033,23 @@ bool EVEServerConfig::ProcessDungeon( const TiXmlElement* ele )
     RemoveParser( "EscalationShareFleet" );
     RemoveParser( "GateKeysRequired" );
     RemoveParser( "TriggerMessages" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessAgents( const TiXmlElement* ele )
+{
+    AddValueParser( "researchDatacoreRP",       agents.researchDatacoreRP );
+    AddValueParser( "researchDatacoreISK",      agents.researchDatacoreISK );
+    AddValueParser( "researchFieldMultipliers", agents.researchFieldMultipliers );
+    AddValueParser( "locatorEnabled",           agents.locatorEnabled );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "researchDatacoreRP" );
+    RemoveParser( "researchDatacoreISK" );
+    RemoveParser( "researchFieldMultipliers" );
+    RemoveParser( "locatorEnabled" );
 
     return result;
 }

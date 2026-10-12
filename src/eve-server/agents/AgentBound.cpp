@@ -46,6 +46,7 @@
 #include "system/DestinyManager.h"
 #include "system/Interdiction.h"
 #include "system/SystemManager.h"
+#include "agents/AgentServices.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 
 AgentBound::AgentBound(EVEServiceManager& mgr, AgentMgrService& parent, Agent *agt) :
@@ -74,7 +75,7 @@ PyResult AgentBound::GetAgentLocationWrap(PyCallArgs &call) {
 
 PyResult AgentBound::GetInfoServiceDetails(PyCallArgs& call) {
     // this is agents personal info... level, division, station, etc.
-    return m_agent->GetInfoServiceDetails();
+    return m_agent->GetInfoServiceDetails(call.client);
 }
 
 
@@ -179,8 +180,13 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
         dialog->AddItem(adminButton);
     }
 
+    int32 act(actionID.has_value() ? actionID.value()->value() : 0);
     if (m_agent->CanUseAgent(call.client)) {
-        switch (actionID.has_value() ? actionID.value()->value() : 0) {
+        // research and locator services (F24) answer their own buttons and the choices encoded in actionID
+        if ((act != 0) and (sResearchMgr.HandleAction(call.client, m_agent, act, agentSays, dialog)
+                        or sLocatorMgr.HandleAction(call.client, m_agent, act, agentSays, dialog))) {
+            // handled by the research/locator service
+        } else switch (act) {
             case 0: {
                 //  if char has current mission with this agent, add this one.
                 MissionOffer offer = MissionOffer();
@@ -206,11 +212,10 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 }
 
                 // if agent does location, add this one...
-                if (m_agent->IsLocator())
+                if (m_agent->IsLocator() and sConfig.agents.locatorEnabled)
                     AddButton(dialog, LocateCharacter);
-                // if agent does research, add this one...
-                if (m_agent->IsResearch())
-                    AddButton(dialog, StartResearch);
+                // research agents:  start, or cancel / buy datacores
+                sResearchMgr.AddInitialButtons(call.client, m_agent, dialog);
             } break;
             case RequestMission:    //2
             case ViewMission: {     //1
@@ -324,22 +329,6 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             case Continue: {    //8
                 // not sure what to do here.
             } break;
-            case StartResearch: {   //12
-                // not sure what to do here.
-            } break;
-            case CancelResearch: {  //13
-                // not sure what to do here.
-            } break;
-            case BuyDatacores: {    //14
-                // not sure what to do here.
-            } break;
-            case LocateCharacter:   //15
-            case LocateAccept: {    //16
-                // not sure what to do here.
-            } break;
-            case LocateReject: {    //17
-                // not sure what to do here.
-            } break;
             case AcceptChoice:{     //4
                 // i think this is for options
             } break;
@@ -348,7 +337,7 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             } break;
             default: {
                 // error
-                _log(AGENT__ERROR, "AgentBound::Handle_DoAction() - unhandled buttonID %u", actionID.value()->value() );
+                _log(AGENT__ERROR, "AgentBound::Handle_DoAction() - unhandled buttonID %i", act );
                 call.client->SendErrorMsg("Internal Server Error. Ref: ServerError xxxxx.");
                 PySafeDecRef(dialog);
                 PySafeDecRef(agentSays);
@@ -356,8 +345,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
             }
         }
     } else {
-        agentSays->SetItem(0, new PyInt(m_agent->GetStandingsRsp(charID)));
-        agentSays->SetItem(1, PyStatic.NewNone() /*new PyInt(charID)*/);
+        // the client's UI/Agents/Incompatible/* reply with the standings needed
+        agentSays->SetItem(0, m_agent->GetCantUseRsp(call.client));
+        agentSays->SetItem(1, PyStatic.NewNone());
     }
 
     if ((errorKey != nullptr) or !errorText.empty()) {
@@ -630,9 +620,8 @@ PyResult AgentBound::GetMyJournalDetails(PyCallArgs &call) {
             missions->AddItem(sMissionDataMgr.GetJournalEntry(offer));
     tuple->SetItem(0, missions);
 
-    //research:
-    PyList* research = new PyList();
-    tuple->SetItem(1, research);
+    //research:  (agentID, skillTypeID, pointsPerDay, points, agentLevel, quality, stationID)
+    tuple->SetItem(1, sResearchMgr.GetJournalRows(call.client->GetCharacterID(), m_agent->GetID()));
 
     if (is_log_enabled(AGENT__RSP_DUMP))
         tuple->Dump(AGENT__RSP_DUMP, "   ");

@@ -53,6 +53,7 @@
 #include "corporation/CorporationDB.h"
 #include "corporation/BillingMgr.h"
 #include "corporation/CorpMgr.h"
+#include "agents/AgentServices.h"
 
 #include <random>
 
@@ -283,6 +284,7 @@ void EntityList::Process() {
 
         // these need 1Hz tics
         sCivMgr.Process();
+        sLocatorMgr.Process();
         sBubbleMgr.Process();
         sExplorationMgr.Process();
 

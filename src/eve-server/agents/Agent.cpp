@@ -26,6 +26,7 @@
 //#include "../../eve-common/EVE_Skills.h"
 
 #include "../StaticDataMgr.h"
+#include "agents/AgentServices.h"
 #include "../station/StationDataMgr.h"
 #include "../map/MapData.h"
 
@@ -349,7 +350,15 @@ PyDict* Agent::GetLocationWrap() {
      */
 }
 
-PyObject* Agent::GetInfoServiceDetails()
+uint8 Agent::GetSkillLevel(uint16 skillID)
+{
+    std::map<uint16, uint8>::iterator itr = m_skills.find(skillID);
+    if (itr == m_skills.end())
+        return 0;
+    return itr->second;
+}
+
+PyObject* Agent::GetInfoServiceDetails(Client* pClient)
 {
     // can this be static data created when agent is loaded?  avoid creating this everytime it's called.
     PyDict* res = new PyDict();
@@ -368,101 +377,37 @@ PyObject* Agent::GetInfoServiceDetails()
      * skillTypeID, blueprintTypeID in data.researchSummary:  -- for predictablePatentNames
      */
 
-    /**  @todo  finish this..... */
+    // research:  the agent's fields, and the pilot's project with this agent (sResearchMgr)
     PyDict* research = new PyDict();
     if (m_agentData.research) {
-        PyTuple* skill1 = new PyTuple(2);
-            skill1->SetItem(0, new PyInt(11452)); // Mechanical Engineering
-            skill1->SetItem(1, new PyInt(4));
-        PyTuple* skill2 = new PyTuple(2);
-            skill2->SetItem(0, new PyInt(11453));  //Electronic Engineering
-            skill2->SetItem(1, new PyInt(3));
         PyList* skillList = new PyList();
-            skillList->AddItem(skill1);
-            skillList->AddItem(skill2);
-        PyDict* researchData = new PyDict();
-            researchData->SetItemString("rpMultiplier", new PyInt(2));
-            researchData->SetItemString("skillTypeID", new PyInt(11452));   // this is player research field with this agent.  not sure how to make "none" yet
-            researchData->SetItemString("points", new PyInt(150));
-            researchData->SetItemString("pointsPerDay", new PyInt(30));
-        PyTuple* patent1 = new PyTuple(2);
-            patent1->SetItem(0, new PyInt(11452));
-        PyList* patentlist1 = new PyList();
-            patentlist1->AddItem(new PyInt(692));
-            patent1->SetItem(1, patentlist1);
-        PyTuple* patent2 = new PyTuple(2);
-            patent2->SetItem(0, new PyInt(11453));
-        PyList* patentlist2 = new PyList();
-            patentlist2->AddItem(new PyInt(1196));
-            patent2->SetItem(1, patentlist2);
-        PyList* patentList = new PyList();
-            patentList->AddItem(patent1);
-            patentList->AddItem(patent2);
-
+        PyList* summary = new PyList();
+        for (auto cur : m_skills) {
+            PyTuple* skill = new PyTuple(2);
+                skill->SetItem(0, new PyInt(cur.first));
+                skill->SetItem(1, new PyInt(cur.second));
+            skillList->AddItem(skill);
+            // predictable patents (research missions) are not implemented
+            PyTuple* patents = new PyTuple(2);
+                patents->SetItem(0, new PyInt(cur.first));
+                patents->SetItem(1, new PyList());
+            summary->AddItem(patents);
+        }
         research->SetItemString("agentServiceType", new PyString("research"));
         research->SetItemString("skills", skillList);
-        research->SetItemString("researchSummary", patentList);
-        research->SetItemString("researchData", researchData);
+        research->SetItemString("researchSummary", summary);
+        research->SetItemString("researchData", sResearchMgr.GetResearchData(pClient, this));
     } else {
         research->SetItemString("agentServiceType", PyStatic.NewNone());
     }
 
-    /* for location agents....
-     *
- level  Standings  Time to Run                             Cooldown    Cost                Range
-    1     Any      Instant/1 minute                        5 minutes   1k/5k               Constellation
-    2     1.0      Instant/1 minute/8 minutes              5 minutes   5k/10k/25k          Region
-    3     3.0      Instant/30 seconds/4 minutes/8 minutes  15 minutes  10k/25k/50k/100k    Unlimited
-    4     5.0      Instant/20 seconds/2 minutes/4 minutes  30 minutes  25k/50k/100k/250k   Unlimited
-
-     * data.frequency
-     *delayRange, delay, cost in data.delays:       -- (tuple) range (system, const, region, other region), responseTime (in sec), cost
-     *   data.callbackID  -- bool for agent locator services being used (locator unavailable)
-     *      OR
-     *   data.lastUsed  -- blue time?
-
-     Once done the locator agent will send you a Notification with the location of the target when you started the search which will include the system, constellation and region as well as the station the player might be docked at. If the target is in space, no station will be listed. E.g. "The sleazebag is currently in the Bukah system, Nohshayess constellation of the Khanid region."
-     If the target is logged off, the locator agent will tell you the last known position. If the target is in Anoikis (wormhole space), the locator agent will tell you "I'm sorry, but I just can't help you with that one. I'm pretty sure O'b Haru Sen is well out of my zone of influence." - even if the agent can locate anyone in known space.
-
-     (235843, `{[character]charID.gender -> "He", "She"} is in the {systemName} system of the {constellationName} constellation.`)
-     (235844, `{[character]charID.gender -> "He", "She"} is in the {systemName} system, {constellationName} constellation of the {regionName} region.`)
-     (235845, `{[character]charID.gender -> "He", "She"} is in your solar system.`)
-     (235846, `{[character]charID.gender -> "He", "She"} is at your station.`)
-     (235847, `{[character]charID.gender -> "He", "She"} is at {stationName} station in your solar system.`)
-     (235848, `{[character]charID.gender -> "He", "She"} is at {stationName} station in the {systemName} system.`)
-     (235849, `{[character]charID.gender -> "He", "She"} is at{stationName} station in the {systemName} system of the {constellationName} constellation.`)
-     (235850, `{[character]charID.gender -> "He", "She"} is at {stationName} station in the {systemName} system, {constellationName} constellation of {regionName} region.`)
-     (235851, `{[character]charID.gender -> "He", "She"} is in the {systemName} system.`)
+    /* for location agents....  (sLocatorMgr)
+     *  data.frequency (100ns units), delays [(range 0..3, delay sec, cost)], callbackID (a search is running), lastUsed (filetime)
      */
     PyDict* locate = new PyDict();
-    if (m_agentData.locator) {
-        PyTuple* sameSystem = new PyTuple(3);
-            sameSystem->SetItem(0, new PyInt(0));
-            sameSystem->SetItem(1, new PyInt(10));
-            sameSystem->SetItem(2, new PyInt(20000));
-        PyTuple* sameConst = new PyTuple(3);
-            sameConst->SetItem(0, PyStatic.NewOne());
-            sameConst->SetItem(1, new PyInt(30));
-            sameConst->SetItem(2, new PyInt(200000));
-        PyTuple* sameRegion = new PyTuple(3);
-            sameRegion->SetItem(0, new PyInt(2));
-            sameRegion->SetItem(1, new PyInt(60));
-            sameRegion->SetItem(2, new PyInt(2000000));
-        PyTuple* otherRegion = new PyTuple(3);
-            otherRegion->SetItem(0, new PyInt(3));
-            otherRegion->SetItem(1, new PyInt(120));
-            otherRegion->SetItem(2, new PyInt(20000000));
-        PyTuple* delays = new PyTuple(4);
-            delays->SetItem(0, sameSystem);
-            delays->SetItem(1, sameConst);
-            delays->SetItem(2, sameRegion);
-            delays->SetItem(3, otherRegion);
-
+    if (m_agentData.locator and sConfig.agents.locatorEnabled) {
         locate->SetItemString("agentServiceType", new PyString("locate"));
-        locate->SetItemString("frequency", new PyInt(1200));  // if this is PyNone (or 0?) agent location isnt avalible (client parsed msg)
-        locate->SetItemString("delays", delays);
-        locate->SetItemString("callbackID", new PyInt(2));
-        locate->SetItemString("lastUsed", new PyInt(0));
+        sLocatorMgr.GetServiceInfo(pClient, this, locate);
     } else {
         locate->SetItemString("agentServiceType", PyStatic.NewNone());
     }
@@ -470,8 +415,7 @@ PyObject* Agent::GetInfoServiceDetails()
     // for mission agents....
     PyDict* mission = new PyDict();
         mission->SetItemString("agentServiceType", new PyString("mission"));
-        // will need to check standings vs agent level to determine this boolean
-        mission->SetItemString("available", new PyBool(true));
+        mission->SetItemString("available", new PyBool(CanUseAgent(pClient)));
 
     PyTuple* services = new PyTuple(3);
         services->SetItem(0, new PyObject("util.KeyVal", research));
@@ -804,13 +748,53 @@ void Agent::SendMissionUpdate(Client* pClient, std::string action)
 
 bool Agent::CanUseAgent(Client* pClient)
 {
-    /** @todo this needs work!!  */
+    // port of the client's eveCfg.CanUseAgent
     if (m_agentData.typeID == Agents::Type::Aura)
         return true;
     if (m_agentData.level == 1)
         if (m_agentData.typeID != Agents::Type::Research)
             return true;
 
+    float facChr(0), corpChr(0), charChr(0), m(0);
+    GetUseStandings(pClient, facChr, corpChr, charChr, m);
+    if ((EvE::max(facChr, corpChr, charChr) >= m ) and (EvE::min(facChr, corpChr, charChr) > -2.0f)) {
+        if ((m_agentData.typeID == Agents::Type::Research) and (corpChr < m - 2.0f))
+            return false;
+        return true;
+    }
+
+    return false;
+}
+
+PyTuple* Agent::GetCantUseRsp(Client* pClient)
+{
+    float facChr(0), corpChr(0), charChr(0), m(0);
+    GetUseStandings(pClient, facChr, corpChr, charChr, m);
+    PyDict* args = new PyDict();
+    PyTuple* rsp = new PyTuple(2);
+    if (EvE::min(facChr, corpChr, charChr) <= -2.0f) {
+        rsp->SetItem(0, new PyString("UI/Agents/Incompatible/CantUseMinStandings"));
+    } else if ((m_agentData.typeID == Agents::Type::Research) and (corpChr < m - 2.0f)) {
+        rsp->SetItem(0, new PyString("UI/Agents/Incompatible/CantUseResearchStandings"));
+        args->SetItemString("minEffective", new PyFloat(m - 2.0f));
+        args->SetItemString("mainEffective", new PyFloat(m));
+    } else {
+        rsp->SetItem(0, new PyString("UI/Agents/Incompatible/CantUseRequiredStandings"));
+        args->SetItemString("minStandings", new PyFloat(m));
+    }
+    rsp->SetItem(1, args);
+    return rsp;
+}
+
+float Agent::GetEffectiveCharStanding(Client* pClient)
+{
+    float facChr(0), corpChr(0), charChr(0), m(0);
+    GetUseStandings(pClient, facChr, corpChr, charChr, m);
+    return charChr;
+}
+
+void Agent::GetUseStandings(Client* pClient, float& facChr, float& corpChr, float& charChr, float& m)
+{
     Character* pChar = pClient->GetChar().get();
     uint32 charID = pChar->itemID();
     uint8 sConn = pChar->GetSkillLevel(EvESkill::Connections);
@@ -820,9 +804,9 @@ bool Agent::CanUseAgent(Client* pClient)
     float bonus = EvEMath::Agent::GetStandingBonus(charStanding, m_agentData.factionID, sConn, sDiplo, sCrim);
     float standing = EvEMath::Agent::EffectiveStanding(charStanding, bonus);
 
-    float facChr = StandingDB::GetStanding(m_agentData.factionID, charID);
-    float corpChr = StandingDB::GetStanding(m_agentData.corporationID, charID);
-    float charChr = StandingDB::GetStanding(m_agentID, charID);
+    facChr = StandingDB::GetStanding(m_agentData.factionID, charID);
+    corpChr = StandingDB::GetStanding(m_agentData.corporationID, charID);
+    charChr = StandingDB::GetStanding(m_agentID, charID);
     float facBonus = EvEMath::Agent::GetStandingBonus(facChr, m_agentData.factionID, sConn, sDiplo, sCrim);
     float corpBonus = EvEMath::Agent::GetStandingBonus(corpChr, m_agentData.factionID, sConn, sDiplo, sCrim);
     float charBonus = EvEMath::Agent::GetStandingBonus(charChr, m_agentData.factionID, sConn, sDiplo, sCrim);
@@ -834,20 +818,12 @@ bool Agent::CanUseAgent(Client* pClient)
     if (charBonus > 0.0f)
         charChr = (1.0 - (1.0 - charChr / 10.0) * (1.0 - charBonus / 10.0)) * 10.0;
 
-    float m = (m_agentData.level - 1) * 2.0f - 1.0f;
+    m = (m_agentData.level - 1) * 2.0f - 1.0f;
 
     _log(AGENT__DEBUG, "%s(%u) CanUseAgent() - charSkills(con:%u,dip:%u,cri:%u), stand(%f, %f, %f)",\
                 m_agentData.name.c_str(), m_agentID, sConn, sDiplo, sCrim, charStanding, bonus, standing);
     _log(AGENT__DEBUG, "%s(%u) CanUseAgent() - standings(fac:%.3f,crp:%.3f,chr:%.3f), bonus(%f, %f, %f) - m=%f", \
                 m_agentData.name.c_str(), m_agentID, facChr, corpChr, charChr, facBonus, corpBonus, charBonus, m);
-
-    if ((EvE::max(facChr, corpChr, charChr) >= m ) and (EvE::min(facChr, corpChr, charChr) > -2.0f)) {
-        if ((m_agentData.typeID == Agents::Type::Research) and (corpChr < m - 2.0f))
-            return false;
-        return true;
-    }
-
-    return false;
 }
 
 

@@ -167,6 +167,20 @@ namespace Dialog {
         };
     }
 
+    /* server-encoded actionIDs (F24):  a dialogue entry (actionID, str) is a link and (actionID, buttonID) a button, and
+     *  both send their actionID back to DoAction.  research and locator choices are carried in it
+     *  (player charIDs are < 100,000,000, so both locate ranges fit an int32)
+     */
+    namespace Action {
+        enum : int32 {
+            ResearchCancelYes   = 99990,        // button labelled Yes
+            ResearchPickField   = 100000,       // + skillTypeID        (link)
+            DatacoreBuyBase     = 200000,       // + quantity 1..9999   (link)
+            LocatePickBase      = 1000000000,   // + charID             (link)
+            LocateAcceptBase    = 1500000000    // + charID             (button labelled LocateAccept)
+        };
+    }
+
 }
 
 /*

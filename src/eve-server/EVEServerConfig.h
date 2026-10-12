@@ -391,6 +391,14 @@ public:
         bool GateRestrictions;          // mission acceleration gates enforce the level's ship restrictions
     } missions;
 
+    // From <agents>  (F24:  research and locator agents)
+    struct {
+        uint32 researchDatacoreRP;      // research points per datacore (100)
+        double researchDatacoreISK;     // ISK per datacore (0 at Crucible; Inferno added 10000)
+        bool researchFieldMultipliers;  // pre-Inferno research field multipliers (agtResearchFieldMultipliers); false = every field x1
+        bool locatorEnabled;            // locator agents find characters
+    } agents;
+
     // From <standings>
     struct {
         float MissionBonus;
@@ -523,6 +531,7 @@ protected:
     bool ProcessExploring( const TiXmlElement* ele );
     bool ProcessDungeon( const TiXmlElement* ele );
     bool ProcessMissions( const TiXmlElement* ele );
+    bool ProcessAgents( const TiXmlElement* ele );
     bool ProcessStandings( const TiXmlElement* ele );
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );

@@ -15,7 +15,143 @@
 
 #include "agents/AgentDB.h"
 #include "StaticDataMgr.h"
+#include "inventory/AttributeEnum.h"
 
+
+bool AgentDB::GetResearch(uint32 charID, uint32 agentID, Research& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT skillTypeID, pointsBanked, pointsPerDay, lastUpdate, startDate FROM chrAgentResearch"
+        " WHERE characterID = %u AND agentID = %u", charID, agentID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetResearch query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    into.skillTypeID = row.GetUInt(0);
+    into.pointsBanked = row.GetDouble(1);
+    into.pointsPerDay = row.GetDouble(2);
+    into.lastUpdate = row.GetInt64(3);
+    into.startDate = row.GetInt64(4);
+    return true;
+}
+
+void AgentDB::SaveResearch(uint32 charID, uint32 agentID, const Research& data)
+{
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "INSERT INTO chrAgentResearch (characterID, agentID, skillTypeID, pointsBanked, pointsPerDay, lastUpdate, startDate)"
+        " VALUES (%u, %u, %u, %f, %f, %lli, %lli)"
+        " ON DUPLICATE KEY UPDATE skillTypeID = VALUES(skillTypeID), pointsBanked = VALUES(pointsBanked),"
+        " pointsPerDay = VALUES(pointsPerDay), lastUpdate = VALUES(lastUpdate)",
+        charID, agentID, data.skillTypeID, data.pointsBanked, data.pointsPerDay, data.lastUpdate, data.startDate);
+}
+
+void AgentDB::DeleteResearch(uint32 charID, uint32 agentID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM chrAgentResearch WHERE characterID = %u AND agentID = %u", charID, agentID);
+}
+
+uint32 AgentDB::CountResearch(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM chrAgentResearch WHERE characterID = %u", charID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void AgentDB::GetResearchList(uint32 charID, std::map<uint32, Research>& into, std::map<uint32, std::pair<uint8, uint32>>& agents)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT r.agentID, r.skillTypeID, r.pointsBanked, r.pointsPerDay, r.lastUpdate, r.startDate, a.level, a.locationID"
+        " FROM chrAgentResearch AS r"
+        " LEFT JOIN agtAgents AS a ON a.agentID = r.agentID"
+        " WHERE r.characterID = %u", charID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetResearchList query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Research data = Research();
+        data.skillTypeID = row.GetUInt(1);
+        data.pointsBanked = row.GetDouble(2);
+        data.pointsPerDay = row.GetDouble(3);
+        data.lastUpdate = row.GetInt64(4);
+        data.startDate = row.GetInt64(5);
+        into[row.GetUInt(0)] = data;
+        agents[row.GetUInt(0)] = std::make_pair((uint8)(row.IsNull(6) ? 0 : row.GetUInt(6)), (row.IsNull(7) ? 0 : row.GetUInt(7)));
+    }
+}
+
+void AgentDB::LoadFieldMultipliers(std::map<uint16, float>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT skillTypeID, multiplier FROM agtResearchFieldMultipliers")) {
+        codelog(DATABASE__ERROR, "Error in LoadFieldMultipliers query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = row.GetFloat(1);
+}
+
+void AgentDB::LoadDatacores(std::map<uint16, uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT t.typeID, IF(a.valueInt IS NULL, a.valueFloat, a.valueInt)"
+        " FROM invTypes AS t"
+        " JOIN dgmTypeAttributes AS a ON a.typeID = t.typeID AND a.attributeID = %u"
+        " WHERE t.groupID = %u AND t.published = 1"
+        " ORDER BY t.typeID", AttrRequiredSkill1, EVEDB::invGroups::Datacores))
+    {
+        codelog(DATABASE__ERROR, "Error in LoadDatacores query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        uint16 skillID((uint16)row.GetDouble(1));
+        if (into.find(skillID) == into.end())
+            into[skillID] = row.GetUInt(0);
+    }
+}
+
+void AgentDB::GetLocateCandidates(uint32 charID, std::vector<std::pair<uint32, std::string>>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT c.contactID, ch.characterName FROM chrContacts AS c"
+        " JOIN chrCharacters AS ch ON ch.characterID = c.contactID"
+        " WHERE c.ownerID = %u AND c.contactID != %u"
+        " ORDER BY ch.characterName LIMIT 30", charID, charID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetLocateCandidates query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(std::make_pair(row.GetUInt(0), std::string(row.GetText(1))));
+}
+
+std::string AgentDB::GetMapName(uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT itemName FROM mapDenormalize WHERE itemID = %u", itemID))
+        return "";
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return "";
+    return row.GetText(0);
+}
 
 void AgentDB::LoadAgentData(uint32 agentID, AgentData& data)
 {
