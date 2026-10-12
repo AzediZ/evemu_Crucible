@@ -379,6 +379,15 @@ EVEServerConfig::EVEServerConfig()
     corp.BillsEnabled = true;
     corp.CloseAllianceOnUnpaidBill = true;
     corp.BillGraceDays = 0;
+    war.Enabled = true;
+    war.CorpWarCost = 2000000.0;
+    war.AllianceWarCost = 50000000.0;
+    war.MaxDeclaredWars = 0;
+    war.BillDays = 7;
+    war.HistoryDays = 30;
+    alliance.JoinDelayHours = 24;
+    alliance.ExecutorTallyHour = 11;
+    alliance.ExecutorMinMemberDays = 7;
 
     // testing
     testing.EnableDrones = false;
@@ -449,6 +458,8 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
     AddMemberParser( "corp",        &EVEServerConfig::ProcessCorp );
+    AddMemberParser( "war",         &EVEServerConfig::ProcessWar );
+    AddMemberParser( "alliance",    &EVEServerConfig::ProcessAlliance );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
     AddMemberParser( "chat",        &EVEServerConfig::ProcessChat );
     AddMemberParser( "debug",       &EVEServerConfig::ProcessDebug );
@@ -479,6 +490,8 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "sov" );
     RemoveParser( "pos" );
     RemoveParser( "corp" );
+    RemoveParser( "war" );
+    RemoveParser( "alliance" );
     RemoveParser( "standings" );
     RemoveParser( "chat" );
     RemoveParser( "debug" );
@@ -1289,6 +1302,43 @@ bool EVEServerConfig::ProcessCorp( const TiXmlElement* ele )
     for (const char* name : {"StasisHours", "CEOVoteMinSharePercent", "CEOVoteCooldownDays", "SanctionDays", "EnforceRaceLimit",
             "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays"})
         RemoveParser( name );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessWar( const TiXmlElement* ele )
+{
+    AddValueParser( "Enabled",                      war.Enabled );
+    AddValueParser( "CorpWarCost",                  war.CorpWarCost );
+    AddValueParser( "AllianceWarCost",              war.AllianceWarCost );
+    AddValueParser( "MaxDeclaredWars",              war.MaxDeclaredWars );
+    AddValueParser( "BillDays",                     war.BillDays );
+    AddValueParser( "HistoryDays",                  war.HistoryDays );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"Enabled", "CorpWarCost", "AllianceWarCost", "MaxDeclaredWars", "BillDays", "HistoryDays"})
+        RemoveParser( name );
+
+    if (war.BillDays < 1)
+        war.BillDays = 1;
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessAlliance( const TiXmlElement* ele )
+{
+    AddValueParser( "JoinDelayHours",               alliance.JoinDelayHours );
+    AddValueParser( "ExecutorTallyHour",            alliance.ExecutorTallyHour );
+    AddValueParser( "ExecutorMinMemberDays",        alliance.ExecutorMinMemberDays );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"JoinDelayHours", "ExecutorTallyHour", "ExecutorMinMemberDays"})
+        RemoveParser( name );
+
+    if (alliance.ExecutorTallyHour > 23)
+        alliance.ExecutorTallyHour = 11;
 
     return result;
 }

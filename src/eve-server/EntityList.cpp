@@ -52,6 +52,7 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "corporation/CorporationDB.h"
 #include "corporation/BillingMgr.h"
+#include "faction/WarManager.h"
 #include "corporation/CorpMgr.h"
 #include "agents/AgentServices.h"
 
@@ -292,6 +293,7 @@ void EntityList::Process() {
         if (m_minuteTimer.Check()) {
             ++m_minutes;
             sMissionDataMgr.Process();  // 1m
+            sWarMgr.Process();  // 1m  war notifications and bills
 
             if (m_minutes % 5 == 0) { // ~5m
                 sWHMgr.Process();
@@ -556,7 +558,7 @@ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyTy
             }
         } break;
 
-        // character notifications (CorpMgr::NotifyChar), wars (F22), sovereignty, starbases and FW:  not routed to corps here
+        // character notifications (CorpMgr::NotifyChar), wars (WarManager via NotificationMgr), sovereignty, starbases and FW:  not routed to corps here
         case CharMedal:
         case AllWarDeclared:
         case AllWarSurrender:

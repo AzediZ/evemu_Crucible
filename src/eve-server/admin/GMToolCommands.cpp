@@ -50,6 +50,7 @@
 #include "npc/LawEnforcement.h"
 #include "npc/NPC.h"
 #include "system/CrimeWatch.h"
+#include "faction/WarManager.h"
 #include "system/SystemManager.h"
 #include "EVEServerConfig.h"
 #include "services/ServiceManager.h"
@@ -407,4 +408,48 @@ PyResult Command_untrash(Client* pClient, CommandDB* db, EVEServiceManager &serv
     iRef->Move(locationID, (EVEItemFlags)flag, true);
     InventoryDB::DeleteTrashLog(itemID);
     return new PyString("Restored.");
+}
+
+PyResult Command_war(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    const char* usage("Correct Usage: /war list [ownerID] | declare (declarerID) (againstID) | retract (warID) | mutual (warID) (0|1) | start (warID) | end (warID)");
+    if (args.argCount() < 2)
+        throw CustomError (usage);
+
+    const std::string& what(args.arg(1));
+    if (what == "list") {
+        uint32 ownerID(pClient->GetAllianceID() != 0 ? pClient->GetAllianceID() : pClient->GetCorporationID());
+        if ((args.argCount() > 2) and args.isNumber(2))
+            ownerID = atoi(args.arg(2).c_str());
+        std::string reply;
+        sWarMgr.GMList(ownerID, reply);
+        return new PyString(reply);
+    }
+
+    if ((args.argCount() < 3) or !args.isNumber(2))
+        throw CustomError (usage);
+    uint32 id(atoi(args.arg(2).c_str()));
+
+    if (what == "declare") {
+        if ((args.argCount() < 4) or !args.isNumber(3))
+            throw CustomError (usage);
+        uint32 warID(sWarMgr.DeclareWar(id, atoi(args.arg(3).c_str()), pClient->GetCharacterID(), false));
+        return new PyString("War " + std::to_string(warID) + " declared.  It is hostile in 24 hours (/war start " + std::to_string(warID) + " to skip that).");
+    } else if (what == "retract") {
+        sWarMgr.GMRetractWar(id);
+        return new PyString("Retracted.  The war can be fought for 24 more hours.");
+    } else if (what == "mutual") {
+        if ((args.argCount() < 4) or !args.isNumber(3))
+            throw CustomError (usage);
+        // as the defender would
+        sWarMgr.GMSetMutual(id, atoi(args.arg(3).c_str()) != 0);
+        return new PyString("Done.");
+    } else if (what == "start") {
+        sWarMgr.GMSkipSpoolUp(id);
+        return new PyString("The war is hostile now.");
+    } else if (what == "end") {
+        sWarMgr.GMEndWar(id);
+        return new PyString("Ended.  The war can be fought for 24 more hours.");
+    }
+    throw CustomError (usage);
 }

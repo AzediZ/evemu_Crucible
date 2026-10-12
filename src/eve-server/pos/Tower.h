@@ -108,13 +108,13 @@ public:
     float GetSentryStatus()                             { return m_tdata.status; }
     /* would the tower's guns shoot this pilot (sentry settings)?  never its own corp or alliance.
      *  standing: the pilot's (or corp's or alliance's, most specific first) standing from standingOwnerID below the limit
-     *  status:   security status below the limit.   statusDrop is not used.   corpWar:  @todo F22 wars
+     *  status:   security status below the limit.   statusDrop is not used.   corpWar:  at war with the owner
      *  F18's tower guns use this too
      */
     bool ConsidersHostile(Client* pClient);
     /* would the tower's defenses shoot this (pilots' ships, ships left in space, drones, npcs)?
      *  never the owner corp or alliance.  anyone flagged to the corp or who shot one of its structures in the last 15 minutes
-     *  (npcs too).  corpWar:  at war with the owner (@todo F22).  statusDrop:  criminals (global criminal countdown).
+     *  (npcs too).  corpWar:  at war with the owner.  statusDrop:  criminals (global criminal countdown).
      *  below high security space also the standing and security status limits (ConsidersHostile)
      */
     bool IsHostile(SystemEntity* pTarget);

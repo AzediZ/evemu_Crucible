@@ -494,6 +494,23 @@ public:
         uint32 BillGraceDays;               // days after a bill's due date before the overdue handling runs
     } corp;
 
+    // From <war>  (F22: wars between player corporations and alliances)
+    struct {
+        bool Enabled;                       // false:  no new declarations, and wars give no free targets
+        double CorpWarCost;                 // base cost of a corporation's war on a corporation (isk)
+        double AllianceWarCost;             // base cost when either side is an alliance (isk)
+        uint32 MaxDeclaredWars;             // most wars an owner may have declared at once.  0 = no limit
+        uint32 BillDays;                    // days between war bills
+        uint32 HistoryDays;                 // days a finished war still shows in the war lists
+    } war;
+
+    // From <alliance>  (F22)
+    struct {
+        uint32 JoinDelayHours;              // hours from an accepted application to membership.  0 = at once
+        uint32 ExecutorTallyHour;           // UTC hour of the daily executor support count (downtime)
+        uint32 ExecutorMinMemberDays;       // days of membership before a corporation may declare executor support
+    } alliance;
+
     // From <testing>
     struct {
         bool EnableDrones;
@@ -538,6 +555,8 @@ protected:
     bool ProcessSov( const TiXmlElement* ele );
     bool ProcessPOS( const TiXmlElement* ele );
     bool ProcessCorp( const TiXmlElement* ele );
+    bool ProcessWar( const TiXmlElement* ele );
+    bool ProcessAlliance( const TiXmlElement* ele );
     bool ProcessBPTimes( const TiXmlElement* ele );
     bool ProcessTesting( const TiXmlElement* ele );
     bool ProcessDebug( const TiXmlElement* ele );

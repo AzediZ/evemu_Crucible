@@ -25,6 +25,7 @@
 
 #include "eve-server.h"
 
+#include "faction/WarManager.h"
 #include "faction/WarRegistryService.h"
 #include "services/ServiceManager.h"
 
@@ -52,21 +53,27 @@ BoundDispatcher* WarRegistryService::BindObject(Client* client, PyRep* bindParam
         return nullptr;
     }
 
-    uint32 corporationID = args.arg1;
-    auto it = this->m_instances.find (corporationID);
+    // eveMoniker.GetWar() binds (session.allianceid or session.corpid, 1):  only the binder's own owner
+    uint32 ownerID = args.arg1;
+    if ((ownerID != (uint32)client->GetCorporationID()) and ((client->GetAllianceID() == 0) or (ownerID != (uint32)client->GetAllianceID()))) {
+        _log(SERVICE__ERROR, "%s: %s tried to bind the war registry of %u.", GetName().c_str(), client->GetName(), ownerID);
+        return nullptr;
+    }
+
+    auto it = this->m_instances.find (ownerID);
 
     if (it != this->m_instances.end ())
         return it->second;
 
-    WarRegistryBound* bound = new WarRegistryBound(args.arg1, this->GetServiceManager (), *this);
+    WarRegistryBound* bound = new WarRegistryBound(ownerID, this->GetServiceManager (), *this);
 
-    this->m_instances.insert_or_assign (corporationID, bound);
+    this->m_instances.insert_or_assign (ownerID, bound);
 
     return bound;
 }
 
 void WarRegistryService::BoundReleased (WarRegistryBound* bound) {
-    auto it = this->m_instances.find (bound->GetCorporationID());
+    auto it = this->m_instances.find (bound->GetOwnerID());
 
     if (it == this->m_instances.end ())
         return;
@@ -74,31 +81,22 @@ void WarRegistryService::BoundReleased (WarRegistryBound* bound) {
     this->m_instances.erase (it);
 }
 
-WarRegistryBound::WarRegistryBound(uint32 corporationID, EVEServiceManager& mgr, WarRegistryService& parent) :
+WarRegistryBound::WarRegistryBound(uint32 ownerID, EVEServiceManager& mgr, WarRegistryService& parent) :
     EVEBoundObject(mgr, parent),
-    mCorporationID(corporationID)
+    mOwnerID(ownerID)
 {
     this->Add("GetWars", &WarRegistryBound::GetWars);
+    this->Add("GetCostOfWarAgainst", &WarRegistryBound::GetCostOfWarAgainst);
 }
 
-PyResult WarRegistryBound::GetWars(PyCallArgs& args, PyInt* ownerID, std::optional<PyInt*> forceRefresh) {
-    sLog.Debug("WarRegistryBound", "Called GetWars stub.");
+PyResult WarRegistryBound::GetWars(PyCallArgs& args, PyInt* ownerID, std::optional<PyRep*> forceRefresh) {
+    // wars are public:  the corp window's wars tab lists any corporation's or alliance's wars
+    return sWarMgr.GetWars(ownerID->value());
+}
 
-    util_IndexRowset irowset;
-
-    irowset.header.push_back("warID");
-    irowset.header.push_back("declaredByID");
-    irowset.header.push_back("againstID");
-    irowset.header.push_back("timeDeclared");
-    irowset.header.push_back("timeFinished");
-    irowset.header.push_back("retracted");
-    irowset.header.push_back("retractedBy");
-    irowset.header.push_back("billID");
-    irowset.header.push_back("mutual");
-
-    irowset.idName = "warID";
-
-    return irowset.Encode();
+PyResult WarRegistryBound::GetCostOfWarAgainst(PyCallArgs& args, PyInt* ownerID) {
+    //  cost = sm.GetService('war').GetCostOfWarAgainst(againstID)
+    return new PyFloat(sWarMgr.GetCostOfWar(mOwnerID, ownerID->value()));
 }
 
 /*

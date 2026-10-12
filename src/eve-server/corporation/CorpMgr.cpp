@@ -38,6 +38,7 @@
 #include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
 #include "corporation/CorpMgr.h"
+#include "faction/WarManager.h"
 #include "corporation/ItemLockdown.h"
 #include "inventory/ItemFactory.h"
 #include "mail/NotificationMgr.h"
@@ -837,9 +838,10 @@ void CorpMgr::LiquidateCorp(uint32 corpID, uint32 byCharID)
         NotifyChar(cur, Notify::Types::CorpLiquidation, byCharID, data);
     }
 
-    // offices and their contents go with the corp, and so do its bills
+    // offices and their contents go with the corp, and so do its bills and wars
     ReleaseOffices(corpID);
     sBillingMgr.CancelBillsOf(corpID);
+    sWarMgr.OnOwnerClosed(corpID);
 
     // the members still online see the corp close before they move
     PyDict* change = new PyDict();
@@ -1446,8 +1448,8 @@ void CorpMgr::ImplementSanction(Client* pCaller, uint32 voteCaseID)
             // a corporation in an alliance goes to war through the alliance
             if (pCaller->GetAllianceID() != 0)
                 throw UserError("CrpCanNotSanctionWarOwner");
-            /** @todo F22:  sWarMgr.DeclareWar(corpID, option.parameter) once wars exist */
-            throw CustomError("War declarations are not available on this server yet.");
+            // the declaration is charged now (throws NotEnoughMoneyCorp)
+            sWarMgr.DeclareWar(corpID, option.parameter, pCaller->GetCharacterID());
         } break;
         default:
             throw CustomError("This sanctioned action can not be implemented.");

@@ -14,6 +14,7 @@
 #include "cache/ObjCacheService.h"
 #include "chat/LSCService.h"
 #include "corporation/CorpMgr.h"
+#include "faction/WarManager.h"
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpRegistryBound.h"
 #include "corporation/OfficeSparseBound.h"
@@ -1961,15 +1962,8 @@ PyResult CorpRegistryBound::InsertVoteCase(PyCallArgs &call, PyRep* voteCaseText
             subject.parameter = charID;
         } break;
         case Corp::VoteType::War: {
-            if (call.client->GetAllianceID() != 0)
-                throw UserError("CrpCanNotSanctionWarOwner");
-            if (IsPlayerCorp(subject.parameter)) {
-                CorpData data = CorpData();
-                    data.corporationID = subject.parameter;
-                CorporationDB::GetCorpData(data);
-                if (data.allianceID != 0)
-                    throw UserError("CrpCanNotSanctionWarAgainstOwner");
-            }
+            // the war rules (owner, target, already at war, limits) are checked again when the CEO implements it
+            sWarMgr.ValidateDeclaration(m_corpID, subject.parameter);
         } break;
         case Corp::VoteType::Shares: {
             if (subject.parameter <= 0)

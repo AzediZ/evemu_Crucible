@@ -278,10 +278,14 @@ SET( explore_SOURCE
 SET( faction_INCLUDE
      "${TARGET_INCLUDE_DIR}/faction/FactionWarMgrDB.h"
      "${TARGET_INCLUDE_DIR}/faction/FactionWarMgrService.h"
+     "${TARGET_INCLUDE_DIR}/faction/WarDB.h"
+     "${TARGET_INCLUDE_DIR}/faction/WarManager.h"
      "${TARGET_INCLUDE_DIR}/faction/WarRegistryService.h" )
 SET( faction_SOURCE
      "${TARGET_SOURCE_DIR}/faction/FactionWarMgrDB.cpp"
      "${TARGET_SOURCE_DIR}/faction/FactionWarMgrService.cpp"
+     "${TARGET_SOURCE_DIR}/faction/WarDB.cpp"
+     "${TARGET_SOURCE_DIR}/faction/WarManager.cpp"
      "${TARGET_SOURCE_DIR}/faction/WarRegistryService.cpp")
 
 SET( fleet_INCLUDE

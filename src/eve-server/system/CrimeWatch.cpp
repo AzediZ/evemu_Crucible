@@ -16,6 +16,7 @@
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "character/Character.h"
+#include "faction/WarManager.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"
 #include "npc/LawEnforcement.h"
@@ -204,10 +205,17 @@ namespace {
 }
 
 /* the client's consider.CanAttackFreely().  the client warns before an act this returns false for.
- *  wars aren't implemented, so war targets are not free targets yet.
+ *  war targets (warRelationshipAtWarCanFight) are free targets, ships, pods and structures alike.
  */
 bool CrimeWatch::CanAttackFreely(Client* pAggressor, const Owner& target)
 {
+    // the war owner comes from the corp:  an entity's cached allianceID can be older than an alliance change
+    if (sConfig.war.Enabled and (target.corpID != 0)) {
+        uint32 mine(sWarMgr.WarOwnerOf(pAggressor->GetCorporationID()));
+        uint32 theirs(sWarMgr.WarOwnerOf(target.corpID));
+        if ((mine != 0) and (theirs != 0) and sWarMgr.IsHostile(mine, theirs))
+            return true;
+    }
     if (target.structure)
         return false;
     uint32 me(pAggressor->GetCharacterID());

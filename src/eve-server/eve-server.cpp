@@ -90,6 +90,7 @@
 #include "corporation/CorpBookmarkMgr.h"
 #include "corporation/CorpFittingMgr.h"
 #include "corporation/BillingMgr.h"
+#include "faction/WarManager.h"
 #include "corporation/CorpMgr.h"
 #include "corporation/CorpMgrService.h"
 #include "corporation/CorporationService.h"
@@ -815,6 +816,7 @@ int main( int argc, char* argv[] )
     std::printf("\n");     // spacer
     sBillingMgr.Initialize();
     sCorpMgr.Initialize();
+    sWarMgr.Initialize();
     std::printf("\n");     // spacer
     sFxDataMgr.Initialize();
     std::printf("\n");     // spacer

@@ -32,6 +32,7 @@
 #include "system/CalendarDB.h"
 #include "mail/NotificationMgr.h"
 #include "system/CrimeWatch.h"
+#include "faction/WarManager.h"
 #include "../eve-common/EVE_Mail.h"
 #include "../eve-common/EVE_Calendar.h"
 
@@ -221,7 +222,10 @@ bool TowerSE::ConsidersHostile(Client* pClient)
         if (pClient->GetSecurityRating() < m_tdata.status)
             return true;
 
-    /** @todo F22: corpWar (shoot those at war with the owner) */
+    // corpWar:  those at war with the owner
+    if (m_tdata.corpWar and sConfig.war.Enabled
+    and sWarMgr.IsHostile(sWarMgr.WarOwnerOf(m_corpID), sWarMgr.WarOwnerOf(pClient->GetCorporationID())))
+        return true;
     return false;
 }
 
@@ -440,7 +444,9 @@ bool TowerSE::IsHostile(SystemEntity* pTarget)
     // 2. flagged to the corp, or shot at its structures
     if (sCrimeWatch.IsFlaggedTo(charID, m_corpID) or IsRecentAggressor(charID, aggressionWindow))
         return true;
-    // 3. at war with the owner:  @todo F22
+    // 3. at war with the owner
+    if (m_tdata.corpWar and sConfig.war.Enabled and sWarMgr.IsHostile(sWarMgr.WarOwnerOf(m_corpID), sWarMgr.WarOwnerOf(corpID)))
+        return true;
     // 4. criminals
     if (m_tdata.statusDrop and sCrimeWatch.IsCriminal(charID))
         return true;

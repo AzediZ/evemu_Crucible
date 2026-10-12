@@ -47,21 +47,18 @@ private:
 class WarRegistryBound : public EVEBoundObject<WarRegistryBound> {
     friend WarRegistryService;
 public:
-    PyResult GetWars(PyCallArgs& args, PyInt* ownerID, std::optional<PyInt*> forceRefresh);
+    // war_cso_wars:  GetWars(ownerID) -> dbutil.CIndexedRowset keyed by warID, every war the owner is on either side of
+    PyResult GetWars(PyCallArgs& args, PyInt* ownerID, std::optional<PyRep*> forceRefresh);
+    // the cost of the moniker's owner declaring war on ownerID (WarDeclareConfirm, corp war votes)
+    PyResult GetCostOfWarAgainst(PyCallArgs& args, PyInt* ownerID);
 
-    uint32 GetCorporationID() { return this->mCorporationID; }
-    /*
-     * other functions that might be required
-     * return self.GetMoniker().RetractWar(againstID)
-     * return self.GetMoniker().DeclareWarAgainst(againstID)
-     * return self.GetMoniker().ChangeMutualWarFlag(warID, mutual)
-     * return self.GetMoniker().GetCostOfWarAgainst(ownerID)
-     */
+    uint32 GetOwnerID() { return this->mOwnerID; }
+
 protected:
-    WarRegistryBound(uint32 corporationID, EVEServiceManager& mgr, WarRegistryService& parent);
+    WarRegistryBound(uint32 ownerID, EVEServiceManager& mgr, WarRegistryService& parent);
 
 private:
-    uint32 mCorporationID;
+    uint32 mOwnerID;        // the binder's alliance, or its corporation (moniker.GetWar binds allianceid or corpid)
 };
 
 #endif /* __WAR_REGISTRY_SERVICE__H__INCL__ */

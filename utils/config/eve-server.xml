@@ -440,6 +440,21 @@ boolean can use either 0/1 OR true/false.
         <BillGraceDays>0</BillGraceDays><!-- days after a bill's due date before it counts as unpaid -->
     </corp>
 
+    <war><!-- wars between player corporations and alliances (Crucible: declared by corporation vote or by the alliance executor, hostile 24 hours after declaration, weekly bills, 24 hour grace when a war ends) -->
+        <Enabled>true</Enabled><!-- bool - false = no new war declarations, and wars give no free targets to CONCORD -->
+        <CorpWarCost>2000000</CorpWarCost><!-- isk - base cost of a corporation's war on a corporation.  cost = base x (wars the declarer has declared + 1) x (wars declared on the target + 1), mutual wars not counted -->
+        <AllianceWarCost>50000000</AllianceWarCost><!-- isk - base cost when either side is an alliance -->
+        <MaxDeclaredWars>0</MaxDeclaredWars><!-- most wars a corporation or alliance may have declared at once.  0 = no limit -->
+        <BillDays>7</BillDays><!-- days between war bills.  the bill is paid by the declaring corporation, or the executor of the declaring alliance; an unpaid bill (also one an alliance without executor can't pay) cancels the war.  wars are only billed while corp bills are enabled -->
+        <HistoryDays>30</HistoryDays><!-- days a finished war still shows in the wars lists -->
+    </war>
+
+    <alliance><!-- alliance membership (Crucible: accepted applications take 24 hours to become effective, executor chosen by the members' support at downtime) -->
+        <JoinDelayHours>24</JoinDelayHours><!-- hours from an accepted application to membership.  0 = the corporation joins at once (old emulator behaviour) -->
+        <ExecutorTallyHour>11</ExecutorTallyHour><!-- UTC hour of the daily executor count (EVE downtime): a member corporation supported by at least half of the members becomes executor -->
+        <ExecutorMinMemberDays>7</ExecutorMinMemberDays><!-- days a corporation must have been a member before it may declare executor support -->
+    </alliance>
+
     <threads><!-- ignored.  the server main loop is single-threaded by design; these are parsed for compatibility only -->
         <NetworkThreads>2</NetworkThreads>
         <DatabaseThreads>2</DatabaseThreads>
