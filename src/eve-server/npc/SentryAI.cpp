@@ -30,6 +30,7 @@
 SentryAI::SentryAI(Sentry* who)
 : m_state(State::Idle),
 m_primaryID(0),
+m_pendingAggroID(0),
 m_npc(who),
 m_ewar(nullptr),
 m_brain(nullptr)
@@ -107,12 +108,26 @@ void SentryAI::Process() {
     SentryContext ctx(MakeContext());
     switch(m_state) {
         case State::Idle: {
+            // someone locked, attacked or ewar'd us (or our room) since the last think
+            if (m_pendingAggroID != 0) {
+                SystemEntity* pBy(m_npc->SystemMgr()->GetSE(m_pendingAggroID));
+                m_pendingAggroID = 0;
+                SystemEntity* pTarget(pBy == nullptr ? nullptr : m_brain->OnAggressed(ctx, pBy));
+                if (pTarget != nullptr) {
+                    _log(NPC__AI_TRACE, "%s(%u): answering %s(%u).", m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
+                    Target(pTarget);
+                    break;
+                }
+            }
             // law guns:  a random eligible target.  pirate and deadspace sentries:  the nearest ship in range
             SystemEntity* pTarget(m_brain->Acquire(ctx));
             if (pTarget != nullptr)
                 Target(pTarget);
         } break;
         case State::Engaged: {
+            m_pendingAggroID = 0;
+            // let go of locks on what we may no longer shoot (expired criminals and aggressors:  no innocent stays locked)
+            PruneLocks(ctx);
             SystemEntity* pTarget(GetPrimary(ctx));
             if (pTarget == nullptr) {
                 _log(NPC__AI_TRACE, "%s(%u): Stopped %s, no primary target.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
@@ -169,11 +184,28 @@ bool SentryAI::SetPrimary(SentryContext& ctx, SystemEntity* pTarget)
     if (pTarget == nullptr)
         return false;
     if (m_npc->TargetMgr()->GetTarget(pTarget->GetID(), false) == nullptr) {
-        // every lock slot taken:  the old primary makes room
-        if ((m_npc->TargetMgr()->TargetCount() >= m_profile->maxLockedTargets) and (m_primaryID != 0)) {
-            SystemEntity* pOld(m_npc->TargetMgr()->GetTarget(m_primaryID, false));
-            if (pOld != nullptr)
+        // can we lock it at all (jammed, or damped below its range)?  nothing is given up for a lock that can't start
+        if (m_npc->TargetMgr()->IsJammed())
+            return false;
+        double range(m_brain->AcquireRange(ctx));
+        if (m_npc->GetEwar() != nullptr)
+            range *= m_npc->GetEwar()->GetTargetRangeMult();
+        if (m_npc->GetPosition().distance(pTarget->GetPosition()) > range)
+            return false;
+        // every lock slot taken:  another lock makes room, the primary only when it's the only one
+        if (m_npc->TargetMgr()->TargetCount() >= m_profile->maxLockedTargets) {
+            SystemEntity* pOld(nullptr);
+            m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
+                if ((pOld == nullptr) and (cur->GetID() != m_primaryID))
+                    pOld = cur;
+            });
+            if ((pOld == nullptr) and (m_primaryID != 0))
+                pOld = m_npc->TargetMgr()->GetTarget(m_primaryID, false);
+            if (pOld != nullptr) {
+                if (pOld->GetID() == m_primaryID)
+                    m_primaryID = 0;
                 m_npc->TargetMgr()->ClearTarget(pOld);
+            }
         }
         bool chase(false);
         if (!m_npc->TargetMgr()->StartTargeting(pTarget, GetTargetTime(pTarget), m_profile->maxLockedTargets,
@@ -297,14 +329,27 @@ void SentryAI::Target(SystemEntity* pTarget) {
 
 void SentryAI::Respond(SystemEntity* pSE)
 {
-    if ((pSE == nullptr) or (m_state != State::Idle) or (m_npc->SysBubble() == nullptr))
+    /* we're inside the other side's StartTargeting() or ApplyDamage() here:  the answer waits for our next think
+     *  (the first one wins, like NPCAIMgr's pending aggressor) */
+    if ((pSE == nullptr) or (pSE == m_npc) or (m_state != State::Idle) or (m_pendingAggroID != 0))
         return;
-    SentryContext ctx(MakeContext());
-    SystemEntity* pTarget(m_brain->OnAggressed(ctx, pSE));
-    if (pTarget == nullptr)
-        return;
-    _log(NPC__AI_TRACE, "%s(%u): answering %s(%u).", m_npc->GetName(), m_npc->GetID(), pTarget->GetName(), pTarget->GetID());
-    Target(pTarget);
+    m_pendingAggroID = pSE->GetID();
+}
+
+void SentryAI::PruneLocks(SentryContext& ctx)
+{
+    m_stale.clear();
+    m_npc->TargetMgr()->ForEachTarget([&](SystemEntity* cur, bool locked) {
+        if (!m_brain->MayShoot(ctx, cur))
+            m_stale.push_back(cur);
+    });
+    // after the walk:  clearing changes the lock map
+    for (auto cur : m_stale) {
+        if (cur->GetID() == m_primaryID)
+            m_primaryID = 0;
+        m_npc->TargetMgr()->ClearTarget(cur);
+    }
+    m_stale.clear();
 }
 
 void SentryAI::Targeted(SystemEntity* pAgressor) {

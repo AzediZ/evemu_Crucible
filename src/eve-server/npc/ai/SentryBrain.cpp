@@ -23,8 +23,11 @@
 
 SentryBrain* SentryBrain::Create(Sentry* pSentry, const NpcProfile& profile)
 {
-    if (pSentry->IsLawSentry())
+    if (pSentry->IsLawSentry()) {
+        // Crimewatch 1 aggression is kept per guarded gate or station
+        pSentry->FindProtectedObject();
         return new LawSentryBrain();
+    }
     return new PirateSentryBrain();
 }
 

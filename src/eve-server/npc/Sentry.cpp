@@ -80,6 +80,28 @@ bool Sentry::IsLawSentry()
     return ((groupID == EVEDB::invGroups::Sentry_Gun) or (groupID == EVEDB::invGroups::Protective_Sentry_Gun));
 }
 
+void Sentry::FindProtectedObject()
+{
+    // a law gun from the database (not placed by LawEnforcement):  it guards the nearest gate or station within 100km
+    if ((m_protectedID != 0) or (m_system == nullptr) or !IsLawSentry())
+        return;
+    double best(100000.0);
+    auto consider = [&](SystemEntity* pSE) {
+        if (pSE == nullptr)
+            return;
+        double distance(GetPosition().distance(pSE->GetPosition()) - pSE->GetRadius());
+        if (distance <= best) {
+            best = distance;
+            m_protectedID = pSE->GetID();
+        }
+    };
+    for (auto cur : m_system->GetGates())
+        consider(cur.second);
+    for (auto cur : m_system->GetEntities())
+        if (cur.second->IsStationSE())
+            consider(cur.second);
+}
+
 void Sentry::TargetLost(SystemEntity *who) {
     m_AI->TargetLost(who);
 }

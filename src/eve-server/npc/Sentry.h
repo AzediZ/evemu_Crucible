@@ -58,6 +58,8 @@ public:
     bool IsLawSentry();
     // the gate or station we guard (aggression is tracked per guarded object).  ourselves when we guard nothing in particular
     uint32 GetProtectedID()                             { return (m_protectedID != 0 ? m_protectedID : GetID()); }
+    // a law gun without a guarded object (loaded from the database) takes the nearest gate or station (SentryBrain::Create)
+    void FindProtectedObject();
 
 protected:
     SentryAI* m_AI;

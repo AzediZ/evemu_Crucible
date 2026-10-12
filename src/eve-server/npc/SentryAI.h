@@ -79,8 +79,10 @@ protected:
     void Attack(SentryContext& ctx, SystemEntity* pTarget);
     void AttackTarget(SentryContext& ctx, SystemEntity* pTarget);
     void FireMissile(SystemEntity* pTarget);
-    // pSE wants a response while we're idle (lock-back, damage, group alert)
+    // pSE wants a response while we're idle (lock-back, damage, group alert):  queued for the next think
     void Respond(SystemEntity* pSE);
+    // drops our locks on what the brain no longer lets us shoot
+    void PruneLocks(SentryContext& ctx);
 
     double GetTargetTime(SystemEntity* pTarget);
     // surface distance to pTarget
@@ -100,6 +102,7 @@ private:
     bool m_ewarChecked : 1;
 
     uint32 m_primaryID;     // weapons target
+    uint32 m_pendingAggroID;// someone who locked, attacked or ewar'd us (or our room) while we were idle.  handled on the next think
 
     Sentry* m_npc;
     NPCEwar* m_ewar;            // we own this.  sentries whose brain allows their type's ewar
@@ -108,6 +111,8 @@ private:
 
     NpcSchedule m_sched;
     NpcRng m_rng;
+
+    std::vector<SystemEntity*> m_stale;     // scratch, reused (PruneLocks)
 };
 
 #endif
