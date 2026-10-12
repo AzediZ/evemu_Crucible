@@ -370,6 +370,25 @@ def report(st, h, km, cal, rows, args):
                        if k[1] == 0))
     R('  named meta-level fits (groups): %d' % len(cal.named_fit))
 
+    R('\n== volatility (%d-day horizon, per sqrt(day);  derive.horizon_volatility), Forge-history types, per category;'
+      '  1-day MAD for comparison' % derive.VOL_LAG)
+    vc = collections.defaultdict(list)
+    for t in sorted(cal.types):
+        r = cal.types[t]
+        c = cal.by_type.get(t, {}).get(history.FORGE)
+        if r.simClass in (derive.EXCLUDED, derive.NOT_SIM) or c is None or cal.hist[t]['kind'] != 'forge':
+            continue
+        one = derive.horizon_volatility(c.day, c.avg, lag=1)
+        vc[st.cat(t)].append((r.volatility, derive.clip(one, derive.VOL_MIN, derive.VOL_MAX) if one is not None else None))
+    for c in sorted(vc, key=lambda c: -len(vc[c])):
+        xs = [v for v, _ in vc[c]]
+        ones = [o for _, o in vc[c] if o is not None]
+        if len(xs) >= 20:
+            R('  %-24s n=%5d  median %.4f  p90 %.4f  at the %.3f floor %4.1f%%   (1-day: median %.4f, at the floor %4.1f%%)' % (
+                st.cats[c], len(xs), median(xs), percentile(xs, .9), derive.VOL_MIN,
+                100.0 * sum(1 for x in xs if x <= derive.VOL_MIN) / len(xs), median(ones),
+                100.0 * sum(1 for x in ones if x <= derive.VOL_MIN) / max(1, len(ones))))
+
     R('\n== consumeShare and elasticity, median per category (simulated types)')
     cc = collections.defaultdict(list)
     for r in cal.types.values():

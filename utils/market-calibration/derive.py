@@ -76,6 +76,7 @@ HALF_SPREAD_IMPLANT = 0.12
 
 HISTORY_MIN_DAYS = 5
 VOL_MIN, VOL_MAX = 0.005, 0.6
+VOL_LAG = 5                            # volatility horizon in days (horizon_volatility);  the harness AT (d) uses the same
 UNITS_WINSOR = 5.0                     # a day's units are capped at this many times the median trading day
 REGION_MIN_ACTIVE = 0.2                # mktCalRegion keeps cells this active, or in a hub region
 RATIO_MIN, RATIO_MAX = 0.1, 10.0
@@ -122,6 +123,24 @@ def weighted_percentile(pairs, p):
 def mad_sd(xs):
     m = median(xs)
     return 1.4826 * median([abs(x - m) for x in xs])
+
+
+def horizon_volatility(days, prices, lag=VOL_LAG, min_pairs=HISTORY_MIN_DAYS):
+    """the daily volatility of a daily price series, measured over 'lag' days:  1.4826 MAD of ln(p[d+lag] / p[d])
+    over every pair of traded days 'lag' calendar days apart, divided by sqrt(lag).  None with fewer than min_pairs.
+
+    Not the MAD of day-to-day returns:  a liquid hub type's daily average sits on a sticky ask (0.01 ISK undercuts
+    against a wall of sell orders), so it is unchanged on more than half of all days and the 1-day MAD is about 0 however
+    far the price moves in a week (Forge, modules with 50-500 orders a day:  1-day 0.0009, 5-day 0.017 per sqrt(day)).
+    Thin types show the opposite (bid/ask bounce between single prints inflates the 1-day figure).  Over a few days
+    both effects fade and what is left is how far the price level moves, which is what the simulation's
+    MarketNoise x volatility drives.  The offline harness measures its acceptance test (d) with the same estimator
+    (src/eve-market-sim/Harness.cpp, HorizonVolatility)."""
+    at = dict(zip(days, prices))
+    rets = [math.log(at[d + lag] / p) for d, p in zip(days, prices) if d + lag in at]
+    if len(rets) < min_pairs:
+        return None
+    return mad_sd(rets) / math.sqrt(lag)
 
 
 def ols(xs, ys):
@@ -407,15 +426,14 @@ class Calibration(object):
                 ref = weighted_percentile(pairs, 0.5)
                 p10, p90 = weighted_percentile(pairs, 0.1), weighted_percentile(pairs, 0.9)
                 kind = 'regions' if rows >= HISTORY_MIN_DAYS else 'thin'
-            # volatility:  1.4826 MAD of day-to-day log returns, Forge, else the region with most days
+            # volatility:  horizon_volatility of the daily average, Forge, else the region with most days
             vol = None
             series = [f] if f is not None else []
             series += [regs[r] for r in sorted(regs, key=lambda r: (-len(regs[r].day), r)) if r != FORGE][:1]
             for c in series:
-                pts = list(zip(c.day, c.avg))
-                rets = [math.log(b / a) for (d0, a), (d1, b) in zip(pts, pts[1:]) if d1 == d0 + 1]
-                if len(rets) >= HISTORY_MIN_DAYS:
-                    vol = clip(mad_sd(rets), VOL_MIN, VOL_MAX)
+                v = horizon_volatility(c.day, c.avg)
+                if v is not None:
+                    vol = clip(v, VOL_MIN, VOL_MAX)
                     break
             # units per day:  every present day (no trade = 0), each day capped at UNITS_WINSOR x the median day
             traded = [units[d] for d in present if units[d] > 0]

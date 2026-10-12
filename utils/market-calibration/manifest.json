@@ -2331,6 +2331,6 @@
  ],
  "output": {
   "file": "sql/migrations/20261013120100-market-calibration.sql",
-  "sha256": "cc97b7650f9911167bf5d643c8b63705d9c0f7dc354363c785291d61a61bb36f"
+  "sha256": "30e6844834daed74978ca57a7594829a5b6a4aad70e4a694cffd6e1721714c58"
  }
 }
