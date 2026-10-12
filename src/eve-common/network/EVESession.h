@@ -65,6 +65,8 @@ public:
     state_t GetState() const { return mNet->GetState(); }
     /** Wrapper of TCPConnection::GetAddress(). */
     std::string GetAddress() const { return mNet->GetAddress(); }
+    /** Wrapper of TCPConnection::GetLocalIP(); the server address this client connected to. */
+    uint32 GetLocalIP() const { return mNet->GetLocalIP(); }
 
     /**
      * @brief Resets session.

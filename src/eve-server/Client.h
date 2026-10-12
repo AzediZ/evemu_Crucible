@@ -107,6 +107,8 @@ public:
     // these dont always work...still dont know why.  fixed.  was bad _comp method in PyDict
     std::string GetAddress() const                      { return pSession->GetCurrentString( "address" ); }
     std::string GetLanguageID() const                   { return pSession->GetCurrentString( "languageID" ); }
+    // the image server url this client downloads portraits and logos from (built from the address it connected to when the image server host is automatic)
+    std::string GetImageServerURL() const;
 
     int32 GetUserID() const                             { return pSession->GetCurrentInt( "userid" ); }
     int32 GetAccountType() const                        { return pSession->GetCurrentInt( "userType" ); }

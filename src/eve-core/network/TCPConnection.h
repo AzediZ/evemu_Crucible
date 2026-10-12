@@ -73,6 +73,11 @@ public:
      * @note It's kinda slow this way.
      */
     std::string GetAddress();
+    /**
+     * @return Local IP (network byte order) of this connection, i.e. the server address the remote end connected to;
+     *         0 when not connected or unknown.
+     */
+    uint32 GetLocalIP() const;
     /** @return Current state of connection. */
     state_t GetState() const { return mSockState; }
 

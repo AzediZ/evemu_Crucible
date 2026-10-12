@@ -48,6 +48,8 @@ public:
     int listen( int backlog = SOMAXCONN );
 
     Socket* accept( sockaddr* addr, PSOCKLEN_T addrlen );
+    /** the local address this (connected) socket is bound to */
+    int getsockname( sockaddr* name, PSOCKLEN_T namelen );
 
     int setopt( int level, int optname, const void* optval, unsigned int optlen );
     int setblocking( bool blocking );

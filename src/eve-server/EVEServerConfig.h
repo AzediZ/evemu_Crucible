@@ -301,7 +301,8 @@ public:
         uint16 port;
         /// Port at which the imageServer should listen.
         uint16 imageServerPort;
-        /// the imageServer for char images. should be the evemu server external ip/host
+        /// the imageServer host clients download char images from. should be the evemu server external ip/host.
+        ///  "auto"/empty (and loopback, outside a container) uses the address each client connected to
         std::string imageServer;
     } net;
 

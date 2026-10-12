@@ -83,6 +83,20 @@ std::string TCPConnection::GetAddress()
     return address;
 }
 
+uint32 TCPConnection::GetLocalIP() const
+{
+    MutexLock lock(mMSock);
+    if (mSock == nullptr)
+        return 0;
+
+    sockaddr_in local = sockaddr_in();
+    SOCKLEN_T len = sizeof(local);
+    if ((mSock->getsockname((sockaddr*)&local, &len) != 0) or (local.sin_family != AF_INET))
+        return 0;
+
+    return local.sin_addr.s_addr;
+}
+
 bool TCPConnection::Connect(uint32 rIP, uint16 rPort, char* errbuf)
 {
     if (errbuf)

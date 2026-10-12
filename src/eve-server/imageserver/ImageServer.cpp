@@ -28,6 +28,7 @@
 #include "imageserver/ImageServer.h"
 #include "imageserver/ImageServerListener.h"
 
+#include <algorithm>
 #include <filesystem>
 
 const char *const ImageServer::FallbackURL = "http://image.eveonline.com/";
@@ -41,17 +42,64 @@ const char *const ImageServer::Categories[] = {
 
 const uint32 ImageServer::CategoryCount = 5;
 
-ImageServer::ImageServer()
+// true for hosts that only ever mean "this machine" to whoever resolves them
+static bool IsLoopbackHost(const std::string& host)
 {
+    std::string lower(host);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return (lower == "localhost") or (lower.compare(0, 4, "127.") == 0) or (lower == "::1") or (lower == "[::1]");
+}
+
+// true when this process runs inside a docker/podman container, where the address a connection arrives on is the
+//  container's own (not reachable by players) and a published loopback port may be the only working image server url
+static bool RunningInContainer()
+{
+#ifdef _WIN32
+    return false;
+#else
+    std::error_code ec;
+    return std::filesystem::exists("/.dockerenv", ec) or std::filesystem::exists("/run/.containerenv", ec);
+#endif
+}
+
+ImageServer::ImageServer()
+: _autoHost(false)
+{
+    /* the client downloads every portrait but its own (which it keeps from character creation) from this url,
+     *  so it must name this server as the *client* sees it.  "auto" (or empty) uses the address each client connected to.
+     *  a loopback host is treated the same unless we are in a container, as it sends every remote client to its own machine.
+     */
+    std::string host(sConfig.net.imageServer);
+    host.erase(0, host.find_first_not_of(" \t\r\n"));
+    host.erase(host.find_last_not_of(" \t\r\n") + 1);
+    std::string lower(host);
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    if (lower.empty() or (lower == "auto")) {
+        _autoHost = true;
+        host = "127.0.0.1";
+    } else if (IsLoopbackHost(host)) {
+        if (RunningInContainer()) {
+            sLog.Warning("      ImageServer", "<imageServer> is %s: only a client on the docker host itself can load other characters' portraits.", host.c_str());
+            sLog.Warning("      ImageServer", "  set <imageServer> in eve-server.xml to the address players connect to (the host's LAN/public ip or name).");
+        } else {
+            _autoHost = true;
+        }
+    }
+
     std::stringstream urlBuilder;
-    urlBuilder << "http://" << sConfig.net.imageServer << ":" << sConfig.net.imageServerPort << "/";
+    urlBuilder << "http://" << host << ":" << sConfig.net.imageServerPort << "/";
     _url = urlBuilder.str();
 
     _basePath = sConfig.files.imageDir;
     if (_basePath[_basePath.size() - 1] != '/')
         _basePath += "/";
 
-    sLog.Cyan("      ImageServer", "Image Server URL: %s", _url.c_str());
+    if (_autoHost) {
+        sLog.Cyan("      ImageServer", "Image Server URL: http://<address the client connected to>:%u/ (<imageServer> %s)", (uint32)sConfig.net.imageServerPort,sConfig.net.imageServer.c_str());
+    } else {
+        sLog.Cyan("      ImageServer", "Image Server URL: %s", _url.c_str());
+    }
     sLog.Cyan("      ImageServer", "Image Server path: %s", _basePath.c_str());
 
     // create the base directory and every category directory (existing ones are fine)
@@ -213,9 +261,17 @@ bool ImageServer::ValidateCategory(std::string& category)
     return false;
 }
 
-std::string& ImageServer::url()
+std::string ImageServer::url(uint32 localIP)
 {
-    return _url;
+    if (!_autoHost or (localIP == 0))
+        return _url;
+
+    // localIP is in network byte order, so its bytes are already in dotted order
+    const uint8* ip = reinterpret_cast<const uint8*>(&localIP);
+    std::stringstream urlBuilder;
+    urlBuilder << "http://" << (uint32)ip[0] << "." << (uint32)ip[1] << "." << (uint32)ip[2] << "." << (uint32)ip[3];
+    urlBuilder << ":" << sConfig.net.imageServerPort << "/";
+    return urlBuilder.str();
 }
 
 void ImageServer::Run()

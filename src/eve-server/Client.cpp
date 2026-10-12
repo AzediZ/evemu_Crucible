@@ -2642,6 +2642,11 @@ uint32 Client::GetUserCount()
     return sEntityList.GetClientCount();
 }
 
+std::string Client::GetImageServerURL() const
+{
+    return sImageServer.url(GetLocalIP());
+}
+
 bool Client::_VerifyVersion(VersionExchangeClient& version)
 {
     version.Dump(NET__PRES_REP, "    ");
@@ -2756,8 +2761,10 @@ bool Client::_VerifyLogin(CryptoChallengePacket& ccp)
     // binascii.crc_hqx of marshaled single-element tuple containing 64 zero-bytes string
     server_shake.challenge_responsehash = "55087";
 
-    // the image server to be used by the client to download images
-    server_shake.imageserverurl = sImageServer.url();
+    // the image server to be used by the client to download images (other characters' portraits, logos).
+    //  it must be an address the *client* can reach; a loopback url makes every remote client look on its own machine
+    server_shake.imageserverurl = GetImageServerURL();
+    _log(CLIENT__MESSAGE, "%s: image server url %s", aData.name.c_str(), server_shake.imageserverurl.c_str());
 
     server_shake.macho_version = MachoNetVersion;
     server_shake.boot_version = EVEVersionNumber;

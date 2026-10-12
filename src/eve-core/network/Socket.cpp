@@ -101,6 +101,11 @@ Socket* Socket::accept( sockaddr* addr, PSOCKLEN_T addrlen )
         return nullptr;
 }
 
+int Socket::getsockname( sockaddr* name, PSOCKLEN_T namelen )
+{
+    return ::getsockname( mSock, name, namelen );
+}
+
 int Socket::setopt( int level, int optname, const void* optval, unsigned int optlen )
 {
     return ::setsockopt( mSock, level, optname, (const char*)optval, optlen );

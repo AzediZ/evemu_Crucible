@@ -176,10 +176,8 @@ PyResult CharMgrService::GetImageServerLink(PyCallArgs& call)
 {
     // only called by billboard service for bounties...
     //  serverLink = sm.RemoteSvc('charMgr').GetImageServerLink()
-    std::stringstream urlBuilder;
-    urlBuilder << "http://" << sConfig.net.imageServer << ":" << sConfig.net.imageServerPort << "/";
-
-    return new PyString(urlBuilder.str());
+    // same url the handshake gave this client
+    return new PyString(call.client->GetImageServerURL());
 }
 
 PyResult CharMgrService::GetRecentShipKillsAndLosses(PyCallArgs& call, PyInt* num, std::optional<PyInt*> startIndex)

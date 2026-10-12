@@ -52,7 +52,13 @@ public:
     void Run();
     void Stop();
 
-    std::string& url();
+    /**
+     * the url a client downloads images from.
+     * @param localIP  server address (network byte order) the client's game connection reached, 0 if unknown.
+     *  used as the host when <imageServer> is "auto" (or empty), or is a loopback address while the server does not run in a
+     *  container, since a loopback url sends every remote client to its own machine
+     */
+    std::string url(uint32 localIP = 0);
 
     void ReportNewImage(uint32 accountID, std::shared_ptr<std::vector<char> > imageData);
     // saves the portrait last uploaded by accountID as characterID's picture.  false if none was received or it could not be written
@@ -80,7 +86,8 @@ private:
     std::shared_ptr<boost::asio::detail::thread> _ioThread;
     std::shared_ptr<boost::asio::io_context> _io;
     std::shared_ptr<ImageServerListener> _listener;
-    std::string _url;
+    std::string _url;           // url with the configured (or fallback) host
+    bool _autoHost;             // true: the host is the address each client connected to
     std::string _basePath;
     boost::asio::detail::mutex _limboLock;
 

@@ -488,7 +488,15 @@ boolean can use either 0/1 OR true/false.
 
     <net>
         <port>26000</port>
-        <!-- Set to IP address which CLIENT can use to access port 26001 on server. -->
+        <!-- Host the CLIENTS use to download portraits/logos from imageServerPort (tcp) on this server.
+             Every client downloads every portrait but its own from here, so it must be an address
+             the players' machines can reach - usually the same host they put in their /server: argument.
+               auto (or empty)     : use the address each client connected to (right for a server that is not behind NAT).
+               localhost/127.x.x.x : treated as auto, except inside a docker/podman container where it is sent as is
+                                     (then only a client on the docker host itself sees other players' portraits).
+               anything else       : sent as is.  Required behind NAT/port forwarding and for containers
+                                     (bridge networking): the docker host's LAN ip, public ip or dns name.
+             Open/publish imageServerPort to the players as well as port. -->
         <imageServer>127.0.0.1</imageServer>
         <imageServerPort>26001</imageServerPort>
     </net>
