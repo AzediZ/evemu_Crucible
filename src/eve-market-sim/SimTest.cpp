@@ -56,6 +56,11 @@ int EconomyTest()
     double k(std::log(2.0) / 3.0);
     T_CHECK(std::fabs(Econ::OUStep(1.0, 0.0, k, 3.0, 0.0, 0.0) - 0.5) < 1e-9);
     T_CHECK(std::fabs(Econ::OUStep(1.0, 0.0, k, 1000.0, 0.0, 0.0)) < 1e-9);
+    // the OU sigma for a calibrated volatility:  the stationary 5-day move is volatility^2 x 5;  no reversion, no change
+    double hs(Econ::HorizonSigma(0.02, k));
+    T_CHECK(std::fabs(hs * hs * (1.0 - std::exp(-5.0 * k)) / k - 0.02 * 0.02 * 5.0) < 1e-12);
+    T_CHECK((hs > 0.02 * 1.29) and (hs < 0.02 * 1.31));
+    T_CHECK(std::fabs(Econ::HorizonSigma(0.02, 0.0) - 0.02) < 1e-12);
     // demand:  elasticity at the reference ask, budget scales it
     T_CHECK(std::fabs(Econ::DemandRate(10.0, 1.0, 1.0, 1.0, 110.0, 110.0, 1.0) - 10.0) < 1e-9);
     T_CHECK(std::fabs(Econ::DemandRate(10.0, 1.0, 1.0, 1.0, 220.0, 110.0, 1.0) - 5.0) < 1e-9);

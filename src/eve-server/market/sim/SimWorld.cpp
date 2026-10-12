@@ -276,7 +276,9 @@ void World::Build(int64_t now)
         if (!(c.costRef > 0.0))
             c.wc = 0.0;
         double vol(t.volatility > 0.0f ? t.volatility : 0.05);
-        c.sigma = m_p.marketNoise * vol;
+        // the calibrated volatility is measured over Econ::VolatilityHorizonDays;  V's mean reversion would take a
+        //  quarter of it off at that horizon, so sigma is scaled to give it back (MarketNoise 1 = the calibration)
+        c.sigma = m_p.marketNoise * Econ::HorizonSigma(vol, Ln2 / std::max(0.1, m_p.fairValueHalfLifeDays));
         // the day's transient move of the quotes (bounce):  at most 3/4 of the half spread, so buying on a low day and
         //  selling on a high one still loses against the spread
         c.sigmaT = std::min(m_p.transientNoise * vol, 0.75 * c.h);
@@ -1885,7 +1887,7 @@ bool World::BackfillSeries(uint32_t regionID, uint16_t typeID, int days, int32_t
     const TypeData& t(*m_static.Type(typeID));
     // a log-OU path from the anchor, bent so that it ends at today's V (PLAN 7.5)
     double kappa(Ln2 / std::max(0.1, m_p.fairValueHalfLifeDays));
-    double sigma(std::max(0.005, (double)t.volatility));
+    double sigma(Econ::HorizonSigma(std::max(0.005, (double)t.volatility), kappa));
     double lnA(c.lnAnchor);
     std::vector<double> x(days);
     x[0] = lnA + sigma * Rng::Normal(Rng::Hash64(m_p.seed, Key(c), hBackfill, 0));

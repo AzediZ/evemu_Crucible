@@ -189,7 +189,7 @@ boolean can use either 0/1 OR true/false.
         <MinHalfSpread>0.015</MinHalfSpread><!-- float - the smallest half spread (asks above, bids below fair value) -->
         <MaxPriceDeviation>2.0</MaxPriceDeviation><!-- float - Kmax: stock pressure moves the fair value at most this factor from its anchor -->
         <FairValueHalfLifeDays>3</FairValueHalfLifeDays><!-- float -->
-        <MarketNoise>1.0</MarketNoise><!-- float - day to day noise of the fair value, x the calibrated volatility (plan 0.5; 1.0 matches the observed noise) -->
+        <MarketNoise>1.0</MarketNoise><!-- float - noise of the fair value, x the calibrated volatility (5-day horizon, corrected for mean reversion; 1.0 reproduces it; plan 0.5) -->
         <TransientNoise>1.0</TransientNoise><!-- float - the quotes' daily bounce, x the volatility, at most 3/4 of the half spread -->
         <PlayerTradeWeight>0.1</PlayerTradeWeight><!-- float - how much trades with players move the fair value (0 for a counterparty with over 20% of the day's volume) -->
         <BuyBand>0.10</BuyBand><!-- float - the sim's consumers buy player sell orders up to fair value + max(BuyBand, half spread) -->
