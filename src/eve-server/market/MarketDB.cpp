@@ -204,8 +204,8 @@ static void FillOrderInfo(DBResultRow& row, Market::OrderInfo& oInfo)
     oInfo.accountKey    = row.GetUInt(10);
     oInfo.issued        = row.GetInt64(11);
     oInfo.escrow        = row.GetDouble(12);
-    // unsigned column.  the station range (-1) is stored as 4294967295
-    oInfo.orderRange    = (int32)row.GetUInt(13);
+    // the station range is -1 (4294967295 before the column was signed)
+    oInfo.orderRange    = (int32)row.GetInt64(13);
     oInfo.minVolume     = row.GetUInt(14);
     oInfo.solarSystemID = row.GetUInt(15);
     oInfo.duration      = row.GetUInt(16);
@@ -360,7 +360,7 @@ uint32 MarketDB::StoreOrder(Market::SaveData &data) {
         " bid, price, escrow, minVolume, volEntered, volRemaining,"
         " issued, contraband, duration, jumps, isCorp, accountKey, memberID"
         " ) VALUES ("
-        "    %u, %u, %u, %u, %u, %u,"
+        "    %u, %u, %u, %u, %u, %i,"
         "    %u, %.2f, %.2f, %u, %u, %u,"
         "    %lli, %u, %u, %u, %u, %u, %u"
         " )",

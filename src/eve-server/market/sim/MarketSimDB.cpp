@@ -607,9 +607,9 @@ bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids,
     // posts:  the sim's orders are npc corp orders, station range for asks, 90 days, no escrow (the sim's ledger holds it)
     std::vector<std::string> rows;
     for (auto& n : batch.posts) {
-        uint32 range((n.range < 0) ? 4294967295u : (uint32)n.range);
-        rows.push_back(Fmt("(%u,%u,%u,%u,%u,%u,%u,%s,0,%u,%u,%u,%lld,0,90,1,0,1000,0)", n.typeID, n.ownerID, n.regionID, n.stationID,
-                           n.systemID, range, n.bid ? 1 : 0, IskText(n.price).c_str(), n.minVolume, n.qty, n.qty, (long long)ToFileTime(n.issued)));
+        // orderRange is signed:  the station range is -1
+        rows.push_back(Fmt("(%u,%u,%u,%u,%u,%i,%u,%s,0,%u,%u,%u,%lld,0,90,1,0,1000,0)", n.typeID, n.ownerID, n.regionID, n.stationID,
+                           n.systemID, (int)n.range, n.bid ? 1 : 0, IskText(n.price).c_str(), n.minVolume, n.qty, n.qty, (long long)ToFileTime(n.issued)));
     }
     static const char* postHead = "INSERT INTO mktOrders (typeID, ownerID, regionID, stationID, solarSystemID, orderRange, bid, price,"
                                   " escrow, minVolume, volEntered, volRemaining, issued, contraband, duration, jumps, isCorp, accountKey,"
@@ -717,7 +717,7 @@ void MarketSimDB::PlayerOrders(uint32 regionID, uint16 typeID, std::vector<Playe
         o.price = (Cents)std::llround(row.GetDouble(5) * 100.0);
         o.qty = row.GetUInt(6);
         o.minVolume = row.GetUInt(7);
-        o.range = (int32)row.GetUInt(8);
+        o.range = (int32)row.GetInt64(8);       // -1 (station), or 4294967295 before the column was signed
         o.issued = ToUnix(row.GetInt64(9));
         (o.bid ? bids : asks).push_back(o);
     }
