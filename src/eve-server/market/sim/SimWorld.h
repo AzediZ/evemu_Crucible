@@ -452,6 +452,7 @@ namespace MktSim {
             double   lastWanted     = 0.0;                  // m3 a day the supply curves asked for at the last step
             double   lastMined      = 0.0;                  // and what the fleet could do of it
             double   lastCapacity   = 0.0;
+            std::vector<double> lastNeed;                   // each output's need at the last step (units a day)
             std::vector<double> lastRel;                    // each ore mined at the last step / its reference m3
             int64_t  since          = 0;
             double   valuePerDay    = 0.0;                  // isk its reference fleet brings in a day

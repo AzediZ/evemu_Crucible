@@ -331,7 +331,16 @@ namespace {
             for (int tick = 0; tick < 96; ++tick) {
                 int64_t t(StartTime + (int64_t)day * SecondsPerDay + tick * 900);
                 market.SetNow(t);
-                world.Step(t);
+                /* the server steps every tick (MarketSimMgr::Process), so nothing due stays behind.  One step per 15
+                 *  minutes, capped at maxOrderOpsPerStep, falls behind on the full calibration (about 400k order ops a
+                 *  day):  the harness then simulated about half a day per day, and 120 'days' were 58.  Step until
+                 *  the queue has caught up with t */
+                for (int i = 0; i < 100000; ++i) {
+                    uint64_t before(world.CellVisits());
+                    world.Step(t);
+                    if ((world.Backlog(t) == 0) or (world.CellVisits() == before))
+                        break;
+                }
                 if ((tick == 48) and opt.bots) {
                     Player& before(market.GetPlayer(Dumper));
                     // (e) dumper:  ten days of demand into the sim's bids, at any price
@@ -574,6 +583,23 @@ namespace {
 
         printActors("at the end");
         if (opt.actors) {
+            {
+                std::map<uint16_t, double> expect;
+                for (auto& c : world.Cells())
+                    if (c.supply == Supply::Manufactured)
+                        expect[c.typeID] += std::max(0.0, c.dcGen + c.lossRate + c.minerRate - c.dropRate);
+                double sumE(0.0), sumM(0.0);
+                for (auto& e : expect) {
+                    std::map<uint16_t, Units>::const_iterator m = world.Made().find(e.first);
+                    double made((m == world.Made().end()) ? 0.0 : (double)m->second / opt.days);
+                    const TypeData& t(*data.Type(e.first));
+                    sumE += e.second * t.refPrice;
+                    sumM += made * t.refPrice;
+                    if (t.categoryID == Category::Ship)
+                        std::printf("    ship %u:  expected %.3g/day, made %.3g/day\n", e.first, e.second, made);
+                }
+                std::printf("  T1 made / expected (isk):  %.3f\n", sumM / std::max(1.0, sumE));
+            }
             std::printf("  per day over the run:  bought by actors (materials, ships), made\n");
             for (auto& cur : world.ActorBought()) {
                 const TypeData* t(data.Type(cur.first));

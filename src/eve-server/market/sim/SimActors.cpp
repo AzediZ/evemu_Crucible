@@ -594,7 +594,11 @@ Units World::SellToMaker(uint32_t actorID, Cell& c, Units q, Cents minPrice, int
         return 0;
     uint32_t mm(c.mm);
     Units sold(0);
-    // its bids hold the money:  each unit bought frees the bid's escrow, the wallet pays the rest of the price
+    /* its bids hold the money:  each unit bought frees the bid's escrow and the wallet pays the rest of the internal
+     *  price.  what the wallet can't top up is paid at the bid (its money is all in bids:  the supplier gets the bid,
+     *  like a player selling) */
+    Cents bidValue(0);
+    Units atBid(0), atPrice(0);
     for (int i = 0; (i < c.levels) and (sold < q); ++i) {
         if (c.bid[i] == 0)
             continue;
@@ -602,27 +606,43 @@ Units World::SellToMaker(uint32_t actorID, Cell& c, Units q, Cents minPrice, int
         if ((itr == m_orders.end()) or (itr->second.qty == 0))
             continue;
         SimOrder& o(itr->second);
-        Units k(std::min<Units>(q - sold, o.qty));
+        Units k(std::min<Units>(q - sold, o.qty)), full(k);
         if (price > o.price) {
             const Ledger::Account* acct(m_ledger.FindAcct(mm));
             Cents wallet((acct == nullptr) ? 0 : acct->wallet);
-            k = std::min<Units>(k, wallet / (price - o.price));
+            full = std::min<Units>(k, wallet / (price - o.price));
         }
-        Cents freed(Econ::MulCents(o.price, k)), value(Econ::MulCents(price, k));
-        if ((k <= 0) or (freed < 0) or (value < 0))
+        Cents freed(Econ::MulCents(o.price, full)), value(Econ::MulCents(price, full));
+        if ((freed < 0) or (value < 0))
             break;
-        m_ledger.Unreserve(mm, freed);
-        if (!m_ledger.Transfer(mm, actorID, value)) {
-            m_ledger.Reserve(mm, freed);
-            break;
+        if (full > 0) {
+            m_ledger.Unreserve(mm, freed);
+            if (!m_ledger.Transfer(mm, actorID, value)) {
+                m_ledger.Reserve(mm, freed);
+                full = 0;
+            }
         }
+        Units rest(k - full);
+        Cents restValue(Econ::MulCents(o.price, rest));
+        if ((rest > 0) and ((restValue < 0) or !m_ledger.PayFromReserved(mm, actorID, restValue)))
+            rest = 0;
+        k = full + rest;
+        if (k <= 0)
+            break;
         m_ledger.MoveGoods(actorID, mm, (uint16_t)c.nodeID, c.typeID, k, false);
         o.qty -= (uint32_t)k;
         sold += k;
+        atPrice += full;
+        atBid += rest;
+        bidValue += restValue;
         if (o.qty == 0)
             CancelOrderNow(o.orderID);
         else
             QueueAlter(o);
+    }
+    if (atBid > 0) {
+        Print(c, std::max<Cents>(1, bidValue / atBid), atBid);
+        Changed(c);
     }
     // beyond its bids, out of its free money (keeping a tenth of its working money for fees)
     if (sold < q) {
@@ -633,10 +653,11 @@ Units World::SellToMaker(uint32_t actorID, Cell& c, Units q, Cents minPrice, int
         if ((k > 0) and (value >= 0) and m_ledger.Transfer(mm, actorID, value)) {
             m_ledger.MoveGoods(actorID, mm, (uint16_t)c.nodeID, c.typeID, k, false);
             sold += k;
+            atPrice += k;
         }
     }
-    if (sold > 0) {
-        Print(c, price, sold);
+    if (atPrice > 0) {
+        Print(c, price, atPrice);
         Changed(c);
     }
     return sold;
@@ -887,8 +908,11 @@ void World::MinerStep(Actor& a, int64_t t, double dt)
         const Cell& mc(m_cells[plan.outputs[m]]);
         double gap(mc.targetStock - (double)MakerStock(mc) - (double)Held(a.actorID, node, mc.typeID));
         need[m] = std::max(0.0, mc.dBar + gap / std::max(0.1, m_p.restockDays));
+        // a mineral in glut still counts a little:  the fit then won't pick ores for what nobody needs
+        need[m] = std::max(need[m], 0.05 * plan.need[m]);
     }
     std::vector<double> x(Prod::FitMix(plan.yield, need, plan.mix, 150));
+    plan.lastNeed = need;
     double wsum(0.0);
     for (auto v : x)
         wsum += v;
@@ -1077,19 +1101,29 @@ void World::ManufacturerStep(Actor& a, int64_t t, double /*dt*/)
         std::vector<std::pair<uint16_t, Units>> perRun;
         for (auto& in : type.bom)
             perRun.push_back(std::make_pair(in.first, std::max<Units>(1, (Units)std::llround(in.second * (double)portion))));
+        /* only as many runs as every input allows (what it holds and what the market maker can spare):  inputs bought for
+         *  a job that then can't start would sit idle while others need them.  a shortage shows in the input's stock */
+        Units feasible(runs);
         for (auto& in : perRun) {
-            Units need(in.second * runs - Held(a.actorID, node, in.first));
+            Cell* ic(FindCell(node, in.first));
+            Units avail(Held(a.actorID, node, in.first) + ((ic != nullptr) ? Spare(*ic, in.second * runs) : 0));
+            feasible = std::min<Units>(feasible, avail / in.second);
+        }
+        if (feasible <= 0)
+            continue;
+        for (auto& in : perRun) {
+            Units need(in.second * feasible - Held(a.actorID, node, in.first));
             if (need <= 0)
                 continue;
             Cell* ic(FindCell(node, in.first));
             if (ic != nullptr)
                 BuyAtNode(a.actorID, *ic, need, InternalBuy(*ic), Spare(*ic, need), t);
         }
-        Units feasible(runs);
+        feasible = runs;
         for (auto& in : perRun)
             feasible = std::min<Units>(feasible, Held(a.actorID, node, in.first) / in.second);
         if (feasible <= 0)
-            continue;           // short of an input:  its cell saw the shortfall (derived demand)
+            continue;           // the money ran out
         SimJob job;
         job.actorID = a.actorID;
         job.nodeID = node;

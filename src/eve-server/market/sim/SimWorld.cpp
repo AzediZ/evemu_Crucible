@@ -754,11 +754,13 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
     intent += c.lossNew;
     c.lossNew = 0.0;
 
-    Units filled(0), unfilled(0);
+    Units filled(0), unfilled(0), lossUnits(0);
     if (wanted > 0.0) {
         // arrivals of 'lot' units.  many arrivals are grouped (at most 64 walks per visit)
         uint64_t arrivals(Rng::Poisson((wanted - lossTake) / (double)c.lot, H(c, t, hArrivals)));
-        arrivals += (uint64_t)Rng::RoundRandom(lossTake / (double)c.lot, H(c, t, hArrivals, 1));
+        uint64_t lossArrivals((uint64_t)Rng::RoundRandom(lossTake / (double)c.lot, H(c, t, hArrivals, 1)));
+        arrivals += lossArrivals;
+        lossUnits = (Units)lossArrivals * c.lot;
         uint64_t groups(std::min<uint64_t>(arrivals, 64));
         Units total((Units)arrivals * c.lot);
         for (uint64_t g = 0; g < groups; ++g) {
@@ -820,7 +822,7 @@ void World::ConsumerDemand(Cell& c, int64_t t, double dt, double anchor)
     }
     // the replacements bought first come off what consumers still want;  the rest fades
     if (c.lossWant > 0.0) {
-        c.lossWant = std::max(0.0, c.lossWant - std::min((double)filled, lossTake));
+        c.lossWant = std::max(0.0, c.lossWant - (double)std::min(filled, lossUnits));
         c.lossWant *= std::exp(-dt * Ln2 / std::max(0.1, m_p.replaceHalfLifeDays));
         if (c.lossWant < 1e-6)
             c.lossWant = 0.0;
@@ -1939,7 +1941,7 @@ std::string World::ActorInfo(uint32_t actorID) const
                 double got(0.0);
                 for (size_t o = 0; (o < plan.ores.size()) and (o < plan.mined.size()); ++o)
                     got += plan.yield[o][m] * plan.mined[o];
-                out << Fmt("  %u %.4g/%.4g/%.4g", m_cells[plan.outputs[m]].typeID, plan.need[m], plan.supply[m], (plan.since > 0) ? got / days : 0.0);
+                out << Fmt("  %u %.4g/%.4g/%.4g (now %.4g)", m_cells[plan.outputs[m]].typeID, plan.need[m], plan.supply[m], (plan.since > 0) ? got / days : 0.0, (m < plan.lastNeed.size()) ? plan.lastNeed[m] : 0.0);
             }
             out << "\n";
         }
