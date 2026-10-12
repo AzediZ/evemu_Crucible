@@ -127,3 +127,4 @@ log.ini
 utils/missiondata/cache/
 utils/missiondata/out/reports.json
 utils/missiondata/__pycache__/
+utils/type-attributes/__pycache__/
