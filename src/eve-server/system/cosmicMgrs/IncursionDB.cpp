@@ -12,7 +12,7 @@
 void IncursionDB::GetSiteTypes(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,
-        "SELECT siteTypeID, siteName, sceneType, designFleet, iskReward, lpReward, influence"
+        "SELECT siteTypeID, siteName, sceneType, designFleet, iskReward, lpReward, influence, secBand, objectiveTypeID"
         " FROM incSiteTypes"))
         _log(DATABASE__ERROR, "Error in GetSiteTypes query: %s", res.error.c_str());
 }

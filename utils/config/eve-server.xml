@@ -216,18 +216,18 @@ boolean can use either 0/1 OR true/false.
     </cosmic>
 
     <incursion>
-        <Enabled>true</Enabled><!-- bool  Sansha incursions (first cut: vanguard sites only, no EWAR or system penalty yet) -->
+        <Enabled>true</Enabled><!-- bool  Sansha incursions (vanguard, assault, headquarters and mothership sites.  no system penalty yet) -->
         <AutoStart>true</AutoStart><!-- bool  start incursions automatically.  GMs can always use /incursion -->
         <MaxActive>1</MaxActive><!-- incursions running at once -->
-        <FleetSize>10</FleetSize><!-- pilots the sites are scaled for.  sites are built for 10, so 10 gives full sites; lower it for small fleets -->
+        <FleetScale>100</FleetScale><!-- percent of full fleet size the sites are scaled to (vanguard 10 pilots, assault 20, headquarters 40, mothership 80).  lower it for small fleets -->
         <Strength>100</Strength><!-- percent HP and damage of Sansha ships -->
-        <SitesPerSystem>3</SitesPerSystem><!-- live vanguard sites per vanguard system -->
+        <SitesPerSystem>3</SitesPerSystem><!-- live sites per vanguard, assault and headquarters system -->
         <SiteRespawn>180</SiteRespawn><!-- seconds before a cleared site is replaced -->
         <MinSecurity>0.45</MinSecurity><!-- float  lowest system security an automatic incursion may cover -->
         <StartDelay>60</StartDelay><!-- minutes between one incursion ending and the next starting -->
-        <MobilizeAfter>72</MobilizeAfter><!-- hours until the incursion turns from established to mobilizing -->
+        <MobilizeAfter>120</MobilizeAfter><!-- hours until the incursion turns from established to mobilizing -->
         <Lifetime>168</Lifetime><!-- hours before the Sansha withdraw on their own -->
-        <WithdrawTime>60</WithdrawTime><!-- minutes the withdrawal lasts before the incursion ends -->
+        <WithdrawTime>1440</WithdrawTime><!-- minutes the withdrawal lasts before the incursion ends.  the mothership appears for this long when influence is broken -->
         <RegenDelay>30</RegenDelay><!-- minutes without a cleared site before Sansha influence starts to recover -->
         <RegenRate>1.0</RegenRate><!-- float  influence recovered, percent per hour -->
     </incursion>

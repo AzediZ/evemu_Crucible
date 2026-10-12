@@ -10,4 +10,4 @@
 
 
 COMMAND( incursion, Acct::Role::ADMIN,
-         "start [here|constellationID] | end [here|constellationID] | info | influence (0-100) [here|constellationID] - control Sansha incursions")
+         "start [here|constellationID] | end [here|constellationID] | info | influence (0-100) [here|constellationID] | mothership [here|constellationID] - control Sansha incursions")

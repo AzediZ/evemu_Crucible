@@ -5,7 +5,7 @@
   * @date:          12 October 2026
   *
   *  see IncursionMgr.h for what this does and doesnt cover yet.
-  *  site layouts, rewards and the Sansha ship stats are approximations (incSite* tables and the incursions migration)
+  *  ship stats and rewards follow the EVE University wiki; wave sizes and layouts are approximations (incSite* tables and the incursions migration)
   */
 
 #include <algorithm>
@@ -53,13 +53,14 @@ static size_t RandomIndex(size_t count)
     return (idx < count ? idx : count - 1);
 }
 
-static const char* SceneName(uint8 sceneType)
+static const char* SceneName(uint32 sceneType)
 {
     switch (sceneType) {
         case Incursion::scenesType::headquarters:   return "Headquarters";
         case Incursion::scenesType::assault:        return "Assault";
         case Incursion::scenesType::vanguard:       return "Vanguard";
         case Incursion::scenesType::staging:        return "Staging";
+        case Incursion::scenesType::boss:           return "Mothership";
     }
     return "Unknown";
 }
@@ -126,6 +127,8 @@ void IncursionMgr::LoadSiteTypes()
             type.iskReward = row.GetUInt(4);
             type.lpReward = row.GetUInt(5);
             type.influence = row.GetFloat(6);
+            type.secBand = row.GetUInt(7);
+            type.objectiveTypeID = row.GetUInt(8);
             type.waves = 0;
             type.designNPCs = 0;
         if (type.designFleet < 1)
@@ -166,6 +169,7 @@ void IncursionMgr::LoadIncursions()
             inc.startTime = row.GetUInt(5);
             inc.stateTime = row.GetUInt(6);
             inc.lastProgress = row.GetUInt(7);
+            inc.endPending = false;
         m_incursions[inc.incursionID] = inc;
     }
 
@@ -217,8 +221,9 @@ void IncursionMgr::Process()
     std::vector<uint32> ended;
     for (auto& cur : m_incursions) {
         ProcessIncursion(cur.second, now, dt);
-        if ((cur.second.state == Incursion::State::Withdrawing)
-        and (now - cur.second.stateTime >= sConfig.incursion.WithdrawTime * 60u))
+        if (cur.second.endPending
+        or ((cur.second.state == Incursion::State::Withdrawing)
+        and (now - cur.second.stateTime >= sConfig.incursion.WithdrawTime * 60u)))
             ended.push_back(cur.first);
     }
     for (auto cur : ended)
@@ -241,10 +246,28 @@ void IncursionMgr::Process()
         }
         site.npcs.erase(std::remove_if(site.npcs.begin(), site.npcs.end(),
                         [pSys](uint32 id) { return pSys->GetSE(id) == nullptr; }), site.npcs.end());
+
+        std::map<uint16, IncSiteType>::iterator itr = m_siteTypes.find(site.siteTypeID);
+        if ((itr != m_siteTypes.end()) and (site.objectiveID != 0)) {
+            // the objective is down; whatever is left goes with the site
+            if (pSys->GetSE(site.objectiveID) == nullptr) {
+                CompleteSite(site, pSys);
+                done.push_back(cur.first);
+                continue;
+            }
+            // the mothership keeps calling in reinforcements while it lives
+            if (itr->second.sceneType == Incursion::scenesType::boss) {
+                if (now >= site.nextWave) {
+                    if (site.npcs.size() < itr->second.designNPCs)
+                        SpawnWave(site, pSys);
+                    site.nextWave = now + MakeRandomInt(60, 300);
+                }
+                continue;
+            }
+        }
         if (!site.npcs.empty())
             continue;
 
-        std::map<uint16, IncSiteType>::iterator itr = m_siteTypes.find(site.siteTypeID);
         if ((itr != m_siteTypes.end()) and (site.wave < itr->second.waves)) {
             SpawnWave(site, pSys);
             continue;
@@ -256,13 +279,19 @@ void IncursionMgr::Process()
     for (auto cur : done)
         m_sites.erase(cur);
 
-    // keep vanguard systems stocked while they're loaded
+    // keep the incursion's systems stocked while they're loaded.  once influence is broken only the mothership is left
     for (auto& cur : m_incursions) {
-        if (cur.second.state == Incursion::State::Withdrawing)
+        IncData& inc = cur.second;
+        if (inc.endPending)
             continue;
-        for (auto sys : cur.second.systems)
-            if (sys.second == Incursion::scenesType::vanguard)
-                TopUpSites(cur.second, sys.first, now);
+        if (inc.state != Incursion::State::Withdrawing) {
+            for (auto sys : inc.systems)
+                TopUpSites(inc, sys.first, sys.second, now);
+        } else if (inc.influence <= 0) {
+            for (auto sys : inc.systems)
+                if (sys.second == Incursion::scenesType::headquarters)
+                    TopUpSites(inc, sys.first, Incursion::scenesType::boss, now);
+        }
     }
 
     if (now - m_lastSave >= 60) {
@@ -285,14 +314,12 @@ void IncursionMgr::ProcessIncursion(IncData& inc, uint32 now, uint32 dt)
         _log(COSMIC_MGR__MESSAGE, "IncursionMgr - incursion %u in %s is now mobilizing.", inc.incursionID, IncursionDB::GetConstellationName(inc.constellationID).c_str());
     }
 
-    if ((inc.influence <= 0) or (now - inc.startTime >= sConfig.incursion.Lifetime * 3600u)) {
+    // zero influence alone doesn't end it; a headquarters site has to be run as well (CompleteSite)
+    if (now - inc.startTime >= sConfig.incursion.Lifetime * 3600u) {
         inc.state = Incursion::State::Withdrawing;
         inc.stateTime = now;
         Save(inc);
-        std::string msg = "Sansha's Nation is withdrawing from ";
-        msg += IncursionDB::GetConstellationName(inc.constellationID);
-        msg += (inc.influence <= 0 ? ". Their influence there has been broken." : ".");
-        Broadcast(msg);
+        Broadcast("Sansha's Nation is withdrawing from " + IncursionDB::GetConstellationName(inc.constellationID) + ".");
         return;
     }
 
@@ -304,7 +331,7 @@ void IncursionMgr::ProcessIncursion(IncData& inc, uint32 now, uint32 dt)
     }
 }
 
-void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 now)
+void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 sceneType, uint32 now)
 {
     if (!sEntityList.IsSystemLoaded(systemID))
         return;
@@ -312,21 +339,33 @@ void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 now)
     if ((cd != m_siteCooldown.end()) and (now < cd->second))
         return;
 
+    // live sites of this kind here.  one mothership at a time
     std::map<uint16, uint8> count;
     uint8 total(0);
-    for (auto& cur : m_sites)
-        if (cur.second.systemID == systemID) {
-            ++count[cur.second.siteTypeID];
-            ++total;
-        }
-    if (total >= sConfig.incursion.SitesPerSystem)
+    for (auto& cur : m_sites) {
+        if (cur.second.systemID != systemID)
+            continue;
+        std::map<uint16, IncSiteType>::iterator itr = m_siteTypes.find(cur.second.siteTypeID);
+        if ((itr == m_siteTypes.end()) or (itr->second.sceneType != sceneType))
+            continue;
+        ++count[cur.second.siteTypeID];
+        ++total;
+    }
+    if (total >= (sceneType == Incursion::scenesType::boss ? 1 : sConfig.incursion.SitesPerSystem))
         return;
 
-    // the vanguard site type with the fewest live copies here, random among ties
+    SystemManager* pSys = sEntityList.FindOrBootSystem(systemID);
+    if (pSys == nullptr)
+        return;
+    bool highSec = (pSys->GetSystemSecurityRating() >= 0.45f);
+
+    // the site type of this kind with the fewest live copies here, random among ties
     std::vector<uint16> pick;
     uint8 best(255);
     for (auto& cur : m_siteTypes) {
-        if (cur.second.sceneType != Incursion::scenesType::vanguard)
+        if (cur.second.sceneType != sceneType)
+            continue;
+        if (((cur.second.secBand == 1) and !highSec) or ((cur.second.secBand == 2) and highSec))
             continue;
         uint8 have = count[cur.first];
         if (have < best) {
@@ -337,10 +376,6 @@ void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 now)
             pick.push_back(cur.first);
     }
     if (pick.empty())
-        return;
-
-    SystemManager* pSys = sEntityList.FindOrBootSystem(systemID);
-    if (pSys == nullptr)
         return;
 
     // one site per system per tick.  on failure, wait a minute before trying again
@@ -412,6 +447,8 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
         site.wave = 0;
         site.spawned = 0;
         site.beaconID = sig.sigItemID;
+        site.objectiveID = 0;
+        site.nextWave = TimeNow() + MakeRandomInt(60, 300);
         site.position = sig.position;
         site.sigID = sig.sigID;
 
@@ -440,15 +477,18 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
 
 void IncursionMgr::SpawnWave(IncLiveSite& site, SystemManager* pSys)
 {
-    ++site.wave;
     std::map<uint16, IncSiteType>::iterator itr = m_siteTypes.find(site.siteTypeID);
     if (itr == m_siteTypes.end())
         return;
     IncSiteType& type = itr->second;
+    // mothership reinforcements cycle through waves 2+
+    if ((type.sceneType == Incursion::scenesType::boss) and (site.wave >= type.waves) and (type.waves > 1))
+        site.wave = 1;
+    ++site.wave;
 
     // scale the wave down for smaller fleets.  each entry is rounded up or down at random,
     //  so over a site the ship count matches the fleet size on average.  a wave never comes up empty.
-    float ratio = (float)sConfig.incursion.FleetSize / type.designFleet;
+    float ratio = sConfig.incursion.FleetScale / 100.0f;
     if (ratio > 1.0f)
         ratio = 1.0f;
     if (ratio < 0.01f)
@@ -466,6 +506,9 @@ void IncursionMgr::SpawnWave(IncLiveSite& site, SystemManager* pSys)
         uint8 count = (uint8)want;
         if (MakeRandomFloat(0.0, 1.0) < (want - count))
             ++count;
+        // the objective always shows up
+        if (obj.typeID == type.objectiveTypeID)
+            count = obj.quantity;
         if (count > 0) {
             spawn.push_back(std::make_pair(&obj, count));
             total += count;
@@ -513,16 +556,11 @@ void IncursionMgr::SpawnWave(IncLiveSite& site, SystemManager* pSys)
 
             // must happen before the NPC is built; it reads these in its constructor
             if (strength != 1.0f) {
-                const uint16 scaled[] = { AttrShieldCapacity, AttrArmorHP, AttrHP, AttrEntityShieldBoostAmount, AttrDamageMultiplier };
+                const uint16 scaled[] = { AttrShieldCapacity, AttrArmorHP, AttrHP, AttrEntityShieldBoostAmount,
+                                          AttrDamageMultiplier, AttrMissileDamageMultiplier, AttrNpcRemoteShieldBoostAmount };
                 for (auto attr : scaled)
                     if (iRef->HasAttribute(attr))
                         iRef->SetAttribute(attr, iRef->GetAttribute(attr).get_float() * strength, false);
-                // missile damage comes from the missile itself, so fire faster or slower instead
-                if (iRef->HasAttribute(AttrMissileLaunchDuration)) {
-                    float duration = iRef->GetAttribute(AttrMissileLaunchDuration).get_float();
-                    if (duration > 100)
-                        iRef->SetAttribute(AttrMissileLaunchDuration, duration / strength, false);
-                }
             }
 
             NPC* pNPC = new NPC(iRef, pSys->GetServiceMgr(), pSys, data);
@@ -538,6 +576,8 @@ void IncursionMgr::SpawnWave(IncLiveSite& site, SystemManager* pSys)
 
             site.npcs.push_back(iRef->itemID());
             ++site.spawned;
+            if (obj->typeID == type.objectiveTypeID)
+                site.objectiveID = iRef->itemID();
         }
     }
 
@@ -557,6 +597,7 @@ void IncursionMgr::CompleteSite(IncLiveSite& site, SystemManager* pSys)
 
     std::string place = IncursionDB::GetConstellationName(pSys->GetConstellationID());
     double influence(0);
+    bool boss(false);
     std::map<uint32, IncData>::iterator iItr = m_incursions.find(site.incursionID);
     if (iItr != m_incursions.end()) {
         IncData& inc = iItr->second;
@@ -565,6 +606,14 @@ void IncursionMgr::CompleteSite(IncLiveSite& site, SystemManager* pSys)
             inc.influence = 0;
         inc.lastProgress = now;
         influence = inc.influence;
+        if (type.sceneType == Incursion::scenesType::boss) {
+            inc.endPending = true;
+            Broadcast("The Sansha mothership " + type.name + " has been destroyed in " + sDataMgr.GetSystemName(site.systemID) + ".");
+        } else if ((type.sceneType == Incursion::scenesType::headquarters) and (inc.influence <= 0)
+               and (inc.state != Incursion::State::Withdrawing)) {
+            BreakInfluence(inc, now);
+            boss = true;
+        }
         Save(inc);
     }
 
@@ -578,6 +627,9 @@ void IncursionMgr::CompleteSite(IncLiveSite& site, SystemManager* pSys)
         double share = (double)type.designFleet * site.spawned / (type.designNPCs > 0 ? type.designNPCs : 1) / pilots.size();
         if (share > 1.0)
             share = 1.0;
+        // low and null-sec pay 10/7 of the high-sec reward (wiki: 15M vs 10.395M for vanguards, and so on)
+        if (pSys->GetSystemSecurityRating() < 0.45f)
+            share *= 10.0 / 7.0;
         double isk = type.iskReward * share;
         uint32 lp = (uint32)(type.lpReward * share + 0.5);
         std::string reason = "Incursion site completed: ";
@@ -602,7 +654,30 @@ void IncursionMgr::CompleteSite(IncLiveSite& site, SystemManager* pSys)
             type.name.c_str(), pSys->GetName(), pilots.size(), influence * 100);
 
     RemoveSite(site, pSys);
-    m_siteCooldown[site.systemID] = now + sConfig.incursion.SiteRespawn;
+    // the mothership comes out right away
+    if (boss) {
+        m_siteCooldown.erase(site.systemID);
+    } else {
+        m_siteCooldown[site.systemID] = now + sConfig.incursion.SiteRespawn;
+    }
+}
+
+void IncursionMgr::BreakInfluence(IncData& inc, uint32 now)
+{
+    inc.influence = 0;
+    inc.state = Incursion::State::Withdrawing;
+    inc.stateTime = now;
+    Save(inc);
+
+    std::string hq = "their headquarters";
+    for (auto cur : inc.systems)
+        if (cur.second == Incursion::scenesType::headquarters)
+            hq = sDataMgr.GetSystemName(cur.first);
+    char buf[300];
+    snprintf(buf, sizeof(buf), "Sansha influence in %s has been broken and the Nation is withdrawing. Their mothership has appeared in %s; destroy it within %u hours to end the incursion.",
+             IncursionDB::GetConstellationName(inc.constellationID).c_str(), hq.c_str(), (sConfig.incursion.WithdrawTime + 59) / 60);
+    Broadcast(buf);
+    _log(COSMIC_MGR__MESSAGE, "IncursionMgr - %s", buf);
 }
 
 void IncursionMgr::RemoveSite(IncLiveSite& site, SystemManager* pSys)
@@ -813,6 +888,7 @@ std::string IncursionMgr::Start(uint32 constellationID/*0*/)
         inc.startTime = now;
         inc.stateTime = now;
         inc.lastProgress = now;
+        inc.endPending = false;
     if (!AssignSystems(inc))
         return "Constellation " + std::to_string(constellationID) + " has no solar systems.";
 
@@ -875,6 +951,30 @@ std::string IncursionMgr::SetInfluence(uint32 constellationID, float percent)
     return buf;
 }
 
+std::string IncursionMgr::Mothership(uint32 constellationID)
+{
+    if (!m_initialized)
+        return "Incursions are disabled on this server.";
+    IncData* inc(nullptr);
+    if (constellationID != 0) {
+        inc = FindByConstellation(constellationID);
+    } else if (!m_incursions.empty()) {
+        inc = &m_incursions.begin()->second;
+    }
+    if (inc == nullptr)
+        return "No matching incursion.";
+    if ((inc->state == Incursion::State::Withdrawing) and (inc->influence <= 0))
+        return "The mothership is already out in " + IncursionDB::GetConstellationName(inc->constellationID) + ".";
+    BreakInfluence(*inc, TimeNow());
+    for (auto cur : inc->systems)
+        if (cur.second == Incursion::scenesType::headquarters) {
+            m_siteCooldown.erase(cur.first);
+            if (!sEntityList.IsSystemLoaded(cur.first))
+                return std::string("Influence broken. The mothership appears when someone enters ") + sDataMgr.GetSystemName(cur.first) + ".";
+        }
+    return "Influence broken. The mothership is spawning in the headquarters system.";
+}
+
 std::string IncursionMgr::Info()
 {
     if (!m_initialized)
@@ -898,6 +998,11 @@ std::string IncursionMgr::Info()
         msg += "Staging: ";
         msg += sDataMgr.GetSystemName(inc.stagingSystemID);
         msg += "<br>";
+        if ((inc.state == Incursion::State::Withdrawing) and (inc.influence <= 0)) {
+            snprintf(buf, sizeof(buf), "Mothership out, %u minutes left.<br>",
+                     (inc.stateTime + sConfig.incursion.WithdrawTime * 60u > now ? (inc.stateTime + sConfig.incursion.WithdrawTime * 60u - now) / 60 : 0));
+            msg += buf;
+        }
         for (auto sys : inc.systems) {
             uint16 sites(0);
             for (auto& site : m_sites)

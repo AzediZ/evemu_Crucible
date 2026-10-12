@@ -800,6 +800,23 @@ void NPCAIMgr::LaunchMissile(uint16 typeID, SystemEntity* pSE)
         missileRef->MultiplyAttribute(AttrAoeCloudSize, m_self->GetAttribute(AttrMissileEntityAoeCloudSizeMultiplier));
     if (m_self->HasAttribute(AttrMissileEntityAoeFalloffMultiplier))
         missileRef->MultiplyAttribute(AttrAoeFalloff, m_self->GetAttribute(AttrMissileEntityAoeFalloffMultiplier));
+    // missile damage multiplier.  only incursion ships use it for now; other NPCs have values in the db
+    //  but their missile damage was balanced without it
+    if ((typeID != 265) and m_self->HasAttribute(AttrMissileDamageMultiplier)) {
+        switch (m_self->groupID()) {
+            case EVEDB::invGroups::Incursion_Sanshas_Nation_Industrial:
+            case EVEDB::invGroups::Incursion_Sanshas_Nation_Capital:
+            case EVEDB::invGroups::Incursion_Sanshas_Nation_Frigate:
+            case EVEDB::invGroups::Incursion_Sanshas_Nation_Cruiser:
+            case EVEDB::invGroups::Incursion_Sanshas_Nation_Battleship: {
+                EvilNumber mult = m_self->GetAttribute(AttrMissileDamageMultiplier);
+                missileRef->MultiplyAttribute(AttrEmDamage, mult);
+                missileRef->MultiplyAttribute(AttrExplosiveDamage, mult);
+                missileRef->MultiplyAttribute(AttrKineticDamage, mult);
+                missileRef->MultiplyAttribute(AttrThermalDamage, mult);
+            } break;
+        }
+    }
 
     SystemManager* pSystem = m_npc->SystemMgr();
     // Missile(InventoryItemRef self, PyServiceMgr &services, SystemManager* system, InventoryItemRef module, SystemEntity* target, ShipItem* ship);

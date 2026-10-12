@@ -4,14 +4,15 @@
   *
   * @date:          12 October 2026
   *
-  *  first playable cut:
   *   - one or more incursions, each covering a constellation (staging, vanguard, assault and headquarters systems)
-  *   - vanguard sites appear as combat anomalies in loaded vanguard systems.  each site has waves of Sansha ships;
-  *       the next wave spawns when the current one is dead.  clearing the last wave pays CONCORD ISK and LP
-  *       to the pilots on grid and lowers Sansha influence
-  *   - influence recovers slowly when no sites are completed.  at zero influence, or when the incursion is too old,
-  *       it withdraws and then ends.  a new one starts automatically after a delay
-  *  not done yet: Sansha EWAR, assault/HQ sites, the mothership, the system penalty, client UI
+  *   - vanguard, assault and headquarters sites appear as combat anomalies in their loaded systems.  each site has
+  *       waves of Sansha ships; the next wave spawns when the current one is dead.  clearing the last wave pays
+  *       CONCORD ISK and LP to the pilots on grid and lowers Sansha influence
+  *   - running a headquarters site at zero influence brings out the mothership in the headquarters system and the
+  *       incursion starts withdrawing.  killing the mothership ends it; otherwise it ends after the withdrawal time
+  *   - influence recovers slowly when no sites are completed.  an incursion too old withdraws on its own.
+  *       a new one starts automatically after a delay
+  *  not done yet: most Sansha EWAR (only warp disruption works for NPCs), the system penalty, client UI
   */
 
 #ifndef EVEMU_SYSTEM_INCURSIONMGR_H_
@@ -42,8 +43,10 @@ struct IncSiteObject {
 
 struct IncSiteType {
     uint16 siteTypeID;
-    uint8 sceneType;
+    uint32 sceneType;           // Incursion::scenesType.  boss = mothership
     uint8 designFleet;
+    uint8 secBand;              // 0 any system, 1 high-sec only, 2 low/null-sec only
+    uint16 objectiveTypeID;     // when set, the site is done when this NPC dies
     uint8 waves;
     uint16 designNPCs;          // total ships over all waves at full size
     uint32 iskReward;           // per pilot, full fleet
@@ -60,10 +63,12 @@ struct IncLiveSite {
     uint8 wave;                 // current wave, 1-based
     uint16 spawned;             // ships spawned over all waves so far
     uint32 beaconID;
+    uint32 objectiveID;         // itemID of the objective NPC, once spawned
+    uint32 nextWave;            // mothership sites: unix time of the next reinforcement wave
     GPoint position;
     std::string sigID;
     std::vector<uint32> structures;
-    std::vector<uint32> npcs;   // live ships of the current wave
+    std::vector<uint32> npcs;   // live ships (all waves)
 };
 
 struct IncData {
@@ -75,6 +80,7 @@ struct IncData {
     uint32 startTime;           // unix time
     uint32 stateTime;
     uint32 lastProgress;
+    bool endPending;            // mothership killed; end on the next tick
     std::map<uint32, uint8> systems;    // systemID, sceneType
 };
 
@@ -97,6 +103,7 @@ public:
     std::string End(uint32 constellationID = 0);
     std::string Info();
     std::string SetInfluence(uint32 constellationID, float percent);
+    std::string Mothership(uint32 constellationID);
 
 private:
     bool m_initialized;
@@ -120,7 +127,8 @@ private:
     bool AssignSystems(IncData& inc);
 
     void ProcessIncursion(IncData& inc, uint32 now, uint32 dt);
-    void TopUpSites(IncData& inc, uint32 systemID, uint32 now);
+    void TopUpSites(IncData& inc, uint32 systemID, uint32 sceneType, uint32 now);
+    void BreakInfluence(IncData& inc, uint32 now);
     bool SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeID);
     void SpawnWave(IncLiveSite& site, SystemManager* pSys);
     void CompleteSite(IncLiveSite& site, SystemManager* pSys);

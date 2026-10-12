@@ -31,7 +31,7 @@ static uint32 GetConstellationArg(Client* pClient, const Seperator& args, size_t
 PyResult Command_incursion(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
     if (args.argCount() < 2)
-        throw CustomError ("Usage: /incursion start [here|constellationID] | end [here|constellationID] | info | influence (0-100) [here|constellationID]");
+        throw CustomError ("Usage: /incursion start [here|constellationID] | end [here|constellationID] | info | influence (0-100) [here|constellationID] | mothership [here|constellationID]");
 
     const std::string& cmd = args.arg(1);
     if (cmd == "start")
@@ -40,11 +40,13 @@ PyResult Command_incursion(Client* pClient, CommandDB* db, EVEServiceManager &se
         return new PyString(sIncursionMgr.End(GetConstellationArg(pClient, args, 2)));
     if (cmd == "info")
         return new PyString(sIncursionMgr.Info());
+    if (cmd == "mothership")
+        return new PyString(sIncursionMgr.Mothership(GetConstellationArg(pClient, args, 2)));
     if (cmd == "influence") {
         if ((args.argCount() < 3) or !args.isNumber(2))
             throw CustomError ("Usage: /incursion influence (0-100) [here|constellationID]");
         return new PyString(sIncursionMgr.SetInfluence(GetConstellationArg(pClient, args, 3), atof(args.arg(2).c_str())));
     }
 
-    throw CustomError ("Unknown option '%s'.  Use start, end, info or influence.", cmd.c_str());
+    throw CustomError ("Unknown option '%s'.  Use start, end, info, influence or mothership.", cmd.c_str());
 }

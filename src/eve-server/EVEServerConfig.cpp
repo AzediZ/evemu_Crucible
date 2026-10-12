@@ -182,15 +182,15 @@ EVEServerConfig::EVEServerConfig()
     incursion.Enabled = true;
     incursion.AutoStart = true;
     incursion.MaxActive = 1;
-    incursion.FleetSize = 10;
+    incursion.FleetScale = 100;
     incursion.Strength = 100;
     incursion.SitesPerSystem = 3;
     incursion.SiteRespawn = 180;
     incursion.MinSecurity = 0.45f;
     incursion.StartDelay = 60;
-    incursion.MobilizeAfter = 72;
+    incursion.MobilizeAfter = 120;
     incursion.Lifetime = 168;
-    incursion.WithdrawTime = 60;
+    incursion.WithdrawTime = 1440;
     incursion.RegenDelay = 30;
     incursion.RegenRate = 1.0f;
 
@@ -741,7 +741,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
     AddValueParser( "Enabled",         incursion.Enabled );
     AddValueParser( "AutoStart",       incursion.AutoStart );
     AddValueParser( "MaxActive",       incursion.MaxActive );
-    AddValueParser( "FleetSize",       incursion.FleetSize );
+    AddValueParser( "FleetScale",      incursion.FleetScale );
     AddValueParser( "Strength",        incursion.Strength );
     AddValueParser( "SitesPerSystem",  incursion.SitesPerSystem );
     AddValueParser( "SiteRespawn",     incursion.SiteRespawn );
@@ -758,7 +758,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
     RemoveParser( "Enabled" );
     RemoveParser( "AutoStart" );
     RemoveParser( "MaxActive" );
-    RemoveParser( "FleetSize" );
+    RemoveParser( "FleetScale" );
     RemoveParser( "Strength" );
     RemoveParser( "SitesPerSystem" );
     RemoveParser( "SiteRespawn" );
