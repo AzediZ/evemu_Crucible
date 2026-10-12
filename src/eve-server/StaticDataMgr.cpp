@@ -48,6 +48,7 @@ m_npcDivisions(nullptr)
     m_ramMatl.clear();
     m_regions.clear();
     m_attrTypeData.clear();
+    m_attrDefaults.clear();
     m_minerals.clear();
     m_compounds.clear();
     m_bpMatlData.clear();
@@ -108,6 +109,7 @@ void StaticDataMgr::Clear()
     m_ramMatl.clear();
     m_regions.clear();
     m_attrTypeData.clear();
+    m_attrDefaults.clear();
     m_minerals.clear();
     m_compounds.clear();
     m_bpMatlData.clear();
@@ -270,7 +272,7 @@ void StaticDataMgr::Populate()
     startTime = GetTimeMSeconds();
     ManagerDB::GetAttributeTypes(*res);
     while (res->GetRow(row)) {
-        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID FROM dgmAttribute
+        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue FROM dgmAttribute
         AttrTypeData typeData               = AttrTypeData();
         typeData.attributeID            = row.GetInt(0);
         typeData.attributeName          = (row.IsNull(1) ? "*none*" : row.GetText(1));
@@ -278,6 +280,11 @@ void StaticDataMgr::Populate()
         typeData.displayName            = (row.IsNull(3) ? "*none*" : row.GetText(3));
         typeData.categoryID             = (row.IsNull(4) ? 0        : row.GetInt(4));
         m_attrTypeData.emplace(row.GetInt(0), typeData);
+        // dogma's value for a type without the attribute (npc ai profiles read through this)
+        uint16 attrID(row.GetInt(0));
+        if (m_attrDefaults.size() <= attrID)
+            m_attrDefaults.resize(attrID + 1, 0.0);
+        m_attrDefaults[attrID] = (row.IsNull(5) ? 0.0 : row.GetDouble(5));
     }
     sLog.Cyan("    StaticDataMgr", "%lu Attribute data sets loaded in %.3fms.", m_attrTypeData.size(), (GetTimeMSeconds() - startTime));
 
@@ -801,6 +808,13 @@ const char* StaticDataMgr::GetAttrName(uint16 attrID)
 
     _log(DATA__ERROR, "GetAttrName() - Attribute %u not found in map", attrID);
     return "None";
+}
+
+double StaticDataMgr::GetAttributeDefault(uint16 attrID) const
+{
+    if (attrID < m_attrDefaults.size())
+        return m_attrDefaults[attrID];
+    return 0.0;
 }
 
 PyInt* StaticDataMgr::GetAgentSystemID(int32 agentID)

@@ -588,7 +588,7 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
                      m_formula.GetDroneToHit(m_pDrone, pTarget),
                      stats.effectID);
             d *= static_cast<float>(stats.damageMultiplier);
-            d *= sConfig.rates.damageRate;
+            // rates.damageRate is applied once, in SystemEntity::ApplyDamage() (bug B15:  it was applied here too)
             // this may destroy the target, and with it our lock
             pTarget->ApplyDamage(d);
         } break;

@@ -79,6 +79,10 @@ void Sentry::TargetedAdd(SystemEntity *who) {
     m_AI->Targeted(who);
 }
 
+void Sentry::TargetLocked(SystemEntity* who) {
+    m_AI->OnLockComplete(who);
+}
+
 void Sentry::EncodeDestiny( Buffer& into )
 {
     using namespace Destiny;

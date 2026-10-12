@@ -4,14 +4,13 @@
   *   formulas for turret tracking, to hit, and other specific things
   * @Author:         Allan
   * @date:   10 June 2015
-  */
-
- /* default crit chances - can change in server config
-  *      NPC  - 1.5%
-  *   Player  - 2%
-  *   Sentry  - 2%
-  *    Drone  - 3%
-  *  Concord  - 5%
+  *
+  *   every shooter uses the shared Crucible formula (npc/ai/NpcMath, npc ai plan 5.1):
+  *     chance = 0.5 ^ ( ((angular / tracking) * (sigRes / targetSig))^2 + (max(0, surface - optimal) / falloff)^2 )
+  *   angular velocity from the transversal part of the relative velocity only, range from surface to surface, and the
+  *   signature resolution inside the roll (no separate 'big gun vs small ship' damage factor).  a draw u below the chance
+  *   hits with quality u + 0.49;  below rates.WreckingChance (0.01) it's a wrecking 3x shot.  the per-shooter crit chances
+  *   (rolled before the hit, so they landed at any range) are gone (bug B2)
   */
 
 #include "character/Character.h" // this sets compat includes for this file
@@ -19,251 +18,124 @@
 #include "npc/NPCAI.h"
 #include "npc/Drone.h"
 #include "npc/Sentry.h"
+#include "npc/SentryAI.h"
+#include "npc/ai/NpcMath.h"
+#include "npc/ai/NpcProfile.h"
 #include "ship/modules/TurretFormulas.h"
 #include "ship/modules/TurretModule.h"
 #include "system/EwarState.h"
 
+namespace {
+    NpcMath::Vec3 PositionOf(SystemEntity* pSE)
+    {
+        const GPoint& p(pSE->DestinyMgr() != nullptr ? pSE->DestinyMgr()->GetPosition() : pSE->GetPosition());
+        NpcMath::Vec3 v = { p.x, p.y, p.z };
+        return v;
+    }
+
+    NpcMath::Vec3 VelocityOf(SystemEntity* pSE)
+    {
+        const GVector& vel(pSE->GetVelocity());
+        NpcMath::Vec3 v = { vel.x, vel.y, vel.z };
+        return v;
+    }
+}
+
+float TurretFormulas::Roll(SystemEntity* pShooter, SystemEntity* pTarget, double optimal, double falloff, double tracking,
+                           double sigRes, double u, LogType logType, const char* who)
+{
+    if ((pShooter == nullptr) or (pTarget == nullptr))
+        return 0.0f;
+    NpcMath::TurretGeometry g(NpcMath::Geometry(PositionOf(pShooter), VelocityOf(pShooter), pShooter->GetRadius(),
+                                                PositionOf(pTarget), VelocityOf(pTarget), pTarget->GetRadius()));
+    NpcMath::TurretInputs in = NpcMath::TurretInputs();
+        in.angular = g.angular;
+        in.surface = g.surface;
+        in.optimal = optimal;
+        in.falloff = falloff;
+        in.tracking = tracking;
+        in.sigRes = sigRes;
+        in.targetSig = pTarget->GetSignatureRadius();   // includes target painters
+        in.targetRadius = pTarget->GetRadius();
+    NpcMath::TurretTerms terms = NpcMath::TurretTerms();
+    double chance(NpcMath::TurretChanceToHit(in, &terms));
+    double shot(NpcMath::ResolveTurretShot(chance, u, sConfig.rates.WreckingChance));
+    if (is_log_enabled(logType))
+        _log(logType, "%s::ToHit %s(%u) -> %s(%u):  surface %.0fm (optimal %.0f, falloff %.0f), transversal %.1fm/s, angular %.5f (tracking %.5f),"
+                " sigRes %.0f vs sig %.1f -> track %.4f, range %.4f, chance %.5f, u %.5f -> %.3f (%s)",
+                who, pShooter->GetName(), pShooter->GetID(), pTarget->GetName(), pTarget->GetID(), g.surface, optimal, falloff,
+                g.transversal, g.angular, tracking, sigRes, in.targetSig, terms.track, terms.range, chance, u, shot,
+                (shot <= 0.0 ? "miss" : (shot >= 3.0 ? "wrecking" : "hit")));
+    return static_cast<float>(shot);
+}
 
 float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEntity* pTarget)
 {
-    if (pTarget == nullptr)
+    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr) or (shipRef->GetPilot() == nullptr))
         return 0;
-    uint32 falloff = pMod->GetAttribute(AttrFalloff).get_uint32();
-    float range = pMod->GetAttribute(AttrMaxRange).get_float();
-    // tracking disruptors on the shooter
     SystemEntity* pShooter(shipRef->GetPilot()->GetShipSE());
+    if (pShooter == nullptr)
+        return 0;
+    double optimal(pMod->GetAttribute(AttrMaxRange).get_double());
+    double tracking(pMod->GetAttribute(AttrTrackingSpeed).get_double());
+    // tracking disruptors on the shooter
     EwarState* pEwar(pShooter->GetEwar());
-    if (pEwar != nullptr)
-        range *= pEwar->GetOptimalMult();
-    float distance = shipRef->position().distance(pTarget->DestinyMgr()->GetPosition());
-    _log(DAMAGE__TRACE, "Turret::GetToHit - distance:%.2f, range:%.0f, falloff:%u", distance, range, falloff);
-
-    // calculate transversal from other data
-    /* i have had problems finding exact data for transversal velocity
-     * ideas/data taken from https://wiki.eveuniversity.org/Velocity
-     * The transversal velocity is computed by subtracting the two velocity vectors from one another, and then finding the length of the vector.
-     * angular velocity = transversal velocity / distance
-     */
-    GVector vector = pTarget->GetVelocity() - pShooter->GetVelocity();
-    float transversalV = vector.length();
-    float angularVel = transversalV / distance;
-    float targSig = pTarget->GetSignatureRadius();
-    if (targSig < 0.01f)
-        targSig = pTarget->GetSelf()->GetAttribute(AttrRadius).get_uint32() / 10;
-    float sigRes = pMod->GetAttribute(AttrOptimalSigRadius).get_float();
-    float trackSpeed = pMod->GetAttribute(AttrTrackingSpeed).get_float();
-    if (pEwar != nullptr)
-        trackSpeed *= pEwar->GetTrackingMult();
-    _log(DAMAGE__TRACE, "Turret::GetToHit - transversalV:%.3f, angularV:%.3f, tracking:%.3f, targetSig:%.1f, sigRes:%.1f", \
-                transversalV, angularVel, trackSpeed, targSig, sigRes);
-    //  calculations for chance to hit  --UD 29May17
-    /*ChanceToHit = 0.5 ^ ((((Transversal speed/(Range to target * Turret Tracking))*(Turret Signature Resolution / Target Signature Radius))^2)
-     *                  + ((max(0, Range To Target - Turret Optimal Range))/Turret Falloff)^2)
-     *
-     *     a =  Transversal speed/(Range to target * Turret Tracking)
-     *     b =  Turret Signature Resolution / Target Signature Radius
-     *     c =  (a * b) ^ 2
-     *     d =  max(0, distance - optimal range)
-     *     e =  (d / falloff) ^ 2
-     * tohit =  0.5 ^ (c + e)
-     */
-    float a = (angularVel / trackSpeed);
-    float b = (sigRes / targSig);
-    float modifier(0.0f);
-    if ((a < 1) and (b > 1)) {
-        /* in cases where weapon can track target, but sigRes > targSig, the weapon would not hit on live but *should* hit with reduced damage
-         * modify formula to remove Signature variable from equation, test toHit against tracking,
-         * then use Signature variables to determine amount of damage reduction (i.e. large gun vs. small ship)
-         */
-        b = 1;
-        modifier = (targSig / sigRes);
+    if (pEwar != nullptr) {
+        optimal *= pEwar->GetOptimalMult();
+        tracking *= pEwar->GetTrackingMult();
     }
-    float c = pow((a * b), 2);
-    float d = EvE::max(distance - range);
-    float e = pow((d / falloff), 2);
-    float x = pow(0.5, c);
-    float y = pow(0.5, e);
-    float ChanceToHit = x * y;
-    _log(DAMAGE__TRACE, "Turret::GetToHit - (%.3f * %.3f)^2 = c:%.5f : (%.3f / %u)^2 = e:%.5f", a, b, c, d, falloff, e);
-    float rNum = MakeRandomFloat();
-    _log(DAMAGE__TRACE, "Turret::GetToHit - %f * %f = %.5f  - Rand:%.3f  - %s", \
-            x, y, ChanceToHit, rNum, ((rNum <= sConfig.rates.PlayerCritChance) ? "Crit" : (rNum < ChanceToHit ? "Hit" : "Miss")));
-    if (rNum <= sConfig.rates.PlayerCritChance)
-        return 3.0f;
-    if (rNum < ChanceToHit) {
-        if (modifier)
-            return modifier;
-        return (rNum + 0.49);
-    }
-    return 0;
+    return Roll(pShooter, pTarget, optimal, pMod->GetAttribute(AttrFalloff).get_double(), tracking,
+                pMod->GetAttribute(AttrOptimalSigRadius).get_double(), MakeRandomFloat(), DAMAGE__TRACE, "Turret");
 }
 
 float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget)
 {
-    if (pTarget == nullptr)
+    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
-    uint16 sigRes = pNPC->GetAIMgr()->GetSigRes();
-    float range = pNPC->GetAIMgr()->GetOptimalRange();
-    uint32 falloff = pNPC->GetAIMgr()->GetFalloff();
-    float distance = pNPC->DestinyMgr()->GetPosition().distance(pTarget->DestinyMgr()->GetPosition());
-    float trackSpeed = pNPC->GetAIMgr()->GetTrackingSpeed();
-    // tracking disruptors on the npc
+    const NpcProfile& p(pNPC->GetAIMgr()->GetProfile());
+    double optimal(p.optimal), tracking(p.tracking);
+    // tracking disruptors on the npc (in Crucible they don't touch npc falloff)
     if (pNPC->GetEwar() != nullptr) {
-        range *= pNPC->GetEwar()->GetOptimalMult();
-        trackSpeed *= pNPC->GetEwar()->GetTrackingMult();
+        optimal *= pNPC->GetEwar()->GetOptimalMult();
+        tracking *= pNPC->GetEwar()->GetTrackingMult();
     }
-    float targSig = pTarget->GetSignatureRadius();
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - distance:%.2f, range:%.0f, falloff:%u", distance, range, falloff);
-
-    GVector vector = pTarget->GetVelocity() - pNPC->GetVelocity();
-    float transversalV = vector.length();
-    float angularVel = transversalV / distance;
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - transversalV:%.3f, angularVel:%.3f tracking:%.3f, targetSig:%.1f, sigRes:%u", \
-                transversalV, angularVel, trackSpeed, targSig, sigRes);
-
-    float a = (angularVel / trackSpeed);
-    float b = (sigRes / targSig);
-    float modifier(0.0f);
-    if ((a < 1) and (b > 1)) {
-        b = 1;
-        modifier = (targSig / sigRes);
-    }
-    float c = pow((a * b), 2);
-    float d = EvE::max(distance - range);
-    float e = pow((d / falloff), 2);
-    float x = pow(0.5, c);
-    float y = pow(0.5, e);
-    float ChanceToHit = x * y;
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - (%.3f * %.3f)^2 = c:%.5f : (%.3f / %u)^2 = e:%.5f", a, b, c, d, falloff, e);
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - %f * %f = %.5f", x, y, ChanceToHit);
-    float rNum = MakeRandomFloat(0.0, 1.0);
-    _log(DAMAGE__TRACE_NPC, "NPC::GetToHit - ChanceToHit:%f, Rand:%.3f - %s", ChanceToHit, rNum, ((rNum <= sConfig.rates.NpcCritChance) ? "Crit" : (rNum < ChanceToHit ? "Hit" : "Miss")));
-    if (rNum <= sConfig.rates.NpcCritChance)
-        return 3.0f;
-    if (rNum < ChanceToHit) {
-        if (modifier)
-            return modifier;
-        return (rNum + 0.49);
-    }
-    return 0;
+    return Roll(pNPC, pTarget, optimal, p.falloff, tracking, p.sigResolution, pNPC->GetAIMgr()->GetRng().Uniform(),
+                DAMAGE__TRACE_NPC, "NPC");
 }
 
-/* standard turret hit chance, with the drone's skill-adjusted stats:
- *   chance = 0.5 ^ ( ((angular / tracking) * (sigResolution / targetSig))^2 + (max(0, range - optimal) / falloff)^2 )
- *  angular velocity uses only the part of the relative velocity across the line of sight.  ranges are surface to surface,
- *  as for the drone's other range checks.  returns the damage modifier: 3 for a wrecking shot, 0 for a miss
- */
+/* the drone's skill-adjusted stats */
 float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget)
 {
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
     const DroneStats& stats(pDrone->Stats());
-
-    GVector los(pDrone->GetPosition(), pTarget->GetPosition());
-    double centres(los.length());
-    double range(centres - pDrone->GetRadius() - pTarget->GetRadius());
-    if (range < 0.0)
-        range = 0.0;
-
-    double trackingTerm(0.0);
-    if ((centres > 0.0) and (stats.tracking > 0.0)) {
-        los = GVector(los.x / centres, los.y / centres, los.z / centres);
-        GVector rel(pTarget->GetVelocity() - pDrone->GetVelocity());
-        double radial(rel.x * los.x + rel.y * los.y + rel.z * los.z);
-        GVector transversal(rel.x - los.x * radial, rel.y - los.y * radial, rel.z - los.z * radial);
-        double angular(transversal.length() / centres);
-        double targetSig(25.0);
-        if (pTarget->GetSelf()->HasAttribute(AttrSignatureRadius))
-            targetSig = pTarget->GetSignatureRadius();
-        if (targetSig <= 0.0)
-            targetSig = 25.0;
-        trackingTerm = (angular / stats.tracking) * (stats.sigResolution / targetSig);
-    }
-
-    double rangeTerm(0.0);
-    double outside(range - stats.optimalRange);
-    if (outside > 0.0) {
-        if (stats.falloff <= 0.0)
-            return 0;
-        rangeTerm = outside / stats.falloff;
-    }
-
-    double chance(std::pow(0.5, trackingTerm * trackingTerm + rangeTerm * rangeTerm));
-    float rNum(MakeRandomFloat(0.0, 1.0));
-    _log(DAMAGE__TRACE, "Drone::GetToHit - range:%.0f (opt %.0f, falloff %.0f) tracking term %.3f, range term %.3f, chance %.4f, rand %.4f",
-         range, stats.optimalRange, stats.falloff, trackingTerm, rangeTerm, chance, rNum);
-    if (rNum >= chance)
-        return 0;
-    if (rNum <= sConfig.rates.DroneCritChance)
-        return 3.0f;
-    return (rNum + 0.49);
+    return Roll(pDrone, pTarget, stats.optimalRange, stats.falloff, stats.tracking, stats.sigResolution, MakeRandomFloat(),
+                DAMAGE__TRACE, "Drone");
 }
 
 float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget)
 {
     if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
-    float distance(pSource->GetPosition().distance(pTarget->DestinyMgr()->GetPosition()));
-    if (distance < 1.0f)
-        distance = 1.0f;
-    // tracking disruptors and dampeners on the battery
+    // tracking disruptors on the battery
     EwarState* pEwar(pSource->GetEwar());
     if (pEwar != nullptr) {
         tracking *= pEwar->GetTrackingMult();
         optimal *= pEwar->GetOptimalMult();
     }
-    // the battery doesn't move:  the target's velocity across the line of sight
-    GVector los(pSource->GetPosition(), pTarget->DestinyMgr()->GetPosition());
-    los.normalize();
-    GVector vel(pTarget->GetVelocity());
-    double radial(vel.dotProduct(los));
-    double transversal(std::sqrt(EvE::max(vel.lengthSquared() - (radial * radial))));
-    float angularVel(transversal / distance);
-    float targSig(pTarget->GetSignatureRadius());
-    if (targSig < 0.01f)
-        targSig = pTarget->GetSelf()->GetAttribute(AttrRadius).get_float() / 10;
-    if (tracking <= 0.0f)
-        tracking = 0.0001f;
-    if (falloff <= 0.0f)
-        falloff = 1.0f;
-    // ChanceToHit = 0.5 ^ (((angular / tracking) * (sigRes / targetSig))^2 + (max(0, distance - optimal) / falloff)^2)
-    float a((angularVel / tracking) * (sigRes / targSig));
-    float d(EvE::max(distance - optimal));
-    float chanceToHit(std::pow(0.5, (a * a) + ((d / falloff) * (d / falloff))));
-    float rNum(MakeRandomFloat(0.0, 1.0));
-    if (rNum <= sConfig.rates.SentryCritChance)
-        return 3.0f;
-    if (rNum < chanceToHit)
-        return (rNum + 0.49);
-    return 0;
+    return Roll(pSource, pTarget, optimal, falloff, tracking, sigRes, MakeRandomFloat(), DAMAGE__TRACE, "Structure");
 }
 
 float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
 {
-    if (pTarget == nullptr)
+    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return 0;
-    float sigRes = pSentry->GetSelf()->GetAttribute(AttrOptimalSigRadius).get_float();
-    float falloff = pSentry->GetSelf()->GetAttribute(AttrFalloff).get_float();
-    float distance = pSentry->GetPosition().distance(pTarget->DestinyMgr()->GetPosition());
-    float targSig = pTarget->GetSignatureRadius();
-    float a = (pTarget->GetVelocity().length() / (distance * pSentry->GetSelf()->GetAttribute(AttrTrackingSpeed).get_float()));
-    float b = (sigRes / targSig);
-    float modifier = 0.0f;
-    if ((a < 1) and (b > 1)) {
-        b = 1;
-        modifier = (targSig / sigRes);
+    // maxRange is the optimal (it used to be entityAttackRange, with the target's whole speed as transversal)
+    const NpcProfile& p(pSentry->GetAIMgr()->GetProfile());
+    double optimal(p.optimal), tracking(p.tracking);
+    if (pSentry->GetEwar() != nullptr) {
+        optimal *= pSentry->GetEwar()->GetOptimalMult();
+        tracking *= pSentry->GetEwar()->GetTrackingMult();
     }
-    float c = pow((a * b), 2);
-    float d = EvE::max(distance - pSentry->GetSelf()->GetAttribute(AttrEntityAttackRange).get_float());
-    float e = pow((d / falloff), 2);
-    float ChanceToHit = pow(0.5, c + e);
-    float rNum = MakeRandomFloat(0.0, 1.0);
-    if (rNum <= sConfig.rates.SentryCritChance)
-        return 3.0f;
-    if (rNum < ChanceToHit) {
-        if (modifier)
-            return modifier;
-        return (rNum + 0.49);
-    }
-    return 0;
+    return Roll(pSentry, pTarget, optimal, p.falloff, tracking, p.sigResolution, MakeRandomFloat(), DAMAGE__TRACE_NPC, "Sentry");
 }

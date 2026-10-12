@@ -107,6 +107,7 @@
 #include "dungeon/DungeonService.h"
 // entity service (player drones)
 #include "npc/EntityService.h"
+#include "npc/ai/NpcProfile.h"
 // exploration services
 #include "exploration/Exploration.h"
 #include "exploration/ScanMgrService.h"
@@ -496,7 +497,8 @@ int main( int argc, char* argv[] )
         sLog.Warning("   Roaming Spawns","Disabled.");
     }
     if (sConfig.npc.RoamingSpawns or sConfig.npc.StaticSpawns)
-        sLog.Green("   Spawns Enabled","Respawn timer checks every %u minutes", sConfig.npc.RespawnTimer /60);
+        sLog.Green("   Spawns Enabled","Killed belt rats respawn after %u-%u minutes", sConfig.npc.RespawnTimer /60,
+                (sConfig.npc.RespawnTimer + sConfig.npc.RespawnJitter) /60);
     if (sConfig.server.BountyPayoutDelayed) {
         sLog.Green(" Delayed Bounties","Delayed Bounties are Enabled.  Loop runs every %u minutes", sConfig.server.BountyPayoutTimer);
         if (sConfig.server.FleetShareDelayed) {
@@ -832,6 +834,8 @@ int main( int argc, char* argv[] )
     std::printf("\n");     // spacer
     svDataMgr.Initialize();
     std::printf("\n");     // spacer
+    // npc ai:  deprecated settings, and the npc type data audit when npc.AuditOnStartup is set
+    NpcProfile::StartupChecks();
 
     // clear dynamic system data (player counts, etc) on server start
     MapDB::SystemStartup();

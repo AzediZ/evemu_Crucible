@@ -139,6 +139,21 @@ public:
     void GetStaticEntities(std::vector<SystemEntity*>& into) const;     // static and global entities (stations, gates, beacons...)
     /* for targeting purposes */
     void GetPlayers(std::vector<Client*> &into) const;
+    /* npc ai:  the same sets without copying them (no allocation per tick).  fn must not add or remove entities here.
+     *  ForEachDynamic visits what GetEntities() returns (dynamic entities that aren't cloaked) */
+    template <class F>
+    void ForEachDynamic(const F& fn) const {
+        for (auto& cur : m_dynamicEntities)
+            if (IsVisibleEntity(cur.second))
+                fn(cur.second);
+    }
+    template <class F>
+    void ForEachPlayer(const F& fn) const {
+        for (auto& cur : m_players)
+            if (cur.second != nullptr)
+                fn(cur.second);
+    }
+    static bool IsVisibleEntity(SystemEntity* pSE);     // not null and not cloaked
     /* for scanning */
     void GetEntityVec(std::vector<SystemEntity*> &into) const;
     SystemEntity* GetRandomEntity();

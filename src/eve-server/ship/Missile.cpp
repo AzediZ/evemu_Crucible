@@ -30,6 +30,8 @@
 #include "Profiler.h"
 #include "character/Character.h"
 #include "inventory/AttributeEnum.h"
+#include "npc/NPC.h"
+#include "npc/ai/NpcMath.h"
 #include "system/DestinyManager.h"
 #include "ship/Missile.h"
 #include "ship/Ship.h"
@@ -72,6 +74,16 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
         if (pChar->HasAttribute(AttrMissileDamageMultiplier))
             m_damageMod *= pChar->GetAttribute(AttrMissileDamageMultiplier).get_float();
         m_secStatus = pChar->GetSecurityRating();
+    } else if ((pMod == nullptr) and (pSE->IsNPCSE() or pSE->IsSentrySE()) and (modRef.get() != nullptr)) {
+        /* npc and sentry missiles (modRef is the npc itself):  its missileDamageMultiplier (212, dgm default 1).
+         *  npc missiles don't use damageMultiplier (64), that one is for turrets (npc ai plan 5.2, bug B12) */
+        //  law npcs and sentries always use theirs (as their turrets do);  other npcs per npc.UseDamageMultiplier
+        bool always(pSE->IsSentrySE() or (pSE->IsNPCSE() and pSE->GetNPCSE()->IsLawEnforcer()));
+        if ((sConfig.npc.UseDamageMultiplier or always) and modRef->HasAttribute(AttrMissileDamageMultiplier)) {
+            float mult(modRef->GetAttribute(AttrMissileDamageMultiplier).get_float());
+            if (mult > 0.0f)
+                m_damageMod *= mult;
+        }
     }
 
     // overloading a launcher doesn't change missile damage.  in Crucible a launcher's overload effect (overloadRofBonus)
@@ -202,17 +214,14 @@ void Missile::HitTarget() {
     if (V <= 0)
         V = 1;
 
-    double v1 = Sr/Er;
-    double v2 = pow(((Ev/V) * v1), (log(DRF) / log(DRS)));
-
     // apply damage modifier from char skills, if applicable
     d *= m_damageMod;
     // a damaged missile does less damage (its share of the bank's launchers is gone)
     float missileDamage(m_self->GetAttribute(AttrDamage).get_float());
     if ((missileDamage > 0) and (m_hullHP > 0))
         d *= EvE::max(1.0 - (missileDamage / m_hullHP));
-    // apply missile damage formula to computed total damage
-    d *= EvE::min1(v1, v2);
+    // apply missile damage formula to computed total damage (shared, guarded:  npc/ai/NpcMath)
+    d *= NpcMath::MissileDamageFactor(Sr, Er, Ev, V, DRF, DRS);
 
     m_targetSE->ApplyDamage(d);
     m_alive = false;

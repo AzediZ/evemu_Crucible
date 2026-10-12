@@ -79,6 +79,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/CommandDispatcher.h"
      "${TARGET_INCLUDE_DIR}/admin/DevToolsProviderService.h"
      "${TARGET_INCLUDE_DIR}/admin/DungeonCommands.h"
+     "${TARGET_INCLUDE_DIR}/admin/NpcAICommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMToolCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionDB.h"
@@ -95,6 +96,7 @@ SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/CommandDispatcher.cpp"
      "${TARGET_SOURCE_DIR}/admin/DevToolsProviderService.cpp"
      "${TARGET_SOURCE_DIR}/admin/DungeonCommands.cpp"
+     "${TARGET_SOURCE_DIR}/admin/NpcAICommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMToolCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionDB.cpp"
@@ -419,7 +421,13 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/NPCAI.h"
      "${TARGET_INCLUDE_DIR}/npc/NPCEwar.h"
      "${TARGET_INCLUDE_DIR}/npc/Sentry.h"
-     "${TARGET_INCLUDE_DIR}/npc/SentryAI.h")
+     "${TARGET_INCLUDE_DIR}/npc/SentryAI.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcBrain.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcMath.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcProfile.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcRng.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/NpcSchedule.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/ThreatTable.h")
 SET( npc_SOURCE
      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
      "${TARGET_SOURCE_DIR}/npc/LawEnforcement.cpp"
@@ -430,7 +438,10 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/NPCAI.cpp"
      "${TARGET_SOURCE_DIR}/npc/NPCEwar.cpp"
      "${TARGET_SOURCE_DIR}/npc/Sentry.cpp"
-     "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp" )
+     "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/NpcBrain.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/NpcMath.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/NpcProfile.cpp" )
 
 SET( planet_INCLUDE
      "${TARGET_INCLUDE_DIR}/planet/Colony.h"

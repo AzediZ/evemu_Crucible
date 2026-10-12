@@ -229,3 +229,9 @@ ADD_SUBDIRECTORY( "src/eve-core" )
 ADD_SUBDIRECTORY( "src/eve-xmlpktgen" )
 ADD_SUBDIRECTORY( "src/eve-common" )
 ADD_SUBDIRECTORY( "src/eve-server" )
+
+# unit tests (src/eve-test, run them with ctest).  they link eve-common only
+OPTION( EVEMU_BUILD_TESTS "Build the eve-test unit tests" ON )
+IF( EVEMU_BUILD_TESTS )
+  ADD_SUBDIRECTORY( "src/eve-test" )
+ENDIF( EVEMU_BUILD_TESTS )

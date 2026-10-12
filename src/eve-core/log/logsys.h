@@ -118,22 +118,23 @@ inline void codelog( LogType type, const char* fmt, ... )
 }
 #else
 //we have variadic macros, hooray!
+//  do { } while (0):  a bare 'if' in these would take the 'else' of an enclosing if/else (dangling else)
 #   define _log( type, fmt, ... ) \
-        if ( is_log_enabled( type ) ) \
-            log_message( type, fmt, ##__VA_ARGS__ )
+        do { if ( is_log_enabled( type ) ) \
+            log_message( type, fmt, ##__VA_ARGS__ ); } while (0)
 
 #   define codelog( type, fmt, ... ) \
-        if ( is_log_enabled( type ) ) \
-            log_message( type, "%s(%s:%d): " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__ )
+        do { if ( is_log_enabled( type ) ) \
+            log_message( type, "%s(%s:%d): " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__ ); } while (0)
 #endif
 
 #define _hex( type, data, len) \
-    if ( is_log_enabled( type ) ) \
-        log_hex( type, (const char*)data, len )
+    do { if ( is_log_enabled( type ) ) \
+        log_hex( type, (const char*)data, len ); } while (0)
 
 #define phex( type, data, len) \
-    if ( is_log_enabled( type ) ) \
-        log_phex( type, (const char*)data, len )
+    do { if ( is_log_enabled( type ) ) \
+        log_phex( type, (const char*)data, len ); } while (0)
 
 
 #endif /*LOGSYS_H_*/

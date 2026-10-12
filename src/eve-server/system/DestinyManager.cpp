@@ -63,6 +63,7 @@
 #include "station/StationDataMgr.h"
 #include "system/BubbleManager.h"
 #include "system/Container.h"
+#include "npc/ai/NpcMath.h"
 #include "system/DestinyManager.h"
 #include "system/Interdiction.h"
 #include "system/SystemBubble.h"
@@ -112,6 +113,7 @@ m_frozen(false)
     m_massMKg = 0.000001f;
     m_alignTime = 1.0f;
     m_maxShipSpeed = 100.0f;
+    m_requestedSpeed = 100.0f;
     m_shipWarpSpeed = 1.0f;
     m_timeToEnterWarp = 10.0f;
     m_shipMaxAccelTime = 0.0f;
@@ -1396,21 +1398,43 @@ void DestinyManager::SetMaxVelocity(float maxVelocity)
                     mySE->GetName(), mySE->GetID(), mySE->GetPilot()->GetName(), mySE->GetPilot()->GetCharacterID(), \
                     mySE->GetSelf()->GetAttribute(AttrMaxDirectionalVelocity).get_float(), maxSpeed, maxVelocity);
 
-    float oldSpeed(m_maxShipSpeed);
     if (maxVelocity > maxSpeed) {
-        m_maxShipSpeed = maxSpeed;
+        m_requestedSpeed = maxSpeed;
     } else {
-        m_maxShipSpeed = maxVelocity;
+        m_requestedSpeed = maxVelocity;
     }
+    // webs on us stay on (bug B5)
+    ApplySpeed(true);
+}
 
+void DestinyManager::ApplySpeed(bool update)
+{
+    float oldSpeed(m_maxShipSpeed);
+    m_maxShipSpeed = m_requestedSpeed * GetWebFactor();
     // the client simulates with this speed too, so keep it informed once we are in space
-    if ((oldSpeed != m_maxShipSpeed) and (mySE->SysBubble() != nullptr)) {
+    if (update and (oldSpeed != m_maxShipSpeed) and (mySE->SysBubble() != nullptr)) {
         SetBallSpeed sbms;
             sbms.entityID = mySE->GetID();
             sbms.speed = m_maxShipSpeed;
         PyTuple* up = sbms.Encode();
         SendSingleDestinyUpdate(&up);   // consumed
     }
+}
+
+float DestinyManager::GetWebFactor() const
+{
+    if (m_webs.empty())
+        return 1.0f;
+    // webs are stacking penalised like modules:  the strongest in full, the next ones less (npc ai plan 5.8)
+    const size_t maxWebs(32);
+    double factors[maxWebs];
+    size_t count(0);
+    for (auto& cur : m_webs) {
+        if (count >= maxWebs)
+            break;
+        factors[count++] = cur.second;
+    }
+    return static_cast<float>(NpcMath::StackedProduct(factors, count));
 }
 
 void DestinyManager::SpeedBoost(bool deactivate/*false*/)
@@ -1423,7 +1447,9 @@ void DestinyManager::SpeedBoost(bool deactivate/*false*/)
     m_alignTime = (-log(0.25) * m_shipAgility);
     m_shipMaxAccelTime = (-log(0.0001) * m_shipAgility);
     m_timeToEnterWarp = m_alignTime;
-    m_maxShipSpeed = mySE->GetSelf()->GetAttribute(AttrMaxVelocity).get_float();
+    // the new top speed, still webbed (bug B5:  the prop mod used to wipe webs)
+    m_requestedSpeed = mySE->GetSelf()->GetAttribute(AttrMaxVelocity).get_float();
+    ApplySpeed(false);
 
     // send out updated ship data
     std::vector<PyTuple*> updates;
@@ -1449,11 +1475,16 @@ void DestinyManager::SpeedBoost(bool deactivate/*false*/)
 
 void DestinyManager::WebbedMe(InventoryItemRef modRef, bool apply/*false*/)
 {
+    if (modRef.get() == nullptr)
+        return;
     if (apply) {
-        m_maxShipSpeed *= (1 + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+        // speedFactor -95..0 %.  nothing can make us faster or stop us outright
+        float factor(1.0f + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+        m_webs[modRef->itemID()] = EvE::min(1.0, EvE::max(factor, 0.0));
     } else {
-        m_maxShipSpeed /= (1 + (modRef->GetAttribute(AttrSpeedFactor).get_float() / 100.0f));
+        m_webs.erase(modRef->itemID());
     }
+    ApplySpeed(false);
     std::vector<PyTuple*> updates;
     SetBallSpeed sbms;
         sbms.entityID = mySE->GetID();
@@ -1489,13 +1520,15 @@ Battleships 0.155
     if (sRef->HasAttribute(AttrInetia))
         m_shipInertia = sRef->GetAttribute(AttrInetia).get_float();
     if (sRef->HasAttribute(AttrMaxVelocity))
-        m_maxShipSpeed = sRef->GetAttribute(AttrMaxVelocity).get_float();
+        m_requestedSpeed = sRef->GetAttribute(AttrMaxVelocity).get_float();
     if (sRef->HasAttribute(AttrWarpCapacitorNeed))
         m_warpCapacitorNeed = sRef->GetAttribute(AttrWarpCapacitorNeed).get_float() *2;
 
     // drones set their own speed for what they are doing (see DroneAIMgr)
     if (mySE->IsNPCSE())
-        m_maxShipSpeed = sRef->GetAttribute(AttrEntityCruiseSpeed).get_float();
+        m_requestedSpeed = sRef->GetAttribute(AttrEntityCruiseSpeed).get_float();
+    // webs on us stay on (bug B5)
+    ApplySpeed(false);
 
     /* The product of Mass and the Inertia Modifier gives the ship's agility
      * Agility = Mass x Inertia Modifier
@@ -1790,7 +1823,8 @@ void DestinyManager::TractorBeamStart(SystemEntity* pShipSE, EvilNumber speed)
 
     m_preTractorMass = m_mass;
     m_mass = 10000;
-    m_maxShipSpeed = speed.get_float();   //AttrMaxTractorVelocity
+    m_requestedSpeed = speed.get_float();   //AttrMaxTractorVelocity
+    m_maxShipSpeed = m_requestedSpeed;
     m_speedFraction = 1.0f;
     m_resetSpeedOnMove = false;
     int32 range(static_cast<int32>(500 + pShipSE->GetRadius()));
@@ -1829,6 +1863,7 @@ void DestinyManager::TractorBeamStop()
     m_thrust = GVector(NULL_ORIGIN);
     m_tractored = false;
     m_mass = m_preTractorMass;
+    m_requestedSpeed = 0;
     m_maxShipSpeed = 0;
     m_resetSpeedOnMove = true;
 

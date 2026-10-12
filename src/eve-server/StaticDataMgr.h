@@ -55,6 +55,8 @@ public:
     void                GetType(uint16 typeID, Inv::TypeData &into);
     void                GetTypes(std::map<uint16, Inv::TypeData> &into);
     const char*         GetAttrName(uint16 attrID);
+    // dgmAttributeTypes.defaultValue:  what dogma uses when a type doesn't have the attribute (0 for unknown attributes)
+    double              GetAttributeDefault(uint16 attrID) const;
     const char*         GetTypeName(uint16 typeID);     // not sure if this will be needed
     const char*         GetGroupName(uint16 grpID);
     const char*         GetCategoryName(uint8 catID);
@@ -223,6 +225,7 @@ private:
     std::map<uint16, std::string>                       m_skills;           // typeID/name
     std::map<uint32, StaticData>                        m_staticData;       // itemID/data
     std::map<uint16, AttrTypeData>                      m_attrTypeData;     // attrID/data
+    std::vector<double>                                 m_attrDefaults;     // attrID/defaultValue
 
     std::multimap<uint16, EvERam::RamMaterials>         m_ramMatl;          // itemTypeID/data
     std::multimap<uint16, EvERam::RamRequirements>      m_ramReq;           // bpTypeID/data

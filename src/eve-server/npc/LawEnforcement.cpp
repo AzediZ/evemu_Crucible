@@ -140,7 +140,7 @@ uint32 LawEnforcement::ConcordDelay()
     while (std::getline(ss, item, ','))
         table.push_back(atoi(item.c_str()));
     if (table.size() < 6)
-        table = {6, 6, 7, 10, 14, 19};
+        table = {2, 5, 10, 15, 20, 25};     // the default:  closest pre-Crucible measurements (npc ai plan, open question 3)
     float level(CrimeWatch::SecurityLevel(m_system->GetSystemSecurityRating()));
     int idx((int)roundf((1.0f - level) * 10.0f));
     if (idx < 0)
@@ -261,8 +261,10 @@ void LawEnforcement::SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave)
         GPoint pos(pTarget->GetPosition());
         pos.MakeRandomPointOnSphere(MakeRandomFloat(4000, 9000));
         NPC* pNPC(SpawnNPC(typeID, pos, factionID, corpID, r.shipID, r.kind));
-        if (pNPC != nullptr)
+        if (pNPC != nullptr) {
             r.npcs.push_back(pNPC);
+            m_npcResponse[pNPC] = (uint64_t)r.charID * 4 + r.kind;
+        }
     }
     _log(CRIME__INFO, "%s arrived for %s(%u) in %s (%lu ships).", (r.kind == Law::Concord ? "CONCORD" : "Faction police"),
             pTarget->GetName(), r.shipID, m_system->GetName(), r.npcs.size());
@@ -282,9 +284,13 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
     if ((pNPC == nullptr) or (pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
         return;
     Response* pResponse(nullptr);
-    for (auto& cur : m_responses)
-        if (std::find(cur.second.npcs.begin(), cur.second.npcs.end(), pNPC) != cur.second.npcs.end())
-            pResponse = &cur.second;
+    std::unordered_map<NPC*, uint64_t>::iterator nItr(m_npcResponse.find(pNPC));
+    if (nItr != m_npcResponse.end()) {
+        std::map<uint64_t, Response>::iterator rItr(m_responses.find(nItr->second));
+        if ((rItr != m_responses.end())
+        and (std::find(rItr->second.npcs.begin(), rItr->second.npcs.end(), pNPC) != rItr->second.npcs.end()))
+            pResponse = &rItr->second;
+    }
     if ((pResponse == nullptr) or (pResponse->shipID != pTarget->GetID()))
         return;
     Response& r = *pResponse;
@@ -313,7 +319,8 @@ void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
     }
     // jammed: loses its locks and can't lock anything while CONCORD is on it
     if (!r.jammed and (pTarget->TargetMgr() != nullptr)) {
-        pTarget->TargetMgr()->ClearAllTargets();
+        // its own locks only (ClearAllTargets() also broke CONCORD's lock on it, so CONCORD had to lock again before its next shot)
+        pTarget->TargetMgr()->LoseAllTargets();
         m_jammed.insert(r.shipID);
         r.jammed = true;
     }
@@ -342,8 +349,10 @@ void LawEnforcement::ReleaseTackle(Response& r)
 void LawEnforcement::Despawn(Response& r)
 {
     ReleaseTackle(r);
-    for (auto cur : r.npcs)
+    for (auto cur : r.npcs) {
+        m_npcResponse.erase(cur);
         RemoveLawNPC(m_system, cur);
+    }
     r.npcs.clear();
 }
 
@@ -360,6 +369,7 @@ void LawEnforcement::Process()
         std::vector<NPC*>::iterator nItr = r.npcs.begin();
         while (nItr != r.npcs.end()) {
             if ((*nItr)->IsDead()) {
+                m_npcResponse.erase(*nItr);
                 RemoveLawNPC(m_system, *nItr);
                 nItr = r.npcs.erase(nItr);
             } else {
@@ -550,6 +560,7 @@ void LawEnforcement::Close()
     for (auto cur : m_loggedOff)
         cur.second.pShipSE->GetShipItemRef()->SaveShip();
     m_responses.clear();
+    m_npcResponse.clear();
     m_loggedOff.clear();
     m_sentries.clear();
     m_jammed.clear();
