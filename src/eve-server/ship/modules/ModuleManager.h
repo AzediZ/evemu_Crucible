@@ -61,8 +61,9 @@ public:
     void Offline(uint32 itemID);
     void Online(EVEItemFlags flag);
     void Offline(EVEItemFlags flag);
-    // a fitted module went offline (manually, burnt out, forced).  stops its active bank.  call after offlining a module
-    void OnModuleWentOffline(GenericModule* pMod);
+    /* a fitted module went offline.  call after offlining a module.  manual (the pilot did it):  its bank is destroyed.
+     *  otherwise (burnt out, forced) the bank stays and stops */
+    void OnModuleWentOffline(GenericModule* pMod, bool manual=false);
     void OnlineAll();
     void OfflineAll();
     void Activate(int32 itemID, uint16 effectID, int32 targetID, int32 repeat);
@@ -86,12 +87,20 @@ public:
     // this is for repairing modules with nanite paste
     PyRep* ModuleRepair(uint32 modID);
     void StopModuleRepair(uint32 modID);
-    // this will move charge item to module and split stack if needed
-    // must NOT throw
-    void LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag);
-    // this will remove charge item from module and update client
+    /* this will move charge item to module and split stack if needed.  more of the loaded type tops it up, another type
+     *  swaps it out.  maxQty > 0 loads no more than that.  returns how many went in
+     * must NOT throw
+     */
+    int32 LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag, int32 maxQty=0);
+    // this will remove charge item from module (also one still loading) and update client
     // must NOT throw
     void UnloadCharge(GenericModule* pMod);
+    // the charge in pMod is destroyed (a crystal burnt out).  must NOT throw
+    void DestroyCharge(GenericModule* pMod);
+    // the charge in a slot, loaded or still loading.  nullptr if none
+    InventoryItemRef GetChargeInSlot(EVEItemFlags flag);
+    // the ship's effects were reset:  no module has its charge's effects on any more
+    void ChargeFxReset();
     // unload charge from module by itemID
     void UnloadModule(uint32 itemID);
     // unload charge from module by flag

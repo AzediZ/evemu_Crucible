@@ -31,7 +31,7 @@ public:
     //virtual void Deactivate(std::string effect="");
 
     //  functions to be handled in derived classes as needed
-    virtual void LoadCharge(InventoryItemRef charge);
+    virtual void LoadCharge(InventoryItemRef charge, bool instant=false);
     virtual void UnloadCharge();
     virtual bool CanActivate();
 

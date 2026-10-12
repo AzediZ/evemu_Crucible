@@ -8,6 +8,7 @@
 
 #include "eve-server.h"
 
+#include "EVE_Charges.h"
 #include "StatisticMgr.h"
 #include "exploration/Probes.h"
 #include "exploration/Scan.h"
@@ -76,54 +77,12 @@ m_heating(false)
     }
 
     // this is an internal variable only.
-    m_reloadTime = GetAttribute(AttrReloadTime).get_uint32();
-    /* our defaults:
-     *  4s for turrets and scrips
-     *  5s for snowball and probe launchers
-     *  6s for miners and remote scripts
-     *  7s for missile launchers
-     * 10s for others.
+    /* Crucible:  only hybrid turrets have reloadTime (5s).  everything else that loads charges (projectiles, crystals,
+     *  launchers, probes, cap booster charges, scripts) takes the attribute's dogma default of 10s
      */
-    if (m_needsCharge or m_usesCharge)  {
-        if (m_reloadTime < 1) {
-            switch (mRef->groupID()) {
-                case EVEDB::invGroups::Tracking_Link:
-                case EVEDB::invGroups::Projected_ECCM:
-                case EVEDB::invGroups::Sensor_Booster:
-                case EVEDB::invGroups::Signal_Amplifier:
-                case EVEDB::invGroups::Tracking_Enhancer:
-                case EVEDB::invGroups::Tracking_Computer:
-                case EVEDB::invGroups::Projectile_Weapon:
-                case EVEDB::invGroups::Tracking_Disruptor: {
-                    m_reloadTime = 4000;
-                } break;
-                case EVEDB::invGroups::Scan_Probe_Launcher:
-                case EVEDB::invGroups::Missile_Launcher_Snowball: {
-                    m_reloadTime = 5000;
-                } break;
-                case EVEDB::invGroups::Remote_Sensor_Damper:
-                case EVEDB::invGroups::Remote_Sensor_Booster:
-                case EVEDB::invGroups::Frequency_Mining_Laser: {
-                    m_reloadTime = 6000;
-                } break;
-                case EVEDB::invGroups::Missile_Launcher_Bomb:
-                case EVEDB::invGroups::Missile_Launcher_Heavy:
-                case EVEDB::invGroups::Missile_Launcher_Siege:
-                case EVEDB::invGroups::Missile_Launcher_Cruise:
-                case EVEDB::invGroups::Missile_Launcher_Rocket:
-                case EVEDB::invGroups::Missile_Launcher_Assault:
-                case EVEDB::invGroups::Missile_Launcher_Citadel:
-                case EVEDB::invGroups::Missile_Launcher_Standard:
-                case EVEDB::invGroups::Missile_Launcher_Defender:
-                case EVEDB::invGroups::Missile_Launcher_Heavy_Assault: {
-                    m_reloadTime = 7000;
-                } break;
-                default: {
-                    m_reloadTime = 10000;
-                } break;
-            }
-        }
-    }
+    m_reloadTime = 0;
+    if (m_needsCharge or m_usesCharge)
+        m_reloadTime = Charges::ReloadTimeMS(GetAttribute(AttrReloadTime).get_double());
 
     if (!m_shipRef->HasPilot())
         return;
@@ -326,18 +285,9 @@ void ActiveModule::CheckTargetRules(uint16 effectID)
 void ActiveModule::Process()
 {
     // the order of Reload/Unload is significant.
-    if (m_reloadTimer.Enabled()) {
-        if (m_reloadTimer.Check(false)) {
-            // charge loading complete
-            m_reloadTimer.Disable();
-            // apply charge effects here after loading is complete, but only for empty modules (no previous charge fx)
-            if (!m_chargeLoaded)
-                sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), true);
-
-            m_ChargeState = Module::State::Loaded;
-            m_chargeLoaded = true;
-        }
-    }
+    if (m_reloadTimer.Enabled())
+        if (m_reloadTimer.Check(false))
+            FinishLoading();
 
     if (m_ModuleState < Module::State::Deactivating)
         return;
@@ -387,12 +337,25 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         return;
     }
     CheckActivationRules();
+    // a module (or any weapon in its bank) that is loading or reloading can't fire
+    {
+        std::vector<GenericModule*> modules;
+        if (m_linkMaster)
+            m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
+        if (modules.empty())
+            modules.push_back(this);
+        for (auto cur : modules)
+            if (cur->IsLoading())
+                throw UserError ("CantActivateReloadingModule")
+                        .AddFormatValue ("moduleTypeID", new PyInt (typeID()));
+    }
     if (m_needsCharge and (!m_chargeLoaded or (m_chargeRef.get() == nullptr))) {
         _log(MODULE__TRACE, "ActiveModule::Activate - %s: needsCharge: %s, chargeLoaded: %s, chargeRef: %s", \
                 m_modRef->name(), m_needsCharge?"True":"False", m_chargeLoaded?"True":"False", \
                 m_chargeRef.get() == nullptr ? "(none)": m_chargeRef->name());
         Clear();
-        throw CustomError ("Your %s doesn't seem to be loaded.", m_modRef->name());
+        throw UserError ("NoCharges")
+                .AddTypeName ("launcher", typeID());
     }
     // warp disruption field generator: a loaded script makes it a targeted point, otherwise it's a sphere around us
     if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
@@ -720,9 +683,23 @@ uint32 ActiveModule::DoCycle() {
             LaunchMissile();
         } break;
         case EVEDB::invGroups::Capacitor_Booster:{
+            /* the charge holds the capacitor (capacitorBonus, effect powerBooster).  one charge at the start of each cycle,
+             *  repeating like any other module until the charges run out
+             */
+            if (m_chargeRef.get() == nullptr) {
+                m_Stop = true;
+                break;
+            }
+            float bonus(m_chargeRef->GetAttribute(AttrCapacitorBonus).get_float());
             ConsumeCharge();
-            UpdateCharge(AttrCapacitorCharge, AttrCapacitorCapacity, AttrPowerTransferAmount, m_shipRef);
-            m_repeat = 1;
+            float capacity(m_shipRef->GetAttribute(AttrCapacitorCapacity).get_float());
+            float charge(m_shipRef->GetAttribute(AttrCapacitorCharge).get_float() + bonus);
+            if (charge >= capacity) {
+                charge = capacity;
+                if (m_shipRef->HasPilot() and m_shipRef->GetPilot()->AutoStop())
+                    Deactivate();
+            }
+            m_shipRef->SetAttribute(AttrCapacitorCharge, charge);
         } break;
         case EVEDB::invGroups::Energy_Destabilizer: {
             if (m_targetSE != nullptr)
@@ -1109,7 +1086,7 @@ void ActiveModule::SetTimer(uint32 time) {
     m_timer.Start(time);
 }
 
-void ActiveModule::LoadCharge(InventoryItemRef chargeRef)
+void ActiveModule::LoadCharge(InventoryItemRef chargeRef, bool instant/*false*/)
 {
     _log(MODULE__TRACE, "%s(%u) calling AM::LoadCharge()", m_modRef->name(), m_modRef->itemID());
 
@@ -1118,71 +1095,81 @@ void ActiveModule::LoadCharge(InventoryItemRef chargeRef)
         return;
     }
 
+    /* ModuleManager passes the charge that is in the slot.  the same item again means more of it was merged in (a reload with
+     *  the same type, or a second stack while loading), anything else is a new charge (a different type is unloaded first)
+     */
     Client* pClient(m_shipRef->GetPilot());
-    if (pClient == nullptr) {
-        _log(MODULE__WARNING, "ActiveModule::LoadCharge() for %s - Pilot is null.  Cannot load charge.", m_modRef->name());
-        // these are just in case...
-        m_chargeRef = InventoryItemRef(nullptr);
+    bool sameCharge(m_chargeRef.get() == chargeRef.get());
+    if (!sameCharge) {
+        // whatever was here before is gone.  its effects come off first
+        if ((pClient != nullptr) and ParseChargeFx(false))
+            sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), pClient->IsInSpace());
+        m_chargeFx = false;
+        m_chargeRef = chargeRef;
+        m_chargeLoaded = false;
+        m_ChargeState = Module::State::Unloaded;
+        m_reloadTimer.Disable();
+
+        // a charge loaded in space missed the ship's effects pass: give it the pilot's missile (etc) bonuses now.
+        //  docked, login and undocking loads get them from ShipItem::ProcessEffects()
+        if ((pClient != nullptr) and !pClient->IsLogin() and pClient->IsInSpace() and !m_shipRef->IsUndocking())
+            sFxProc.ApplyOwnerModifiers(chargeRef, pClient->GetChar().get(), m_shipRef.get());
+    }
+
+    // the ship's own fitting (login, boarding, no pilot) is already loaded, and docked loading is instant
+    if (instant or (pClient == nullptr) or pClient->IsLogin() or !pClient->IsInSpace() or (m_reloadTime < 1)) {
+        FinishLoading();
+        return;
+    }
+
+    // more charges going in while this one is still loading:  the reload already running covers them
+    if (sameCharge and IsLoading())
+        return;
+
+    // an empty module is loading, a loaded one reloading (its charge keeps working once the reload is done, it can't fire meanwhile)
+    m_ChargeState = (m_chargeLoaded ? Module::State::Reloading : Module::State::Loading);
+    m_reloadTimer.Disable();
+    m_reloadTimer.Start(m_reloadTime);
+
+    /*  **** this sets "reload blink" status on weapon button, and the LauncherLoadDelay message
+     * def OnChargeBeingLoadedToModule(self, moduleIDs, chargeTypeID, reloadTime):
+     *  {returns}
+     *        [PyTuple 3 items]
+     *          [PyTuple 1 items]
+     *            [PyIntegerVar 1005885547063]  << moduleID (can be multiple, each module of a bank sends its own)
+     *          [PyInt 203]                     << chargeTypeID
+     *          [PyFloat 10000]                 << reloadTime (ms)
+     */
+    PyTuple* module = new PyTuple(1);
+        module->SetItem(0, new PyInt(m_modRef->itemID()));
+    PyTuple* tmp = new PyTuple(3);
+        tmp->SetItem(0, module);
+        tmp->SetItem(1, new PyInt(chargeRef->typeID()));
+        tmp->SetItem(2, new PyInt(m_reloadTime));
+    pClient->SendNotification("OnChargeBeingLoadedToModule", "shipid", &tmp);
+}
+
+void ActiveModule::FinishLoading()
+{
+    m_reloadTimer.Disable();
+    if (m_chargeRef.get() == nullptr) {
+        // the charge went away while it was loading (unfit, destroyed)
         m_chargeLoaded = false;
         m_ChargeState = Module::State::Unloaded;
         return;
     }
 
-    uint8 loadQty(chargeRef->quantity());
+    m_ChargeState = Module::State::Loaded;
+    m_chargeLoaded = true;
 
-    if (m_ChargeState == Module::State::Loaded) {
-        m_ChargeState = Module::State::Reloading;
-        if (m_chargeRef.get() != nullptr)
-            loadQty += m_chargeRef->quantity();
-        // dont change chargeRef if we're just reloading. new chargeRef is deleted on merge
-    } else {
-        m_ChargeState = Module::State::Loading;
-        m_chargeRef = chargeRef;
-    }
-
-    if (!pClient->IsLogin()) {
-        // a charge loaded in space missed the ship's effects pass: give it the pilot's missile (etc) bonuses now.
-        //  docked and undocking loads get them from ShipItem::ProcessEffects()
-        if (pClient->IsInSpace() and !m_shipRef->IsUndocking())
-            sFxProc.ApplyOwnerModifiers(chargeRef, pClient->GetChar().get(), m_shipRef.get());
-        // process new charge's effects (load timer will determine if fx are applied based on existing charge)
-        // GM::Online proc fx when client logs in...this is to avoid dupe calls
-        for (auto it : chargeRef->type().m_stateFxMap) {
-            fxData data = fxData();
-            data.action = FX::Action::Invalid;
-            data.srcRef = chargeRef;
-            sFxProc.ParseExpression(m_modRef.get(), sFxDataMgr.GetExpression(it.second.preExpression), data, this);
-        }
-        if (pClient->IsInSpace()) {
-            /*  **** this sets "reload blink" status on weapon button
-             * def OnChargeBeingLoadedToModule(self, moduleIDs, chargeTypeID, reloadTime):
-             *  {returns}
-             *        [PyTuple 3 items]
-             *          [PyTuple 1 items]
-             *            [PyIntegerVar 1005885547063]  << moduleID (can be multiple, but not coded for multiples yet)
-             *          [PyInt 203]                     << chargeTypeID
-             *          [PyFloat 10000]                 << reloadTime (ms)
-             */
-            PyTuple* module = new PyTuple(1);
-                module->SetItem(0, new PyInt(m_modRef->itemID()));
-            PyTuple* tmp = new PyTuple(3);
-                tmp->SetItem(0, module);
-                tmp->SetItem(1, new PyInt(chargeRef->typeID()));
-                tmp->SetItem(2, new PyInt(m_reloadTime));
-            pClient->SendNotification("OnChargeBeingLoadedToModule", "shipid", &tmp);
-            m_reloadTimer.Start(m_reloadTime);
-        }
-    }
-
-    if (!m_reloadTimer.Enabled()) {
-        // apply charge effects only for empty modules (no previous charge fx)
-        if (!m_chargeLoaded)
-            sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), true);
-
-        // set immediately on login or when docked
-        m_chargeLoaded = true;
-        m_ChargeState = Module::State::Loaded;
-    }
+    /* a new charge's effects go on an online module now.  a reload keeps the effects it had.  offline modules and logins get
+     *  them from Online()
+     */
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or pClient->IsLogin() or (m_ModuleState < Module::State::Online))
+        return;
+    if (ParseChargeFx(true))
+        sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), pClient->IsInSpace());
 }
 
 //{'FullPath': u'UI/Messages', 'messageID': 259200, 'label': u'NoChargesBody'}(u'{launcher} has run out of charges', None, {u'{launcher}': {'conditionalValues': [], 'variableType': 10, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'launcher'}})
@@ -1195,29 +1182,34 @@ void ActiveModule::UnloadCharge()
 {
     _log(MODULE__TRACE, "%s(%u) calling AM::UnloadCharge()", m_modRef->name(), m_modRef->itemID());
 
-    // make sure module isnt currently active
+    /* make sure module isnt currently active.  a module that ran out (or lost its crystal) finishes the cycle it is in and stops.
+     *  m_Stop is set too, for the first cycle of an activation (the module isn't Activated yet while that cycle fires)
+     */
     Deactivate();
+    m_Stop = true;
+    // a reload in progress is cancelled with the charge
+    m_reloadTimer.Disable();
 
-    if (m_chargeRef.get() != nullptr) {
+    Client* pClient(m_shipRef->GetPilot());
+    // civilian turrets keep their own item as the "charge"
+    if ((m_chargeRef.get() != nullptr) and (m_chargeRef.get() != m_modRef.get())) {
         if (m_chargeRef->HasAttribute(AttrUnfitCapCost)) {
             float cap(m_shipRef->GetAttribute(AttrCapacitorCharge).get_float());
             cap -= m_chargeRef->GetAttribute(AttrUnfitCapCost).get_float();
             m_shipRef->SetAttribute(AttrCapacitorCharge, cap);
         }
 
-        m_modRef->ClearModifiers();
-        for (auto it : m_chargeRef->type().m_stateFxMap) {
-            fxData data = fxData();
-            data.action = FX::Action::Invalid;
-            data.srcRef = m_chargeRef;
-            sFxProc.ParseExpression(m_modRef.get(), sFxDataMgr.GetExpression(it.second.postExpression), data, this);
+        // the charge's effects come off, if they are on (an offline module has them off already, a loading charge never had them)
+        if (pClient != nullptr) {
+            m_modRef->ClearModifiers();
+            // apply to containing module to properly remove effects  -this doesnt work right for scripts.
+            if (ParseChargeFx(false))
+                sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), pClient->IsInSpace());
         }
-
-        // apply to containing module to properly remove effects  -this doesnt work right for scripts.
-        sFxProc.ApplyEffects(m_modRef.get(), m_shipRef->GetPilot()->GetChar().get(), m_shipRef.get(), m_shipRef->GetPilot()->IsInSpace());
+        m_chargeRef = InventoryItemRef(nullptr);       // Ensure ref is NULL
     }
 
-    m_chargeRef = InventoryItemRef(nullptr);       // Ensure ref is NULL
+    m_chargeFx = false;
     m_ChargeState = Module::State::Unloaded;
     m_chargeLoaded = false;
 
@@ -1246,15 +1238,25 @@ void ActiveModule::UnloadCharge()
 }
 
 void ActiveModule::ConsumeCharge() {
-    if (m_linkMaster) {
-        // remove charges from linked modules as applicable
-        std::vector<GenericModule*> modules;
+    /* one charge per cycle from every online, loaded weapon of the bank (just this module when not banked).
+     *  only used in space:  the stack size goes to the client as the charge's quantity attribute (OMAC), not as an ixStacksize
+     *  update.  the last one empties the module:  the item is deleted, which unloads it (ShipItem::RemoveItem) and stops the
+     *  module at the end of this cycle.  the client's auto reload (a client setting) then asks for a reload (LoadAmmoToBank)
+     */
+    std::vector<GenericModule*> modules;
+    if (m_linkMaster)
         m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
-        for (auto cur : modules)
-            if (cur->isOnline() and cur->IsLoaded())
-                cur->GetLoadedChargeRef()->AlterQuantity(-1, cur->IsLoaded());
-    } else {
-        m_chargeRef->AlterQuantity(-1, false);  // only used in space.  dont send ixStacksize update
+    if (modules.empty())
+        modules.push_back(this);
+
+    for (auto cur : modules) {
+        if (!cur->isOnline() or !cur->IsLoaded())
+            continue;
+        InventoryItemRef cRef(cur->GetLoadedChargeRef());
+        // civilian turrets keep their own item as the "charge"
+        if ((cRef.get() == nullptr) or (cRef.get() == cur->GetSelf().get()) or (cRef->quantity() < 1))
+            continue;
+        cRef->AlterQuantity(-1, false);
     }
 }
 
@@ -1718,6 +1720,11 @@ void ActiveModule::LaunchMissile()
     Client* pClient = m_shipRef->GetPilot();
     if (pClient == nullptr)
         return;
+    // the launcher ran out (or was unloaded) since it was activated.  it stops at the end of this cycle
+    if ((m_chargeRef.get() == nullptr) or (m_targetSE == nullptr)) {
+        m_Stop = true;
+        return;
+    }
     ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position() );
     InventoryItemRef missileRef = sItemFactory.SpawnItem(idata);
     if (missileRef.get() == nullptr) {
@@ -1766,6 +1773,10 @@ void ActiveModule::LaunchProbe()
     Client* pClient = m_shipRef->GetPilot();
     if (pClient == nullptr)
         return;
+    if (m_chargeRef.get() == nullptr) {
+        m_Stop = true;
+        return;
+    }
 
     // survey probes fly to a moon and report its materials.  they aren't scanner probes
     if (m_chargeRef->groupID() == EVEDB::invGroups::Survey_Probe) {
@@ -1796,9 +1807,13 @@ void ActiveModule::LaunchProbe()
     // we are not changing singleton status of probes
     ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagNone, 1);
     ProbeItemRef probeRef = sItemFactory.SpawnProbe(idata);
-    if (probeRef.get() == nullptr)
-        throw CustomError ("Unable to spawn item #%u:'%s' of type %u.", \
-                m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID() );
+    if (probeRef.get() == nullptr) {
+        // must not throw here:  this runs in the module's cycle too
+        _log(ITEM__ERROR, "Unable to spawn item #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
+        pClient->SendErrorMsg("Your %s in %s experienced a launching error and was disabled.", m_chargeRef->name(), m_modRef->name());
+        m_Stop = true;
+        return;
+    }
 
     probeRef->SetPosition(pos);
     SystemManager* pSystem = pClient->SystemMgr();

@@ -30,9 +30,11 @@ public:
 
     /* GenericModule overrides */
     virtual void        Process();
-    // this will not move charge item.
-    // must NOT throw
-    virtual void        LoadCharge(InventoryItemRef charge);
+    /* this will not move charge item.  charge is the charge in the slot (ModuleManager merges more of the same type into it).
+     *  in space this takes the reload time (OnChargeBeingLoadedToModule), unless instant (the ship's own fitting loading)
+     * must NOT throw
+     */
+    virtual void        LoadCharge(InventoryItemRef charge, bool instant=false);
     // this will not move charge item.
     // must NOT throw
     virtual void        UnloadCharge();
@@ -133,6 +135,9 @@ protected:
 private:
     Timer               m_timer;
     Timer               m_reloadTimer;
+
+    // the charge is in:  loaded, and a new charge's effects go on the (online) module
+    void                FinishLoading();
 
     /* ship and cargo scanners:  results at the end of the cycle (OnShipScanCompleted / OnCargoScanComplete) */
     void                ShipScanResult();

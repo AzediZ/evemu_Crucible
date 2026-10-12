@@ -35,6 +35,7 @@
 #include "pos/POS_AI.h"
 #include "effects/EffectsDataMgr.h"
 #include "ship/modules/GenericModule.h"
+#include "ship/modules/ModuleManager.h"
 #include "npc/LawEnforcement.h"
 #include "system/Container.h"
 #include "system/SystemManager.h"
@@ -228,7 +229,7 @@ PyResult DogmaIMBound::TakeModuleOffline(PyCallArgs& call, PyInt* locationID, Py
 
 PyResult DogmaIMBound::LoadAmmoToModules(PyCallArgs& call, PyInt* shipID, PyList* cModuleIDs, PyInt* chargeTypeID, PyInt* itemID, PyInt* ammoLocationId) {
     //  self.remoteDogmaLM.LoadAmmoToModules(shipID, moduleIDs, chargeTypeID, itemID, ammoLocationID, qty=qty)
-    //  NOTE:  this call seems to be a list of moduleIDs with ONLY a single module.
+    //  NOTE:  this call seems to be a list of moduleIDs with ONLY a single module.  (the item menu's fit to active ship)
     /* 02:13:11 [SvcCall]       Tuple: 5 elements
      * 02:13:11 [SvcCall]         [ 0] Integer field: 140000602     <- ship
      * 02:13:11 [SvcCall]         [ 1] List: 1 elements
@@ -257,19 +258,22 @@ PyResult DogmaIMBound::LoadAmmoToModules(PyCallArgs& call, PyInt* shipID, PyList
 
     if (moduleIDs.empty())
         return nullptr;
-    if (moduleIDs.size() > 1) {
-        sLog.Error("DogmaIMBound::Handle_LoadAmmoToModules()", "args.moduleIDs.size = %lu.", moduleIDs.size() );
-        call.Dump(MODULE__WARNING);
-    }
 
-    // Get Reference to Ship and Charge
+    int32 qty(0);
+    std::map<std::string, PyRep*>::iterator qItr = call.byname.find("qty");
+    if ((qItr != call.byname.end()) and (qItr->second != nullptr) and qItr->second->IsInt())
+        qty = qItr->second->AsInt()->value();
+
+    // Get Reference to Ship and Charge.  a grouped module loads its bank
     ShipItemRef sRef = call.client->GetShip();
-    GenericModule* pMod = sRef->GetModule(sItemFactory.GetItemRef(moduleIDs[0])->flag());
-    if (pMod == nullptr)
-        throw UserError ("ModuleNoLongerPresentForCharges");
-
-    InventoryItemRef cRef = sItemFactory.GetItemRef(itemID->value());
-    sRef->LoadCharge(cRef, pMod->flag());
+    std::vector<int32> chargeIDs;
+    chargeIDs.push_back(itemID->value());
+    for (auto moduleID : moduleIDs) {
+        GenericModule* pMod(sRef->GetModuleManager()->GetModule((uint32)moduleID));
+        if ((pMod == nullptr) or (pMod->itemID() != (uint32)moduleID))
+            throw UserError ("ModuleNoLongerPresentForCharges");
+        sRef->LoadAmmo(pMod, chargeIDs, qty);
+    }
 
     // returns nodeID and timestamp
     return this->GetOID();
@@ -280,6 +284,8 @@ PyResult DogmaIMBound::LoadAmmoToBank(PyCallArgs& call, PyInt* shipID, PyInt* ma
    * self.remoteDogmaLM.LoadAmmoToBank(shipID, masterID, chargeTypeID,  itemIDs,  chargeLocationID,   qty)
    *                                    ship,   module,  charge type, charge item, charge location, stack qty (usually none - havent found otherwise)
    *   *******    UPDATED VAR NAMES TO MATCH CLIENT CODE  -allan 26Jul14  *************
+   *  the client's reload, reload all, ammo change, drag and drop and auto reload (its autoreload setting, per module) all come here.
+   *  itemIDs are every stack of the type in cargo (or the dropped ones), qty is the shift-drag amount
    */
   _log(MODULE__TRACE, "DogmaIMBound::Handle_LoadAmmoToBank()");
   call.Dump(MODULE__TRACE);
@@ -313,21 +319,14 @@ PyResult DogmaIMBound::LoadAmmoToBank(PyCallArgs& call, PyInt* shipID, PyInt* ma
     if (sRef->itemID() != shipID->value())
         sLog.Error("DogmaIMBound::Handle_LoadAmmoToBank()", "passed shipID %u != current shipID %u.", shipID->value(), sRef->itemID() );
 
-    // if shipID passed in call isnt active ship (from client->GetShip()), would this work right?
-    GenericModule* pMod = sRef->GetModule(sItemFactory.GetItemRef(masterID->value())->flag());
-    if (pMod == nullptr)
+    GenericModule* pMod(sRef->GetModuleManager()->GetModule((uint32)masterID->value()));
+    if ((pMod == nullptr) or (pMod->itemID() != (uint32)masterID->value()))
         throw UserError ("ModuleNoLongerPresentForCharges");
 
-    // figure out how to use args.qty for loading less-than-full charges
-    //  LoadCharge() can be easily updated to do this.
-    if (pMod->IsLinked()) {
-        sRef->LoadLinkedWeapons(pMod, itemIDs);
-    } else {
-        sRef->LoadCharge(sItemFactory.GetItemRef(itemIDs.at(0)), pMod->flag());
-    }
-
-    // not sure why im not using this, as call is to load bank...
-    //sRef->LoadChargesToBank(pMod->flag(), args.itemIDs);
+    int32 count(0);
+    if (qty.has_value() and (qty.value() != nullptr))
+        count = qty.value()->value();
+    sRef->LoadAmmo(pMod, itemIDs, count);
 
     // returns nodeID and timestamp
     return this->GetOID();

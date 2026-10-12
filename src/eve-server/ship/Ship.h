@@ -214,8 +214,11 @@ public:
     uint32 AddItemByFlag( EVEItemFlags flag, InventoryItemRef iRef, Client* pClient=nullptr);
     // this can throw. returns nothing
     void LoadCharge(InventoryItemRef cRef, EVEItemFlags flag);
-    // this can throw. returns nothing
-    void LoadChargesToBank(EVEItemFlags flag, std::vector<int32>& chargeIDs);
+    /* this can throw. returns nothing.  loads pMod (its whole bank when grouped) from the stacks in chargeIDs (one type, in
+     *  cargo or the station hangar), split evenly over the bank.  qty > 0 loads at most that many */
+    void LoadAmmo(GenericModule* pMod, std::vector<int32>& chargeIDs, int32 qty=0);
+    // throws the client's error when pMod (or its bank) is active or loading
+    void CheckChargeLoadable(GenericModule* pMod, InventoryItemRef cRef);
     // called by client for subLocation (charge) removal
     void RemoveCharge(EVEItemFlags fromFlag);
     /* end new module manager interface */
@@ -290,8 +293,6 @@ public:
     void UnlinkGroup(uint32 memberID, bool update=false, bool force=false);
     void UnlinkAllWeapons(bool force=false);
     PyRep* GetLinkedWeapons();
-    // to load with ammo
-    void LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs);
     void GetLinkedWeaponMods(EVEItemFlags flag, std::vector<GenericModule*> &modules);
 
 protected:

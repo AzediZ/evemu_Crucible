@@ -2,6 +2,7 @@
 #include "Client.h"
 #include "EntityList.h"
 #include "EVEServerConfig.h"
+#include "EVE_Charges.h"
 #include "EVE_Mail.h"
 #include "Profiler.h"
 #include "StaticDataMgr.h"
@@ -430,6 +431,8 @@ void ShipItem::Dock() {
     m_ModuleManager->ClearOverloads();
     StopHeating();
     m_onlineModuleVec.clear();
+    // the reset below reloads charge attributes from the db (crystal damage)
+    m_ModuleManager->SaveModules();
     // remove ship effects and char skill effects for docking.
     ProcessEffects();
 }
@@ -566,9 +569,12 @@ uint32 ShipItem::AddItemByFlag(EVEItemFlags flag, InventoryItemRef iRef, Client*
 
     if (IsModuleSlot(flag)) {
         if (iRef->categoryID() == EVEDB::invCategories::Charge) {
-            iRef->ChangeSingleton(false, false);
+            // damaged crystals stay assembled
+            if (iRef->GetAttribute(AttrDamage) <= EvilZero)
+                iRef->ChangeSingleton(false, false);
             m_ModuleManager->LoadCharge(iRef, flag);
-            iRef = m_ModuleManager->GetLoadedChargeOnModule(flag);
+            // the charge in the slot (also while it is still loading in space)
+            iRef = m_ModuleManager->GetChargeInSlot(flag);
             if (iRef.get() == nullptr)
                 return 0;
             return iRef->itemID();
@@ -683,46 +689,9 @@ void ShipItem::LoadCharge(InventoryItemRef cRef, EVEItemFlags flag)
     if (!IsFittingSlot(flag))
         throw CustomError ("Destination is not weapon.");
 
-    if (IsFittingSlot(cRef->flag())) {
-        _log(MODULE__TRACE, "ShipItem::LoadCharge - Trying to load %s from %s to %s.", \
-                    cRef->name(), sDataMgr.GetFlagName(cRef->flag()), sDataMgr.GetFlagName(flag));
-        throw UserError ("CantMoveChargesBetweenModules");
-    }
-
-    GenericModule* pMod(m_ModuleManager->GetModule(flag));
-    if (pMod == nullptr)
-        throw UserError ("ModuleNoLongerPresentForCharges");
-
-    if (pMod->IsActive()) {
-        throw CustomError ("You cannot load active modules.");
-        /*
-        std::map<std::string, PyRep *> args;
-        args["chargeType"] = new PyInt(iRef->typeID());
-        throw PyException( MakeUserError("LoadingChargeSlotAlready", args));  */
-        /*LoadingChargeSlotAlreadyBody'}(u'You cannot load the {[item]chargeType.name} because the module is already involved in another loading operation.'
-         * , None, {u'{[item]chargeType.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'chargeType'}})
-         */
-    }
-    if (pMod->GetModuleState() == Module::State::Loading) {
-        throw UserError ("LoadingChargeSlotAlready")
-                .AddFormatValue ("chargeType", new PyInt (cRef->typeID ()));
-        //throw PyException( MakeUserError("LoadingChargeAlready", args));
-        /*LoadingChargeAlreadyBody'}(u'Some or all of {[item]chargeType.name} is already being loaded into a module.
-         * If you wish to load what remains, you will have to wait until this is finished.',
-         * None, {u'{[item]chargeType.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'chargeType'}})
-         */
-    }
-
-    VerifyHoldType(flag, cRef, m_pilot);
-        /*  this doesnt work right....comment for now.
-        std::map<std::string, PyRep *> args;
-        args["charge"] = new PyInt(iRef->itemID());
-        throw UserError ("ChargeLoadingFailedWithRefund");
-        */
-        /* ChargeLoadingFailedWithRefundBody'}(u'Your {[item]charge.name} failed to load and was returned to your cargo.',
-         * None, {u'{[item]charge.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'charge'}})
-         */
-    m_ModuleManager->LoadCharge(cRef, flag);
+    std::vector<int32> chargeIDs;
+    chargeIDs.push_back(cRef->itemID());
+    LoadAmmo(m_ModuleManager->GetModule(flag), chargeIDs);
 }
 /*
  * ChargeRequiresLauncher
@@ -734,59 +703,144 @@ NotEnoughChargeSpace  {'FullPath': u'UI/Messages', 'messageID': 259162, 'label':
 
  */
 
-// only called from dogma call.  can throw
-void ShipItem::LoadChargesToBank(EVEItemFlags flag, std::vector< int32 >& chargeIDs)
+// can throw.  the client's errors
+void ShipItem::CheckChargeLoadable(GenericModule* pMod, InventoryItemRef cRef)
 {
-    int8 pos = 0;
-    InventoryItemRef cRef(nullptr);
-    std::vector<GenericModule*> modVec;
-    m_ModuleManager->GetModulesInBank(flag, modVec);
-    for (auto cur : modVec) {
-        if (pos + 1 > chargeIDs.size())
-            return;
-        cRef = sItemFactory.GetItemRef(chargeIDs[pos]);
-        if (cRef.get() == nullptr) {
-            ++pos;
-            continue;
-        }
-        if (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())) {
-            LoadCharge(cRef, cur->flag());
-        } else {
-            ++pos;
-        }
+    if (pMod == nullptr)
+        throw UserError ("ModuleNoLongerPresentForCharges");
+    // a bank loads (and fires) as one.  its master's state is the bank's
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    for (auto cur : modules) {
+        // "You cannot load or unload {typeID} while it is active."
+        if (cur->IsActive())
+            throw UserError ("CannotLoadActiveLauncher")
+                    .AddFormatValue ("typeID", new PyInt (cur->typeID()));
+        // "...because the module is already involved in another loading operation."
+        if (cur->IsLoading())
+            throw UserError ("LoadingChargeSlotAlready")
+                    .AddFormatValue ("chargeType", new PyInt (cRef.get() == nullptr ? cur->typeID() : cRef->typeID()));
     }
 }
 
-// only called from dogma call.  can throw
-void ShipItem::LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs)
+/* only called from dogma calls.  can throw.
+ *  the client's LoadAmmoToBank (reload, ammo change, auto reload) and LoadAmmoToModules send the stacks to load from, all of
+ *  one type:  the cargo hold, or the hangar when docked.  a grouped module loads its whole bank, the charges split evenly
+ *  over it (Charges::SplitAcrossBank).  a module loaded with another type has it swapped out.  qty > 0 loads at most that many
+ */
+void ShipItem::LoadAmmo(GenericModule* pMod, std::vector<int32>& chargeIDs, int32 qty/*0*/)
 {
-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
-    if (itr == m_linkedWeapons.end())
+    if (pMod == nullptr)
+        throw UserError ("ModuleNoLongerPresentForCharges");
+    if (m_pilot == nullptr)
         return;
 
-    int8 pos = 0;
-    InventoryItemRef cRef(sItemFactory.GetItemRef(chargeIDs[pos]));
-    if (cRef.get() == nullptr)
+    bool docked(m_pilot->IsDocked());
+    std::vector<InventoryItemRef> stacks;
+    for (auto id : chargeIDs) {
+        InventoryItemRef cRef(sItemFactory.GetItemRef(id));
+        if ((cRef.get() == nullptr) or (cRef->quantity() < 1))
+            continue;
+        if (IsFittingSlot(cRef->flag())) {
+            _log(MODULE__TRACE, "ShipItem::LoadAmmo - Trying to load %s from %s to %s.", \
+                        cRef->name(), sDataMgr.GetFlagName(cRef->flag()), sDataMgr.GetFlagName(pMod->flag()));
+            throw UserError ("CantMoveChargesBetweenModules");
+        }
+        if (cRef->categoryID() != EVEDB::invCategories::Charge)
+            continue;
+        bool inCargo((cRef->locationID() == m_itemID) and IsCargoHoldFlag(cRef->flag()));
+        bool inHangar(docked and (cRef->locationID() == locationID()) and (cRef->flag() == flagHangar)
+                and (cRef->ownerID() == m_pilot->GetCharacterID()));
+        if (!inCargo and !inHangar)
+            continue;
+        if (!stacks.empty() and (cRef->typeID() != stacks.front()->typeID()))
+            continue;
+        stacks.push_back(cRef);
+    }
+    if (stacks.empty())
         throw UserError ("CantFindChargeToAdd");
 
-    int8 size(chargeIDs.size());
-    //load charge in master
-    VerifyHoldType(pMod->flag(), cRef, m_pilot);
-    m_ModuleManager->LoadCharge(cRef, pMod->flag());
-    // loop thru slaves and load charge(s)
-    std::list<GenericModule*>::iterator itr2 = itr->second.begin();
-    while ((itr2 != itr->second.end()) and (pos < size)) {
-        cRef = sItemFactory.GetItemRef(chargeIDs[pos]);
-        if (cRef.get() == nullptr){
-            ++pos;
-        } else if (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())) {
-            VerifyHoldType((*itr2)->flag(), cRef, m_pilot);
-            m_ModuleManager->LoadCharge(cRef, (*itr2)->flag());
-            ++itr2;
-        } else {
-            ++pos;
+    InventoryItemRef first(stacks.front());
+    std::vector<GenericModule*> modules;
+    GetBankMembers(pMod, modules);
+    // every module of the bank must take this charge (size, group, skills), and be idle
+    for (auto cur : modules)
+        VerifyHoldType(cur->flag(), first, m_pilot);
+        /*  this doesnt work right....comment for now.
+        std::map<std::string, PyRep *> args;
+        args["charge"] = new PyInt(iRef->itemID());
+        throw UserError ("ChargeLoadingFailedWithRefund");
+        */
+        /* ChargeLoadingFailedWithRefundBody'}(u'Your {[item]charge.name} failed to load and was returned to your cargo.',
+         * None, {u'{[item]charge.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'charge'}})
+         */
+    CheckChargeLoadable(pMod, first);
+
+    // what each module has room for.  one holding another type gets all of its room, its charges go out
+    double volume(first->GetAttribute(AttrVolume).get_double());
+    std::vector<int32> room, share;
+    std::vector<double> swapVolume;
+    for (auto cur : modules) {
+        InventoryItemRef loaded(m_ModuleManager->GetChargeInSlot(cur->flag()));
+        int32 have(0);
+        double swap(0);
+        if (loaded.get() != nullptr) {
+            if (loaded->typeID() == first->typeID()) {
+                have = loaded->quantity();
+            } else {
+                swap = loaded->quantity() * loaded->GetAttribute(AttrVolume).get_double();
+            }
+        }
+        room.push_back(Charges::RoomFor(cur->GetAttribute(AttrCapacity).get_double(), volume, have));
+        swapVolume.push_back(swap);
+    }
+    int64 available(0);
+    for (auto cur : stacks)
+        available += cur->quantity();
+    if ((qty > 0) and (available > qty))
+        available = qty;
+    if (available > 0x7fffffff)
+        available = 0x7fffffff;
+    Charges::SplitAcrossBank((int32)available, room, share);
+
+    /* swapped out charges go to the cargo hold in space ("There is not enough space in the cargo hold for the charges
+     *  currently in the {item} to be moved into.").  the charges leaving the cargo make room for them
+     */
+    if (!docked) {
+        double out(0), in(0);
+        for (size_t i = 0; i < modules.size(); ++i)
+            if (share[i] > 0) {
+                out += swapVolume[i];
+                in += share[i] * volume;
+            }
+        if ((out > 0) and ((GetRemainingVolumeByFlag(flagCargoHold) + (first->locationID() == m_itemID ? in : 0)) < out))
+            throw UserError ("NoSpaceForReplacedItem")
+                    .AddTypeName ("item", pMod->typeID());
+    }
+
+    bool full(true);
+    size_t s(0);
+    for (size_t i = 0; i < modules.size(); ++i) {
+        int32 want(share[i]);
+        if (want < room[i])
+            full = false;
+        while ((want > 0) and (s < stacks.size())) {
+            InventoryItemRef cRef(stacks[s]);
+            // used up (merged in, deleted), or gone into a module whole
+            if ((cRef->quantity() < 1) or IsFittingSlot(cRef->flag())) {
+                ++s;
+                continue;
+            }
+            int32 got(m_ModuleManager->LoadCharge(cRef, modules[i]->flag(), want));
+            if (got < 1)
+                break;
+            want -= got;
         }
     }
+
+    //{'FullPath': u'UI/Messages', 'messageID': 256676, 'label': u'CannotLoadNotEnoughChargesBody'}(u'There are not enough charges to fully load all of your modules. Some of your modules have been left partially loaded or empty.', None, None)
+    if (!full)
+        m_pilot->SendRemoteMessage("CannotLoadNotEnoughCharges");
 }
 
 //{'FullPath': u'UI/Messages', 'messageID': 257270, 'label': u'NotEnoughCargoSpaceToUnloadBankBody'}(u'There is not enough cargo space left to unload the charges in the weapon bank. Try freeing up some space and try again.', None, None)
@@ -799,8 +853,15 @@ void ShipItem::RemoveCharge(EVEItemFlags fromFlag)
         if (pMod == nullptr)
             throw CustomError ("Module was not found at %s.", sDataMgr.GetFlagName(fromFlag));
 
-        if (pMod->IsActive())
+        // a bank fires as one:  its slaves are in use while its master is
+        GenericModule* pMaster(GetBankMaster(pMod));
+        if (pMod->IsActive() or ((pMaster != nullptr) and pMaster->IsActive()))
             throw UserError ("CannotAccessChargeWhileInUse");
+
+        // "{item} is currently being reloaded. Please wait until it is finished and try again."
+        if (pMod->IsLoading())
+            throw UserError ("AlreadyBeingReloaded")
+                    .AddTypeName ("item", pMod->typeID());
 
         if (!pMod->IsLoaded())
             throw CustomError ("Your %s is not loaded.", pMod->GetSelf()->name());
@@ -838,6 +899,12 @@ void ShipItem::CheckSubSystemFit(EVEItemFlags flag, InventoryItemRef iRef)
 // only called from inv bound call.  can throw
 void ShipItem::TryModuleLimitChecks(EVEItemFlags flag, InventoryItemRef iRef, bool swap/*false*/)
 {
+    // a charge dropped on a module loads it (VerifyHoldType has checked that it fits).  the module must be idle
+    if (iRef->categoryID() == EVEDB::invCategories::Charge) {
+        CheckChargeLoadable(m_ModuleManager->GetModule(flag), iRef);
+        return;
+    }
+
     // a subsystem dropped on a fitted one replaces it
     if (!(swap and IsSubSystem(flag)) and m_ModuleManager->IsSlotOccupied(flag))
         throw UserError ("SlotAlreadyOccupied");
@@ -2139,6 +2206,8 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
         m_ModuleManager->GetLoadedCharges(charges);
         for (auto cur : charges)
             cur.second->ResetAttributes();
+        // the charges' effects on their modules went with the reset
+        m_ModuleManager->ChargeFxReset();
 
         // do we remove fx here?  nah, we've reset everything at this point.
     }
@@ -2203,6 +2272,8 @@ void ShipItem::ResetEffects() {
     m_ModuleManager->GetLoadedCharges(charges);
     for (auto cur : charges)
         cur.second->ResetAttributes();
+    // the charges' effects on their modules went with the reset
+    m_ModuleManager->ChargeFxReset();
 
     ProcessEffects(true, true/*sDataMgr.IsSolarSystem(locationID())*/);
     _log(EFFECTS__DEBUG, "ShipItem::ResetEffects() - Effects reset in %.3fms", (GetTimeMSeconds() - start));
@@ -2449,20 +2520,29 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client* 
                     GenericModule* pMod(m_ModuleManager->GetModule(flag));
                     if (pMod != nullptr) {
                         // note:  this is also checked in client before calling Load()
-                        if (iRef->HasAttribute(AttrChargeSize))
-                            if (pMod->GetAttribute(AttrChargeSize) != iRef->GetAttribute(AttrChargeSize)) {
-                                sLog.Error("ShipItem::VerifyHoldType", "Charge size %u for %s does not match Module size %u for %s.",\
-                                        iRef->GetAttribute(AttrChargeSize).get_uint32(), iRef->name(),\
-                                        pMod->GetAttribute(AttrChargeSize).get_uint32(), pMod->GetSelf()->name());
-                                throw CustomError ("Incorrect charge size for this module.");
-                            }
-                            if ((pMod->GetAttribute(AttrChargeGroup1) != iRef->groupID())
-                            and (pMod->GetAttribute(AttrChargeGroup2) != iRef->groupID())
-                            and (pMod->GetAttribute(AttrChargeGroup3) != iRef->groupID())
-                            and (pMod->GetAttribute(AttrChargeGroup4) != iRef->groupID())
-                            and (pMod->GetAttribute(AttrChargeGroup5) != iRef->groupID())) {
-                                throw CustomError ("Incorrect charge type for this module.");
-                            }
+                        //  "The {ammoGroupName} is size {sizeGot}, this {weaponGroupName} requires size {sizeWant}."
+                        if (iRef->HasAttribute(AttrChargeSize) and pMod->HasAttribute(AttrChargeSize)
+                        and (pMod->GetAttribute(AttrChargeSize) != iRef->GetAttribute(AttrChargeSize))) {
+                            _log(MODULE__TRACE, "ShipItem::VerifyHoldType - Charge size %u for %s does not match Module size %u for %s.",\
+                                    iRef->GetAttribute(AttrChargeSize).get_uint32(), iRef->name(),\
+                                    pMod->GetAttribute(AttrChargeSize).get_uint32(), pMod->GetSelf()->name());
+                            throw UserError ("BadAmmoSize")
+                                    .AddGroupName ("ammoGroupName", iRef->groupID())
+                                    .AddFormatValue ("sizeGot", new PyInt (iRef->GetAttribute(AttrChargeSize).get_int()))
+                                    .AddGroupName ("weaponGroupName", pMod->groupID())
+                                    .AddFormatValue ("sizeWant", new PyInt (pMod->GetAttribute(AttrChargeSize).get_int()));
+                        }
+                        //  "You cannot load {ammoGroup} into a {moduleName}, this module needs to be loaded with {group1}."
+                        static const uint16 chargeGroups[] = { AttrChargeGroup1, AttrChargeGroup2, AttrChargeGroup3, AttrChargeGroup4, AttrChargeGroup5 };
+                        bool fits(false);
+                        for (auto attrID : chargeGroups)
+                            if (pMod->HasAttribute(attrID) and (pMod->GetAttribute(attrID).get_uint32() == iRef->groupID()))
+                                fits = true;
+                        if (!fits)
+                            throw UserError ("IncompatibleChargeGroup1")
+                                    .AddGroupName ("ammoGroup", iRef->groupID())
+                                    .AddFormatValue ("moduleName", new PyInt (pMod->typeID()))
+                                    .AddGroupName ("group1", pMod->GetAttribute(AttrChargeGroup1).get_uint32());
                         // NOTE: Module Manager will check for actual room to load charges and make stack splits, or reject loading altogether
                     } else {
                         throw CustomError ("There is no module in %s.  Ref: ServerError 25162.", sDataMgr.GetFlagName(flag));
