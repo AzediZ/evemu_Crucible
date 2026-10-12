@@ -841,6 +841,11 @@ void CorpMgr::LiquidateCorp(uint32 corpID, uint32 byCharID)
     ReleaseOffices(corpID);
     sBillingMgr.CancelBillsOf(corpID);
 
+    // the members still online see the corp close before they move
+    PyDict* change = new PyDict();
+        AddChange(change, "deleted", new PyInt(0), new PyInt(1));
+    BroadcastCorpChange(corpID, change);
+
     for (auto cur : members)
         if (cur != byCharID)
             MoveMemberToCorp(cur, GetDefaultCorp(cur));
@@ -913,14 +918,15 @@ void SendOfficeChanged(uint32 corpID, uint32 officeID, uint32 folderID)
     sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnOfficeRentalChanged", "corpid", payload);
 }
 
-void NotifyOfficeExpiration(const OfficeData& odata, const std::string& errorText)
+void NotifyOfficeExpiration(const OfficeData& odata, const std::string& errorText, int32 daysLeft)
 {
     // CorpOfficeExpiration {typeID, stationID, dueDate, rentPeriod, errorText} (typeOfficeFolder = the office)
+    //  rentPeriod is shown as "You have {rentPeriod} days to vacate the location"
     PyDict* data = new PyDict();
         data->SetItemString("typeID", new PyInt(26));
         data->SetItemString("stationID", new PyInt(odata.stationID));
         data->SetItemString("dueDate", new PyLong(odata.expiryTime));
-        data->SetItemString("rentPeriod", new PyInt(30));
+        data->SetItemString("rentPeriod", new PyInt(daysLeft));
         data->SetItemString("errorText", new PyString(errorText));
     sCorpMgr.NotifyCorp(odata.corporationID, Notify::Types::CorpOfficeExpiration, stDataMgr.GetOwnerID(odata.stationID), data,
                         Corp::Role::Accountant | Corp::Role::JuniorAccountant);
@@ -967,8 +973,10 @@ void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
 {
     // "If this is ever unpaid, the alliance will be closed at the following downtime."
     uint32 executorID = AllianceDB::GetExecutorID(bill.debtorID);
+    // AllMaintenanceBill {allianceID, dueDate}
     PyDict* data = new PyDict();
         data->SetItemString("allianceID", new PyInt(bill.debtorID));
+        data->SetItemString("dueDate", new PyLong(bill.dueDateTime));
     NotifyCorp(executorID, Notify::Types::AllMaintenanceBill, corpCONCORD, data);
 
     if (sConfig.corp.CloseAllianceOnUnpaidBill) {
@@ -980,13 +988,7 @@ void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
 
 void CorpMgr::OnSovBillOverdue(const BillData& bill)
 {
-    // SovAllBillLate {corpID} to the alliance's accountants (the executor pays)
-    uint32 executorID = AllianceDB::GetExecutorID(bill.debtorID);
-    PyDict* data = new PyDict();
-        data->SetItemString("corpID", new PyInt(executorID));
-        data->SetItemString("solarSystemID", new PyInt(bill.externalID2));
-    NotificationMgr::SendToAlliance(bill.debtorID, Corp::Role::Accountant | Corp::Role::JuniorAccountant, Notify::Types::SovAllBillLate, corpCONCORD, data);
-
+    // the alliance was warned with SovAllBillLate ("almost due") before the due date (BillingMgr::ProcessSovBills)
     /** @todo F14:  an unpaid sovereignty bill should cost the alliance its claim (svDataMgr has no claim-drop hook yet) */
     _log(CORP__WARNING, "CorpMgr::OnSovBillOverdue() - alliance %u did not pay sovereignty bill %u for system %i", bill.debtorID, bill.billID, bill.externalID2);
 }
@@ -1027,7 +1029,7 @@ void CorpMgr::ExpireOffice(uint32 officeID, const std::string& errorText)
     }
 
     SendOfficeChanged(odata.corporationID, 0, 0);
-    NotifyOfficeExpiration(odata, errorText);
+    NotifyOfficeExpiration(odata, errorText, 0);
 
     _log(CORP__INFO, "CorpMgr::ExpireOffice() - office %u of corp %u in station %u %s", officeID, odata.corporationID, odata.stationID,
          (empty ? "removed" : "impounded"));
@@ -1116,7 +1118,7 @@ void CorpMgr::ProcessOffices()
             continue;
         OfficeData odata = OfficeData();
         if (StationDB::GetOfficeData(cur, odata))
-            NotifyOfficeExpiration(odata, "");
+            NotifyOfficeExpiration(odata, "", (int32)EvE::max((int64)0, (odata.expiryTime - now + EvE::Time::Day - 1) / EvE::Time::Day));
     }
 }
 
@@ -1256,7 +1258,7 @@ void CorpMgr::OnVoteCaseOpened(uint32 corpID, uint32 voteCaseID, uint32 proposer
         if (IsCharacterID(cur.first))
             ids.push_back(cur.first);
     uint32 ceoID = CorporationDB::GetCorporationCEO(corpID);
-    if (IsCharacterID(ceoID))
+    if (IsCharacterID(ceoID) and (holders.find(ceoID) == holders.end()))
         ids.push_back(ceoID);
     PyDict* data = new PyDict();
         data->SetItemString("subject", new PyWString(vc.voteCaseText));

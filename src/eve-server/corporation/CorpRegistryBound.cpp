@@ -824,8 +824,9 @@ PyResult CorpRegistryBound::UpdateCorporation(PyCallArgs &call, PyRep* descripti
         double oldRate = PyRep::FloatValue(taxChange->AsTuple()->GetItem(0));
         PyDict* data = new PyDict();
             data->SetItemString("corpID", new PyInt(m_corpID));
-            data->SetItemString("oldTaxRate", new PyFloat(oldRate * 100));
-            data->SetItemString("newTaxRate", new PyFloat(taxRate * 100));
+            // shown as "{oldTaxRate}%":  the db keeps a float, so round to hundredths of a percent
+            data->SetItemString("oldTaxRate", new PyFloat(std::round(oldRate * 10000) / 100));
+            data->SetItemString("newTaxRate", new PyFloat(std::round(taxRate * 10000) / 100));
         sCorpMgr.NotifyCorp(m_corpID, Notify::Types::CorpTaxChange, call.client->GetCharacterID(), data);
 
         std::vector<Client*> list;
@@ -1599,16 +1600,20 @@ PyResult CorpRegistryBound::UpdateApplicationOffer(PyCallArgs &call, PyInt* char
         // the applicant joins:  employment history, member lists of both corps, corp events
         sCorpMgr.MoveMemberToCorp(characterID->value(), m_corpID);
 
+        // CorpAppAccept / CorpAppReject {corpID, charID, applicationText}
         PyDict* data = new PyDict();
             data->SetItemString("corpID", new PyInt(m_corpID));
             data->SetItemString("charID", new PyInt(characterID->value()));
+            data->SetItemString("applicationText", new PyWString(PyRep::StringContent(applicationText)));
         sCorpMgr.NotifyChar(characterID->value(), Notify::Types::CorpAppAccept, call.client->GetCharacterID(), data);
     } else if (status->value() == Corp::AppStatus::RejectedByCorporation) {
         sEntityList.CorpNotify(m_corpID, Notify::Types::CorpAppReject, "OnCorporationApplicationChanged", "*corpid&corprole", ocac.Encode());
 
+        // CorpAppAccept / CorpAppReject {corpID, charID, applicationText}
         PyDict* data = new PyDict();
             data->SetItemString("corpID", new PyInt(m_corpID));
             data->SetItemString("charID", new PyInt(characterID->value()));
+            data->SetItemString("applicationText", new PyWString(PyRep::StringContent(applicationText)));
         sCorpMgr.NotifyChar(characterID->value(), Notify::Types::CorpAppReject, call.client->GetCharacterID(), data);
     } else if (status->value() == Corp::AppStatus::RenegotiatedByCorporation) {
         // i dont see this option in client code...may not be able to reneg app.

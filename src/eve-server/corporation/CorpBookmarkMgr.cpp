@@ -37,6 +37,7 @@
 #include "packets/Bookmarks.h"
 #include "cache/ObjCacheService.h"
 #include "corporation/CorpBookmarkMgr.h"
+#include "corporation/CorporationDB.h"
 
 CorpBookmarkMgr::CorpBookmarkMgr() :
     Service("corpBookmarkMgr", eAccessLevel_Corporation)
@@ -254,7 +255,7 @@ PyResult CorpBookmarkMgr::CopyBookmarks(PyCallArgs& call, std::optional<PyRep*> 
         // ('NotAllBookmarksCopiedNotEnoughRoom', {maxLimit, owner, bookmarksCopied})
         PyDict* args = new PyDict();
             args->SetItemString("maxLimit", new PyInt(maxCorpBookmarkCount));
-            args->SetItemString("owner", new PyInt(corpID));
+            args->SetItemString("owner", new PyString(CorporationDB::GetCorpName(corpID)));
             args->SetItemString("bookmarksCopied", new PyInt(copied));
         PyTuple* message = new PyTuple(2);
             message->SetItem(0, new PyString("NotAllBookmarksCopiedNotEnoughRoom"));

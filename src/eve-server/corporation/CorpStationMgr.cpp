@@ -733,6 +733,7 @@ PyResult CorpStationMgrIMBound::RevokeCloneContractsAtStation(PyCallArgs& call, 
     DBQueryResult res;
     StationDB::GetOwnerIDsOfClonesAtStation(m_stationID, corpID, res);
     DBResultRow row;
+    uint32 movedTo(0);
     while (res.GetRow(row)) {
         uint32 charID = row.GetUInt(0);
         if ((characterID->value() != -1) and (charID != (uint32)characterID->value()))
@@ -755,16 +756,24 @@ PyResult CorpStationMgrIMBound::RevokeCloneContractsAtStation(PyCallArgs& call, 
             pClient->SendSessionChange();
         }
 
+        // CloneRevoked2 {corpID: the station's owner, stationID, newStationID}
         PyDict* notify = new PyDict();
             notify->SetItemString("corpID", new PyInt(ownerID));
+            notify->SetItemString("stationID", new PyInt(m_stationID));
             notify->SetItemString("newStationID", new PyInt(newStationID));
         sCorpMgr.NotifyChar(charID, Notify::Types::CloneRevoked2, ownerID, notify);
+        movedTo = newStationID;
     }
 
-    if (characterID->value() == -1) {
+    // CloneRevoked1 to the whole corp:  where its members' contracts went (their corp's HQ)
+    if ((characterID->value() == -1) and (movedTo != 0)) {
+        CorpData data = CorpData();
+            data.corporationID = corpID;
+        CorporationDB::GetCorpData(data);
         PyDict* notify = new PyDict();
             notify->SetItemString("corpID", new PyInt(ownerID));
-            notify->SetItemString("newStationID", new PyInt(0));
+            notify->SetItemString("stationID", new PyInt(m_stationID));
+            notify->SetItemString("newStationID", new PyInt(((data.corpHQ != 0) and (data.corpHQ != m_stationID)) ? data.corpHQ : movedTo));
         sCorpMgr.NotifyCorp(corpID, Notify::Types::CloneRevoked1, ownerID, notify);
     }
     return nullptr;

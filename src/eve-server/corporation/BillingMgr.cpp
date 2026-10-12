@@ -35,6 +35,7 @@
 #include "corporation/CorpMgr.h"
 #include "inventory/ItemFactory.h"
 #include "inventory/ItemType.h"
+#include "mail/NotificationMgr.h"
 #include "system/sov/SovereigntyDataMgr.h"
 
 /*
@@ -49,6 +50,8 @@ const double AllianceMembershipCost = 2000000.0;
 const int64 AllianceBillingPeriod = 30 * EvE::Time::Day;
 // const.sovereignityBillingPeriod (days)
 const int64 SovBillingPeriod = 14 * EvE::Time::Day;
+// SovAllBillLate warning before a sovereignty bill is due
+const int64 SovBillWarning = 3 * EvE::Time::Day;
 
 const char* BILL_COLUMNS =
     "billID, billTypeID, debtorID, creditorID, amount, dueDateTime, interest, externalID, paid, externalID2, createdDateTime";
@@ -115,6 +118,7 @@ BillingMgr::BillingMgr()
 {
     m_handlers.clear();
     m_outOfMoney.clear();
+    m_sovWarned.clear();
 }
 
 int BillingMgr::Initialize()
@@ -258,10 +262,16 @@ void BillingMgr::NotifyIssued(const BillData& bill)
 
 void BillingMgr::NotifyPaid(const BillData& bill, uint32 payerID)
 {
-    if (IsCharacterID(payerID)) {
-        sCorpMgr.NotifyChar(payerID, Notify::Types::BillPaidChar, bill.creditorID, new PyDict());
+    // BillPaidChar / BillPaidCorpAll {amount, dueDate} go to the creditor, from the payer:
+    //  "A debt of {amount} owed to you by the sender of this message, due {dueDate} has been paid"  (npc creditors get nothing)
+    PyDict* data = new PyDict();
+        data->SetItemString("amount", new PyFloat(bill.amount));
+        data->SetItemString("dueDate", new PyLong(bill.dueDateTime));
+    if (IsCharacterID(bill.creditorID)) {
+        sCorpMgr.NotifyChar(bill.creditorID, Notify::Types::BillPaidChar, payerID, data);
     } else {
-        sCorpMgr.NotifyCorp(payerID, Notify::Types::BillPaidCorpAll, bill.creditorID, new PyDict(), Corp::Role::Accountant | Corp::Role::JuniorAccountant);
+        // NotifyCorp drops it for npc corps
+        sCorpMgr.NotifyCorp(PayingCorpFor(bill.creditorID), Notify::Types::BillPaidCorpAll, payerID, data, Corp::Role::Accountant | Corp::Role::JuniorAccountant);
     }
     SendBillReceived(bill.debtorID);
 }
@@ -338,6 +348,7 @@ bool BillingMgr::TryAutoPay(const BillData& bill)
         if (m_outOfMoney.insert(bill.billID).second) {
             PyDict* data = new PyDict();
                 data->SetItemString("billTypeID", new PyInt(bill.billTypeID));
+                data->SetItemString("dueDate", new PyLong(bill.dueDateTime));
             sCorpMgr.NotifyCorp(corpID, Notify::Types::BillOutOfMoney, bill.creditorID, data, Corp::Role::Accountant | Corp::Role::JuniorAccountant);
         }
         _log(CORP__WARNING, "BillingMgr::TryAutoPay() - corp %u could not pay bill %u of %.2f", corpID, bill.billID, bill.amount);
@@ -492,6 +503,24 @@ void BillingMgr::ProcessSovBills(int64 now)
             CreateBill(Corp::BillType::SovereigntyMarker, claim.allianceID, corpCONCORD, amount, due, -1, claim.solarSystemID);
         sDatabase.RunQuery(err, "REPLACE INTO sovBilling (solarSystemID, claimID, nextBillDateTime) VALUES (%u, %u, %lli)",
                            claim.solarSystemID, claim.claimID, due);
+    }
+
+    // "Bill for {system} almost due":  SovAllBillLate {corpID: executor, solarSystemID, dueInDays} to the alliance's accountants,
+    //  once per bill, in the last days before it is due (an unpaid bill costs the claim)
+    std::vector<BillData> bills;
+    std::string where = "paid = 0 AND billTypeID = ";
+    where += std::to_string(Corp::BillType::SovereigntyMarker);
+    where += " AND dueDateTime > " + std::to_string(now);
+    where += " AND dueDateTime <= " + std::to_string(now + SovBillWarning);
+    GetBills(where.c_str(), bills);
+    for (auto& cur : bills) {
+        if (!m_sovWarned.insert(cur.billID).second)
+            continue;
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(AllianceDB::GetExecutorID(cur.debtorID)));
+            data->SetItemString("solarSystemID", new PyInt(cur.externalID2));
+            data->SetItemString("dueInDays", new PyInt((int32)((cur.dueDateTime - now + EvE::Time::Day - 1) / EvE::Time::Day)));
+        NotificationMgr::SendToAlliance(cur.debtorID, Corp::Role::Accountant | Corp::Role::JuniorAccountant, Notify::Types::SovAllBillLate, corpCONCORD, data);
     }
 }
 

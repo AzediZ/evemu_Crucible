@@ -101,6 +101,7 @@ private:
 
     std::map<uint8, std::pair<BillHandler, BillHandler>> m_handlers;
     std::set<uint32> m_outOfMoney;      // bills already reported as BillOutOfMoney (once per server run)
+    std::set<uint32> m_sovWarned;       // sovereignty bills already reported as almost due (SovAllBillLate, once per server run)
 };
 
 #define sBillingMgr \
