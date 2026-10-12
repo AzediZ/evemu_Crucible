@@ -83,6 +83,7 @@ private:
     std::unique_ptr<ServerMarketGateway> m_gw;
     std::unique_ptr<MktSim::World> m_world;
     std::vector<MktSim::AuditLine> m_pendingAudit;
+    std::vector<MktSim::HistoryRow> m_unwrittenHistory;     // finished days' rows a failed flush didn't write
 
     bool  m_enabled;
     int64 m_offset;                 // /mktsim step (test servers):  seconds the sim runs ahead of the clock

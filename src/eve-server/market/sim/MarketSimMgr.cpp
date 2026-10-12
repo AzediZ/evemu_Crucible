@@ -527,8 +527,11 @@ void MarketSimMgr::Flush()
     double start(GetTimeMSeconds());
     std::vector<uint32> cells;
     m_world->TakeChangedCells(cells);
+    // finished days first (with those a failed flush didn't write:  the world hands them out once)
     std::vector<HistoryRow> history;
+    std::swap(history, m_unwrittenHistory);
     m_world->TakeFinishedHistory(history);
+    size_t finished(history.size());
     for (auto idx : cells) {
         const Cell& c(m_world->Cells()[idx]);
         if (c.dVol > 0)
@@ -537,6 +540,7 @@ void MarketSimMgr::Flush()
     if (!MarketSimDB::Flush(*m_world, cells, history, StateMap(), m_pendingAudit, m_replaceInventory)) {
         sLog.Error("    MarketSimMgr", "Market sim:  writing its state failed.  It is kept in memory and written again.");
         m_world->MarkAllCellsChanged();
+        m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
         return;
     }
     m_pendingAudit.clear();
