@@ -24,6 +24,7 @@
 */
 
 #include "eve-server.h"
+#include "Client.h"
 
 #include "EVEServerConfig.h"
 #include "account/AuthService.h"
@@ -65,17 +66,17 @@ PyResult AuthService::AmUnderage(PyCallArgs &call)
 PyResult AuthService::AccruedTime(PyCallArgs &call)
 {
     // return sm.RemoteSvc('authentication').AccruedTime()
-    sLog.Warning("AuthService", "Handle_AccruedTime() size=%lli", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    return nullptr;
+    //  (China anti-addiction play time:  map(Session.PreLoad, AccruedTime()) - nothing to preload here)
+    return new PyList();
 }
 
 PyResult AuthService::SetLanguageID(PyCallArgs &call, PyRep* languageID)
 {
-    //sm.RemoteSvc('authentication').SetLanguageID(setlanguageID)
-    sLog.Warning("AuthService", "Handle_SetLanguageID() size=%lli", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
+    //sm.RemoteSvc('authentication').SetLanguageID(setlanguageID)   (the client restarts afterwards)
+    std::string language(PyRep::StringContent(languageID));
+    if (language.empty() or (language.size() > 10))
+        return nullptr;
+    call.client->GetSession()->SetString("languageID", language.c_str());
+    call.client->SendSessionChange();
     return nullptr;
 }

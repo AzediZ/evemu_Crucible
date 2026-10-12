@@ -452,6 +452,37 @@ PyRep* ServiceDB::LookupCorporations(const std::string & search) {
 }
 
 
+PyRep* ServiceDB::LookupCorporationsOrAlliances(const std::string& search, bool exact, bool warable, uint32 myCorpID, uint32 myAllianceID)
+{
+    std::string secure;
+    sDatabase.DoEscapeString(secure, search);
+    std::string match(exact ? "= '" + secure + "'" : "LIKE '" + secure + "%'");
+
+    std::ostringstream corpFilter, allyFilter;
+    corpFilter << " AND deleted = 0";
+    allyFilter << " AND deleted = 0";
+    if (warable) {
+        corpFilter << " AND corporationID >= " << minPCCorporation << " AND allianceID = 0 AND corporationID != " << myCorpID;
+        allyFilter << " AND allianceID != " << myAllianceID;
+    }
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT corporationID AS ownerID, corporationName AS ownerName, 2 AS typeID FROM crpCorporation"
+        " WHERE corporationName %s %s"
+        " UNION ALL"
+        " SELECT allianceID AS ownerID, allianceName AS ownerName, 16159 AS typeID FROM alnAlliance"
+        " WHERE allianceName %s %s"
+        " LIMIT 100",
+        match.c_str(), corpFilter.str().c_str(), match.c_str(), allyFilter.str().c_str()))
+    {
+        _log(DATABASE__ERROR, "Error in LookupCorporationsOrAlliances query: %s", res.error.c_str());
+        return PyStatic.NewNone();
+    }
+
+    return DBResultToRowset(res);
+}
+
 PyRep* ServiceDB::LookupFactions(const std::string & search) {
     DBQueryResult res;
     std::string secure;

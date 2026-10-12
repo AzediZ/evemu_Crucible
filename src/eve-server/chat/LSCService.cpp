@@ -31,6 +31,7 @@
 #include "ConsoleCommands.h"
 #include "admin/CommandDispatcher.h"
 #include "admin/SlashService.h"
+#include "account/AccountService.h"
 #include "mail/MailMgr.h"
 #include "chat/LSCService.h"
 #include "fleet/FleetService.h"
@@ -621,6 +622,9 @@ PyResult LSCService::Invite(PyCallArgs& call, PyInt* characterID, PyInt* channel
     Client* pTarget = sEntityList.FindClientByCharID(targetID);
     if (pTarget == nullptr)
         throw CustomError("%s is not online.", sDataMgr.GetOwnerName(targetID).c_str());
+
+    // CSPA (the client wraps Invite in CSPAChargedAction and calls again with approvedCost)
+    AccountService::ChargeCSPA(call.client, targetID, call);
 
     // the client asks to put the invitee on the allowed list when the channel isn't public (operators only, so a kick
     //  can't be lifted thru an invite)

@@ -49,6 +49,20 @@ public:
         Client* pClient=nullptr
     );
 
+    /* CONCORD Spam Prevention Act (F24).  contacting a character costs what they set (contactCost) unless the
+     *  sender is whitelisted:  same corp or alliance, or on the recipient's contact list with a positive standing.
+     *  recipients that refuse the sender (blocked it, or accept contacts only) are removed from 'recipients'.
+     *  non-character ids are left alone and cost nothing
+     */
+    // returns the total ISK charge for sender -> recipients
+    static double GetCSPACharge(Client* pSender, std::vector<uint32>& recipients);
+    /* throws UserError ContactCostNotApproved when the charge is more than the call's approvedCost keyword (the client
+     *  asks the pilot and calls again with it), otherwise pays CONCORD for each charged recipient (journal CSPA)
+     */
+    static void ChargeCSPA(Client* pSender, std::vector<uint32>& recipients, PyCallArgs& call);
+    // one recipient (chat and fleet invites):  throws when the recipient refuses the sender
+    static void ChargeCSPA(Client* pSender, uint32 recipientID, PyCallArgs& call);
+
     // this should be the ONLY method to alter corp balances, and ONLY called from TransferFunds()
     static void HandleCorpTransaction(
         uint32 corpID,
@@ -82,13 +96,12 @@ protected:
     PyResult GetEntryTypes(PyCallArgs& call);
     PyResult GetWalletDivisionsInfo(PyCallArgs& call);
     PyResult GetDefaultContactCost(PyCallArgs& call);
-    PyResult SetContactCost(PyCallArgs& call, std::optional<PyInt*> cost);
+    PyResult SetContactCost(PyCallArgs& call, std::optional<PyRep*> cost);
     PyResult GetCashBalance(PyCallArgs& call, std::optional<PyBool*> isCorpWallet, std::optional<PyInt*> walletKey);
     PyResult GetCashBalance(PyCallArgs& call, std::optional<PyInt*> isCorpWallet, std::optional<PyInt*> walletKey);
     PyResult GetJournal(PyCallArgs& call, PyInt* accountKey, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyInt* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev);
     PyResult GetJournal(PyCallArgs& call, PyInt* accountKey, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyBool* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev);
-    PyResult GetJournalForAccounts(PyCallArgs& call, PyInt* accountKeys, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyBool* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev);
-    PyResult GetJournalForAccounts(PyCallArgs& call, PyInt* accountKeys, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyInt* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev);
+    PyResult GetJournalForAccounts(PyCallArgs& call, PyRep* accountKeys, PyRep* fromDate, std::optional<PyRep*> entryTypeID, PyRep* corpAccount, std::optional <PyRep*> transactionID, std::optional<PyRep*> rev);
     PyResult GiveCash(PyCallArgs& call, PyInt* toID, PyInt* amount, std::optional <PyWString*> reason);
     PyResult GiveCash(PyCallArgs& call, PyInt* toID, PyFloat* amount, std::optional <PyWString*> reason);
     PyResult GiveCash(PyCallArgs& call, PyInt* toID, PyInt* amount, std::optional <PyString*> reason);

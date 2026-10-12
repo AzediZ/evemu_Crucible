@@ -17,6 +17,7 @@
 
 
 
+#include "account/AccountService.h"
 #include "fleet/FleetBound.h"
 #include "fleet/FleetObject.h"
 #include "services/ServiceManager.h"
@@ -369,6 +370,12 @@ PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<
     }
 
     _log(FLEET__MESSAGE, "Fleet Invite:  Role: %s, WingID: %i, SquadID: %i", sFltSvc.GetRoleName(data.role).c_str(), data.wingID, data.squadID);
+
+    // CSPA (the client wraps Invite in CSPAChargedAction and calls again with approvedCost).  answering a join request is free
+    std::vector<Client*> requests;
+    sFltSvc.GetJoinRequests(m_fleetID, requests);
+    if (std::find(requests.begin(), requests.end(), pClient) == requests.end())
+        AccountService::ChargeCSPA(call.client, charID, call);
 
     if (!sFltSvc.SaveInviteData(charID, data))
         throw UserError("FleetMemberAlreadyInvited");

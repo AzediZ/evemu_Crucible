@@ -85,7 +85,7 @@ protected:
 
 private:
     // AddContact/EditContact: store, then the optional ContactAdd/ContactEdit notification
-    void SaveContact(Client* pClient, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit);
+    void SaveContact(PyCallArgs& call, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit);
 };
 
 

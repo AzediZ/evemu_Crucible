@@ -608,25 +608,36 @@ PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* contactID)
 
 PyResult CharMgrService::AddContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message)
 {
-    SaveContact(call.client, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, false);
+    SaveContact(call, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, false);
     return PyStatic.NewNone();
 }
 
 PyResult CharMgrService::EditContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, std::optional<PyRep*> message)
 {
-    SaveContact(call.client, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, true);
+    SaveContact(call, contactID->value(), relationshipID, inWatchlist, notify, message.has_value() ? message.value() : nullptr, true);
     return PyStatic.NewNone();
 }
 
-void CharMgrService::SaveContact(Client* pClient, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit)
+void CharMgrService::SaveContact(PyCallArgs& call, uint32 contactID, PyRep* relationshipID, PyRep* inWatchlist, PyRep* notify, PyRep* message, bool isEdit)
 {
-    // CSPA charges for the notification (ContactCostNotApproved) are not implemented
+    Client* pClient = call.client;
     uint32 charID = pClient->GetCharacterID();
     if (contactID == charID)
         throw CustomError("You can't add yourself as a contact.");
     bool isChar = IsCharacterID(contactID);
     if (!isChar and !IsAgent(contactID) and !IsCorp(contactID) and !IsAlliance(contactID) and !IsFaction(contactID))
         throw CustomError("That can't be added as a contact.");
+
+    /* the notification is optional, and never reaches someone who blocked me or only accepts their contacts.
+     *  it is subject to CSPA:  the client wraps the call in CSPAChargedAction and calls again with approvedCost, so the
+     *  charge is settled before anything is saved
+     */
+    bool sendNotify(IsTrue(notify) and isChar);
+    if (sendNotify) {
+        std::vector<uint32> cspa(1, contactID);
+        AccountService::ChargeCSPA(pClient, cspa, call);
+        sendNotify = !cspa.empty();
+    }
 
     float standing = ClampStanding(relationshipID);
     // only characters can be watched
@@ -649,10 +660,7 @@ void CharMgrService::SaveContact(Client* pClient, uint32 contactID, PyRep* relat
         }
     }
 
-    if (!IsTrue(notify) or !isChar)
-        return;
-    // the notification is optional, and never reaches someone who blocked me
-    if (CharacterDB::IsBlocked(contactID, charID))
+    if (!sendNotify)
         return;
 
     PyDict* data = new PyDict();

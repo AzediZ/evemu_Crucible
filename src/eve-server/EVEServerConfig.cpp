@@ -166,6 +166,10 @@ EVEServerConfig::EVEServerConfig()
     // account
     account.autoAccountRole = Acct::Role::STD;
     account.loginMessage = "";
+    account.redeemEnabled = true;
+    account.reverseRedeemTypes = "";
+    account.cspaEnabled = true;
+    account.cspaDefaultCost = 0;
 
     // character
     character.startBalance = 6666000000.0f;
@@ -748,11 +752,19 @@ bool EVEServerConfig::ProcessAccount( const TiXmlElement* ele )
 {
     AddValueParser( "autoAccountRole",  account.autoAccountRole );
     AddValueParser( "loginMessage",     account.loginMessage );
+    AddValueParser( "redeemEnabled",    account.redeemEnabled );
+    AddValueParser( "reverseRedeemTypes", account.reverseRedeemTypes );
+    AddValueParser( "cspaEnabled",      account.cspaEnabled );
+    AddValueParser( "cspaDefaultCost",  account.cspaDefaultCost );
 
     const bool result = ParseElementChildren( ele );
 
     RemoveParser( "autoAccountRole" );
     RemoveParser( "loginMessage" );
+    RemoveParser( "redeemEnabled" );
+    RemoveParser( "reverseRedeemTypes" );
+    RemoveParser( "cspaEnabled" );
+    RemoveParser( "cspaDefaultCost" );
 
     return result;
 }

@@ -220,6 +220,39 @@ PyResult Command_recustomize(Client* who, CommandDB* db, EVEServiceManager &serv
     return new PyString("Operation successful.");
 }
 
+PyResult Command_token(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (args.argCount() < 3)
+        throw CustomError ("Correct Usage: /token [charID|me] [typeID] [quantity]");
+
+    uint32 charID(0);
+    if (args.arg(1) == "me") {
+        charID = who->GetCharacterID();
+    } else if (args.isNumber(1)) {
+        charID = atol(args.arg(1).c_str());
+    } else {
+        throw CustomError ("Argument 1 should be a character ID ('me'=self)");
+    }
+    uint32 accountID(CharacterDB::GetAccountID(charID));
+    if (accountID == 0)
+        throw CustomError ("Character %u not found", charID);
+    if (!args.isNumber(2))
+        throw CustomError ("Argument 2 should be a typeID");
+    uint32 typeID(atol(args.arg(2).c_str()));
+    if (sItemFactory.GetType(typeID) == nullptr)
+        throw CustomError ("Type %u not found", typeID);
+    uint32 qty(1);
+    if ((args.argCount() > 3) and args.isNumber(3))
+        qty = atol(args.arg(3).c_str());
+    if (qty < 1)
+        qty = 1;
+
+    std::string label("GM gift");
+    if (AccountDB::CreateRedeemToken(accountID, typeID, qty, label, "Given by " + std::string(who->GetName())) == 0)
+        throw CustomError ("The token could not be created.");
+    return new PyString("Operation successful.");
+}
+
 PyResult Command_pop(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
     if (4 != args.argCount())

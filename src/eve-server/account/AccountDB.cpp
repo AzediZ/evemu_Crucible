@@ -176,6 +176,165 @@ PyRep* AccountDB::GetJournal(uint32 ownerID, int8 entryTypeID, uint16 accountKey
     return DBResultToCRowset(res);
 }
 
+PyRep* AccountDB::GetJournal(uint32 ownerID, int8 entryTypeID, const std::vector<uint16>& accountKeys, int64 fromDate, bool reverse/*false*/)
+{
+    std::string tblName = "jnlCharacters";
+    if (IsCorp(ownerID))
+        tblName = "jnlCorporations";
+
+    std::ostringstream keys;
+    keys << "0";
+    for (auto cur : accountKeys)
+        keys << "," << (cur == 0 ? Account::KeyType::Cash : cur);
+
+    std::string entryType = "";
+    if (entryTypeID) {
+        entryType = " AND entryTypeID = ";
+        entryType += std::to_string(entryTypeID);
+    }
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT transactionID, transactionDate, referenceID, entryTypeID, ownerID1, ownerID2, accountKey, amount,"
+        " balance, description, currency, 1 AS sortValue"
+        " FROM %s"
+        " WHERE transactionDate > %lli AND accountKey IN (%s) %s AND ownerID = %u"
+        " ORDER BY transactionID %s",
+        tblName.c_str(), fromDate, keys.str().c_str(), entryType.c_str(), ownerID, (reverse ? "DESC" : "ASC")))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+
+    return DBResultToCRowset(res);
+}
+
+PyRep* AccountDB::GetRedeemTokens(uint32 accountID)
+{
+    int64 now((int64)GetFileTimeNow());
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT tokenID, massTokenID, typeID, quantity, label, description, dateTime, expireDateTime, availableDateTime, stationID"
+        " FROM accRedeemTokens"
+        " WHERE accountID = %u AND claimedBy IS NULL"
+        " AND (availableDateTime IS NULL OR availableDateTime <= %lli)"
+        " AND (expireDateTime IS NULL OR expireDateTime > %lli)"
+        " ORDER BY tokenID", accountID, now, now))
+    {
+        codelog(DATABASE__ERROR, "Error in GetRedeemTokens query: %s", res.error.c_str());
+        return new PyList();
+    }
+    return DBResultToCRowset(res);
+}
+
+bool AccountDB::GetRedeemToken(uint32 tokenID, RedeemToken& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT tokenID, accountID, typeID, quantity, COALESCE(stationID, 0), COALESCE(expireDateTime, 0),"
+        " COALESCE(availableDateTime, 0), claimedBy IS NOT NULL"
+        " FROM accRedeemTokens WHERE tokenID = %u", tokenID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetRedeemToken query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    into.tokenID = row.GetUInt(0);
+    into.accountID = row.GetUInt(1);
+    into.typeID = row.GetUInt(2);
+    into.quantity = row.GetUInt(3);
+    into.stationID = row.GetUInt(4);
+    into.expireDateTime = row.GetInt64(5);
+    into.availableDateTime = row.GetInt64(6);
+    into.claimed = (row.GetInt(7) != 0);
+    return true;
+}
+
+bool AccountDB::ClaimRedeemToken(uint32 tokenID, uint32 charID)
+{
+    DBerror err;
+    uint32 affected(0);
+    if (!sDatabase.RunQuery(err, affected,
+        "UPDATE accRedeemTokens SET claimedBy = %u, claimedDateTime = %lli WHERE tokenID = %u AND claimedBy IS NULL",
+        charID, (int64)GetFileTimeNow(), tokenID))
+        return false;
+    return (affected > 0);
+}
+
+uint32 AccountDB::CreateRedeemToken(uint32 accountID, uint32 typeID, uint32 quantity, const std::string& label,
+                                    const std::string& description, uint32 stationID/*0*/, int64 expireDateTime/*0*/)
+{
+    std::string eLabel, eDesc;
+    sDatabase.DoEscapeString(eLabel, label);
+    sDatabase.DoEscapeString(eDesc, description);
+    std::string station(stationID ? std::to_string(stationID) : "NULL");
+    std::string expire(expireDateTime ? std::to_string(expireDateTime) : "NULL");
+
+    DBerror err;
+    uint32 tokenID(0);
+    if (!sDatabase.RunQueryLID(err, tokenID,
+        "INSERT INTO accRedeemTokens (accountID, typeID, quantity, label, description, dateTime, expireDateTime, stationID)"
+        " VALUES (%u, %u, %u, '%s', '%s', %lli, %s, %s)",
+        accountID, typeID, quantity, eLabel.c_str(), eDesc.c_str(), (int64)GetFileTimeNow(), expire.c_str(), station.c_str()))
+    {
+        codelog(DATABASE__ERROR, "Error in CreateRedeemToken query: %s", err.c_str());
+        return 0;
+    }
+    return tokenID;
+}
+
+void AccountDB::AddUserReport(uint32 reporterID, uint32 reportedID, uint8 reportType, const std::string& channel, const std::string& entries)
+{
+    std::string eChannel, eEntries;
+    sDatabase.DoEscapeString(eChannel, channel);
+    sDatabase.DoEscapeString(eEntries, entries);
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "INSERT INTO accUserReports (reporterID, reportedID, reportType, channel, entries, reportDateTime)"
+        " VALUES (%u, %u, %u, '%s', '%s', %lli)",
+        reporterID, reportedID, reportType, eChannel.c_str(), eEntries.c_str(), (int64)GetFileTimeNow());
+}
+
+int64 AccountDB::GetPaidUntil(uint32 accountID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT paidUntil FROM account WHERE accountID = %u", accountID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetInt64(0);
+}
+
+void AccountDB::SetPaidUntil(uint32 accountID, int64 paidUntil)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE account SET paidUntil = %lli WHERE accountID = %u", paidUntil, accountID);
+}
+
+int32 AccountDB::GetContactCost(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT contactCost FROM chrCharacters WHERE characterID = %u", charID))
+        return 0;
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return (row.IsNull(0) ? -1 : row.GetInt(0));
+}
+
+void AccountDB::SetContactCost(uint32 charID, int32 cost)
+{
+    DBerror err;
+    if (cost < 0) {
+        sDatabase.RunQuery(err, "UPDATE chrCharacters SET contactCost = NULL WHERE characterID = %u", charID);
+    } else {
+        sDatabase.RunQuery(err, "UPDATE chrCharacters SET contactCost = %i WHERE characterID = %u", cost, charID);
+    }
+}
+
 void AccountDB::AddJournalEntry(uint32 ownerID, int8 entryTypeID, uint32 ownerFromID, uint32 ownerToID, int8 currency, \
                                 uint16 accountKey, double amount, double newBalance, std::string description, uint32 referenceID/*0*/ )
 {

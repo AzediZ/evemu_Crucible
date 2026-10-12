@@ -25,6 +25,7 @@
 
 
 #include "eve-server.h"
+#include "Client.h"
 
 
 #include "chat/LookupService.h"
@@ -36,6 +37,7 @@ LookupService::LookupService() :
     this->Add("LookupOwners", &LookupService::LookupOwners);
     this->Add("LookupPlayerCharacters", &LookupService::LookupPlayerCharacters);
     this->Add("LookupCorporations", &LookupService::LookupCorporations);
+    this->Add("LookupCorporationsOrAlliances", &LookupService::LookupCorporationsOrAlliances);
     this->Add("LookupFactions", &LookupService::LookupFactions);
     this->Add("LookupCorporationTickers", &LookupService::LookupCorporationTickers);
     this->Add("LookupStations", &LookupService::LookupStations);
@@ -71,6 +73,11 @@ PyResult LookupService::LookupPlayerCharacters(PyCallArgs &call, PyWString* sear
 }
 PyResult LookupService::LookupCorporations(PyCallArgs &call, PyWString* searchString) {
     return ServiceDB::LookupCorporations(searchString->content().c_str());
+}
+PyResult LookupService::LookupCorporationsOrAlliances(PyCallArgs &call, PyRep* searchString, PyRep* exact, PyRep* warableOnly) {
+    // result = sm.RemoteSvc('lookupSvc').LookupCorporationsOrAlliances(searchStr, exact, warableEntitysOnly)  -> rows with .ownerID
+    return ServiceDB::LookupCorporationsOrAlliances(PyRep::StringContent(searchString), PyRep::IntegerValue(exact) != 0,
+            PyRep::IntegerValue(warableOnly) != 0, call.client->GetCorporationID(), call.client->GetAllianceID());
 }
 PyResult LookupService::LookupFactions(PyCallArgs &call, PyWString* searchString) {
     return ServiceDB::LookupFactions(searchString->content().c_str());

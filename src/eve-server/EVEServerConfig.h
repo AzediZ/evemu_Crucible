@@ -196,6 +196,10 @@ public:
         int64 autoAccountRole;
         /// A message shown to every client on login (if enabled in <World><LoginMsg>).
         std::string loginMessage;
+        bool redeemEnabled;             // redeem window (accRedeemTokens)  (F24)
+        std::string reverseRedeemTypes; // comma separated typeIDs that can be put back into the redeem list, "" = none  (F24)
+        bool cspaEnabled;               // CONCORD Spam Prevention Act charges for contacting non-contacts  (F24)
+        int32 cspaDefaultCost;          // CSPA charge stored for new characters (0 = free, -1 = only contacts may contact)  (F24)
     } account;
 
     // From <character>

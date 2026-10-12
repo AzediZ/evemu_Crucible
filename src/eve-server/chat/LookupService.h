@@ -44,6 +44,7 @@ protected:
     PyResult LookupNoneNPCAccountOwners(PyCallArgs& call, PyWString* searchString, PyInt* exact);
     PyResult LookupPlayerCharacters(PyCallArgs& call, PyWString* searchString);
     PyResult LookupCorporations(PyCallArgs& call, PyWString* searchString);
+    PyResult LookupCorporationsOrAlliances(PyCallArgs& call, PyRep* searchString, PyRep* exact, PyRep* warableOnly);
     PyResult LookupFactions(PyCallArgs& call, PyWString* searchString);
     PyResult LookupCorporationTickers(PyCallArgs& call, PyWString* searchString);
     PyResult LookupStations(PyCallArgs& call, PyWString* searchString);

@@ -15,6 +15,8 @@ COMMAND( freesp, Acct::Role::GMH,
          "(charID|me) (amount) - adds (or with a negative amount takes) unallocated skill points" )
 COMMAND( recustomize, Acct::Role::GMH,
          "(charID|me) (state) - sets the paperdoll state: 0 none, 1 resculpt, 3 full recustomization (bloodline), 4 forced at login" )
+COMMAND( token, Acct::Role::GMH,
+         "(charID|me) (typeID) [quantity] - adds an item to the redeem list of the character's account" )
 COMMAND( pop, Acct::Role::ADMIN,
          "(type) (key) (value) - Send an OnRemoteMessage" )
 COMMAND( setbpattr, Acct::Role::CONTENT,

@@ -63,6 +63,10 @@ public:
     static PyRep* LookupChars(const char *match, bool exact=false);
     static PyRep* LookupOwners(const char *match, bool exact=false);
     static PyRep* LookupCorporations(const std::string &);
+    /* corp/alliance picker (wars, votes, standings):  rowset ownerID, ownerName, typeID.
+     *  warable:  no NPC corps, no corps in an alliance (the alliance is the target) and not the caller's own corp/alliance
+     */
+    static PyRep* LookupCorporationsOrAlliances(const std::string& search, bool exact, bool warable, uint32 myCorpID, uint32 myAllianceID);
     static PyRep* LookupFactions(const std::string &);
     static PyRep* LookupCorporationTickers(const std::string &);
     static PyRep* LookupStations(const std::string &);

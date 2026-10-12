@@ -26,6 +26,7 @@
 #include "eve-server.h"
 
 #include "EVE_Mail.h"
+#include "account/AccountService.h"
 #include "mail/MailMgr.h"
 #include "mail/MailMgrService.h"
 
@@ -148,6 +149,15 @@ PyResult MailMgrService::SendMail(PyCallArgs &call, PyList* toCharacterIDs, PyRe
     MailMgr::TruncateUtf8(subject, mailMaxSubjectSize);
     std::string text = PyRep::StringContent(body);
     MailMgr::TruncateUtf8(text, mailMaxTaggedBodySize);
+
+    // CSPA:  recipients refusing the sender are dropped, the others may cost ISK (the client asks and calls again with approvedCost)
+    if (!toChars.empty()) {
+        std::vector<uint32> cspa(toChars.begin(), toChars.end());
+        AccountService::ChargeCSPA(call.client, cspa, call);
+        toChars.assign(cspa.begin(), cspa.end());
+        if (toChars.empty() and (listID == 0) and (corpOrAllianceID == 0))
+            throw UserError("EveMailNoCharFound").AddFormatValue("name", new PyString(""));
+    }
 
     uint32 messageID = MailMgr::SendMail(charID, toChars, listID, corpOrAllianceID, subject, text, 0, charID);
     if (messageID == 0)

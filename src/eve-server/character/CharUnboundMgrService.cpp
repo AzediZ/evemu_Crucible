@@ -362,6 +362,10 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
     if (!sImageServer.SavePortrait(pClient->GetUserID(), charRef->itemID()))
         pClient->SendInfoModalMsg("Your character portrait was not received by the server.  Your character was created, but will show no portrait until it is recaptured.");
 
+    // CSPA charge for new characters (the column default is 0 = free)
+    if (sConfig.account.cspaDefaultCost != 0)
+        AccountDB::SetContactCost(charRef->itemID(), sConfig.account.cspaDefaultCost);
+
     //  add charID to staticOwners
     CharacterDB::AddOwnerCache(charRef->itemID(), charRef->itemName(), char_type->id());
 

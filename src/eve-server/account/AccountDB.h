@@ -35,6 +35,39 @@ public:
     PyRep* GetWalletDivisionsInfo(uint32 corpID);
 
     PyRep* GetJournal(uint32 ownerID, int8 entryTypeID, uint16 accountKey, int64 fromDate, bool reverse = false);
+    // several account keys at once (GetJournalForAccounts)
+    static PyRep* GetJournal(uint32 ownerID, int8 entryTypeID, const std::vector<uint16>& accountKeys, int64 fromDate, bool reverse = false);
+
+    /* redeem tokens (accRedeemTokens).  stationID 0 = anywhere, expire 0 = never */
+    struct RedeemToken {
+        uint32 tokenID;
+        uint32 accountID;
+        uint32 typeID;
+        uint32 quantity;
+        uint32 stationID;
+        int64 expireDateTime;
+        int64 availableDateTime;
+        bool claimed;
+    };
+    // the account's unclaimed, available and unexpired tokens:  CRowset tokenID, massTokenID, typeID, quantity, label,
+    //  description, dateTime, expireDateTime, availableDateTime, stationID
+    static PyRep* GetRedeemTokens(uint32 accountID);
+    static bool GetRedeemToken(uint32 tokenID, RedeemToken& into);
+    // marks it claimed; false if it was claimed meanwhile
+    static bool ClaimRedeemToken(uint32 tokenID, uint32 charID);
+    static uint32 CreateRedeemToken(uint32 accountID, uint32 typeID, uint32 quantity, const std::string& label,
+                                    const std::string& description, uint32 stationID = 0, int64 expireDateTime = 0);
+
+    // player reports (accUserReports): 1 bot, 2 isk spammer
+    static void AddUserReport(uint32 reporterID, uint32 reportedID, uint8 reportType, const std::string& channel, const std::string& entries);
+
+    // paid game time (PLEX).  0 = none recorded
+    static int64 GetPaidUntil(uint32 accountID);
+    static void SetPaidUntil(uint32 accountID, int64 paidUntil);
+
+    // CSPA charge a character asks of non-contacts.  -1 = only contacts may contact (NULL in the db)
+    static int32 GetContactCost(uint32 charID);
+    static void SetContactCost(uint32 charID, int32 cost);
 
     static double OfflineFundXfer(uint32 charID, double amount, uint8 type=Account::CreditType::ISK);
     static double GetCorpBalance(uint32 corpID, uint16 accountKey);

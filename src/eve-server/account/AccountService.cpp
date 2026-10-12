@@ -31,6 +31,7 @@
 
 #include "StaticDataMgr.h"
 #include "account/AccountService.h"
+#include "character/CharacterDB.h"
 #include "cache/ObjCacheService.h"
 #include "corporation/CorporationDB.h"
 
@@ -64,11 +65,123 @@ AccountService::AccountService() :
     this->Add("GiveCashFromCorpAccount", static_cast <PyResult (AccountService::*)(PyCallArgs &, PyInt *, PyFloat *, PyInt *)> (&AccountService::GiveCashFromCorpAccount));
     this->Add("GetJournal", static_cast <PyResult (AccountService::*)(PyCallArgs &, PyInt *, PyLong *, std::optional<PyInt*>, PyInt *, std::optional <PyInt*>, std::optional<PyInt*>)> (&AccountService::GetJournal));
     this->Add("GetJournal", static_cast <PyResult(AccountService::*)(PyCallArgs&, PyInt*, PyLong*, std::optional<PyInt*>, PyBool*, std::optional <PyInt*>, std::optional<PyInt*>)> (&AccountService::GetJournal));
-    this->Add("GetJournalForAccounts", static_cast <PyResult (AccountService::*) (PyCallArgs &, PyInt *, PyLong *, std::optional<PyInt*>, PyBool *, std::optional <PyInt*>, std::optional<PyInt*>)>(&AccountService::GetJournalForAccounts));
-    this->Add("GetJournalForAccounts", static_cast <PyResult(AccountService::*) (PyCallArgs&, PyInt*, PyLong*, std::optional<PyInt*>, PyInt*, std::optional <PyInt*>, std::optional<PyInt*>)>(&AccountService::GetJournalForAccounts));
+    this->Add("GetJournalForAccounts", &AccountService::GetJournalForAccounts);
     this->Add("GetWalletDivisionsInfo", &AccountService::GetWalletDivisionsInfo);
     this->Add("GetDefaultContactCost", &AccountService::GetDefaultContactCost);
     this->Add("SetContactCost", &AccountService::SetContactCost);
+}
+
+double AccountService::GetCSPACharge(Client* pSender, std::vector<uint32>& recipients)
+{
+    uint32 senderID(pSender->GetCharacterID());
+    std::vector<uint32> chars;
+    for (auto cur : recipients)
+        if (IsCharacterID(cur) and (cur != senderID))
+            chars.push_back(cur);
+    if (chars.empty())
+        return 0.0;
+
+    std::ostringstream ids;
+    ids << "0";
+    for (auto cur : chars)
+        ids << "," << cur;
+
+    // recipient -> (cost, whitelisted)
+    std::set<uint32> refuse, whitelisted;
+    std::map<uint32, int64> cost;
+    DBQueryResult res;
+    DBResultRow row;
+    if (sDatabase.RunQuery(res,
+        "SELECT c.characterID, c.contactCost, c.corporationID, COALESCE(co.allianceID, 0),"
+        "  (SELECT COUNT(*) FROM chrContacts AS k WHERE k.ownerID = c.characterID AND k.contactID IN (%u, %u, %u) AND k.relationshipID > 0),"
+        "  (SELECT COUNT(*) FROM chrBlocked AS b WHERE b.ownerID = c.characterID AND b.blockedID IN (%u, %u, %u))"
+        " FROM chrCharacters AS c"
+        " LEFT JOIN crpCorporation AS co ON co.corporationID = c.corporationID"
+        " WHERE c.characterID IN (%s)",
+        senderID, pSender->GetCorporationID(), pSender->GetAllianceID(),
+        senderID, pSender->GetCorporationID(), pSender->GetAllianceID(), ids.str().c_str()))
+    {
+        while (res.GetRow(row)) {
+            uint32 charID(row.GetUInt(0));
+            if (row.GetInt(5) > 0) {
+                refuse.insert(charID);          // blocked the sender (or its corp/alliance)
+            } else if ((row.GetUInt(2) == (uint32)pSender->GetCorporationID())
+                   or ((row.GetUInt(3) != 0) and (row.GetUInt(3) == (uint32)pSender->GetAllianceID()))
+                   or (row.GetInt(4) > 0)) {
+                whitelisted.insert(charID);
+            } else if (row.IsNull(1)) {
+                refuse.insert(charID);          // only contacts may contact
+            } else {
+                cost[charID] = row.GetInt(1);
+            }
+        }
+    }
+
+    double total(0.0);
+    std::vector<uint32> keep;
+    for (auto cur : recipients) {
+        if (refuse.find(cur) != refuse.end())
+            continue;
+        keep.push_back(cur);
+        std::map<uint32, int64>::iterator itr = cost.find(cur);
+        if (itr != cost.end())
+            total += itr->second;
+    }
+    recipients.swap(keep);
+    return total;
+}
+
+void AccountService::ChargeCSPA(Client* pSender, std::vector<uint32>& recipients, PyCallArgs& call)
+{
+    double total(GetCSPACharge(pSender, recipients));
+    if (!sConfig.account.cspaEnabled or (total <= 0.0))
+        return;
+
+    double approved(0.0);
+    std::map<std::string, PyRep*>::const_iterator itr = call.byname.find("approvedCost");
+    if (itr != call.byname.end())
+        approved = PyRep::FloatValue(itr->second);
+    if (total > approved) {
+        // util.CSPAChargedAction reads totalCost (raw, passed back as approvedCost) and totalCostISK
+        throw UserError ("ContactCostNotApproved")
+                .AddFormatValue ("totalCost", new PyFloat(total))
+                .AddISK ("totalCostISK", total)
+                .AddISK ("approvedCostISK", approved);
+    }
+
+    // one journal entry per charged recipient (refCSPA names the character contacted)
+    uint32 senderID(pSender->GetCharacterID());
+    std::ostringstream ids;
+    ids << "0";
+    for (auto cur : recipients)
+        if (IsCharacterID(cur) and (cur != senderID))
+            ids << "," << cur;
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res,
+        "SELECT c.characterID, c.contactCost FROM chrCharacters AS c"
+        " LEFT JOIN crpCorporation AS co ON co.corporationID = c.corporationID"
+        " WHERE c.characterID IN (%s) AND c.contactCost > 0 AND c.corporationID != %u"
+        " AND (co.allianceID IS NULL OR co.allianceID = 0 OR co.allianceID != %u)"
+        " AND NOT EXISTS (SELECT 1 FROM chrContacts AS k WHERE k.ownerID = c.characterID AND k.contactID IN (%u, %u, %u) AND k.relationshipID > 0)",
+        ids.str().c_str(), pSender->GetCorporationID(), pSender->GetAllianceID(),
+        senderID, pSender->GetCorporationID(), pSender->GetAllianceID()))
+        return;
+    while (res.GetRow(row)) {
+        TransferFunds(senderID, corpCONCORD, row.GetInt(1), "CSPA charge", Journal::EntryType::CSPA, row.GetUInt(0));
+    }
+}
+
+void AccountService::ChargeCSPA(Client* pSender, uint32 recipientID, PyCallArgs& call)
+{
+    std::vector<uint32> recipients(1, recipientID);
+    ChargeCSPA(pSender, recipients, call);
+    if (!recipients.empty())
+        return;
+    if (CharacterDB::IsBlocked(recipientID, pSender->GetCharacterID()))
+        throw UserError ("ChtBlockedBefore")
+                .AddFormatValue ("char", new PyInt(recipientID));
+    throw CustomError ("%s only accepts contact from the people on their contact list.", sDataMgr.GetOwnerName(recipientID).c_str());
 }
 
 PyResult AccountService::GetKeyMap(PyCallArgs &call)
@@ -94,17 +207,14 @@ PyResult AccountService::GetDefaultContactCost(PyCallArgs &call)
             if self.defaultContactCost is None:
                 self.defaultContactCost = -1
         */
-
-    sLog.Log( "AccountService::Handle_GetDefaultContactCost()", "size=%lu", call.tuple->size());
-    call.Dump(ACCOUNT__CALL_DUMP);
-
-    //return m_db.GetDefaultContactCost(call.client->GetCorporationID());
-
-    // returning "none" will block all contact attempts
-    return PyStatic.NewNone();
+    // None = only contacts may contact this character
+    int32 cost(AccountDB::GetContactCost(call.client->GetCharacterID()));
+    if (cost < 0)
+        return PyStatic.NewNone();
+    return new PyInt(cost);
 }
 
-PyResult AccountService::SetContactCost(PyCallArgs &call, std::optional<PyInt*> cost)
+PyResult AccountService::SetContactCost(PyCallArgs &call, std::optional<PyRep*> cost)
 {
     /*
         self.GetAccountSvc().SetContactCost(cost)
@@ -112,10 +222,15 @@ PyResult AccountService::SetContactCost(PyCallArgs &call, std::optional<PyInt*> 
     def BlockAll(self):
         self.GetAccountSvc().SetContactCost(None)
         */
-
-    sLog.Log( "AccountService::Handle_SetContactCost()", "size=%lu", call.tuple->size());
-    call.Dump(ACCOUNT__CALL_DUMP);
-    // m_db.SetContactCost(call.client->GetCorporationID());
+    // None = only contacts may contact this character
+    if (!cost.has_value() or (cost.value() == nullptr) or cost.value()->IsNone()) {
+        AccountDB::SetContactCost(call.client->GetCharacterID(), -1);
+        return nullptr;
+    }
+    int64 value(PyRep::IntegerValue(cost.value()));
+    if (value < 0)
+        throw UserError ("ContactCostNegativeAmount");
+    AccountDB::SetContactCost(call.client->GetCharacterID(), (int32)std::min(value, (int64)INT32_MAX));
 
     // returns nothing
     return nullptr;
@@ -175,25 +290,32 @@ PyResult AccountService::GetJournal(PyCallArgs &call, PyInt* accountKey, PyLong*
     return res;
 }
 
-PyResult AccountService::GetJournalForAccounts(PyCallArgs& call, PyInt* accountKeys, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyBool* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev) {
-    return GetJournalForAccounts(call, accountKeys, fromDate, entryTypeID, new PyInt(corpAccount->value()), transactionID, rev);
-}
-
-/** @todo this isnt right.... */
-PyResult AccountService::GetJournalForAccounts(PyCallArgs &call, PyInt* accountKeys, PyLong* fromDate, std::optional<PyInt*> entryTypeID, PyInt* corpAccount, std::optional <PyInt*> transactionID, std::optional<PyInt*> rev) {
-    // this asks for data for multiple acctKeys
+PyResult AccountService::GetJournalForAccounts(PyCallArgs &call, PyRep* accountKeys, PyRep* fromDate, std::optional<PyRep*> entryTypeID, PyRep* corpAccount, std::optional <PyRep*> transactionID, std::optional<PyRep*> rev) {
+    // this asks for data for multiple acctKeys (an int or a list of them)
     // self.journalData[key] = self.GetAccountSvc().GetJournalForAccounts(accountKeys, fromDate, entryTypeID, corpAccount, transactionID, rev)
     if (is_log_enabled(ACCOUNT__CALL_DUMP)) {
         sLog.Log( "AccountService::Handle_GetJournalForAccounts()", "size=%lu", call.tuple->size());
         call.Dump(ACCOUNT__CALL_DUMP);
     }
     uint32 ownerID = call.client->GetCharacterID();
-    if (corpAccount->value())
+    if (PyRep::IntegerValue(corpAccount) != 0)
         ownerID = call.client->GetCorporationID();
 
-    uint16 acctKey = Account::KeyType::Cash;
+    std::vector<uint16> keys;
+    if (accountKeys->IsList()) {
+        for (PyList::const_iterator itr = accountKeys->AsList()->begin(); itr != accountKeys->AsList()->end(); ++itr)
+            keys.push_back(PyRep::IntegerValueU32(*itr));
+    } else if (accountKeys->IsTuple()) {
+        for (PyTuple::const_iterator itr = accountKeys->AsTuple()->begin(); itr != accountKeys->AsTuple()->end(); ++itr)
+            keys.push_back(PyRep::IntegerValueU32(*itr));
+    } else {
+        keys.push_back(PyRep::IntegerValueU32(accountKeys));
+    }
 
-    PyRep* res = m_db.GetJournal(ownerID, entryTypeID.has_value() ? entryTypeID.value()->value() : 0, acctKey, fromDate->value(), rev.has_value() ? rev.value()->value() : 0);
+    PyRep* res = AccountDB::GetJournal(ownerID, entryTypeID.has_value() ? PyRep::IntegerValue(entryTypeID.value()) : 0, keys,
+            PyRep::IntegerValue(fromDate), rev.has_value() ? (PyRep::IntegerValue(rev.value()) != 0) : false);
+    if (res == nullptr)
+        return PyStatic.NewNone();
     if (is_log_enabled(ACCOUNT__RSP_DUMP))
         res->Dump(ACCOUNT__RSP_DUMP, "    ");
     return res;
