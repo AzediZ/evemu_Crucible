@@ -79,6 +79,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/CommandDispatcher.h"
      "${TARGET_INCLUDE_DIR}/admin/DevToolsProviderService.h"
      "${TARGET_INCLUDE_DIR}/admin/DungeonCommands.h"
+     "${TARGET_INCLUDE_DIR}/admin/IncursionCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/PetitionerService.h"
      "${TARGET_INCLUDE_DIR}/admin/SlashService.h"
@@ -93,6 +94,7 @@ SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/CommandDispatcher.cpp"
      "${TARGET_SOURCE_DIR}/admin/DevToolsProviderService.cpp"
      "${TARGET_SOURCE_DIR}/admin/DungeonCommands.cpp"
+     "${TARGET_SOURCE_DIR}/admin/IncursionCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/PetitionerService.cpp"
      "${TARGET_SOURCE_DIR}/admin/SlashService.cpp"
@@ -614,6 +616,8 @@ SET( system_managers_INCLUDE
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/BeltMgr.h"
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/CivilianMgr.h"
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/DungeonMgr.h"
+     "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/IncursionDB.h"
+     "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/IncursionMgr.h"
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/ManagerDB.h"
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/SpawnMgr.h"
      "${TARGET_INCLUDE_DIR}/system/cosmicMgrs/WormholeMgr.h")
@@ -622,6 +626,8 @@ SET( system_managers_SOURCE
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/BeltMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/CivilianMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/DungeonMgr.cpp"
+     "${TARGET_SOURCE_DIR}/system/cosmicMgrs/IncursionDB.cpp"
+     "${TARGET_SOURCE_DIR}/system/cosmicMgrs/IncursionMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/ManagerDB.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/SpawnMgr.cpp"
      "${TARGET_SOURCE_DIR}/system/cosmicMgrs/WormholeMgr.cpp")

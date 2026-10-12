@@ -404,6 +404,15 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
             sig.sigName.c_str(), m_system->GetName(), sig.systemID, sig.bubbleID, sig.sigStrength *100);
 }
 
+void AnomalyMgr::RegisterAnomaly(CosmicSignature &sig)
+{
+    m_sigBySigID.emplace(sig.sigID, sig);
+    m_anomByItemID.emplace(sig.sigItemID, sig);
+    ++m_Anoms;
+    // bookmarking a scan result reads the position from sysSignatures
+    m_mdb.SaveAnomaly(sig);
+}
+
 // Register an exit wormhole created by WhMgr's 'CreateExit()' function
 void AnomalyMgr::RegisterExitWH(CosmicSignature &sig)
 {

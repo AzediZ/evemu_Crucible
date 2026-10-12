@@ -735,6 +735,9 @@ void NPCAIMgr::ClearTarget(SystemEntity* pSE) {
 void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
     if (pSE == nullptr)
         return;
+    // missile-only, ewar and logistics npcs have no turret damage.  dont fake a laser shot for them
+    if ((m_npc->GetEM() + m_npc->GetKinetic() + m_npc->GetThermal() + m_npc->GetExplosive()) <= 0)
+        return;
     // put checks here for point/tackle
 
     // effects are listed in EVE_Effects.h

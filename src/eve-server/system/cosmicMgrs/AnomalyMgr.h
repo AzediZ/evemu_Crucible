@@ -53,6 +53,8 @@ class AnomalyMgr
     const char* GetScanGroupName(uint8 groupID=0);
 
     void RegisterExitWH(CosmicSignature &sig);
+    // register a combat site built outside DungeonMgr (incursions).  shows on the scanner and can be bookmarked
+    void RegisterAnomaly(CosmicSignature &sig);
 
 protected:
     ManagerDB m_mdb;

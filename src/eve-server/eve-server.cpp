@@ -177,6 +177,7 @@
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/CivilianMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 // database cleaner service
@@ -827,6 +828,9 @@ int main( int argc, char* argv[] )
     // clear dynamic system data (player counts, etc) on server start
     MapDB::SystemStartup();
     sLog.Green("       ServerInit", "Dynamic System Data Reset.");
+
+    /* create the IncursionMgr singleton.  needs the data sets above */
+    sIncursionMgr.Initialize();
 
     //sLog.Warning("server init", "Adding NPC Market Orders.");
     //NPCMarket::CreateNPCMarketFromFile("/etc/npcMarket.xml");

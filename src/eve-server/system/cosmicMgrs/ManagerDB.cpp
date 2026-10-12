@@ -723,6 +723,9 @@ void ManagerDB::ClearDungeons(uint32 systemID)
     // anomaly items are all temp, except roids, so we may not need this...
     sDatabase.RunQuery(err, "DELETE FROM entity_attributes WHERE itemID IN (SELECT itemID FROM entity WHERE locationID = %u AND customInfo LIKE 'Dungeon%%')", systemID);
     sDatabase.RunQuery(err, "DELETE FROM entity WHERE locationID = %u AND customInfo LIKE 'Dungeon%%'", systemID);
+    // live dungeon and incursion site items are rebuilt when the system boots again.  saved copies would load as orphans
+    sDatabase.RunQuery(err, "DELETE FROM entity_attributes WHERE itemID IN (SELECT itemID FROM entity WHERE locationID = %u AND customInfo LIKE 'livedungeon%%')", systemID);
+    sDatabase.RunQuery(err, "DELETE FROM entity WHERE locationID = %u AND customInfo LIKE 'livedungeon%%'", systemID);
 }
 
 /*

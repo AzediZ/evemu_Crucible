@@ -178,6 +178,22 @@ EVEServerConfig::EVEServerConfig()
     cosmic.CiviliansEnabled = false;
     cosmic.BumpEnabled = false;
 
+    // incursion
+    incursion.Enabled = true;
+    incursion.AutoStart = true;
+    incursion.MaxActive = 1;
+    incursion.FleetSize = 10;
+    incursion.Strength = 100;
+    incursion.SitesPerSystem = 3;
+    incursion.SiteRespawn = 180;
+    incursion.MinSecurity = 0.45f;
+    incursion.StartDelay = 60;
+    incursion.MobilizeAfter = 72;
+    incursion.Lifetime = 168;
+    incursion.WithdrawTime = 60;
+    incursion.RegenDelay = 30;
+    incursion.RegenRate = 1.0f;
+
     // exploring
     exploring.Gravametric = 5;
     exploring.Magnetometric = 3;
@@ -283,6 +299,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "character",   &EVEServerConfig::ProcessCharacter );
     AddMemberParser( "npc",         &EVEServerConfig::ProcessNPC );
     AddMemberParser( "cosmic",      &EVEServerConfig::ProcessCosmic );
+    AddMemberParser( "incursion",   &EVEServerConfig::ProcessIncursion );
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
     AddMemberParser( "standings",   &EVEServerConfig::ProcessStandings );
@@ -307,6 +324,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "character" );
     RemoveParser( "npc" );
     RemoveParser( "cosmic" );
+    RemoveParser( "incursion" );
     RemoveParser( "exploring" );
     RemoveParser( "crime" );
     RemoveParser( "standings" );
@@ -714,6 +732,43 @@ bool EVEServerConfig::ProcessCosmic( const TiXmlElement* ele )
     RemoveParser( "WormHoleEnabled" );
     RemoveParser( "CiviliansEnabled" );
     RemoveParser( "BumpEnabled" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+{
+    AddValueParser( "Enabled",         incursion.Enabled );
+    AddValueParser( "AutoStart",       incursion.AutoStart );
+    AddValueParser( "MaxActive",       incursion.MaxActive );
+    AddValueParser( "FleetSize",       incursion.FleetSize );
+    AddValueParser( "Strength",        incursion.Strength );
+    AddValueParser( "SitesPerSystem",  incursion.SitesPerSystem );
+    AddValueParser( "SiteRespawn",     incursion.SiteRespawn );
+    AddValueParser( "MinSecurity",     incursion.MinSecurity );
+    AddValueParser( "StartDelay",      incursion.StartDelay );
+    AddValueParser( "MobilizeAfter",   incursion.MobilizeAfter );
+    AddValueParser( "Lifetime",        incursion.Lifetime );
+    AddValueParser( "WithdrawTime",    incursion.WithdrawTime );
+    AddValueParser( "RegenDelay",      incursion.RegenDelay );
+    AddValueParser( "RegenRate",       incursion.RegenRate );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "Enabled" );
+    RemoveParser( "AutoStart" );
+    RemoveParser( "MaxActive" );
+    RemoveParser( "FleetSize" );
+    RemoveParser( "Strength" );
+    RemoveParser( "SitesPerSystem" );
+    RemoveParser( "SiteRespawn" );
+    RemoveParser( "MinSecurity" );
+    RemoveParser( "StartDelay" );
+    RemoveParser( "MobilizeAfter" );
+    RemoveParser( "Lifetime" );
+    RemoveParser( "WithdrawTime" );
+    RemoveParser( "RegenDelay" );
+    RemoveParser( "RegenRate" );
 
     return result;
 }

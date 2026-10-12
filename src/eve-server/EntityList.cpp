@@ -44,6 +44,7 @@
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/CivilianMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "corporation/CorporationDB.h"
@@ -255,6 +256,7 @@ void EntityList::Process() {
         // these need 1Hz tics
         sCivMgr.Process();
         sBubbleMgr.Process();
+        sIncursionMgr.Process();
 
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {

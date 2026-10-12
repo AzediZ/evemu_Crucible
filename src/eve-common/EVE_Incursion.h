@@ -44,7 +44,7 @@ namespace Incursion {
             solarSystemSecurityMin = 11, //: Parameter('solarSystemSecurityMin', float, 1.0, 'Security minimum', 'The security level of the solar system has to be above this before the condition is true'),
             solarSystemSecurityMax = 12, //: Parameter('solarSystemSecurityMax', float, 0.0, 'Security maximum', 'The security level of the solar system has to be below this before the condition is true'),
             solarSystemSecurityMinInclusive = 13, //: Parameter('solarSystemSecurityMinInclusive', bool, True, 'Security minimum inclusive', 'This is whether the minimum should be inclusive or exclusive'),
-            solarSystemSecurityMinInclusive = 14, //: Parameter('solarSystemSecurityMinInclusive', bool, False, 'Security maximum inclusive', 'This is whether the maximum should be inclusive or exclusive'),
+            solarSystemSecurityMaxInclusive = 14, //: Parameter('solarSystemSecurityMinInclusive', bool, False, 'Security maximum inclusive', 'This is whether the maximum should be inclusive or exclusive'),
             disableConvoyDjinn = 15, //: Parameter('disableConvoyDjinn', bool, False, 'Disable convoy djinn', 'Disables the convoy djinn during the tale'),
             disableCustomsPoliceDjinn = 16, //: Parameter('disableCustomsPoliceDjinn', bool, False, 'Disable custom police djinn', 'Disables the custom police during the tale'),
             disableEmpirePoliceDjinn = 17, //: Parameter('disableEmpirePoliceDjinn', bool, False, 'Disable empire police djinn', 'Disables the empire police during the tale'),
