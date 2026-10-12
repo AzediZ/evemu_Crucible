@@ -340,6 +340,8 @@ namespace MktSim {
         void SetControllerIntegral(double v)            { m_integral = v; }
         double IncomeFactor() const                     { return m_incomeFactor; }
         void SetIncomeFactor(double v)                  { m_incomeFactor = v; }
+        double MoneyDrain() const                       { return m_drain; }
+        void SetMoneyDrain(double v)                    { m_drain = std::max(0.0, v); }
         int64_t LastIncomeTime() const                  { return m_lastIncome; }
         void SetLastIncomeTime(int64_t t)               { m_lastIncome = t; }
         double MoneyTarget() const                      { return m_moneyTarget; }
@@ -531,6 +533,7 @@ namespace MktSim {
         double   m_moneyTarget;             // M*, cents
         double   m_integral;
         double   m_incomeFactor;
+        double   m_drain;                   // phase 3:  cents a day the sinks take (average), the income's level
         int64_t  m_lastIncome;
 
         // intake caps:  (day, owner, type) units and (day, owner) isk

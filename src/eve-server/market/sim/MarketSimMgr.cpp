@@ -362,6 +362,7 @@ bool MarketSimMgr::LoadSaved(int64 now)
     m_world->SetControllerIntegral(std::strtod(state["integral"].c_str(), nullptr));
     double factor(std::strtod(state["incomeFactor"].c_str(), nullptr));
     m_world->SetIncomeFactor((factor > 0.0) ? factor : 1.0);
+    m_world->SetMoneyDrain(std::strtod(state["drain"].c_str(), nullptr));
     m_world->SetLastIncomeTime(std::strtoll(state["lastIncome"].c_str(), nullptr, 10));
     m_world->Pause(state["paused"] == "1");
 
@@ -610,6 +611,7 @@ std::map<std::string, std::string> MarketSimMgr::StateMap() const
     s["simTime"] = std::to_string(Now());
     s["integral"] = Fmt("%.17g", m_world->ControllerIntegral());
     s["incomeFactor"] = Fmt("%.17g", m_world->IncomeFactor());
+    s["drain"] = Fmt("%.17g", m_world->MoneyDrain());
     s["lastIncome"] = std::to_string(m_world->LastIncomeTime());
     s["paused"] = m_world->Paused() ? "1" : "0";
     // the GM overrides that are set (MarketSimDB::Flush replaces them all)
