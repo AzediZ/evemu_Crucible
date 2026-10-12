@@ -30,6 +30,22 @@ namespace Market {
     bool InSkillRange(int32 distance, uint8 level);
     // does an order at orderStationID with orderRange (Range or jumps) reach targetStationID
     bool RangeCovers(int32 orderRange, uint32 orderStationID, uint32 targetStationID);
+
+    /* one side of a trade.  the money is ownerID's:  a character, a player corp's wallet division accountKey, or the
+     *  npc corp a market sim actor trades as.  client is the acting character when it is online */
+    struct Party {
+        uint32 ownerID;
+        uint32 charID;          // acting character (the member for corp trades).  the npc corp itself for the sim
+        bool isCorp;            // ownerID is a player corp wallet
+        uint16 accountKey;
+        Client* client;
+        uint32 simActorID;      // the market sim actor, 0 for players
+
+        bool IsSim() const                              { return simActorID != 0; }
+        // the client's character, or its corp's division accountKey when useCorp
+        static Party ForClient(Client* pClient, bool useCorp, uint16 accountKey);
+        static Party ForSim(uint32 actorID, uint32 corpID);
+    };
 }
 
 class MarketMgr
@@ -64,6 +80,21 @@ public:
     // buy qty from a sell order.  throws (NotEnoughMoney) before anything changed when the buyer can't pay
     bool ExecuteSellOrder(Client* buyer, const Market::OrderInfo& oInfo, uint32 qty, bool useCorp, uint16 accountKey);
 
+    /* the trade bodies behind ExecuteBuyOrder / ExecuteSellOrder.  fees, taxes, journals, transactions and the order
+     *  owner's notifications happen here and only here, for players and for the market sim alike.
+     *  FillAgainstBuyOrder:  seller sells qty into a resting buy order in stationID.  a player hands over iRef (exactly
+     *    qty), the sim hands over nothing (iRef null) and the items are made from its stock
+     *  FillAgainstSellOrder: buyer takes qty from a resting sell order.  items are delivered to players; the sim gets none
+     *    (they go to its stock).  throws NotEnoughMoney before anything changed when a player can't pay
+     *  npc orders are only filled when something backs them (the market sim's ledger):  an npc wallet holds no isk and
+     *  an npc sell order has no items.  false when nothing happened */
+    bool FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market::Party& seller, InventoryItemRef iRef, uint32 qty, uint32 stationID);
+    bool FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Market::Party& buyer, uint32 qty);
+    // the order is owned by an npc and backed by the market sim
+    bool IsBackedNpcOrder(const Market::OrderInfo& oInfo);
+    // the order's owner is a character or a player corp
+    static bool IsPlayerOrder(const Market::OrderInfo& oInfo);
+
     // removes an order and settles it:  a buy order's remaining escrow goes back to its wallet, a sell order's remaining
     //  items to its owner's hangar (corp: the office's deliveries hangar).  the owner is told with 'Expiry'.  false if the order is gone
     bool CancelOrderInternal(const Market::OrderInfo& oInfo, const char* reason);
@@ -75,6 +106,14 @@ public:
     void NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, PyRep* order = nullptr);
 
     void InvalidateOrdersCache(uint32 regionID, uint32 typeID);
+    void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
+
+    /* the market window's best-price lists (GetStationAsks, GetSystemAsks, GetRegionBest), cached for a minute (they
+     *  group the whole region's orders).  MarkAsksDirty drops a region's lists at once */
+    PyRep* GetStationAsks(uint32 stationID);
+    PyRep* GetSystemAsks(uint32 solarSystemID);
+    PyRep* GetRegionBest(uint32 regionID);
+    void MarkAsksDirty(uint32 regionID);
 
     // player order modification delay (market.OrderModificationDelay, Crucible const.mktModificationDelay)
     // issued = order's issue date.  the last-modified stamps are kept in memory only
@@ -117,11 +156,11 @@ public:
 protected:
     void Populate();
     void ProcessOrderExpiry();
-    void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
-    // records both sides of a trade
+    // records both sides of a trade.  recordBuyer false leaves out the buy side row (the sell side row is the one the
+    //  price history uses, so it is always written)
     void RecordTrade(uint16 typeID, uint32 qty, double price, uint32 stationID,
                      uint32 sellerOwnerID, bool sellerIsCorp, uint32 sellerCharID, uint16 sellerKey,
-                     uint32 buyerOwnerID, bool buyerIsCorp, uint32 buyerCharID, uint16 buyerKey);
+                     uint32 buyerOwnerID, bool buyerIsCorp, uint32 buyerCharID, uint16 buyerKey, bool recordBuyer = true);
 
 private:
     MarketDB m_db;
@@ -137,6 +176,14 @@ private:
     std::map<uint16, double> m_materialIndex;       // typeID/market index price
     std::map<uint16, double> m_insuranceValue;      // ship typeID/insurance value (memo, cleared with the index)
     bool m_indexReady;
+
+    struct AsksCache {
+        PyRep* rep;
+        int64  built;       // filetime
+        uint32 regionID;
+    };
+    std::map<std::pair<uint8, uint32>, AsksCache> m_asks;   // (0 station / 1 system / 2 region, id)
+    PyRep* CachedAsks(uint8 kind, uint32 id, uint32 regionID);
 
     // markets are regional.  there are 66 regions.
     // market orders are stored as {regionID/typeID}

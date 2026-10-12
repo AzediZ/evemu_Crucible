@@ -235,3 +235,6 @@ OPTION( EVEMU_BUILD_TESTS "Build the eve-test unit tests" ON )
 IF( EVEMU_BUILD_TESTS )
   ADD_SUBDIRECTORY( "src/eve-test" )
 ENDIF( EVEMU_BUILD_TESTS )
+
+# the market simulation harness and its tests (CTest)
+ADD_SUBDIRECTORY( "src/eve-market-sim" )

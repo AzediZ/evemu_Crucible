@@ -40,7 +40,6 @@ EntityList::Process() {
             cur.second->UpdateData();           -- update active system timers and dynamic data every 5m
 
     [on15MinTic]
-        sMktBotMgr.Process();                   -- update orders in current system based on settings, travel to next system
         sConsole.UpdateStatus();
 
     [onHourTic]

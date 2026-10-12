@@ -138,7 +138,7 @@
 // market services
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
-#include "market/MarketBotMgr.h"
+#include "market/sim/MarketSimMgr.h"
 // missions services
 #include "missions/MissionMgrService.h"
 // planet services
@@ -232,7 +232,6 @@ int main( int argc, char* argv[] )
     sLog.Log("       Build Date", " %s", EVEMU_BUILD_DATE );
     sLog.Log("   Config Version", " %.1f", Config_Version );
     sLog.Log("      Log Version", " %.1f", Log_Version );
-    sLog.Log("TraderJoe Version", " %.2f", Joe_Version );
     sLog.Log(" Missions Version", " %.2f", Mission_Version );
     sLog.Log("     Scan Version", " %.2f", Scan_Version );
     sLog.Log("   NPC AI Version", " %.2f", NPC_AI_Version );
@@ -526,14 +525,6 @@ int main( int argc, char* argv[] )
         sLog.Green("      Decay Timer","Enabled.  Checks every %u minutes", sConfig.rates.WorldDecay);
     }  else {
         sLog.Warning("      Decay Timer","Disabled.");
-    }
-    if (sConfig.server.TraderJoe) {
-        sLog.Green("   Market Bot Mgr", "TraderJoe is Enabled.");
-        /* create the MarketBot singleton */
-        sLog.Green("       ServerInit", "Starting Market Bot Manager");
-        sMktBotMgr.Initialize();
-    } else {
-        sLog.Warning("   Market Bot Mgr", "TraderJoe is Disabled.");
     }
     std::printf("\n");     // spacer
 
@@ -836,6 +827,10 @@ int main( int argc, char* argv[] )
     std::printf("\n");     // spacer
     // npc ai:  deprecated settings, and the npc type data audit when npc.AuditOnStartup is set
     NpcProfile::StartupChecks();
+    /* the market simulation (needs the static, map and station data above) */
+    sLog.Green("       ServerInit", "Starting Market Simulation");
+    sMktSim.Initialize();
+    std::printf("\n");     // spacer
 
     // clear dynamic system data (player counts, etc) on server start
     MapDB::SystemStartup();
@@ -1029,7 +1024,8 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
         sEntityList.Shutdown();
     /* mission pockets get no more dungeon events */
     sMissionInstanceMgr.Close();
-    /* Close the MarketMgr */
+    /* Close the market simulation (writes its state), then the MarketMgr */
+    sMktSim.Close();
     sMktMgr.Close();
     /* Close the sovereignty data manager (saves anything changed before shutdown) */
     svDataMgr.Close();

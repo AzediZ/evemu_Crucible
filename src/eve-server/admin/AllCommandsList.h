@@ -9,6 +9,7 @@
 #include "admin/DungeonCommands.h"
 #include "admin/GMToolCommands.h"
 #include "admin/NpcAICommands.h"
+#include "admin/MarketSimCommands.h"
 
 //clean up macros
 #undef COMMAND

@@ -29,7 +29,6 @@
 #include "testing/test.h"
 #include "admin/CommandDispatcher.h" // ---commandlist update
 #include "EVE_Roles.h" // ---commandlist update
-#include "market/MarketBotMgr.h" // ---marketbot update
 #include "admin/CommandHelper.h"
 #include "services/ServiceManager.h"
 #include "system/BookmarkService.h"
@@ -1449,13 +1448,6 @@ PyResult Command_dropLoot(Client* pClient, CommandDB* db, EVEServiceManager &ser
     pBubble->CmdDropLoot();
 
     return nullptr;
-}
-
-// ---marketbot update; forcerun command
-PyResult Command_marketbot_run(Client* pClient, CommandDB* db, EVEServiceManager& services, const Seperator& args) {
-    sMktBotMgr.ForceRun();
-    pClient->SendNotifyMsg("MarketBot has been forced to refresh orders.");
-    return new PyString("MarketBot refresh cycle triggered.");
 }
 
 /* groove's new command.....
