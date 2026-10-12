@@ -202,6 +202,21 @@ bool Ledger::MoveGoods(uint32_t fromID, uint32_t toID, uint16_t nodeID, uint16_t
     return true;
 }
 
+bool Ledger::Relocate(uint32_t actorID, uint16_t fromNode, uint16_t toNode, uint16_t typeID, Units q)
+{
+    if (q <= 0)
+        return (q == 0);
+    StockKey kf(Key(actorID, fromNode, typeID)), kt(Key(actorID, toNode, typeID));
+    Stock& f(m_stocks[kf]);
+    if (f.qty < q)
+        return false;
+    f.qty -= q;
+    m_stocks[kt].qty += q;
+    m_dirtyStocks.insert(kf);
+    m_dirtyStocks.insert(kt);
+    return true;
+}
+
 bool Ledger::ReserveGoods(uint32_t actorID, uint16_t nodeID, uint16_t typeID, Units q)
 {
     if (q <= 0)

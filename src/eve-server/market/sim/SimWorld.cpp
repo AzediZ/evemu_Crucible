@@ -71,7 +71,11 @@ World::World(const StaticData& data, const Params& params, IMarketGateway& gatew
   m_capacity(nullptr),
   m_nextJobID(1),
   m_jobsChanged(false),
-  m_miningShock(1.0, 0)
+  m_miningShock(1.0, 0),
+  m_nextTripID(1),
+  m_tripsChanged(false),
+  m_tripsArrived(0),
+  m_tripsLost(0)
 {
     m_capacity = m_ownCapacity.get();
     if (m_p.quoteLevels > MaxLevels)
@@ -212,6 +216,11 @@ void World::Build(int64_t now)
     m_minerPlans.clear();
     m_makerPlans.clear();
     m_nodeLosses.clear();
+    m_sites.clear();
+    m_haulPlans.clear();
+    m_remoteShare.clear();
+    m_trips.clear();
+    m_transit.clear();
     std::map<uint32_t, uint32_t> consumers;                         // regionID -> actor
     std::map<std::pair<uint32_t, uint8_t>, uint32_t> makers, producers;
     auto newActor = [this](uint8_t kind, uint8_t sector, uint32_t corp, uint32_t regionID, uint32_t nodeID) -> uint32_t {
@@ -451,6 +460,9 @@ void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
     // the miners' fleets
     if (m_p.actors)
         SeedActors(now, nodeID, freshOnly);
+    // phase 4:  the hauling hulls
+    if (m_p.actors and m_p.logistics)
+        SeedHaulers(nodeID, freshOnly);
 }
 
 void World::Start(int64_t now, bool catchUp)
@@ -489,6 +501,9 @@ void World::Start(int64_t now, bool catchUp)
     }
     for (auto& cur : m_jobs)
         m_due.push(Due{std::max(cur.second.end, now), DueJob, cur.first});
+    // phase 4:  shipments arrive when they arrive (overdue after a downtime:  at once)
+    for (auto& cur : m_trips)
+        m_due.push(Due{std::max(cur.second.arrive, now), DueTrip, cur.first});
     for (auto& cur : m_minerPlans)
         if (cur.second.since == 0)
             cur.second.since = now;
@@ -537,11 +552,15 @@ void World::Step(int64_t now, double budgetUs, std::function<double()> usNow)
             case DueJob:
                 CompleteJob(d.index, d.t);
                 break;
+            case DueTrip:
+                ArriveTrip(d.index, d.t);
+                break;
             case DueActor:
                 if ((d.index == 0) or (d.index > m_actors.size()))
                     break;
                 StepActor(m_actors[d.index - 1], d.t);
-                m_due.push(Due{d.t + 3600, DueActor, d.index});
+                // phase 4:  hub traders plan every half hour (PLAN 6.4), one direction at a time
+                m_due.push(Due{d.t + ((m_actors[d.index - 1].kind == ActorKind::Hauler) ? 1800 : 3600), DueActor, d.index});
                 break;
             default: {
                 if (d.index >= m_cells.size())
@@ -1942,6 +1961,7 @@ std::string World::Status(int64_t now) const
                    kinds[ActorKind::LootSource], MiningShockOf(now), (MiningShockOf(now) != 1.0) ? " (shocked)" : "", lossShock,
                    hullShocks ? Fmt(", %u hulls shocked", hullShocks).c_str() : "");
     }
+    out << LogisticsStatus(now);
     for (auto& line : m_auditLines)
         if ((line.category.compare(0, 9, "residual.") == 0) or (line.category == "priceIndex.ppm"))
             out << Fmt("  day %d %s = %lld\n", line.day, line.category.c_str(), (long long)line.amount);
@@ -1987,7 +2007,7 @@ std::string World::ActorInfo(uint32_t actorID) const
     out << Fmt("actor %u, %s (sector/class %u), corp %u, region %u, node %u%s.  wallet %.2f, reserved %.2f, target %.2f\n",
                a.actorID, ActorKind::Name(a.kind), a.sector, a.ownerCorpID, a.regionID, a.nodeID, (a.state != 0) ? ", retired" : "",
                acct ? Econ::ToIsk(acct->wallet) : 0.0, acct ? Econ::ToIsk(acct->reserved) : 0.0, a.target / 100.0);
-    if (a.kind == ActorKind::Miner) {
+    if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::RemoteMiner)) {
         std::map<uint32_t, MinerPlan>::const_iterator itr = m_minerPlans.find(actorID);
         if (itr != m_minerPlans.end()) {
             out << Fmt("  fleet (reference %.0f m3/day, %u ores):", a.capacity, (uint32_t)itr->second.ores.size());
@@ -2030,6 +2050,8 @@ std::string World::ActorInfo(uint32_t actorID) const
         }
         out << JobList(actorID);
     }
+    if ((a.kind == ActorKind::Hauler) or (a.kind == ActorKind::RemoteMiner))
+        out << HaulerInfo(a) << TripList(actorID);
     std::vector<std::pair<double, Ledger::StockKey>> top;
     for (auto& cur : m_ledger.Stocks()) {
         if (Ledger::KeyActor(cur.first) != actorID)

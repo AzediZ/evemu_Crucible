@@ -61,6 +61,8 @@ namespace MktSim {
         void  GoodsIn(uint32_t actorID, uint16_t nodeID, uint16_t typeID, Units q, uint8_t flow);    // faucet or from a player
         bool  GoodsOut(uint32_t actorID, uint16_t nodeID, uint16_t typeID, Units q, uint8_t flow, bool fromReserved);  // sink or to a player
         bool  MoveGoods(uint32_t fromID, uint32_t toID, uint16_t nodeID, uint16_t typeID, Units q, bool fromReserved);
+        // an actor's own goods from one location to another (shipments:  a node or site to TransitLoc and on;  no flow)
+        bool  Relocate(uint32_t actorID, uint16_t fromNode, uint16_t toNode, uint16_t typeID, Units q);
         bool  ReserveGoods(uint32_t actorID, uint16_t nodeID, uint16_t typeID, Units q);
         void  UnreserveGoods(uint32_t actorID, uint16_t nodeID, uint16_t typeID, Units q);
 

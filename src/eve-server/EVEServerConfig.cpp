@@ -198,6 +198,18 @@ EVEServerConfig::EVEServerConfig()
     marketSim.MaxCatchUpHours = 48;
     marketSim.FlushSeconds = 30;
     marketSim.PauseOnAuditResidual = true;
+    // marketSim phase 4 (PLAN 6.5, 9.6:  the plan's route risk and freight)
+    marketSim.EnableLogistics = true;
+    marketSim.RiskHighSec = 2e-5;
+    marketSim.RiskHighSecBeta = 0.7;
+    marketSim.RiskLowSec = 2e-3;
+    marketSim.RiskNullSec = 5e-3;
+    marketSim.FreightIskPerM3Jump = 1.5;
+    marketSim.HaulerFleet = 5;
+    marketSim.HaulerMaxTripValue = 5e8;
+    marketSim.HaulerCargoFactor = 3.0;
+    marketSim.HaulerMargin = 0.03;
+    marketSim.RemoteSupplyElasticity = 2.0;
     // marketSim phase 3 (PLAN 6.3, 6.4, 6.6;  KillmailCoverage per PLAN 4.2, line costs as Crucible's npc station lines)
     marketSim.Actors = true;
     marketSim.KillmailCoverage = 0.5;
@@ -911,6 +923,17 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     AddValueParser( "MaxCatchUpHours",              marketSim.MaxCatchUpHours );
     AddValueParser( "FlushSeconds",                 marketSim.FlushSeconds );
     AddValueParser( "PauseOnAuditResidual",         marketSim.PauseOnAuditResidual );
+    AddValueParser( "EnableLogistics",              marketSim.EnableLogistics );
+    AddValueParser( "RiskHighSec",                  marketSim.RiskHighSec );
+    AddValueParser( "RiskHighSecBeta",              marketSim.RiskHighSecBeta );
+    AddValueParser( "RiskLowSec",                   marketSim.RiskLowSec );
+    AddValueParser( "RiskNullSec",                  marketSim.RiskNullSec );
+    AddValueParser( "FreightIskPerM3Jump",          marketSim.FreightIskPerM3Jump );
+    AddValueParser( "HaulerFleet",                  marketSim.HaulerFleet );
+    AddValueParser( "HaulerMaxTripValue",           marketSim.HaulerMaxTripValue );
+    AddValueParser( "HaulerCargoFactor",            marketSim.HaulerCargoFactor );
+    AddValueParser( "HaulerMargin",                 marketSim.HaulerMargin );
+    AddValueParser( "RemoteSupplyElasticity",       marketSim.RemoteSupplyElasticity );
     AddValueParser( "Actors",                       marketSim.Actors );
     AddValueParser( "KillmailCoverage",             marketSim.KillmailCoverage );
     AddValueParser( "PodLossRate",                  marketSim.PodLossRate );
@@ -969,6 +992,17 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     RemoveParser( "MaxCatchUpHours" );
     RemoveParser( "FlushSeconds" );
     RemoveParser( "PauseOnAuditResidual" );
+    RemoveParser( "EnableLogistics" );
+    RemoveParser( "RiskHighSec" );
+    RemoveParser( "RiskHighSecBeta" );
+    RemoveParser( "RiskLowSec" );
+    RemoveParser( "RiskNullSec" );
+    RemoveParser( "FreightIskPerM3Jump" );
+    RemoveParser( "HaulerFleet" );
+    RemoveParser( "HaulerMaxTripValue" );
+    RemoveParser( "HaulerCargoFactor" );
+    RemoveParser( "HaulerMargin" );
+    RemoveParser( "RemoteSupplyElasticity" );
     RemoveParser( "Actors" );
     RemoveParser( "KillmailCoverage" );
     RemoveParser( "PodLossRate" );

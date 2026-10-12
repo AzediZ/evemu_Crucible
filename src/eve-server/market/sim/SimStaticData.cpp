@@ -25,6 +25,7 @@ int Isk::Sign(uint8_t flow)
         case Income: case Seed: case PlayerToSim: case Reconcile:
             return 1;
         case SimToPlayer: case Production: case BrokerFee: case SalesTax: case Upkeep: case VendorSales: case LineCost:
+        case Freight:
             return -1;
     }
     return 0;
@@ -44,6 +45,7 @@ const char* Isk::Name(uint8_t flow)
         case VendorSales:   return "isk.sink.vendor";
         case Reconcile:     return "isk.reconcile";
         case LineCost:      return "isk.sink.lineCost";
+        case Freight:       return "isk.sink.freight";
     }
     return "isk.unknown";
 }
@@ -55,6 +57,7 @@ int Goods::Sign(uint8_t flow)
         case Mined: case Loot: case Dropped: case Manufactured: case Refined:
             return 1;
         case SimToPlayer: case Consumption: case Materials: case RefineTax: case Destroyed: case Spoiled:
+        case Transport:
             return -1;
     }
     return 0;
@@ -79,6 +82,7 @@ const char* Goods::Name(uint8_t flow)
         case RefineTax:     return "goods.sink.refineTax";
         case Destroyed:     return "goods.sink.destroyed";
         case Spoiled:       return "goods.sink.spoiled";
+        case Transport:     return "goods.sink.transport";
     }
     return "goods.unknown";
 }
@@ -94,6 +98,8 @@ const char* ActorKind::Name(uint8_t kind)
         case Reprocessor:   return "reprocessor";
         case Manufacturer:  return "manufacturer";
         case LootSource:    return "loot source";
+        case Hauler:        return "hauler";
+        case RemoteMiner:   return "remote miner";
     }
     return "?";
 }
@@ -312,6 +318,18 @@ float StaticData::LossesPerDay(uint16_t hullTypeID) const
     for (auto v : itr->second)
         sum += v;
     return sum;
+}
+
+uint8_t StaticData::OreBands(const TypeData& t) const
+{
+    const uint8_t anywhere((1 << SecBand::High) | (1 << SecBand::Low) | (1 << SecBand::Null));
+    if (oreBands.empty() or (t.groupID == Group::Ice))
+        return anywhere;
+    std::map<uint16_t, uint8_t>::const_iterator itr = oreBands.find(t.groupID);
+    if (itr != oreBands.end())
+        return (itr->second != 0) ? itr->second : anywhere;
+    // an ore roidDistribution doesn't place (Mercoxit) is in null-sec's belts only
+    return (t.categoryID == Category::Asteroid) ? (uint8_t)(1 << SecBand::Null) : anywhere;
 }
 
 size_t StaticData::Validate(std::vector<std::string>& problems) const

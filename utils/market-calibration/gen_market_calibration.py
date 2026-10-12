@@ -42,6 +42,7 @@ import derive  # noqa: E402
 import fetch  # noqa: E402
 import history  # noqa: E402
 import killmails  # noqa: E402
+import serverdata  # noqa: E402
 from derive import median, percentile  # noqa: E402
 
 DEFAULT_OUT = os.path.join(ROOT, 'sql', 'migrations', '20261013120100-market-calibration.sql')
@@ -208,6 +209,56 @@ def build_time_json(st, cal):
     return out
 
 
+HAUL_GROUPS = (28, 380, 513)        # industrials, transport ships, freighters:  their cargo holds
+
+
+def logistics_json(st, rows):
+    """the market sim's phase 4 logistics (the harness snapshot):  k-space (systemID, security, regionID), its jumps
+    (each once), the npc stations with a refinery (stationID, systemID, regionID, efficiency, take), the security bands
+    each ore group's belts are in (bit 0 high-sec >= 0.45, 1 low-sec, 2 null-sec;  roidDistribution per securityClass),
+    the hauling hulls' cargo holds and the regional node stations MarketSimDB::AutoRegionalStations picks (a high/low-sec
+    region with 1% of the isk:  in its system with the most stations, the station with the most assembly lines)"""
+    systems = {}
+    for r in serverdata.load_synced('mapSolarSystems').rows:
+        if r['regionID'] < 11000000:
+            systems[r['solarSystemID']] = (float(r['security']), r['regionID'], r['securityClass'])
+    jumps = sorted(set((min(r['fromSolarSystemID'], r['toSolarSystemID']), max(r['fromSolarSystemID'], r['toSolarSystemID']))
+                       for r in serverdata.load_synced('mapSolarSystemJumps').rows
+                       if r['fromSolarSystemID'] in systems and r['toSolarSystemID'] in systems))
+    sta = serverdata.load_synced('staStations').rows
+    stations = sorted((r['stationID'], r['solarSystemID'], r['regionID'], float(r['reprocessingEfficiency'] or 0),
+                       float(r['reprocessingStationsTake'] or 0))
+                      for r in sta if (r['reprocessingEfficiency'] or 0) > 0 and r['solarSystemID'] in systems)
+    by_class = collections.defaultdict(int)
+    for sec, _region, cls in systems.values():
+        by_class[cls] |= 1 if sec >= 0.45 else (2 if sec > 0 else 4)
+    bands = collections.defaultdict(int)
+    for r in serverdata.load_synced('roidDistribution').rows:
+        if r['roidID'] in st.types:
+            bands[st.types[r['roidID']]['groupID']] |= by_class.get(r['systemSec'], 0)
+    cargo = dict((str(t), float(r['capacity'] or 0)) for t, r in sorted(st.types.items())
+                 if r['groupID'] in HAUL_GROUPS and (r['capacity'] or 0) > 0)
+    # the regional nodes:  as the server's 'auto'
+    lines = collections.defaultdict(int)
+    for r in serverdata.load_synced('ramAssemblyLineStations').rows:
+        lines[r['stationID']] += r['quantity'] or 0
+    isk = dict((r[0], r[3]) for r in rows['mktCalRegionDefault'])
+    regional = []
+    for region in sorted(isk):
+        secs = [sec for sec, reg, _ in systems.values() if reg == region]
+        if not secs or max(secs) <= 0.0 or isk[region] < 0.01:
+            continue
+        per = collections.Counter(r['solarSystemID'] for r in sta if r['regionID'] == region)
+        if not per:
+            continue
+        top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        best = sorted((r['stationID'] for r in sta if r['solarSystemID'] == top), key=lambda sid: (-lines[sid], sid))[0]
+        regional.append([region, best])
+    return {'systems': [[sid, sec, reg] for sid, (sec, reg, _) in sorted(systems.items())],
+            'jumps': [list(j) for j in jumps], 'stations': [list(s) for s in stations],
+            'oreBands': dict((str(g), b) for g, b in sorted(bands.items())), 'cargo': cargo, 'regional': regional}
+
+
 def export_json(path, st, cal, rows):
     types = {}
     for t in sorted(cal.types):
@@ -230,6 +281,7 @@ def export_json(path, st, cal, rows):
     doc = {'generator': 'utils/market-calibration/gen_market_calibration.py', 'attribution': ATTRIBUTION,
            'types': types, 'bom': bom, 'refine': refine, 'calibration': cal_json}
     doc['buildTime'] = build_time_json(st, cal)
+    doc['logistics'] = logistics_json(st, rows)
     with open(path, 'w', encoding='utf-8', newline='\n') as f:
         json.dump(doc, f, sort_keys=True, separators=(',', ':'))
         f.write('\n')

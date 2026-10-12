@@ -142,6 +142,18 @@ void MarketSimMgr::ReadParams()
     p.lineInstallCost = c.LineInstallCost;
     p.lineCostPerHour = c.LineCostPerHour;
     p.buildTimeMultiplier = 0.8 * sConfig.ram.ProdTime;     // Industry V, and the server's manufacturing time multiplier
+    // phase 4
+    p.logistics = c.EnableLogistics;
+    p.risk.highSec = std::max(0.0, c.RiskHighSec);
+    p.risk.highSecBeta = c.RiskHighSecBeta;
+    p.risk.lowSec = std::max(0.0, c.RiskLowSec);
+    p.risk.nullSec = std::max(0.0, c.RiskNullSec);
+    p.freightPerM3Jump = std::max(0.0, c.FreightIskPerM3Jump);
+    p.haulerFleet = (int)std::max<uint32>(1, c.HaulerFleet);
+    p.haulerMaxTripValue = std::max(1e6, c.HaulerMaxTripValue);
+    p.haulerCargoFactor = std::max(1.0, c.HaulerCargoFactor);
+    p.haulerMargin = std::max(0.0, c.HaulerMargin);
+    p.remoteSupplyElasticity = std::max(0.0, c.RemoteSupplyElasticity);
     m_params = p;
 }
 
@@ -201,6 +213,8 @@ bool MarketSimMgr::LoadStatic(std::string& why)
     }
     MarketSimDB::LoadMaterials(m_static);
     MarketSimDB::LoadIndustry(m_static);
+    if (m_params.logistics and m_params.actors)
+        MarketSimDB::LoadLogistics(m_static);
     MarketSimDB::LoadVendorOffers(m_static, sConfig.marketSim.VendorStations, m_hubs);
     PickCorps();
 
@@ -423,10 +437,12 @@ bool MarketSimMgr::LoadSaved(int64 now)
 
     std::vector<MarketSimDB::StockRow> stock;
     MarketSimDB::LoadInventory(stock);
+    // phase 4:  stock at a node's sites and on the way is kept under locations that follow the node's number
+    std::function<uint32_t(uint32_t)> nodeFn(node);
     for (auto& r : stock) {
         uint32 a(actor(r.actorID));
         if (a != 0)
-            m_world->GetLedger().LoadStock(Ledger::Key(a, (uint16)node(r.nodeID), r.typeID), r.qty, r.reserved);
+            m_world->GetLedger().LoadStock(Ledger::Key(a, World::MapLocation((uint16)r.nodeID, nodeFn), r.typeID), r.qty, r.reserved);
     }
 
     std::vector<MarketSimDB::CellRow> cells;
@@ -504,6 +520,21 @@ bool MarketSimMgr::LoadSaved(int64 now)
             _log(MARKET__SIM, "Market sim:  job %u (actor %u, type %u) has no manufacturer or node any more.  Dropped.", r.jobID, r.actorID, r.typeID);
     }
     m_world->MarkJobsChanged();
+
+    // phase 4:  the shipments on the way (their goods are the actors' stock at TransitLoc)
+    m_world->SetNextTripID((uint32)std::strtoul(state["nextTripID"].c_str(), nullptr, 10));
+    std::vector<SimTrip> trips;
+    MarketSimDB::LoadShipments(trips);
+    uint32 tripsLoaded(0);
+    for (auto& t : trips) {
+        t.actorID = actor(t.actorID);
+        t.from = World::MapLocation(t.from, nodeFn);
+        t.to = World::MapLocation(t.to, nodeFn);
+        if (m_world->LoadTrip(t))
+            ++tripsLoaded;
+    }
+    std::string transit(m_world->ReconcileTransit());
+    m_world->MarkTripsChanged();
 
     // the orders:  gone ones are forgotten, those of cells that left are cancelled, the rest are the world's again
     std::vector<MarketSimDB::OrderRow> orders;
@@ -598,6 +629,8 @@ bool MarketSimMgr::LoadSaved(int64 now)
     m_world->MarkAllCellsChanged();
     sLog.Green("    MarketSimMgr", "Market sim loaded:  %u cells (%u new), %u actors, %u orders (%u filled or gone while down, %u dropped), %u jobs.  %s.",
                (uint32)m_world->Cells().size(), (uint32)fresh.size(), (uint32)m_world->Actors().size(), loaded, gone, dropped, jobsLoaded, rec.c_str());
+    if (!trips.empty() or m_params.logistics)
+        sLog.Green("    MarketSimMgr", "Market sim logistics:  %u of %u shipments loaded;  %s.", tripsLoaded, (uint32)trips.size(), transit.c_str());
     return true;
 }
 
@@ -623,6 +656,8 @@ std::map<std::string, std::string> MarketSimMgr::StateMap() const
     }
     // phase 3
     s["nextJobID"] = std::to_string(m_world->NextJobID());
+    // phase 4
+    s["nextTripID"] = std::to_string(m_world->NextTripID());
     for (auto& cur : m_world->LossShocks())
         if (cur.second.second > Now())
             s[Fmt("shock:loss:%u", cur.first)] = Fmt("%.9g,%lld", cur.second.first, (long long)cur.second.second);
@@ -653,6 +688,7 @@ void MarketSimMgr::Flush()
         m_world->MarkAllCellsChanged();
         m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
         m_world->MarkJobsChanged();
+        m_world->MarkTripsChanged();
         return;
     }
     m_pendingAudit.clear();
@@ -831,7 +867,7 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
 {
     std::string sub((args.argCount() > 1) ? args.arg(1) : "status");
     std::string usage("usage: /mktsim status | pause | resume | cell <typeID> [stationID] | actor <actorID> | actors [kind] |"
-                      " jobs [actorID] | anchor <typeID> <price> [regionID] |"
+                      " jobs [actorID] | routes [stationID] | shipments [actorID] | anchor <typeID> <price> [regionID] |"
                       " shock <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0> <mult> <days> |"
                       " requote <typeID|all> | seed [stationID] | audit [days] | step <ticks> | purge | purgelegacy | export <file>");
     if (sub == "purgelegacy") {
@@ -869,7 +905,7 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
     }
     if (sub == "actors") {
         // a kind by number or name (market maker 1, producer 2, consumer 3, vendor 4, miner 5, reprocessor 6,
-        //  manufacturer 7, loot 8)
+        //  manufacturer 7, loot 8, hauler 9, remote miner 10)
         int kind(0);
         if (args.argCount() > 2) {
             std::string k(args.arg(2));
@@ -884,6 +920,30 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
         uint32 actorID((args.argCount() > 2) ? (uint32)std::strtoul(args.arg(2).c_str(), nullptr, 10) : 0);
         std::string list(m_world->JobList(actorID));
         return Fmt("%u sim jobs running.\n", (uint32)m_world->Jobs().size()) + list;
+    }
+    // phase 4:  the sites and routes (of one node by its station), the shipments on the way (of one actor)
+    if (sub == "routes") {
+        uint32 nodeID(0);
+        if (args.argCount() > 2) {
+            uint32 station((uint32)std::strtoul(args.arg(2).c_str(), nullptr, 10));
+            for (auto& n : m_world->Nodes())
+                if (n.stationID == station)
+                    nodeID = n.nodeID;
+            if (nodeID == 0)
+                return Fmt("%u is not a market sim node.", station);
+        }
+        return m_world->RouteInfo(nodeID);
+    }
+    if (sub == "shipments") {
+        uint32 actorID((args.argCount() > 2) ? (uint32)std::strtoul(args.arg(2).c_str(), nullptr, 10) : 0);
+        Units lost(0), hulls(0);
+        for (auto& cur : m_world->TransportLost())
+            lost += cur.second;
+        for (auto& cur : m_world->HaulHullsBought())
+            hulls += cur.second;
+        return Fmt("%u shipments on the way;  since the boot %llu arrived, %llu lost (%lld units), %lld hauling hulls bought.\n",
+                   (uint32)m_world->Trips().size(), (unsigned long long)m_world->TripsArrived(), (unsigned long long)m_world->TripsLost(),
+                   (long long)lost, (long long)hulls) + m_world->TripList(actorID);
     }
     if (sub == "anchor") {
         if ((args.argCount() < 4) or !args.isNumber(2))
