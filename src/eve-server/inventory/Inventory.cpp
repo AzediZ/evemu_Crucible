@@ -32,6 +32,7 @@
 #include "StaticDataMgr.h"
 
 #include "character/Character.h"
+#include "corporation/BillingMgr.h"
 #include "inventory/Inventory.h"
 #include "planet/CustomsOffice.h"
 #include "inventory/ItemDB.h"
@@ -954,6 +955,9 @@ bool Inventory::ValidateIHubUpgrade(InventoryItemRef iRef) const {
             throw UserError("CanNotInstallOutpostNotUpgraded")
                     .AddFormatValue("upgradeLevel", new PyInt(iRef->GetAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel).get_int()));
     }
+
+    // the upkeep for the rest of the current billing period, from the installer's corp master wallet (SovConfirmUpgradeDropWithCharge)
+    BillingMgr::ChargeUpgradeInstall(pClient, systemID, iRef->typeID());
 
     _log(SOV__INFO, "Inventory::ValidateIHubUpgrade() - %s is installing %s in hub %u", pClient->GetName(), iRef->name(), m_myID);
     return true;

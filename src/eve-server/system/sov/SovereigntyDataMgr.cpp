@@ -166,6 +166,12 @@ uint32 SovereigntyDataMgr::GetSystemAllianceID(uint32 systemID)
     return 0;
 }
 
+void SovereigntyDataMgr::GetClaims(std::vector<SovereigntyData>& into)
+{
+    for (auto cur : m_sovData)
+        into.push_back(cur);
+}
+
 SovereigntyData SovereigntyDataMgr::GetSovereigntyData(uint32 systemID)
 {
     auto it = m_sovData.get<SovDataBySolarSystem>().find(systemID);

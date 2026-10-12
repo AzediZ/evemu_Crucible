@@ -114,6 +114,8 @@ public:
     void RemoveSovClaim(uint32 systemID);
     void MarkContested(uint32 systemID, bool contested);
     SovereigntyData GetSovereigntyData(uint32 systemID);
+    // every claim (sovereignty bills, F21)
+    void GetClaims(std::vector<SovereigntyData>& into);
     void UpdateSystemHubID(uint32 systemID, uint32 hubID);
     void UpdateSystemJammerID(uint32 systemID, uint32 jammerID);
     void UpdateSystemBeaconID(uint32 systemID, uint32 beaconID);

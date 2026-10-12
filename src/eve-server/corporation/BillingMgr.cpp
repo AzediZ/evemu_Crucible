@@ -33,6 +33,9 @@
 #include "alliance/AllianceDB.h"
 #include "corporation/BillingMgr.h"
 #include "corporation/CorpMgr.h"
+#include "inventory/ItemFactory.h"
+#include "inventory/ItemType.h"
+#include "system/sov/SovereigntyDataMgr.h"
 
 /*
  * CORP__ERROR
@@ -44,6 +47,8 @@ namespace {
 // alliance maintenance:  2,000,000 isk per member corporation, monthly (const.allianceMembershipCost)
 const double AllianceMembershipCost = 2000000.0;
 const int64 AllianceBillingPeriod = 30 * EvE::Time::Day;
+// const.sovereignityBillingPeriod (days)
+const int64 SovBillingPeriod = 14 * EvE::Time::Day;
 
 const char* BILL_COLUMNS =
     "billID, billTypeID, debtorID, creditorID, amount, dueDateTime, interest, externalID, paid, externalID2, createdDateTime";
@@ -86,6 +91,7 @@ uint8 EntryTypeFor(uint8 billTypeID)
         case Corp::BillType::AllianceMaintainanceBill:  return Journal::EntryType::AllianceMaintainanceFee;
         case Corp::BillType::WarBill:                   return Journal::EntryType::WarFee;
         case Corp::BillType::MarketFine:                return Journal::EntryType::MarketFinePaid;
+        case Corp::BillType::SovereigntyMarker:         return Journal::EntryType::SovereignityUpkeepAdjustment;
     }
     return Journal::EntryType::Undefined;
 }
@@ -383,6 +389,110 @@ void BillingMgr::Process()
     }
 
     ProcessAllianceBills(now);
+    ProcessSovBills(now);
+}
+
+double BillingMgr::GetSovDailyCost(const SovereigntyData& claim)
+{
+    // "The sum of this attribute on the claim markers, Infrastructure hub, and each upgrade is the systems base cost" (daily upkeep)
+    double daily(0);
+    const ItemType* pType(sItemFactory.GetType(EVEDB::invTypes::FixedLinkAnnexationGenerator));
+    if (pType != nullptr)
+        daily += pType->GetAttribute(AttrsovBillSystemCost).get_double();
+    if (claim.hubID == 0)
+        return daily;
+    pType = sItemFactory.GetType(EVEDB::invTypes::InfrastructureHub);
+    if (pType != nullptr)
+        daily += pType->GetAttribute(AttrsovBillSystemCost).get_double();
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT typeID FROM entity WHERE locationID = %u", claim.hubID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return daily;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        pType = sItemFactory.GetType(row.GetUInt(0));
+        if (pType != nullptr)
+            daily += pType->GetAttribute(AttrsovBillSystemCost).get_double();
+    }
+    return daily;
+}
+
+int64 BillingMgr::GetSovPeriodEnd(int64 claimTime, int64 now)
+{
+    // billing cycles of const.sovereignityBillingPeriod days from the claim (sovSvc.CalculateUpgradeCost)
+    if (now < claimTime)
+        return claimTime + SovBillingPeriod;
+    return claimTime + ((now - claimTime) / SovBillingPeriod + 1) * SovBillingPeriod;
+}
+
+void BillingMgr::ChargeUpgradeInstall(Client* pClient, uint32 systemID, uint16 typeID)
+{
+    // SovConfirmUpgradeDropWithCharge:  "{amount} will be deducted from the master division of your corporation wallet to cover the
+    //  upkeep cost for the remaining {days} days of the current" billing period
+    SovereigntyData claim = svDataMgr.GetSovereigntyData(systemID);
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    if ((claim.claimID == 0) or (pType == nullptr))
+        return;
+    double daily = pType->GetAttribute(AttrsovBillSystemCost).get_double();
+    if (daily <= 0)
+        return;
+    int64 now = GetFileTimeNow();
+    int64 daysHeld = (now - claim.claimTime) / EvE::Time::Day;
+    int64 daysLeft = (SovBillingPeriod / EvE::Time::Day) - (daysHeld % (SovBillingPeriod / EvE::Time::Day));
+
+    std::string reason = "Sovereignty upkeep for ";
+    reason += pType->name();
+    // throws NotEnoughMoneyCorp
+    AccountService::TransferFunds(pClient->GetCorporationID(), corpCONCORD, daily * daysLeft, reason,
+                                  Journal::EntryType::SovereignityUpkeepAdjustment, systemID, Account::KeyType::Cash);
+}
+
+void BillingMgr::ProcessSovBills(int64 now)
+{
+    // one bill per claimed system and billing period, due at the end of the period it covers
+    std::vector<SovereigntyData> claims;
+    svDataMgr.GetClaims(claims);
+    std::map<uint32, const SovereigntyData*> bySystem;
+    for (auto& cur : claims)
+        if (cur.allianceID != 0)
+            bySystem[cur.solarSystemID] = &cur;
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT solarSystemID, claimID, nextBillDateTime FROM sovBilling")) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+    std::map<uint32, std::pair<uint32, int64>> billing;
+    DBResultRow row;
+    while (res.GetRow(row))
+        billing[row.GetUInt(0)] = std::make_pair(row.GetUInt(1), row.GetInt64(2));
+
+    DBerror err;
+    // claims that are gone take their unpaid bills with them
+    for (auto cur : billing) {
+        std::map<uint32, const SovereigntyData*>::iterator itr = bySystem.find(cur.first);
+        if ((itr != bySystem.end()) and (itr->second->claimID == cur.second.first))
+            continue;
+        sDatabase.RunQuery(err, "UPDATE bills SET paid = 2 WHERE billTypeID = %u AND externalID2 = %u AND paid = 0",
+                           Corp::BillType::SovereigntyMarker, cur.first);
+        sDatabase.RunQuery(err, "DELETE FROM sovBilling WHERE solarSystemID = %u", cur.first);
+    }
+
+    for (auto cur : bySystem) {
+        const SovereigntyData& claim = *cur.second;
+        std::map<uint32, std::pair<uint32, int64>>::iterator itr = billing.find(cur.first);
+        if ((itr != billing.end()) and (itr->second.first == claim.claimID) and (itr->second.second > now))
+            continue;
+
+        int64 due = GetSovPeriodEnd(claim.claimTime, now);
+        double amount = GetSovDailyCost(claim) * (SovBillingPeriod / EvE::Time::Day);
+        if (amount > 0)
+            CreateBill(Corp::BillType::SovereigntyMarker, claim.allianceID, corpCONCORD, amount, due, -1, claim.solarSystemID);
+        sDatabase.RunQuery(err, "REPLACE INTO sovBilling (solarSystemID, claimID, nextBillDateTime) VALUES (%u, %u, %lli)",
+                           claim.solarSystemID, claim.claimID, due);
+    }
 }
 
 void BillingMgr::ProcessAllianceBills(int64 now)

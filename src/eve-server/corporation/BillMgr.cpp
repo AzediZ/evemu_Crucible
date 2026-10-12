@@ -127,7 +127,7 @@ PyResult BillMgr::SendAutomaticPaySettings(PyCallArgs &call, PyDict* automaticPa
             int64 type = PyRep::IntegerValue(sItr->first);
             if ((type < Corp::BillType::MarketFine) or (type > Corp::BillType::SovereigntyMarker))
                 continue;
-            if (alliance and (type != Corp::BillType::AllianceMaintainanceBill))
+            if (alliance and (type != Corp::BillType::AllianceMaintainanceBill) and (type != Corp::BillType::SovereigntyMarker))
                 continue;
             flags[type] = (PyRep::IntegerValue(sItr->second) != 0);
         }
@@ -163,6 +163,7 @@ PyResult BillMgr::GetAutomaticPaySettings(PyCallArgs &call) {
         if ((allianceID != 0) and (AllianceDB::GetExecutorID(allianceID) == (uint32)call.client->GetCorporationID())) {
             allianceSets = new PyDict();
             allianceSets->SetItem(new PyInt(Corp::BillType::AllianceMaintainanceBill), flag(row, 4));
+            allianceSets->SetItem(new PyInt(Corp::BillType::SovereigntyMarker), flag(row, 5));
         }
     }
 

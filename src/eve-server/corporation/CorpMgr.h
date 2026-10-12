@@ -161,6 +161,7 @@ private:
     void OnRentPaid(const BillData& bill);
     void OnRentOverdue(const BillData& bill);
     void OnAllianceBillOverdue(const BillData& bill);
+    void OnSovBillOverdue(const BillData& bill);
 
     std::set<uint32> m_warnedOffices;       // offices told their rent is due soon (once per server run)
 

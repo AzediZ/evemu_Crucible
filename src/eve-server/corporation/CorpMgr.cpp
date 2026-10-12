@@ -80,6 +80,9 @@ int CorpMgr::Initialize()
     sBillingMgr.RegisterHandlers(Corp::BillType::AllianceMaintainanceBill,
         nullptr,
         [this](const BillData& bill) { OnAllianceBillOverdue(bill); });
+    sBillingMgr.RegisterHandlers(Corp::BillType::SovereigntyMarker,
+        nullptr,
+        [this](const BillData& bill) { OnSovBillOverdue(bill); });
 
     sLog.Blue("          CorpMgr", "Corporation Manager Initialized.");
     return 1;
@@ -973,6 +976,19 @@ void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
         _log(CORP__WARNING, "CorpMgr::OnAllianceBillOverdue() - alliance %u did not pay its maintenance bill %u; closing alliances is not available yet",
              bill.debtorID, bill.billID);
     }
+}
+
+void CorpMgr::OnSovBillOverdue(const BillData& bill)
+{
+    // SovAllBillLate {corpID} to the alliance's accountants (the executor pays)
+    uint32 executorID = AllianceDB::GetExecutorID(bill.debtorID);
+    PyDict* data = new PyDict();
+        data->SetItemString("corpID", new PyInt(executorID));
+        data->SetItemString("solarSystemID", new PyInt(bill.externalID2));
+    NotificationMgr::SendToAlliance(bill.debtorID, Corp::Role::Accountant | Corp::Role::JuniorAccountant, Notify::Types::SovAllBillLate, corpCONCORD, data);
+
+    /** @todo F14:  an unpaid sovereignty bill should cost the alliance its claim (svDataMgr has no claim-drop hook yet) */
+    _log(CORP__WARNING, "CorpMgr::OnSovBillOverdue() - alliance %u did not pay sovereignty bill %u for system %i", bill.debtorID, bill.billID, bill.externalID2);
 }
 
 void CorpMgr::ExpireOffice(uint32 officeID, const std::string& errorText)

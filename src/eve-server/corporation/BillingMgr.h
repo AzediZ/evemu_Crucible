@@ -36,6 +36,7 @@
 #include <functional>
 
 class Client;
+struct SovereigntyData;
 
 struct BillData {
     uint32 billID = 0;
@@ -79,6 +80,11 @@ public:
     // corp -> itself, alliance -> its executor corp, character -> 0
     static uint32 PayingCorpFor(uint32 debtorID);
     static bool GetBill(uint32 billID, BillData& into);
+    // sovereignty:  daily upkeep of a claimed system (claim marker, hub and its upgrades), the end of the billing period now is in,
+    //  and the prorated upkeep charged when an upgrade is installed (throws NotEnoughMoneyCorp)
+    static double GetSovDailyCost(const SovereigntyData& claim);
+    static int64 GetSovPeriodEnd(int64 claimTime, int64 now);
+    static void ChargeUpgradeInstall(Client* pClient, uint32 systemID, uint16 typeID);
     // unpaid bills for the client:  billID, billTypeID, debtorID, creditorID, amount, dueDateTime, interest, externalID, paid, externalID2
     static PyRep* GetBillsPayable(uint32 debtorID);
     static PyRep* GetBillsReceivable(uint32 creditorID);
@@ -91,6 +97,7 @@ private:
     // OnBillReceived() to the debtor character or the paying corp's online accountants
     void SendBillReceived(uint32 debtorID);
     void ProcessAllianceBills(int64 now);
+    void ProcessSovBills(int64 now);
 
     std::map<uint8, std::pair<BillHandler, BillHandler>> m_handlers;
     std::set<uint32> m_outOfMoney;      // bills already reported as BillOutOfMoney (once per server run)
