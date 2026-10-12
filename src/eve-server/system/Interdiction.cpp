@@ -111,8 +111,8 @@ bool InterdictionMgr::IsWarpDisrupted(SystemEntity* pSE) const
 {
     if (m_fields.empty())
         return false;
-    // only player ships and pods are caught.  npcs, drones and missiles are not
-    if ((pSE == nullptr) or !pSE->IsShipSE())
+    // player ships and pods are caught, and npcs with npc.RespectInterdiction (npc ai plan phase 2).  drones and missiles are not
+    if ((pSE == nullptr) or !(pSE->IsShipSE() or (pSE->IsNPCSE() and sConfig.npc.RespectInterdiction)))
         return false;
     if (IsImmune(pSE))
         return false;

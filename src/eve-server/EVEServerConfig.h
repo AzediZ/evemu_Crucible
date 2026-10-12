@@ -267,6 +267,25 @@ public:
         bool RequireWeaponEffects;  // turrets need effect 10, missiles effect 569 (false = attribute-only gating, the old behaviour)
         uint32 RngSeed;             // seed of every npc's random numbers (with its itemID).  0 = from the clock
         uint32 RespawnJitter;       // s.  a killed belt rat respawns RespawnTimer + U(0, RespawnJitter) after it died
+        // npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8)
+        uint32 AcquireRange;        // m.  R_acq = max(entityAttackRange, this):  how far an npc looks for (and locks) targets
+        bool AcquireDrones;         // standard rats may pick a player's drone as their first target
+        uint32 DroneRetaliation;    // 1 = an idle rat hit by a drone shoots the drone, 0 = the drone's pilot (when in sight)
+        uint32 DroneAggroInterval;  // s.  how often a standard rat rolls DroneAggroChance per drone that hurt it
+        bool UseAttackDelay;        // first weapon/ewar activation waits U(entityAttackDelayMin, Max) x reactionFactor
+        float AttackDelayScale;     // multiplier on that delay
+        bool UseReactionFactor;     // entityReactionFactor:  chance to join the group's target, and the delay scale
+        bool ChaseSigBloom;         // signature x entityMaxVelocitySignatureRadiusMultiplier while chase-boosting
+        float LeashSoftScale;       // x entityMaxWanderRange:  beyond this from home an npc turns back for 5-10s
+        float LeashHardScale;       // x entityMaxWanderRange:  beyond this it drops everything and goes home
+        uint32 LeashHardMode;       // 1 = warp home (when not scrambled), 0 = fly home
+        uint32 EwarUsageRoll;       // when the npc usage chance (scram 504, web 512) is rolled:  0 spawn, 1 new primary, 2 every cycle
+        uint32 PassiveAggroRange;   // m.  a passive dungeon group aggroes on a ship/drone this close (when its own aggroRange is 0)
+        uint32 GroupAggroMemory;    // s.  an aggroed passive group re-engages its aggressors this long
+        float WaveWeakestChance;    // chance a wave npc's first target is the weakest ship (else the nearest ship or drone)
+        uint32 HaulerFleeDelay;     // s.  an unharmed hauler warps off this long after a player arrives
+        bool CommanderFlee;         // a commander whose escorts are all dead warps to another belt
+        bool RespectInterdiction;   // npc warps are stopped and pulled by warp disruption fields like players'
     } npc;
 
     // From <database>

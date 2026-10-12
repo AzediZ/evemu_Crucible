@@ -251,4 +251,35 @@ double TurretDps(double totalDamage, double damageMultiplier, double cycleMs)
     return totalDamage * damageMultiplier / (cycleMs / 1000.0);
 }
 
+uint8_t MoveMode(double distance, double orbitRange, double boostRange)
+{
+    if (!Finite(distance) or (distance <= 1.5 * orbitRange))
+        return Move::Orbit;
+    if (distance <= std::max(boostRange, orbitRange))
+        return Move::Follow;
+    return Move::Chase;
+}
+
+uint8_t LeashState(double distanceFromHome, double wanderRange, double softScale, double hardScale, double hardOverride)
+{
+    if (!Finite(distanceFromHome))
+        return Leash::None;
+    double hard((hardOverride > 0.0) ? hardOverride : (wanderRange * hardScale));
+    if ((hard > 0.0) and (distanceFromHome > hard))
+        return Leash::Hard;
+    double soft(wanderRange * softScale);
+    if ((soft > 0.0) and (distanceFromHome > soft) and ((hard <= 0.0) or (soft < hard)))
+        return Leash::Soft;
+    return Leash::None;
+}
+
+double RepairSkipChance(double delayChance, double multiplier)
+{
+    if (!Finite(delayChance))
+        return 0.0;
+    if (!Finite(multiplier) or (multiplier < 0.0))
+        multiplier = 1.0;
+    return std::min(1.0, std::max(0.0, delayChance * multiplier));
+}
+
 }   // namespace NpcMath

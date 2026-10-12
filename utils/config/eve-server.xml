@@ -226,13 +226,32 @@ boolean can use either 0/1 OR true/false.
         <UseEwar>true</UseEwar><!-- bool  npcs and non-law sentries use their type's ewar on players (scram, web, jam, damp, tracking disruption, paint, neut).  Crucible default -->
         <GroupAggro>true</GroupAggro><!-- bool  attacking one npc aggros the rest of its spawn group in the bubble -->
         <DroneAggroChance>0.10</DroneAggroChance><!-- chance (checked every 30s) that a regular rat switches to a drone that damaged it.  sleepers use threat instead -->
-        <LeashRange>200000</LeashRange><!-- m.  sleepers and deadspace/mission npcs pulled further than this from where they spawned give up and return.  0 = off -->
+        <LeashRange>0</LeashRange><!-- m.  deprecated:  every npc's leash comes from its entityMaxWanderRange (LeashSoftScale/LeashHardScale below).  > 0 replaces the hard leash range (logged at boot).  0 default -->
         <TargetSwitchTime>15</TargetSwitchTime><!-- s.  how often sleepers re-evaluate their primary target (when the type has no switch timer of its own) -->
         <!-- npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1) -->
         <SleepEmptyBubbles>true</SleepEmptyBubbles><!-- bool  idle npcs in a bubble without players skip their ai (movement still runs) until a player arrives, they are locked, damaged or their group is alerted.  true default -->
         <RequireWeaponEffects>true</RequireWeaponEffects><!-- bool  Crucible dogma:  npc turrets need effect 10 (targetAttack), missiles effect 569 (missileLaunchingForEntity).  false = attribute-only gating (the old behaviour, for comparison).  true default -->
         <AuditOnStartup>false</AuditOnStartup><!-- bool  build the ai profile of every npc type at boot and log the data problems (channel NPC__AI_WARN) and their counts.  /npcai audit does the same on demand.  false default -->
         <RngSeed>0</RngSeed><!-- integer  seed of every npc's random numbers (combined with its itemID), for reproducible ai tests.  0 = from the clock.  0 default -->
+        <!-- npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8).  [DD] = design decision, no era number -->
+        <AcquireRange>100000</AcquireRange><!-- m.  an npc looks for (and locks) targets within max(entityAttackRange, this), in its bubble.  [DD] belt rats engage on landing.  100000 default -->
+        <AcquireDrones>true</AcquireDrones><!-- bool  a player's drone can be a standard rat's first target (era: "new spawns may aggro drones").  true default -->
+        <DroneRetaliation>1</DroneRetaliation><!-- 1 = an idle rat hit by a drone shoots the drone, 0 = the drone's pilot when in sight (the old way).  1 default -->
+        <DroneAggroInterval>30</DroneAggroInterval><!-- s.  how often a standard rat rolls DroneAggroChance for each drone that hurt it in the last 30s (not while its primary's pilot hurt it too).  30 default -->
+        <UseAttackDelay>true</UseAttackDelay><!-- bool  an npc's first weapon/ewar activation waits U(entityAttackDelayMin, entityAttackDelayMax) x entityReactionFactor.  true default -->
+        <AttackDelayScale>1.0</AttackDelayScale><!-- multiplier on that delay.  1.0 default -->
+        <UseReactionFactor>true</UseReactionFactor><!-- bool  entityReactionFactor is the chance an alerted group member takes the group's target (else it picks its own) and scales its join delay.  false = always the same target.  true default -->
+        <ChaseSigBloom>true</ChaseSigBloom><!-- bool  a chasing npc's signature x entityMaxVelocitySignatureRadiusMultiplier (data: "used to fake MWD sig radius increase", 6.0) while it boosts.  true default -->
+        <LeashSoftScale>1.0</LeashSoftScale><!-- x entityMaxWanderRange (100km):  an npc pulled further from home turns back for 5-10s, then resumes.  1.0 default -->
+        <LeashHardScale>2.0</LeashHardScale><!-- x entityMaxWanderRange:  further than this it drops its targets and goes home (era: "round about 200 km they will teleport back").  2.0 default -->
+        <LeashHardMode>1</LeashHardMode><!-- 1 = the hard leash warps home (flies when scrambled), 0 = flies home.  1 default -->
+        <EwarUsageRoll>0</EwarUsageRoll><!-- when an npc rolls the usage chance of its scram (504) and web (512):  0 = once per spawn ("this rat carries a scram"), 1 = per new primary, 2 = every cycle (the old way).  0 default -->
+        <PassiveAggroRange>15000</PassiveAggroRange><!-- m.  a passive dungeon group (dunSpawnGroups.aggroMode 1) aggroes when a player ship or drone comes this close to a member, unless the group has its own aggroRange.  15000 default -->
+        <GroupAggroMemory>900</GroupAggroMemory><!-- s.  an aggroed passive group re-engages the pilots who aggroed it for this long.  900 default -->
+        <WaveWeakestChance>0.5</WaveWeakestChance><!-- chance an npc of a dungeon wave picks the weakest ship (shield + armor + hull left) first, else the nearest ship or drone.  0.5 default -->
+        <HaulerFleeDelay>30</HaulerFleeDelay><!-- s.  an unharmed belt hauler warps off (and is gone) this long after a player arrives;  a damaged one tries at once, whenever it isn't scrambled.  30 default -->
+        <CommanderFlee>true</CommanderFlee><!-- bool  a belt commander whose escorts are all dead warps to another belt when it isn't scrambled.  true default -->
+        <RespectInterdiction>true</RespectInterdiction><!-- bool  npc warps are refused inside, and pulled by, warp disruption fields like players'.  true default -->
     </npc>
 
     <standings><!-- these are in percent. do not modify.  not fully debugged -->

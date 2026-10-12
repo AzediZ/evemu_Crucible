@@ -192,6 +192,7 @@ struct SystemSpawnGroup { //reference to this bubble's data for spawn groups.  m
 struct SpawnGroup {
     uint8 quantity; //quantity to spawn for this typeID
     uint16 typeID;  //typeID to spawn
+    uint8 role;     //NPCAI::Role of these npcs (hauler, commander;  npc ai plan 4.4).  0 = none
 };
 
 /* POD structure for spawn entries */

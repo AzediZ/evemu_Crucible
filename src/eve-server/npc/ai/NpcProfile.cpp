@@ -59,25 +59,22 @@ namespace {
         return false;
     }
 
-    // today's acquisition ('sight') range by size.  phase 2 replaces it with R_acq (npc.AcquireRange)
-    uint32 LegacySightRange(float radius, float attackRange)
-    {
-        uint32 range(20000);
-        if (radius < 30) {
-            range = 2500;
-        } else if (radius < 60) {
-            range = 5000;
-        } else if (radius < 150) {
-            range = 8000;
-        } else if (radius < 280) {
-            range = 12000;
-        } else if (radius < 550) {
-            range = 15000;
-        }
-        if (attackRange > range)
-            range = static_cast<uint32>(attackRange * 2);
-        return range;
-    }
+    /* self-repair (5.9):  the first of these effects the type has, and the attribute holding its per-cycle delay
+     *  ("skip") chance and that chance's multiplier (0 = none).  876 and 878 have no activation attribute in dgmEffects;
+     *  by convention they use the generic 639/638 */
+    struct RepairEffect { uint16 effectID; uint16 chanceAttr; uint16 multAttr; };
+    const RepairEffect c_shieldRepair[] = {
+        { EVEEffectID::entityShieldBoostingSmall,  AttrEntityShieldBoostDelayChanceSmall,  AttrEntityShieldBoostDelayChanceSmallMultiplier },
+        { EVEEffectID::entityShieldBoostingMedium, AttrEntityShieldBoostDelayChanceMedium, AttrEntityShieldBoostDelayChanceMediumMultiplier },
+        { EVEEffectID::entityShieldBoostingLarge,  AttrEntityShieldBoostDelayChanceLarge,  AttrEntityShieldBoostDelayChanceLargeMultiplier },
+        { EVEEffectID::shieldBoostingForEntities,  AttrEntityShieldBoostDelayChance,       0 }
+    };
+    const RepairEffect c_armorRepair[] = {
+        { EVEEffectID::entityArmorRepairingSmall,  AttrEntityArmorRepairDelayChanceSmall,  AttrEntityArmorRepairDelayChanceSmallMultiplier },
+        { EVEEffectID::entityArmorRepairingMedium, AttrEntityArmorRepairDelayChanceMedium, AttrEntityArmorRepairDelayChanceMediumMultiplier },
+        { EVEEffectID::entityArmorRepairingLarge,  AttrEntityArmorRepairDelayChanceLarge,  AttrEntityArmorRepairDelayChanceLargeMultiplier },
+        { EVEEffectID::armorRepairForEntities,     AttrEntityArmorRepairDelayChance,       0 }
+    };
 
     // today's lock time by size, for types without scanResolution and scanSpeed
     double RadiusLockTimeMs(float radius)
@@ -125,7 +122,7 @@ const char* NpcAI::GetProblemText(uint32 problemBit)
         case Problem::L1LevelTwo:           return "AI_ShouldUseTargetSwitching 2 -> treated as 1";
         case Problem::NoTracking:           return "turret without trackingSpeed -> hits only targets without angular velocity";
         case Problem::MissileCycleTooShort: return "effect 569 with missileLaunchDuration under 1s -> 20s default";
-        case Problem::RangeBeyondAttack:    return "maxRange or falloff beyond entityAttackRange -> orbit/follow kept inside it";
+        case Problem::RangeBeyondAttack:    return "entityFlyRange beyond 0.9 x entityAttackRange -> orbit kept inside it";
         case Problem::SentryNoRange:        return "sentry turret without maxRange -> entityAttackRange as optimal";
         case Problem::MissileNoEffect:      return "missileLaunchDuration and entityMissileTypeID but no effect 569 -> no missiles (they fired without RequireWeaponEffects)";
     }
@@ -292,6 +289,13 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
         if (r.orbitRange <= 0.0f)
             r.orbitRange = 1000.0f;
     }
+    /* weapons fire only inside entityAttackRange (B7).  a few armed types (dire guristas despoilers, some mission and
+     *  incursion frigates) orbit beyond it and would never shoot:  their orbit is kept inside 90% of it */
+    double fireRange(r.hasTurret ? r.attackRange : r.MissileFireRange());
+    if (r.HasWeapons() and (fireRange > 0.0) and (r.orbitRange > 0.9 * fireRange)) {
+        r.problems |= NpcAI::Problem::RangeBeyondAttack;
+        r.orbitRange = static_cast<float>(0.9 * fireRange);
+    }
     r.chaseMaxDistance = static_cast<float>(Attr(type, AttrEntityChaseMaxDistance));
     r.boostRange = std::max(r.chaseMaxDistance, r.orbitRange);
     r.maxVelocity = static_cast<float>(Attr(type, AttrMaxVelocity));
@@ -303,9 +307,8 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     r.sigRadius = static_cast<float>(Attr(type, AttrSignatureRadius));
     r.radius = type.radius();
     r.sigBloom = static_cast<float>(Attr(type, AttrEntityMaxVelocitySignatureRadiusMultiplier));
-    r.sightRange = LegacySightRange(r.radius, r.attackRange);
-    if (r.hasTurret and ((r.optimal > r.attackRange) or (r.falloff > r.attackRange)))
-        r.problems |= NpcAI::Problem::RangeBeyondAttack;
+    // R_acq (5.4):  no era number;  frigates' entityAttackRange (~3km) alone can't be how far they see
+    r.acquireRange = static_cast<uint32>(std::max(static_cast<double>(r.attackRange), static_cast<double>(sConfig.npc.AcquireRange)));
 
     /* targeting */
     double maxAttack(Attr(type, AttrMaxAttackTargets));
@@ -358,6 +361,24 @@ std::shared_ptr<const NpcProfile> NpcProfile::Build(const ItemType& type, bool l
     for (auto effectID : c_selfRepairEffects)
         if (type.HasEffect(effectID))
             r.hasSelfRepair = true;
+    /* self-repair by effect (5.9, N3):  the old fallback order could pick the generic 639 (dgm default 1 = never repair) */
+    auto repair = [&type](const RepairEffect* list, size_t count, uint16 cycleAttr, uint16 amountAttr, NpcProfile::SelfRepair& into) {
+        into = NpcProfile::SelfRepair();
+        for (size_t i = 0; i < count; ++i) {
+            if (!type.HasEffect(list[i].effectID))
+                continue;
+            into.amount = static_cast<float>(Attr(type, amountAttr));
+            if (into.amount <= 0.0f)
+                return;
+            into.effectID = list[i].effectID;
+            into.cycleMs = static_cast<uint32>(std::max(1000.0, Attr(type, cycleAttr)));
+            into.skipChance = static_cast<float>(NpcMath::RepairSkipChance(Attr(type, list[i].chanceAttr),
+                                                 (list[i].multAttr != 0 ? Attr(type, list[i].multAttr) : 1.0)));
+            return;
+        }
+    };
+    repair(c_shieldRepair, sizeof(c_shieldRepair) / sizeof(c_shieldRepair[0]), AttrEntityShieldBoostDuration, AttrEntityShieldBoostAmount, r.selfShield);
+    repair(c_armorRepair, sizeof(c_armorRepair) / sizeof(c_armorRepair[0]), AttrEntityArmorRepairDuration, AttrEntityArmorRepairAmount, r.selfArmor);
     r.hasRemoteRepair = false;
     for (auto effectID : c_remoteRepairEffects)
         if (type.HasEffect(effectID))
@@ -474,6 +495,11 @@ void NpcProfile::StartupChecks()
         if (cur.value >= 0.0f)
             sLog.Warning("     ServerConfig", "<rates><%s> is deprecated and ignored.  Every turret uses <WreckingChance> (%.3f), rolled inside a hit.",
                     cur.name, sConfig.rates.WreckingChance);
+
+    // the data leash replaced the flat one (npc ai plan 5.4)
+    if (sConfig.npc.LeashRange > 0)
+        sLog.Warning("     ServerConfig", "<npc><LeashRange> is deprecated.  It replaces the data leash's hard range (%u m instead of %.1f x entityMaxWanderRange).",
+                sConfig.npc.LeashRange, sConfig.npc.LeashHardScale);
 
     if (sConfig.npc.AuditOnStartup) {
         std::string report;

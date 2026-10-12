@@ -186,7 +186,10 @@ public:
 
     /* hooks (SystemEntity::Destroy, SystemEntity::ApplyDamage, ShipSE::Killed, hacking/salvage/containers/missions) */
     void OnEntityDestroyed(SystemEntity* pSE, Damage& d);
+    // 'Attacked' triggers:  pSE was hit and survived it (npc ai plan 4.3, N5:  a one-volleyed trigger npc fires none)
     void OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker);
+    // pSE is about to be hit:  an overseer structure or sentry aggroes its whole room (npc ai plan 4.3)
+    void OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker);
     void OnPlayerKilled(ShipSE* pShip, uint32 charID);
     // Dungeon::Trigger::HackingSuccess..ArchaeologyFailure (11-16), ItemPlacedInMissionContainer (23),
     //  ItemRemovedFromSpawnContainer (32), ItemInCargo (33) on the dungeon object itemID (typeID for item triggers)

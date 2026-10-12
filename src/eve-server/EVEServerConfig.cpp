@@ -201,7 +201,7 @@ EVEServerConfig::EVEServerConfig()
     npc.UseEwar = true;
     npc.GroupAggro = true;
     npc.DroneAggroChance = 0.10;
-    npc.LeashRange = 200000 /*m*/;
+    npc.LeashRange = 0 /*m*/;   // deprecated (npc ai phase 2):  > 0 overrides the data leash's hard range
     npc.TargetSwitchTime = 15 /*s*/;
     npc.RoamingSpawns = false;
     npc.StaticSpawns = false;
@@ -220,6 +220,25 @@ EVEServerConfig::EVEServerConfig()
     npc.RequireWeaponEffects = true;    // Crucible dogma:  what an npc can fire comes from its effects (10, 569)
     npc.RngSeed = 0;                    // 0 = seeded from the clock
     npc.RespawnJitter = 300 /*s*/;      // 20 min + U(0, 5) min respawn (owner decision, npc ai plan 5.10)
+    // npc ai phase 2:  standard ai (npc ai plan 4.2-4.4, 5.4-5.6, 5.8).  [DD] = design decision, no era number
+    npc.AcquireRange = 100000 /*m*/;    // [DD] belt rats engage on landing;  frigates' entityAttackRange (~3km) can't be their sight (plan 10.4)
+    npc.AcquireDrones = true;           // era: "new spawns may aggro drones"
+    npc.DroneRetaliation = 1;           // era: drones aggro whole rooms;  owner default (plan 10.7)
+    npc.DroneAggroInterval = 30 /*s*/;  // [DD] with DroneAggroChance 0.10
+    npc.UseAttackDelay = true;          // data:  entityAttackDelayMin/Max (475/476)
+    npc.AttackDelayScale = 1.0f;
+    npc.UseReactionFactor = true;       // data:  entityReactionFactor (466) "chance of attacking the same person as its group members"
+    npc.ChaseSigBloom = true;           // data:  1133 "used to fake MWD sig radius increase" (plan 10.8)
+    npc.LeashSoftScale = 1.0f;          // data:  entityMaxWanderRange (584, 100km);  era: sleepers "fly back for a few seconds"
+    npc.LeashHardScale = 2.0f;          // era:  "round about 200 km they will teleport back"
+    npc.LeashHardMode = 1;              // warp (plan 10.9)
+    npc.EwarUsageRoll = 0;              // per spawn:  "this rat carries a scram" (owner decision 6)
+    npc.PassiveAggroRange = 15000 /*m*/;// [DD] era: "a ship or drone wandering into a group ... can cause the whole pocket to attack"
+    npc.GroupAggroMemory = 900 /*s*/;   // [DD] era: returning after leaving re-engages an aggroed group
+    npc.WaveWeakestChance = 0.5f;       // [DD] era: "mission respawns tend to target the weakest ship present first"
+    npc.HaulerFleeDelay = 30 /*s*/;     // era: haulers "escape ... typically within 30 seconds if not attacked"
+    npc.CommanderFlee = true;           // era (low-med):  commanders run when their escort is gone
+    npc.RespectInterdiction = true;     // [DD] npcs can't warp out of (or through) warp disruption fields
 
     // cosmic
     cosmic.PIEnabled = false;
@@ -873,6 +892,25 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "RequireWeaponEffects",     npc.RequireWeaponEffects );
     AddValueParser( "RngSeed",                  npc.RngSeed );
     AddValueParser( "RespawnJitter",            npc.RespawnJitter );
+    // npc ai phase 2 (npc ai plan 4.2-4.4, 5.4-5.6, 5.8)
+    AddValueParser( "AcquireRange",             npc.AcquireRange );
+    AddValueParser( "AcquireDrones",            npc.AcquireDrones );
+    AddValueParser( "DroneRetaliation",         npc.DroneRetaliation );
+    AddValueParser( "DroneAggroInterval",       npc.DroneAggroInterval );
+    AddValueParser( "UseAttackDelay",           npc.UseAttackDelay );
+    AddValueParser( "AttackDelayScale",         npc.AttackDelayScale );
+    AddValueParser( "UseReactionFactor",        npc.UseReactionFactor );
+    AddValueParser( "ChaseSigBloom",            npc.ChaseSigBloom );
+    AddValueParser( "LeashSoftScale",           npc.LeashSoftScale );
+    AddValueParser( "LeashHardScale",           npc.LeashHardScale );
+    AddValueParser( "LeashHardMode",            npc.LeashHardMode );
+    AddValueParser( "EwarUsageRoll",            npc.EwarUsageRoll );
+    AddValueParser( "PassiveAggroRange",        npc.PassiveAggroRange );
+    AddValueParser( "GroupAggroMemory",         npc.GroupAggroMemory );
+    AddValueParser( "WaveWeakestChance",        npc.WaveWeakestChance );
+    AddValueParser( "HaulerFleeDelay",          npc.HaulerFleeDelay );
+    AddValueParser( "CommanderFlee",            npc.CommanderFlee );
+    AddValueParser( "RespectInterdiction",      npc.RespectInterdiction );
 
     const bool result = ParseElementChildren( ele );
 
@@ -901,6 +939,24 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "RequireWeaponEffects" );
     RemoveParser( "RngSeed" );
     RemoveParser( "RespawnJitter" );
+    RemoveParser( "AcquireRange" );
+    RemoveParser( "AcquireDrones" );
+    RemoveParser( "DroneRetaliation" );
+    RemoveParser( "DroneAggroInterval" );
+    RemoveParser( "UseAttackDelay" );
+    RemoveParser( "AttackDelayScale" );
+    RemoveParser( "UseReactionFactor" );
+    RemoveParser( "ChaseSigBloom" );
+    RemoveParser( "LeashSoftScale" );
+    RemoveParser( "LeashHardScale" );
+    RemoveParser( "LeashHardMode" );
+    RemoveParser( "EwarUsageRoll" );
+    RemoveParser( "PassiveAggroRange" );
+    RemoveParser( "GroupAggroMemory" );
+    RemoveParser( "WaveWeakestChance" );
+    RemoveParser( "HaulerFleeDelay" );
+    RemoveParser( "CommanderFlee" );
+    RemoveParser( "RespectInterdiction" );
 
     return result;
 }

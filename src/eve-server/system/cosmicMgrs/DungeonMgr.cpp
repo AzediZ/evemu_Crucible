@@ -204,6 +204,10 @@ void DungeonDataMgr::Load(uint32 dungeonID)
             group.warpIn = row.GetBool(11);
             group.isOverseer = row.GetBool(12);
             group.lootGroupID = row.GetUInt(13);
+            // column 14 is r.dungeonID.  npc ai phase 2:  aggro mode, range and link (all proactive by default)
+            group.aggroMode = row.GetUInt(15);
+            group.aggroRange = row.GetUInt(16);
+            group.aggroLink = row.GetUInt(17);
         itr->second->groups.push_back(group);
     }
     // the group vectors are complete now, so pointers into them stay valid
@@ -880,6 +884,27 @@ uint32 DungeonMgr::SpawnNPC(Instance& inst, uint8 roomIdx, uint32 typeID, uint32
         }
     }
     Index(pNPC->GetID(), inst.instanceID, roomIdx);
+
+    /* its aggro group (npc ai plan 4.3, 6.5):  the live group (with the group's aggro mode, range and link), or the room's
+     *  placed npcs.  rooms are one group key per instance and room;  links count inside the instance only */
+    AggroGroupRegistry& groups(m_spawnMgr->GetAggroGroups());
+    uint64_t roomKey((static_cast<uint64_t>(inst.instanceID) << 8) | roomIdx);
+    const Dungeon::SpawnGroupDef* pDef(nullptr);
+    if (liveGroupID != 0)
+        for (auto& group : inst.rooms[roomIdx].groups)
+            if (group.liveGroupID == liveGroupID)
+                pDef = group.def;
+    if (pDef != nullptr) {
+        uint64_t linkKey((pDef->aggroLink != 0) ? ((static_cast<uint64_t>(inst.instanceID) << 32) | pDef->aggroLink) : 0);
+        pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::Dungeon, liveGroupID,
+                (pDef->aggroMode == Dungeon::AggroMode::Passive ? NpcAI::AggroMode::Passive : NpcAI::AggroMode::Proactive),
+                pDef->aggroRange, linkKey, roomKey));
+        // a wave's first pick may be the weakest ship (4.3)
+        if ((pDef->spawnMode == Dungeon::SpawnMode::TriggerOnly) or (pDef->waveNumber > 0))
+            pNPC->GetAIMgr()->SetWave();
+    } else {
+        pNPC->GetAIMgr()->SetGroup(groups.Get(NpcAI::GroupKind::DungeonRoom, roomKey, NpcAI::AggroMode::Proactive, 0, 0, roomKey));
+    }
     return pNPC->GetID();
 }
 
@@ -1257,6 +1282,22 @@ void DungeonMgr::OnEntityDestroyed(SystemEntity* pSE, Damage& d)
     }
 
     QueueTrigger(instanceID, roomIdx, Dungeon::Trigger::Exploding, ctx);
+}
+
+void DungeonMgr::OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker)
+{
+    /* "attacking such structures causes all ships in the pocket to target and attack you" (npc ai plan 4.3):  an overseer
+     *  structure or a sentry of a room was shot.  every aggro group of that room aggroes (even if the shot kills it) */
+    if ((pSE == nullptr) or (pAttacker == nullptr) or (!pAttacker->IsShipSE() and !pAttacker->IsDroneSE()))
+        return;
+    if (!pSE->IsSentrySE() and (pSE->GetGroupID() != EVEDB::invGroups::Deadspace_Overseer_s_Structure)
+    and (pSE->GetGroupID() != EVEDB::invGroups::Deadspace_Overseer_s_Sentry))
+        return;
+    auto iItr = m_entityIndex.find(pSE->GetID());
+    if (iItr == m_entityIndex.end())
+        return;
+    uint64_t roomKey((static_cast<uint64_t>(iItr->second.first) << 8) | iItr->second.second);
+    m_spawnMgr->GetAggroGroups().AlertRoom(roomKey, pAttacker);
 }
 
 void DungeonMgr::OnEntityAttacked(SystemEntity* pSE, SystemEntity* pAttacker)

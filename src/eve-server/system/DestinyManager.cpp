@@ -1064,11 +1064,12 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     GVector toDestination(m_position, destination);
     double warpDistance(toDestination.length() - minRange);
 
-    // warp disruption fields (bubbles).  only player ships and pods are affected (see InterdictionMgr)
-    //  acceleration gates fling the ship regardless
+    // warp disruption fields (bubbles).  player ships and pods are affected, npcs too with npc.RespectInterdiction
+    //  (see InterdictionMgr).  acceleration gates fling the ship regardless
     InterdictionMgr* pInterdict((mySE->SystemMgr() != nullptr) ? mySE->SystemMgr()->GetInterdictionMgr() : nullptr);
     bool dragged(false);
-    if ((pInterdict != nullptr) and pInterdict->HasFields() and mySE->IsShipSE() and !gateWarp) {
+    bool interdictable(mySE->IsShipSE() or (mySE->IsNPCSE() and sConfig.npc.RespectInterdiction));
+    if ((pInterdict != nullptr) and pInterdict->HasFields() and interdictable and !gateWarp) {
         // inside a field: no warp at all
         if (pInterdict->IsWarpDisrupted(mySE)) {
             double escape(0);

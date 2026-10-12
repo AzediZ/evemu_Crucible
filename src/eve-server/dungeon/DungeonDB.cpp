@@ -332,7 +332,8 @@ void DungeonDB::GetObjectRows(DBQueryResult& res, uint32 dungeonID/*0*/)
 void DungeonDB::GetSpawnGroups(DBQueryResult& res, uint32 dungeonID/*0*/)
 {
     if (!sDatabase.RunQuery(res, "SELECT g.spawnGroupID, g.roomID, g.waveNumber, g.spawnMode, g.npcClassType, g.npcClassSub,"
-        " g.factionID, g.x, g.y, g.z, g.spread, g.warpIn, g.isOverseer, g.lootGroupID, r.dungeonID"
+        " g.factionID, g.x, g.y, g.z, g.spread, g.warpIn, g.isOverseer, g.lootGroupID, r.dungeonID,"
+        " g.aggroMode, g.aggroRange, g.aggroLink"
         " FROM dunSpawnGroups AS g INNER JOIN dunRooms AS r ON r.roomID = g.roomID%s ORDER BY g.spawnGroupID",
         DungeonFilter(dungeonID, "r.dungeonID").c_str()))
         _log(DATABASE__ERROR, "Error in GetSpawnGroups query: %s", res.error.c_str());

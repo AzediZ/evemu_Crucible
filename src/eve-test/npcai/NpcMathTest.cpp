@@ -30,6 +30,7 @@
 #include "NpcMath.h"
 #include "NpcRng.h"
 #include "NpcSchedule.h"
+#include "RecentDamage.h"
 #include "ThreatTable.h"
 
 namespace {
@@ -232,6 +233,52 @@ int npcai_NpcMathTest( int argc, char* argv[] )
         True("top", (t.Top() != nullptr) and (t.Top()->id == 101));
         t.Decay(0.1f, 1.0f);
         True("decay drops entries below 1", (t.Get(3) == 0.0f) and (t.Get(101) > 4.9f));
+    }
+
+    ::printf("\n movement mode (5.5)\n");
+    {
+        // orbit 5000, boost 20000
+        True("on the orbit:  orbit", NpcMath::MoveMode(5000, 5000, 20000) == NpcMath::Move::Orbit);
+        True("1.5 x orbit:  still orbit", NpcMath::MoveMode(7500, 5000, 20000) == NpcMath::Move::Orbit);
+        True("past 1.5 x orbit:  follow", NpcMath::MoveMode(7600, 5000, 20000) == NpcMath::Move::Follow);
+        True("at the boost range:  follow", NpcMath::MoveMode(20000, 5000, 20000) == NpcMath::Move::Follow);
+        True("past the boost range:  chase", NpcMath::MoveMode(20001, 5000, 20000) == NpcMath::Move::Chase);
+        // entityChaseMaxDistance 0:  boost range = orbit range, so anything past 1.5 x orbit chases
+        True("665 = 0:  chase past 1.5 x orbit", NpcMath::MoveMode(7600, 5000, 5000) == NpcMath::Move::Chase);
+        True("NaN distance:  orbit (no move)", NpcMath::MoveMode(std::nan(""), 5000, 20000) == NpcMath::Move::Orbit);
+    }
+
+    ::printf("\n leash (5.4)\n");
+    {
+        True("inside:  none", NpcMath::LeashState(99000, 100000, 1.0, 2.0) == NpcMath::Leash::None);
+        True("past 100km:  soft", NpcMath::LeashState(100001, 100000, 1.0, 2.0) == NpcMath::Leash::Soft);
+        True("past 200km:  hard", NpcMath::LeashState(200001, 100000, 1.0, 2.0) == NpcMath::Leash::Hard);
+        True("LeashRange override 150km:  hard", NpcMath::LeashState(150001, 100000, 1.0, 2.0, 150000) == NpcMath::Leash::Hard);
+        True("override below soft:  no soft", NpcMath::LeashState(90000, 100000, 1.0, 2.0, 80000) == NpcMath::Leash::Hard);
+        True("no wander range:  none", NpcMath::LeashState(1e9, 0, 1.0, 2.0) == NpcMath::Leash::None);
+    }
+
+    ::printf("\n self-repair skip chance (5.9)\n");
+    {
+        Near("0.5 x 1", NpcMath::RepairSkipChance(0.5, 1.0), 0.5, 1e-9);
+        Near("0.5 x 1.5", NpcMath::RepairSkipChance(0.5, 1.5), 0.75, 1e-9);
+        Near("0.9 x 2 clamps to 1", NpcMath::RepairSkipChance(0.9, 2.0), 1.0, 1e-9);
+        Near("bad multiplier counts as 1", NpcMath::RepairSkipChance(0.4, -3.0), 0.4, 1e-9);
+    }
+
+    ::printf("\n recent damage (4.2 drone rule)\n");
+    {
+        RecentDamage r;
+        r.Add(7, 100.0f, 1000);
+        r.Add(7, 50.0f, 20000);
+        Near("adds up inside the window", r.Get(7, 25000), 150.0, 1e-6);
+        Near("gone 30s after the last hit", r.Get(7, 50001), 0.0, 1e-6);
+        r.Add(7, 10.0f, 60000);
+        Near("starts over after a gap", r.Get(7, 60000), 10.0, 1e-6);
+        r.Add(8, 500.0f, 60000);
+        uint32_t ids[RecentDamage::Capacity];
+        size_t n(r.Sorted(60000, ids, RecentDamage::Capacity));
+        True("sorted by damage", (n == 2) and (ids[0] == 8) and (ids[1] == 7));
     }
 
     ::printf("\n%d failure(s)\n", s_failures);

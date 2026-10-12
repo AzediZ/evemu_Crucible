@@ -3,15 +3,16 @@
   *   electronic warfare used by npcs and non-law sentries
   *
   *   effect (id)                   chance                      duration (default)      range / falloff       values
-  *   warpScrambleForEntity (563)   entityWarpScrambleChance    warpScrambleDuration    warpScrambleRange     warpScrambleStrength
-  *   modifyTargetSpeed2 (575)      modifyTargetSpeedChance     modifyTargetSpeedDur.   modifyTargetSpeedRange  speedFactor
+  *   warpScrambleForEntity (563)   entityWarpScrambleChance(u) warpScrambleDuration    warpScrambleRange     warpScrambleStrength
+  *   modifyTargetSpeed2 (575)      modifyTargetSpeedChance(u)  modifyTargetSpeedDur.   modifyTargetSpeedRange  speedFactor
   *   entityTargetJam (1871)        entityTargetJamDurChance    entityTargetJamDur.     936 / 953             scan*StrengthBonus
   *   entityCapacitorDrain (1872)   entityCapDrainDurChance     entityCapDrainDur.      937 / -               entityCapacitorDrainAmount
   *   entitySensorDampen (1878)     entitySensorDampenDurChance entitySensorDampenDur.  938 / 950             maxTargetRange/scanResolutionMultiplier
   *   entityTrackingDisruptOld(1877) entityTrackingDisruptDurCh. entityTrackingDisrDur. 940 / 951             entityTrackingDisruptMultiplier
   *   entityTargetPaint (1879)      entityTargetPaintDurChance  entityTargetPaintDur.   941 / 954             signatureRadiusBonus
   *
-  *   chances are 0..1 ("chance of npc effect to be activated each duration"); a few types use percent (> 1)
+  *   (u):  usage chance (npc.EwarUsageRoll), the others are activation chances rolled every duration ("chance of npc effect
+  *   to be activated each duration").  chances are 0..1;  a few types use percent (> 1)
   */
 
 #include "eve-server.h"
@@ -19,6 +20,8 @@
 #include "Client.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/NPCEwar.h"
+#include "npc/ai/NpcMath.h"
+#include "npc/ai/NpcRng.h"
 #include "ship/modules/EwarModule.h"
 #include "system/DestinyManager.h"
 #include "system/SystemBubble.h"
@@ -26,8 +29,9 @@
 #include "system/SystemManager.h"
 
 
-NPCEwar::NPCEwar(SystemEntity* pSelf)
+NPCEwar::NPCEwar(SystemEntity* pSelf, NpcRng* rng/*nullptr*/)
 : m_self(pSelf),
+m_rng(rng),
 m_selfRef(pSelf->GetSelf())
 {
     m_effects.clear();
@@ -36,23 +40,23 @@ m_selfRef(pSelf->GetSelf())
     float strength(Attr(AttrWarpScrambleStrength, 1.0f));
     if (strength <= 0.0f)
         strength = 1.0f;
-    AddEffect(EVEEffectID::warpScrambleForEntity, Ewar::Scramble, "effects.WarpScramble", AttrEntityWarpScrambleChance,
+    AddEffect(EVEEffectID::warpScrambleForEntity, Ewar::Scramble, "effects.WarpScramble", AttrEntityWarpScrambleChance, 0,
               AttrWarpScrambleDuration, 8000, AttrWarpScrambleRange, 0, 0, strength, 0);
 
     // web.  only real webs, and nothing that would turn the target's speed negative
     float speedFactor(m_selfRef->GetAttribute(AttrSpeedFactor).get_float());
     if ((speedFactor < 0.0f) and (speedFactor > -100.0f))
-        AddEffect(EVEEffectID::modifyTargetSpeed2, Ewar::Web, "effects.ModifyTargetSpeed", AttrModifyTargetSpeedChance,
+        AddEffect(EVEEffectID::modifyTargetSpeed2, Ewar::Web, "effects.ModifyTargetSpeed", AttrModifyTargetSpeedChance, 0,
                   AttrModifyTargetSpeedDuration, 5000, AttrModifyTargetSpeedRange, 20000, 0, speedFactor, 0);
 
     // ecm.  the effect has no guid; the client shows the player ecm beam
-    AddEffect(EVEEffectID::entityTargetJam, Ewar::Jam, "effects.ElectronicAttributeModifyTarget", AttrEntityTargetJamDurationChance,
+    AddEffect(EVEEffectID::entityTargetJam, Ewar::Jam, "effects.ElectronicAttributeModifyTarget", 0, AttrEntityTargetJamDurationChance,
               AttrEntityTargetJamDuration, 30000, AttrEntityTargetJamMaxRange, 0, AttrEntityTargetJamFallOff, 0, 0);
 
     // energy neutralizer (GJ per duration)
     float amount(Attr(AttrEntityCapacitorDrainAmount, 0.0f));
     if (amount > 0.0f)
-        AddEffect(EVEEffectID::entityCapacitorDrain, Neut, "effects.EnergyVampire", AttrEntityCapacitorDrainDurationChance,
+        AddEffect(EVEEffectID::entityCapacitorDrain, Neut, "effects.EnergyVampire", 0, AttrEntityCapacitorDrainDurationChance,
                   AttrEntityCapacitorDrainDuration, 30000, AttrEntityCapacitorDrainMaxRange, 0, AttrEntityCapacitorFallOff, amount, 0);
 
     // sensor dampener: target range and scan resolution multipliers
@@ -63,20 +67,20 @@ m_selfRef(pSelf->GetSelf())
     if (scanMult <= 0.0f)
         scanMult = 1.0f;
     if ((rangeMult < 1.0f) or (scanMult < 1.0f))
-        AddEffect(EVEEffectID::entitySensorDampen, Ewar::Damp, "effects.ElectronicAttributeModifyTarget", AttrEntitySensorDampenDurationChance,
+        AddEffect(EVEEffectID::entitySensorDampen, Ewar::Damp, "effects.ElectronicAttributeModifyTarget", 0, AttrEntitySensorDampenDurationChance,
                   AttrEntitySensorDampenDuration, 30000, AttrEntitySensorDampenMaxRange, 0, AttrEntitySensorDampenFallOff, rangeMult, scanMult);
 
     // tracking disruptor: turret tracking and optimal range
     float trackMult(Attr(AttrEntityTrackingDisruptMultiplier, 1.0f));
     if ((trackMult > 0.0f) and (trackMult < 1.0f))
-        AddEffect(EVEEffectID::entityTrackingDisruptOld, Ewar::TrackDisrupt, "effects.ElectronicAttributeModifyTarget", AttrEntityTrackingDisruptDurationChance,
+        AddEffect(EVEEffectID::entityTrackingDisruptOld, Ewar::TrackDisrupt, "effects.ElectronicAttributeModifyTarget", 0, AttrEntityTrackingDisruptDurationChance,
                   AttrEntityTrackingDisruptDuration, 30000, AttrEntityTrackingDisruptMaxRange, 0, AttrEntityTrackingDisruptFallOff, trackMult, trackMult);
 
     // target painter: signature radius (bonus in %)
     float sigBonus(Attr(AttrSignatureRadiusBonus, 0.0f));
     float sigMult(sigBonus > 0.0f ? (1.0f + (sigBonus / 100.0f)) : Attr(AttrEntityTargetPaintMultiplier, 1.0f));
     if (sigMult > 1.0f)
-        AddEffect(EVEEffectID::entityTargetPaint, Ewar::Paint, "effects.TargetPaint", AttrEntityTargetPaintDurationChance,
+        AddEffect(EVEEffectID::entityTargetPaint, Ewar::Paint, "effects.TargetPaint", 0, AttrEntityTargetPaintDurationChance,
                   AttrEntityTargetPaintDuration, 30000, AttrEntityTargetPaintMaxRange, 0, AttrEntityTargetPaintFallOff, sigMult, 0);
 
     if (!m_effects.empty())
@@ -91,22 +95,35 @@ float NPCEwar::Attr(uint16 attrID, float def) const
     return def;
 }
 
-void NPCEwar::AddEffect(uint16 effectID, uint8 kind, const char* guid, uint16 chanceAttr, uint16 durationAttr, uint32 defDuration,
-                        uint16 rangeAttr, double defRange, uint16 falloffAttr, float v1, float v2)
+double NPCEwar::Rand()
+{
+    if (m_rng != nullptr)
+        return m_rng->Uniform();
+    return MakeRandomFloat();
+}
+
+void NPCEwar::AddEffect(uint16 effectID, uint8 kind, const char* guid, uint16 usageAttr, uint16 chanceAttr, uint16 durationAttr,
+                        uint32 defDuration, uint16 rangeAttr, double defRange, uint16 falloffAttr, float v1, float v2)
 {
     if (!m_selfRef->type().HasEffect(effectID)) {
         // types without any effect data fall back to their attributes
         if (m_selfRef->type().HasEffects())
             return;
-        if (Attr(chanceAttr, 0.0f) <= 0.0f)
+        if (Attr((usageAttr != 0 ? usageAttr : chanceAttr), 0.0f) <= 0.0f)
             return;
     }
 
-    // the effect is there but the chance isn't: the effect always runs
-    float chance(Attr(chanceAttr, 1.0f));
-    if (chance > 1.0f)
-        chance /= 100.0f;      // a few types use percent
-    if (chance <= 0.0f)
+    // the effect is there but a chance isn't:  that chance is 1.  a few types use percent
+    auto chanceOf = [this](uint16 attrID) -> float {
+        if (attrID == 0)
+            return 1.0f;
+        float value(Attr(attrID, 1.0f));
+        if (value > 1.0f)
+            value /= 100.0f;
+        return value;
+    };
+    float usage(chanceOf(usageAttr)), chance(chanceOf(chanceAttr));
+    if ((usage <= 0.0f) or (chance <= 0.0f))
         return;
 
     double range(Attr(rangeAttr, defRange));
@@ -124,18 +141,24 @@ void NPCEwar::AddEffect(uint16 effectID, uint8 kind, const char* guid, uint16 ch
         fx.effectID = effectID;
         fx.kind = kind;
         fx.guid = guid;
+        fx.usage = usage;
         fx.chance = chance;
+        // "this rat carries a scram":  the usage chance is rolled once, now (npc.EwarUsageRoll 0, owner decision 6)
+        fx.carried = (Rand() < usage);
+        fx.usable = false;
+        fx.usableFor = 0;
         fx.duration = duration;
         fx.range = range;
         fx.falloff = (falloffAttr == 0 ? 0.0 : Attr(falloffAttr, 0.0f));
         fx.v1 = v1;
         fx.v2 = v2;
+        fx.nextAt = 0;
         fx.targetID = 0;
-    fx.timer.Disable();
     m_effects.push_back(fx);
 
-    _log(NPC__AI_TRACE, "%s(%u): NPCEwar - effect %u kind %u: chance %.3f, duration %ums, range %.0f/%.0f, values %.3f/%.3f",
-            m_self->GetName(), m_self->GetID(), effectID, kind, chance, duration, range, fx.falloff, v1, v2);
+    _log(NPC__AI_TRACE, "%s(%u): NPCEwar - effect %u kind %u: usage %.3f (%s), chance %.3f, duration %ums, range %.0f/%.0f, values %.3f/%.3f",
+            m_self->GetName(), m_self->GetID(), effectID, kind, usage, (fx.carried ? "carried" : "not carried"), chance, duration,
+            range, fx.falloff, v1, v2);
 }
 
 bool NPCEwar::HasTackle() const
@@ -172,7 +195,7 @@ bool NPCEwar::IsEwarTarget(SystemEntity* pTarget) const
     return true;
 }
 
-bool NPCEwar::InRange(const Effect& fx, SystemEntity* pTarget) const
+bool NPCEwar::InRange(const Effect& fx, SystemEntity* pTarget)
 {
     double distance(m_self->GetPosition().distance(pTarget->GetPosition()) - m_self->GetRadius() - pTarget->GetRadius());
     if (distance <= fx.range)
@@ -183,8 +206,7 @@ bool NPCEwar::InRange(const Effect& fx, SystemEntity* pTarget) const
     if (fx.kind == Ewar::Jam)
         return (distance <= (fx.range + (3 * fx.falloff)));
     // the client's range chance past optimal: 2^(-((d - range) / falloff)^2)
-    double over(distance - fx.range);
-    return (MakeRandomFloat() <= std::pow(2.0, -(over * over) / (fx.falloff * fx.falloff)));
+    return (Rand() < NpcMath::EwarRangeChance(distance, fx.range, fx.falloff));
 }
 
 void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* pSecondary/*nullptr*/)
@@ -193,28 +215,51 @@ void NPCEwar::Process(SystemEntity* pPrimary, SystemEntity* pSecondary/*nullptr*
     if (!IsEwarTarget(pTarget))
         pTarget = nullptr;
 
+    int64 now(GetSteadyTime());
     for (auto& fx : m_effects) {
         // target changed or gone
         if ((fx.targetID != 0) and ((pTarget == nullptr) or (fx.targetID != pTarget->GetID())))
             EndSession(fx);
         if (pTarget == nullptr) {
-            fx.timer.Disable();
+            fx.nextAt = 0;
             continue;
         }
-        // the first roll comes right away, then every duration
-        if (fx.timer.Enabled()) {
-            if (!fx.timer.Check())
+        // the first roll comes right away, then every duration (drift free, like NpcSchedule)
+        if (fx.nextAt != 0) {
+            if (now < fx.nextAt)
                 continue;
+            fx.nextAt = (((now - fx.nextAt) > (2 * static_cast<int64>(fx.duration))) ? now : fx.nextAt) + fx.duration;
         } else {
-            fx.timer.Start(fx.duration);
+            fx.nextAt = now + fx.duration;
         }
         Cycle(fx, pTarget);
     }
 }
 
+bool NPCEwar::Uses(Effect& fx, SystemEntity* pTarget)
+{
+    // the usage chance (504 scram, 512 web;  1 for the others), when npc.EwarUsageRoll says it's rolled
+    switch (sConfig.npc.EwarUsageRoll) {
+        case 1: {
+            // per new target
+            if (fx.usableFor != pTarget->GetID()) {
+                fx.usableFor = pTarget->GetID();
+                fx.usable = (Rand() < fx.usage);
+            }
+            return fx.usable;
+        }
+        case 2: {
+            // every cycle (the phase 0-1 behaviour:  a 25% scrammer scrams almost surely within a minute)
+            return (Rand() < fx.usage);
+        }
+    }
+    // once per spawn (0, the default)
+    return fx.carried;
+}
+
 void NPCEwar::Cycle(Effect& fx, SystemEntity* pTarget)
 {
-    if ((MakeRandomFloat() >= fx.chance) or !InRange(fx, pTarget)) {
+    if (!Uses(fx, pTarget) or (Rand() >= fx.chance) or !InRange(fx, pTarget)) {
         // not this time.  whatever we did last cycle ends now
         if (fx.targetID != 0)
             EndSession(fx);
@@ -295,7 +340,7 @@ void NPCEwar::StopAll()
     for (auto& fx : m_effects) {
         if (fx.targetID != 0)
             EndSession(fx);
-        fx.timer.Disable();
+        fx.nextAt = 0;
     }
 }
 
