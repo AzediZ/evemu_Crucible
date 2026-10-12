@@ -26,6 +26,12 @@ is missing and reports any file whose sha256 differs (EVE Ref warns that archive
 | `gen_market_calibration.py` | The CLI: writes the migration and `manifest.json`, prints the consistency report, optionally writes the harness snapshot (`--export-json`). |
 | `manifest.json` | Every source file of the committed run: URL, data date, Last-Modified, size, sha256, rows; the repo static files and the client bulkdata file used; the sha256 of the generated SQL. |
 
+The harness snapshot (`--export-json`) carries, besides the types, bills, refine outputs and `mktCal*` rows,
+`buildTime` (the blueprints' productionTime, phase 3) and `chains` (phase 6, `chains_json`): the invention, reaction
+and planetary recipes, the decryptors, the bills of T2, T3 and components, the T2 blueprints, `moonMiningAmount` and
+what T2/T3/components reprocess into, the same data `MarketSimDB::LoadChains` loads on the server. It goes into no
+migration.
+
 All of these are stdlib Python 3 and deterministic: two runs over the same inputs write byte-identical SQL, manifest
 and snapshot. **Change the generator rather than the SQL, run it again and commit the SQL, the manifest and the
 generator together.** On a database that already has the previous data, migrate `20261013120100` down and up again.

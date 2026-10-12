@@ -51,7 +51,6 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimClock.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.h"
-     "${SERVER_SOURCE_DIR}/market/sim/SimChains.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimCapacityStandIn.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.h"
@@ -59,7 +58,8 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimRng.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimTypes.h"
-     "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h" )
+     "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimChains.h" )
 SET( core_SOURCE
      "${SERVER_SOURCE_DIR}/market/sim/SimActors.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimChains.cpp"

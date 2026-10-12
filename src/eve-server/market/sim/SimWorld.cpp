@@ -448,6 +448,9 @@ void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
     // the miners' fleets
     if (m_p.actors)
         SeedActors(now, nodeID, freshOnly);
+    // phase 6:  the inventors' first copies (SimChains.cpp)
+    if (ChainsT2())
+        ChainSeed(nodeID, freshOnly);
 }
 
 void World::Start(int64_t now, bool catchUp)
@@ -1953,6 +1956,7 @@ std::string World::CellInfo(uint16_t typeID, uint32_t stationID) const
         }
         out << Fmt("  today:  %lld traded, low %.2f high %.2f, last %.2f.  bought from players today %lld\n",
                    (long long)c.dVol, Econ::ToIsk(c.dLow), Econ::ToIsk(c.dHigh), c.lastClear, (long long)c.dIntake);
+        out << ChainCellInfo(c);        // phase 6 (SimChains.cpp)
     }
     std::string s(out.str());
     return s.empty() ? Fmt("type %u has no cell%s.", typeID, stationID ? " at that station" : "") : s;

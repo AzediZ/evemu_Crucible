@@ -213,7 +213,7 @@ EVEServerConfig::EVEServerConfig()
     // marketSim phase 6 (PLAN 6.4;  POS fuel:  a large tower's 40 blocks an hour shared by about four arrays)
     marketSim.EnableT2 = true;
     marketSim.EnableMoonPI = true;
-    marketSim.InventBufferDays = 2.0;
+    marketSim.InventBufferDays = 5.0;
     marketSim.HarvestSlack = 1.0;
     marketSim.PosFuelPerArrayHour = 10.0;
     marketSim.MoonHarvestPerHour = 1.0;

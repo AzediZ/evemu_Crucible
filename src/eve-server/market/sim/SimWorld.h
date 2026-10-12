@@ -131,7 +131,7 @@ namespace MktSim {
         bool     enableMoonPI       = true;         // EnableMoonPI:  moon harvesting, reactions, planetary industry, components, fuel blocks
         double   inventChance       = 1.0;          // ram.InventChance:  multiplies the Crucible invention chance
         double   inventionTimeMultiplier = 1.0;     // invention time:  the line's (1);  no skill shortens it in Crucible
-        double   inventBufferDays   = 2.0;          // inventors keep copies for this many days of their products' demand
+        double   inventBufferDays   = 5.0;          // inventors keep copies for this many days of their products' demand (a thin T2 ship's inventions take days)
         double   harvestSlack       = 1.0;          // harvesters' and extractors' capacity over the calibrated need (moons and planets to spare)
         double   posFuelPerArrayHour = 10.0;        // fuel blocks a harvesting or reaction array's tower burns an hour (a large
                                                     //  tower's 40 shared by about four arrays)
@@ -424,6 +424,8 @@ namespace MktSim {
         double RefMade(uint32_t nodeID, uint16_t typeID) const;
         double RefDerived(uint32_t nodeID, uint16_t typeID) const;
         std::string ChainInfo(uint32_t actorID) const;
+        // how a chain makes a cell's goods and what holds it up now (copies, inputs, margin);  empty:  no chain makes it
+        std::string ChainCellInfo(const Cell& c) const;
 
     private:
         struct Due {
@@ -585,6 +587,8 @@ namespace MktSim {
         void     ChainSupply();
         void     ChainDerived(std::map<uint64_t, double>& derived);
         void     ChainActors();
+        // a fresh world's inventors start with InventBufferDays of copies (a one-off goods faucet, like the miners' fleets)
+        void     ChainSeed(uint32_t nodeID, bool freshOnly);
         void     ChainStep(Actor& a, int64_t t, double dtDays);
         void     HarvestStep(Actor& a, ChainPlan& plan, int64_t t, double dtDays);
         void     ProcessStep(Actor& a, ChainPlan& plan, int64_t t);

@@ -964,6 +964,15 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
         }
         for (auto& cur : ch["moonAmounts"].o)
             data.moonAmounts[(uint16_t)std::atoi(cur.first.c_str())] = cur.second.Num();
+        /* what T2, T3 and components reprocess into (invTypeMaterials, as the server has it):  the 'bom' base above has
+         *  the invented copy's waste in (x1.5), and a reprocessing floor that high buys every T2 charge for its minerals */
+        for (auto& cur : ch["materials"].o) {
+            std::map<uint16_t, TypeData>::iterator itr = data.types.find((uint16_t)std::atoi(cur.first.c_str()));
+            if (itr == data.types.end())
+                continue;
+            itr->second.refine.clear();
+            lines(cur.second, itr->second.refine);
+        }
     }
     if (data.types.empty()) {
         err = "no types in " + path;

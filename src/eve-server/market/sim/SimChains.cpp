@@ -43,6 +43,8 @@ namespace {
     };
     // reaction and planetary goods follow their inputs' cost like components (PLAN 6.2 w_c)
     const double ChainPassThrough = 0.9;
+    // a reaction or schematic runs while its output brings back at least this share of its inputs' and fuel's cost
+    const double ChainMinRecovery = 0.5;
 
     std::string Fmt(const char* fmt, ...)
     {
@@ -206,8 +208,14 @@ Units World::BuyInput(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units 
     if (q <= 0)
         return 0;
     Cell* ic(FindCell(nodeID, typeID));
-    if (ic != nullptr)
-        return BuyAtNode(actorID, *ic, q, InternalBuy(*ic), Spare(*ic, q), t);
+    if (ic != nullptr) {
+        /* what the market maker can spare (it keeps a tenth of its target);  of a thin cell, a few units on the shelf,
+         *  the last ones too (else a T1 item a T2 build needs is never there):  the empty shelf raises the price */
+        Units spare(Spare(*ic, q));
+        if ((spare < q) and (ic->targetStock < 10.0))
+            spare = std::min<Units>(q, MakerStock(*ic));
+        return BuyAtNode(actorID, *ic, q, InternalBuy(*ic), spare, t);
+    }
     return BuyVendor(actorID, nodeID, typeID, q);
 }
 
@@ -359,7 +367,10 @@ void World::ChainSupply()
                     p.decryptor = (d != nullptr) ? d->typeID : 0;
                 }
             }
-            if (best < 0.0)
+            /* what sells for clearly less than its cheapest way of making it (the materials at the copy's level and its
+             *  share of the attempts) isn't invented:  the stock model keeps supplying it (Crucible had researched T2
+             *  originals from the lottery;  as phase 3 leaves T1 under its inputs' cost to the loot source) */
+            if ((best < 0.0) or (c.refLocal * (1.0 - share * c.h) < m_p.lootCostShare * best))
                 continue;
             p.process = Supply::Invented;
             p.blueprint = bp->second;
@@ -389,7 +400,8 @@ void World::ChainSupply()
                 continue;
             std::vector<std::pair<uint16_t, double>> materials;
             Chains::BillAt(bill->second, Chains::ComponentMaterialLevel, materials);
-            if (materials.empty() or (listCost(node, materials, t.typeID) < 0.0))
+            double cost(materials.empty() ? -1.0 : listCost(node, materials, t.typeID));
+            if ((cost < 0.0) or (c.refLocal * (1.0 - share * c.h) < m_p.lootCostShare * cost))
                 continue;
             c.supply = Supply::Manufactured;
             setBill(c, materials);
@@ -458,7 +470,8 @@ void World::ChainSupply()
                     p.fuelled = reaction and (fuelOf.count(node) > 0) and (m_p.posFuelPerArrayHour > 0.0);
                 }
             }
-            if (best < 0.0)
+            // (a recipe that brings back less than ChainMinRecovery of its cost at reference prices is left to the stock model)
+            if ((best < 0.0) or (c.refLocal * (1.0 - share * c.h) < ChainMinRecovery * best))
                 continue;
             c.supply = p.process;
             std::vector<std::pair<uint16_t, double>> perUnit;
@@ -592,8 +605,9 @@ void World::ChainActors()
                         break;
                     case Supply::Reacted:
                     case Supply::Processed:
-                        // an array (a factory) per product at least:  a tower runs its reactions all the time
-                        arrays += std::max(1.0, std::ceil(p.ref / std::max(1e-9, p.unitsPerRun) * p.seconds / 86400.0 * (1.0 + m_p.productionSlack)));
+                        /* two arrays (factories) per product at least, and twice the slack of the lines:  towers and planets are
+                         *  plentiful, and a chain's demand runs ahead of its reference while the stocks along it fill */
+                        arrays += std::max(2.0, std::ceil(p.ref / std::max(1e-9, p.unitsPerRun) * p.seconds / 86400.0 * 2.0 * (1.0 + m_p.productionSlack)));
                         break;
                     case Supply::Harvested:
                     case Supply::Extracted:
@@ -621,6 +635,30 @@ void World::ChainActors()
     }
     m_chainPending.clear();
 }
+
+void World::ChainSeed(uint32_t nodeID, bool freshOnly)
+{
+    for (auto& cur : m_chainPlans) {
+        const Actor& a(m_actors[cur.first - 1]);
+        if ((a.kind != ActorKind::Inventor) or ((nodeID != 0) and (a.nodeID != nodeID)) or (a.state != 0))
+            continue;
+        // a loaded world that grew:  only an inventor that holds no copies at all
+        bool holds(false);
+        for (auto& p : cur.second.products)
+            if (Held(a.actorID, a.nodeID, p.blueprint) > 0)
+                holds = true;
+        if (freshOnly and holds)
+            continue;
+        for (auto& p : cur.second.products) {
+            const Cell& c(m_cells[p.cell]);
+            Units want((Units)std::ceil(std::max(c.dBar, c.dRef) * m_p.inventBufferDays / std::max(1.0, p.unitsPerRun)));
+            Units have(Held(a.actorID, a.nodeID, p.blueprint));
+            if (want > have)
+                GoodsTo(a.actorID, a.nodeID, p.blueprint, want - have, Goods::Seed);
+        }
+    }
+}
+
 
 /************************************************************************************************************************
  * the actors' steps (hourly, SimActors.cpp's StepActor)
@@ -776,11 +814,15 @@ void World::ProcessStep(Actor& a, ChainPlan& plan, int64_t t)
             if (oc != m_cellIndex.end())
                 value += out.second * ExpectSell(m_cells[oc->second]);
         }
-        if (!(cost > 0.0) or (value < cost * (1.0 + m_p.minMargin)))
+        /* the towers and planets run on demand, like the miners:  a moon alliance runs its reactions on its own goo, the
+         *  chain pays as a whole (Crucible's prices leave some reactions and schematics under their inputs' cost:  the
+         *  actor's money is topped up as the other actors' is).  only a cycle that would bring back less than half its
+         *  cost waits for the price to rise */
+        if (!(cost > 0.0) or (value < ChainMinRecovery * cost))
             continue;
         // as many jobs (arrays, factories) as the gap takes:  every product's first job before anyone's second
-        double score((value / cost - 1.0) * std::min(1.0, gap / std::max(1.0, c.targetStock)));
-        for (int j = 0; (units > 0.0) and (j < 4); ++j) {
+        double score((value / cost) * std::min(1.0, gap / std::max(1.0, c.targetStock)));
+        for (int j = 0; (units > 0.0) and (j < 256); ++j) {
             cands.push_back(Cand{score / (1.0 + j), i, (Units)std::min(maxUnits, units)});
             units -= maxUnits;
         }
@@ -871,12 +913,24 @@ void World::InventorStep(Actor& a, ChainPlan& plan, int64_t t)
                 continue;
             std::map<uint16_t, double>::const_iterator w = plan.wip.find(c.typeID);
             double gap(c.targetStock - (double)MakerStock(c) - (double)Held(a.actorID, node, c.typeID) - ((w == plan.wip.end()) ? 0.0 : w->second));
-            if (gap < std::min(0.5 * p.unitsPerRun, std::max(1.0, 0.5 * c.targetStock)))
+            /* the sim is a fraction of TQ (EconomyScale):  a run of a T2 charge (5000) is days of a small node's demand, so a
+             *  job makes what the gap needs (a share of a run:  the copy's runs are used in proportion, rounded at random) */
+            if (gap < std::max(1.0, 0.1 * c.targetStock))
                 continue;
-            double maxUnits(std::max(p.unitsPerRun, std::floor(m_p.maxJobHours * 3600.0 / std::max(1e-6, p.seconds))));
-            Units runs((Units)std::ceil(std::min(gap, maxUnits) / p.unitsPerRun));
-            runs = std::max<Units>(1, std::min(runs, copies));
-            Units units(runs * (Units)p.unitsPerRun);
+            // (at most half a day of its demand at once, as the reactions:  a long job bought at once empties its inputs' shelves)
+            double maxUnits(std::max(1.0, std::min(std::floor(m_p.maxJobHours * 3600.0 / std::max(1e-6, p.seconds)),
+                                                   std::ceil(0.5 * std::max(c.dBar, c.dRef)))));
+            Units units((Units)std::max(1.0, std::min(std::ceil(gap), maxUnits)));
+            // but enough that the line's installation stays a small part of the cost (at most a run:  the rest is held)
+            {
+                SimJob one;
+                one.start = t;
+                one.end = t + (int64_t)std::ceil(p.seconds);
+                double sell(ExpectSell(c));
+                if (sell > 0.0)
+                    units = std::max<Units>(units, (Units)std::min(p.unitsPerRun, std::ceil(m_capacity->JobCost(one) / (0.05 * sell))));
+            }
+            units = std::min<Units>(units, copies * (Units)p.unitsPerRun);
             double cost(inputsCost(p.inputs));
             if (cost < 0.0)
                 continue;
@@ -904,16 +958,13 @@ void World::InventorStep(Actor& a, ChainPlan& plan, int64_t t)
             if (need > 0)
                 BuyInput(a.actorID, node, in.first, need, t);
         }
-        // the whole runs every material allows
-        Units portion((Units)p.unitsPerRun);
-        for (auto& in : p.inputs) {
-            double per(in.second * (double)portion);
-            if (per > 0.0)
-                units = std::min<Units>(units, (Units)std::floor((double)Held(a.actorID, node, in.first) / per + 1e-9) * portion);
-        }
+        // the units every material allows
+        for (auto& in : p.inputs)
+            if (in.second > 0.0)
+                units = std::min<Units>(units, (Units)std::floor((double)Held(a.actorID, node, in.first) / in.second + 1e-9));
         if (units <= 0)
             continue;
-        Units runs(units / portion);
+        Units runs((Units)std::ceil((double)units / p.unitsPerRun - 1e-9));
         SimJob job;
         job.actorID = a.actorID;
         job.nodeID = node;
@@ -939,7 +990,10 @@ void World::InventorStep(Actor& a, ChainPlan& plan, int64_t t)
             if (use > 0)
                 m_ledger.GoodsOut(a.actorID, (uint16_t)node, in.first, use, Goods::Materials, false);
         }
-        m_ledger.GoodsOut(a.actorID, (uint16_t)node, p.blueprint, runs, Goods::Materials, false);
+        Units used(std::min<Units>(Held(a.actorID, node, p.blueprint),
+                                   Rng::RoundRandom((double)units / p.unitsPerRun, Rng::Hash64(m_p.seed, a.actorID, (uint64_t)t, hUse, ++salt))));
+        if (used > 0)
+            m_ledger.GoodsOut(a.actorID, (uint16_t)node, p.blueprint, used, Goods::Materials, false);
         job.jobID = m_nextJobID++;
         m_jobs[job.jobID] = job;
         plan.wip[c.typeID] += (double)units;
@@ -1147,6 +1201,67 @@ bool World::ChainLoadJob(const SimJob& job)
 /************************************************************************************************************************
  * GM
  */
+
+std::string World::ChainCellInfo(const Cell& c) const
+{
+    const char* how(nullptr);
+    switch (c.supply) {
+        case Supply::Invented:      how = "invented and built"; break;
+        case Supply::Harvested:     how = "harvested"; break;
+        case Supply::Reacted:       how = "reacted"; break;
+        case Supply::Extracted:     how = "extracted"; break;
+        case Supply::Processed:     how = "planetary factories"; break;
+        case Supply::Manufactured:  how = (c.bill != 0) ? "manufactured (its own bill)" : nullptr; break;
+    }
+    if (how == nullptr)
+        return "";
+    std::ostringstream out;
+    out << Fmt("  chain:  %s;  reference %.4g/day made, %.4g/day used by the sim's industry\n", how, RefMade(c.nodeID, c.typeID),
+               RefDerived(c.nodeID, c.typeID));
+    const ChainProduct* p(nullptr);
+    uint32_t actorID(0);
+    for (auto& cur : m_chainPlans) {
+        if (m_actors[cur.first - 1].nodeID != c.nodeID)
+            continue;
+        std::map<uint16_t, size_t>::const_iterator pi = cur.second.index.find(c.typeID);
+        if (pi == cur.second.index.end())
+            continue;
+        p = &cur.second.products[pi->second];
+        actorID = cur.first;
+        std::map<uint16_t, double>::const_iterator w = cur.second.wip.find(c.typeID);
+        out << Fmt("  actor %u:  holds %lld, in jobs %.0f", actorID, (long long)Held(actorID, c.nodeID, c.typeID),
+                   (w == cur.second.wip.end()) ? 0.0 : w->second);
+        if (p->process == Supply::Invented) {
+            std::map<uint16_t, double>::const_iterator cw = cur.second.wip.find(p->blueprint);
+            out << Fmt(";  copies of %u:  %lld runs held, %.1f expected from attempts;  chance %.3f, %.0f runs a success%s",
+                       p->blueprint, (long long)Held(actorID, c.nodeID, p->blueprint), (cw == cur.second.wip.end()) ? 0.0 : cw->second,
+                       p->chance, p->runsPerSuccess, (p->decryptor != 0) ? Fmt(", decryptor %u", p->decryptor).c_str() : "");
+        } else if ((p->process == Supply::Harvested) or (p->process == Supply::Extracted)) {
+            std::map<uint16_t, double>::const_iterator cap = cur.second.capacity.find(c.typeID);
+            int64_t now(c.lastTime);
+            out << Fmt(";  capacity %.4g/day (x%.2f)", (cap == cur.second.capacity.end()) ? 0.0 : cap->second, SupplyShockOf(c.typeID, now));
+        }
+        out << "\n";
+        break;
+    }
+    // the inputs:  what the node's market maker has of each (of its target), and what a unit costs against what it sells for
+    const std::vector<std::pair<uint16_t, double>>& bill(BomOf(c));
+    if (!bill.empty()) {
+        double cost(0.0);
+        out << "  inputs a unit (market maker's stock / target):";
+        for (auto& in : bill) {
+            std::map<uint64_t, uint32_t>::const_iterator ic = m_cellIndex.find(CellKey(c.nodeID, in.first));
+            double unit(InputCost(c.nodeID, in.first));
+            cost += in.second * std::max(0.0, unit);
+            if (ic != m_cellIndex.end())
+                out << Fmt("  %u x%.4g %lld/%.0f", in.first, in.second, (long long)MakerStock(m_cells[ic->second]), m_cells[ic->second].targetStock);
+            else
+                out << Fmt("  %u x%.4g %s", in.first, in.second, (unit > 0.0) ? "(npc vendor)" : "(NOT TRADED HERE)");
+        }
+        out << Fmt("\n  a unit costs %.2f (inputs at the internal price), sells for %.2f\n", cost, ExpectSell(c));
+    }
+    return out.str();
+}
 
 std::string World::ChainInfo(uint32_t actorID) const
 {

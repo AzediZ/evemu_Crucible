@@ -207,111 +207,114 @@ def build_time_json(st, cal):
         if t in cal.types and st.bp[t].get('productionTime'):
             out[str(t)] = int(st.bp[t]['productionTime'])
     return out
-
-
-def chains_json(st, cal):
-    """the market sim's phase 6 chains (the harness snapshot), as the server loads them (MarketSimDB::LoadChains):
-    invention recipes (a T2 blueprint with a chanceOfRE, invented from its T1 parent's blueprint:  the activity 8
-    datacores, the data interface's decryptor group;  the interface is not used up), decryptors, reactions
-    (invTypeReactions x moonMiningAmount), planetary schematics, the bills of T2, T3 and components (per unit:  base
-    materials less the recycled T1 item's, extras x damagePerJob, the blueprint's wasteFactor) and T2 blueprints"""
-    import serverdata
-    attrs = collections.defaultdict(dict)
-    for r in serverdata.load_synced('dgmTypeAttributes').rows:
-        if r['attributeID'] in (726, 1112, 1113, 1114, 1115, 1124):
-            v = r['valueFloat'] if r['valueFloat'] is not None else r['valueInt']
-            if v is not None:
-                attrs[r['typeID']][r['attributeID']] = float(v)
-    amounts = {t: a[726] for t, a in attrs.items() if a.get(726, 0) > 0}
-    bps = {}
-    for r in sorted(serverdata.load_synced('invBlueprintTypes').rows, key=lambda r: r['blueprintTypeID']):
-        bps[r['blueprintTypeID']] = r
-    reqs8 = collections.defaultdict(list)
-    for r in serverdata.load_synced('ramTypeRequirements').rows:
-        if r['activityID'] == 8:
-            reqs8[r['typeID']].append(r)
-    out = {'recipes': [], 'bills': {}, 'blueprints': {}, 'decryptors': [], 'moonAmounts': {}}
-
-    def int_or_float(x):
-        return int(x) if float(x).is_integer() else float(x)
-
-    # bills and T2 blueprints (the lowest blueprint of each product, as derive.Static.bp)
-    for t in sorted(st.bp):
-        if t not in cal.types or cal.types[t].simClass not in (derive.MFG_T2, derive.MFG_T3, derive.COMPONENT):
-            continue
-        b = st.bp[t]
-        portion = float(st.portion(t))
-        base = collections.OrderedDict(st.mats.get(t, []))
-        extra = []
-        for req, q, dmg, rec in st.reqs.get(b['blueprintTypeID'], []):
-            if req not in st.types or st.cat(req) == derive.CAT_SKILL:
-                continue
-            if rec:
-                for m, mq in st.mats.get(req, []):
-                    if m in base:
-                        base[m] = max(0, base[m] - mq * q)
-            if dmg > 0:
-                extra.append([req, q * dmg / portion])
-        base_l = [[m, q / portion] for m, q in base.items() if q > 0]
-        if base_l or extra:
-            out['bills'][str(t)] = {'base': base_l, 'extra': extra, 'wasteFactor': float(b['wasteFactor'] or 0) / 100.0}
-        if cal.types[t].simClass == derive.MFG_T2:
-            out['blueprints'][str(t)] = b['blueprintTypeID']
-    # invention
-    for bp2 in sorted(bps):
-        b2 = bps[bp2]
-        if not (b2['chanceOfRE'] and b2['chanceOfRE'] > 0):
-            continue
-        parent, meta = st.meta.get(b2['productTypeID'], (None, None))
-        if meta != 2 or parent not in st.bp:
-            continue
-        b1 = st.bp[parent]
-        inputs, group = [], 0
-        for r in sorted(reqs8.get(b1['blueprintTypeID'], []), key=lambda r: r['requiredTypeID']):
-            req = r['requiredTypeID']
-            if req not in st.types or st.cat(req) == derive.CAT_SKILL:
-                continue
-            if st.group(req) == GROUP_DATA_INTERFACE:
-                group = int(attrs.get(req, {}).get(1115, 0))
-                continue
-            q = (r['quantity'] or 0) * float(r['damagePerJob'] or 0)
-            if q > 0:
-                inputs.append([req, int_or_float(q)])
-        if not inputs:
-            continue
-        t1max, t2max = max(1, int(b1['maxProductionLimit'] or 1)), max(1, int(b2['maxProductionLimit'] or 1))
-        runs = min(max(int(math.floor(t2max / 10.0)), 1), t2max)     # EvEMath::RAM::InventionRuns, a max-run T1 copy
-        out['recipes'].append({'kind': 1, 'id': b1['blueprintTypeID'], 'inputs': inputs, 'outputs': [[bp2, runs]],
-                               'seconds': float(b1['researchTechTime'] or 0), 'chance': float(b2['chanceOfRE']),
-                               'decryptorGroup': group, 'maxRuns': t2max})
-    # decryptors
-    for t in sorted(attrs):
-        a = attrs[t]
-        if not any(k in a for k in (1112, 1113, 1114, 1124)) or t not in cal.types:
-            continue
-        out['decryptors'].append([t, st.group(t), a.get(1112, 1.0), a.get(1124, 0.0), a.get(1113, 0.0), a.get(1114, 0.0)])
-    # reactions and schematics
-
-    def amount(t):
-        return max(1.0, amounts.get(t, 1.0))
-    reactions = collections.OrderedDict()
-    for r in sorted(serverdata.load_synced('invTypeReactions').rows, key=lambda r: (r['reactionTypeID'], r['input'], r['typeID'])):
-        e = reactions.setdefault(r['reactionTypeID'], {'kind': 2, 'id': r['reactionTypeID'], 'inputs': [], 'outputs': [],
-                                                       'seconds': 3600.0, 'chance': 1.0, 'decryptorGroup': 0, 'maxRuns': 0})
-        e['inputs' if r['input'] else 'outputs'].append([r['typeID'], int_or_float((r['quantity'] or 0) * amount(r['typeID']))])
-    out['recipes'] += [e for e in reactions.values() if e['inputs'] and e['outputs']]
-    cycle = {r['schematicID']: float(r['cycleTime'] or 0) for r in serverdata.load_synced('piSchematics').rows}
-    schematics = collections.OrderedDict()
-    for r in sorted(serverdata.load_synced('piTypeMap').rows, key=lambda r: (r['schematicID'], r['typeID'])):
-        e = schematics.setdefault(r['schematicID'], {'kind': 3, 'id': r['schematicID'], 'inputs': [], 'outputs': [],
-                                                     'seconds': cycle.get(r['schematicID'], 0.0), 'chance': 1.0,
-                                                     'decryptorGroup': 0, 'maxRuns': 0})
-        flag = r['isInput']
-        is_input = (ord(flag) if isinstance(flag, str) else int(flag or 0)) != 0
-        e['inputs' if is_input else 'outputs'].append([r['typeID'], r['quantity'] or 0])
-    out['recipes'] += [e for e in schematics.values() if e['inputs'] and e['outputs'] and e['seconds'] > 0]
-    out['moonAmounts'] = {str(t): amounts[t] for t in sorted(amounts)}
-    return out
+
+
+def chains_json(st, cal):
+    """the market sim's phase 6 chains (the harness snapshot), as the server loads them (MarketSimDB::LoadChains):
+    invention recipes (a T2 blueprint with a chanceOfRE, invented from its T1 parent's blueprint:  the activity 8
+    datacores, the data interface's decryptor group;  the interface is not used up), decryptors, reactions
+    (invTypeReactions x moonMiningAmount), planetary schematics, the bills of T2, T3 and components (per unit:  base
+    materials less the recycled T1 item's, extras x damagePerJob, the blueprint's wasteFactor) and T2 blueprints"""
+    import serverdata
+    attrs = collections.defaultdict(dict)
+    for r in serverdata.load_synced('dgmTypeAttributes').rows:
+        if r['attributeID'] in (726, 1112, 1113, 1114, 1115, 1124):
+            v = r['valueFloat'] if r['valueFloat'] is not None else r['valueInt']
+            if v is not None:
+                attrs[r['typeID']][r['attributeID']] = float(v)
+    amounts = {t: a[726] for t, a in attrs.items() if a.get(726, 0) > 0}
+    bps = {}
+    for r in sorted(serverdata.load_synced('invBlueprintTypes').rows, key=lambda r: r['blueprintTypeID']):
+        bps[r['blueprintTypeID']] = r
+    reqs8 = collections.defaultdict(list)
+    for r in serverdata.load_synced('ramTypeRequirements').rows:
+        if r['activityID'] == 8:
+            reqs8[r['typeID']].append(r)
+    out = {'recipes': [], 'bills': {}, 'blueprints': {}, 'decryptors': [], 'moonAmounts': {}, 'materials': {}}
+
+    def int_or_float(x):
+        return int(x) if float(x).is_integer() else float(x)
+
+    # bills and T2 blueprints (the lowest blueprint of each product, as derive.Static.bp)
+    for t in sorted(st.bp):
+        if t not in cal.types or cal.types[t].simClass not in (derive.MFG_T2, derive.MFG_T3, derive.COMPONENT):
+            continue
+        b = st.bp[t]
+        portion = float(st.portion(t))
+        base = collections.OrderedDict(st.mats.get(t, []))
+        extra = []
+        for req, q, dmg, rec in st.reqs.get(b['blueprintTypeID'], []):
+            if req not in st.types or st.cat(req) == derive.CAT_SKILL:
+                continue
+            if rec:
+                for m, mq in st.mats.get(req, []):
+                    if m in base:
+                        base[m] = max(0, base[m] - mq * q)
+            if dmg > 0:
+                extra.append([req, q * dmg / portion])
+        base_l = [[m, q / portion] for m, q in base.items() if q > 0]
+        if base_l or extra:
+            out['bills'][str(t)] = {'base': base_l, 'extra': extra, 'wasteFactor': float(b['wasteFactor'] or 0) / 100.0}
+        # what it reprocesses into (invTypeMaterials, as the server's reprocessing gives;  'bom' has the waste in)
+        if st.mats.get(t):
+            out['materials'][str(t)] = [[m, q / portion] for m, q in st.mats[t]]
+        if cal.types[t].simClass == derive.MFG_T2:
+            out['blueprints'][str(t)] = b['blueprintTypeID']
+    # invention
+    for bp2 in sorted(bps):
+        b2 = bps[bp2]
+        if not (b2['chanceOfRE'] and b2['chanceOfRE'] > 0):
+            continue
+        parent, meta = st.meta.get(b2['productTypeID'], (None, None))
+        if meta != 2 or parent not in st.bp:
+            continue
+        b1 = st.bp[parent]
+        inputs, group = [], 0
+        for r in sorted(reqs8.get(b1['blueprintTypeID'], []), key=lambda r: r['requiredTypeID']):
+            req = r['requiredTypeID']
+            if req not in st.types or st.cat(req) == derive.CAT_SKILL:
+                continue
+            if st.group(req) == GROUP_DATA_INTERFACE:
+                group = int(attrs.get(req, {}).get(1115, 0))
+                continue
+            q = (r['quantity'] or 0) * float(r['damagePerJob'] or 0)
+            if q > 0:
+                inputs.append([req, int_or_float(q)])
+        if not inputs:
+            continue
+        t1max, t2max = max(1, int(b1['maxProductionLimit'] or 1)), max(1, int(b2['maxProductionLimit'] or 1))
+        runs = min(max(int(math.floor(t2max / 10.0)), 1), t2max)     # EvEMath::RAM::InventionRuns, a max-run T1 copy
+        out['recipes'].append({'kind': 1, 'id': b1['blueprintTypeID'], 'inputs': inputs, 'outputs': [[bp2, runs]],
+                               'seconds': float(b1['researchTechTime'] or 0), 'chance': float(b2['chanceOfRE']),
+                               'decryptorGroup': group, 'maxRuns': t2max})
+    # decryptors
+    for t in sorted(attrs):
+        a = attrs[t]
+        if not any(k in a for k in (1112, 1113, 1114, 1124)) or t not in cal.types:
+            continue
+        out['decryptors'].append([t, st.group(t), a.get(1112, 1.0), a.get(1124, 0.0), a.get(1113, 0.0), a.get(1114, 0.0)])
+    # reactions and schematics
+
+    def amount(t):
+        return max(1.0, amounts.get(t, 1.0))
+    reactions = collections.OrderedDict()
+    for r in sorted(serverdata.load_synced('invTypeReactions').rows, key=lambda r: (r['reactionTypeID'], r['input'], r['typeID'])):
+        e = reactions.setdefault(r['reactionTypeID'], {'kind': 2, 'id': r['reactionTypeID'], 'inputs': [], 'outputs': [],
+                                                       'seconds': 3600.0, 'chance': 1.0, 'decryptorGroup': 0, 'maxRuns': 0})
+        e['inputs' if r['input'] else 'outputs'].append([r['typeID'], int_or_float((r['quantity'] or 0) * amount(r['typeID']))])
+    out['recipes'] += [e for e in reactions.values() if e['inputs'] and e['outputs']]
+    cycle = {r['schematicID']: float(r['cycleTime'] or 0) for r in serverdata.load_synced('piSchematics').rows}
+    schematics = collections.OrderedDict()
+    for r in sorted(serverdata.load_synced('piTypeMap').rows, key=lambda r: (r['schematicID'], r['typeID'])):
+        e = schematics.setdefault(r['schematicID'], {'kind': 3, 'id': r['schematicID'], 'inputs': [], 'outputs': [],
+                                                     'seconds': cycle.get(r['schematicID'], 0.0), 'chance': 1.0,
+                                                     'decryptorGroup': 0, 'maxRuns': 0})
+        flag = r['isInput']
+        is_input = (ord(flag) if isinstance(flag, str) else int(flag or 0)) != 0
+        e['inputs' if is_input else 'outputs'].append([r['typeID'], r['quantity'] or 0])
+    out['recipes'] += [e for e in schematics.values() if e['inputs'] and e['outputs'] and e['seconds'] > 0]
+    out['moonAmounts'] = {str(t): amounts[t] for t in sorted(amounts)}
+    return out
 
 
 def export_json(path, st, cal, rows):
