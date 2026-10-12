@@ -208,6 +208,12 @@ public:
         bool SimPaysFees;
         bool SimRecordNpcSide;
         double SimBrokerFee;            // the sim's broker fee rate
+        // facility capacity (PLAN 6.6, phase 5):  the sim's production takes npc station lines;  players always get theirs
+        bool EnableFacilities;          // the sim's production books station capacity (false:  its own virtual capacity)
+        bool UseRealAssemblyLines;      // sim jobs take real lines (players see them busy);  false:  per station counters only
+        double MaxLineShare;            // at most this share of a station's lines of an activity is the sim's
+        uint32 MinFreeLinesPerStation;  // the sim leaves at least this many lines of an activity free
+        double RefineryM3PerHour;       // the sim's refining per station (soft cap).  <= 0:  no limit
         double MoneyDaysTarget;
         double ControllerKp;
         double ControllerKi;

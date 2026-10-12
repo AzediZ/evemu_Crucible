@@ -88,6 +88,31 @@ public:
     static void GetActiveJobsInContainer(uint32 containerID, std::vector<EvERam::JobProperties>& into);
     static bool UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConfig& data);
 
+    /* the market sim's jobs on npc station lines (market/sim/SimFacilityMgr, market-sim PLAN 6.6) */
+    struct SimLine {
+        uint32 stationID;
+        uint32 lineID;
+        uint32 ownerID;
+        int64  nextFreeTime;            // FILETIME
+        double timeMultiplier;
+        double costInstall;
+        double costPerHour;             // at least the line type's minimum
+    };
+    /* the lines of the activity at the stations that an npc corp may use (the station owner's lines, no corp or alliance
+     *  restriction, no standing above neutral needed, security limits around 0), by station and line */
+    static bool SelectLinesForSim(const std::vector<uint32>& stationIDs, uint8 activityID, std::vector<SimLine>& into);
+    // nextFreeTime = IF(nextFreeTime = guard, value, GREATEST(nextFreeTime, floor))  (no guard:  the GREATEST only)
+    struct LineTimeWrite {
+        uint32 lineID;
+        bool   hasGuard;
+        int64  guard;
+        int64  value;
+        int64  floor;
+    };
+    // batched:  one statement per 500 lines
+    static bool SetNextFreeTimes(const std::vector<LineTimeWrite>& writes);
+    // lines' next free times, and whether a player job (not delivered) ends on them after nowTime.  lines gone are left out
+    static bool GetLineStatesForSim(const std::vector<uint32>& lineIDs, int64 nowTime, std::map<uint32, std::pair<int64, bool>>& into);
 };
 
 #endif  // EVE_MANUF_FACTORYDB_H

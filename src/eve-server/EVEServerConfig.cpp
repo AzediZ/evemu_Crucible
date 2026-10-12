@@ -183,6 +183,11 @@ EVEServerConfig::EVEServerConfig()
     marketSim.SimPaysFees = true;
     marketSim.SimRecordNpcSide = false;
     marketSim.SimBrokerFee = 0.01;
+    marketSim.EnableFacilities = true;
+    marketSim.UseRealAssemblyLines = true;
+    marketSim.MaxLineShare = 0.3;
+    marketSim.MinFreeLinesPerStation = 2;
+    marketSim.RefineryM3PerHour = 2000000.0;
     marketSim.MoneyDaysTarget = 30.0;
     marketSim.ControllerKp = 0.3;
     marketSim.ControllerKi = 0.02;
@@ -879,6 +884,11 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     AddValueParser( "SimPaysFees",                  marketSim.SimPaysFees );
     AddValueParser( "SimRecordNpcSide",             marketSim.SimRecordNpcSide );
     AddValueParser( "SimBrokerFee",                 marketSim.SimBrokerFee );
+    AddValueParser( "EnableFacilities",             marketSim.EnableFacilities );
+    AddValueParser( "UseRealAssemblyLines",         marketSim.UseRealAssemblyLines );
+    AddValueParser( "MaxLineShare",                 marketSim.MaxLineShare );
+    AddValueParser( "MinFreeLinesPerStation",       marketSim.MinFreeLinesPerStation );
+    AddValueParser( "RefineryM3PerHour",            marketSim.RefineryM3PerHour );
     AddValueParser( "MoneyDaysTarget",              marketSim.MoneyDaysTarget );
     AddValueParser( "ControllerKp",                 marketSim.ControllerKp );
     AddValueParser( "ControllerKi",                 marketSim.ControllerKi );
@@ -921,6 +931,11 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     RemoveParser( "SimPaysFees" );
     RemoveParser( "SimRecordNpcSide" );
     RemoveParser( "SimBrokerFee" );
+    RemoveParser( "EnableFacilities" );
+    RemoveParser( "UseRealAssemblyLines" );
+    RemoveParser( "MaxLineShare" );
+    RemoveParser( "MinFreeLinesPerStation" );
+    RemoveParser( "RefineryM3PerHour" );
     RemoveParser( "MoneyDaysTarget" );
     RemoveParser( "ControllerKp" );
     RemoveParser( "ControllerKi" );

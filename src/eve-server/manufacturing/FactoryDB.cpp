@@ -1053,3 +1053,115 @@ bool FactoryDB::UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConf
     }
     return true;
 }
+
+namespace {
+    std::string IdList(const std::vector<uint32>& ids, size_t from, size_t to)
+    {
+        std::string list;
+        for (size_t i = from; i < to; ++i) {
+            if (i > from)
+                list += ",";
+            list += std::to_string(ids[i]);
+        }
+        return list;
+    }
+}
+
+bool FactoryDB::SelectLinesForSim(const std::vector<uint32>& stationIDs, uint8 activityID, std::vector<SimLine>& into)
+{
+    if (stationIDs.empty())
+        return true;
+    /* the sim's actors are npc corps:  neutral standing (0) and security status 0.  costs as GetAssemblyLineProperties
+     *  takes them (no standing modifier at neutral standing) */
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT al.containerID, al.assemblyLineID, al.ownerID, al.nextFreeTime, COALESCE(alt.baseTimeMultiplier, 1),"
+        " COALESCE(al.costInstall, 0), GREATEST(COALESCE(al.costPerHour, 0), COALESCE(alt.minCostPerHour, 0))"
+        " FROM ramAssemblyLines AS al"
+        " JOIN staStations AS st ON st.stationID = al.containerID AND st.corporationID = al.ownerID"
+        " JOIN crpNPCCorporations AS corp ON corp.corporationID = al.ownerID"
+        " LEFT JOIN ramAssemblyLineTypes AS alt ON alt.assemblyLineTypeID = al.assemblyLineTypeID"
+        " WHERE al.containerID IN (%s) AND al.activityID = %u"
+        " AND (COALESCE(al.restrictionMask, 0) & %u) = 0"
+        " AND ((COALESCE(al.restrictionMask, 0) & %u) = 0 OR COALESCE(al.minimumStanding, 0) <= 0)"
+        " AND ((COALESCE(al.restrictionMask, 0) & %u) = 0 OR (COALESCE(al.minimumCharSecurity, 0) <= 0"
+        "   AND COALESCE(al.maximumCharSecurity, 0) >= 0 AND COALESCE(al.minimumCorpSecurity, 0) <= 0"
+        "   AND COALESCE(al.maximumCorpSecurity, 0) >= 0))"
+        " ORDER BY al.containerID, al.assemblyLineID",
+        IdList(stationIDs, 0, stationIDs.size()).c_str(), activityID,
+        (EvERam::RestrictionMask::ByCorp | EvERam::RestrictionMask::ByAlliance),
+        EvERam::RestrictionMask::ByStanding, EvERam::RestrictionMask::BySecurity))
+    {
+        _log(DATABASE__ERROR, "Failed to query assembly lines for the market sim: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        SimLine line = SimLine();
+        line.stationID      = row.GetUInt(0);
+        line.lineID         = row.GetUInt(1);
+        line.ownerID        = row.GetUInt(2);
+        line.nextFreeTime   = row.GetInt64(3);
+        line.timeMultiplier = row.GetDouble(4);
+        line.costInstall    = row.GetDouble(5);
+        line.costPerHour    = row.GetDouble(6);
+        into.push_back(line);
+    }
+    return true;
+}
+
+bool FactoryDB::SetNextFreeTimes(const std::vector<LineTimeWrite>& writes)
+{
+    static const size_t Chunk = 500;
+    bool ok(true);
+    for (size_t i = 0; i < writes.size(); i += Chunk) {
+        std::string cases, ids;
+        char buf[160];
+        for (size_t k = i; (k < writes.size()) and (k < i + Chunk); ++k) {
+            const LineTimeWrite& w(writes[k]);
+            if (w.hasGuard) {
+                std::snprintf(buf, sizeof(buf), " WHEN %u THEN IF(nextFreeTime = %lld, %lld, GREATEST(nextFreeTime, %lld))",
+                              w.lineID, (long long)w.guard, (long long)w.value, (long long)w.floor);
+            } else {
+                std::snprintf(buf, sizeof(buf), " WHEN %u THEN GREATEST(nextFreeTime, %lld)", w.lineID, (long long)w.floor);
+            }
+            cases += buf;
+            if (k > i)
+                ids += ",";
+            ids += std::to_string(w.lineID);
+        }
+        DBerror err;
+        if (!sDatabase.RunQuery(err,
+            "UPDATE ramAssemblyLines SET nextFreeTime = CASE assemblyLineID%s ELSE nextFreeTime END"
+            " WHERE assemblyLineID IN (%s)", cases.c_str(), ids.c_str()))
+        {
+            _log(DATABASE__ERROR, "Failed to set next free times of %u assembly lines: %s", (uint32)(writes.size() - i), err.c_str());
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+bool FactoryDB::GetLineStatesForSim(const std::vector<uint32>& lineIDs, int64 nowTime, std::map<uint32, std::pair<int64, bool>>& into)
+{
+    if (lineIDs.empty())
+        return true;
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT al.assemblyLineID, al.nextFreeTime,"
+        " EXISTS (SELECT 1 FROM ramJobs AS job WHERE job.assemblyLineID = al.assemblyLineID AND job.completedStatusID = 0"
+        "   AND job.endProductionTime > %lli)"
+        " FROM ramAssemblyLines AS al"
+        " WHERE al.assemblyLineID IN (%s)",
+        nowTime, IdList(lineIDs, 0, lineIDs.size()).c_str()))
+    {
+        _log(DATABASE__ERROR, "Failed to query assembly line states for the market sim: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into[row.GetUInt(0)] = std::make_pair(row.GetInt64(1), row.GetInt(2) != 0);
+    return true;
+}

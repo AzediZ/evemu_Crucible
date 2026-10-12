@@ -14,6 +14,7 @@
 #include "inventory/Inventory.h"
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/RamMethods.h"
+#include "market/sim/SimFacilityMgr.h"
 #include "pos/PosMgrDB.h"
 #include "pos/Structure.h"
 #include "station/StationDataMgr.h"
@@ -912,7 +913,9 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
     into.usageCost *= ceil(into.productionTime / 3600.0f);
     into.cost = into.installCost + into.usageCost;
 
-    into.maxJobStartTime = FactoryDB::GetNextFreeTime(args.AssemblyLineID);
+    /* a line the market sim holds is quoted as it was before the sim took it:  installing there moves the sim's job off
+     *  (RamProxyService::InstallJob), so a player never waits for the sim or gets RamCannotGuaranteeStartTime because of it */
+    into.maxJobStartTime = sSimFacilities.PlayerNextFreeTime(args.AssemblyLineID, FactoryDB::GetNextFreeTime(args.AssemblyLineID));
 
     return true;
 }

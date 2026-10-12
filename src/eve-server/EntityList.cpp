@@ -42,6 +42,7 @@
 #include "map/MapDB.h"
 #include "market/MarketMgr.h"
 #include "market/sim/MarketSimMgr.h"
+#include "market/sim/SimFacilityMgr.h"
 #include "missions/MissionDataMgr.h"
 #include "station/Station.h"
 #include "system/DestinyManager.h"
@@ -292,6 +293,7 @@ void EntityList::Process() {
         sExplorationMgr.Process();
         sFltSvc.Process();  // fleet invite timeouts
         sMktSim.Process();  // market simulation (keeps to its own time budget)
+        sSimFacilities.Process();   // the sim's station lines:  GM test jobs, and its writes when the sim doesn't make them
 
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {

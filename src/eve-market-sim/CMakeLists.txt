@@ -28,14 +28,17 @@ ENDIF()
 #########
 SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/HarnessData.h"
+     "${TARGET_INCLUDE_DIR}/HarnessFacilities.h"
      "${TARGET_INCLUDE_DIR}/HarnessMarket.h"
      "${TARGET_INCLUDE_DIR}/Json.h"
      "${TARGET_INCLUDE_DIR}/TestCheck.h"
      "${SERVER_SOURCE_DIR}/market/MarketMatch.h" )
 SET( SOURCE
      "${TARGET_SOURCE_DIR}/eve-market-sim.cpp"
+     "${TARGET_SOURCE_DIR}/FacilitiesTest.cpp"
      "${TARGET_SOURCE_DIR}/Harness.cpp"
      "${TARGET_SOURCE_DIR}/HarnessData.cpp"
+     "${TARGET_SOURCE_DIR}/HarnessFacilities.cpp"
      "${TARGET_SOURCE_DIR}/HarnessMarket.cpp"
      "${TARGET_SOURCE_DIR}/MatchTest.cpp"
      "${TARGET_SOURCE_DIR}/SimTest.cpp" )
@@ -44,6 +47,9 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/IMarketGateway.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimClock.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimCapacityStandIn.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimRng.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.h"
@@ -51,6 +57,8 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h" )
 SET( core_SOURCE
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.cpp"
+     "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.cpp"
+     "${SERVER_SOURCE_DIR}/market/sim/SimLineCapacity.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimLedger.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimWorld.cpp" )
@@ -82,6 +90,8 @@ ADD_TEST( NAME "MarketSimLedgerTest"
           COMMAND "${TARGET_NAME}" --test ledger )
 ADD_TEST( NAME "MarketSimWorldTest"
           COMMAND "${TARGET_NAME}" --test world )
+ADD_TEST( NAME "MarketSimFacilitiesTest"
+          COMMAND "${TARGET_NAME}" --test facilities )
 # the phase 2 acceptance tests:  a simulated year at EconomyScale 0.01, five seeds, plus a determinism rerun
 ADD_TEST( NAME "MarketSimAcceptance"
           COMMAND "${TARGET_NAME}" --synthetic --days 365 --seeds 5 )
