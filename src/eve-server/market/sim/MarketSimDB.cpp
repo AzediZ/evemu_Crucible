@@ -447,8 +447,7 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
                         const std::map<std::string, std::string>& state, const std::vector<AuditLine>& audit,
                         bool replaceInventory/*false*/)
 {
-    if (!Exec("START TRANSACTION"))
-        return false;
+    DBTransaction tx("market sim flush");
     bool ok(true);
     std::vector<std::string> rows;
     // rows under old actor/node numbers would come back as stock of whatever has that number next time
@@ -540,10 +539,10 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
     ok = InsertRows("INSERT INTO mktSimNode (nodeID, stationID, solarSystemID, regionID, kind, enabled) VALUES ", rows, "") and ok;
 
     if (!ok) {
-        Exec("ROLLBACK");
+        tx.Rollback();
         return false;
     }
-    if (!Exec("COMMIT"))
+    if (!tx.Commit())
         return false;
     world.GetLedger().ClearDirty();
     return true;
@@ -601,8 +600,8 @@ void MarketSimDB::ForgetOrder(uint32 orderID)
 
 bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids, bool multiRow)
 {
-    if (!Exec("START TRANSACTION"))
-        return false;
+    // a lost connection fails it as a whole:  ids of posts the server rolled back are never handed out
+    DBTransaction tx("market sim orders");
     bool ok(true);
     // posts:  the sim's orders are npc corp orders, station range for asks, 90 days, no escrow (the sim's ledger holds it)
     std::vector<std::string> rows;
@@ -670,11 +669,11 @@ bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids,
         ok = Exec("DELETE FROM mktOrders WHERE orderID IN (" + in + ")") and Exec("DELETE FROM mktSimOrder WHERE orderID IN (" + in + ")");
     }
     if (!ok) {
-        Exec("ROLLBACK");
+        tx.Rollback();
         ids.clear();
         return false;
     }
-    if (!Exec("COMMIT")) {
+    if (!tx.Commit()) {
         ids.clear();
         return false;
     }
