@@ -115,12 +115,12 @@ double BudgetFactor(double wallet, double target)
     return std::fmin(1.2, std::fmax(0.2, b));
 }
 
-double ControllerFactor(double money, double moneyTarget, double integral, double kp, double ki)
+double ControllerFactor(double money, double moneyTarget, double integral, double kp, double ki, double lo, double hi)
 {
     if (!(money > 0.0) or !(moneyTarget > 0.0))
-        return 2.0;
+        return hi;
     double x(kp * std::log(moneyTarget / money) + ki * integral);
-    return std::fmin(2.0, std::fmax(0.5, std::exp(x)));
+    return std::fmin(hi, std::fmax(lo, std::exp(x)));
 }
 
 Cents MulCents(Cents price, Units qty)

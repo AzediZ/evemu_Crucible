@@ -94,6 +94,12 @@ bool MarketSimDB::TablesReady(std::string& why)
             return false;
         }
     }
+    // phase 3 (20261015100000-market-sim-actors.sql)
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SHOW COLUMNS FROM mktSimCell LIKE 'lossWant'") or (res.GetRowCount() == 0)) {
+        why = "column mktSimCell.lossWant is missing (run the market sim actors migration)";
+        return false;
+    }
     return true;
 }
 
@@ -383,11 +389,11 @@ void MarketSimDB::LoadCells(std::vector<CellRow>& into)
     DBQueryResult res;
     DBResultRow row;
     if (sDatabase.RunQuery(res,
-        "SELECT nodeID, typeID, lnV, lnAnchor, demandEwma, targetStock, lastClear, lastTime, nextDue, flags, clampDays FROM mktSimCell"))
+        "SELECT nodeID, typeID, lnV, lnAnchor, demandEwma, targetStock, lastClear, lastTime, nextDue, flags, clampDays, lossWant FROM mktSimCell"))
         while (res.GetRow(row))
             into.push_back(CellRow{row.GetUInt(0), (uint16)row.GetUInt(1), row.GetDouble(2), row.GetDouble(3), row.GetDouble(4),
                                    row.GetDouble(5), row.GetDouble(6), row.GetInt64(7), row.GetInt64(8), row.GetUInt(9),
-                                   (uint16)row.GetUInt(10)});
+                                   (uint16)row.GetUInt(10), row.GetDouble(11)});
 }
 
 void MarketSimDB::LoadOrders(std::vector<OrderRow>& into)
@@ -479,14 +485,16 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
             continue;
         const Cell& c(world.Cells()[idx]);
         uint32 flags(c.flags & (CellFlag::Backfilled | CellFlag::Clamped | CellFlag::Disabled));
-        rows.push_back(Fmt("(%u,%u,%.17g,%.17g,%.9g,%.9g,%.9g,%lld,%lld,%u,%u)", c.nodeID, c.typeID, c.lnV, c.lnAnchor, c.dBar,
-                           c.targetStock, c.lastClear, (long long)c.lastTime, (long long)c.nextDue, flags, c.clampDays));
+        rows.push_back(Fmt("(%u,%u,%.17g,%.17g,%.9g,%.9g,%.9g,%lld,%lld,%u,%u,%.9g)", c.nodeID, c.typeID, c.lnV, c.lnAnchor, c.dBar,
+                           c.targetStock, c.lastClear, (long long)c.lastTime, (long long)c.nextDue, flags, c.clampDays, c.lossWant));
     }
     ok = InsertRows("INSERT INTO mktSimCell (nodeID, typeID, lnV, lnAnchor, demandEwma, targetStock, lastClear, lastTime, nextDue,"
-                    " flags, clampDays) VALUES ", rows,
+                    " flags, clampDays, lossWant) VALUES ", rows,
                     " ON DUPLICATE KEY UPDATE lnV=VALUES(lnV), lnAnchor=VALUES(lnAnchor), demandEwma=VALUES(demandEwma),"
                     " targetStock=VALUES(targetStock), lastClear=VALUES(lastClear), lastTime=VALUES(lastTime),"
-                    " nextDue=VALUES(nextDue), flags=VALUES(flags), clampDays=VALUES(clampDays)") and ok;
+                    " nextDue=VALUES(nextDue), flags=VALUES(flags), clampDays=VALUES(clampDays), lossWant=VALUES(lossWant)") and ok;
+    // the phase 3 manufacturers' jobs
+    ok = FlushJobs(world) and ok;
 
     // history rows are whole days (or today so far) summed over the region's nodes
     std::map<std::tuple<uint32, uint16, int32>, HistoryRow> sum;
@@ -762,4 +770,112 @@ void MarketSimDB::InsertBackfill(const std::vector<HistoryRow>& rows)
     }
     // never over a real day
     InsertRows("INSERT IGNORE INTO mktHistory (regionID, typeID, historyDate, lowPrice, highPrice, avgPrice, volume, orders) VALUES ", values, "");
+}
+
+/************************************************************************************************************************
+ * phase 3:  the actors
+ */
+
+void MarketSimDB::LoadIndustry(StaticData& data)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    // killmails:  public losses per hull and security band, and the fits lost with them (PLAN 4.2)
+    if (sDatabase.RunQuery(res, "SELECT hullTypeID, secBand, lossesPerDay FROM mktCalLoss ORDER BY hullTypeID, secBand")) {
+        while (res.GetRow(row)) {
+            uint8 band((uint8)row.GetUInt(1));
+            if (band < SecBand::Count)
+                data.losses[(uint16)row.GetUInt(0)][band] += row.GetFloat(2);
+        }
+    }
+    if (sDatabase.RunQuery(res, "SELECT hullTypeID, typeID, qtyPerLoss, destroyedShare FROM mktCalFit ORDER BY hullTypeID, typeID"))
+        while (res.GetRow(row))
+            data.fits[(uint16)row.GetUInt(0)].push_back(FitItem{(uint16)row.GetUInt(1), row.GetFloat(2), row.GetFloat(3)});
+    // blueprint times per run
+    if (sDatabase.RunQuery(res, "SELECT productTypeID, MAX(productionTime) FROM invBlueprintTypes GROUP BY productTypeID")) {
+        while (res.GetRow(row)) {
+            std::map<uint16, TypeData>::iterator itr = data.types.find((uint16)row.GetUInt(0));
+            if (itr != data.types.end())
+                itr->second.buildSeconds = row.GetDouble(1);
+        }
+    }
+    // the nodes' refineries (PLAN 6.6:  efficiency, and the take at neutral standing)
+    for (auto& node : data.nodes) {
+        if (!sDatabase.RunQuery(res, "SELECT reprocessingEfficiency, reprocessingStationsTake FROM staStations WHERE stationID = %u", node.stationID)
+        or !res.GetRow(row))
+            continue;
+        node.refineEfficiency = row.GetFloat(0);
+        node.refineTake = row.GetFloat(1);
+    }
+}
+
+void MarketSimDB::LoadActorCorpData(std::map<uint32, std::array<uint32, 3>>& blueprints, std::map<std::pair<uint32, uint32>, uint32>& refineries)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    // the blueprints each npc corp sells:  of ships, of modules, charges and drones, of mining gear (mining lasers, strip
+    //  miners, mining crystals, barges and exhumers)
+    if (sDatabase.RunQuery(res,
+        "SELECT t.corporationID, SUM(g.categoryID = 6), SUM(g.categoryID IN (7, 8, 18)), SUM(p.groupID IN (54, 464, 482, 483, 463, 543))"
+        " FROM crpNPCCorporationTrades t"
+        " JOIN invBlueprintTypes b ON b.blueprintTypeID = t.typeID"
+        " JOIN invTypes p ON p.typeID = b.productTypeID"
+        " JOIN invGroups g ON g.groupID = p.groupID"
+        " GROUP BY t.corporationID"))
+    {
+        while (res.GetRow(row))
+            blueprints[row.GetUInt(0)] = std::array<uint32, 3>{{row.GetUInt(1), row.GetUInt(2), row.GetUInt(3)}};
+    }
+    // the stations with a full refinery each corp owns, per region
+    if (sDatabase.RunQuery(res,
+        "SELECT regionID, corporationID, COUNT(*) FROM staStations WHERE reprocessingEfficiency >= 0.5 GROUP BY regionID, corporationID"))
+    {
+        while (res.GetRow(row))
+            refineries[std::make_pair(row.GetUInt(0), row.GetUInt(1))] = row.GetUInt(2);
+    }
+}
+
+void MarketSimDB::LoadJobs(std::vector<JobRow>& into)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    if (sDatabase.RunQuery(res,
+        "SELECT jobID, actorID, kind, assemblyLineID, stationID, outputTypeID, runs, qtyOut, startTime, endTime FROM mktSimJob ORDER BY jobID"))
+    {
+        while (res.GetRow(row)) {
+            JobRow j = JobRow();
+            j.jobID = row.GetUInt(0);
+            j.actorID = row.GetUInt(1);
+            j.kind = (uint8)row.GetUInt(2);
+            j.lineID = row.GetUInt(3);
+            j.stationID = row.GetUInt(4);
+            j.typeID = (uint16)row.GetUInt(5);
+            j.runs = row.GetUInt(6);
+            j.qtyOut = row.GetInt64(7);
+            j.start = row.GetInt64(8);
+            j.end = row.GetInt64(9);
+            into.push_back(j);
+        }
+    }
+}
+
+bool MarketSimDB::FlushJobs(World& world)
+{
+    // the jobs are few (hundreds to a few thousand):  rewritten whole when they changed
+    if (!world.TakeJobsChanged())
+        return true;
+    bool ok(Exec("DELETE FROM mktSimJob"));
+    std::vector<std::string> rows;
+    for (auto& cur : world.Jobs()) {
+        const SimJob& j(cur.second);
+        const NodeData* node(world.Node(j.nodeID));
+        rows.push_back(Fmt("(%u,%u,%u,%u,%u,%u,%u,%lld,%lld,%lld,0)", j.jobID, j.actorID, j.activity, j.lineID,
+                           (j.stationID != 0) ? j.stationID : ((node != nullptr) ? node->stationID : 0), j.typeID, j.runs, (long long)j.qtyOut, (long long)j.start,
+                           (long long)j.end));
+    }
+    ok = InsertRows("INSERT INTO mktSimJob (jobID, actorID, kind, assemblyLineID, stationID, outputTypeID, runs, qtyOut, startTime,"
+                    " endTime, state) VALUES ", rows, "") and ok;
+    if (!ok)
+        world.MarkJobsChanged();
+    return ok;
 }

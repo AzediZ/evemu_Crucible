@@ -48,8 +48,8 @@ namespace Econ {
     // B in [0.2, 1.2]:  a consumer's wallet against its target
     double BudgetFactor(double wallet, double target);
 
-    // the money controller's income multiplier:  clamp(exp(kp ln(M*/M) + ki integral), 0.5, 2)
-    double ControllerFactor(double money, double moneyTarget, double integral, double kp, double ki);
+    // the money controller's income multiplier:  clamp(exp(kp ln(M*/M) + ki integral), lo, hi)  (PLAN 6.8:  0.5, 2)
+    double ControllerFactor(double money, double moneyTarget, double integral, double kp, double ki, double lo = 0.5, double hi = 2.0);
 
     // value of qty units at a price, or -1 when it would not fit (no trade is that big)
     Cents MulCents(Cents price, Units qty);

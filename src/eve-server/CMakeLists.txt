@@ -395,6 +395,7 @@ SET( market_INCLUDE
      "${TARGET_INCLUDE_DIR}/market/sim/SimClock.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimEconomy.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimLedger.h"
+     "${TARGET_INCLUDE_DIR}/market/sim/SimProduction.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimRng.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimStaticData.h"
      "${TARGET_INCLUDE_DIR}/market/sim/SimTypes.h"
@@ -406,8 +407,10 @@ SET( market_SOURCE
      "${TARGET_SOURCE_DIR}/market/sim/MarketSimDB.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/MarketSimMgr.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/ServerMarketGateway.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimActors.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/SimEconomy.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/SimLedger.cpp"
+     "${TARGET_SOURCE_DIR}/market/sim/SimProduction.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/SimStaticData.cpp"
      "${TARGET_SOURCE_DIR}/market/sim/SimWorld.cpp" )
 

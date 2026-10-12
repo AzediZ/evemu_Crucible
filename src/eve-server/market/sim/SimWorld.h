@@ -10,6 +10,18 @@
   *                                  sim.  its income, metered by the money controller, is the only isk faucet
   *     vendor (npc corp)            fixed price orders of skills, blueprints and trade goods (an official goods faucet and
   *                                  isk sink, outside the closed loop)
+  *   phase 3 (PLAN 6.4, Params::actors) replaces the abstract producers of ore, minerals, T1 goods and loot with a supply
+  *   chain (SimActors.cpp):
+  *     miner (node)                 a mining consortium:  its fleet (hulls it owns, buys and loses) mines ore and ice in
+  *                                  the mix the node's minerals need, which follows prices;  it refines or sells the ore
+  *     reprocessor (node)           buys refinables (player asks, gluts, unsold loot) for less than they refine into and
+  *                                  sells the minerals:  the refine floor under modules, loot and ore
+  *     manufacturer (node, sector)  T1 jobs on its lines (Prod::ICapacity) from inputs it buys at the node, ranked by
+  *                                  margin and the market maker's stock gap;  sells the output
+  *     loot source (node)           loot, LP and salvage at their calibrated rates, plus the drops of lost fits
+  *   consumers lose ships at the killmail rates (mktCalLoss / KillmailCoverage) and want the hull and its fit back
+  *   (mktCalFit);  what drops goes to the loot source.  sim actors trade with a node's market maker inside the spread
+  *   (InternalSpreadShare), the plan's internal call auction;  consumers and players trade at the quotes
   *   the sim also fills player orders (consumers lift player asks, market makers sell into player bids) and players fill
   *   the sim's orders (the hooks).  everything goes through the ledger, which the daily audit checks to the cent.
   *   work is scheduled per cell (hot cells every 15 minutes, cold ones every 2 hours, cells with player activity at once)
@@ -30,8 +42,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include <memory>
+
 #include "market/sim/IMarketGateway.h"
 #include "market/sim/SimLedger.h"
+#include "market/sim/SimProduction.h"
 #include "market/sim/SimStaticData.h"
 
 namespace MktSim {
@@ -71,6 +86,7 @@ namespace MktSim {
         double   moneyDaysTarget    = 30.0;
         double   controllerKp       = 0.3;
         double   controllerKi       = 0.02;
+        double   controllerMinFactor = 0.02;        // phase 3:  income can go this low (the plan's 0.5 for the stock model)
         double   supplyFactor       = 1.0;          // producer capacity = supplyFactor x calibrated demand
         double   tradesPerUnit      = 2.0;          // a consumed unit trades twice in the stock model (to the market maker, to the consumer)
         double   restockDays        = 1.0;
@@ -86,6 +102,29 @@ namespace MktSim {
         int      maxCatchUpHours    = 48;
         uint32_t maxOrderOpsPerStep = 2000;
         bool     pauseOnAuditResidual = true;
+        // phase 3:  the actor model (PLAN 6.3, 6.4).  false:  the phase 2 stock model, an abstract producer for every class
+        bool     actors             = true;
+        double   killmailCoverage   = 0.5;          // public killmails / all losses (PLAN 4.2)
+        double   podLossRate        = 0.0;          // capsules lost per ship lost;  <= 0:  the killmails' own capsule losses
+        double   internalSpreadShare = 0.5;         // sim actors trade with a market maker at V (1 -+ share x h)
+        double   minMargin          = 0.02;         // a job starts when its output sells for this much over its cost
+        double   lootCostShare      = 0.9;          // T1 calibrated under this x its inputs' cost isn't built:  NPC loot supplies it
+        double   mineralOtherShare  = 0.2;          // minerals' final demand beyond T1 building, at least this share (elastic:  it clears gluts)
+        double   productionSlack    = 1.0;          // manufacturers' lines and miners' fleets over the calibrated need
+        double   miningM3PerHullDay = 12000.0;      // what one mining hull brings in a day
+        double   lineInstallCost    = 1000.0;       // isk per job (Crucible npc station lines:  ramAssemblyLines.costInstall)
+        double   lineCostPerHour    = 333.0;        // ramAssemblyLines.costPerHour
+        double   buildTimeMultiplier = 0.8;         // Industry V
+        double   defaultBuildSeconds = 3600.0;      // per run, for a type without a blueprint time
+        double   maxJobHours        = 24.0;         // MaxSimJobHours:  longer runs are split
+        double   actorCapitalDays   = 5.0;          // miners', manufacturers' and reprocessors' working money, days of turnover
+        double   reprocessorMargin  = 0.03;         // the reprocessor pays refine value x (1 - margin)
+        double   holdDays           = 3.0;          // a mineral miners hold this many days of, unsold, starts to be worth less to them
+        double   lootHoldDays       = 20.0;         // loot nobody bought for this long is refined or spoils
+        double   lootPriceResponse  = 2.0;          // loot comes in faster when it fetches more:  (V / anchor)^k, x0.25..x4
+        double   lootRestockDays    = 1.0;          // and a type down to half its target is refilled this fast (like RestockDays)
+        double   replaceHalfLifeDays = 5.0;         // lost ships nobody replaced fade from demand
+        double   replaceDays        = 1.0;          // pilots buy back what they lost over about this long
     };
 
     struct Actor {
@@ -98,7 +137,20 @@ namespace MktSim {
         double   target         = 0.0;  // cents.  consumer:  wallet target;  market maker:  working capital;  producer:  cash kept
         double   share          = 0.0;  // consumer:  share of the income
         uint8_t  state          = 0;
+        double   capacity       = 0.0;  // miner:  m3 a day of its reference fleet;  manufacturer:  lines
+        int64_t  lastStep       = 0;    // phase 3 actors:  the last planning step
     };
+
+    // how a cell's goods come to the node
+    namespace Supply {
+        enum : uint8_t {
+            Abstract        = 0,    // the stock model's producer (phase 2;  T2, T3, components, PI, ... until phases 5-6)
+            Mined           = 1,    // the miner (ore and ice)
+            Refined         = 2,    // the miner and the reprocessor (minerals, ice products)
+            Manufactured    = 3,    // a manufacturer (T1 with every input quoted at the node)
+            Loot            = 4     // the loot source
+        };
+    }
 
     namespace CellFlag {
         enum : uint32_t {
@@ -147,6 +199,16 @@ namespace MktSim {
         double   vStar          = 0.0;  // the stock pressure target at the last visit
         uint8_t  levels         = 1;
         bool     shocked        = false;
+        // phase 3
+        uint8_t  supply         = Supply::Abstract;
+        double   lossRate       = 0.0;  // expected units a day consumers want for lost ships and fits (reference)
+        double   minerRate      = 0.0;  // expected units a day the miners want (lost hulls and fits)
+        double   dropRate       = 0.0;  // expected units a day that drop from lost fits (loot supply)
+        double   dcGen          = 0.0;  // the rest of the final demand:  dc less what losses and derived demand explain
+        double   dRef           = 0.0;  // reference demand:  dc, or what the losses and the rest add up to when that's more
+        double   lossWant       = 0.0;  // units consumers still want for ships and fits they lost (persisted)
+        double   lossNew        = 0.0;  // of which lost since the last visit (the demand rate)
+        double   derived        = 0.0;  // units sim actors bought here since the last visit
         // GM overrides (persisted in mktSimState)
         double   shockMult      = 1.0;
         int64_t  shockUntil     = 0;
@@ -184,6 +246,7 @@ namespace MktSim {
         Cents          incomeToday;
         uint32_t       liveOrders;
         uint32_t       clampedCells;
+        uint32_t       liveJobs;
     };
 
     // writes the server does at once (player boundary crossings), so a crash never loses or doubles them
@@ -194,6 +257,10 @@ namespace MktSim {
         virtual void IntakeAdd(int32_t day, uint32_t ownerID, uint16_t typeID, Units qty, Cents isk) = 0;
         // a sim order a player filled completely (its mktOrders row is gone already)
         virtual void OrderGone(uint32_t orderID) = 0;
+        /* around a trade the sim takes with a player order:  the player's side (through the gateway) and the ledger's
+         *  writes above are saved together */
+        virtual void FillBegin()                        { }
+        virtual void FillEnd()                          { }
     };
 
     class World {
@@ -292,10 +359,38 @@ namespace MktSim {
         uint64_t TradesWithPlayers() const              { return m_playerTrades; }
         size_t   Backlog(int64_t now) const;
 
+        /* phase 3:  the actors (SimActors.cpp) */
+        // the lines behind the manufacturers' jobs.  default:  the world's own VirtualCapacity (PLAN 6.6 mode false);
+        //  phase 5 sets its real-line capacity here, before Build()
+        void SetCapacity(Prod::ICapacity* capacity)     { m_capacity = (capacity != nullptr) ? capacity : m_ownCapacity.get(); }
+        Prod::ICapacity& Capacity()                     { return *m_capacity; }
+        const std::map<uint32_t, SimJob>& Jobs() const  { return m_jobs; }
+        uint32_t NextJobID() const                      { return m_nextJobID; }
+        void SetNextJobID(uint32_t id)                  { if (id > m_nextJobID) m_nextJobID = id; }
+        // a job loaded from mktSimJob (after Build, before Start).  false when its actor or node is gone
+        bool LoadJob(const SimJob& job);
+        // the jobs changed since the last call (the server's write-behind)
+        bool TakeJobsChanged()                          { bool c(m_jobsChanged); m_jobsChanged = false; return c; }
+        void MarkJobsChanged()                          { m_jobsChanged = true; }
+        // consumers lose hullTypeID x mult for days (0:  every hull)
+        void ShockLosses(uint16_t hullTypeID, double mult, double days, int64_t now);
+        // the miners' fleets bring in x mult for days
+        void ShockMining(double mult, double days, int64_t now);
+        std::map<uint16_t, std::pair<double, int64_t>>& LossShocks()   { return m_lossShock; }
+        std::pair<double, int64_t>& MiningShock()       { return m_miningShock; }
+        // units made (jobs finished) and mined per type since the world started (the acceptance tests)
+        const std::map<uint16_t, Units>& Made() const   { return m_made; }
+        const std::map<uint16_t, Units>& MinedUnits() const { return m_mined; }
+        // units sim actors bought per type (derived demand) since the world started
+        const std::map<uint16_t, Units>& ActorBought() const { return m_bought; }
+        // an actor of a node (0 when the node has none of that kind).  sector:  manufacturers' Sector::Ships or Goods
+        uint32_t NodeActor(uint32_t nodeID, uint8_t kind, uint8_t sector = 0) const;
+        std::string JobList(uint32_t actorID) const;
+
     private:
         struct Due {
             int64_t  t;
-            uint8_t  kind;          // 0 day, 1 hour, 2 cell
+            uint8_t  kind;          // 0 day, 1 hour, 2 cell, 3 job end, 4 actor
             uint32_t index;
             bool operator>(const Due& o) const {
                 if (t != o.t) return t > o.t;
@@ -303,7 +398,7 @@ namespace MktSim {
                 return index > o.index;
             }
         };
-        enum : uint8_t { DueDay = 0, DueHour = 1, DueCell = 2 };
+        enum : uint8_t { DueDay = 0, DueHour = 1, DueCell = 2, DueJob = 3, DueActor = 4 };
 
         uint64_t Key(const Cell& c) const               { return ((uint64_t)c.nodeID << 16) | c.typeID; }
         uint64_t H(const Cell& c, int64_t t, uint64_t purpose, uint64_t extra = 0) const;
@@ -340,6 +435,74 @@ namespace MktSim {
         Units    IntakeLeft(const Cell& c, uint32_t ownerID, Cents price, int64_t t) const;
         void     RecordIntake(Cell& c, uint32_t ownerID, Units qty, Cents value, int64_t t);
         Cents    BidOf(uint32_t nodeID, uint16_t typeID) const;   // the sim's best bid at a node (or 0)
+        Units    MakerStock(const Cell& c) const;                 // the market maker's units of the cell (free and on asks)
+
+        /* phase 3 (SimActors.cpp) */
+        struct MinerPlan {
+            std::vector<uint32_t> ores;                     // cells it mines
+            std::vector<double>   mix;                      // m3 a day of each at reference prices
+            std::vector<double>   value0;                   // isk per m3 of each at reference prices
+            std::vector<uint32_t> outputs;                  // the mineral cells its ore refines into
+            std::vector<double>   need, supply;             // of each a day:  what the node needs, what the mix gives
+            std::vector<std::vector<double>> yield;         // [ore][output]:  units per m3 (after the refinery's yield and take)
+            std::vector<std::pair<uint16_t, double>> fleet; // hull type, hulls at reference
+            double   lossPerHullDay = 0.0;
+            double   m3PerHull      = 0.0;                  // what a hull brings in a day
+            std::vector<double> mined;                      // m3 of each ore since the start (not persisted)
+            double   lastWanted     = 0.0;                  // m3 a day the supply curves asked for at the last step
+            double   lastMined      = 0.0;                  // and what the fleet could do of it
+            double   lastCapacity   = 0.0;
+            std::vector<double> lastRel;                    // each ore mined at the last step / its reference m3
+            int64_t  since          = 0;
+            double   valuePerDay    = 0.0;                  // isk its reference fleet brings in a day
+            std::map<uint16_t, Units> needs;                // hulls and fit items to buy (replacements)
+        };
+        struct MakerPlan {
+            std::vector<uint32_t> products;                 // cells it builds
+            std::map<uint16_t, Units> wip;                  // units in running jobs per type
+            std::map<uint16_t, Units> used;                 // inputs used since the start (not persisted)
+        };
+        struct NodeActors {
+            uint32_t miner = 0, reprocessor = 0, loot = 0;
+            uint32_t maker[2] = {0, 0};                     // ships, goods
+        };
+        void     BuildActors(int64_t now);
+        void     PlanMining(uint32_t nodeID);
+        void     SeedActors(int64_t now, uint32_t nodeID, bool freshOnly);
+        void     StepActor(Actor& a, int64_t t);
+        void     MinerStep(Actor& a, int64_t t, double dtDays);
+        void     ReprocessorStep(Actor& a, int64_t t, double dtDays);
+        void     ManufacturerStep(Actor& a, int64_t t, double dtDays);
+        void     LootStep(Actor& a, int64_t t, double dtDays);
+        void     CompleteJob(uint32_t jobID, int64_t t);
+        void     LossEvents(int64_t t, double hours);
+        void     ReprocessorAtCell(Cell& c, int64_t t);
+        void     ActorsDaily(int64_t t);
+        // the prices sim actors trade at with a node's market maker (PLAN 7.3 internal call auction):  inside the spread
+        Cents    InternalSell(const Cell& c) const;
+        Cents    InternalBuy(const Cell& c) const;
+        // the same at V* (where V is heading), for planning:  isk
+        double   ExpectSell(const Cell& c) const;
+        double   ExpectBuy(const Cell& c) const;
+        // an actor sells what it holds to the market maker, up to the maker's target stock.  returns units sold
+        Units    SellToMaker(uint32_t actorID, Cell& c, Units q, Cents minPrice, int64_t t);
+        // an actor buys:  player asks at or under the limit first, then up to fromMaker units of the market maker's stock
+        //  at the internal price (when that is within the limit).  returns units bought
+        Units    BuyAtNode(uint32_t actorID, Cell& c, Units q, Cents limit, Units fromMaker, int64_t t);
+        Units    Spare(const Cell& c, Units q) const;     // what an actor may take of the market maker's stock now
+        // an actor sells into the market maker's public bids at their prices (a glut).  returns units sold
+        Units    SellToBids(uint32_t actorID, Cell& c, Units q, int64_t t);
+        // refines what an actor holds of a type (whole batches) at the node's refinery.  returns units used
+        Units    RefineHeld(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q);
+        // what one unit refines into at the node, at the internal sell prices of its outputs (isk)
+        double   RefineWorth(uint32_t nodeID, const TypeData& t) const;
+        double   NodeYield(uint32_t nodeID) const;
+        double   NodeTake(uint32_t nodeID) const;
+        Units    Held(uint32_t actorID, uint32_t nodeID, uint16_t typeID) const;
+        void     GoodsTo(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q, uint8_t flow);
+        void     RebuildHoldings();
+        double   LossShockOf(uint16_t hullTypeID, int64_t t) const;
+        double   MiningShockOf(int64_t t) const;
 
         const StaticData&   m_static;
         Params              m_p;
@@ -381,6 +544,22 @@ namespace MktSim {
         int32_t  m_auditDay;
         uint64_t m_cellVisits;
         uint64_t m_playerTrades;
+
+        // phase 3
+        std::unique_ptr<Prod::VirtualCapacity> m_ownCapacity;
+        Prod::ICapacity*    m_capacity;
+        std::vector<NodeActors> m_nodeActors;                       // by nodeID - 1
+        std::map<uint32_t, MinerPlan> m_minerPlans;                 // actorID ->
+        std::map<uint32_t, MakerPlan> m_makerPlans;
+        std::vector<std::vector<std::pair<uint16_t, double>>> m_nodeLosses;     // by nodeID - 1:  (hull, consumer losses a day)
+        std::map<uint32_t, SimJob> m_jobs;
+        uint32_t m_nextJobID;
+        bool     m_jobsChanged;
+        std::map<uint16_t, std::pair<double, int64_t>> m_lossShock; // hull (0 = all) -> (mult, until)
+        std::pair<double, int64_t> m_miningShock;
+        std::map<uint16_t, Units> m_made, m_mined, m_bought;
+        std::map<uint32_t, std::vector<uint32_t>> m_actorCells;     // loot source -> the cells it supplies
+        std::map<uint32_t, std::set<uint16_t>> m_holdings;          // phase 3 actor -> types it may hold at its node
     };
 
 }

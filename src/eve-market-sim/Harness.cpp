@@ -56,6 +56,7 @@ namespace {
         uint16_t    trace       = 0;            // print this type's cell every day
         uint32_t    traceNode   = 1;            // at this node
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
+        bool        actors      = false;        // print the phase 3 actors at the start and the end
     };
 
     struct ShockSpec {
@@ -244,6 +245,15 @@ namespace {
         world.Seed(StartTime);
         world.Start(StartTime, false);
         market.SetNow(StartTime);
+        auto printActors = [&](const char* when) {
+            if (!opt.actors)
+                return;
+            std::printf("  actors %s:\n%s", when, world.ActorList(0).c_str());
+            for (auto& a : world.Actors())
+                if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::Manufacturer))
+                    std::printf("%s", world.ActorInfo(a.actorID).c_str());
+        };
+        printActors("at the start");
 
         std::ostringstream csv;
         int dayNo(0);
@@ -463,9 +473,10 @@ namespace {
                             avg = (double)r.sumValue / (double)r.volume / 100.0;
                             vol = r.volume;
                         }
-                    std::printf("  trace day %3d  V %.4f  V* %.4f  anchor %.4f  stock %lld (%lld on asks) of %.0f  dBar %.1f d0 %.1f  avg %.4f vol %lld  clamp %u\n",
+                    std::printf("  trace day %3d  V %.4f  V* %.4f  anchor %.4f  stock %lld (%lld on asks) of %.0f  dBar %.1f d0 %.1f  avg %.4f vol %lld  clamp %u"
+                                "  lossWant %.2f (rate %.3f, drops %.3f, rest %.3f)\n",
                                 day, std::exp(tc->lnV), tc->vStar, std::exp(tc->lnAnchor), (long long)(s ? s->qty + s->reserved : 0), (long long)(s ? s->reserved : 0),
-                                tc->targetStock, tc->dBar, tc->d0, avg, (long long)vol, tc->clampDays);
+                                tc->targetStock, tc->dBar, tc->d0, avg, (long long)vol, tc->clampDays, tc->lossWant, tc->lossRate, tc->dropRate, tc->dcGen);
                 }
             }
             res.indexMin = std::min(res.indexMin, index);
@@ -561,6 +572,18 @@ namespace {
         (void)undercutSold;
         (void)bidderBought;
 
+        printActors("at the end");
+        if (opt.actors) {
+            std::printf("  per day over the run:  bought by actors (materials, ships), made\n");
+            for (auto& cur : world.ActorBought()) {
+                const TypeData* t(data.Type(cur.first));
+                if ((t == nullptr) or ((t->categoryID != Category::Material) and (t->categoryID != Category::Ship)))
+                    continue;
+                std::map<uint16_t, Units>::const_iterator made = world.Made().find(cur.first);
+                std::printf("    type %u:  bought %.4g, made %.4g\n", cur.first, (double)cur.second / opt.days,
+                            (made == world.Made().end()) ? 0.0 : (double)made->second / opt.days);
+            }
+        }
         res.playerTrades = world.TradesWithPlayers();
         res.cellVisits = world.CellVisits();
         res.orderWrites = market.Writes();
@@ -621,6 +644,8 @@ int HarnessMain(int argc, char** argv)
             opt.traceNode = (uint32_t)std::atoi(next());
         else if (a == "--export")
             opt.exportCsv = next();
+        else if (a == "--actors")
+            opt.actors = true;
         else {
             Usage();
             return 2;

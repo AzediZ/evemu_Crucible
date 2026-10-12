@@ -218,6 +218,17 @@ public:
         uint32 MaxCatchUpHours;
         uint32 FlushSeconds;
         bool PauseOnAuditResidual;
+        // phase 3:  the actor model (miners, reprocessors, T1 manufacturers, loot sources, ship losses;  PLAN 6.3, 6.4)
+        bool Actors;                    // off:  the phase 2 stock model (abstract producers for every class)
+        double KillmailCoverage;        // public killmails / all losses (mktCalLoss counts public ones)
+        double PodLossRate;             // capsules lost per ship lost;  0:  the killmails' own capsule losses
+        double InternalSpreadShare;     // sim actors trade with a market maker at V (1 -+ share x half spread)
+        double MinMargin;               // manufacturers start a job when its output sells for this much over its cost
+        double ProductionSlack;         // manufacturers' lines and miners' fleets over the calibrated need
+        double MiningM3PerHullDay;      // what a mining hull brings in a day
+        double MaxSimJobHours;          // longer jobs are split
+        double LineInstallCost;         // isk per job (virtual lines;  phase 5 uses the real lines' costs)
+        double LineCostPerHour;         // isk per job hour
     } marketSim;
 
     // From <ram>

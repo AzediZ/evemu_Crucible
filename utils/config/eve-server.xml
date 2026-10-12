@@ -210,6 +210,17 @@ boolean can use either 0/1 OR true/false.
         <MaxCatchUpHours>48</MaxCatchUpHours><!-- integer - after a downtime the sim catches up at most this much -->
         <FlushSeconds>30</FlushSeconds><!-- integer - the sim's state is written this often (trades with players at once) -->
         <PauseOnAuditResidual>true</PauseOnAuditResidual><!-- bool - stop the sim when its daily books don't close (logged as an error) -->
+        <!-- phase 3:  the supply chain.  mining consortia (their fleets lost and bought again), reprocessors, T1 manufacturers and loot sources replace the stock model's producers of ore, minerals, T1 and loot;  consumers lose ships and fits at the killmail rates (PLAN 6.3, 6.4) -->
+        <Actors>true</Actors><!-- bool - false:  the phase 2 stock model  default: true -->
+        <KillmailCoverage>0.5</KillmailCoverage><!-- float - public killmails / all losses (the calibration counts the public ones;  PLAN 4.2)  default: 0.5 -->
+        <PodLossRate>0</PodLossRate><!-- float - capsules lost per ship lost;  0 = the killmails' own capsule losses  default: 0 -->
+        <InternalSpreadShare>0.5</InternalSpreadShare><!-- float - the sim's miners, manufacturers and the like trade with its market makers at fair value -+ this share of the half spread (players trade at the quotes)  default: 0.5 -->
+        <MinMargin>0.02</MinMargin><!-- float - a manufacturer starts a job when the output sells for this much over inputs and line  default: 0.02 -->
+        <ProductionSlack>1.0</ProductionSlack><!-- float - lines and mining fleets beyond the calibrated need (mining follows prices into it)  default: 1.0 -->
+        <MiningM3PerHullDay>12000</MiningM3PerHullDay><!-- float - what a mining barge or exhumer brings in a day (fleets have at least 20 hulls)  default: 12000 -->
+        <MaxSimJobHours>24</MaxSimJobHours><!-- float - the sim's manufacturing jobs are at most this long  default: 24 -->
+        <LineInstallCost>1000</LineInstallCost><!-- float - isk per sim job (npc station lines:  ramAssemblyLines.costInstall)  default: 1000 -->
+        <LineCostPerHour>333</LineCostPerHour><!-- float - isk per sim job hour (ramAssemblyLines.costPerHour)  default: 333 -->
     </marketSim>
 
     <!-- R.A.M. (science and industry).  times/materials are multiplied to db values to get a modified result - < 1.0 = faster/cheaper -->
