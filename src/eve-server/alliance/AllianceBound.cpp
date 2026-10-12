@@ -22,6 +22,7 @@
 #include "corporation/BillingMgr.h"
 #include "chat/LSCService.h"
 #include "packets/CorporationPkts.h"
+#include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
 #include "faction/WarManager.h"
 #include "alliance/AllianceManager.h"
@@ -72,6 +73,9 @@ AllianceBound::AllianceBound(EVEServiceManager& mgr, AllianceRegistry& parent, A
     this->Add("RemoveAllianceContacts", &AllianceBound::RemoveAllianceContacts);
     this->Add("EditContactsRelationshipID", &AllianceBound::EditContactsRelationshipID);
     this->Add("UpdateAlliance", &AllianceBound::UpdateAlliance);
+    this->Add("GetRelationships", &AllianceBound::GetRelationships);
+    this->Add("SetRelationship", &AllianceBound::SetRelationship);
+    this->Add("DeleteRelationship", &AllianceBound::DeleteRelationship);
     this->Add("DeclareWarAgainst", &AllianceBound::DeclareWarAgainst);
     this->Add("RetractWar", &AllianceBound::RetractWar);
     this->Add("ChangeMutualWarFlag", &AllianceBound::ChangeMutualWarFlag);
@@ -352,25 +356,102 @@ PyResult AllianceBound::GetAllianceContacts(PyCallArgs &call)
     return m_db.GetContacts(m_allyID);
 }
 
-PyResult AllianceBound::AddAllianceContact(PyCallArgs &call, PyInt* contactID, PyInt* relationshipID)
+namespace {
+    // contactIDs from the client:  integers only
+    void ReadContactIDs(PyList* list, std::vector<int32>& into)
+    {
+        for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr)
+            if ((*itr)->IsInt() or (*itr)->IsLong())
+                into.push_back((int32)PyRep::IntegerValue(*itr));
+    }
+
+    // standings come as int or float
+    float ReadLevel(PyRep* rep)
+    {
+        if (rep->IsInt() or rep->IsLong())
+            return (float)PyRep::IntegerValue(rep);
+        return (float)PyRep::FloatValue(rep);
+    }
+
+    PyTuple* ContactUpdate(int32 contactID, PyRep* relationship, PyRep* labelMask)
+    {
+        PyTuple* update = new PyTuple(3);
+            update->SetItem(0, new PyInt(contactID));
+            update->SetItem(1, relationship);
+            update->SetItem(2, labelMask);
+        return update;
+    }
+
+    void AddChange(PyDict* change, const char* key, PyRep* oldValue, PyRep* newValue)
+    {
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, oldValue);
+            tuple->SetItem(1, newValue);
+        change->SetItemString(key, tuple);
+    }
+}
+
+void AllianceBound::RequireDiplomat(PyCallArgs& call)
+{
+    // addressbook.ShowLabelMenuAndManageBtn('alliancecontact'):  directors and diplomats of the executor corporation
+    AllianceManager::RequireMember(call.client, m_allyID);
+    if ((AllianceDB::GetExecutorID(m_allyID) != (uint32)call.client->GetCorporationID())
+    or !CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::Diplomat))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be a diplomat or director of the executor corporation to manage alliance contacts."));
+}
+
+void AllianceBound::SendContactsUpdated(PyList* updates)
+{
+    // addressbook.OnOrganizationContactsUpdated(ownerID, [(contactID, relationshipID|None, labelMask|None)]);  (id, None, None) = removed
+    if (updates->empty()) {
+        PyDecRef(updates);
+        return;
+    }
+    PyTuple* payload = new PyTuple(2);
+        payload->SetItem(0, new PyInt(m_allyID));
+        payload->SetItem(1, updates);
+    AllianceManager::SendToAlliance(m_allyID, "OnOrganizationContactsUpdated", payload);
+}
+
+void AllianceBound::SendLabelMasks(const std::vector<int32>& contactIDs)
+{
+    std::map<int32, int64> masks;
+    AllianceDB::GetContactLabelMasks(m_allyID, contactIDs, masks);
+    PyList* updates = new PyList();
+    for (auto cur : masks)
+        updates->AddItem(ContactUpdate(cur.first, PyStatic.NewNone(), new PyLong(cur.second)));
+    SendContactsUpdated(updates);
+}
+
+PyResult AllianceBound::AddAllianceContact(PyCallArgs &call, PyInt* contactID, PyRep* relationshipID)
 {
     //   self.GetMoniker().AddAllianceContact(contactID, relationshipID)
     _log(ALLY__CALL, "AllianceBound::Handle_AddAllianceContact() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.AddContact(m_allyID, contactID->value(), relationshipID->value());
+    RequireDiplomat(call);
+    float level = ReadLevel(relationshipID);
+    m_db.AddContact(m_allyID, contactID->value(), level);
 
+    PyList* updates = new PyList();
+        updates->AddItem(ContactUpdate(contactID->value(), new PyFloat(level), PyStatic.NewNone()));
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
-PyResult AllianceBound::EditAllianceContact(PyCallArgs &call, PyInt* contactID, PyInt* relationshipID)
+PyResult AllianceBound::EditAllianceContact(PyCallArgs &call, PyInt* contactID, PyRep* relationshipID)
 {
     //   self.GetMoniker().EditAllianceContact(contactID, relationshipID)
     _log(ALLY__CALL, "AllianceBound::Handle_EditAllianceContact() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.UpdateContact(relationshipID->value(), contactID->value(), m_allyID);
+    RequireDiplomat(call);
+    float level = ReadLevel(relationshipID);
+    m_db.UpdateContact(level, contactID->value(), m_allyID);
 
+    PyList* updates = new PyList();
+        updates->AddItem(ContactUpdate(contactID->value(), new PyFloat(level), PyStatic.NewNone()));
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
@@ -380,73 +461,204 @@ PyResult AllianceBound::RemoveAllianceContacts(PyCallArgs &call, PyList* contact
     _log(ALLY__CALL, "AllianceBound::Handle_RemoveAllianceContacts() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr)
-    {
-        m_db.RemoveContact(PyRep::IntegerValueU32(*itr), m_allyID);
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    PyList* updates = new PyList();
+    for (auto cur : ids) {
+        m_db.RemoveContact(cur, m_allyID);
+        updates->AddItem(ContactUpdate(cur, PyStatic.NewNone(), PyStatic.NewNone()));
     }
-
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
-PyResult AllianceBound::EditContactsRelationshipID(PyCallArgs &call, PyList* contactIDs, PyInt* relationshipID)
+PyResult AllianceBound::EditContactsRelationshipID(PyCallArgs &call, PyList* contactIDs, PyRep* relationshipID)
 {
     //    self.GetMoniker().EditContactsRelationshipID(contactIDs, relationshipID)
     _log(ALLY__CALL, "AllianceBound::Handle_EditContactsRelationshipID() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    for (PyList::const_iterator itr = contactIDs->begin(); itr != contactIDs->end(); ++itr)
-    {
-        m_db.UpdateContact(relationshipID->value(), PyRep::IntegerValueU32(*itr), m_allyID);
+    RequireDiplomat(call);
+    float level = ReadLevel(relationshipID);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    PyList* updates = new PyList();
+    for (auto cur : ids) {
+        m_db.UpdateContact(level, cur, m_allyID);
+        updates->AddItem(ContactUpdate(cur, new PyFloat(level), PyStatic.NewNone()));
     }
-
+    SendContactsUpdated(updates);
     return nullptr;
 }
 
 PyResult AllianceBound::GetLabels(PyCallArgs &call)
 {
-    //   return self.GetMoniker().GetLabels()
+    //   return self.GetMoniker().GetLabels()    dict labelID -> KeyVal(labelID, name, color), labelIDs are bit values
     _log(ALLY__CALL, "AllianceBound::Handle_GetLabels() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
-    return nullptr;
+
+    return CharacterDB::GetContactLabels("alnLabels", m_allyID);
 }
 
-PyResult AllianceBound::CreateLabel(PyCallArgs &call, PyString* name, std::optional<PyInt*> color)
+PyResult AllianceBound::CreateLabel(PyCallArgs &call, PyRep* name, std::optional<PyRep*> color)
 {
-    //   return self.GetMoniker().CreateLabel(name, color)
+    //   return self.GetMoniker().CreateLabel(name, color)    -> the new labelID (a bit value)
     _log(ALLY__CALL, "AllianceBound::Handle_CreateLabel() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
-    return nullptr;
+
+    RequireDiplomat(call);
+    std::string labelName = PyRep::StringContent(name);
+    if (labelName.empty())
+        throw UserError("MailLabelMustProvideName");
+    MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+    if (CharacterDB::ContactLabelNameExists("alnLabels", m_allyID, labelName))
+        throw UserError("MailLabelNameExists");
+
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    int64 labelID = CharacterDB::CreateContactLabel("alnLabels", m_allyID, labelName, hasColor ? &colorVal : nullptr);
+    if (labelID == 0)
+        throw CustomError("Your alliance has too many contact labels.");
+    return new PyLong(labelID);
 }
 
-PyResult AllianceBound::DeleteLabel(PyCallArgs &call, PyInt* labelID)
+PyResult AllianceBound::DeleteLabel(PyCallArgs &call, PyRep* labelID)
 {
-    //   self.GetMoniker().DeleteLabel(labelID)
+    //   self.GetMoniker().DeleteLabel(labelID)    the label's bit is cleared from every contact
     _log(ALLY__CALL, "AllianceBound::Handle_DeleteLabel() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
+
+    RequireDiplomat(call);
+    CharacterDB::DeleteContactLabel("alnLabels", "alnContacts", m_allyID, PyRep::IntegerValue(labelID));
     return nullptr;
 }
 
-PyResult AllianceBound::EditLabel(PyCallArgs &call, PyInt* labelID, PyString* name, std::optional<PyInt*> color)
+PyResult AllianceBound::EditLabel(PyCallArgs &call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color)
 {
-    //   self.GetMoniker().EditLabel(labelID, name, color)
+    //   self.GetMoniker().EditLabel(labelID, name, color)    None = unchanged
     _log(ALLY__CALL, "AllianceBound::Handle_EditLabel() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
+
+    RequireDiplomat(call);
+    int64 id = PyRep::IntegerValue(labelID);
+    std::string labelName;
+    bool hasName = !name->IsNone();
+    if (hasName) {
+        labelName = PyRep::StringContent(name);
+        if (labelName.empty())
+            throw UserError("MailLabelMustProvideName");
+        MailMgr::TruncateUtf8(labelName, mailMaxLabelSize);
+        if (CharacterDB::ContactLabelNameExists("alnLabels", m_allyID, labelName, id))
+            throw UserError("MailLabelNameExists");
+    }
+    int32 colorVal(0);
+    bool hasColor = (color.has_value() and (color.value() != nullptr) and !color.value()->IsNone());
+    if (hasColor)
+        colorVal = (int32)PyRep::IntegerValue(color.value());
+
+    CharacterDB::EditContactLabel("alnLabels", m_allyID, id, hasName ? &labelName : nullptr, hasColor ? &colorVal : nullptr);
     return nullptr;
 }
 
-PyResult AllianceBound::AssignLabels(PyCallArgs &call, PyList* contactIDs, PyInt* labelMask)
+PyResult AllianceBound::AssignLabels(PyCallArgs &call, PyList* contactIDs, PyRep* labelMask)
 {
     //   self.GetMoniker().AssignLabels(contactIDs, labelMask)
     _log(ALLY__CALL, "AllianceBound::Handle_AssignLabels() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
+
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits("alnContacts", m_allyID, ids, PyRep::IntegerValue(labelMask), true);
+    SendLabelMasks(ids);
     return nullptr;
 }
 
-PyResult AllianceBound::RemoveLabels(PyCallArgs &call, PyList* contactIDs, PyInt* labelMask)
+PyResult AllianceBound::RemoveLabels(PyCallArgs &call, PyList* contactIDs, PyRep* labelMask)
 {
     //   self.GetMoniker().RemoveLabels(contactIDs, labelMask)
     _log(ALLY__CALL, "AllianceBound::Handle_RemoveLabels() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
+
+    RequireDiplomat(call);
+    std::vector<int32> ids;
+    ReadContactIDs(contactIDs, ids);
+    CharacterDB::SetContactLabelBits("alnContacts", m_allyID, ids, PyRep::IntegerValue(labelMask), false);
+    SendLabelMasks(ids);
+    return nullptr;
+}
+
+PyResult AllianceBound::GetRelationships(PyCallArgs &call)
+{
+    //   self.relationships = self.GetMoniker().GetRelationships()    (the legacy relationships; contacts replaced them in the UI)
+    _log(ALLY__CALL, "AllianceBound::Handle_GetRelationships() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    return AllianceDB::GetRelationships(m_allyID);
+}
+
+void AllianceBound::SendRelationshipChanged(uint32 toID, uint8 oldRel, uint8 newRel)
+{
+    // OnAllianceRelationshipChanged(allianceID, toID, {toID, relationship})
+    PyDict* change = new PyDict();
+    if (oldRel == 0) {
+        AddChange(change, "toID", PyStatic.NewNone(), new PyInt(toID));
+        AddChange(change, "relationship", PyStatic.NewNone(), new PyInt(newRel));
+    } else if (newRel == 0) {
+        AddChange(change, "toID", new PyInt(toID), PyStatic.NewNone());
+        AddChange(change, "relationship", new PyInt(oldRel), PyStatic.NewNone());
+    } else {
+        AddChange(change, "toID", new PyInt(toID), new PyInt(toID));
+        AddChange(change, "relationship", new PyInt(oldRel), new PyInt(newRel));
+    }
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(m_allyID));
+        payload->SetItem(1, new PyInt(toID));
+        payload->SetItem(2, change);
+    AllianceManager::SendToAlliance(m_allyID, "OnAllianceRelationshipChanged", payload);
+}
+
+PyResult AllianceBound::SetRelationship(PyCallArgs &call, PyInt* relationship, PyInt* toID)
+{
+    //   self.GetMoniker().SetRelationship(relationship, toID)
+    _log(ALLY__CALL, "AllianceBound::Handle_SetRelationship() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    AllianceManager::RequireExecutorDirector(call.client, m_allyID);
+    uint32 to(toID->value());
+    if ((to == m_allyID) or AllianceDB::IsMember(m_allyID, to))
+        throw CustomError("There is no point in setting a relationship to your own alliance or its members.");
+    if (!IsPlayerCorp(to) and !IsAlliance(to))
+        throw CustomError("Relationships can only be set to player corporations and alliances.");
+    int32 rel(relationship->value());
+    if ((rel < EveAlliance::Relation::NAP) or (rel > EveAlliance::Relation::Enemy))
+        throw CustomError("That is not a valid relationship.");
+
+    uint8 oldRel(0);
+    AllianceDB::GetRelationship(m_allyID, to, oldRel);
+    if (oldRel == rel)
+        return nullptr;
+    AllianceDB::SetRelationship(m_allyID, to, rel);
+    SendRelationshipChanged(to, oldRel, rel);
+    return nullptr;
+}
+
+PyResult AllianceBound::DeleteRelationship(PyCallArgs &call, PyInt* toID)
+{
+    //   self.GetMoniker().DeleteRelationship(toID)
+    _log(ALLY__CALL, "AllianceBound::Handle_DeleteRelationship() size=%lli", call.tuple->size());
+    call.Dump(ALLY__CALL_DUMP);
+
+    AllianceManager::RequireExecutorDirector(call.client, m_allyID);
+    uint8 oldRel(0);
+    if (!AllianceDB::GetRelationship(m_allyID, toID->value(), oldRel))
+        return nullptr;
+    AllianceDB::DeleteRelationship(m_allyID, toID->value());
+    SendRelationshipChanged(toID->value(), oldRel, 0);
     return nullptr;
 }
 

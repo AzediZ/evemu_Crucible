@@ -32,12 +32,13 @@ public:
 
     uint32 GetAllianceID () const { return this->m_allyID; }
 protected:
-    PyResult CreateLabel(PyCallArgs& call, PyString* name, std::optional<PyInt*> color);
+    // contact labels (bit value labelIDs), managed by directors and diplomats of the executor corporation
+    PyResult CreateLabel(PyCallArgs& call, PyRep* name, std::optional<PyRep*> color);
     PyResult GetLabels(PyCallArgs& call);
-    PyResult DeleteLabel(PyCallArgs& call, PyInt* labelID);
-    PyResult EditLabel(PyCallArgs& call, PyInt* labelID, PyString* name, std::optional<PyInt*> color);
-    PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
-    PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
+    PyResult DeleteLabel(PyCallArgs& call, PyRep* labelID);
+    PyResult EditLabel(PyCallArgs& call, PyRep* labelID, PyRep* name, std::optional<PyRep*> color);
+    PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelMask);
+    PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyRep* labelMask);
 
     PyResult AddBulletin(PyCallArgs& call, PyRep* title, PyRep* body);
     PyResult GetBulletins(PyCallArgs& call);
@@ -55,10 +56,19 @@ protected:
     PyResult GetBills(PyCallArgs& call);
     PyResult GetBillsReceivable(PyCallArgs& call);
     PyResult GetAllianceContacts(PyCallArgs& call);
-    PyResult AddAllianceContact(PyCallArgs& call, PyInt* contactID, PyInt* relationshipID);
-    PyResult EditAllianceContact(PyCallArgs& call, PyInt* contactID, PyInt* relationshipID);
+    PyResult AddAllianceContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID);
+    PyResult EditAllianceContact(PyCallArgs& call, PyInt* contactID, PyRep* relationshipID);
     PyResult RemoveAllianceContacts(PyCallArgs& call, PyList* contactIDs);
-    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyInt* relationshipID);
+    PyResult EditContactsRelationshipID(PyCallArgs& call, PyList* contactIDs, PyRep* relationshipID);
+    void RequireDiplomat(PyCallArgs& call);
+    void SendContactsUpdated(PyList* updates);
+    void SendLabelMasks(const std::vector<int32>& contactIDs);
+
+    // the legacy alliance relationships (all_cso_relationships)
+    PyResult GetRelationships(PyCallArgs& call);
+    PyResult SetRelationship(PyCallArgs& call, PyInt* relationship, PyInt* toID);
+    PyResult DeleteRelationship(PyCallArgs& call, PyInt* toID);
+    void SendRelationshipChanged(uint32 toID, uint8 oldRel, uint8 newRel);
     PyResult GetAlliance(PyCallArgs& call);
     PyResult UpdateAlliance(PyCallArgs& call, PyWString* description, PyWString* url);
 
