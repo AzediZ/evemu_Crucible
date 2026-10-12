@@ -778,15 +778,17 @@ void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
 void NPCAIMgr::WarpOutComplete()
 {
     m_warpOutTimer.Disable();
+    /* wherever an npc lands is home, the first warp-in of a belt spawn too:  those are created 1000+ km off grid,
+     *  and a leashed npc (target switching, e.g. officers) would otherwise give up every fight to fly back there */
+    m_home = m_npc->GetPosition();
     if ((m_state != NPCAI::State::WarpOut) and (m_state != NPCAI::State::WarpFollow))
         return;
     _log(NPC__AI_TRACE, "%s(%u): %s complete.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
     m_state = NPCAI::State::Idle;
     m_destiny->SetMaxVelocity(CruiseSpeed());
-    // make sure our spawn manager has us in this bubble, and this is home now
+    // make sure our spawn manager has us in this bubble
     if ((m_npc->GetSpawnMgr() != nullptr) and (m_npc->SysBubble() != nullptr))
         m_npc->GetSpawnMgr()->MoveSpawn(m_npc, m_npc->SysBubble());
-    m_home = m_npc->GetPosition();
     // look around right away
     m_beginFindTarget.Start(1000);
 }
