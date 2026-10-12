@@ -50,6 +50,14 @@ double OUStep(double lnV, double lnTarget, double kappa, double dtDays, double s
     return lnTarget + (lnV - lnTarget) * decay + std::sqrt(var) * xi;
 }
 
+double HorizonSigma(double volatility, double kappa, double horizonDays)
+{
+    double x(kappa * horizonDays);
+    if (!(x > 1e-9))
+        return volatility;
+    return volatility * std::sqrt(x / (1.0 - std::exp(-x)));
+}
+
 double ExecFeedback(double lnV, double price, double qty, double demandDt, double lambda, double maxMove)
 {
     if (!(price > 0.0) or !(qty > 0.0) or (lambda <= 0.0))

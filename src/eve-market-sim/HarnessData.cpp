@@ -95,6 +95,9 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
     Gen g(seed ^ 0x5EEDDA7Aull);
     auto count = [scale](int n) { return std::max(1, (int)std::lround(n * scale)); };
 
+    // volatilities throughout:  the median of the real calibration's history-priced types of the same class and
+    //  category (mktCalType.volatility, 5-day horizon, PLAN 4.1 calibration note), with a log-normal spread
+
     // minerals (PLAN 4.1:  Crucible window Forge prices, units of the order of the expanded consumption)
     static const double mPrice[8] = { 4.5, 10.0, 42.0, 70.0, 420.0, 830.0, 2600.0, 7300.0 };
     static const double mUnits[8] = { 1.4e9, 3.5e8, 9e7, 2.2e7, 4e6, 1.5e6, 6e5, 9e4 };
@@ -105,7 +108,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.basePrice = mPrice[i];
         t.unitsPerDay = mUnits[i];
         t.lotSize = mLot[i];
-        t.volatility = (float)g.LogN(0.055, 0.3);
+        t.volatility = (float)g.LogN(0.014, 0.3);
         t.volume = 0.01;
         data.types[t.typeID] = t;
     }
@@ -141,18 +144,18 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = 0.95 * bomValue(t.refine);
         t.unitsPerDay = g.LogN(2e8, 1.0);
         t.lotSize = 5000;
-        t.volatility = (float)g.LogN(0.055, 0.3);
+        t.volatility = (float)g.LogN(0.021, 0.5);
         data.types[t.typeID] = t;
     }
 
     // T1 modules, charges, drones, ships and components:  price ~ mineral cost x markup (PLAN 4.1 price / mineral cost)
     struct Kind { int n; uint8_t cat; uint16_t group; uint8_t cls; double median, sd, markup, markupSd, a, b, resid, vol; uint32_t lot; int maxMineral; };
     static const Kind kinds[] = {
-        { 120, Category::Module,    60,  SimClass::MfgT1,     3e5,  1.2, 0.97, 0.15, 5.24, -0.69, 0.5, 0.107, 2,    6 },
-        {  40, Category::Charge,    80,  SimClass::MfgT1,     300,  1.0, 1.18, 0.10, 6.64, -0.89, 0.5, 0.22,  1000, 4 },
-        {  15, Category::Drone,     100, SimClass::MfgT1,     1e5,  0.8, 1.15, 0.10, 5.24, -0.69, 0.4, 0.10,  5,    5 },
-        {  40, Category::Ship,      25,  SimClass::MfgT1,     1.5e7,1.5, 1.15, 0.15, 3.75, -0.29, 0.3, 0.031, 1,    8 },
-        {  20, Category::Commodity, 334, SimClass::Component, 5e4,  0.8, 1.10, 0.10, 5.78, -0.75, 0.4, 0.15,  50,   7 },
+        { 120, Category::Module,    60,  SimClass::MfgT1,     3e5,  1.2, 0.97, 0.15, 5.24, -0.69, 0.5, 0.034, 2,    6 },
+        {  40, Category::Charge,    80,  SimClass::MfgT1,     300,  1.0, 1.18, 0.10, 6.64, -0.89, 0.5, 0.068, 1000, 4 },
+        {  15, Category::Drone,     100, SimClass::MfgT1,     1e5,  0.8, 1.15, 0.10, 5.24, -0.69, 0.4, 0.057, 5,    5 },
+        {  40, Category::Ship,      25,  SimClass::MfgT1,     1.5e7,1.5, 1.15, 0.15, 3.75, -0.29, 0.3, 0.036, 1,    8 },
+        {  20, Category::Commodity, 334, SimClass::Component, 5e4,  0.8, 1.10, 0.10, 5.78, -0.75, 0.4, 0.027, 50,   7 },
     };
     std::vector<uint16_t> t1Modules, t1Ships, components;
     for (auto& k : kinds) {
@@ -190,7 +193,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.buildCostRef = cost;
         t.unitsPerDay = std::pow(10.0, 5.0 - 0.69 * std::log10(t.refPrice) + 0.5 * g.N());
         t.lotSize = 1;
-        t.volatility = (float)g.LogN(0.11, 0.4);
+        t.volatility = (float)g.LogN(0.035, 0.4);
         data.types[t.typeID] = t;
     }
     for (int i = 0; i < count(12); ++i) {
@@ -202,7 +205,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = cost * g.LogN(1.44, 0.2);
         t.buildCostRef = cost;
         t.unitsPerDay = std::pow(10.0, 3.5 - 0.29 * std::log10(t.refPrice) + 0.3 * g.N());
-        t.volatility = (float)g.LogN(0.04, 0.4);
+        t.volatility = (float)g.LogN(0.0145, 0.4);
         data.types[t.typeID] = t;
     }
 
@@ -214,7 +217,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = parent.refPrice * g.LogN(1.1, 0.8);
         t.refine = parent.refine;
         t.unitsPerDay = parent.unitsPerDay * g.LogN(0.3, 0.6);
-        t.volatility = (float)g.LogN(0.107, 0.5);
+        t.volatility = (float)g.LogN(0.072, 0.5);
         data.types[t.typeID] = t;
     }
     for (int i = 0; i < count(20); ++i) {
@@ -224,14 +227,14 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = parent.refPrice * g.LogN(517.0, 0.5);
         t.refine = parent.refine;
         t.unitsPerDay = g.LogN(5.0, 0.8);
-        t.volatility = (float)g.LogN(0.15, 0.4);
+        t.volatility = (float)g.LogN(0.040, 0.4);
         data.types[t.typeID] = t;
     }
     for (int i = 0; i < count(15); ++i) {
         TypeData t(Base(next++, (uint16_t)(300 + i % 4), Category::Implant, SimClass::Faction));
         t.refPrice = g.LogN(5e6, 1.2);
         t.unitsPerDay = std::pow(10.0, 4.5 - 0.6 * std::log10(t.refPrice) + 0.4 * g.N());
-        t.volatility = (float)g.LogN(0.091, 0.4);
+        t.volatility = (float)g.LogN(0.047, 0.4);
         data.types[t.typeID] = t;
     }
     // PI and salvage:  raw goods without a bill in the stock model
@@ -240,7 +243,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = g.LogN(2000.0, 1.0);
         t.unitsPerDay = std::pow(10.0, 7.0 - 0.75 * std::log10(t.refPrice) + 0.4 * g.N());
         t.lotSize = 1700;
-        t.volatility = (float)g.LogN(0.058, 0.3);
+        t.volatility = (float)g.LogN(0.0385, 0.3);
         data.types[t.typeID] = t;
     }
     for (int i = 0; i < count(15); ++i) {
@@ -248,7 +251,7 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
         t.refPrice = g.LogN(1e4, 1.0);
         t.unitsPerDay = std::pow(10.0, 5.78 - 0.75 * std::log10(t.refPrice) + 0.5 * g.N());
         t.lotSize = 10;
-        t.volatility = (float)g.LogN(0.15, 0.5);
+        t.volatility = (float)g.LogN(0.197, 0.5);
         data.types[t.typeID] = t;
     }
     // npc vendor skills, sold at two hubs each

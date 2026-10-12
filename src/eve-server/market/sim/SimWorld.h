@@ -56,7 +56,7 @@ namespace MktSim {
         double   minHalfSpread      = 0.015;
         double   kMax               = 2.0;
         double   fairValueHalfLifeDays = 3.0;
-        double   marketNoise        = 1.0;          // persistent noise of V:  sigma = MarketNoise x volatility (plan 0.5;  1.0 meets AT (d), see the harness)
+        double   marketNoise        = 1.0;          // persistent noise of V:  sigma = MarketNoise x Econ::HorizonSigma(volatility)  (1.0:  V moves as the calibration measured;  plan 0.5)
         double   transientNoise     = 1.0;          // the quotes' daily bounce:  min(TransientNoise x volatility, 0.75 h)
         double   lambdaExec         = 0.3;
         double   playerTradeWeight  = 0.1;

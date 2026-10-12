@@ -6,10 +6,11 @@
   *     (a) conservation:  the audit residual is exactly 0 cents and 0 units every day (and the ledger never goes negative,
   *         the reservations always match the live orders, the book matches the world)
   *     (b) stability:  the Laspeyres index of the top-500 isk basket stays in [0.8, 1.25] of day 0;  no cell sits at the
-  *         Kmax clamp for more than 3 consecutive days unless shocked
+  *         Kmax clamp (V* at a bound, the sim's clampDays) for more than 3 consecutive days unless shocked;  V itself
+  *         beyond the Kmax band is reported
   *     (c) money:  M/M* in [0.7, 1.4] after day 30
-  *     (d) noise:  per category, the median daily log-return sd of the hub's daily average price is within x0.5..x2 of
-  *         the calibrated volatility's median (PLAN 4.1)
+  *     (d) noise:  per category, the median volatility of the hub's daily average price is within x0.5..x2 of the
+  *         calibrated volatility's median, both measured over the same 5-day horizon (HorizonVolatility, PLAN 4.1/4.4)
   *     (e) exploit bots:  a dumper earns no more than the intake caps allow;  a wash trader, a round-tripper, an
   *         insurance farmer and a reprocessing looper net <= 0
   *     (f) determinism:  the same seed gives identical audit csv
@@ -43,6 +44,7 @@ namespace {
 
     const int64_t StartTime = 1325462400;       // 2012-01-02 00:00 UTC, a Monday in the calibration window
     const double MinTradesPerDay = 5.0;         // (d) compares cells with at least this many trades a day
+    const int    VolatilityLag = (int)Econ::VolatilityHorizonDays;    // (d) the calibration's horizon (derive.py VOL_LAG)
 
     struct Options {
         std::string staticPath;                 // empty:  synthetic
@@ -151,19 +153,25 @@ namespace {
         // (b)
         double   indexMin           = 1.0;
         double   indexMax           = 1.0;
-        int      maxClampDays       = 0;
+        int      maxClampDays       = 0;    // consecutive day-ends with V* at a Kmax bound (a stock-out or a glut)
         std::string clampWhere;
         int      cellsOverClamp     = 0;
+        int      maxVClampDays      = 0;    // the same for V beyond the Kmax band (info)
+        std::string vClampWhere;
+        int      cellsOverVClamp    = 0;
         // (c)
         double   moneyMin           = 1e9;
         double   moneyMax           = 0.0;
         // (d)
-        std::map<std::string, std::pair<double, double>> noise;    // category -> (realised median, calibrated median)
+        struct Noise { double realised; double calibrated; size_t cells; };
+        std::map<std::string, Noise> noise;    // category -> medians over the compared cells
         // (e)
         std::vector<BotResult> bots;
         // coverage
         uint64_t playerTrades       = 0;
         uint64_t cellVisits         = 0;
+        uint64_t maxBacklog         = 0;    // seconds the due queue was behind after a tick's steps
+        int      simDays            = 0;    // days the sim's books closed
         uint64_t orderWrites        = 0;
         size_t   liveOrders         = 0;
         double   seconds            = 0.0;
@@ -178,6 +186,28 @@ namespace {
         std::sort(v.begin(), v.end());
         size_t n(v.size());
         return (n % 2) ? v[n / 2] : 0.5 * (v[n / 2 - 1] + v[n / 2]);
+    }
+
+    // the calibration's volatility estimator (utils/market-calibration/derive.py horizon_volatility):  1.4826 x the
+    //  median absolute deviation of ln(p[d + lag] / p[d]) over every pair of traded days 'lag' days apart, divided by
+    //  sqrt(lag).  -1 with fewer than minPairs pairs.  Over a few days the bid/ask bounce of a day's few prints and the
+    //  sticky asks of the real hub (unchanged on most days) both fade, leaving how far the price level moves
+    double HorizonVolatility(const std::vector<std::pair<int32_t, double>>& series, int lag, size_t minPairs)
+    {
+        std::map<int32_t, double> at(series.begin(), series.end());
+        std::vector<double> r;
+        for (auto& cur : series) {
+            std::map<int32_t, double>::const_iterator later = at.find(cur.first + lag);
+            if (later != at.end())
+                r.push_back(std::log(later->second / cur.second));
+        }
+        if (r.size() < minPairs)
+            return -1.0;
+        double med(Median(r));
+        std::vector<double> dev;
+        for (auto x : r)
+            dev.push_back(std::fabs(x - med));
+        return 1.4826 * Median(dev) / std::sqrt((double)lag);
     }
 
     const char* NoiseCategory(const TypeData& t)
@@ -314,6 +344,10 @@ namespace {
         double dumpCapWorst(0.0);
         double undercutSold(0.0), undercutListed(0.0), bidderBought(0.0), bidderBid(0.0);
 
+        /* (b) counts the day-ends a cell's V* sits at a Kmax bound (the sim's clampDays).  V itself beyond the Kmax band
+         *  (PLAN 11's literal wording) is reported as info:  V may wander to Kmax^2, and the high-volatility loot does */
+        std::vector<int> vClamp(world.Cells().size(), 0);
+        const double lnKmax(std::log(p.kMax));
         size_t shockIdx(0);
         for (int day = 0; day < opt.days; ++day) {
             for (; shockIdx < shocks.size() and (shocks[shockIdx].day <= day); ++shockIdx)
@@ -321,7 +355,17 @@ namespace {
             for (int tick = 0; tick < 96; ++tick) {
                 int64_t t(StartTime + (int64_t)day * SecondsPerDay + tick * 900);
                 market.SetNow(t);
-                world.Step(t);
+                /* the server steps every tick (MarketSimMgr::Process), so nothing due stays behind.  One step per 15
+                 *  minutes, capped at maxOrderOpsPerStep, falls behind on the full calibration (about 400k order ops a
+                 *  day):  the harness then simulated about half a day per day, and 120 'days' were 58.  Step until
+                 *  the queue has caught up with t */
+                for (int i = 0; i < 100000; ++i) {
+                    uint64_t before(world.CellVisits());
+                    world.Step(t);
+                    if ((world.Backlog(t) == 0) or (world.CellVisits() == before))
+                        break;
+                }
+                res.maxBacklog = std::max<uint64_t>(res.maxBacklog, world.Backlog(t));
                 if ((tick == 48) and opt.bots) {
                     Player& before(market.GetPlayer(Dumper));
                     // (e) dumper:  ten days of demand into the sim's bids, at any price
@@ -484,14 +528,27 @@ namespace {
                 }
                 std::printf("  day %3d  price index %.4f  (biggest mover type %u x%.3f)\n", day, index, worstType, worst);
             }
-            for (auto& c : world.Cells())
+            auto where = [&](const Cell& c) {
+                const TypeData& ct(*data.Type(c.typeID));
+                return "type " + std::to_string(c.typeID) + " (class " + std::to_string(ct.simClass) + ", category "
+                     + std::to_string(ct.categoryID) + ") at node " + std::to_string(c.nodeID) + " on day " + std::to_string(day)
+                     + ", demand " + std::to_string(c.dBar) + "/day, target stock " + std::to_string(c.targetStock);
+            };
+            for (size_t i = 0; i < world.Cells().size(); ++i) {
+                const Cell& c(world.Cells()[i]);
+                // V* at a Kmax bound:  a stock-out (or a glut) at the day's last visit
                 if (c.clampDays > res.maxClampDays) {
                     res.maxClampDays = c.clampDays;
-                    const TypeData& ct(*data.Type(c.typeID));
-                    res.clampWhere = "type " + std::to_string(c.typeID) + " (class " + std::to_string(ct.simClass) + ", category "
-                                   + std::to_string(ct.categoryID) + ") at node " + std::to_string(c.nodeID) + " on day " + std::to_string(day)
-                                   + ", demand " + std::to_string(c.dBar) + "/day, target stock " + std::to_string(c.targetStock);
+                    res.clampWhere = where(c);
                 }
+                // V itself beyond the band (info)
+                int& n(vClamp[i]);
+                n = (!c.shocked and (std::fabs(c.lnV - c.lnAnchor) >= lnKmax - 1e-9)) ? n + 1 : 0;
+                if (n > res.maxVClampDays) {
+                    res.maxVClampDays = n;
+                    res.vClampWhere = where(c);
+                }
+            }
             std::string problem;
             int bad(CheckInvariants(world, problem));
             if (bad > 0) {
@@ -506,9 +563,12 @@ namespace {
         for (auto& c : world.Cells())
             if (c.clampDays > 3)
                 ++res.cellsOverClamp;
+        for (auto n : vClamp)
+            if (n > 3)
+                ++res.cellsOverVClamp;
         res.violations = world.GetLedger().Violations();
 
-        // (d) noise per category:  sd of the daily log-returns of the hub's daily average, against the calibration
+        // (d) noise per category:  the volatility of the hub's daily average, measured as the calibration measures it
         std::map<std::string, std::vector<double>> realised, calibrated;
         for (auto& cur : series) {
             const TypeData& t(*data.Type(cur.first));
@@ -519,23 +579,15 @@ namespace {
             if ((cat == nullptr) or (cur.second.size() < 30)
             or ((double)seriesTrades[cur.first] / (double)cur.second.size() < MinTradesPerDay))
                 continue;
-            std::vector<double> r;
-            for (size_t i = 1; i < cur.second.size(); ++i)
-                if (cur.second[i].first == cur.second[i - 1].first + 1)
-                    r.push_back(std::log(cur.second[i].second / cur.second[i - 1].second));
-            if (r.size() < 20)
+            double v(HorizonVolatility(cur.second, VolatilityLag, 20));
+            if (v < 0.0)
                 continue;
-            // the calibration's estimator (PLAN 4.5):  1.4826 x the median absolute deviation
-            double med(Median(r));
-            std::vector<double> dev;
-            for (auto x : r)
-                dev.push_back(std::fabs(x - med));
-            realised[cat].push_back(1.4826 * Median(dev));
+            realised[cat].push_back(v);
             calibrated[cat].push_back(t.volatility);
         }
         for (auto& cur : realised)
             if (cur.second.size() >= 3)
-            res.noise[cur.first] = std::make_pair(Median(cur.second), Median(calibrated[cur.first]));
+            res.noise[cur.first] = RunResult::Noise{Median(cur.second), Median(calibrated[cur.first]), cur.second.size()};
 
         // (e) the bots' net:  isk, plus what they hold at the sim's bid
         auto net = [&](std::initializer_list<uint32_t> ids) {
@@ -563,6 +615,7 @@ namespace {
 
         res.playerTrades = world.TradesWithPlayers();
         res.cellVisits = world.CellVisits();
+        res.simDays = dayNo;
         res.orderWrites = market.Writes();
         res.liveOrders = world.LiveOrders();
         if (!opt.exportCsv.empty())
@@ -656,12 +709,12 @@ int HarnessMain(int argc, char** argv)
     std::vector<RunResult> results;
     for (auto seed : opt.seeds) {
         RunResult r(Run(data, p, seed, opt, shocks));
-        std::printf("\nseed %llu:  %.1fs, %llu cell visits, %llu order writes, %zu live orders at the end, %llu trades with players\n",
-                    (unsigned long long)seed, r.seconds, (unsigned long long)r.cellVisits, (unsigned long long)r.orderWrites,
-                    r.liveOrders, (unsigned long long)r.playerTrades);
+        std::printf("\nseed %llu:  %.1fs, %d days closed (queue at most %llus behind), %llu cell visits, %llu order writes, %zu live orders at the end, %llu trades with players\n",
+                    (unsigned long long)seed, r.seconds, r.simDays, (unsigned long long)r.maxBacklog, (unsigned long long)r.cellVisits,
+                    (unsigned long long)r.orderWrites, r.liveOrders, (unsigned long long)r.playerTrades);
         if (!r.firstProblem.empty())
             std::printf("  first problem:  %s\n", r.firstProblem.c_str());
-        char buf[512];
+        char buf[1024];
         std::snprintf(buf, sizeof(buf), "(a) conservation:  %d days with a residual, %d invariant failures, %llu ledger violations",
                       r.residualDays, r.invariantFailures, (unsigned long long)r.violations);
         Check((r.residualDays == 0) and (r.invariantFailures == 0) and (r.violations == 0), buf, failures);
@@ -670,6 +723,8 @@ int HarnessMain(int argc, char** argv)
         if (r.maxClampDays > 3)
             std::printf("  longest clamp:  %s\n", r.clampWhere.c_str());
         Check((r.indexMin >= 0.8) and (r.indexMax <= 1.25) and (r.cellsOverClamp == 0) and (shocks.empty() ? (r.maxClampDays <= 3) : true), buf, failures);
+        std::printf("  [info] V itself beyond the Kmax band (it may go to Kmax^2):  longest %d days, %d cells over 3 at the end%s%s\n",
+                    r.maxVClampDays, r.cellsOverVClamp, (r.maxVClampDays > 3) ? ":  " : "", (r.maxVClampDays > 3) ? r.vClampWhere.c_str() : "");
         if (opt.days > 30) {
             std::snprintf(buf, sizeof(buf), "(c) money:  M/M* in [%.3f, %.3f] after day 30 (allowed [0.7, 1.4])", r.moneyMin, r.moneyMax);
             Check((r.moneyMin >= 0.7) and (r.moneyMax <= 1.4), buf, failures);
@@ -677,13 +732,14 @@ int HarnessMain(int argc, char** argv)
         bool noiseOk(!r.noise.empty());
         std::string noise;
         for (auto& cur : r.noise) {
-            double ratio(cur.second.second > 0.0 ? cur.second.first / cur.second.second : 0.0);
-            std::snprintf(buf, sizeof(buf), " %s %.3f/%.3f=x%.2f", cur.first.c_str(), cur.second.first, cur.second.second, ratio);
+            double ratio(cur.second.calibrated > 0.0 ? cur.second.realised / cur.second.calibrated : 0.0);
+            std::snprintf(buf, sizeof(buf), " %s %.3f/%.3f=x%.2f (%zu)", cur.first.c_str(), cur.second.realised, cur.second.calibrated,
+                          ratio, cur.second.cells);
             noise += buf;
             if ((ratio < 0.5) or (ratio > 2.0))
                 noiseOk = false;
         }
-        std::snprintf(buf, sizeof(buf), "(d) noise (realised/calibrated daily log-return sd, allowed x0.5..x2):%s", noise.c_str());
+        std::snprintf(buf, sizeof(buf), "(d) noise (realised/calibrated %d-day volatility, cells, allowed x0.5..x2):%s", VolatilityLag, noise.c_str());
         Check(noiseOk, buf, failures);
         if (opt.bots) {
             for (auto& b : r.bots) {

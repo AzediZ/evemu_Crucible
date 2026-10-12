@@ -16,7 +16,7 @@ CREATE TABLE mktCalType (
   refPrice       DOUBLE NOT NULL,             -- robust median of daily avg (Forge, else volume-weighted all-region)
   priceP10       DOUBLE NOT NULL,             -- band of daily avg in the window
   priceP90       DOUBLE NOT NULL,
-  volatility     FLOAT NOT NULL,              -- daily log-return sd, 1.4826*MAD, from consecutive-day pairs
+  volatility     FLOAT NOT NULL,              -- log-return sd per sqrt(day), 5-day horizon: 1.4826*MAD(ln p[d+5]/p[d])/sqrt(5)
   unitsPerDay    DOUBLE NOT NULL,             -- TQ, all regions, mean units per window day (0 when never traded)
   activeShare    FLOAT NOT NULL,              -- share of window days with a trade (Forge)
   lotSize        INT UNSIGNED NOT NULL,       -- median volume/order_count, rounded to portionSize

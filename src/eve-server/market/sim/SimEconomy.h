@@ -28,6 +28,15 @@ namespace Econ {
      *  d lnV = kappa (lnV* - lnV) dt + sigma dW,  so long steps (cold cells, catch-up) stay stable.  xi ~ N(0,1) */
     double OUStep(double lnV, double lnTarget, double kappa, double dtDays, double sigma, double xi);
 
+    // the horizon in days over which the calibration measures volatility (utils/market-calibration/derive.py VOL_LAG):
+    //  mktCalType.volatility = 1.4826 MAD(ln p[d+h] / p[d]) / sqrt(h)
+    const double VolatilityHorizonDays = 5.0;
+
+    /* the OU sigma whose stationary h-day moves have the calibrated volatility per sqrt(day):  a stationary OU path
+     *  moves sigma^2 (1 - e^{-kappa h}) / kappa over h days, less than a random walk's sigma^2 h, so
+     *  sigma = volatility * sqrt(kappa h / (1 - e^{-kappa h}))  (x1.30 at a 3 day half life and h = 5) */
+    double HorizonSigma(double volatility, double kappa, double horizonDays = VolatilityHorizonDays);
+
     // executions feed back:  lnV + lambda * ln(P / V) * min(1, q / (D * dt)), the move capped at +-maxMove
     double ExecFeedback(double lnV, double price, double qty, double demandDt, double lambda, double maxMove = 0.05);
 

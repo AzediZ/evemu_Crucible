@@ -111,8 +111,18 @@ markup for T3 groups (no group mixes T2 and T3).
 **Statistics.**
 - `priceP10/P90`: the 10th/90th percentile of the same daily series as `refPrice` (gap-filled types: the group's
   median band ratios).
-- `volatility`: 1.4826 × MAD of the log return between consecutive calendar days that both traded (Forge, else the
-  region with most days, else the group median), clipped to [0.005, 0.6].
+- `volatility` (per √day, `derive.horizon_volatility`): 1.4826 × the MAD of the log return between traded days
+  5 calendar days apart, divided by √5. It uses Forge, else the region with the most days, else the group median,
+  and is clipped to [0.005, 0.6].
+  - **Why not the day-to-day MAD:** liquid hub types trade on a sticky ask, so their daily average doesn't change on
+    most days. Their 1-day MAD is about 0 however far the price moves in a week: it put 31 % of modules, 31 % of
+    commodities and 36 % of drones on the 0.005 floor. Thin types show the opposite: bid/ask bounce between single
+    prints inflates the 1-day figure.
+  - **What the 5-day horizon measures:** the movement of the price level, which is what the sim's
+    `MarketNoise × volatility` drives.
+  - **Consistency:** the harness's acceptance test (d) (`src/eve-market-sim/Harness.cpp`, `HorizonVolatility`)
+    measures the simulated hub history with the same estimator.
+  - **Report:** each run prints the 5-day and 1-day figures per category.
 - `unitsPerDay`: all regions, the mean over every window day (no trade counts 0), each day capped at 5× the type's
   median trading day. Types with fewer than 5 trading days are capped at, and types that never traded get, the
   group's median units scaled by `(price/groupMedianPrice)^volB` (an upper bound: they didn't trade in 173 days).
