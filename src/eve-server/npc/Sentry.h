@@ -52,9 +52,12 @@ public:
 
     SentryAI* GetAIMgr()                                { return m_AI; }
 
-    // gate and station guns (npc/LawEnforcement.h): they shoot criminals and anyone aggressing their owner
-    void SetLawSentry(bool set=true)                    { m_lawSentry = set; }
-    bool IsLawSentry()                                  { return m_lawSentry; }
+    /* gate and station guns (npc/LawEnforcement.h, Crimewatch 1):  they shoot criminals and anyone aggressing what they
+     *  guard (protectedID:  their gate or station).  the empire guns' own groups count as law guns wherever they come from */
+    void SetLawSentry(bool set=true, uint32 protectedID=0)  { m_lawSentry = set; m_protectedID = protectedID; }
+    bool IsLawSentry();
+    // the gate or station we guard (aggression is tracked per guarded object).  ourselves when we guard nothing in particular
+    uint32 GetProtectedID()                             { return (m_protectedID != 0 ? m_protectedID : GetID()); }
 
 protected:
     SentryAI* m_AI;
@@ -69,6 +72,7 @@ private:
     float m_shieldCharge = 0;
     float m_shieldCapacity = 0;
     bool m_lawSentry = false;
+    uint32 m_protectedID = 0;
 };
 
 #endif  // __NPC_SENTRY_H

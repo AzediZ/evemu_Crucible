@@ -225,9 +225,9 @@ void NPCAIMgr::Process() {
         return;
 
     if (!m_ewarChecked) {
-        // law enforcement doesn't use the ewar on its type (CONCORD has its own tackle in LawEnforcement)
+        // law enforcement's type ewar:  LawEnforcement::UsesTypeEwar() (npc ai plan N6, phase 4)
         m_ewarChecked = true;
-        if (sConfig.npc.UseEwar and !m_npc->IsLawEnforcer()) {
+        if (m_npc->IsLawEnforcer() ? LawEnforcement::UsesTypeEwar(m_npc) : sConfig.npc.UseEwar) {
             m_ewar = new NPCEwar(m_npc);
             if (!m_ewar->HasAny())
                 SafeDelete(m_ewar);

@@ -42,7 +42,7 @@ bool CloakModule::CanActivate()
         Clear();
         throw UserError("CantCloakTooManyDevices");
     }
-    if ((pShip->SystemMgr() != nullptr) and pShip->SystemMgr()->GetLaw()->IsJammed(pShip->GetID())) {
+    if ((pShip->SystemMgr() != nullptr) and pShip->SystemMgr()->GetLaw()->IsPursued(pShip->GetID())) {
         Clear();
         throw UserError("CantCloakPolicePursuit");
     }

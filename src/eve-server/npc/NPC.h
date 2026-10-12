@@ -43,7 +43,8 @@ namespace Law {
     enum {
         None    = 0,
         Concord = 1,
-        Police  = 2
+        Police  = 2,
+        Navy    = 3     // faction navy (crime.FactionNavy, npc ai plan 4.9)
     };
 }
 

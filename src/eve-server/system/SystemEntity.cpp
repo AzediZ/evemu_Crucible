@@ -932,7 +932,7 @@ void DynamicSystemEntity::UpdateDamage()
     SendDamageStateChanged();
 }
 
-void DynamicSystemEntity::AwardBounty(Client* pClient)
+void SystemEntity::AwardBounty(Client* pClient)
 {
     // this will use a map{charID/BountyData} in system manager for using a bounty timer.
     double bounty = m_self->GetAttribute(AttrEntityKillBounty).get_double();

@@ -468,6 +468,13 @@ public:
         uint8 SentriesPerGate;
         uint8 SentriesPerStation;
         uint32 SentryRange;             // m
+        /* npc ai plan phase 4 (law and sentries, PLAN.md 4.8 - 4.10) */
+        uint16 SentryRetarget;          // s between a gate/station gun's random re-picks of its target
+        uint16 SentryAggression;        // s aggression against a gate/station (or its guns) lasts;  renewed when a gun picks you
+        bool ConcordScriptedTackle;     // CONCORD's old scripted tackle (scram 100, web, unbreakable jam) instead of its data ewar
+        bool FactionNavy;               // faction navies attack pilots with bad standing in their high-sec
+        float FactionNavyStanding;      // standing with the faction at or below which the navy comes
+        bool NpcFactionAggression;      // attacking an NPC makes its faction's sentries (and navy) hostile for SentryAggression
     } crime;
 
     // From <sov>

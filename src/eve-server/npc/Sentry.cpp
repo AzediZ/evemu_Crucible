@@ -71,6 +71,15 @@ void Sentry::Process() {
         sProfiler.AddTime(Profile::npc, GetTimeUSeconds() - profileStartTime);
 }
 
+bool Sentry::IsLawSentry()
+{
+    if (m_lawSentry)
+        return true;
+    // the empire gate and station guns (group 99) are law guns even when they come from the database instead of LawEnforcement
+    uint16 groupID(m_self->groupID());
+    return ((groupID == EVEDB::invGroups::Sentry_Gun) or (groupID == EVEDB::invGroups::Protective_Sentry_Gun));
+}
+
 void Sentry::TargetLost(SystemEntity *who) {
     m_AI->TargetLost(who);
 }
@@ -167,8 +176,8 @@ void Sentry::Killed(Damage &damage) {
     MapDB::AddKill(locationID);
     MapDB::AddFactionKill(locationID);
     if (pClient != nullptr) {
-        //award kill bounty.
-        //AwardBounty( pClient );
+        // destructible sentries carry a bounty like the rats around them (npc ai plan B19b).  AwardBounty skips 0
+        AwardBounty( pClient );
         if (m_system->GetSystemSecurityRating() > 0)
             AwardSecurityStatus(m_self, pClient->GetChar().get());  // this awards secStatusChange for npcs in empire space
     }

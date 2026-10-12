@@ -11,6 +11,7 @@
 #define EVEMU_POS_POS_AI_H_
 
 #include "inventory/InventoryItem.h"
+#include "npc/ai/NpcSchedule.h"
 
 class Client;
 class StructureSE;
@@ -21,7 +22,9 @@ class TowerSE;
  *  an online battery of a powered tower picks the closest target its tower considers hostile (TowerSE::IsHostile),
  *  locks it and fires at its rate of fire with its loaded charges (flagHiSlot0).  ewar batteries keep their effect on
  *  the target while they cycle.  automatic fire is not an aggressive act by anyone.
- *  a pilot controlling the battery (manual control) chooses the target instead
+ *  a pilot controlling the battery (manual control) chooses the target instead.
+ *  npc ai plan 4.12 (phase 4):  turrets use the shared Crucible turret formula (TurretFormulas::GetStructureToHit, wrecking only
+ *  inside a hit), locks the shared lock formula (NpcMath::LockTimeMs), and the rate of fire a drift-free NpcSchedule
  */
 class POS_AI {
 public:
@@ -88,8 +91,8 @@ private:
     uint8 m_ewarKind;
     const char* m_guid;
 
-    Timer m_scanTimer;              // looking for targets
-    Timer m_fireTimer;              // rate of fire / ewar cycle
+    // NpcAct::Think:  looking for targets (5s).  NpcAct::Turret:  rate of fire / ewar cycle (drift free, every kind of battery)
+    NpcSchedule m_sched;
 
     uint32 m_targetID;              // current target
     uint32 m_ewarTargetID;          // target of the running ewar session

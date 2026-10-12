@@ -12,6 +12,8 @@
  *  anyone may shoot the criminal's ship, CONCORD destroys it in 0.5 - 1.0, and gate/station sentries shoot it.
  *  the client keeps the same table (michelle.aggressors) and works out its warnings, overview flags and the
  *  neocom countdown from it, so every change is pushed to the pilots in the aggressor's system.
+ *  Crimewatch 1 gate and station guns (npc ai plan 4.10) keep their own aggression per guarded object:  attacking the guns
+ *  of a gate or station makes that object's guns shoot you, for crime.SentryAggression, renewed each time one picks you.
  */
 
 
@@ -75,6 +77,14 @@ public:
     bool IsFlaggedTo(uint32 aggressorID, uint32 victimID);       // aggressor has a live flag towards victim (char or corp)
     bool HasLiveFlags(uint32 charID);                            // live aggressor towards anyone, or a live criminal
     bool IsOutlaw(float secStatus)                               { return (roundf(secStatus * 10.0f) / 10.0f) <= -5.0f; }
+
+    /* Crimewatch 1 sentries (npc ai plan 4.10, phase 4) */
+    // charID attacked a gate/station gun (objectID = the gate or station it guards), or a gun picked them:  (re)starts the timer
+    void SentryAggression(uint32 charID, uint32 objectID);
+    // charID has live aggression (crime.SentryAggression) with what objectID's guns guard
+    bool HasSentryAggression(uint32 charID, uint32 objectID);
+    // the npc aggression timer (crime.NpcFactionAggression):  charID attacked one of factionID's npcs in the last SentryAggression
+    bool HasFactionAggression(uint32 charID, uint32 factionID);
     // seconds left before this pilot may dock or jump after an aggressive act.  0 = free to go
     uint32 WeaponsTimer(uint32 charID);
     // how long a ship logging off in space stays there (seconds).  0 = warp off and vanish at the normal rate
@@ -117,6 +127,16 @@ private:
     std::map<uint32, std::map<uint32, int64>> m_killRights;
     // npc kill sec status gain window: charID -> systemID -> (window start, best gain)
     std::map<uint32, std::map<uint32, std::pair<int64, float>>> m_secGain;
+    // Crimewatch 1 sentry aggression:  (guarded objectID << 32 | charID) -> last act or pick
+    std::unordered_map<uint64_t, int64> m_sentryAggression;
+    // npc aggression timer:  (factionID << 32 | charID) -> last attack on one of the faction's npcs
+    std::unordered_map<uint64_t, int64> m_factionAggression;
+
+    int64 SentryAggressionTime();
+    // drops expired entries now and then
+    void Prune(std::unordered_map<uint64_t, int64>& map);
+    // a pilot attacked an npc:  no crime, but the npc aggression timer (crime.NpcFactionAggression)
+    void NpcFactionAct(Client* pAggressor, SystemEntity* pNPC);
 
     int64 FlagTime();
     int64 CrimTime();
@@ -136,6 +156,7 @@ private:
         bool pod = false;
         bool concord = false;           // CONCORD, attacking them is a crime
         bool sentry = false;            // gate/station sentry (attacking flags you to its owner)
+        uint32 protectedID = 0;         // law sentry:  the gate or station it guards (Crimewatch 1 aggression)
         bool structure = false;         // player structure (owned by corpID)
     };
     bool GetOwner(SystemEntity* pSE, Owner& into);

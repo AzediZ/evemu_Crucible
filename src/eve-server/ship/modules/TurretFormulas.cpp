@@ -137,5 +137,6 @@ float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget)
         optimal *= pSentry->GetEwar()->GetOptimalMult();
         tracking *= pSentry->GetEwar()->GetTrackingMult();
     }
-    return Roll(pSentry, pTarget, optimal, p.falloff, tracking, p.sigResolution, MakeRandomFloat(), DAMAGE__TRACE_NPC, "Sentry");
+    return Roll(pSentry, pTarget, optimal, p.falloff, tracking, p.sigResolution, pSentry->GetAIMgr()->GetRng().Uniform(),
+                DAMAGE__TRACE_NPC, "Sentry");
 }

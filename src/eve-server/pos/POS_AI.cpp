@@ -57,8 +57,6 @@ m_selfRef(pSE->GetSelf()),
 m_kind(Kind::Turret),
 m_ewarKind(Ewar::None),
 m_guid("effects.Laser"),
-m_scanTimer(5000),
-m_fireTimer(0),
 m_targetID(0),
 m_ewarTargetID(0),
 m_manualTargetID(0),
@@ -66,7 +64,7 @@ m_manualFire(false),
 m_lockNotified(false),
 m_controlTimer(5000)
 {
-    m_fireTimer.Disable();
+    m_sched.StartPeriodic(NpcAct::Think, GetSteadyTime(), 5000);
 
     switch (m_selfRef->groupID()) {
         case EVEDB::invGroups::Mobile_Missile_Sentry: {
@@ -244,23 +242,20 @@ bool POS_AI::IsEngageable(SystemEntity* pTarget)
 
 SystemEntity* POS_AI::FindTarget(TowerSE* pTower)
 {
-    // the closest hostile in reach
-    std::map<uint32, SystemEntity*> entities;
-    m_self->SysBubble()->GetEntities(entities);
+    // the closest hostile in reach (the bubble's entities without copying them)
     SystemEntity* pBest(nullptr);
     double best(-1);
-    for (auto cur : entities) {
-        SystemEntity* pSE(cur.second);
-        if ((pSE == nullptr) or !(pSE->IsShipSE() or pSE->IsDroneSE() or pSE->IsNPCSE()))
-            continue;
+    m_self->SysBubble()->ForEachDynamic([&](SystemEntity* pSE) {
+        if (!(pSE->IsShipSE() or pSE->IsDroneSE() or pSE->IsNPCSE()))
+            return;
         if (!IsEngageable(pSE) or !pTower->IsHostile(pSE))
-            continue;
+            return;
         double distance(m_self->GetPosition().distance(pSE->GetPosition()));
         if ((best < 0) or (distance < best)) {
             best = distance;
             pBest = pSE;
         }
-    }
+    });
     return pBest;
 }
 
@@ -306,7 +301,7 @@ void POS_AI::Process()
         if ((pTarget == nullptr) or !m_manualFire) {
             if (m_ewarTargetID != 0)
                 EndEwar();
-            m_fireTimer.Disable();
+            m_sched.Stop(NpcAct::Turret);
             return;
         }
         m_targetID = pTarget->GetID();
@@ -322,12 +317,12 @@ void POS_AI::Process()
                 if (m_ewarTargetID != 0)
                     EndEwar();
                 m_targetID = 0;
-                m_fireTimer.Disable();
+                m_sched.Stop(NpcAct::Turret);
                 pTarget = nullptr;
             }
         }
         if (pTarget == nullptr) {
-            if (!m_scanTimer.Check())
+            if (!m_sched.Due(NpcAct::Think, GetSteadyTime()))
                 return;
             pTarget = FindTarget(pTower);
             if (pTarget == nullptr)
@@ -346,13 +341,13 @@ void POS_AI::Process()
             return;
     }
 
-    if (!m_fireTimer.Enabled()) {
-        // first shot right away
-        m_fireTimer.Start(GetCycleTime());
-        Fire(pTarget);
-        return;
-    }
-    if (m_fireTimer.Check())
+    // the first shot right away, then every cycle (drift free:  a 2.5s gun on the 1Hz tick averages its real rate of fire, B13)
+    int64 now(GetSteadyTime());
+    if (!m_sched.Active(NpcAct::Turret))
+        m_sched.Start(NpcAct::Turret, now, 0, GetCycleTime());
+    // the tower's bonuses may have changed (online, offline, another tower type)
+    m_sched.SetPeriod(NpcAct::Turret, GetCycleTime());
+    if (m_sched.Due(NpcAct::Turret, now))
         Fire(pTarget);
 }
 
@@ -629,7 +624,7 @@ void POS_AI::UnlockManualTarget(uint32 targetID)
         EndEwar();
     m_manualTargetID = 0;
     m_lockNotified = false;
-    m_fireTimer.Disable();
+    m_sched.Stop(NpcAct::Turret);
 }
 
 void POS_AI::Stop()
@@ -640,5 +635,5 @@ void POS_AI::Stop()
     if (m_self->TargetMgr() != nullptr)
         m_self->TargetMgr()->ClearTargets();
     m_targetID = 0;
-    m_fireTimer.Disable();
+    m_sched.Stop(NpcAct::Turret);
 }

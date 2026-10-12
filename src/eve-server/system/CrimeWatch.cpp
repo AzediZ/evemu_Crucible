@@ -22,6 +22,7 @@
 #include "npc/LawEnforcement.h"
 #include "npc/NPC.h"
 #include "npc/Sentry.h"
+#include "npc/ai/LawRules.h"
 #include "ship/Ship.h"
 #include "standing/StandingDB.h"
 #include "system/CrimeWatch.h"
@@ -120,6 +121,78 @@ bool CrimeWatch::IsFlaggedTo(uint32 aggressorID, uint32 victimID)
     return Live(vItr->second, FlagTime());
 }
 
+/* ------------------------------------------------------------------------------------------------------------------
+ *  Crimewatch 1 sentries and the npc aggression timer (npc ai plan 4.9, 4.10)
+ * ------------------------------------------------------------------------------------------------------------------ */
+int64 CrimeWatch::SentryAggressionTime()
+{
+    return (int64)sConfig.crime.SentryAggression * EvE::Time::Second;
+}
+
+void CrimeWatch::Prune(std::unordered_map<uint64_t, int64>& map)
+{
+    if (map.size() < 256)
+        return;
+    int64 now(GetFileTimeNow());
+    for (std::unordered_map<uint64_t, int64>::iterator itr = map.begin(); itr != map.end(); )
+        if (!LawRules::Live(itr->second, SentryAggressionTime(), now))
+            itr = map.erase(itr);
+        else
+            ++itr;
+}
+
+void CrimeWatch::SentryAggression(uint32 charID, uint32 objectID)
+{
+    if (!sConfig.crime.Enabled or (sConfig.crime.SentryAggression == 0) or (charID == 0) or (objectID == 0))
+        return;
+    Prune(m_sentryAggression);
+    m_sentryAggression[((uint64_t)objectID << 32) | charID] = GetFileTimeNow();
+}
+
+bool CrimeWatch::HasSentryAggression(uint32 charID, uint32 objectID)
+{
+    std::unordered_map<uint64_t, int64>::iterator itr(m_sentryAggression.find(((uint64_t)objectID << 32) | charID));
+    if (itr == m_sentryAggression.end())
+        return false;
+    return LawRules::Live(itr->second, SentryAggressionTime(), GetFileTimeNow());
+}
+
+bool CrimeWatch::HasFactionAggression(uint32 charID, uint32 factionID)
+{
+    if (!sConfig.crime.NpcFactionAggression or (factionID == 0))
+        return false;
+    std::unordered_map<uint64_t, int64>::iterator itr(m_factionAggression.find(((uint64_t)factionID << 32) | charID));
+    if (itr == m_factionAggression.end())
+        return false;
+    return LawRules::Live(itr->second, SentryAggressionTime(), GetFileTimeNow());
+}
+
+void CrimeWatch::NpcFactionAct(Client* pAggressor, SystemEntity* pNPC)
+{
+    // EVElopedia "Combat Timers" (2012):  attacking an npc makes its faction's npcs and station/gate guns hostile for 15 minutes
+    if (!sConfig.crime.NpcFactionAggression or (sConfig.crime.SentryAggression == 0))
+        return;
+    int32 factionID(pNPC->GetWarFactionID());
+    if (!IsFaction(factionID))
+        return;
+    uint32 me(pAggressor->GetCharacterID());
+    uint64_t key(((uint64_t)factionID << 32) | me);
+    bool fresh(!HasFactionAggression(me, factionID));
+    Prune(m_factionAggression);
+    m_factionAggression[key] = GetFileTimeNow();
+    if (!fresh)
+        return;
+    _log(CRIME__INFO, "%s(%u) attacked %s(%u):  faction %i is hostile to them.", pAggressor->GetName(), me, pNPC->GetName(),
+            pNPC->GetID(), factionID);
+    // the faction's navy comes for them in its own high-sec (crime.FactionNavy)
+    SystemManager* pSystem(pAggressor->SystemMgr());
+    if ((pSystem == nullptr) or pAggressor->InPod() or (SecurityClass(pSystem->GetSystemSecurityRating()) != Crime::SecClass::High))
+        return;
+    SystemData data;
+    if (sDataMgr.GetSystemData(pSystem->GetID(), data) and ((int32)data.factionID == factionID))
+        pSystem->GetLaw()->ReportNavyTarget(pAggressor, data.factionID);
+}
+
 bool CrimeWatch::HasLiveFlags(uint32 charID)
 {
     std::map<uint32, Record>::iterator itr = m_records.find(charID);
@@ -172,6 +245,9 @@ bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
     } else if (pSE->IsSentrySE()) {
         into.sentry = true;
         into.corpID = pSE->GetSelf()->ownerID();
+        // gate and station guns keep aggression per guarded object (Crimewatch 1)
+        if (pSE->GetSentrySE()->IsLawSentry())
+            into.protectedID = pSE->GetSentrySE()->GetProtectedID();
         return true;
     } else if (pSE->IsPOSSE() or pSE->IsCOSE()) {
         // npc owned (Interbus customs offices) can be shot without penalty.  player structures belong to their corp
@@ -246,8 +322,12 @@ void CrimeWatch::OffensiveAct(Client* pAggressor, SystemEntity* pTarget)
     if (pSystem == nullptr)
         return;
     Owner target;
-    if (!GetOwner(pTarget, target))
+    if (!GetOwner(pTarget, target)) {
+        // rats, police and navies:  no crime, but the npc aggression timer
+        if (pTarget->IsNPCSE())
+            NpcFactionAct(pAggressor, pTarget);
         return;
+    }
     Act(pAggressor, pSystem, target);
 }
 
@@ -272,9 +352,11 @@ void CrimeWatch::Act(Client* pAggressor, SystemManager* pSystem, const Owner& ta
         Notify(me);
         return;
     }
-    // gate/station sentries: you're flagged to their owner, and they shoot back
+    // gate/station sentries: you're flagged to their owner, and that gate's or station's guns shoot back (Crimewatch 1)
     if (target.sentry) {
         Flag(me, target.corpID, now);
+        if (target.protectedID != 0)
+            SentryAggression(me, target.protectedID);
         Notify(me);
         return;
     }
@@ -557,12 +639,18 @@ void CrimeWatch::OnEnterSpace(Client* pClient)
     Notify(me);
 
     // faction police chase pilots with low security status in their high-sec systems:
-    //   -2.0 in 1.0 systems, down to -4.5 in 0.5 systems.  they can be escaped, and don't kill pods
-    if (sConfig.crime.FactionPolice and (secClass == Crime::SecClass::High) and !pClient->InPod()) {
-        float level(SecurityLevel(trueSec));
-        float threshold(-2.0f - ((1.0f - level) * 5.0f));
-        if ((roundf(pClient->GetSecurityRating() * 10.0f) / 10.0f) <= threshold)
+    //   -2.0 in 1.0 systems, down to -4.5 in 0.5 systems.  they can be escaped, and don't kill pods (npc/ai/LawRules.h)
+    if (sConfig.crime.FactionPolice and (secClass == Crime::SecClass::High) and !pClient->InPod())
+        if (LawRules::PoliceWanted(pClient->GetSecurityRating(), SecurityLevel(trueSec)))
             pSystem->GetLaw()->ReportPoliceTarget(pClient);
+
+    // faction navies (crime.FactionNavy):  pilots with bad standing with the system's faction, or with the npc aggression timer
+    if (sConfig.crime.FactionNavy and (secClass == Crime::SecClass::High) and !pClient->InPod()) {
+        SystemData data;
+        if (sDataMgr.GetSystemData(pSystem->GetID(), data) and (data.factionID != 0))
+            if (LawRules::NavyWanted(StandingDB::GetStanding(data.factionID, me), sConfig.crime.FactionNavyStanding)
+            or HasFactionAggression(me, data.factionID))
+                pSystem->GetLaw()->ReportNavyTarget(pClient, data.factionID);
     }
 }
 

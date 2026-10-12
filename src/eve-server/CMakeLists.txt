@@ -422,11 +422,14 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/NPCEwar.h"
      "${TARGET_INCLUDE_DIR}/npc/Sentry.h"
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/LawBrain.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/LawRules.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcMath.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcProfile.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcRng.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/NpcSchedule.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/SentryBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/ThreatTable.h")
 SET( npc_SOURCE
      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
@@ -439,9 +442,11 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/NPCEwar.cpp"
      "${TARGET_SOURCE_DIR}/npc/Sentry.cpp"
      "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/LawBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcMath.cpp"
-     "${TARGET_SOURCE_DIR}/npc/ai/NpcProfile.cpp" )
+     "${TARGET_SOURCE_DIR}/npc/ai/NpcProfile.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/SentryBrain.cpp" )
 
 SET( planet_INCLUDE
      "${TARGET_INCLUDE_DIR}/planet/Colony.h"
