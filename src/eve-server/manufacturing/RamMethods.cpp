@@ -846,7 +846,10 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
             pType = &bpRef->productType();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
             into.materialMultiplier += bpRef->GetME();
-            into.materialMultiplier *= (1.0f - (0.05f * pChar->GetSkillLevel(EvESkill::ProductionEfficiency)));
+            /* Production Efficiency is not applied here:  it lowers the character's manufactureCostMultiplier (1.25 base, -4% a level,
+             *  dogma effect 429), which is charMaterialMultiplier, the skill waste on the base quantity apart from the blueprint's
+             *  ME waste (infosvc bill of materials:  base + base * wastageFactor, then + base * charMult - base)
+             */
             into.materialMultiplier *= sConfig.ram.MatMod;
             into.charTimeMultiplier *= (1.0f - (0.04f * pChar->GetSkillLevel(EvESkill::Industry)));
             into.productionTime = EvEMath::RAM::ProductionTime(bpRef->type().productionTime(), bpRef->type().productivityModifier(),

@@ -209,12 +209,7 @@ bool TowerSE::ConsidersHostile(Client* pClient)
 
     if (!IsSentrySettingOff(m_tdata.standing)) {
         uint32 ownerID(m_tdata.standingOwnerID > 0 ? m_tdata.standingOwnerID : m_corpID);
-        float standing(0.0f);
-        if (!PosMgrDB::GetContactStanding(ownerID, pClient->GetCharacterID(), standing))
-            if (!PosMgrDB::GetContactStanding(ownerID, pClient->GetCorporationID(), standing))
-                if (IsAlliance(pClient->GetAllianceID()))
-                    PosMgrDB::GetContactStanding(ownerID, pClient->GetAllianceID(), standing);
-        if (standing < m_tdata.standing)
+        if (GetContactStanding(ownerID, pClient) < m_tdata.standing)
             return true;
     }
 
@@ -227,6 +222,35 @@ bool TowerSE::ConsidersHostile(Client* pClient)
     and sWarMgr.IsHostile(sWarMgr.WarOwnerOf(m_corpID), sWarMgr.WarOwnerOf(pClient->GetCorporationID())))
         return true;
     return false;
+}
+
+float TowerSE::GetContactStanding(uint32 ownerID, Client* pClient)
+{
+    // every battery asks every tick:  standings changes reach the guns within a minute
+    int64 now(GetFileTimeNow());
+    uint32 charID(pClient->GetCharacterID());
+    std::map<uint32, CachedStanding>::iterator itr(m_standingCache.find(charID));
+    if ((itr != m_standingCache.end()) and (itr->second.ownerID == ownerID) and (itr->second.expires > now))
+        return itr->second.standing;
+
+    float standing(0.0f);
+    if (!PosMgrDB::GetContactStanding(ownerID, charID, standing))
+        if (!PosMgrDB::GetContactStanding(ownerID, pClient->GetCorporationID(), standing))
+            if (IsAlliance(pClient->GetAllianceID()))
+                PosMgrDB::GetContactStanding(ownerID, pClient->GetAllianceID(), standing);
+
+    // drop expired pilots now and then
+    if (m_standingCache.size() > 200)
+        for (itr = m_standingCache.begin(); itr != m_standingCache.end(); )
+            if (itr->second.expires <= now)
+                itr = m_standingCache.erase(itr);
+            else
+                ++itr;
+    CachedStanding& entry(m_standingCache[charID]);
+    entry.ownerID = ownerID;
+    entry.standing = standing;
+    entry.expires = now + EvE::Time::Minute;
+    return standing;
 }
 
 void TowerSE::Killed(Damage& damage)

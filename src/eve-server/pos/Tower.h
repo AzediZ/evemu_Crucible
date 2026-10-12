@@ -250,6 +250,15 @@ private:
     // stores up to units in the silo, returns what fit
     uint32 AddToSilo(StructureSE* pSilo, uint16 typeID, uint32 units);
     void TakeFromSilo(StructureSE* pSilo, uint16 typeID, uint32 units);
+    // ownerID's contact standing to the pilot (char, else corp, else alliance), looked up at most once a minute per pilot
+    float GetContactStanding(uint32 ownerID, Client* pClient);
+
+    struct CachedStanding {
+        uint32 ownerID;
+        float standing;
+        int64 expires;
+    };
+    std::map<uint32, CachedStanding> m_standingCache;   // charID / standing from standingOwnerID
 
     std::vector<EVEPOS::ProcessLink> m_links;   // moon process links
 
