@@ -87,6 +87,7 @@ CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService
     this->Add("GetVoteCasesByCorporation", &CorpRegistryBound::GetVoteCasesByCorporation);
     this->Add("GetVoteCaseOptions", &CorpRegistryBound::GetVoteCaseOptions);
     this->Add("GetSanctionedActionsByCorporation", &CorpRegistryBound::GetSanctionedActionsByCorporation);
+    this->Add("UpdateSanctionedAction", &CorpRegistryBound::UpdateSanctionedAction);
 
     this->Add("AddBulletin", &CorpRegistryBound::AddBulletin);
     this->Add("GetBulletins", &CorpRegistryBound::GetBulletins);
@@ -1013,46 +1014,43 @@ PyResult CorpRegistryBound::UpdateRecruitmentAd(PyCallArgs &call, PyInt* adID, P
 
 PyResult CorpRegistryBound::MoveCompanyShares(PyCallArgs &call, PyInt* corporationID, PyInt* toShareholderID, PyInt* numberOfShares) {
     // return self.GetCorpRegistry().MoveCompanyShares(corporationID, toShareholderID, numberOfShares)
+    //  the corporation's own (treasury) shares, by its CEO or directors
     _log(CORP__CALL, "CorpRegistryBound::Handle_MoveCompanyShares()");
     call.Dump(CORP__CALL_DUMP);
 
-    if (IsCorp(toShareholderID->value())) {
-        call.client->SendInfoModalMsg("You cannot give shares to a corporation.");
+    RequireDirector(call);
+    if ((uint32)corporationID->value() != m_corpID)
+        throw CustomError("You can only give away your own corporation's shares.");
+    if (IsCorp(toShareholderID->value()))
+        throw CustomError("You cannot give shares to a corporation.");
+    if (numberOfShares->value() <= 0)
         return nullptr;
-    }
 
-    uint32 corpID = 0;
-    Client* pClient = sEntityList.FindClientByCharID(toShareholderID->value());
-    if (pClient == nullptr) {
-        corpID = CharacterDB::GetCorpID(toShareholderID->value());
-    } else {
-        corpID = pClient->GetCorporationID();
-    }
-
-    /** @todo  test for moving shares between players.  can we do that? */
-    m_db.MoveShares(m_corpID, corpID, corporationID->value(), toShareholderID->value(), numberOfShares->value());
+    sCorpMgr.TransferShares(m_corpID, m_corpID, toShareholderID->value(), numberOfShares->value());
     return nullptr;
 }
 
 PyResult CorpRegistryBound::MovePrivateShares(PyCallArgs &call, PyInt* corporationID, PyInt* toShareholderID, PyInt* numberOfShares) {
     // return self.GetCorpRegistry().MovePrivateShares(corporationID, toShareholderID, numberOfShares)
+    //  the caller's own shares of any corporation
     _log(CORP__CALL, "CorpRegistryBound::Handle_MovePrivateShares()");
     call.Dump(CORP__CALL_DUMP);
 
-    uint32 corpID = 0;
-    Client* pClient = sEntityList.FindClientByCharID(toShareholderID->value());
-    if (pClient == nullptr) {
-        corpID = CharacterDB::GetCorpID(toShareholderID->value());
-    } else {
-        corpID = pClient->GetCorporationID();
-    }
+    if (numberOfShares->value() <= 0)
+        return nullptr;
 
-    // gonna have to do this one different...
-    //  will need shares OF WHAT corpID also.
-    m_db.MoveShares(call.client->GetCharacterID(), corpID, corporationID->value(), toShareholderID->value(), numberOfShares->value());
+    sCorpMgr.TransferShares(corporationID->value(), call.client->GetCharacterID(), toShareholderID->value(), numberOfShares->value());
     return nullptr;
 }
 
+void CorpRegistryBound::GiveShares(PyCallArgs& call, uint32 toID, int64 count)
+{
+    // task management CTV_GIVE CTPG_SHARES:  treasury shares to a member
+    RequireDirector(call);
+    if (count <= 0)
+        return;
+    sCorpMgr.TransferShares(m_corpID, m_corpID, toID, (uint32)count);
+}
 
 PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryList, std::optional <PyInt*> includeImplied, PyInt* searchTitles) {
     /*this is performed thru corp window using a multitude of options, to get specific members based on quite variable criteria
@@ -1306,48 +1304,25 @@ uint8 CorpRegistryBound::GetQueryType(std::string queryType)
  * @note   these below are partially coded
  */
 
-PyResult CorpRegistryBound::PayoutDividend(PyCallArgs &call, PyBool* payShareholders, PyFloat* payoutAmount) {
-    //self.GetCorpRegistry().PayoutDividend(payShareholders, payoutAmount)
-    /*** shareholders
-     * 04:42:43 W CorpRegistryBound::Handle_PayoutDividend(): size= 2
-     * 04:42:43 [CorpCallDump]   Call Arguments:
-     * 04:42:43 [CorpCallDump]       Tuple: 2 elements
-     * 04:42:43 [CorpCallDump]         [ 0] Integer field: 1            <-- int bool?
-     * 04:42:43 [CorpCallDump]         [ 1] Real field: 1.000000        <-- amount
-     *** members
-     * 04:42:50 W CorpRegistryBound::Handle_PayoutDividend(): size= 2
-     * 04:42:50 [CorpCallDump]   Call Arguments:
-     * 04:42:50 [CorpCallDump]       Tuple: 2 elements
-     * 04:42:50 [CorpCallDump]         [ 0] Integer field: 0
-     * 04:42:50 [CorpCallDump]         [ 1] Real field: 1.000000
-     */
+PyResult CorpRegistryBound::PayoutDividend(PyCallArgs &call, PyRep* payShareholders, PyRep* payoutAmount) {
+    //self.GetCorpRegistry().PayoutDividend(payShareholders, payoutAmount)    payShareholders is an int (AskPayShareholders yes/no)
     _log(CORP__CALL, "CorpRegistryBound::Handle_PayoutDividend()");
     call.Dump(CORP__CALL_DUMP);
 
-    /** @todo finish this... */
+    RequireMember(call);
 
-    // get list of ids to pay.  this includes corp shareholders if paying to shares
-    std::vector<uint32> toIDs;
-    if (payShareholders->value()) {
-        // not used yet
-    } else {
-        // not used yet
+    double amount(0);
+    if (payoutAmount->IsFloat()) {
+        amount = PyRep::FloatValue(payoutAmount);
+    } else if (payoutAmount->IsInt() or payoutAmount->IsLong()) {
+        amount = (double)PyRep::IntegerValue(payoutAmount);
     }
+    bool shareholders(false);
+    std::optional<int64> pay = Corp::MemberUpdate::Int(payShareholders);
+    if (pay.has_value())
+        shareholders = (pay.value() != 0);
 
-    // get total amount and divide by # of ids to pay
-    float amount = payoutAmount->value() / toIDs.size();
-    if (amount < 0.01) {
-        return nullptr;  //make error here?
-    }
-
-    // pay each id and record xfer
-    std::string reason = "Dividend Payment from ";
-    reason += ""; //corp name here
-
-    for (auto cur : toIDs) {
-        AccountService::TransferFunds(m_corpID, cur, amount, reason.c_str(), Journal::EntryType::CorporationDividendPayment, call.client->GetCharacterID());
-    }
-
+    sCorpMgr.PayDividend(call.client, m_corpID, shareholders, amount);
     return nullptr;
 }
 
@@ -1889,127 +1864,107 @@ PyResult CorpRegistryBound::GetOffices(PyCallArgs &call) {
     */
 }
 
-PyResult CorpRegistryBound::InsertVoteCase(PyCallArgs &call, PyRep* voteCaseText, PyRep* description, PyInt* corporationID, PyInt* voteType, std::optional <PyObject*> voteCaseOptions, PyLong* startDateTime, PyLong* endDateTime) {
+PyResult CorpRegistryBound::InsertVoteCase(PyCallArgs &call, PyRep* voteCaseText, PyRep* description, PyInt* corporationID, PyInt* voteType,
+                                           PyObject* voteCaseOptions, std::optional<PyRep*> startDateTime, std::optional<PyRep*> endDateTime) {
     //  return self.GetCorpRegistry().InsertVoteCase(voteCaseText, description, corporationID, voteType, voteCaseOptions, startDateTime, endDateTime)
-    // see notes in m_db.AddVoteCase() for more info on data
-
+    //  voteCaseOptions:  util.Rowset ['optionText', 'parameter', 'parameter1', 'parameter2'];  the row index is the optionID, option 0 is "do it"
     _log(CORP__CALL, "CorpRegistryBound::Handle_InsertVoteCase()");
     call.Dump(CORP__CALL_DUMP);
 
-    /*
-     * 10:10:55 W CorpRegistryBound::Handle_InsertVoteCase(): size= 7
-     * 10:10:55 [CorpCallDump]   Call Arguments:
-     * 10:10:55 [CorpCallDump]       Tuple: 7 elements
-     * 10:10:55 [CorpCallDump]       [ 0]    WString: 'test'         << voteCaseText
-     * 10:10:55 [CorpCallDump]       [ 1]    WString: 'test vote'    << description
-     * 10:10:55 [CorpCallDump]       [ 2]    Integer: 98000000       << corporationID
-     * 10:10:55 [CorpCallDump]       [ 3]    Integer: 4              << voteType (Corp::VoteType::xx)
-     * 10:10:55 [CorpCallDump]       [ 4] Object:
-     * 10:10:55 [CorpCallDump]       [ 4] Type:     String: 'util.Rowset'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: Dictionary: 3 entries   << voteCaseOptions
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Key:     String: 'lines'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: List: 2 elements
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 0] List: 4 elements
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 0] [ 0]    WString: 'yay'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 0] [ 1]    Integer: 0
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 0] [ 2]       None: 0
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 0] [ 3]       None: 0
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 1] List: 4 elements
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 1] [ 0]    WString: 'nay'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 1] [ 1]    Integer: 1
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 1] [ 2]       None: 0
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 0] Value: [ 1] [ 3]       None: 0
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 1] Key:     String: 'RowClass'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 1] Value: Token: 'util.Row'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Key:     String: 'header'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Value: List: 4 elements
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Value: [ 0]     String: 'choice'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Value: [ 1]     String: 'itemID'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Value: [ 2]     String: 'typeID'
-     * 10:10:55 [CorpCallDump]       [ 4] Args: [ 2] Value: [ 3]     String: 'locationID'
-     * 10:10:55 [CorpCallDump]       [ 5]       Long: 131575686552352973    << startDateTime
-     * 10:10:55 [CorpCallDump]       [ 6]       Long: 131576550552352973    << endDateTime
-     * 10:10:55 [CorpCallDump]   Call Named Arguments:
-     * 10:10:55 [CorpCallDump]     Argument 'machoVersion':
-     * 10:10:55 [CorpCallDump]            Integer: 1
-     */
+    RequireMember(call);
+    uint32 charID = call.client->GetCharacterID();
+    if ((uint32)corporationID->value() != m_corpID)
+        throw CustomError("You can only propose votes in your own corporation.");
+    // "You cannot propose a vote during a CEO voting period."
+    if (CorporationDB::HasOpenCEOVote(m_corpID))
+        throw UserError("CEOCantAddVoteInCEOVotePeriod");
 
-    /*
-     * 13:54:27 [CorpCall] CorpRegistryBound::Handle_InsertVoteCase()
-     * 13:54:27 [DB Error] DoQuery_locked(/backups/local/src/eve/EVE/src/eve-core/database/dbcore.cpp:345):
-     * DBCore Query - #1064 in
-     * 'INSERT INTO crpVoteOptions (voteCaseID, optionID, optionText, parameter, parameter1, parameter2)
-     * VALUES
-     * (1,-104,'Lockdown the 125mm Gatling AutoCannon I Blueprint',140024216,819,60014140),
-     * (1,0,'Don't lockdown the 125mm Gatling AutoCannon I Blueprint',0,0,0)':
-     *
-     * You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version
-     * for the right syntax to use near 't lockdown the 125mm Gatling AutoCannon I Blueprint',0,0,0)' at line 1
-     */
-
-
-    if (!call.tuple->GetItem(4)->IsObject()) {
-        codelog(CORP__ERROR, "Tuple Item is wrong type: %s.  Expected PyObject.", call.tuple->GetItem(0)->TypeString());
-        return nullptr;
-    }
-    Call_InsertVoteCase args;
-    if (!args.Decode(&call.tuple)) {
-        codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
-        return nullptr;
+    uint8 type = voteType->value();
+    if (type == Corp::VoteType::CEO) {
+        if (!sCorpMgr.CanRunForCEO(m_corpID, charID))
+            throw UserError("CantRunForCEOAtTheMoment");
+    } else if ((call.client->GetRolesAtAll() & Corp::Role::Director) != Corp::Role::Director) {
+        throw UserError("CrpOnlyDirectorsCanProposeVotes");
     }
 
-    if (!args.voteCaseOptions->arguments()->IsDict()) {
-        codelog(CORP__ERROR, "voteCaseOptions Argument is wrong type: %s.  Expected PyDict.", args.voteCaseOptions->arguments()->TypeString());
-        return nullptr;
+    // options
+    if (!voteCaseOptions->arguments()->IsDict())
+        throw CustomError("The vote options could not be read.");
+    PyRep* lines = voteCaseOptions->arguments()->AsDict()->GetItemString("lines");
+    if ((lines == nullptr) or !lines->IsList())
+        throw CustomError("The vote options could not be read.");
+
+    std::vector<Corp::VoteCaseOptions> options;
+    int8 optionID(0);
+    for (PyList::const_iterator itr = lines->AsList()->begin(); itr != lines->AsList()->end(); ++itr) {
+        if (!(*itr)->IsList() or ((*itr)->AsList()->size() < 4))
+            continue;
+        PyList* line = (*itr)->AsList();
+        Corp::VoteCaseOptions option = Corp::VoteCaseOptions();
+            option.optionID = optionID++;
+            option.optionText = PyRep::StringContent(line->GetItem(0));
+            option.parameter = (int32)Corp::MemberUpdate::Int(line->GetItem(1)).value_or(0);
+            option.parameter1 = (int32)Corp::MemberUpdate::Int(line->GetItem(2)).value_or(0);
+            option.parameter2 = (int32)Corp::MemberUpdate::Int(line->GetItem(3)).value_or(0);
+        options.push_back(option);
+    }
+    if (options.size() < 2)
+        throw CustomError("A vote needs at least two options.");
+
+    // what the vote is about
+    Corp::VoteCaseOptions& subject = options.front();
+    switch (type) {
+        case Corp::VoteType::CEO: {
+            subject.parameter = charID;
+        } break;
+        case Corp::VoteType::War: {
+            if (call.client->GetAllianceID() != 0)
+                throw UserError("CrpCanNotSanctionWarOwner");
+            if (IsPlayerCorp(subject.parameter)) {
+                CorpData data = CorpData();
+                    data.corporationID = subject.parameter;
+                CorporationDB::GetCorpData(data);
+                if (data.allianceID != 0)
+                    throw UserError("CrpCanNotSanctionWarAgainstOwner");
+            }
+        } break;
+        case Corp::VoteType::Shares: {
+            if (subject.parameter <= 0)
+                throw CustomError("The number of new shares must be more than zero.");
+        } break;
+        case Corp::VoteType::KickMember: {
+            CorpData data = CorpData();
+            if (!CorpMgr::LoadMemberData(subject.parameter, data) or (data.corporationID != m_corpID))
+                throw CustomError("That character is not a member of this corporation.");
+            if (CorporationDB::GetCorporationCEO(m_corpID) == (uint32)subject.parameter)
+                throw CustomError("The CEO cannot be expelled by a vote.  Propose a CEO vote instead.");
+        } break;
+        case Corp::VoteType::ItemLock: {
+            ItemLockdown::ValidateLockable(m_corpID, subject.parameter, subject.parameter2);
+        } break;
+        case Corp::VoteType::ItemUnlock: {
+            if (!ItemLockdown::IsLocked(subject.parameter))
+                throw UserError("CrpItemIsNotLocked");
+        } break;
+        case Corp::VoteType::General:
+            break;
+        default:
+            throw CustomError("Unknown vote type.");
     }
 
-    m_db.AddVoteCase(m_corpID, call.client->GetCharacterID(), args);
+    // the voting period starts now and runs 1 to 30 days
+    int64 now = GetFileTimeNow();
+    int64 end = now + EvE::Time::Day;
+    if (endDateTime.has_value() and (endDateTime.value()->IsInt() or endDateTime.value()->IsLong()))
+        end = PyRep::IntegerValue(endDateTime.value());
+    end = std::max<int64>(now + EvE::Time::Day, std::min<int64>(now + 30 * EvE::Time::Day, end));
 
-    //  OnCorporationVoteCaseChanged
+    uint32 voteCaseID = CorporationDB::AddVoteCase(m_corpID, charID, type, PyRep::StringContent(voteCaseText), PyRep::StringContent(description),
+                                                  now, end, options);
+    if (voteCaseID == 0)
+        throw CustomError("The vote could not be created.");
 
-    // send notification to online corp memebers
-    //def OnNotificationReceived(self, notificationID, typeID, senderID, created, data = {}):
-    /*
-     * ==================== Sent from Server 161 bytes
-     *
-     * [PyObjectData Name: macho.Notification]
-     *  [PyTuple 6 items]
-     *    [PyInt 12]
-     *    [PyObjectData Name: macho.MachoAddress]
-     *      [PyTuple 4 items]
-     *        [PyInt 1]
-     *        [PyInt 698477]
-     *        [PyNone]
-     *        [PyNone]
-     *    [PyObjectData Name: macho.MachoAddress]
-     *      [PyTuple 4 items]
-     *        [PyInt 4]
-     *        [PyString "OnNotificationReceived"]
-     *        [PyList 0 items]
-     *        [PyString "clientID"]
-     *    [PyInt 5654387]
-     *    [PyTuple 1 items]
-     *      [PyTuple 2 items]
-     *        [PyInt 0]
-     *        [PySubStream 85 bytes]
-     *          [PyTuple 2 items]
-     *            [PyInt 0]
-     *            [PyTuple 2 items]
-     *              [PyInt 1]
-     *              [PyTuple 5 items]
-     *                [PyInt 342405655]     << notifyID (sequential?  random?)
-     *                [PyInt 25]           << Notify::Types::CorpVote
-     *                [PyInt 1661059544]    << senderID (CharID)
-     *                [PyIntegerVar 129492998400000000] << created timestamp
-     *                [PyDict 2 kvp]        << data (varies for each notify type)
-     *                  [PyString "body"]
-     *                  [PyString "please vote for me"]
-     *                  [PyString "subject"]
-     *                  [PyString "proposed vote"]
-     *    [PyDict 1 kvp]
-     *      [PyString "sn"]
-     *      [PyIntegerVar 9]
-     */
+    sCorpMgr.OnVoteCaseOpened(m_corpID, voteCaseID, charID);
     return nullptr;
 }
 
@@ -2074,24 +2029,17 @@ PyResult CorpRegistryBound::GetVoteCasesByCorporation(PyCallArgs &call, PyInt* c
     _log(CORP__CALL, "CorpRegistryBound::Handle_GetVoteCasesByCorporation()");
     call.Dump(CORP__CALL_DUMP);
 
-    if (status.has_value() && maxLen.has_value()) {
-        return m_db.GetVoteItems(corporationID->value(), status.value()->value(), maxLen.value()->value());
-    } else if (call.tuple->size() == 1) {
-        return m_db.GetVoteItems(m_corpID);
-    } else {
-        ; // error?
-    }
-
-    return nullptr;
+    uint8 statusValue = (status.has_value() ? status.value()->value() : 0);
+    uint16 limit = (maxLen.has_value() ? maxLen.value()->value() : 0);
+    return CorporationDB::GetVoteItems(corporationID->value(), statusValue, limit);
 }
 
-PyResult CorpRegistryBound::GetVoteCaseOptions(PyCallArgs &call, PyInt* corporationID, PyInt* voteCaseID) {
-    // options = self.GetCorpRegistry().GetVoteCaseOptions(corpID, voteCaseID)
+PyResult CorpRegistryBound::GetVoteCaseOptions(PyCallArgs &call, PyRep* corporationID, PyInt* voteCaseID) {
+    // options = self.GetCorpRegistry().GetVoteCaseOptions(corpID, voteCaseID)     corpID may be None (sanctioned actions)
     _log(CORP__CALL, "CorpRegistryBound::Handle_GetVoteCaseOptions()");
     call.Dump(CORP__CALL_DUMP);
 
-    // TODO: also support specifying corporationID as parameters so shareholders can vote
-    PyRep* rsp = m_db.GetVoteOptions(voteCaseID->value());
+    PyRep* rsp = CorporationDB::GetVoteOptions(voteCaseID->value());
     if (is_log_enabled(CORP__RSP_DUMP))
         rsp->Dump(CORP__RSP_DUMP, "");
 
@@ -2113,8 +2061,7 @@ PyResult CorpRegistryBound::GetVotes(PyCallArgs &call, PyInt* corporationId, PyI
                     votedFor = charVotes[session.charid].optionID
             */
 
-    // TODO: also support specifying corporationID as parameters so shareholders can vote
-    PyRep* rsp = m_db.GetVotes(voteCaseID->value());
+    PyRep* rsp = CorporationDB::GetVotes(voteCaseID->value());
     if (is_log_enabled(CORP__RSP_DUMP))
         rsp->Dump(CORP__RSP_DUMP, "");
 
@@ -2214,7 +2161,21 @@ PyResult CorpRegistryBound::GetSanctionedActionsByCorporation(PyCallArgs &call, 
      */
 
 
-    return m_db.GetSanctionedItems(corporationID->value(), state->value());
+    return CorporationDB::GetSanctionedItems(corporationID->value(), state->value());
+}
+
+PyResult CorpRegistryBound::UpdateSanctionedAction(PyCallArgs &call, PyInt* voteCaseID, PyRep* inEffect, std::optional<PyRep*> reason) {
+    // corp_ui_sanctionableactions 'Implement':  UpdateSanctionedAction(voteCaseID, 1) by the active CEO
+    _log(CORP__CALL, "CorpRegistryBound::Handle_UpdateSanctionedAction()");
+    call.Dump(CORP__CALL_DUMP);
+
+    RequireMember(call);
+    std::optional<int64> effect = Corp::MemberUpdate::Int(inEffect);
+    if (!effect.has_value() or (effect.value() == 0))
+        throw CustomError("A sanctioned action can only be undone by another vote.");
+
+    sCorpMgr.ImplementSanction(call.client, voteCaseID->value());
+    return nullptr;
 }
 
 PyResult CorpRegistryBound::CanVote(PyCallArgs &call, PyInt* corporationID) {
@@ -2222,7 +2183,7 @@ PyResult CorpRegistryBound::CanVote(PyCallArgs &call, PyInt* corporationID) {
     _log(CORP__CALL, "CorpRegistryBound::Handle_CanVote() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
-    return PyStatic.NewFalse();
+    return new PyBool(sCorpMgr.GetVoteWeight(call.client->GetCharacterID(), corporationID->value()) > 0);
 }
 
 
@@ -2231,11 +2192,76 @@ PyResult CorpRegistryBound::InsertVote(PyCallArgs &call, PyInt* corporationID, P
     _log(CORP__CALL, "CorpRegistryBound::Handle_InsertVote() size=%lli", call.tuple->size());
     call.Dump(CORP__CALL_DUMP);
 
-    // can you change your vote?  will we have to check for votes already cast and update them?
-    m_db.CastVote(corporationID->value(), call.client->GetCharacterID(), voteCaseID->value(), voteValue->value());
+    uint32 corpID = corporationID->value();
+    uint32 charID = call.client->GetCharacterID();
+    uint32 caseID = voteCaseID->value();
+    Corp::VoteCase vc = Corp::VoteCase();
+    if (!CorporationDB::GetVoteCase(caseID, vc) or (vc.corporationID != corpID))
+        throw CustomError("That vote could not be found.");
+    if ((vc.status != 2) or (vc.endDateTime <= GetFileTimeNow()))
+        throw UserError("CorpVoteCaseClosed");
+    if (CorporationDB::HasVoted(caseID, charID))
+        throw UserError("CrpAlreadyVoted");
 
-    // returns none
-    return PyStatic.NewNone();
+    std::vector<Corp::VoteCaseOptions> options;
+    CorporationDB::GetVoteCaseOptions(caseID, options);
+    double oldVotes(-1);
+    for (auto cur : options)
+        if (cur.optionID == voteValue->value())
+            oldVotes = cur.votesFor;
+    if (oldVotes < 0)
+        throw CustomError("That is not an option of this vote.");
+
+    // votes are weighted by shares
+    uint32 weight = sCorpMgr.GetVoteWeight(charID, corpID);
+    if (weight == 0)
+        throw CustomError("You have no shares in this corporation and cannot vote.");
+
+    if (!CorporationDB::CastVote(corpID, charID, caseID, voteValue->value(), weight))
+        throw UserError("CrpAlreadyVoted");
+
+    // OnCorporationVoteChanged(corpID, voteCaseID, characterID, add) and the option's new tally
+    PyDict* change = new PyDict();
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, PyStatic.NewNone());
+        tuple->SetItem(1, new PyInt(charID));
+    change->SetItemString("characterID", tuple);
+    tuple = new PyTuple(2);
+        tuple->SetItem(0, PyStatic.NewNone());
+        tuple->SetItem(1, new PyInt(caseID));
+    change->SetItemString("voteCaseID", tuple);
+    tuple = new PyTuple(2);
+        tuple->SetItem(0, PyStatic.NewNone());
+        tuple->SetItem(1, new PyInt(voteValue->value()));
+    change->SetItemString("optionID", tuple);
+    PyTuple* payload = new PyTuple(4);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, new PyInt(caseID));
+        payload->SetItem(2, new PyInt(charID));
+        payload->SetItem(3, change);
+    if (call.client->GetCorporationID() != (int32)corpID) {
+        PyIncRef(payload);
+        call.client->SendNotification("OnCorporationVoteChanged", "clientID", &payload);
+    }
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnCorporationVoteChanged", "corpid", payload);
+
+    change = new PyDict();
+    tuple = new PyTuple(2);
+        tuple->SetItem(0, new PyFloat(oldVotes));
+        tuple->SetItem(1, new PyFloat(oldVotes + weight));
+    change->SetItemString("votesFor", tuple);
+    payload = new PyTuple(4);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, new PyInt(caseID));
+        payload->SetItem(2, new PyInt(voteValue->value()));
+        payload->SetItem(3, change);
+    if (call.client->GetCorporationID() != (int32)corpID) {
+        PyIncRef(payload);
+        call.client->SendNotification("OnCorporationVoteCaseOptionChanged", "clientID", &payload);
+    }
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnCorporationVoteCaseOptionChanged", "corpid", payload);
+
+    return nullptr;
 }
 
 PyResult CorpRegistryBound::GetLockedItemLocations(PyCallArgs& call)
@@ -2731,10 +2757,6 @@ PyResult CorpRegistryBound::GetNumberOfPotentialCEOs(PyCallArgs &call) {
     return new PyInt(candidates.size());
 }
 
-void CorpRegistryBound::GiveShares(PyCallArgs& call, uint32 toID, int64 count)
-{
-    throw CustomError("Giving shares is not available yet.");
-}
 
 PyResult CorpRegistryBound::CanLeaveCurrentCorporation(PyCallArgs &call) {
     //  canLeave, error, errorDetails = corpSvc.CanLeaveCurrentCorporation()

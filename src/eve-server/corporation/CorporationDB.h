@@ -75,7 +75,10 @@ public:
     PyRep *GetMyApplications(uint32 charID);
     PyRep *GetApplications(uint32 corpID);
 
-    void MoveShares(uint32 ownerID, uint32 corpID, int32 corporationID, int32 toShareholderID, int32 numberOfShares);
+    // moves count shares of corpID from fromID to toID (crpShares keyed by corporationID, shareholderID).  false when fromID has fewer
+    static bool MoveShares(uint32 corpID, uint32 fromID, uint32 toID, uint32 count, uint32& fromOld, uint32& toOld);
+    // new shares into the corp's own treasury
+    static void IssueShares(uint32 corpID, uint32 count);
     PyRep *GetShares(uint32 corpID);
     PyRep *GetMyShares(uint32 ownerID);
     bool HasShares(uint32 charID, uint32 corpID);
@@ -91,12 +94,30 @@ public:
     PyRep *GetItemEvents(uint32 corpID, uint32 charID, int64 fromDate, int64 toDate, uint8 rowsPerPage);
     PyRep *GetRoleHistroy(uint32 corpID, uint32 charID, int64 fromDate, int64 toDate, uint8 rowsPerPage);
 
-    void CastVote(uint32 corpID, uint32 charID, uint32 voteCaseID, uint8 optionID);
-    void AddVoteCase(uint32 corpID, uint32 charID, Call_InsertVoteCase& args);
-    PyRep* GetVotes(uint32 voteCaseID);
-    PyRep* GetVoteItems(uint32 corpID, uint8 status=0, uint8 maxLen=20);
-    PyRep* GetVoteOptions(uint32 voteCaseID);
-    PyRep* GetSanctionedItems(uint32 corpID, uint8 status=0);
+    /* votes (crpVoteItems/crpVoteOptions/crpVotes) */
+    // false when the voter already voted
+    static bool CastVote(uint32 corpID, uint32 charID, uint32 voteCaseID, uint8 optionID, uint32 weight);
+    static bool HasVoted(uint32 voteCaseID, uint32 charID);
+    // optionID = row index.  returns voteCaseID (0 = failed)
+    static uint32 AddVoteCase(uint32 corpID, uint32 charID, uint8 voteType, const std::string& text, const std::string& description,
+                              int64 startDateTime, int64 endDateTime, const std::vector<Corp::VoteCaseOptions>& options);
+    static PyRep* GetVotes(uint32 voteCaseID);
+    // status 0 = all, 2 = open, 1 = closed (newest first).  maxLen 0 = no limit
+    static PyRep* GetVoteItems(uint32 corpID, uint8 status=0, uint16 maxLen=0);
+    static PyRep* GetVoteOptions(uint32 voteCaseID);
+    // state 1 = in effect, 2 = not in effect and not expired, 0 = all
+    static PyRep* GetSanctionedItems(uint32 corpID, uint8 state=0);
+    // {column: (None, value)} rows for the 'add' notifications
+    static PyDict* GetVoteItemChange(uint32 voteCaseID);
+    static PyDict* GetSanctionChange(uint32 voteCaseID);
+    static bool GetVoteCase(uint32 voteCaseID, Corp::VoteCase& into);
+    static void GetVoteCaseOptions(uint32 voteCaseID, std::vector<Corp::VoteCaseOptions>& into);
+    static void GetExpiredVoteCases(int64 now, std::vector<uint32>& into);
+    static void CloseVoteCase(uint32 voteCaseID, int8 winningOptionID, bool inEffect, bool actedUpon, int64 timeActedUpon, int64 expires);
+    // saves inEffect, actedUpon, timeActedUpon, rescended, timeRescended
+    static void UpdateSanction(const Corp::VoteCase& vc);
+    // the in-effect lockdown sanction of an item (0 = none)
+    static uint32 GetInEffectLockdown(uint32 corpID, uint32 itemID);
 
     void GetAutoPay(uint32 corpID, DBQueryResult& res);
     void SetAutoPay();

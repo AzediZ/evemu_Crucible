@@ -67,16 +67,17 @@ protected:
     PyResult MovePrivateShares(PyCallArgs& call, PyInt* corporationID, PyInt* toShareholderID, PyInt* numberOfShares);
     PyResult GetSharesByShareholder(PyCallArgs& call, PyBool* corpShares);
     PyResult GetShareholders(PyCallArgs& call);
-    PyResult PayoutDividend(PyCallArgs& call, PyBool* payShareholders, PyFloat* payoutAmount);
+    PyResult PayoutDividend(PyCallArgs& call, PyRep* payShareholders, PyRep* payoutAmount);
 
     PyResult CanViewVotes(PyCallArgs& call, PyInt* corporationID);
-    PyResult InsertVoteCase(PyCallArgs& call, PyRep* voteCaseText, PyRep* description, PyInt* corporationID, PyInt* voteType, std::optional <PyObject*> voteCaseOptions, PyLong* startDateTime, PyLong* endDateTime);
+    PyResult InsertVoteCase(PyCallArgs& call, PyRep* voteCaseText, PyRep* description, PyInt* corporationID, PyInt* voteType, PyObject* voteCaseOptions, std::optional<PyRep*> startDateTime, std::optional<PyRep*> endDateTime);
     PyResult GetVotes(PyCallArgs& call, PyInt* corporationId, PyInt* voteCaseID);
     PyResult CanVote(PyCallArgs& call, PyInt* corporationID);
     PyResult InsertVote(PyCallArgs& call, PyInt* corporationID, PyInt* voteCaseID, PyInt* voteValue);
     PyResult GetVoteCasesByCorporation(PyCallArgs& call, PyInt* corporationID, std::optional<PyInt*> status, std::optional <PyInt*> maxLen);
-    PyResult GetVoteCaseOptions(PyCallArgs& call, PyInt* corporationID, PyInt* voteCaseID);
+    PyResult GetVoteCaseOptions(PyCallArgs& call, PyRep* corporationID, PyInt* voteCaseID);
     PyResult GetSanctionedActionsByCorporation(PyCallArgs& call, PyInt* corporationID, PyInt* state);
+    PyResult UpdateSanctionedAction(PyCallArgs& call, PyInt* voteCaseID, PyRep* inEffect, std::optional<PyRep*> reason);
 
     PyResult GetRoleGroups(PyCallArgs& call);
     PyResult GetRoles(PyCallArgs& call);

@@ -106,6 +106,32 @@ public:
     // OnCorporationChanged(corpID, {column: (old, new)}) to the online members.  consumes change
     void BroadcastCorpChange(uint32 corpID, PyDict* change);
 
+    /* shares */
+    // moves shares of corpID between holders with the OnShareChange notifications.  throws NotEnoughShares
+    void TransferShares(uint32 corpID, uint32 fromID, uint32 toID, uint32 count);
+    // OnShareChange(shareholderID, corporationID, change) to the holder (a character, or the members of a holding corp)
+    void SendShareChange(uint32 holderID, uint32 corpID, uint32 oldShares, uint32 newShares);
+    // a voter's weight in corpID's votes:  their own shares, and as active CEO of a corp that corp's holding (its treasury for their own corp)
+    uint32 GetVoteWeight(uint32 charID, uint32 corpID);
+    // the active CEO:  CEO and not under a CEO vote
+    bool IsActiveCEO(uint32 corpID, uint32 charID);
+
+    /* votes and sanctioned actions */
+    // a new vote case:  OnCorporationVoteCaseChanged add, CorpVote to the shareholders, and for a CEO vote the CEO's roles go
+    void OnVoteCaseOpened(uint32 corpID, uint32 voteCaseID, uint32 proposerID);
+    // closes vote cases past their end (every 5 minutes)
+    void ProcessVotes();
+    void CloseVote(uint32 voteCaseID);
+    // UpdateSanctionedAction by the active CEO.  throws
+    void ImplementSanction(Client* pCaller, uint32 voteCaseID);
+    // OnCorporationVoteCaseChanged / OnSanctionedActionChanged to the members.  consume change
+    void SendVoteCaseChanged(uint32 corpID, uint32 voteCaseID, PyDict* change);
+    void SendSanctionChanged(uint32 corpID, uint32 voteCaseID, PyDict* change);
+
+    /* dividends */
+    // PayoutDividend:  to the shareholders by their shares (not the corp's own treasury), or evenly to the members.  throws
+    void PayDividend(Client* pCaller, uint32 corpID, bool shareholders, double amount);
+
     /* notifications (persistent, delivered at login) */
     // members of a player corp holding any of roleMask (0 = all, directors always).  consumes data
     void NotifyCorp(uint32 corpID, uint16 notifyType, uint32 senderID, PyDict* data, int64 roleMask = 0);

@@ -2099,245 +2099,341 @@ PyRep* CorporationDB::GetRoleHistroy(uint32 corpID, uint32 charID, int64 fromDat
     */
 }
 
-void CorporationDB::AddVoteCase(uint32 corpID, uint32 charID, Call_InsertVoteCase& args)
-{   // working
-    PyDict* dict = args.voteCaseOptions->arguments()->AsDict();
-    dict->Dump(CORP__TRACE, "    ");
-
-    PyRep* rep = dict->GetItemString("lines");
-    if (!rep->IsList()) {
-        codelog(CORP__ERROR, "'lines' item is not PyList: %s", rep->TypeString());
-        return;
-    }
-
-    std::vector<Corp::VoteCaseOptions> data;
-    PyList* list = rep->AsList();
-    for (PyList::const_iterator itr = list->begin(); itr != list->end(); ++itr) {
-        if (!(*itr)->IsList()) {
-            _log(CORP__ERROR, "itr item is not PyList: %s", rep->TypeString());
-            continue;
-        }
-        PyList* list2 = (*itr)->AsList();
-        Corp::VoteCaseOptions args2 = Corp::VoteCaseOptions();
-        //vote decision option
-        args2.optionText = PyRep::StringContent(list2->GetItem(0));
-        args2.optionID = PyRep::IntegerValue(list2->GetItem(1));
-        //for kick, ceo this is charID.  for war, this is corpID.  for lock/unlock, this is itemID  for shares/general, this is boolean
-        args2.parameter = PyRep::IntegerValue(list2->GetItem(1));
-        switch (args.voteType) {
-            case Corp::VoteType::Shares:
-            case Corp::VoteType::General: {
-                // nothing
-            } break;
-            case Corp::VoteType::CEO:
-            case Corp::VoteType::War:
-            case Corp::VoteType::KickMember: {
-                // nothing
-            } break;
-            case Corp::VoteType::ItemLock:
-            case Corp::VoteType::ItemUnlock: {
-                //for lock/unlock, this is items typeID.  for shares/general, this is 0
-                args2.parameter1 = PyRep::IntegerValue(list2->GetItem(2));
-                //for lock/unlock, this is items locationID.  for others, this is none
-                args2.parameter2 = PyRep::IntegerValue(list2->GetItem(3));
-            } break;
-        }
-        data.push_back(args2);
-    }
+uint32 CorporationDB::AddVoteCase(uint32 corpID, uint32 charID, uint8 voteType, const std::string& text, const std::string& description,
+                                  int64 startDateTime, int64 endDateTime, const std::vector<Corp::VoteCaseOptions>& options)
+{
+    std::string textEsc, descEsc;
+    sDatabase.DoEscapeString(textEsc, text);
+    sDatabase.DoEscapeString(descEsc, description);
 
     uint32 voteCaseID(0);
     DBerror err;
-    sDatabase.RunQueryLID(err, voteCaseID,
-        " INSERT INTO crpVoteItems( "
-        " corporationID, voteType, voteCaseText, description, startDateTime, endDateTime)"
-        " VALUES (%u, %u, '%s', '%s', %lli, %lli)",
-        args.corporationID, args.voteType, args.voteCaseText.c_str(), args.description.c_str(), args.startDateTime, args.endDateTime);
-
-    std::stringstream str;
-    str << "INSERT INTO crpVoteOptions (voteCaseID, optionID, optionText, parameter, parameter1, parameter2) VALUES ";
-
-    bool set(false);
-    for (auto cur : data) {
-        if (!set) {
-            set = true;
-        } else {
-            str << ",";
-        }
-        str << "(" << std::to_string((int64)voteCaseID) << "," << std::to_string(cur.optionID) << ",\"" << cur.optionText << "\"," << std::to_string(cur.parameter) << ",";
-        str << std::to_string(cur.parameter1) << "," << std::to_string(cur.parameter2) << ")";
+    if (!sDatabase.RunQueryLID(err, voteCaseID,
+        " INSERT INTO crpVoteItems (corporationID, characterID, voteType, voteCaseText, description, inEffect, status, startDateTime, endDateTime)"
+        " VALUES (%u, %u, %u, '%s', '%s', 0, 2, %lli, %lli)",
+        corpID, charID, voteType, textEsc.c_str(), descEsc.c_str(), startDateTime, endDateTime))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+        return 0;
     }
 
-    if (set)
-        sDatabase.RunQuery(err, str.str().c_str());
+    for (auto cur : options) {
+        std::string optEsc;
+        sDatabase.DoEscapeString(optEsc, cur.optionText);
+        if (!sDatabase.RunQuery(err,
+            "INSERT INTO crpVoteOptions (voteCaseID, optionID, optionText, parameter, parameter1, parameter2, votesFor)"
+            " VALUES (%u, %i, '%s', %i, %i, %i, 0)",
+            voteCaseID, cur.optionID, optEsc.c_str(), cur.parameter, cur.parameter1, cur.parameter2))
+            codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+    }
+
+    return voteCaseID;
 }
 
-PyRep* CorporationDB::GetVoteItems(uint32 corpID, uint8 status/*0*/, uint8 maxLen/*20*/)
-{   // working
-    if (maxLen == 0)
-        maxLen = 20;
-    std::string statusTxt = "";
-    if (status != 0) {
-        statusTxt = "AND status = ";
-        statusTxt += std::to_string(status);
-    }
+namespace {
+const char* VOTE_ITEM_COLUMNS =
+    " voteCaseID, voteCaseText, description, corporationID, characterID, voteType, startDateTime, endDateTime,"
+    " status, inEffect, actedUpon, timeActedUpon, rescended, timeRescended";
+}
+
+PyRep* CorporationDB::GetVoteItems(uint32 corpID, uint8 status/*0*/, uint16 maxLen/*0*/)
+{
+    // bco_voting:  all (cached by the client and kept by OnCorporationVoteCaseChanged), open (2), or the last maxLen closed (1)
+    std::ostringstream query;
+    query << "SELECT" << VOTE_ITEM_COLUMNS << " FROM crpVoteItems WHERE corporationID = " << corpID;
+    if (status != 0)
+        query << " AND status = " << (uint32)status;
+    query << " ORDER BY " << (status == 1 ? "endDateTime DESC" : "voteCaseID");
+    if (maxLen > 0)
+        query << " LIMIT " << maxLen;
 
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        " SELECT voteCaseID, voteType, voteCaseText, description, inEffect, status, actedUpon, timeActedUpon,"
-        " rescended, timeRescended, startDateTime, endDateTime"
-        " FROM crpVoteItems"
-        " WHERE corporationID = %u "
-        " %s"
-        " LIMIT 0,%u", corpID, statusTxt.c_str(), maxLen))
-    {
+    if (!sDatabase.RunQuery(res, query.str().c_str())) {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
-    return DBResultToPackedRowDict(res, "voteCaseID");
+    return DBResultToCIndexedRowset(res, "voteCaseID");
 }
 
-// this shit changes based on type of vote....optionID for xxx, parameter for xxx
+PyDict* CorporationDB::GetVoteItemChange(uint32 voteCaseID)
+{
+    // an 'add' for OnCorporationVoteCaseChanged:  {column: (None, value)} over the vote case columns
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT%s FROM crpVoteItems WHERE voteCaseID = %u", VOTE_ITEM_COLUMNS, voteCaseID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return nullptr;
+
+    PyDict* change = new PyDict();
+    for (uint32 i = 0; i < row.ColumnCount(); ++i) {
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, PyStatic.NewNone());
+            tuple->SetItem(1, DBColumnToPyRep(row, i));
+        change->SetItemString(row.ColumnName(i), tuple);
+    }
+    return change;
+}
+
+bool CorporationDB::GetVoteCase(uint32 voteCaseID, Corp::VoteCase& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT corporationID, characterID, voteType, status, inEffect, actedUpon, rescended, winningOptionID,"
+        " startDateTime, endDateTime, expires, timeActedUpon, timeRescended, voteCaseText, description"
+        " FROM crpVoteItems WHERE voteCaseID = %u", voteCaseID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+
+    into.voteCaseID = voteCaseID;
+    into.corporationID = row.GetUInt(0);
+    into.characterID = row.GetUInt(1);
+    into.voteType = row.GetUInt(2);
+    into.status = row.GetUInt(3);
+    into.inEffect = (row.GetUInt(4) != 0);
+    into.actedUpon = (row.GetUInt(5) != 0);
+    into.rescended = (row.GetUInt(6) != 0);
+    into.winningOptionID = (row.IsNull(7) ? -1 : row.GetInt(7));
+    into.startDateTime = row.GetInt64(8);
+    into.endDateTime = row.GetInt64(9);
+    into.expires = row.GetInt64(10);
+    into.timeActedUpon = row.GetInt64(11);
+    into.timeRescended = row.GetInt64(12);
+    into.voteCaseText = row.GetText(13);
+    into.description = row.GetText(14);
+    return true;
+}
+
+void CorporationDB::GetVoteCaseOptions(uint32 voteCaseID, std::vector<Corp::VoteCaseOptions>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT optionID, IFNULL(parameter, 0), IFNULL(parameter1, 0), IFNULL(parameter2, 0), votesFor, optionText"
+        " FROM crpVoteOptions WHERE voteCaseID = %u ORDER BY optionID", voteCaseID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        Corp::VoteCaseOptions option = Corp::VoteCaseOptions();
+            option.optionID = row.GetInt(0);
+            option.parameter = row.GetInt(1);
+            option.parameter1 = row.GetInt(2);
+            option.parameter2 = row.GetInt(3);
+            option.votesFor = row.GetDouble(4);
+            option.optionText = row.GetText(5);
+        into.push_back(option);
+    }
+}
+
+void CorporationDB::GetExpiredVoteCases(int64 now, std::vector<uint32>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT voteCaseID FROM crpVoteItems WHERE status = 2 AND endDateTime <= %lli", now)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
+void CorporationDB::CloseVoteCase(uint32 voteCaseID, int8 winningOptionID, bool inEffect, bool actedUpon, int64 timeActedUpon, int64 expires)
+{
+    DBerror err;
+    std::string winner = (winningOptionID < 0 ? "NULL" : std::to_string(winningOptionID));
+    if (!sDatabase.RunQuery(err,
+        "UPDATE crpVoteItems SET status = 1, winningOptionID = %s, inEffect = %u, actedUpon = %u, timeActedUpon = %lli, expires = %lli"
+        " WHERE voteCaseID = %u",
+        winner.c_str(), (inEffect ? 1 : 0), (actedUpon ? 1 : 0), timeActedUpon, expires, voteCaseID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+}
+
+void CorporationDB::UpdateSanction(const Corp::VoteCase& vc)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "UPDATE crpVoteItems SET inEffect = %u, actedUpon = %u, timeActedUpon = %lli, rescended = %u, timeRescended = %lli"
+        " WHERE voteCaseID = %u",
+        (vc.inEffect ? 1 : 0), (vc.actedUpon ? 1 : 0), vc.timeActedUpon, (vc.rescended ? 1 : 0), vc.timeRescended, vc.voteCaseID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+}
+
+uint32 CorporationDB::GetInEffectLockdown(uint32 corpID, uint32 itemID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT v.voteCaseID FROM crpVoteItems v JOIN crpVoteOptions o ON o.voteCaseID = v.voteCaseID AND o.optionID = v.winningOptionID"
+        " WHERE v.corporationID = %u AND v.voteType = %u AND v.inEffect = 1 AND o.parameter = %u ORDER BY v.voteCaseID DESC LIMIT 1",
+        corpID, Corp::VoteType::ItemLock, itemID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+
+    DBResultRow row;
+    if (res.GetRow(row))
+        return row.GetUInt(0);
+    return 0;
+}
+
 PyRep* CorporationDB::GetVoteOptions(uint32 voteCaseID)
-{   // working
+{
+    // CIndexedRowset by optionID.  votesFor is a float (the closed vote results show votesFor / totalVotes * 100)
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        "SELECT voteCaseID, optionID, optionText, parameter, parameter1, parameter2, votesFor"
-        " FROM crpVoteOptions WHERE voteCaseID = %u", voteCaseID))
+        "SELECT o.voteCaseID, o.optionID, o.optionText, o.parameter, o.votesFor,"
+        " (SELECT COUNT(*) FROM crpVotes v WHERE v.voteCaseID = o.voteCaseID AND v.optionID = o.optionID) AS votesMade,"
+        " 0 AS votesProxied, o.parameter1, o.parameter2"
+        " FROM crpVoteOptions o WHERE o.voteCaseID = %u ORDER BY o.optionID", voteCaseID))
     {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
 
-    return DBResultToIndexRowset(res, "optionID");
+    return DBResultToCIndexedRowset(res, "optionID");
 }
 
-PyRep* CorporationDB::GetSanctionedItems(uint32 corpID, uint8 status/*0*/)
-{   // working
-    // status - 0:default, 1: open, 2: closed
+PyRep* CorporationDB::GetSanctionedItems(uint32 corpID, uint8 state/*0*/)
+{
+    // state 1:  in effect, 2:  not in effect and not expired, 0:  all
+    std::string filter;
+    if (state == 1) {
+        filter = " AND v.inEffect = 1";
+    } else if (state == 2) {
+        filter = " AND v.inEffect = 0 AND v.expires > ";
+        filter += std::to_string(GetFileTimeNow());
+    }
+
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        " SELECT voteCaseID, voteType, inEffect, actedUpon, timeActedUpon, timeRescended, endDateTime AS expires"
-        " FROM crpVoteItems"
-        " WHERE corporationID = %u ", corpID))
+        " SELECT v.voteCaseID, v.voteType, v.winningOptionID AS optionID, v.inEffect, v.actedUpon, v.timeActedUpon, v.timeRescended,"
+        "  v.expires, IFNULL(o.parameter, 0) AS parameter, IFNULL(o.parameter1, 0) AS parameter1, IFNULL(o.parameter2, 0) AS parameter2"
+        " FROM crpVoteItems v"
+        "  JOIN crpVoteOptions o ON o.voteCaseID = v.voteCaseID AND o.optionID = v.winningOptionID"
+        " WHERE v.corporationID = %u AND v.status = 1%s", corpID, filter.c_str()))
     {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
 
-    //return DBResultToPackedRowDict(res, "voteCaseID");
-    //return DBResultToCIndexedRowset(res, "voteCaseID");
-    //return DBResultToIndexRowset(res, "voteCaseID");
     return DBResultToCRowset(res);
 }
 
-PyRep* CorporationDB::GetVotes(uint32 voteCaseID)
-{   // working
+PyDict* CorporationDB::GetSanctionChange(uint32 voteCaseID)
+{
+    // an 'add' for OnSanctionedActionChanged over the sanctioned action columns
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
-        "SELECT charID, voteCaseID, optionID FROM crpVotes"
+        " SELECT v.voteCaseID, v.voteType, v.winningOptionID AS optionID, v.inEffect, v.actedUpon, v.timeActedUpon, v.timeRescended,"
+        "  v.expires, IFNULL(o.parameter, 0) AS parameter, IFNULL(o.parameter1, 0) AS parameter1, IFNULL(o.parameter2, 0) AS parameter2"
+        " FROM crpVoteItems v"
+        "  JOIN crpVoteOptions o ON o.voteCaseID = v.voteCaseID AND o.optionID = v.winningOptionID"
+        " WHERE v.voteCaseID = %u", voteCaseID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return nullptr;
+
+    PyDict* change = new PyDict();
+    for (uint32 i = 0; i < row.ColumnCount(); ++i) {
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, PyStatic.NewNone());
+            tuple->SetItem(1, DBColumnToPyRep(row, i));
+        change->SetItemString(row.ColumnName(i), tuple);
+    }
+    return change;
+}
+
+PyRep* CorporationDB::GetVotes(uint32 voteCaseID)
+{
+    // util.IndexRowset by characterID (bco_voting.OnCorporationVoteChanged rebuilds it with that key)
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT charID AS characterID, voteCaseID, optionID FROM crpVotes"
         " WHERE voteCaseID = %u", voteCaseID))
     {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
 
-    return DBResultToCIndexedRowset(res, "charID");
+    return DBResultToIndexRowset(res, "characterID");
 }
 
-void CorporationDB::CastVote(uint32 corpID, uint32 charID, uint32 voteCaseID, uint8 optionID)
-{   // working
-    DBerror err;
-    sDatabase.RunQuery(err, "UPDATE crpVoteItems SET votesMade=votesMade + 1 WHERE voteCaseID = %u", voteCaseID);
-    sDatabase.RunQuery(err, "UPDATE crpVoteOptions SET votesFor=votesFor + 1 WHERE voteCaseID = %u AND optionID = %u", voteCaseID, optionID);
-    sDatabase.RunQuery(err,
-            "INSERT INTO crpVotes (charID,corpID,voteCaseID,optionID)"
-            " VALUES (%u,%u,%u,%u)", charID, corpID, voteCaseID, optionID);
-}
-
-
-void CorporationDB::MoveShares(uint32 ownerID, uint32 corpID, int32 corporationID, int32 toShareholderID, int32 numberOfShares)
-{   // working
-    //MoveShares(corporationID, toShareholderID, numberOfShares)
-    //  this will also send share update notifications as its' easier to do here..
-
-    // get old owner data
-    bool isCorp = false;
-    if (IsPlayerCorp(ownerID))
-        isCorp = true;
+bool CorporationDB::HasVoted(uint32 voteCaseID, uint32 charID)
+{
     DBQueryResult res;
-    sDatabase.RunQuery(res,"SELECT shares FROM crpShares WHERE corporationID = %u AND shareholderID = %u ", corpID, ownerID);
-    DBResultRow row;
-    if (res.GetRow(row)) {
-        // add to notification
-        /** @todo update this to use CorpNotify() */
-        OnCorpShareChange corpUpdate;
-            corpUpdate.corpID = corpID;
-            corpUpdate.ownerID = ownerID;
-            corpUpdate.oldShares = row.GetInt(0);
-            corpUpdate.newShares = row.GetInt(0) - numberOfShares;
-        MulticastTarget mct;
-        if (isCorp) {
-            mct.corporations.insert(corpID);
-        } else {
-            mct.characters.insert(ownerID);
-        }
-        PyTuple* tuple = corpUpdate.Encode();
-        sEntityList.Multicast("OnShareChange", "*corpid&corprole", &tuple, mct);
+    if (!sDatabase.RunQuery(res, "SELECT optionID FROM crpVotes WHERE voteCaseID = %u AND charID = %u", voteCaseID, charID)) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return true;
     }
-
-    DBerror err;
-    // remove from old owner
-    sDatabase.RunQuery(err,
-        "UPDATE crpShares SET shares = shares - %i"
-        " WHERE corporationID = %u AND shareholderID = %u ", numberOfShares, corporationID, ownerID);
-
-    // get new owner data
-    uint16 oldShares = 0;
-    uint32 oldCorpID = 0;
-    Client* pClient(nullptr);
-    if (IsCharacterID(toShareholderID)) {
-        pClient = sEntityList.FindClientByCharID(toShareholderID);
-        if (pClient == nullptr) {
-            oldCorpID = CharacterDB::GetCorpID(toShareholderID);
-        } else {
-            oldCorpID = pClient->GetCorporationID();
-        }
-    }
-    OnCharShareChange charUpdate;
-    charUpdate.ownerID = toShareholderID;
-    charUpdate.corpID = corpID;
-    charUpdate.newShares = numberOfShares; // plus existing shares this owner has of this corp
-    //res.Reset();
-    sDatabase.RunQuery(res,"SELECT shares, shareholderCorporationID FROM crpShares WHERE corporationID = %u AND shareholderID = %u ", corpID, toShareholderID);
-    // this isnt completely right.   also throws error
-    //  AttributeError: 'dict' object has no attribute 'header'
-    if (res.GetRow(row)) {
-        charUpdate.oldShares = (oldShares = row.GetInt(0));
-        charUpdate.oldCorpID = row.GetInt(1);
-        charUpdate.oldOwnerID = toShareholderID;
-        charUpdate.newOwnerOldCorpID = (isCorp ? 0 : oldCorpID);
-    } else {
-        charUpdate.oldShares = 0;
-        charUpdate.oldCorpID = 0;
-        charUpdate.oldOwnerID = 0;
-        charUpdate.newOwnerOldCorpID = 0;
-    }
-
-    charUpdate.newShares = (oldShares + numberOfShares);
-    charUpdate.newCorpID = corpID;
-    charUpdate.newOwnerID = toShareholderID;
-    charUpdate.newOwnerNewCorpID = (isCorp ? 0 : oldCorpID);
-
-    if (pClient != nullptr)
-        pClient->SendNotification("OnShareChange", "charid", charUpdate.Encode());
-
-    // add to new owner
-    sDatabase.RunQuery(err,
-        "INSERT INTO crpShares (corporationID, shareholderID, shares, shareholderCorporationID)"
-        " VALUES (%i, %i, %i, %u)"
-        " ON DUPLICATE KEY UPDATE shares = shares + %i", corporationID, toShareholderID, numberOfShares, corpID, numberOfShares);
+    return (res.GetRowCount() > 0);
 }
 
+bool CorporationDB::CastVote(uint32 corpID, uint32 charID, uint32 voteCaseID, uint8 optionID, uint32 weight)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+            "INSERT INTO crpVotes (voteCaseID, charID, corpID, optionID, weight)"
+            " VALUES (%u, %u, %u, %u, %u)", voteCaseID, charID, corpID, optionID, weight))
+    {
+        // (voteCaseID, charID) is the key:  one vote per voter
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+        return false;
+    }
+    sDatabase.RunQuery(err, "UPDATE crpVoteItems SET votesMade = votesMade + 1 WHERE voteCaseID = %u", voteCaseID);
+    sDatabase.RunQuery(err, "UPDATE crpVoteOptions SET votesFor = votesFor + %u WHERE voteCaseID = %u AND optionID = %u", weight, voteCaseID, optionID);
+    return true;
+}
+
+bool CorporationDB::MoveShares(uint32 corpID, uint32 fromID, uint32 toID, uint32 count, uint32& fromOld, uint32& toOld)
+{
+    fromOld = GetSharesHeld(fromID, corpID);
+    toOld = GetSharesHeld(toID, corpID);
+    if ((count == 0) or (fromOld < count))
+        return false;
+
+    DBerror err;
+    if (fromOld == count) {
+        sDatabase.RunQuery(err, "DELETE FROM crpShares WHERE corporationID = %u AND shareholderID = %u", corpID, fromID);
+    } else {
+        sDatabase.RunQuery(err, "UPDATE crpShares SET shares = shares - %u WHERE corporationID = %u AND shareholderID = %u", count, corpID, fromID);
+    }
+
+    // shareholderCorporationID:  the holder's corp (a corp holder is its own)
+    uint32 holderCorpID = (IsCorp(toID) ? toID : CharacterDB::GetCorpID(toID));
+    sDatabase.RunQuery(err,
+        "INSERT INTO crpShares (corporationID, shareholderID, shares, shareholderCorporationID) VALUES (%u, %u, %u, %u)"
+        " ON DUPLICATE KEY UPDATE shares = shares + %u, shareholderCorporationID = %u",
+        corpID, toID, count, holderCorpID, count, holderCorpID);
+    return true;
+}
+
+void CorporationDB::IssueShares(uint32 corpID, uint32 count)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE crpCorporation SET shares = shares + %u WHERE corporationID = %u", count, corpID);
+    sDatabase.RunQuery(err,
+        "INSERT INTO crpShares (corporationID, shareholderID, shares, shareholderCorporationID) VALUES (%u, %u, %u, %u)"
+        " ON DUPLICATE KEY UPDATE shares = shares + %u",
+        corpID, corpID, count, corpID, count);
+}
 PyRep* CorporationDB::GetShares(uint32 corpID)
 {
     DBQueryResult res;
@@ -2368,16 +2464,32 @@ PyRep *CorporationDB::GetMyShares(uint32 ownerID)
 
 PyRep* CorporationDB::GetSharesForCorp(uint32 corpID)
 {
+    // kick vote target picker:  members holding more than the average member holding; every member when nobody does
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT shareholderID FROM crpShares WHERE corporationID = %u AND shareholderID < 98000000", corpID)) {
+    if (!sDatabase.RunQuery(res,
+        "SELECT s.shareholderID FROM crpShares s JOIN chrCharacters c ON c.characterID = s.shareholderID AND c.corporationID = %u"
+        " WHERE s.corporationID = %u AND s.shares > (SELECT AVG(s2.shares) FROM crpShares s2"
+        "  JOIN chrCharacters c2 ON c2.characterID = s2.shareholderID AND c2.corporationID = %u WHERE s2.corporationID = %u)",
+        corpID, corpID, corpID, corpID))
+    {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
-        return nullptr;
+        return new PyList();
     }
 
     DBResultRow row;
     PyList* list = new PyList();
     while (res.GetRow(row))
-        list->AddItem(new PyInt(row.GetInt(1)));
+        list->AddItem(new PyInt(row.GetInt(0)));
+
+    if (list->empty()) {
+        std::vector<uint32> ids, offline;
+        GetMemberIDs(corpID, ids, true);
+        GetMemberIDs(corpID, offline, false);
+        for (auto cur : ids)
+            list->AddItem(new PyInt(cur));
+        for (auto cur : offline)
+            list->AddItem(new PyInt(cur));
+    }
 
     return list;
 }

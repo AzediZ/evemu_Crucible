@@ -78,6 +78,7 @@ int CorpMgr::Initialize()
 
 void CorpMgr::Process()
 {
+    ProcessVotes();
 }
 
 /* roles */
@@ -900,6 +901,411 @@ bool CorpMgr::IsCEORevoked(uint32 corpID, uint32 charID)
     if (itr == m_ceoVote.end())
         itr = m_ceoVote.emplace(corpID, CorporationDB::HasOpenCEOVote(corpID)).first;
     return itr->second;
+}
+
+/* shares */
+bool CorpMgr::IsActiveCEO(uint32 corpID, uint32 charID)
+{
+    if (!IsPlayerCorp(corpID))
+        return false;
+    if (CorporationDB::GetCorporationCEO(corpID) != charID)
+        return false;
+    return !IsCEORevoked(corpID, charID);
+}
+
+void CorpMgr::SendShareChange(uint32 holderID, uint32 corpID, uint32 oldShares, uint32 newShares)
+{
+    if (oldShares == newShares)
+        return;
+
+    // bco_shares.OnShareChange(shareholderID, corporationID, change):  an add has every old value None, a removal every new one
+    uint32 holderCorpID = (IsCorp(holderID) ? holderID : CharacterDB::GetCorpID(holderID));
+    PyDict* change = new PyDict();
+    if (oldShares == 0) {
+        AddChange(change, "corporationID", PyStatic.NewNone(), new PyInt(corpID));
+        AddChange(change, "shareholderID", PyStatic.NewNone(), new PyInt(holderID));
+        AddChange(change, "shares", PyStatic.NewNone(), new PyInt(newShares));
+        AddChange(change, "shareholderCorporationID", PyStatic.NewNone(), new PyInt(holderCorpID));
+    } else if (newShares == 0) {
+        AddChange(change, "corporationID", new PyInt(corpID), PyStatic.NewNone());
+        AddChange(change, "shareholderID", new PyInt(holderID), PyStatic.NewNone());
+        AddChange(change, "shares", new PyInt(oldShares), PyStatic.NewNone());
+        AddChange(change, "shareholderCorporationID", new PyInt(holderCorpID), PyStatic.NewNone());
+    } else {
+        AddChange(change, "shares", new PyInt(oldShares), new PyInt(newShares));
+    }
+
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(holderID));
+        payload->SetItem(1, new PyInt(corpID));
+        payload->SetItem(2, change);
+
+    if (IsCorp(holderID)) {
+        sEntityList.CorpNotify(holderID, Notify::Types::CorpNews, "OnShareChange", "corpid", payload);
+        return;
+    }
+
+    Client* pClient = sEntityList.FindClientByCharID(holderID);
+    if (pClient != nullptr) {
+        pClient->SendNotification("OnShareChange", "charid", &payload);
+    } else {
+        PyDecRef(payload);
+    }
+}
+
+void CorpMgr::TransferShares(uint32 corpID, uint32 fromID, uint32 toID, uint32 count)
+{
+    if (count == 0)
+        return;
+    if (fromID == toID)
+        return;
+    if (!IsPlayerCorp(corpID))
+        throw CustomError("Only player corporations have shares.");
+    if (!IsCharacterID(toID) and !IsPlayerCorp(toID))
+        throw UserError("GiveSharesSelectOwner");
+
+    uint32 fromOld(0), toOld(0);
+    if (!CorporationDB::MoveShares(corpID, fromID, toID, count, fromOld, toOld))
+        throw UserError("NotEnoughShares").AddFormatValue("amount", new PyInt(count)).AddFormatValue("balance", new PyInt(fromOld));
+
+    SendShareChange(fromID, corpID, fromOld, fromOld - count);
+    SendShareChange(toID, corpID, toOld, toOld + count);
+
+    _log(CORP__INFO, "CorpMgr::TransferShares() - %u shares of corp %u from %u to %u", count, corpID, fromID, toID);
+}
+
+uint32 CorpMgr::GetVoteWeight(uint32 charID, uint32 corpID)
+{
+    uint32 weight = CorporationDB::GetSharesHeld(charID, corpID);
+
+    // the CEO votes with the shares their corp holds (bco_voting.CanVote)
+    CorpData data = CorpData();
+    if (LoadMemberData(charID, data) and IsActiveCEO(data.corporationID, charID))
+        weight += CorporationDB::GetSharesHeld(data.corporationID, corpID);
+
+    return weight;
+}
+
+/* votes and sanctioned actions */
+void CorpMgr::SendVoteCaseChanged(uint32 corpID, uint32 voteCaseID, PyDict* change)
+{
+    if (change == nullptr)
+        return;
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, new PyInt(voteCaseID));
+        payload->SetItem(2, change);
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnCorporationVoteCaseChanged", "corpid", payload);
+}
+
+void CorpMgr::SendSanctionChanged(uint32 corpID, uint32 voteCaseID, PyDict* change)
+{
+    if (change == nullptr)
+        return;
+    PyTuple* payload = new PyTuple(3);
+        payload->SetItem(0, new PyInt(corpID));
+        payload->SetItem(1, new PyInt(voteCaseID));
+        payload->SetItem(2, change);
+    sEntityList.CorpNotify(corpID, Notify::Types::CorpNews, "OnSanctionedActionChanged", "corpid", payload);
+}
+
+void CorpMgr::OnVoteCaseOpened(uint32 corpID, uint32 voteCaseID, uint32 proposerID)
+{
+    Corp::VoteCase vc = Corp::VoteCase();
+    if (!CorporationDB::GetVoteCase(voteCaseID, vc))
+        return;
+
+    SendVoteCaseChanged(corpID, voteCaseID, CorporationDB::GetVoteItemChange(voteCaseID));
+
+    // CorpVote {subject, body} to the shareholders and the CEO
+    std::map<uint32, uint32> holders;
+    CorporationDB::GetShareholders(corpID, holders);
+    std::vector<uint32> ids;
+    for (auto cur : holders)
+        if (IsCharacterID(cur.first))
+            ids.push_back(cur.first);
+    uint32 ceoID = CorporationDB::GetCorporationCEO(corpID);
+    if (IsCharacterID(ceoID))
+        ids.push_back(ceoID);
+    PyDict* data = new PyDict();
+        data->SetItemString("subject", new PyWString(vc.voteCaseText));
+        data->SetItemString("body", new PyWString(vc.description));
+    NotificationMgr::Send(ids, Notify::Types::CorpVote, proposerID, data);
+
+    if (vc.voteType != Corp::VoteType::CEO)
+        return;
+
+    // "{charID} is running for CEO in {corp}. Your roles as CEO have been revoked for the duration of the voting period."
+    CorporationDB::SetLastCEOVote(corpID, GetFileTimeNow());
+    InvalidateCEOVote(corpID);
+    RefreshMemberSession(ceoID);
+    data = new PyDict();
+        data->SetItemString("corpID", new PyInt(corpID));
+        data->SetItemString("charID", new PyInt(proposerID));
+    NotifyChar(ceoID, Notify::Types::CorpVoteCEORevoked, proposerID, data);
+}
+
+void CorpMgr::ProcessVotes()
+{
+    std::vector<uint32> ids;
+    CorporationDB::GetExpiredVoteCases(GetFileTimeNow(), ids);
+    for (auto cur : ids)
+        CloseVote(cur);
+}
+
+void CorpMgr::CloseVote(uint32 voteCaseID)
+{
+    Corp::VoteCase vc = Corp::VoteCase();
+    if (!CorporationDB::GetVoteCase(voteCaseID, vc) or (vc.status != 2))
+        return;
+
+    std::vector<Corp::VoteCaseOptions> options;
+    CorporationDB::GetVoteCaseOptions(voteCaseID, options);
+
+    // the option with the most share-weighted votes wins;  a tie or no votes is a "don't" (the last option)
+    double total(0), best(-1);
+    int8 winner(-1);
+    bool tie(false);
+    for (auto cur : options) {
+        total += cur.votesFor;
+        if (cur.votesFor > best) {
+            best = cur.votesFor;
+            winner = cur.optionID;
+            tie = false;
+        } else if (cur.votesFor == best) {
+            tie = true;
+        }
+    }
+    if ((total <= 0) or tie)
+        winner = ((vc.voteType == Corp::VoteType::General) or options.empty() ? -1 : options.back().optionID);
+    // a CEO candidate needs more than half of the votes cast
+    if ((vc.voteType == Corp::VoteType::CEO) and (winner == 0) and !options.empty() and (options.front().votesFor * 2 <= total))
+        winner = options.back().optionID;
+
+    int32 parameter(0);
+    for (auto cur : options)
+        if (cur.optionID == winner)
+            parameter = cur.parameter;
+
+    int64 now = GetFileTimeNow();
+    bool inEffect(false), actedUpon(false), newCEO(false);
+    int64 timeActedUpon(0), expires(0);
+    switch (vc.voteType) {
+        case Corp::VoteType::CEO: {
+            CorpData data = CorpData();
+            if ((winner >= 0) and (parameter != 0) and LoadMemberData(parameter, data) and (data.corporationID == vc.corporationID)) {
+                newCEO = true;
+                inEffect = actedUpon = true;
+                timeActedUpon = now;
+            }
+        } break;
+        case Corp::VoteType::General: {
+            // a decision, nothing to implement
+            if (winner >= 0) {
+                inEffect = actedUpon = true;
+                timeActedUpon = now;
+            }
+        } break;
+        default: {
+            // shares, kick, war, lockdown, unlock:  the CEO may implement a passed action until it expires
+            if ((winner >= 0) and (parameter != 0))
+                expires = now + (int64)sConfig.corp.SanctionDays * EvE::Time::Day;
+        } break;
+    }
+
+    CorporationDB::CloseVoteCase(voteCaseID, winner, inEffect, actedUpon, timeActedUpon, expires);
+    if (vc.voteType == Corp::VoteType::CEO)
+        InvalidateCEOVote(vc.corporationID);
+
+    PyDict* change = new PyDict();
+        AddChange(change, "status", new PyInt(2), new PyInt(1));
+        if (inEffect)
+            AddChange(change, "inEffect", new PyInt(0), new PyInt(1));
+        if (actedUpon) {
+            AddChange(change, "actedUpon", new PyInt(0), new PyInt(1));
+            AddChange(change, "timeActedUpon", new PyLong(0), new PyLong(timeActedUpon));
+        }
+    SendVoteCaseChanged(vc.corporationID, voteCaseID, change);
+    if (winner >= 0)
+        SendSanctionChanged(vc.corporationID, voteCaseID, CorporationDB::GetSanctionChange(voteCaseID));
+
+    if (vc.voteType == Corp::VoteType::CEO) {
+        if (newCEO) {
+            ChangeCEO(vc.corporationID, parameter, true);
+        } else {
+            // the CEO's roles come back
+            RefreshMemberSession(CorporationDB::GetCorporationCEO(vc.corporationID));
+        }
+    }
+
+    _log(CORP__INFO, "CorpMgr::CloseVote() - vote case %u of corp %u (type %u) closed, winning option %i", voteCaseID, vc.corporationID, vc.voteType, winner);
+}
+
+void CorpMgr::ImplementSanction(Client* pCaller, uint32 voteCaseID)
+{
+    uint32 corpID = pCaller->GetCorporationID();
+    uint32 charID = pCaller->GetCharacterID();
+    Corp::VoteCase vc = Corp::VoteCase();
+    if (!CorporationDB::GetVoteCase(voteCaseID, vc) or (vc.corporationID != corpID))
+        throw CustomError("That sanctioned action could not be found.");
+    if (!IsActiveCEO(corpID, charID))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You can not implement this sanctioned action unless you are the active CEO."));
+    if ((vc.status != 1) or (vc.winningOptionID < 0) or vc.actedUpon or vc.inEffect)
+        throw CustomError("This sanctioned action can not be implemented.");
+    if (vc.expires <= GetFileTimeNow())
+        throw CustomError("This sanctioned action has expired.");
+
+    std::vector<Corp::VoteCaseOptions> options;
+    CorporationDB::GetVoteCaseOptions(voteCaseID, options);
+    Corp::VoteCaseOptions option = Corp::VoteCaseOptions();
+    for (auto cur : options)
+        if (cur.optionID == vc.winningOptionID)
+            option = cur;
+    if (option.parameter == 0)
+        throw CustomError("This sanctioned action can not be implemented.");
+
+    int64 now = GetFileTimeNow();
+    bool news(false);
+    switch (vc.voteType) {
+        case Corp::VoteType::Shares: {
+            uint32 oldTotal = CorporationDB::GetCorpShares(corpID);
+            uint32 oldHeld = CorporationDB::GetSharesHeld(corpID, corpID);
+            CorporationDB::IssueShares(corpID, option.parameter);
+            SendShareChange(corpID, corpID, oldHeld, oldHeld + option.parameter);
+            PyDict* change = new PyDict();
+                AddChange(change, "shares", new PyInt(oldTotal), new PyInt(oldTotal + option.parameter));
+            BroadcastCorpChange(corpID, change);
+            news = true;
+        } break;
+        case Corp::VoteType::KickMember: {
+            // the vote replaces the stasis rule, but not someone in space
+            CorpData data = CorpData();
+            if (!LoadMemberData(option.parameter, data) or (data.corporationID != corpID))
+                throw CustomError("That character is no longer a member of the corporation.");
+            if (CorporationDB::GetCorporationCEO(corpID) == (uint32)option.parameter)
+                throw CustomError("The CEO cannot be expelled from the corporation.");
+            Client* pTarget = sEntityList.FindClientByCharID(option.parameter);
+            if ((pTarget != nullptr) and !pTarget->IsDocked())
+                throw UserError("CrpCanNotKickMemberInSpace");
+            LeaveCorp(option.parameter, true, charID);
+            news = true;
+        } break;
+        case Corp::VoteType::ItemLock: {
+            ItemLockdown::Lock(corpID, option.parameter, option.parameter2);
+        } break;
+        case Corp::VoteType::ItemUnlock: {
+            ItemLockdown::Unlock(corpID, option.parameter);
+            // the lockdown it ends is rescinded
+            uint32 lockCaseID = CorporationDB::GetInEffectLockdown(corpID, option.parameter);
+            Corp::VoteCase lock = Corp::VoteCase();
+            if ((lockCaseID != 0) and CorporationDB::GetVoteCase(lockCaseID, lock)) {
+                lock.inEffect = false;
+                lock.rescended = true;
+                lock.timeRescended = now;
+                CorporationDB::UpdateSanction(lock);
+                PyDict* change = new PyDict();
+                    AddChange(change, "inEffect", new PyInt(1), new PyInt(0));
+                    AddChange(change, "timeRescended", new PyLong(0), new PyLong(now));
+                SendSanctionChanged(corpID, lockCaseID, change);
+            }
+        } break;
+        case Corp::VoteType::War: {
+            // a corporation in an alliance goes to war through the alliance
+            if (pCaller->GetAllianceID() != 0)
+                throw UserError("CrpCanNotSanctionWarOwner");
+            /** @todo F22:  sWarMgr.DeclareWar(corpID, option.parameter) once wars exist */
+            throw CustomError("War declarations are not available on this server yet.");
+        } break;
+        default:
+            throw CustomError("This sanctioned action can not be implemented.");
+    }
+
+    vc.inEffect = true;
+    vc.actedUpon = true;
+    vc.timeActedUpon = now;
+    CorporationDB::UpdateSanction(vc);
+
+    PyDict* change = new PyDict();
+        AddChange(change, "inEffect", new PyInt(0), new PyInt(1));
+        AddChange(change, "actedUpon", new PyInt(0), new PyInt(1));
+        AddChange(change, "timeActedUpon", new PyLong(0), new PyLong(now));
+    SendSanctionChanged(corpID, voteCaseID, change);
+
+    if (news) {
+        // CorpNews {corpID, voteType, parameter, inEffect, body}
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(corpID));
+            data->SetItemString("voteType", new PyInt(vc.voteType));
+            data->SetItemString("parameter", new PyInt(option.parameter));
+            data->SetItemString("inEffect", new PyInt(1));
+            data->SetItemString("body", new PyString(""));
+        NotifyCorp(corpID, Notify::Types::CorpNews, charID, data);
+    }
+
+    _log(CORP__INFO, "CorpMgr::ImplementSanction() - %u implemented vote case %u (type %u) of corp %u", charID, voteCaseID, vc.voteType, corpID);
+}
+
+/* dividends */
+void CorpMgr::PayDividend(Client* pCaller, uint32 corpID, bool shareholders, double amount)
+{
+    uint32 charID = pCaller->GetCharacterID();
+    if (!IsActiveCEO(corpID, charID))
+        throw UserError("OnlyCEOCanPayoutDividends");
+    if (amount < 0.01)
+        return;
+
+    uint16 key = pCaller->GetCorpAccountKey();
+    if ((key < Account::KeyType::Cash) or (key > Account::KeyType::Cash7))
+        key = Account::KeyType::Cash;
+    if (AccountDB::GetCorpBalance(corpID, key) < amount)
+        throw UserError("CorpHasNoMoneyToPayoutDividends");
+
+    // payee -> share of the payout
+    std::map<uint32, double> payouts;
+    if (shareholders) {
+        // "based upon the number of shares you hold, in relation to the total number of shares issued" (the corp's own treasury holds no claim)
+        std::map<uint32, uint32> holders;
+        CorporationDB::GetShareholders(corpID, holders);
+        holders.erase(corpID);
+        int64 held(0);
+        for (auto cur : holders)
+            held += cur.second;
+        if (held == 0)
+            throw CustomError("There are no shareholders to pay.");
+        for (auto cur : holders)
+            payouts[cur.first] = std::floor(amount * cur.second / held * 100) / 100;
+    } else {
+        // "split evenly between all members"
+        std::vector<uint32> members, offline;
+        CorporationDB::GetMemberIDs(corpID, members, true);
+        CorporationDB::GetMemberIDs(corpID, offline, false);
+        members.insert(members.end(), offline.begin(), offline.end());
+        if (members.empty())
+            return;
+        double each = std::floor(amount / members.size() * 100) / 100;
+        for (auto cur : members)
+            payouts[cur] = each;
+    }
+
+    std::string reason = "Dividend payment from ";
+    reason += CorporationDB::GetCorpName(corpID);
+    for (auto cur : payouts) {
+        if (cur.second < 0.01)
+            continue;
+        AccountService::TransferFunds(corpID, cur.first, cur.second, reason, Journal::EntryType::CorporationDividendPayment, charID, key);
+
+        PyDict* data = new PyDict();
+            data->SetItemString("corpID", new PyInt(corpID));
+            data->SetItemString("payout", new PyFloat(cur.second));
+            data->SetItemString("isMembers", new PyBool(!shareholders));
+        if (IsCharacterID(cur.first)) {
+            NotifyChar(cur.first, Notify::Types::CorpDividend, charID, data);
+        } else {
+            NotifyCorp(cur.first, Notify::Types::CorpDividend, charID, data, Corp::Role::Accountant);
+        }
+    }
+
+    _log(CORP__INFO, "CorpMgr::PayDividend() - corp %u paid %.2f to %u %s", corpID, amount, payouts.size(), (shareholders ? "shareholders" : "members"));
 }
 
 /* notifications */

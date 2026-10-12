@@ -42,17 +42,34 @@ namespace Corp {
         int64 grantableRolesAtOther;
     };
 
-    /* POD structure for corp vote data */
+    /* POD structure for corp vote data.  the client sends rows [optionText, parameter, parameter1, parameter2]; the row index is the optionID */
     struct VoteCaseOptions {
-        int8 optionID;
-        int16 parameter1;      // typeID
-        int16 voteCaseID;
-        int32 parameter;       // itemID
-        int32 votesFor;
-        int32 votesMade;
-        int32 votesProxied;
-        int32 parameter2;      // locationID
+        int8 optionID = 0;
+        int32 parameter = 0;    // ceo/kick: charID, war: ownerID, shares: count, lock/unlock: itemID, general: option index.  0 = "don't"
+        int32 parameter1 = 0;   // lock/unlock: typeID
+        int32 parameter2 = 0;   // lock/unlock: stationID
+        double votesFor = 0;    // share-weighted
         std::string optionText;
+    };
+
+    /* one vote case (crpVoteItems) */
+    struct VoteCase {
+        uint32 voteCaseID = 0;
+        uint32 corporationID = 0;
+        uint32 characterID = 0;     // proposer
+        uint8 voteType = 0;
+        uint8 status = 0;           // 2 open, 1 closed
+        bool inEffect = false;
+        bool actedUpon = false;
+        bool rescended = false;
+        int8 winningOptionID = -1;
+        int64 startDateTime = 0;
+        int64 endDateTime = 0;
+        int64 expires = 0;          // sanctioned action:  the CEO may implement it until then
+        int64 timeActedUpon = 0;
+        int64 timeRescended = 0;
+        std::string voteCaseText;
+        std::string description;
     };
 
     /* POD structure for corp app data */
