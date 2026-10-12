@@ -119,11 +119,13 @@ SET( agent_SOURCE
 SET( alliance_INCLUDE
      "${TARGET_INCLUDE_DIR}/alliance/AllianceBound.h"
      "${TARGET_INCLUDE_DIR}/alliance/AllianceRegistry.h"
-     "${TARGET_INCLUDE_DIR}/alliance/AllianceDB.h")
+     "${TARGET_INCLUDE_DIR}/alliance/AllianceDB.h"
+     "${TARGET_INCLUDE_DIR}/alliance/AllianceManager.h")
 SET( alliance_SOURCE
      "${TARGET_SOURCE_DIR}/alliance/AllianceBound.cpp"
      "${TARGET_SOURCE_DIR}/alliance/AllianceRegistry.cpp"
-     "${TARGET_SOURCE_DIR}/alliance/AllianceDB.cpp")
+     "${TARGET_SOURCE_DIR}/alliance/AllianceDB.cpp"
+     "${TARGET_SOURCE_DIR}/alliance/AllianceManager.cpp")
 
 SET( cache_INCLUDE
      "${TARGET_INCLUDE_DIR}/cache/BulkDB.h"

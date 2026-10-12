@@ -15,6 +15,7 @@
 #include "chat/LSCService.h"
 #include "corporation/CorpMgr.h"
 #include "faction/WarManager.h"
+#include "alliance/AllianceManager.h"
 #include "corporation/CorpRegistryService.h"
 #include "corporation/CorpRegistryBound.h"
 #include "corporation/OfficeSparseBound.h"
@@ -926,7 +927,8 @@ PyResult CorpRegistryBound::AddBulletin(PyCallArgs &call, PyRep* title, PyRep* b
 
     if (edit) {
         if (bulletinID >= 100000) {
-            AllianceDB::EditBulletin(bulletinID, call.client->GetCharacterID(), editDateTime, titleStr, bodyStr);
+            // an alliance bulletin (the client edits those through the alliance moniker):  only the caller's alliance's
+            AllianceDB::EditBulletin(call.client->GetAllianceID(), bulletinID, call.client->GetCharacterID(), titleStr, bodyStr);
         } else {
             m_db.EditBulletin(bulletinID, call.client->GetCharacterID(), editDateTime, titleStr, bodyStr);
         }
@@ -944,7 +946,7 @@ PyResult CorpRegistryBound::DeleteBulletin(PyCallArgs &call, PyInt* bulletinID) 
     call.Dump(CORP__CALL_DUMP);
 
     if (bulletinID->value() >= 100000) {
-        AllianceDB::DeleteBulletin(bulletinID->value());
+        AllianceDB::DeleteBulletin(call.client->GetAllianceID(), bulletinID->value());
     } else {
         m_db.DeleteBulletin(bulletinID->value());
     }
@@ -2620,6 +2622,16 @@ PyResult CorpRegistryBound::CreateAlliance(PyCallArgs &call, PyRep* allianceName
     AllianceDB a_db;
     Client* pClient(call.client);
 
+    // all_ui_home shows "Create Alliance" to the CEO of a corp not in an alliance
+    RequireMember(call);
+    if (!sCorpMgr.IsActiveCEO(m_corpID, pClient->GetCharacterID()))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO can create an alliance."));
+    if (sWarMgr.WarOwnerOf(m_corpID) != m_corpID)
+        throw CustomError("Your corporation is already a member of an alliance.");
+    // the new alliance adopts the wars against the corp, but not wars the corp declared
+    if (sWarMgr.HasDeclaredWars(m_corpID))
+        throw UserError("CantApplyToAllianceHaveDeclaredWars");
+
     std::string allianceNameStr = PyRep::StringContent(allianceName);
     std::string shortNameStr = PyRep::StringContent(shortName);
     std::string descriptionStr = PyRep::StringContent(description);
@@ -2687,20 +2699,8 @@ PyResult CorpRegistryBound::CreateAlliance(PyCallArgs &call, PyRep* allianceName
     // create alliance channel
     this->m_lsc->CreateSystemChannel(allyID);
 
-    // join corporation to alliance
-    if (!a_db.UpdateCorpAlliance(allyID, corpID)) {
-        codelog(SERVICE__ERROR, "Alliance join failed.");
-        return nullptr;
-    }
-
-    // Add alliance membership record to corporation
-    if (!a_db.AddEmployment(allyID, corpID)) {
-        codelog(SERVICE__ERROR, "Add corp employment failed.");
-        return nullptr;
-    }
-
-    // Update alliance ID on client session
-    pClient->UpdateSessionInt("allianceid", allyID);
+    // the corp joins (every online member's session, the corp's wars) and is executor
+    sAllianceMgr.JoinAlliance(corpID, allyID, true);
 
     //Return alliance we just created
     return a_db.GetAlliance(allyID);
@@ -2740,6 +2740,23 @@ PyResult CorpRegistryBound::ApplyToJoinAlliance(PyCallArgs &call, PyInt* allianc
     call.Dump(CORP__CALL_DUMP);
 
     AllianceDB a_db;
+
+    RequireMember(call);
+    uint32 allyID(allianceID->value());
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO or a director can apply to join an alliance."));
+    if (sWarMgr.WarOwnerOf(m_corpID) != m_corpID)
+        throw CustomError("Your corporation is already a member of an alliance.");
+    std::vector<uint32> members;
+    AllianceDB::GetMemberCorps(allyID, members);
+    if (!IsAlliance(allyID) or members.empty())
+        throw UserError("AllianceNotFound");
+    if (AllianceDB::HasPendingApplication(allyID, m_corpID))
+        throw UserError("CantApplyTwiceToAlliance");
+    if (sWarMgr.HasDeclaredWars(m_corpID))
+        throw UserError("CantApplyToAllianceHaveDeclaredWars");
+    if (sWarMgr.AreAtWar(m_corpID, allyID))
+        throw UserError("CantApplyToAllianceYouAreAtWarWith");
 
     Alliance::ApplicationInfo app;
         app.appText = applicationText->content();
@@ -2787,10 +2804,9 @@ PyResult CorpRegistryBound::ApplyToJoinAlliance(PyCallArgs &call, PyInt* allianc
         }
     }
 
-    /// Send an evemail to those who can decide
-    /// Well, for the moment, send it to the ceo
+    // an evemail to the executor's CEO, who (or whose directors) decides
     std::string subject = "New application from ";
-    subject += call.client->GetName();
+    subject += CorporationDB::GetCorpName(m_corpID);
     std::vector<int32> recipients;
     recipients.push_back(m_db.GetCorporationCEO(AllianceDB::GetExecutorID(app.allyID)));
     this->m_lsc->SendMail(m_db.GetCorporationCEO(m_corpID), recipients, subject, applicationText->content());

@@ -24,6 +24,10 @@
 #include "packets/CorporationPkts.h"
 #include "corporation/CorporationDB.h"
 #include "faction/WarManager.h"
+#include "alliance/AllianceManager.h"
+#include "corporation/CorpMgr.h"
+#include "mail/MailMgr.h"
+#include "EVEServerConfig.h"
 #include "station/StationDB.h"
 #include "station/StationDataMgr.h"
 
@@ -100,23 +104,46 @@ PyResult AllianceBound::GetMembers(PyCallArgs &call)
 
 PyResult AllianceBound::DeclareExecutorSupport(PyCallArgs &call, PyInt* chosenExecutor)
 {
-    //   self.GetMoniker().DeclareExecutorSupport(corpID)
+    //   self.GetMoniker().DeclareExecutorSupport(corpID)    the member's CEO or a director, for a member corp
     _log(ALLY__CALL, "AllianceBound::Handle_DeclareExecutorSupport() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.DeclareExecutorSupport(call.client->GetCorporationID(), chosenExecutor->value());
+    AllianceManager::RequireMember(call.client, m_allyID);
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO or a director can declare executor support."));
+    uint32 corpID(call.client->GetCorporationID()), chosen(chosenExecutor->value());
+    if (!AllianceDB::IsMember(m_allyID, chosen))
+        throw UserError("AllianceExecutorInOtherAlliance");
+    int64 since = AllianceDB::GetMemberStartDate(corpID);
+    if ((int64)GetFileTimeNow() - since < (int64)sConfig.alliance.ExecutorMinMemberDays * EvE::Time::Day)
+        throw UserError("CanNotDeclareExecutorInFirstWeek");
 
+    uint32 oldChosen(AllianceDB::GetChosenExecutor(corpID));
+    if (oldChosen == chosen)
+        return nullptr;
+    m_db.DeclareExecutorSupport(corpID, chosen);
+    AllianceManager::SendMemberChanged(m_allyID, corpID, AllianceManager::MemberUpdated, oldChosen, chosen);
     return nullptr;
 }
 
 PyResult AllianceBound::DeleteMember(PyCallArgs &call, PyInt* corporationID)
 {
-    //  self.GetMoniker().DeleteMember(corpID)
+    //  self.GetMoniker().DeleteMember(corpID)    quit (own corp:  its CEO or a director) or kick (the executor's directors)
     _log(ALLY__CALL, "AllianceBound::Handle_DeleteMember() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.DeleteMember(m_allyID, corporationID->value());
+    AllianceManager::RequireMember(call.client, m_allyID);
+    uint32 corpID(corporationID->value());
+    if (corpID == (uint32)call.client->GetCorporationID()) {
+        if (!AllianceManager::IsCEOOrDirector(call.client))
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("Only the CEO or a director can take the corporation out of the alliance."));
+    } else {
+        AllianceManager::RequireExecutorDirector(call.client, m_allyID);
+        if (!AllianceDB::IsMember(m_allyID, corpID))
+            throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("That corporation is not a member of the alliance."));
+    }
 
+    sAllianceMgr.LeaveAlliance(corpID, m_allyID);
     return nullptr;
 }
 
@@ -132,162 +159,59 @@ PyResult AllianceBound::GetApplications(PyCallArgs &call)
 
 PyResult AllianceBound::UpdateApplication(PyCallArgs &call, PyInt* corporationID, PyWString* applicationText, PyInt* state)
 {
-    //    return self.GetMoniker().UpdateApplication(corpID, applicationText, state)
+    //    return self.GetMoniker().UpdateApplication(corpID, applicationText, state)    the executor's directors accept or reject
     _log(ALLY__CALL, "AllianceBound::Handle_UpdateApplication() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    //We don't delay joining an alliance so we will simply change AppAccepted to AppEffective
-    if (state->value() == EveAlliance::AppStatus::AppAccepted)
-    {
-        state = new PyInt (EveAlliance::AppStatus::AppEffective);
-    }
+    AllianceManager::RequireExecutorDirector(call.client, m_allyID);
 
-    //Old application info
+    uint32 corpID(corporationID->value());
     Alliance::ApplicationInfo oldInfo = Alliance::ApplicationInfo();
+    if (!m_db.GetCurrentApplicationInfo(m_allyID, corpID, oldInfo))
+        throw CustomError("That application could not be found.");
+    if (oldInfo.state != EveAlliance::AppStatus::AppNew)
+        throw CustomError("That application has already been decided.");
 
-    if (!m_db.GetCurrentApplicationInfo(m_allyID, corporationID->value(), oldInfo))
-    {
-        _log(SERVICE__ERROR, "%s: Failed to query application for corp %u alliance %u", call.client->GetName(), corporationID->value(), m_allyID);
-        return nullptr;
-    }
-
-    //New application info
     Alliance::ApplicationInfo newInfo = oldInfo;
     newInfo.valid = true;
-    newInfo.state = state->value();
+    newInfo.appText = applicationText->content();
+    switch (state->value()) {
+        case EveAlliance::AppStatus::AppAccepted: {
+            // the corp's wars are adopted, but wars it declared itself can't be
+            if (sWarMgr.HasDeclaredWars(corpID))
+                throw UserError("CanNotAdoptWarsAsCorpHasDesclaredWarsInProgress");
+            if (sWarMgr.WarOwnerOf(corpID) != corpID)
+                throw CustomError("That corporation is already a member of an alliance.");
+            newInfo.state = EveAlliance::AppStatus::AppAccepted;
+        } break;
+        case EveAlliance::AppStatus::AppRejected: {
+            newInfo.state = EveAlliance::AppStatus::AppRejected;
+        } break;
+        default:
+            throw CustomError("An application can only be accepted or rejected.");
+    }
     if (!m_db.UpdateApplication(newInfo))
-    {
-        _log(SERVICE__ERROR, "%s: Failed to update application for corp %u alliance %u", call.client->GetName(), corporationID->value(), m_allyID);
-        return nullptr;
+        throw CustomError("The application could not be updated.");
+    AllianceManager::SendApplicationChanged(oldInfo, newInfo);
+
+    uint32 ceoID(CorporationDB::GetCorporationCEO(corpID));
+    if (newInfo.state == EveAlliance::AppStatus::AppAccepted) {
+        // "Accepted applications take 24 hours to become effective"
+        if (sConfig.alliance.JoinDelayHours == 0) {
+            sAllianceMgr.JoinAlliance(corpID, m_allyID, false);
+        } else {
+            AllianceDB::SetApplicationEffectiveAt(newInfo.appID, (int64)GetFileTimeNow() + (int64)sConfig.alliance.JoinDelayHours * EvE::Time::Hour);
+            if (IsCharacterID(ceoID))
+                MailMgr::SendMail(call.client->GetCharacterID(), ceoID, "Application to alliance accepted",
+                    "Your application to join " + sDataMgr.GetOwnerName(m_allyID) + " has been accepted.  Your corporation becomes a member in "
+                    + std::to_string(sConfig.alliance.JoinDelayHours) + " hours.");
+        }
+    } else if (IsCharacterID(ceoID)) {
+        MailMgr::SendMail(call.client->GetCharacterID(), ceoID, "Application to alliance rejected",
+            "Your application to join " + sDataMgr.GetOwnerName(m_allyID) + " has been rejected.");
     }
-
-    OnAllianceApplicationChanged oaac;
-    oaac.allianceID = newInfo.allyID;
-    oaac.corpID = newInfo.corpID;
-    FillOAApplicationChange(oaac, oldInfo, newInfo);
-
-    //Client list for notifications
-    std::vector<Client *> list;
-
-    //If we are accepting an application
-    if (state->value() == EveAlliance::AppStatus::AppEffective)
-    {
-        // OnAllianceMemberChanged event
-        OnAllianceMemberChange oamc;
-        oamc.allyID = newInfo.allyID;
-        oamc.corpID = newInfo.corpID;
-        FillOAMemberChange(oamc, oldInfo, newInfo);
-
-        //Send to everyone who needs to see it in the applying corp and in the alliance executor corp
-        uint32 executorID = AllianceDB::GetExecutorID(newInfo.allyID);
-
-        list.clear();
-        sEntityList.GetCorpClients(list, oamc.corpID);
-        for (auto cur : list)
-        {
-            if (cur != nullptr)
-            {
-                cur->SendNotification("OnAllianceMemberChanged", "clientID", oamc.Encode(), false);
-                _log(ALLY__TRACE, "OnAllianceMemberChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-            }
-        }
-
-        list.clear();
-        sEntityList.GetCorpClients(list, executorID);
-        for (auto cur : list)
-        {
-            if (cur != nullptr)
-            {
-                cur->SendNotification("OnAllianceMemberChanged", "clientID", oamc.Encode(), false);
-                _log(ALLY__TRACE, "OnAllianceMemberChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-            }
-        }
-
-        //  call to db.AddCorporation() will update eveStaticOwners with new corp
-        PyString *cache_name = new PyString("config.StaticOwners");
-        this->m_cache->InvalidateCache(cache_name);
-        PySafeDecRef(cache_name);
-
-        // join corporation to alliance
-        if (!m_db.UpdateCorpAlliance(m_allyID, corporationID->value()))
-        {
-            codelog(SERVICE__ERROR, "Alliance join failed.");
-            return nullptr;
-        }
-
-        // Add alliance membership record to corporation
-        if (!m_db.AddEmployment(m_allyID, corporationID->value()))
-        {
-            codelog(SERVICE__ERROR, "Add corp employment failed.");
-            return nullptr;
-        }
-
-        // Send an evemail to the corporation in question that the application has been accepted
-        std::string subject = "Application to alliance accepted";
-        std::string message = "Your alliance application has been accepted.";
-        subject += call.client->GetName();
-        std::vector<int32> recipients;
-        recipients.push_back(CorporationDB::GetCorporationCEO(corporationID->value()));
-        this->m_lsc->SendMail(CorporationDB::GetCorporationCEO(m_db.GetExecutorID(m_allyID)), recipients, subject, message);
-
-        //Send OnAllianceChanged packet
-        OnAllianceChanged ac;
-        ac.allianceID = m_allyID;
-        if (!m_db.CreateAllianceChangePacket(ac, 0, m_allyID))
-        {
-            codelog(SERVICE__ERROR, "Failed to create OnAllianceChanged notification stream.");
-            call.client->SendErrorMsg("Unable to notify about alliance change.");
-            return nullptr;
-        }
-
-        //Send to everyone who needs to see it in the applying corp
-        list.clear();
-        sEntityList.GetCorpClients(list, corporationID->value());
-        for (auto cur : list)
-        {
-            if (cur != nullptr)
-            {
-                cur->SendNotification("OnAllianceChanged", "clientID", ac.Encode(), false);
-                _log(ALLY__TRACE, "OnAllianceChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-            }
-        }
-    }
-
-    else if (state->value() == EveAlliance::AppStatus::AppRejected)
-    {
-        _log(ALLY__TRACE, "Application of %u:%u has been rejected, sending notification...", m_allyID, corporationID->value());
-    }
-
-    else
-    {
-        _log(SERVICE__ERROR, "%s: Sent unhandled status %u ", call.client->GetName(), state->value());
-    }
-
-    //Send to everyone who needs to see it in the applying corp and in the alliance executor corp
-    uint32 executorID = AllianceDB::GetExecutorID(oaac.allianceID);
-
-    list.clear();
-    sEntityList.GetCorpClients(list, oaac.corpID);
-    for (auto cur : list)
-    {
-        if (cur != nullptr)
-        {
-            cur->SendNotification("OnAllianceApplicationChanged", "clientID", oaac.Encode(), false);
-            _log(ALLY__TRACE, "OnAllianceApplicationChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-        }
-    }
-
-    list.clear();
-    sEntityList.GetCorpClients(list, executorID);
-    for (auto cur : list)
-    {
-        if (cur != nullptr)
-        {
-            cur->SendNotification("OnAllianceApplicationChanged", "clientID", oaac.Encode(), false);
-            _log(ALLY__TRACE, "OnAllianceApplicationChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-        }
-    }
-
+    _log(ALLY__INFO, "AllianceBound::UpdateApplication() - application of corp %u to alliance %u %s by %u", corpID, m_allyID,
+         (newInfo.state == EveAlliance::AppStatus::AppAccepted ? "accepted" : "rejected"), call.client->GetCharacterID());
     return nullptr;
 }
 
@@ -320,23 +244,6 @@ void AllianceBound::FillOAApplicationChange(OnAllianceApplicationChanged &OAAC, 
         }
     }
 }
-
-void AllianceBound::FillOAMemberChange(OnAllianceMemberChange &oamc, const Alliance::ApplicationInfo &Old, const Alliance::ApplicationInfo &New)
-{
-    if (Old.valid)
-    {
-        oamc.corporationIDOld = new PyInt(Old.corpID);
-        oamc.corporationNameOld = new PyString(CorporationDB::GetCorpName(Old.corpID));
-        oamc.chosenExecutorIDOld = new PyInt(AllianceDB::GetExecutorID(Old.allyID));
-    }
-    if (New.valid)
-    {
-        oamc.corporationIDNew = new PyInt(New.corpID);
-        oamc.corporationNameNew = new PyString(CorporationDB::GetCorpName(New.corpID));
-        oamc.chosenExecutorIDNew = new PyInt(AllianceDB::GetExecutorID(New.allyID));
-    }
-}
-
 
 PyResult AllianceBound::AddToVoiceChat(PyCallArgs &call, PyString* channelName)
 {
@@ -390,15 +297,22 @@ PyResult AllianceBound::GetBillsReceivable(PyCallArgs &call)
     return BillingMgr::GetBillsReceivable(m_allyID);
 }
 
-PyResult AllianceBound::AddBulletin(PyCallArgs &call, PyWString* title, PyWString* body)
+PyResult AllianceBound::AddBulletin(PyCallArgs &call, PyRep* title, PyRep* body)
 {
     //   sm.GetService('alliance').GetMoniker().AddBulletin(title, body)
     //  sm.GetService('alliance').GetMoniker().AddBulletin(title, body, bulletinID=bulletinID, editDateTime=editDateTime)  <-- this is to update bulletin
     _log(ALLY__CALL, "AllianceBound::Handle_AddBulletin() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.AddBulletin(m_allyID, call.client->GetCorporationID(), call.client->GetCharacterID(), title->content(), body->content());
-
+    RequireBulletinManager(call);
+    std::string titleStr = PyRep::StringContent(title);
+    std::string bodyStr = PyRep::StringContent(body);
+    std::map<std::string, PyRep*>::iterator itr = call.byname.find("bulletinID");
+    if ((itr != call.byname.end()) and (itr->second->IsInt() or itr->second->IsLong())) {
+        AllianceDB::EditBulletin(m_allyID, (uint32)PyRep::IntegerValue(itr->second), call.client->GetCharacterID(), titleStr, bodyStr);
+    } else {
+        m_db.AddBulletin(m_allyID, call.client->GetCorporationID(), call.client->GetCharacterID(), titleStr, bodyStr);
+    }
     return nullptr;
 }
 
@@ -408,8 +322,17 @@ PyResult AllianceBound::DeleteBulletin(PyCallArgs &call, PyInt* id)
     _log(ALLY__CALL, "AllianceBound::Handle_DeleteBulletin() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    m_db.DeleteBulletin(id->value());
+    RequireBulletinManager(call);
+    AllianceDB::DeleteBulletin(m_allyID, id->value());
     return nullptr;
+}
+
+void AllianceBound::RequireBulletinManager(PyCallArgs& call)
+{
+    // base_corporation:  communications officers (corpRoleChatManager) of the member corps edit the alliance bulletins
+    AllianceManager::RequireMember(call.client, m_allyID);
+    if (!CorpMgr::HasRole(call.client->GetCorpRole(), Corp::Role::ChatManager))
+        throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be a communications officer to manage alliance bulletins."));
 }
 
 PyResult AllianceBound::GetBulletins(PyCallArgs &call)
@@ -533,22 +456,9 @@ PyResult AllianceBound::UpdateAlliance(PyCallArgs &call, PyWString* description,
     _log(ALLY__CALL, "AllianceBound::Handle_UpdateAlliance() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
+    AllianceManager::RequireExecutorDirector(call.client, m_allyID);
     m_db.UpdateAlliance(m_allyID, description->content(), url->content());
-
-    //Send OnAllianceChanged packet
-    OnAllianceChanged ac;
-    ac.allianceID = m_allyID;
-    if (!m_db.CreateAllianceChangePacket(ac, 0, m_allyID))
-    {
-        codelog(SERVICE__ERROR, "Failed to create OnAllianceChanged notification stream.");
-        call.client->SendErrorMsg("Unable to notify about alliance change.");
-        return nullptr;
-    }
-
-    //Send notification to the client about the alliance change which just occurred
-    call.client->SendNotification("OnAllianceChanged", "clientID", ac.Encode(), false);
-    _log(SOV__DEBUG, "OnAllianceChanged sent to %s(%u)", call.client->GetName(), call.client->GetCharID());
-
+    AllianceManager::SendAllianceChanged(m_allyID);
     return nullptr;
 }
 

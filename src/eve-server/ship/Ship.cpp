@@ -2925,6 +2925,28 @@ void ShipSE::SetPilot(Client* pClient) {
     m_corpID = pClient->GetCorporationID();
 }
 
+void ShipSE::RefreshOwnerIDs()
+{
+    Client* pPilot(GetPilot());
+    if (pPilot == nullptr)
+        return;
+    if ((m_allyID == pPilot->GetAllianceID()) and (m_corpID == (uint32)pPilot->GetCorporationID()) and (m_warID == pPilot->GetWarFactionID()))
+        return;
+    m_allyID = pPilot->GetAllianceID();
+    m_corpID = pPilot->GetCorporationID();
+    m_warID = pPilot->GetWarFactionID();
+    if (SysBubble() == nullptr)
+        return;
+    // the overview, brackets and war flags read corpID/allianceID/warFactionID from the slim item
+    PyTuple* slimData = new PyTuple(2);
+        slimData->SetItem(0, new PyLong(GetID()));
+        slimData->SetItem(1, new PyObject("foo.SlimItem", MakeSlimItem()));
+    PyTuple* itemData = new PyTuple(2);
+        itemData->SetItem(0, new PyString("OnSlimItemChange"));
+        itemData->SetItem(1, slimData);
+    SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange");
+}
+
 bool ShipSE::IsInvul()
 {
     if (m_shipRef->HasPilot())

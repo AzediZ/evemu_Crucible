@@ -2171,6 +2171,10 @@ void Client::UpdateCorpSession(CorpData& data)
     SendSessionChange();
 
     sEntityList.UpdateCorpMember(this, oldCorpID);
+
+    // the ship's slim item carries corp, alliance and militia (overview, war flags)
+    if (pShipSE != nullptr)
+        pShipSE->RefreshOwnerIDs();
 }
 
 void Client::ApplyCorpRoles(const CorpData& data)

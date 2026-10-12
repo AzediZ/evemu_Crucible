@@ -400,6 +400,8 @@ public:
 
     /* virtual functions in base to allow common interface calls specific to ship entities */
     virtual void SetPilot(Client* pClient);
+    // the pilot's corp, alliance or militia changed:  the cached IDs and everyone's slim item follow
+    void RefreshOwnerIDs();
     virtual bool HasPilot()                             { return ((m_shipRef.get() == nullptr) ? false : m_shipRef->HasPilot()); }
     virtual Client* GetPilot()                          { return ((m_shipRef.get() == nullptr) ? nullptr : m_shipRef->GetPilot()); }
 

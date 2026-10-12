@@ -118,10 +118,10 @@ PyResult AllianceRegistry::GetRankedAlliances(PyCallArgs &call, PyInt* maxLen) {
     _log(ALLY__CALL, "AllianceRegistry::Handle_GetRankedAlliances() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
-    return m_db.GetRankedAlliances();
+    // maxLen 0 = all (all_ui_rankings)
+    return m_db.GetRankedAlliances(maxLen->value() > 0 ? maxLen->value() : 0);
 }
 
-//Not sure why this doesn't work
 PyResult AllianceRegistry::GetEmploymentRecord(PyCallArgs &call, PyInt* corporationID) {
     //  allianceHistory = sm.RemoteSvc('allianceRegistry').GetEmploymentRecord(itemID)
     _log(ALLY__CALL, "AllianceRegistry::Handle_GetEmploymentRecord() size=%lli", call.tuple->size());

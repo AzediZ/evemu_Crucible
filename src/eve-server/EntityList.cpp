@@ -53,6 +53,7 @@
 #include "corporation/CorporationDB.h"
 #include "corporation/BillingMgr.h"
 #include "faction/WarManager.h"
+#include "alliance/AllianceManager.h"
 #include "corporation/CorpMgr.h"
 #include "agents/AgentServices.h"
 
@@ -294,6 +295,7 @@ void EntityList::Process() {
             ++m_minutes;
             sMissionDataMgr.Process();  // 1m
             sWarMgr.Process();  // 1m  war notifications and bills
+            sAllianceMgr.Process();  // 1m  alliance joins, daily executor count
 
             if (m_minutes % 5 == 0) { // ~5m
                 sWHMgr.Process();

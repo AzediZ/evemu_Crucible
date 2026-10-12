@@ -29,7 +29,6 @@ public:
     AllianceBound(EVEServiceManager& mgr, AllianceRegistry& parent, AllianceDB& db, uint32 allyID);
 
     static void FillOAApplicationChange(OnAllianceApplicationChanged& OAAC, const Alliance::ApplicationInfo& Old, const Alliance::ApplicationInfo& New);
-    static void FillOAMemberChange(OnAllianceMemberChange& OAMC, const Alliance::ApplicationInfo& Old, const Alliance::ApplicationInfo& New);
 
     uint32 GetAllianceID () const { return this->m_allyID; }
 protected:
@@ -40,9 +39,10 @@ protected:
     PyResult AssignLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
     PyResult RemoveLabels(PyCallArgs& call, PyList* contactIDs, PyInt* labelMask);
 
-    PyResult AddBulletin(PyCallArgs& call, PyWString* title, PyWString* body);
+    PyResult AddBulletin(PyCallArgs& call, PyRep* title, PyRep* body);
     PyResult GetBulletins(PyCallArgs& call);
     PyResult DeleteBulletin(PyCallArgs& call, PyInt* id);
+    void RequireBulletinManager(PyCallArgs& call);
 
     PyResult GetMembers(PyCallArgs& call);
     PyResult DeclareExecutorSupport(PyCallArgs& call, PyInt* chosenExecutor);

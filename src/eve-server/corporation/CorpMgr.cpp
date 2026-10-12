@@ -39,6 +39,7 @@
 #include "corporation/CorporationDB.h"
 #include "corporation/CorpMgr.h"
 #include "faction/WarManager.h"
+#include "alliance/AllianceManager.h"
 #include "corporation/ItemLockdown.h"
 #include "inventory/ItemFactory.h"
 #include "mail/NotificationMgr.h"
@@ -982,9 +983,8 @@ void CorpMgr::OnAllianceBillOverdue(const BillData& bill)
     NotifyCorp(executorID, Notify::Types::AllMaintenanceBill, corpCONCORD, data);
 
     if (sConfig.corp.CloseAllianceOnUnpaidBill) {
-        /** @todo F22:  sAllianceMgr.DisbandAlliance(bill.debtorID) once alliances can be closed */
-        _log(CORP__WARNING, "CorpMgr::OnAllianceBillOverdue() - alliance %u did not pay its maintenance bill %u; closing alliances is not available yet",
-             bill.debtorID, bill.billID);
+        _log(CORP__WARNING, "CorpMgr::OnAllianceBillOverdue() - alliance %u did not pay its maintenance bill %u and is closed", bill.debtorID, bill.billID);
+        sAllianceMgr.DisbandAlliance(bill.debtorID);
     }
 }
 
