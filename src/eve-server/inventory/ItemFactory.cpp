@@ -92,6 +92,9 @@ void ItemFactory::Close()
 void ItemFactory::SaveItems() {
     if (sConfig.debug.DeleteTrackingCans)
         InventoryDB::DeleteTrackingCans();
+    // one commit for every item's attributes and the items (entity and entity_attributes are InnoDB:  a commit each
+    //  would wait for the disk each time)
+    DBTransaction tx("item save");
     uint32 count(0);
     double startTime = GetTimeMSeconds();
     std::vector<Inv::SaveData> items;
