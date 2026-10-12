@@ -47,7 +47,7 @@ PyRep *TutorialDB::GetPages(uint32 tutorialID) {
     DBQueryResult res;
 
     if (!sDatabase.RunQuery(res,
-        "SELECT pageID, pageNumber, pageName, text, imagePath, audioPath, 0 AS dataID"
+        "SELECT pageID, pageNumber, pageName, pageNameID, text, textID, imagePath, audioPath, NULL AS pageActionID, 0 AS dataID"
         " FROM tutorial_pages"
         " WHERE tutorialID=%u"
         " ORDER BY pageNumber", tutorialID))
@@ -63,7 +63,7 @@ PyRep *TutorialDB::GetTutorial(uint32 tutorialID) {
     DBQueryResult res;
 
     if (!sDatabase.RunQuery(res,
-        "SELECT tutorialID, tutorialName, nextTutorialID, 0 AS dataID"
+        "SELECT tutorialID, tutorialName, tutorialNameID, nextTutorialID, categoryID, 0 AS dataID"
         " FROM tutorials"
         " WHERE tutorialID=%u", tutorialID))
     {
@@ -94,7 +94,7 @@ PyRep *TutorialDB::GetAllTutorials() {
     DBQueryResult res;
 
     if (!sDatabase.RunQuery(res,
-        "SELECT tutorialID, tutorialName, nextTutorialID, categoryID, 0 AS dataID"
+        "SELECT tutorialID, tutorialName, tutorialNameID, nextTutorialID, categoryID, 0 AS dataID"
         " FROM tutorials"))
     {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
@@ -108,7 +108,7 @@ PyRep *TutorialDB::GetAllCriterias() {
     DBQueryResult res;
 
     if (!sDatabase.RunQuery(res,
-        "SELECT criteriaID, criteriaName, messageText, audioPath, 0 AS dataID"
+        "SELECT criteriaID, criteriaName, messageText, messageTextID, audioPath, 0 AS dataID"
         " FROM tutorial_criteria"))
     {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
@@ -123,7 +123,7 @@ PyRep *TutorialDB::GetCategories() {
 
     if (!sDatabase.RunQuery(res,
         "SELECT"
-        " categoryID, categoryName, description, 0 AS dataID"
+        " categoryID, categoryName, categoryNameID, description, descriptionID, 0 AS dataID"
         " FROM tutorial_categories"))
     {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
@@ -133,29 +133,101 @@ PyRep *TutorialDB::GetCategories() {
     return DBResultToRowset(res);
 }
 
-PyRep *TutorialDB::GetTutorialsAndConnections(uint8 raceID) {
+PyRep* TutorialDB::GetTutorialsAndConnections()
+{
+    // the client does t.Index('tutorialID') and tc.Filter('tutorialID'), so both are CRowsets
     DBQueryResult res;
-    sDatabase.RunQuery(res, "SELECT tutorialID, %u AS raceID, nextTutorialID FROM tutorials", raceID);
-    /*
-    DBQueryResult res;
-    if (!sDatabase.RunQuery(res, "SELECT `tutorialID`, `tutorialName`, `categoryID`, `dataID`, `tutorialNameID` FROM `tutorialsvc_tutorials`")) {
-        sLog.Error("TutorialService","GetTutorialsAndConnections query1 error: %s", res.error.c_str());
-        return nullptr;
+    if (!sDatabase.RunQuery(res,
+        "SELECT tutorialID, tutorialName, tutorialNameID, categoryID, 0 AS dataID FROM tutorials"))
+    {
+        codelog(DATABASE__ERROR, "Error in GetTutorialsAndConnections query: %s", res.error.c_str());
+        return PyStatic.NewNone();
     }
-    PyObjectEx *tutorials = DBResultToCRowset(res);
+    PyRep* tutorials = DBResultToCRowset(res);
 
-    res.Reset();
-    if (!sDatabase.RunQuery(res, "SELECT `tutorialID`, `raceID`, `nextTutorialID`, `dataID` FROM `tutorialsvc_connections`")) {
-        sLog.Error("TutorialService","GetTutorialsAndConnections query2 error: %s", res.error.c_str());
-        return nullptr;
+    // Crucible's sequence (per race), plus the next tutorial of our own tutorials for every race
+    DBQueryResult cres;
+    if (!sDatabase.RunQuery(cres,
+        "SELECT tutorialID, raceID, nextTutorialID FROM tutorialConnections"
+        " UNION ALL"
+        " SELECT t.tutorialID, 0, t.nextTutorialID FROM tutorials AS t"
+        " WHERE t.nextTutorialID IS NOT NULL AND t.nextTutorialID != 0"
+        " AND NOT EXISTS (SELECT 1 FROM tutorialConnections AS c WHERE c.tutorialID = t.tutorialID)"))
+    {
+        codelog(DATABASE__ERROR, "Error in GetTutorialsAndConnections query: %s", cres.error.c_str());
+        PyDecRef(tutorials);
+        return PyStatic.NewNone();
     }
-    DBRowDescriptor
-    PyObjectEx *connections = DBResultToCRowset(res);
-    PyList *rtn = new PyList(2);
-    rtn->SetItem(0, tutorials);
-    rtn->SetItem(1, connections);
-    rtn->Dump(stdout, "GTAC:   ");
-    return rtn; */
-    return DBResultToRowset(res);
+
+    PyTuple* tuple = new PyTuple(2);
+        tuple->SetItem(0, tutorials);
+        tuple->SetItem(1, DBResultToCRowset(cres));
+    return tuple;
 }
 
+void TutorialDB::LogEvent(uint32 charID, uint32 tutorialID, uint32 pageID, uint16 eventTypeID, uint32 seconds)
+{
+    DBerror err;
+    sDatabase.RunQuery(err,
+        "INSERT INTO chrTutorialEvents (characterID, tutorialID, pageID, eventTypeID, eventDateTime, secondsSpent)"
+        " VALUES (%u, %u, %u, %u, %lli, %u)"
+        " ON DUPLICATE KEY UPDATE pageID = VALUES(pageID), eventTypeID = VALUES(eventTypeID),"
+        " eventDateTime = VALUES(eventDateTime), secondsSpent = VALUES(secondsSpent)",
+        charID, tutorialID, pageID, eventTypeID, (int64)GetFileTimeNow(), seconds);
+}
+
+PyRep* TutorialDB::GetCharacterTutorialState(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT tutorialID, pageID, eventTypeID FROM chrTutorialEvents WHERE characterID = %u ORDER BY eventDateTime", charID))
+    {
+        codelog(DATABASE__ERROR, "Error in GetCharacterTutorialState query: %s", res.error.c_str());
+        return new PyList();
+    }
+    return DBResultToCRowset(res);
+}
+
+PyRep* TutorialDB::GetCareerAgents()
+{
+    PyDict* dict = new PyDict();
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT careerType, agentID FROM agtCareerAgents ORDER BY careerType, agentID")) {
+        codelog(DATABASE__ERROR, "Error in GetCareerAgents query: %s", res.error.c_str());
+        return dict;
+    }
+    std::map<uint8, PyList*> lists;
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        std::map<uint8, PyList*>::iterator itr = lists.find(row.GetUInt(0));
+        if (itr == lists.end())
+            itr = lists.emplace(row.GetUInt(0), new PyList()).first;
+        itr->second->AddItem(new PyInt(row.GetUInt(1)));
+    }
+    for (auto cur : lists)
+        dict->SetItem(new PyInt(cur.first), cur.second);
+    return dict;
+}
+
+PyRep* TutorialDB::GetTutorialAgents(const std::vector<uint32>& agentIDs)
+{
+    std::ostringstream ids;
+    ids << "0";
+    for (auto cur : agentIDs)
+        ids << "," << cur;
+
+    // bloodline and gender come from the npc character, like AgentDB::LoadAgentData
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT agt.agentID, agt.agentTypeID, agt.divisionID, agt.level, agt.locationID AS stationID,"
+        " bl.bloodlineID, agt.quality, agt.corporationID, chr.gender"
+        " FROM agtAgents AS agt"
+        " LEFT JOIN chrNPCCharacters AS chr ON chr.characterID = agt.agentID"
+        " LEFT JOIN bloodlineTypes AS bl ON bl.typeID = chr.typeID"
+        " WHERE agt.agentID IN (%s)", ids.str().c_str()))
+    {
+        codelog(DATABASE__ERROR, "Error in GetTutorialAgents query: %s", res.error.c_str());
+        return new PyList();
+    }
+    return DBResultToRowset(res);
+}

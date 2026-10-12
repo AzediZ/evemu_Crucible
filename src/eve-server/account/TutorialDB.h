@@ -41,7 +41,18 @@ public:
     PyRep *GetAllTutorials();
     PyRep *GetAllCriterias();
     PyRep *GetCategories();
-    PyRep *GetTutorialsAndConnections(uint8 raceID);
+    // (tutorials CRowset tutorialID, tutorialName, tutorialNameID, categoryID, dataID; connections CRowset tutorialID, raceID, nextTutorialID)
+    static PyRep* GetTutorialsAndConnections();
+
+    // the character's latest event per tutorial (chrTutorialEvents)
+    static void LogEvent(uint32 charID, uint32 tutorialID, uint32 pageID, uint16 eventTypeID, uint32 seconds);
+    // CRowset tutorialID, pageID, eventTypeID
+    static PyRep* GetCharacterTutorialState(uint32 charID);
+
+    // career funnel:  dict careerType -> [agentIDs] (agtCareerAgents)
+    static PyRep* GetCareerAgents();
+    // rowset agentID, agentTypeID, divisionID, level, stationID, bloodlineID, quality, corporationID, gender
+    static PyRep* GetTutorialAgents(const std::vector<uint32>& agentIDs);
 };
 
 #endif

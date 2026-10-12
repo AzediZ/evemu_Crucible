@@ -711,6 +711,7 @@ int main( int argc, char* argv[] )
     newSvcMgr.Register(new HoloscreenMgrService());
     newSvcMgr.Register(new Standing());
     newSvcMgr.Register(new TutorialService());
+    newSvcMgr.Register(new TutorialLocationService());
     newSvcMgr.Register(new VoucherService(newSvcMgr));
     newSvcMgr.Register(new encounterSpawnServer());
     newSvcMgr.Register(new zActionServer());

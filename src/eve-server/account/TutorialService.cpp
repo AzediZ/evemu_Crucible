@@ -26,6 +26,7 @@
 #include "eve-server.h"
 
 
+#include "Client.h"
 #include "account/TutorialService.h"
 
 TutorialService::TutorialService() :
@@ -39,6 +40,12 @@ TutorialService::TutorialService() :
     this->Add("GetCharacterTutorialState", &TutorialService::GetCharacterTutorialState);
     this->Add("GetTutorialsAndConnections", &TutorialService::GetTutorialsAndConnections);
     this->Add("GetCareerAgents", &TutorialService::GetCareerAgents);
+    this->Add("GetActions", &TutorialService::GetActions);
+    this->Add("LogStarted", &TutorialService::LogStarted);
+    this->Add("LogCompleted", &TutorialService::LogCompleted);
+    this->Add("LogAborted", &TutorialService::LogAborted);
+    this->Add("LogClosed", &TutorialService::LogClosed);
+    this->Add("LogAppClosed", &TutorialService::LogAppClosed);
 }
 
 PyResult TutorialService::GetTutorials(PyCallArgs &call) {
@@ -50,33 +57,29 @@ PyResult TutorialService::GetTutorials(PyCallArgs &call) {
 PyResult TutorialService::GetTutorialInfo(PyCallArgs &call, PyInt* tutorialID) {
   sLog.Warning( "TutorialService::Handle_GetTutorialInfo()", "size=%lu", call.tuple->size());
   call.Dump(SERVICE__CALL_DUMP);
-    Rsp_GetTutorialInfo rsp;
-
-    rsp.pagecriterias = m_db.GetPageCriterias(tutorialID->value());
-    if (rsp.pagecriterias == NULL) {
-        codelog(SERVICE__ERROR, "An error occured while getting pagecriterias for tutorial %u.", tutorialID->value());
-        return nullptr;
-    }
-
-    rsp.pages = m_db.GetPages(tutorialID->value());
-    if (rsp.pages == NULL) {
-        codelog(SERVICE__ERROR, "An error occured while getting pages for tutorial %u.", tutorialID->value());
-        return nullptr;
-    }
-
-    rsp.tutorial = m_db.GetTutorial(tutorialID->value());
-    if (rsp.tutorial == NULL) {
+    // KeyVal(pagecriterias, pages, tutorial, criterias, actions, pageactions).  rows use message IDs (pageNameID, textID, ...)
+    PyRep* pagecriterias = m_db.GetPageCriterias(tutorialID->value());
+    PyRep* pages = m_db.GetPages(tutorialID->value());
+    PyRep* tutorial = m_db.GetTutorial(tutorialID->value());
+    PyRep* criterias = m_db.GetTutorialCriterias(tutorialID->value());
+    if ((pagecriterias == nullptr) or (pages == nullptr) or (tutorial == nullptr) or (criterias == nullptr)) {
         codelog(SERVICE__ERROR, "An error occured while getting tutorial %u.", tutorialID->value());
+        PySafeDecRef(pagecriterias);
+        PySafeDecRef(pages);
+        PySafeDecRef(tutorial);
+        PySafeDecRef(criterias);
         return nullptr;
     }
 
-    rsp.criterias = m_db.GetTutorialCriterias(tutorialID->value());
-    if (rsp.criterias == NULL) {
-        codelog(SERVICE__ERROR, "An error occured while getting criterias for tutorial %u.", tutorialID->value());
-        return nullptr;
-    }
-
-    return(rsp.Encode());
+    PyDict* dict = new PyDict();
+        dict->SetItemString("pagecriterias", pagecriterias);
+        dict->SetItemString("pages", pages);
+        dict->SetItemString("tutorial", tutorial);
+        dict->SetItemString("criterias", criterias);
+        // tutorial and page actions (rows with actionID / pageID, actionID):  none in our content
+        dict->SetItemString("actions", new PyList());
+        dict->SetItemString("pageactions", new PyList());
+    return new PyObject("util.KeyVal", dict);
 }
 
 PyResult TutorialService::GetTutorialAgents(PyCallArgs &call, PyList* agentIDs) {
@@ -225,10 +228,10 @@ PyResult TutorialService::GetTutorialAgents(PyCallArgs &call, PyList* agentIDs) 
             ["corporationID" => <0> [I4]]
             ["gender" => <1> [Bool]]
                 */
-    sLog.White( "TutorialService::Handle_GetTutorialAgents()", "size=%lu", call.tuple->size());
-    call.Dump(SERVICE__CALL_DUMP);
-
-    return new PyInt( 0 );
+    std::vector<uint32> ids;
+    for (PyList::const_iterator itr = agentIDs->begin(); itr != agentIDs->end(); ++itr)
+        ids.push_back(PyRep::IntegerValueU32(*itr));
+    return TutorialDB::GetTutorialAgents(ids);
 }
 
 PyResult TutorialService::GetCriterias(PyCallArgs &call) {
@@ -245,9 +248,8 @@ PyResult TutorialService::GetCategories(PyCallArgs &call) {
 
 //00:25:53 L TutorialService::Handle_GetCharacterTutorialState(): size= 0
 PyResult TutorialService::GetCharacterTutorialState(PyCallArgs& call) {
-  /*  Empty Call  */
-
-    return new PyInt( 0 );
+    // rows (tutorialID, pageID, eventTypeID):  155 completed and 158 aborted are done, 158 also turns tutorials off
+    return TutorialDB::GetCharacterTutorialState(call.client->GetCharacterID());
 }
 
 PyResult TutorialService::GetTutorialsAndConnections(PyCallArgs& call) {
@@ -263,11 +265,7 @@ PyResult TutorialService::GetTutorialsAndConnections(PyCallArgs& call) {
                     self.tutorialConnections[tutID][each.raceID] = each.nextTutorialID
     */
 
-            /*  FIXME  this needs work.  not sure what's wrong, but i DO know our db is incomplete
-    uint8 raceID = call.client->GetChar()->race();
-    return (m_db.GetTutorialsAndConnections(raceID));
-    */
-    return PyStatic.NewNone();
+    return TutorialDB::GetTutorialsAndConnections();
 }
 
 PyResult TutorialService::GetCareerAgents(PyCallArgs& call) {
@@ -286,8 +284,72 @@ PyResult TutorialService::GetCareerAgents(PyCallArgs& call) {
                 self.careerAgents[careerType]['agent'][agent.agentID] = agent
                 self.careerAgents[careerType]['station'][agent.agentID] = sm.GetService('map').GetStation(agent.stationID)
 */
+    // {careerType (1 industry .. 5 advanced military): [agentIDs]}, empty when no agents are mapped
+    return TutorialDB::GetCareerAgents();
+}
 
-    return PyStatic.NewNone();
+PyResult TutorialService::GetActions(PyCallArgs& call)
+{
+    // rows with actionID, actionTypeID, actionData:  none in our content
+    return new PyList();
+}
+
+void TutorialService::LogEvent(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds, uint16 eventTypeID)
+{
+    uint32 tutID(PyRep::IntegerValueU32(tutorialID));
+    if (tutID == 0)
+        return;
+    int64 secs(PyRep::IntegerValue(seconds));
+    TutorialDB::LogEvent(call.client->GetCharacterID(), tutID, PyRep::IntegerValueU32(pageNo), eventTypeID, (uint32)(secs < 0 ? 0 : secs));
+}
+
+// appLogConst event types
+PyResult TutorialService::LogStarted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds)
+{
+    LogEvent(call, tutorialID, pageNo, seconds, 245);
+    return nullptr;
+}
+
+PyResult TutorialService::LogCompleted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds)
+{
+    LogEvent(call, tutorialID, pageNo, seconds, 155);
+    return nullptr;
+}
+
+PyResult TutorialService::LogAborted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds)
+{
+    LogEvent(call, tutorialID, pageNo, seconds, 158);
+    return nullptr;
+}
+
+PyResult TutorialService::LogClosed(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds)
+{
+    LogEvent(call, tutorialID, pageNo, seconds, 156);
+    return nullptr;
+}
+
+PyResult TutorialService::LogAppClosed(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds)
+{
+    LogEvent(call, tutorialID, pageNo, seconds, 157);
+    return nullptr;
+}
+
+TutorialLocationService::TutorialLocationService() :
+    Service("tutorialLocationSvc", eAccessLevel_Character)
+{
+    this->Add("GetTutorialGoodies", &TutorialLocationService::GetTutorialGoodies);
+    this->Add("GiveTutorialGoodies", &TutorialLocationService::GiveTutorialGoodies);
+}
+
+PyResult TutorialLocationService::GetTutorialGoodies(PyCallArgs& call, PyRep* tutorialID, PyRep* pageID, PyRep* pageNo)
+{
+    // goodies = sm.RemoteSvc('tutorialLocationSvc').GetTutorialGoodies(tutorialID, pageID, pageNo)  (empty = none)
+    return new PyList();
+}
+
+PyResult TutorialLocationService::GiveTutorialGoodies(PyCallArgs& call, PyRep* tutorialID, PyRep* pageID, PyRep* pageNo)
+{
+    return new PyList();
 }
 
 

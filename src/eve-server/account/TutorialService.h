@@ -46,6 +46,27 @@ protected:
     PyResult GetCharacterTutorialState(PyCallArgs& call);
     PyResult GetTutorialsAndConnections(PyCallArgs& call);
     PyResult GetCareerAgents(PyCallArgs& call);
+    PyResult GetActions(PyCallArgs& call);
+    // tutorial progress (tutorialsvc.py):  (tutorialID, pageNo, secondsSpent)
+    PyResult LogStarted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds);
+    PyResult LogCompleted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds);
+    PyResult LogAborted(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds);
+    PyResult LogClosed(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds);
+    PyResult LogAppClosed(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds);
+
+private:
+    void LogEvent(PyCallArgs& call, PyRep* tutorialID, PyRep* pageNo, PyRep* seconds, uint16 eventTypeID);
+};
+
+// tutorialLocationSvc:  items handed out by tutorial pages (none in our content)
+class TutorialLocationService : public Service <TutorialLocationService>
+{
+public:
+    TutorialLocationService();
+
+protected:
+    PyResult GetTutorialGoodies(PyCallArgs& call, PyRep* tutorialID, PyRep* pageID, PyRep* pageNo);
+    PyResult GiveTutorialGoodies(PyCallArgs& call, PyRep* tutorialID, PyRep* pageID, PyRep* pageNo);
 };
 
 #endif
