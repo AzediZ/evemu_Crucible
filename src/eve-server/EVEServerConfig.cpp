@@ -166,7 +166,7 @@ EVEServerConfig::EVEServerConfig()
     marketSim.HotCellShare = 0.05;
     marketSim.QuoteLevels = 3;
     marketSim.MaxOrdersPerCellSide = 3;
-    marketSim.SimMaxOrders = 200000;
+    marketSim.SimMaxOrders = 300000;
     marketSim.QuoteDepthDays = 1.0;
     marketSim.RequoteThreshold = 0.01;
     marketSim.MinHalfSpread = 0.015;

@@ -90,8 +90,8 @@ public:
      *  an npc sell order has no items.  false when nothing happened */
     bool FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market::Party& seller, InventoryItemRef iRef, uint32 qty, uint32 stationID);
     bool FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Market::Party& buyer, uint32 qty);
-    // the order is owned by an npc and backed by the market sim
-    bool IsBackedNpcOrder(const Market::OrderInfo& oInfo);
+    // the order is owned by an npc and backed by the market sim, which has qty of it at the row's price
+    bool IsBackedNpcOrder(const Market::OrderInfo& oInfo, uint32 qty);
     // the order's owner is a character or a player corp
     static bool IsPlayerOrder(const Market::OrderInfo& oInfo);
 
@@ -105,7 +105,8 @@ public:
     // tells the order's owner (character, or the corp's traders and accountants).  'order' is consumed
     void NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, PyRep* order = nullptr);
 
-    void InvalidateOrdersCache(uint32 regionID, uint32 typeID);
+    // asks:  also drop the region's best-price lists (players' orders;  the sim's own requotes leave them to their minute)
+    void InvalidateOrdersCache(uint32 regionID, uint32 typeID, bool asks = true);
     void InvalidateHistoryCache(uint32 regionID, uint32 typeID);
 
     /* the market window's best-price lists (GetStationAsks, GetSystemAsks, GetRegionBest), cached for a minute (they

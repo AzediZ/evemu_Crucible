@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <tuple>
+#include <unordered_map>
 
 #include "market/sim/MarketSimDB.h"
 #include "market/sim/SimEconomy.h"
@@ -443,12 +444,16 @@ void MarketSimDB::LoadHistoryDay(int32 day, std::vector<HistoryRow>& into)
 }
 
 bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const std::vector<HistoryRow>& history,
-                        const std::map<std::string, std::string>& state, const std::vector<AuditLine>& audit)
+                        const std::map<std::string, std::string>& state, const std::vector<AuditLine>& audit,
+                        bool replaceInventory/*false*/)
 {
     if (!Exec("START TRANSACTION"))
         return false;
     bool ok(true);
     std::vector<std::string> rows;
+    // rows under old actor/node numbers would come back as stock of whatever has that number next time
+    if (replaceInventory)
+        ok = Exec("DELETE FROM mktSimInventory") and ok;
 
     for (auto& a : world.Actors()) {
         const Ledger::Account* acct(world.GetLedger().FindAcct(a.actorID));
@@ -544,6 +549,12 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
     return true;
 }
 
+void MarketSimDB::RemapOrders(const std::vector<std::tuple<uint32, uint32, uint32>>& orders)
+{
+    for (auto& o : orders)
+        Exec(Fmt("UPDATE mktSimOrder SET actorID = %u, nodeID = %u WHERE orderID = %u", std::get<1>(o), std::get<2>(o), std::get<0>(o)));
+}
+
 void MarketSimDB::ClearState()
 {
     static const char* tables[] = { "mktSimState", "mktSimNode", "mktSimActor", "mktSimInventory", "mktSimCell", "mktSimOrder",
@@ -628,11 +639,21 @@ bool MarketSimDB::ApplyOrders(const OrderBatch& batch, std::vector<uint32>& ids,
     if (ok)
         ok = InsertRows("INSERT INTO mktSimOrder (orderID, actorID, nodeID, typeID, bid, level) VALUES ", rows, "");
 
-    // alters:  one UPDATE ... CASE per chunk
-    for (size_t i = 0; ok and (i < batch.alters.size()); i += Chunk) {
+    /* alters:  one UPDATE ... CASE per chunk.  an order altered twice in a batch (its cell visited twice in a step, a
+     *  backlog or /mktsim step) keeps its last values:  CASE takes the first WHEN that matches */
+    std::vector<const AlterOrder*> alters;
+    {
+        std::unordered_map<uint32, size_t> last;
+        for (size_t i = 0; i < batch.alters.size(); ++i)
+            last[batch.alters[i].orderID] = i;
+        for (size_t i = 0; i < batch.alters.size(); ++i)
+            if (last[batch.alters[i].orderID] == i)
+                alters.push_back(&batch.alters[i]);
+    }
+    for (size_t i = 0; ok and (i < alters.size()); i += Chunk) {
         std::string price, qty, issued, in;
-        for (size_t k = i; (k < batch.alters.size()) and (k < i + Chunk); ++k) {
-            const AlterOrder& a(batch.alters[k]);
+        for (size_t k = i; (k < alters.size()) and (k < i + Chunk); ++k) {
+            const AlterOrder& a(*alters[k]);
             price += Fmt(" WHEN %u THEN %s", a.orderID, IskText(a.price).c_str());
             qty += Fmt(" WHEN %u THEN %u", a.orderID, a.qty);
             issued += Fmt(" WHEN %u THEN %lld", a.orderID, (long long)ToFileTime(a.issued));

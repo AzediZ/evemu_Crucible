@@ -1207,6 +1207,18 @@ void World::CancelOrderNow(uint32_t orderID)
 
 void World::FlushOrders()
 {
+    // orders whose last write failed go again, as they are now (players may have traded with them since)
+    if (!m_rewrite.empty()) {
+        std::vector<uint32_t> rewrite;
+        std::swap(rewrite, m_rewrite);
+        for (auto id : rewrite) {
+            std::unordered_map<uint32_t, SimOrder>::iterator itr = m_orders.find(id);
+            if (itr == m_orders.end())
+                continue;
+            itr->second.dbIssued = INT64_MIN;
+            QueueAlter(itr->second);
+        }
+    }
     if (m_batch.Empty())
         return;
     // anything queued while the batch is settled (a level's second order) goes with the next flush
@@ -1215,6 +1227,14 @@ void World::FlushOrders()
     m_pendingVendor.clear();
     std::vector<uint32_t> ids;
     bool ok(m_gw.ApplyOrders(batch, ids));
+    if (!ok) {
+        /* nothing was written (the transaction rolled back), but the orders in memory have their new price and quantity
+         *  and the cancelled ones are gone:  the market must not keep the old rows.  again with the next flush */
+        for (auto& a : batch.alters)
+            m_rewrite.push_back(a.orderID);
+        for (auto& c : batch.cancels)
+            m_batch.cancels.push_back(c);
+    }
     for (size_t i = 0; i < batch.posts.size(); ++i) {
         const NewOrder& n(batch.posts[i]);
         uint32_t id((ok and (i < ids.size())) ? ids[i] : 0);

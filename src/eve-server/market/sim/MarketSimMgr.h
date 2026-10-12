@@ -43,6 +43,9 @@ public:
 
     /* MarketMgr's hooks */
     bool IsSimOrder(uint32 orderID) const;
+    /* the market's row of a sim order (oInfo, as MarketMgr read it) agrees with the sim's order:  same side and price, and
+     *  at least qty left.  a trade is only made when it does, so the ledger pays and delivers exactly what the player got */
+    bool CanFill(const Market::OrderInfo& oInfo, uint32 qty) const;
     // a player bought from / sold into a sim order (the money moved already).  qty at the order's price
     void OnSimAskFilled(const Market::OrderInfo& oInfo, uint32 qty, uint32 buyerOwnerID);
     void OnSimBidFilled(const Market::OrderInfo& oInfo, uint32 qty, uint32 sellerOwnerID);
@@ -86,6 +89,7 @@ private:
     int64 m_lastFlush;
     int64 m_lastHistoryInvalidate;
     int32 m_startDay;               // the first day of the sim's own history (backfill ends there)
+    bool  m_replaceInventory;       // actors or nodes were renumbered at boot:  the next flush rewrites the stock table
     std::vector<uint32> m_hubs;
 };
 

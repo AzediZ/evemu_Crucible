@@ -228,6 +228,10 @@ void MarketMgr::UpdatePriceHistory()
         } else {
             day = EvE::max(oldest, firstTx - (firstTx % EvE::Time::Day));
         }
+    } else if ((day - EvE::Time::Day) >= oldest) {
+        /* the last day rolled up goes again (the rollup recomputes a day from its sources):  the market sim can still
+         *  write rows of that day after it was rolled up (a backlogged visit, a failed flush) */
+        day -= EvE::Time::Day;
     }
 
     uint16 count(0);
@@ -546,7 +550,7 @@ void MarketMgr::NotifyOrderOwner(const Market::OrderInfo& oInfo, uint8 action, P
     SendOnOwnOrderChanged(pClient, oInfo.orderID, action, false, order);
 }
 
-void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID) {
+void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID, bool asks/*true*/) {
     std::string method_name ("GetOrders_");
     method_name += std::to_string(regionID);
     method_name += "_";
@@ -554,7 +558,8 @@ void MarketMgr::InvalidateOrdersCache(uint32 regionID, uint32 typeID) {
     ObjectCachedMethodID method_id("marketProxy", method_name.c_str());
     this->m_cache->InvalidateCache(method_id);
     // and the region's best-price lists
-    MarkAsksDirty(regionID);
+    if (asks)
+        MarkAsksDirty(regionID);
 }
 
 PyRep* MarketMgr::CachedAsks(uint8 kind, uint32 id, uint32 regionID)
@@ -839,11 +844,12 @@ bool MarketMgr::IsPlayerOrder(const Market::OrderInfo& oInfo)
     return (IsCharacterID(oInfo.ownerID) or (oInfo.isCorp and IsPlayerCorp(oInfo.ownerID)));
 }
 
-bool MarketMgr::IsBackedNpcOrder(const Market::OrderInfo& oInfo)
+bool MarketMgr::IsBackedNpcOrder(const Market::OrderInfo& oInfo, uint32 qty)
 {
-    // the market sim's orders are backed by its ledger.  any other npc order (old seed scripts) would pay from a
-    //  wallet that holds nothing or deliver items that never existed, so those are left alone
-    return sMktSim.IsSimOrder(oInfo.orderID);
+    /* the market sim's orders are backed by its ledger.  any other npc order (old seed scripts) would pay from a
+     *  wallet that holds nothing or deliver items that never existed, so those are left alone.  a sim order is only
+     *  filled when its row agrees with the sim (price, and qty left):  the ledger settles at its own price and quantity */
+    return sMktSim.CanFill(oInfo, qty);
 }
 
 bool MarketMgr::FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market::Party& seller, InventoryItemRef iRef, uint32 qty, uint32 stationID)
@@ -859,7 +865,7 @@ bool MarketMgr::FillAgainstBuyOrder(const Market::OrderInfo& oInfo, const Market
     bool isPlayer(IsCharacterID(buyerID));
     bool isCorp(oInfo.isCorp and IsPlayerCorp(buyerID));
     bool npcBuyer(!isPlayer and !isCorp);
-    if (npcBuyer and (seller.IsSim() or !IsBackedNpcOrder(oInfo))) {
+    if (npcBuyer and (seller.IsSim() or !IsBackedNpcOrder(oInfo, qty))) {
         _log(MARKET__TRACE, "FillAgainstBuyOrder - npc buy order #%u of %u has nothing behind it.  Skipped.", oInfo.orderID, buyerID);
         return false;
     }
@@ -996,7 +1002,7 @@ bool MarketMgr::FillAgainstSellOrder(const Market::OrderInfo& oInfo, const Marke
     bool sellerIsChar(IsCharacterID(sellerID));
     bool sellerIsCorp(oInfo.isCorp and IsPlayerCorp(sellerID));
     bool playerSeller(sellerIsChar or sellerIsCorp);
-    if (!playerSeller and (buyer.IsSim() or !IsBackedNpcOrder(oInfo))) {
+    if (!playerSeller and (buyer.IsSim() or !IsBackedNpcOrder(oInfo, qty))) {
         _log(MARKET__TRACE, "FillAgainstSellOrder - npc sell order #%u of %u has nothing behind it.  Skipped.", oInfo.orderID, sellerID);
         return false;
     }

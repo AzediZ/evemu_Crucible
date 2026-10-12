@@ -40,14 +40,19 @@
  * MARKET__DB_TRACE
  */
 
+/* the cheapest sell order of each type where 'scope' holds:  its price, volume and station.  (a plain GROUP BY took the
+ *  volume and station of any order of the type, and is refused under ONLY_FULL_GROUP_BY.)  orders tied at the best price
+ *  give a row each;  the client's IndexRowset keeps one */
+static const char* s_bestAsksSql =
+    "SELECT o.typeID, o.price, o.volRemaining, o.stationID"
+    " FROM mktOrders o"
+    " JOIN (SELECT typeID, MIN(price) AS best FROM mktOrders WHERE %s=%u AND bid=%u GROUP BY typeID) m"
+    "   ON m.typeID = o.typeID AND o.price = m.best"
+    " WHERE o.%s=%u AND o.bid=%u";
+
 PyRep *MarketDB::GetStationAsks(uint32 stationID) {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        "    typeID, MIN(price) AS price, volRemaining, stationID "
-        " FROM mktOrders "
-        " WHERE stationID=%u AND bid=%u"
-        " GROUP BY typeID",  stationID, Market::Type::Sell))
+    if (!sDatabase.RunQuery(res, s_bestAsksSql, "stationID", stationID, Market::Type::Sell, "stationID", stationID, Market::Type::Sell))
         //" LIMIT %u",  stationID, sConfig.market.StationOrderLimit))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
@@ -63,12 +68,7 @@ PyRep *MarketDB::GetStationAsks(uint32 stationID) {
 
 PyRep *MarketDB::GetSystemAsks(uint32 solarSystemID) {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        "    typeID, MIN(price) AS price, volRemaining, stationID "
-        " FROM mktOrders "
-        " WHERE solarSystemID=%u AND bid=%u"
-        " GROUP BY typeID", solarSystemID, Market::Type::Sell))
+    if (!sDatabase.RunQuery(res, s_bestAsksSql, "solarSystemID", solarSystemID, Market::Type::Sell, "solarSystemID", solarSystemID, Market::Type::Sell))
         //" LIMIT %u", solarSystemID, sConfig.market.SystemOrderLimit))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
@@ -84,12 +84,7 @@ PyRep *MarketDB::GetSystemAsks(uint32 solarSystemID) {
 
 PyRep *MarketDB::GetRegionBest(uint32 regionID) {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        "    typeID, MIN(price) AS price, volRemaining, stationID "
-        " FROM mktOrders "
-        " WHERE regionID=%u AND bid=%u"
-        " GROUP BY typeID", regionID, Market::Type::Sell))
+    if (!sDatabase.RunQuery(res, s_bestAsksSql, "regionID", regionID, Market::Type::Sell, "regionID", regionID, Market::Type::Sell))
         //" LIMIT %u", regionID, Market::Type::Sell, sConfig.market.RegionOrderLimit))
     {
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());

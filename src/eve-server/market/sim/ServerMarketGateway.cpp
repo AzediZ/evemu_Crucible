@@ -42,7 +42,8 @@ bool ServerMarketGateway::ApplyOrders(const MktSim::OrderBatch& batch, std::vect
     bool ok(MarketSimDB::ApplyOrders(batch, ids, m_multiRow));
     newIDs.assign(ids.begin(), ids.end());
     m_writes += batch.Size();
-    // the client's caches of the order books that changed
+    /* the client's caches of the order books that changed.  the best-price lists (a region-wide GROUP BY) keep their
+     *  minute:  the sim requotes every second somewhere, dropping them on each batch left them uncached */
     std::set<std::pair<uint32, uint16>> touched;
     for (auto& n : batch.posts)
         touched.insert(std::make_pair(n.regionID, n.typeID));
@@ -50,13 +51,8 @@ bool ServerMarketGateway::ApplyOrders(const MktSim::OrderBatch& batch, std::vect
         touched.insert(std::make_pair(a.regionID, a.typeID));
     for (auto& c : batch.cancels)
         touched.insert(std::make_pair(c.regionID, c.typeID));
-    std::set<uint32> regions;
-    for (auto& cur : touched) {
-        sMktMgr.InvalidateOrdersCache(cur.first, cur.second);
-        regions.insert(cur.first);
-    }
-    for (auto r : regions)
-        sMktMgr.MarkAsksDirty(r);
+    for (auto& cur : touched)
+        sMktMgr.InvalidateOrdersCache(cur.first, cur.second, false);
     return ok;
 }
 

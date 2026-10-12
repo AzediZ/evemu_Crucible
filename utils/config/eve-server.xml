@@ -183,7 +183,7 @@ boolean can use either 0/1 OR true/false.
         <HotCellShare>0.05</HotCellShare><!-- float - share of a hub's types (by isk traded) that are hot -->
         <QuoteLevels>3</QuoteLevels><!-- integer - price levels per side and type -->
         <MaxOrdersPerCellSide>3</MaxOrdersPerCellSide><!-- integer -->
-        <SimMaxOrders>200000</SimMaxOrders><!-- integer - over this, the least traded types get one level per side -->
+        <SimMaxOrders>300000</SimMaxOrders><!-- integer - over this, the least traded types get one level per side.  default 300000:  the 89.5k npc vendor orders plus the full ladder (about 181k orders at Crucible data;  200000 trimmed ladders) -->
         <QuoteDepthDays>1.0</QuoteDepthDays><!-- float - quotes show about this many days of demand -->
         <RequoteThreshold>0.01</RequoteThreshold><!-- float - an order is re-priced when its price is this far off -->
         <MinHalfSpread>0.015</MinHalfSpread><!-- float - the smallest half spread (asks above, bids below fair value) -->
