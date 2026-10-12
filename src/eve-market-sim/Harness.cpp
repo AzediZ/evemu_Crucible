@@ -60,6 +60,7 @@ namespace {
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
         bool        actors      = false;        // print the phase 3 actors at the start and the end
         bool        phase3      = false;        // the phase 3 acceptance tests (Phase3Test.cpp) instead
+        bool        phase6      = false;        // the phase 6 acceptance tests (Phase6Test.cpp) instead
     };
 
     struct ShockSpec {
@@ -281,7 +282,7 @@ namespace {
                 return;
             std::printf("  actors %s:\n%s", when, world.ActorList(0).c_str());
             for (auto& a : world.Actors())
-                if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::Manufacturer))
+                if ((a.kind == ActorKind::Miner) or (a.kind == ActorKind::Manufacturer) or (a.kind >= ActorKind::Inventor))
                     std::printf("%s", world.ActorInfo(a.actorID).c_str());
         };
         printActors("at the start");
@@ -654,6 +655,22 @@ namespace {
                 }
                 std::printf("  T1 made / expected (isk):  %.3f\n", sumM / std::max(1.0, sumE));
             }
+            {
+                // phase 6:  the chains' goods, what the reference says the sim makes and uses a day (all nodes) against
+                //  what it made and its actors bought
+                std::map<uint16_t, std::pair<double, double>> ref;      // type -> (made, used)
+                for (auto& c : world.Cells())
+                    if ((c.supply >= Supply::Invented) or (c.simClass == SimClass::Component)) {
+                        ref[c.typeID].first += world.RefMade(c.nodeID, c.typeID);
+                        ref[c.typeID].second += world.RefDerived(c.nodeID, c.typeID);
+                    }
+                std::printf("  chains per day over the run:  reference made / used, made, bought by actors\n");
+                for (auto& r : ref) {
+                    std::map<uint16_t, Units>::const_iterator m = world.Made().find(r.first), b = world.ActorBought().find(r.first);
+                    std::printf("    type %u:  ref %.4g / %.4g, made %.4g, bought %.4g\n", r.first, r.second.first, r.second.second,
+                                (m == world.Made().end()) ? 0.0 : (double)m->second / opt.days, (b == world.ActorBought().end()) ? 0.0 : (double)b->second / opt.days);
+                }
+            }
             std::printf("  per day over the run:  bought by actors (materials, ships), made\n");
             for (auto& cur : world.ActorBought()) {
                 const TypeData* t(data.Type(cur.first));
@@ -687,12 +704,13 @@ namespace {
     void Usage()
     {
         std::printf("usage: eve-market-sim [--static export.json | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
-                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3]\n"
+                    "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3] [--phase6]\n"
                     "       eve-market-sim --test <name>\n");
     }
 }
 
 int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
+int Phase6Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
 
 int HarnessMain(int argc, char** argv)
 {
@@ -731,6 +749,8 @@ int HarnessMain(int argc, char** argv)
             opt.actors = true;
         else if (a == "--phase3")
             opt.phase3 = true;
+        else if (a == "--phase6")
+            opt.phase6 = true;
         else {
             Usage();
             return 2;
@@ -764,6 +784,8 @@ int HarnessMain(int argc, char** argv)
 
     if (opt.phase3)
         return Phase3Main(data, p, opt.seeds, opt.days);
+    if (opt.phase6)
+        return Phase6Main(data, p, opt.seeds, opt.days);
 
     int failures(0);
     std::vector<RunResult> results;

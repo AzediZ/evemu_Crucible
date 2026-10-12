@@ -126,6 +126,16 @@ namespace MktSim {
         double   lootRestockDays    = 1.0;          // and a type down to half its target is refilled this fast (like RestockDays)
         double   replaceHalfLifeDays = 5.0;         // lost ships nobody replaced fade from demand
         double   replaceDays        = 1.0;          // pilots buy back what they lost over about this long
+        // phase 6:  the advanced chains (PLAN 6.4, SimChains.cpp).  they need the actors;  off:  the stock model supplies them
+        bool     enableT2           = true;         // EnableT2:  inventors (invention, T2 manufacturing)
+        bool     enableMoonPI       = true;         // EnableMoonPI:  moon harvesting, reactions, planetary industry, components, fuel blocks
+        double   inventChance       = 1.0;          // ram.InventChance:  multiplies the Crucible invention chance
+        double   inventionTimeMultiplier = 1.0;     // invention time:  the line's (1);  no skill shortens it in Crucible
+        double   inventBufferDays   = 2.0;          // inventors keep copies for this many days of their products' demand
+        double   harvestSlack       = 1.0;          // harvesters' and extractors' capacity over the calibrated need (moons and planets to spare)
+        double   posFuelPerArrayHour = 10.0;        // fuel blocks a harvesting or reaction array's tower burns an hour (a large
+                                                    //  tower's 40 shared by about four arrays)
+        double   moonHarvestPerHour = 1.0;          // batches a harvesting array brings in an hour (x the material's moonMiningAmount)
     };
 
     struct Actor {
@@ -149,7 +159,13 @@ namespace MktSim {
             Mined           = 1,    // the miner (ore and ice)
             Refined         = 2,    // the miner and the reprocessor (minerals, ice products)
             Manufactured    = 3,    // a manufacturer (T1 with every input quoted at the node)
-            Loot            = 4     // the loot source
+            Loot            = 4,    // the loot source
+            // phase 6 (SimChains.cpp)
+            Invented        = 5,    // the inventor (T2:  invention, then manufacturing from the copies)
+            Harvested       = 6,    // the harvester (raw moon materials, gas)
+            Reacted         = 7,    // the reactor (intermediate and composite moon materials, polymers, booster materials)
+            Extracted       = 8,    // the planetary producer's extractors (P0)
+            Processed       = 9     // the planetary producer's factories (P1 to P4)
         };
     }
 
@@ -210,6 +226,9 @@ namespace MktSim {
         double   lossWant       = 0.0;  // units consumers still want for ships and fits they lost (persisted)
         double   lossNew        = 0.0;  // losses expected since the last visit (the demand rate)
         double   derived        = 0.0;  // units sim actors bought here since the last visit
+        // phase 6
+        double   derivedRef     = 0.0;  // units a day the sim's industry uses at reference (the loot source supplies them too)
+        uint32_t bill           = 0;    // the materials per unit its maker uses (World::BomOf):  0 = TypeData.bom
         // GM overrides (persisted in mktSimState)
         double   shockMult      = 1.0;
         int64_t  shockUntil     = 0;
@@ -388,6 +407,24 @@ namespace MktSim {
         uint32_t NodeActor(uint32_t nodeID, uint8_t kind, uint8_t sector = 0) const;
         std::string JobList(uint32_t actorID) const;
 
+        /* phase 6:  the advanced chains (SimChains.cpp) */
+        // the harvesters' or extractors' supply of a type x mult for days (0:  the type's supply removed)
+        void ShockSupply(uint16_t typeID, double mult, double days, int64_t now);
+        std::map<uint16_t, std::pair<double, int64_t>>& SupplyShocks()   { return m_supplyShock; }
+        // invention attempts started since the world started:  attempts, successes, and the successes expected (sum of p)
+        //  and their variance (sum of p (1 - p)) at the chances used
+        struct InventionStats {
+            Units  attempts     = 0;
+            Units  successes    = 0;
+            double expected     = 0.0;
+            double variance     = 0.0;
+        };
+        const InventionStats& Inventions() const        { return m_inventStats; }
+        // units a day the sim makes of a type at a node at reference, and what its industry uses of it (0:  none)
+        double RefMade(uint32_t nodeID, uint16_t typeID) const;
+        double RefDerived(uint32_t nodeID, uint16_t typeID) const;
+        std::string ChainInfo(uint32_t actorID) const;
+
     private:
         struct Due {
             int64_t  t;
@@ -486,6 +523,8 @@ namespace MktSim {
         // the same at V* (where V is heading), for planning:  isk
         double   ExpectSell(const Cell& c) const;
         double   ExpectBuy(const Cell& c) const;
+        // the materials per unit a cell's maker uses (Cell::bill, else TypeData.bom)
+        const std::vector<std::pair<uint16_t, double>>& BomOf(const Cell& c) const;
         // an actor sells what it holds to the market maker, up to the maker's target stock.  returns units sold
         Units    SellToMaker(uint32_t actorID, Cell& c, Units q, Cents minPrice, int64_t t);
         // an actor buys:  player asks at or under the limit first, then up to fromMaker units of the market maker's stock
@@ -505,6 +544,65 @@ namespace MktSim {
         void     RebuildHoldings();
         double   LossShockOf(uint16_t hullTypeID, int64_t t) const;
         double   MiningShockOf(int64_t t) const;
+
+        /* phase 6 (SimChains.cpp) */
+        struct ChainProduct {
+            uint32_t cell           = 0;
+            uint8_t  process        = 0;    // the cell's Supply
+            std::vector<std::pair<uint16_t, double>> inputs;    // per run (reaction, schematic);  T2:  per unit, the bill at its level
+            std::vector<std::pair<uint16_t, double>> outputs;   // per run (reaction, schematic)
+            double   unitsPerRun    = 1.0;  // the product a run makes (T2:  portionSize, a run of a copy)
+            double   seconds        = 0.0;  // a run (reaction, schematic);  T2:  a unit's build, with the time multiplier
+            double   ref            = 0.0;  // units a day at reference (World::RefMade)
+            // T2
+            uint16_t blueprint      = 0;    // the copy a run uses
+            std::vector<std::pair<uint16_t, double>> invent;    // used up per attempt (datacores, the decryptor)
+            double   chance         = 0.0;  // per attempt (skills, ram.InventChance and the decryptor)
+            double   runsPerSuccess = 0.0;
+            double   inventSeconds  = 0.0;  // an attempt
+            uint16_t decryptor      = 0;
+            // harvest and extraction
+            double   perArrayHour   = 0.0;  // units an array brings in an hour (fuelled harvests)
+            bool     fuelled        = false;
+        };
+        struct ChainPlan {
+            std::vector<ChainProduct> products;
+            std::map<uint16_t, size_t> index;       // output type -> products[]
+            std::map<uint16_t, double> wip;         // units in running jobs per output (copies:  the runs expected)
+            uint32_t slots          = 0;            // inventor:  manufacturing lines;  reactor, planetary:  arrays, factories
+            uint32_t inventSlots    = 0;            // inventor:  invention lines
+            uint32_t used           = 0;
+            uint32_t inventUsed     = 0;
+            uint16_t fuel           = 0;            // the fuel block its towers burn (0:  none traded at the node)
+            std::map<uint16_t, double> capacity;    // harvest, extraction:  units a day at most per type
+            std::map<uint16_t, Units> made;         // since the start (not persisted)
+            double   fuelBurnt      = 0.0;
+            std::set<uint16_t> inputs;              // what its products are made of
+            std::map<uint16_t, Units> unsold;       // of the products it also uses:  what it made and holds (not persisted)
+        };
+        bool     ChainsT2() const                   { return m_p.actors and m_p.enableT2; }
+        bool     ChainsMoonPI() const               { return m_p.actors and m_p.enableMoonPI; }
+        void     ChainSupply();
+        void     ChainDerived(std::map<uint64_t, double>& derived);
+        void     ChainActors();
+        void     ChainStep(Actor& a, int64_t t, double dtDays);
+        void     HarvestStep(Actor& a, ChainPlan& plan, int64_t t, double dtDays);
+        void     ProcessStep(Actor& a, ChainPlan& plan, int64_t t);
+        void     InventorStep(Actor& a, ChainPlan& plan, int64_t t);
+        bool     ChainJob(const SimJob& job) const;
+        void     ChainJobDone(const SimJob& job, int64_t t);
+        bool     ChainLoadJob(const SimJob& job);
+        // buys fuel and burns it for hours of arrays;  returns the share of it there was (0..1)
+        double   BurnFuel(Actor& a, ChainPlan& plan, double arrayHours, int64_t t);
+        // an npc vendor's price for a type (the basePrice of a vendor type;  0:  none)
+        double   VendorPrice(uint16_t typeID) const;
+        // an actor buys from the npc vendors (isk sunk, goods from the vendor faucet).  returns units bought
+        Units    BuyVendor(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q);
+        // what a unit of an input costs an actor at a node, to plan with (the internal buy price, or the vendor's).  < 0:  none
+        double   InputCost(uint32_t nodeID, uint16_t typeID) const;
+        // buys q of an input at the node (players' asks, the market maker, or the vendors).  returns units bought
+        Units    BuyInput(uint32_t actorID, uint32_t nodeID, uint16_t typeID, Units q, int64_t t);
+        double   SupplyShockOf(uint16_t typeID, int64_t t) const;
 
         const StaticData&   m_static;
         Params              m_p;
@@ -563,6 +661,13 @@ namespace MktSim {
         std::map<uint16_t, Units> m_made, m_mined, m_bought;
         std::map<uint32_t, std::vector<uint32_t>> m_actorCells;     // loot source -> the cells it supplies
         std::map<uint32_t, std::set<uint16_t>> m_holdings;          // phase 3 actor -> types it may hold at its node
+        // phase 6
+        std::map<uint32_t, ChainPlan> m_chainPlans;                 // actorID ->
+        std::map<uint32_t, std::vector<ChainProduct>> m_chainPending;   // nodeID -> products, from ChainSupply to ChainActors
+        std::vector<std::vector<std::pair<uint16_t, double>>> m_bills;  // Cell::bill - 1 ->
+        std::map<uint64_t, double> m_refDerived, m_refMade;         // (nodeID << 16 | typeID) -> units a day at reference
+        std::map<uint16_t, std::pair<double, int64_t>> m_supplyShock;   // harvested / extracted type -> (mult, until)
+        InventionStats m_inventStats;
     };
 
 }

@@ -117,11 +117,12 @@ double World::Mid(const Cell& c) const
 double World::CostNow(const Cell& c) const
 {
     const TypeData* t(m_static.Type(c.typeID));
-    if ((t == nullptr) or t->bom.empty())
+    if ((t == nullptr) or BomOf(c).empty())
         return 0.0;
     const NodeData* node(Node(c.nodeID));
     double cost(0.0);
-    for (auto& in : t->bom) {
+    // (phase 6:  a chain's own bill where it has one)
+    for (auto& in : BomOf(c)) {
         std::map<uint64_t, uint32_t>::const_iterator itr = m_cellIndex.find(((uint64_t)c.nodeID << 16) | in.first);
         if (itr != m_cellIndex.end()) {
             cost += in.second * Value(m_cells[itr->second]);
@@ -2008,6 +2009,9 @@ std::string World::ActorInfo(uint32_t actorID) const
                 out << Fmt("  %u x%lld", u.first, (long long)u.second);
             out << "\n";
         }
+        out << JobList(actorID);
+    } else if (a.kind >= ActorKind::Inventor) {
+        out << ChainInfo(actorID);      // phase 6 (SimChains.cpp)
         out << JobList(actorID);
     }
     std::vector<std::pair<double, Ledger::StockKey>> top;

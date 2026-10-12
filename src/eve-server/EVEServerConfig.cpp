@@ -210,6 +210,13 @@ EVEServerConfig::EVEServerConfig()
     marketSim.MaxSimJobHours = 24.0;
     marketSim.LineInstallCost = 1000.0;
     marketSim.LineCostPerHour = 333.0;
+    // marketSim phase 6 (PLAN 6.4;  POS fuel:  a large tower's 40 blocks an hour shared by about four arrays)
+    marketSim.EnableT2 = true;
+    marketSim.EnableMoonPI = true;
+    marketSim.InventBufferDays = 2.0;
+    marketSim.HarvestSlack = 1.0;
+    marketSim.PosFuelPerArrayHour = 10.0;
+    marketSim.MoonHarvestPerHour = 1.0;
 
     // ram
     ram.AutoEvent = false;
@@ -922,6 +929,12 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     AddValueParser( "MaxSimJobHours",               marketSim.MaxSimJobHours );
     AddValueParser( "LineInstallCost",              marketSim.LineInstallCost );
     AddValueParser( "LineCostPerHour",              marketSim.LineCostPerHour );
+    AddValueParser( "EnableT2",                     marketSim.EnableT2 );
+    AddValueParser( "EnableMoonPI",                 marketSim.EnableMoonPI );
+    AddValueParser( "InventBufferDays",             marketSim.InventBufferDays );
+    AddValueParser( "HarvestSlack",                 marketSim.HarvestSlack );
+    AddValueParser( "PosFuelPerArrayHour",          marketSim.PosFuelPerArrayHour );
+    AddValueParser( "MoonHarvestPerHour",           marketSim.MoonHarvestPerHour );
 
     const bool result = ParseElementChildren( ele );
 
@@ -980,6 +993,12 @@ bool EVEServerConfig::ProcessMarketSim(const TiXmlElement* ele)
     RemoveParser( "MaxSimJobHours" );
     RemoveParser( "LineInstallCost" );
     RemoveParser( "LineCostPerHour" );
+    RemoveParser( "EnableT2" );
+    RemoveParser( "EnableMoonPI" );
+    RemoveParser( "InventBufferDays" );
+    RemoveParser( "HarvestSlack" );
+    RemoveParser( "PosFuelPerArrayHour" );
+    RemoveParser( "MoonHarvestPerHour" );
 
     return result;
 }

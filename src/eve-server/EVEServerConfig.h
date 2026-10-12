@@ -236,6 +236,13 @@ public:
         double MaxSimJobHours;          // longer jobs are split
         double LineInstallCost;         // isk per job (virtual lines;  phase 5 uses the real lines' costs)
         double LineCostPerHour;         // isk per job hour
+        // phase 6:  the advanced chains (inventors, moon harvesters and reactors, planetary producers;  PLAN 6.4, 11)
+        bool EnableT2;                  // inventors invent and build T2 (off:  the stock model supplies T2)
+        bool EnableMoonPI;              // moon harvesting, reactions, planetary industry, components and fuel blocks
+        double InventBufferDays;        // inventors keep blueprint copies for this many days of demand
+        double HarvestSlack;            // harvesters' and planetary extractors' capacity over the calibrated need
+        double PosFuelPerArrayHour;     // fuel blocks a harvesting or reaction array's tower burns an hour
+        double MoonHarvestPerHour;      // batches (x moonMiningAmount) a moon harvesting array brings in an hour
     } marketSim;
 
     // From <ram>
