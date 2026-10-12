@@ -104,6 +104,7 @@ boolean can use either 0/1 OR true/false.
         <TrashRetentionDays>30</TrashRetentionDays><!-- days a trashed item is kept for GM restore (/untrash) before it is purged at server startup.  0 = trashed items are deleted at once -->
         <SecureContainerOwnerBypass>true</SecureContainerOwnerBypass><!-- bool - owners open their own password-protected containers in their station hangar or ship without the password.  corp containers, containers in space and other people's always ask -->
         <fleetWarpSlowestSpeed>true</fleetWarpSlowestSpeed><!-- bool - every ship in a fleet warp uses the slowest warp speed among them.  Crucible: true -->
+        <fleetInviteTimeout>120</fleetInviteTimeout><!-- seconds an unanswered fleet invite lasts; then the position it holds is free again and the inviter is told the invitee did not respond.  0 = invites never time out -->
     </world>
 
     <rates>

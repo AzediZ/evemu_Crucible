@@ -2629,6 +2629,27 @@ void FleetService::RemoveInviteData(uint32 charID)
     m_inviteData.erase(charID); // remove invite data
 }
 
+void FleetService::Process()
+{
+    if (m_inviteData.empty())
+        return;
+    int64 now(GetFileTimeNow());
+    for (auto itr = m_inviteData.begin(); itr != m_inviteData.end(); ) {
+        if ((itr->second.expires == 0) or (itr->second.expires > now)) {
+            ++itr;
+            continue;
+        }
+        if (itr->second.inviteBy != nullptr) {
+            // fleetSvc.OnFleetJoinReject(memberID, reasonCode)  const.rejectFleetInviteTimeout = 1
+            PyTuple* tuple = new PyTuple(2);
+                tuple->SetItem(0, new PyInt(itr->first));
+                tuple->SetItem(1, new PyInt(1));
+            itr->second.inviteBy->SendNotification("OnFleetJoinReject", "clientID", &tuple, false);
+        }
+        itr = m_inviteData.erase(itr);
+    }
+}
+
 uint32 FleetService::GetPendingInvite(uint32 fleetID, int32 wingID, int32 squadID, int8 role)
 {
     if ((role != Fleet::Role::FleetLeader) and (role != Fleet::Role::WingLeader) and (role != Fleet::Role::SquadLeader))

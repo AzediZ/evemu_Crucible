@@ -191,6 +191,7 @@ struct InviteData {
     int32 squadID;
     Client* invited;
     Client* inviteBy;
+    int64 expires;      // filetime the invite times out (0 = never).  FleetService::Process
 };
 
 #endif  // EVEMU_SRC_FLEET_DATA_H_

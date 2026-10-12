@@ -36,6 +36,7 @@
 #include "ServiceDB.h"
 #include "agents/Agent.h"
 #include "exploration/Exploration.h"
+#include "fleet/FleetService.h"
 #include "exploration/Probes.h"
 #include "station/InsuranceService.h"
 #include "map/MapDB.h"
@@ -289,6 +290,7 @@ void EntityList::Process() {
         sLocatorMgr.Process();
         sBubbleMgr.Process();
         sExplorationMgr.Process();
+        sFltSvc.Process();  // fleet invite timeouts
 
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {

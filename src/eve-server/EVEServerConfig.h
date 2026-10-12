@@ -96,6 +96,7 @@ public:
         uint16 SelfDestructRetryDelay;  // s after an abort before self-destruct may be started again  (F09)
         uint16 gridUnloadTime;
         uint16 apWarptoDistance;
+        uint16 fleetInviteTimeout;      // s an unanswered fleet invite (and the position it holds) lasts.  0 = never times out
         uint16 TrashRetentionDays;      // days a trashed item is kept for GM restore before it's purged at startup.  0 = deleted at once  (F20)
     } world;
 

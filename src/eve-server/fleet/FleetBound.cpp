@@ -293,6 +293,7 @@ PyResult FleetBound::Invite(PyCallArgs &call, PyInt* characterID, std::optional<
         data.wingID = wingID.has_value() ? wingID.value()->value() : 0;  // client sends None for 'any'
         data.squadID = squadID.has_value() ? squadID.value()->value() : 0;
         data.role = role.has_value () ? role.value ()->value () : Fleet::Role::Member; // member as default
+        data.expires = (sConfig.world.fleetInviteTimeout > 0 ? (int64)GetFileTimeNow() + (int64)sConfig.world.fleetInviteTimeout * EvE::Time::Second : 0);
     if (data.wingID < 0)
         data.wingID = 0;
     if (data.squadID < 0)

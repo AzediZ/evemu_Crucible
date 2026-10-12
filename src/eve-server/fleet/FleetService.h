@@ -94,6 +94,8 @@ public:
     void LeaveFleet(Client* pClient);
     // called when a client disconnects: drops its invites and join requests, then leaves its fleet
     void ClientLogout(Client* pClient);
+    // 1Hz:  invites nobody answered time out (the slot they hold is free again, OnFleetJoinReject 'no response' to the inviter)
+    void Process();
     // makes pNewBoss the fleet boss (job Creator), clearing the job on the old boss
     void SetBoss(uint32 fleetID, Client* pNewBoss);
 
