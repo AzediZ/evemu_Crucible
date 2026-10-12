@@ -18,7 +18,7 @@ protected:
     PyResult SaveFitting(PyCallArgs& call, PyInt* ownerID, PyObject* fitting);
     PyResult SaveManyFittings(PyCallArgs& call, PyInt* ownerID, PyDict* fittingsToSave);
     PyResult DeleteFitting(PyCallArgs& call, PyInt* ownerID, PyInt* fittingID);
-    PyResult UpdateNameAndDescription(PyCallArgs& call, PyInt* fittingID, PyInt* ownerID, PyWString* name, PyWString* description);
+    PyResult UpdateNameAndDescription(PyCallArgs& call, PyInt* fittingID, PyInt* ownerID, PyRep* name, PyRep* description);
 
 };
 
