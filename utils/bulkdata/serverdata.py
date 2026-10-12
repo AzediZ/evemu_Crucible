@@ -11,6 +11,9 @@ the Up sections of sql/migrations do to them.  Stdlib only.
 Migration statements that are understood:  INSERT [IGNORE] INTO t [(cols)] VALUES ...,  REPLACE INTO ...,
 UPDATE t SET c = v[, ...] WHERE c = v [AND c = v ...] / WHERE c IN (...),  DELETE FROM t WHERE <same>.
 Anything else that names a loaded table is listed in t.unhandled so a caller can deal with it by hand.
+
+load() leaves out the client-sync migrations gen_client_sync.py wrote;  load_synced(name) is load() plus a replay of
+theirs (their cs_<table> / csn_<table> temporary tables), i.e. the table as a fresh install really has it.
 """
 
 import gzip
@@ -444,3 +447,92 @@ def load(name, skip_migrations=()):
                 table.unhandled.append((fn, st[:200]))
     _cache[key] = table
     return table
+
+
+_TEMP_TABLE = r'CREATE TEMPORARY TABLE `(cs|csn)_%s` \((.*?)\n\);'
+
+
+def load_synced(name):
+    """the table as a fresh install has it, including the client-sync migrations gen_client_sync.py wrote:  load()
+    plus a replay of their temporary tables.  `cs_<table>` rows are op 'u' (mask bit i = the i-th non-key column of the
+    temporary table;  those columns are written), 'd' (the row is deleted) or 'i';  `csn_<table>` rows are new rows.
+    ALTER TABLE statements in those files are applied too;  other statements naming the table (the moon orbitIndex
+    UPDATE) are listed in t.unhandled."""
+    key = ('synced', name)
+    if key in _cache:
+        return _cache[key]
+    src = load(name)
+    table = Table(name, list(src.columns), dict(src.types), list(src.pk))
+    table.notnull, table.defaults, table.autoinc = set(src.notnull), dict(src.defaults), set(src.autoinc)
+    table.rows = [dict(r) for r in src.rows]
+    table.unhandled = list(src.unhandled)
+    table.sources = list(src.sources)
+    for fn, p in migration_files():
+        text = open(p, encoding='utf-8', errors='replace', newline='').read()
+        if not text.startswith(SKIP_HEADER):
+            continue
+        up = up_section(text)
+        if ('`%s`' % name) not in up and ('_%s`' % name) not in up:
+            continue
+        if _replay_sync(table, up):
+            table.sources.append(fn)
+    _cache[key] = table
+    return table
+
+
+def _replay_sync(table, up):
+    name = re.escape(table.name)
+    done = False
+    for am in re.finditer(r'^ALTER TABLE `%s` (.*?);\s*$' % name, up, re.M | re.S):
+        if not _alter(table, 'ALTER TABLE `%s` %s' % (table.name, am.group(1))):
+            table.unhandled.append(('client-sync', am.group(0)[:200]))
+        done = True
+    for um in re.finditer(r'^UPDATE `%s` SET .*$' % name, up, re.M):
+        table.unhandled.append(('client-sync', um.group(0)[:200]))
+    index = {tuple(str(r.get(c)) for c in table.pk): r for r in table.rows} if table.pk else {}
+    for cm in re.finditer(_TEMP_TABLE % name, up, re.S):
+        kind, body = cm.group(1), cm.group(2)
+        cols = re.findall(r'^\s*`(\w+)`', body, re.M)
+        pkm = re.search(r'PRIMARY KEY \(([^)]*)\)', body)
+        pk = [table.lc(c.strip().strip('`')) or c.strip().strip('`') for c in pkm.group(1).split(',')] if pkm else []
+        data_cols = [c for c in cols if c not in ('op', 'mask') and c not in pk]
+        drop = up.find('DROP TEMPORARY TABLE `%s_%s`' % (kind, table.name), cm.end())
+        end = drop if drop >= 0 else len(up)
+        if pk and pk != table.pk:
+            index = {tuple(str(r.get(c)) for c in pk): r for r in table.rows}
+        dead = set()
+        pat = re.compile(r'INSERT INTO `%s_%s` \(([^)]*)\) VALUES\s*' % (kind, name))
+        for im in pat.finditer(up, cm.end(), end):
+            icols = [c.strip().strip('`') for c in im.group(1).split(',')]
+            rows, _ = parse_values(up, im.end())
+            for rv in rows:
+                r = dict(zip(icols, rv))
+                k = tuple(str(r.get(c)) for c in pk)
+                op = 'i' if kind == 'csn' else r['op']
+                if op == 'd':
+                    old = index.pop(k, None)
+                    if old is not None:
+                        dead.add(id(old))
+                elif op == 'i':
+                    row = dict((c, table.defaults.get(c)) for c in table.columns)
+                    for c in icols:
+                        if c not in ('op', 'mask') and table.lc(c):
+                            row[table.lc(c)] = r[c]
+                    old = index.get(k) if pk else None
+                    if old is not None:
+                        old.update(row)
+                    else:
+                        table.rows.append(row)
+                        if pk:
+                            index[k] = row
+                else:
+                    row = index.get(k)
+                    if row is None:
+                        continue
+                    for bit, c in enumerate(data_cols):
+                        if int(r['mask']) & (1 << bit) and table.lc(c):
+                            row[table.lc(c)] = r[c]
+            done = True
+        if dead:
+            table.rows = [r for r in table.rows if id(r) not in dead]
+    return done
