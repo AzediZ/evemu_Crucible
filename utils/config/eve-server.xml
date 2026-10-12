@@ -234,7 +234,7 @@ boolean can use either 0/1 OR true/false.
         <EnableT2>true</EnableT2><!-- bool - inventors invent and build T2  default: true -->
         <EnableMoonPI>true</EnableMoonPI><!-- bool - moon harvesting, reactions, planetary industry, components, fuel blocks  default: true -->
         <InventBufferDays>5</InventBufferDays><!-- float - inventors keep blueprint copies for this many days of their products' demand (a thin T2 ship's inventions take days)  default: 5 -->
-        <HarvestSlack>1.0</HarvestSlack><!-- float - harvesters' and planetary extractors' capacity beyond the calibrated need (moons and planets to spare)  default: 1.0 -->
+        <HarvestSlack>2.0</HarvestSlack><!-- float - harvesters' and planetary extractors' capacity beyond the calibrated need (moons and planets to spare:  the chains' restocking runs up to x3 of the need in a shortage)  default: 2.0 -->
         <PosFuelPerArrayHour>10</PosFuelPerArrayHour><!-- float - fuel blocks a moon harvesting or reaction array's tower burns an hour (a large tower's 40 shared by about four arrays)  default: 10 -->
         <MoonHarvestPerHour>1</MoonHarvestPerHour><!-- float - batches a harvesting array brings in an hour, x the material's moonMiningAmount (Crucible:  1)  default: 1 -->
     </marketSim>

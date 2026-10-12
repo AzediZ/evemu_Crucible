@@ -214,7 +214,7 @@ EVEServerConfig::EVEServerConfig()
     marketSim.EnableT2 = true;
     marketSim.EnableMoonPI = true;
     marketSim.InventBufferDays = 5.0;
-    marketSim.HarvestSlack = 1.0;
+    marketSim.HarvestSlack = 2.0;
     marketSim.PosFuelPerArrayHour = 10.0;
     marketSim.MoonHarvestPerHour = 1.0;
 

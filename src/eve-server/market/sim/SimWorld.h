@@ -132,7 +132,8 @@ namespace MktSim {
         double   inventChance       = 1.0;          // ram.InventChance:  multiplies the Crucible invention chance
         double   inventionTimeMultiplier = 1.0;     // invention time:  the line's (1);  no skill shortens it in Crucible
         double   inventBufferDays   = 5.0;          // inventors keep copies for this many days of their products' demand (a thin T2 ship's inventions take days)
-        double   harvestSlack       = 1.0;          // harvesters' and extractors' capacity over the calibrated need (moons and planets to spare)
+        double   harvestSlack       = 2.0;          // harvesters' and extractors' capacity over the calibrated need (moons and planets to spare;
+                                                    //  the chains' restocking runs up to x3 of it in a shortage)
         double   posFuelPerArrayHour = 10.0;        // fuel blocks a harvesting or reaction array's tower burns an hour (a large
                                                     //  tower's 40 shared by about four arrays)
         double   moonHarvestPerHour = 1.0;          // batches a harvesting array brings in an hour (x the material's moonMiningAmount)
