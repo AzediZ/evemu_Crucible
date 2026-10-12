@@ -555,11 +555,14 @@ void World::SeedActors(int64_t /*now*/, uint32_t nodeID, bool freshOnly)
 
 bool World::LoadJob(const SimJob& job)
 {
-    if ((job.actorID == 0) or (job.actorID > m_actors.size()) or (job.qtyOut <= 0))
+    if ((job.actorID == 0) or (job.actorID > m_actors.size()))
+        return false;
+    // phase 6 (SimChains.cpp):  a chain actor's (an invention that failed gives nothing:  qtyOut 0)
+    if (m_actors[job.actorID - 1].kind >= ActorKind::Inventor)
+        return ChainLoadJob(job);
+    if (job.qtyOut <= 0)
         return false;
     const Actor& a(m_actors[job.actorID - 1]);
-    if (a.kind >= ActorKind::Inventor)
-        return ChainLoadJob(job);       // phase 6 (SimChains.cpp)
     if ((a.kind != ActorKind::Manufacturer) or (a.nodeID != job.nodeID) or (m_static.Type(job.typeID) == nullptr))
         return false;
     SimJob j(job);

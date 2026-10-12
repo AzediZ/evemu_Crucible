@@ -149,5 +149,20 @@ int ChainsTest()
         T_CHECK_EQ(again.Jobs().size(), 1);
         break;
     }
+    // an invention that failed (its copies:  none) is loaded again too:  it holds its line until it ends
+    for (auto& cur : world.Jobs()) {
+        if (cur.second.activity != Activity::Invention)
+            continue;
+        SimJob j(cur.second);
+        j.jobID = 0;
+        j.qtyOut = 0;
+        World again(data, p, market);
+        again.Build(t0);
+        T_CHECK(again.LoadJob(j));
+        // a failed reaction (nothing out) isn't
+        j.activity = Activity::Reaction;
+        T_CHECK(!again.LoadJob(j));
+        break;
+    }
     return MktTest::failures;
 }

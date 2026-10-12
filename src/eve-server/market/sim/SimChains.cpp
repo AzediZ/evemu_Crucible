@@ -1166,7 +1166,7 @@ bool World::ChainLoadJob(const SimJob& job)
 {
     const Actor& a(m_actors[job.actorID - 1]);
     std::map<uint32_t, ChainPlan>::iterator pitr = m_chainPlans.find(job.actorID);
-    if (pitr == m_chainPlans.end())
+    if ((pitr == m_chainPlans.end()) or ((job.activity != Activity::Invention) and (job.qtyOut <= 0)))
         return false;
     ChainPlan& plan(pitr->second);
     const ChainProduct* p(nullptr);
