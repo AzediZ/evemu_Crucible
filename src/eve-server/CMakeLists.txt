@@ -450,6 +450,7 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/Sentry.h"
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/AggroGroup.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/FighterWarpRules.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawRules.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LevelOneBrain.h"

@@ -480,9 +480,9 @@ PyResult EntityBound::CmdDelegateControl(PyCallArgs &call, PyList* droneIDs, PyI
                 //{'FullPath': u'UI/Messages', 'label': u'EntityNoTargetDroneManagementAbilitiesLeftBody'}(u'Control of the {item} cannot be delegated to {whom} because they only have the skill to control {[numeric]limit} drones and they are already controlling that many.')
                 err = MakeError("EntityNoTargetDroneManagementAbilitiesLeft", {{"item", new PyString(pDrone->GetName())}, {"whom", new PyString(pOther->GetName())},
                                                                                {"limit", new PyInt(maxDrones)}});
-            } else if (pOther->GetShipSE()->SysBubble() != pDrone->SysBubble()) {
-                /* in Crucible fighters warped to their controller within the system.  ours can't warp yet, so they could
-                 *  never reach a pilot outside their bubble:  refuse with the client's message for a pilot they can't warp to */
+            } else if ((pOther->GetShipSE()->SysBubble() != pDrone->SysBubble()) and !pDrone->CanWarpTo(pOther->GetShipSE()->GetPosition())) {
+                /* fighters warp to their controller within the system (DroneAIMgr::WarpAfter()).  they can't when they are warp
+                 *  scrambled, or to a pilot past an acceleration gate (deadspace) */
                 //{'FullPath': u'UI/Messages', 'label': u'EntityTargetWarpDisruptedBody'}(u'Control of the {[item]item.name} cannot be delegated to someone who the drones cannot warp to.')
                 err = MakeError("EntityTargetWarpDisrupted", {{"item", new PyInt(pDrone->GetSelf()->typeID())}});
             }

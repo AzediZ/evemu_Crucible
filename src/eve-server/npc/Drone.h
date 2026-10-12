@@ -37,6 +37,8 @@
  *  Normally owner and controller are the same pilot, unless control was delegated to a fleet member.
  *  Control is lost when the controlling ship leaves the system, docks, is destroyed or its pilot changes ship.
  *  The drone then stays in space, still owned, and its owner can reconnect to it.
+ * Fighters and fighter bombers warp within the system after their controlling ship, and with the controlling pilot's
+ *  "Fighter attack and follow" setting after a target that warps off (DroneAIMgr::WarpAfter()).  Other drones never warp.
  *
  * The client keeps a list of the drones each pilot controls (the SetState droneState rowset, kept up to date with
  *  OnDroneStateChange).  Drones it owns that are not in that list are offered for reconnection.
@@ -123,6 +125,11 @@ public:
     void ReleaseControl();
     // tells the owner and controller about our current state
     void SendStateChange();
+
+    /* warping (fighters and fighter bombers only, see DroneAIMgr::WarpAfter()).  ordinary drones never warp */
+    bool IsFighter();                                   // a fighter (549) or fighter bomber (1023)
+    bool CanWarp();                                     //  that isn't warp scrambled
+    bool CanWarpTo(const GPoint& where);                //  and where isn't past an acceleration gate (deadspace)
 
     // distance between our surface and the controlling ship's, or -1 if not controlled
     double ControllerDistance();

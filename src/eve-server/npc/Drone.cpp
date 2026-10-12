@@ -37,6 +37,7 @@
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 
 namespace {
     // drones with no mass would break the movement equations (on the client too).  some mining drones have none
@@ -441,10 +442,12 @@ void DroneSE::ReleaseControl() {
 
     _log(DRONE__TRACE, "Drone %s(%u) lost control from ship %u", GetName(), GetID(), shipID);
 
-    // a delegated drone goes back to its owner, if they can take it
-    if ((pOwner != nullptr) and (pOwner != pController)) {
+    /* a delegated drone goes back to its owner, if they can take it:  in our bubble, or anywhere in the system we can warp
+     *  to (fighters, the only drones that can be delegated).  not while we are being destroyed */
+    if ((pOwner != nullptr) and (pOwner != pController) and !IsDead() and pOwner->IsInSpace()) {
         ShipSE* pOwnerShip(pOwner->GetShipSE());
-        if ((pOwnerShip != nullptr) and (pOwnerShip->SystemMgr() == m_system) and (pOwnerShip->SysBubble() == m_bubble)
+        if ((pOwnerShip != nullptr) and (pOwnerShip->SystemMgr() == m_system) and (pOwnerShip->SysBubble() != nullptr)
+        and ((pOwnerShip->SysBubble() == m_bubble) or CanWarpTo(pOwnerShip->GetPosition()))
         and !pOwner->InPod() and (CountControlledBy(m_system, m_ownerID) < pOwner->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32()))
             SetController(pOwnerShip);
     }
@@ -483,6 +486,27 @@ void DroneSE::SendStateChangeTo(Client* pClient, bool remove) {
         up->SetItem(0, new PyString("OnDroneStateChange"));
         up->SetItem(1, args);
     pClient->QueueDestinyUpdate(&up);
+}
+
+bool DroneSE::IsFighter() {
+    return ((m_self->groupID() == EVEDB::invGroups::Fighter_Drone) or (m_self->groupID() == EVEDB::invGroups::Fighter_Bomber));
+}
+
+/* fighters warp, other drones don't.  warp disruption fields don't stop them (InterdictionMgr catches ships, and npcs by
+ *  config, as before):  CCP spoke of making fighters "able to be warp disrupted" only in 2015.  a warp scrambler on one does
+ *  (players disagreed in 2008, "Fighters CAN be scrambled";  it gives the client's EntityTargetWarpDisrupted, "cannot be
+ *  delegated to someone who the drones cannot warp to", a meaning)
+ */
+bool DroneSE::CanWarp() {
+    return (IsFighter() and !IsWarpScrambled());
+}
+
+// rooms past a dungeon's first are reached through its acceleration gates only ("Fighters will not follow you into DED space")
+bool DroneSE::CanWarpTo(const GPoint& where) {
+    if (!CanWarp())
+        return false;
+    GPoint entrance;
+    return !m_system->GetDungMgr()->RedirectWarp(where, entrance);
 }
 
 double DroneSE::ControllerDistance() {
