@@ -435,8 +435,10 @@ namespace MktSim {
         uint64_t TripsLost() const                      { return m_tripsLost; }
         const std::map<uint16_t, Units>& TransportLost() const  { return m_transportLost; }
         const std::map<uint16_t, Units>& HaulHullsBought() const { return m_haulHullsBought; }
-        // the share of a node's reference supply of a mineral its remote miners bring in (0 without logistics)
-        double RemoteShare(uint32_t nodeID, uint16_t typeID) const;
+        // the share of a node's reference supply of a mineral its remote miners bring in (of one band;  0 without logistics)
+        double RemoteShare(uint32_t nodeID, uint16_t typeID, int band = -1) const;
+        // the route a node's remote miner of a band ships on (nullptr:  none)
+        const Route* RemoteRoute(uint32_t nodeID, uint8_t band) const;
 
     private:
         struct Due {

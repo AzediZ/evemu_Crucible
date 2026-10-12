@@ -58,7 +58,8 @@ namespace MktSim {
         bool     ok         = false;            // reachable
         uint8_t  profile    = 0;
         uint16_t jumps      = 0;
-        uint16_t bandJumps[SecBand::Count] = {};    // jumps into high, low, null (and w-space) systems
+        uint16_t bandJumps[SecBand::Count] = {};    // the systems it passes per band (high, low, null, w-space):  the one it
+                                                    //  leaves from and each jump's destination
     };
 
     class RouteMap {

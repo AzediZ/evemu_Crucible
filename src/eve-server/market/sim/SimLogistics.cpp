@@ -181,6 +181,9 @@ const Route& RouteMap::Get(uint32_t fromSystem, uint32_t toSystem, uint8_t profi
                     ++r.bandJumps[std::min<uint8_t>(m_band[v], SecBand::Count - 1)];
                     v = (uint32_t)prev[v];
                 }
+                // and the system it leaves from:  a cargo undocks and takes the gate there too (a low-sec site next to
+                //  high-sec is still a low-sec system)
+                ++r.bandJumps[std::min<uint8_t>(m_band[a->second], SecBand::Count - 1)];
             }
         }
     }

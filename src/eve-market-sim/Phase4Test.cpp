@@ -12,8 +12,11 @@
   *                     most 85% of the calibration's (a hauler takes a node's stock down to half its target at most, so
   *                     a cheap node's price rises at most (1/2)^-theta:  the cheap tail of a spread that wide stays)
   *     route risk      RiskLowSec x10 widens the high-end mineral premium at high-sec hubs:  over the minerals a hub gets
-  *                     mostly from its low and null-sec sites (its remote miners' share at least half), their fair value
-  *                     against the control's in the last two thirds of the run, the median at least x1.015
+  *                     only from its sites (the remote miners' share at least 90%:  the node's own ores can't stand in)
+  *                     and mostly through low-sec (routes that pass a low-sec system:  at least half;  a null-sec site next
+  *                     to high-sec doesn't count), their fair value
+  *                     against the control's in the last two thirds of the run, the median at least x1.005 (above the
+  *                     runs' own noise:  a mineral the risk doesn't reach moves about 0.3%)
   *     losses          shipments are lost (the audit's goods.sink.transport is above 0 over the run) and the haulers buy
   *                     industrials to replace the hulls (bought at least as many as half the shipments lost, and more
   *                     than none), in the RiskLowSec x10 run;  the control's are reported
@@ -54,6 +57,7 @@ namespace {
         // (nodeID << 16 | typeID) -> V per day, of the minerals
         std::map<uint32_t, std::vector<double>> minerals;
         std::map<uint32_t, double> remoteShare;  // (nodeID << 16 | typeID) -> the remote miners' share
+        std::map<uint32_t, double> lowSecShare;  // ... that comes through low-sec (its route passes a low-sec system)
         Units    transportLost      = 0;
         uint64_t tripsLost          = 0;
         uint64_t tripsArrived       = 0;
@@ -136,9 +140,16 @@ namespace {
         world.Seed(StartTime);
         world.Start(StartTime, false);
         market.SetNow(StartTime);
-        for (auto& c : world.Cells())
-            if (c.supply == Supply::Refined)
-                out.remoteShare[(c.nodeID << 16) | c.typeID] = world.RemoteShare(c.nodeID, c.typeID);
+        for (auto& c : world.Cells()) {
+            if (c.supply != Supply::Refined)
+                continue;
+            out.remoteShare[(c.nodeID << 16) | c.typeID] = world.RemoteShare(c.nodeID, c.typeID);
+            for (uint8_t band = SecBand::Low; band <= SecBand::Null; ++band) {
+                const Route* r(world.RemoteRoute(c.nodeID, band));
+                if ((r != nullptr) and (r->bandJumps[SecBand::Low] > 0))
+                    out.lowSecShare[(c.nodeID << 16) | c.typeID] += world.RemoteShare(c.nodeID, c.typeID, band);
+            }
+        }
         world.SetDayHook([&](const DayReport& rep) {
             out.transportLost += rep.audit.goods[Goods::Transport];
             out.destroyed += rep.audit.goods[Goods::Destroyed];
@@ -302,7 +313,8 @@ int Phase4Main(const StaticData& data, const Params& p, const std::vector<uint64
             uint32_t nodeID(cur.first >> 16);
             uint16_t typeID((uint16_t)(cur.first & 0xFFFF));
             const NodeData& node(data.nodes[nodeID - 1]);
-            if ((node.security < 0.45f) or (control.remoteShare[cur.first] < 0.5))
+            // the high-end minerals:  all but nothing from the sites (the node's own ores can't stand in)
+            if ((node.security < 0.45f) or (control.remoteShare[cur.first] < 0.9) or (control.lowSecShare[cur.first] < 0.5))
                 continue;
             const std::vector<double>& c(cur.second);
             const std::vector<double>& r(risk.minerals[cur.first]);
@@ -317,8 +329,8 @@ int Phase4Main(const StaticData& data, const Params& p, const std::vector<uint64
             detail += F(" %u@%u x%.3f", typeID, nodeID, sr / sc);
         }
         double median(Percentile(premia, 0.5));
-        Check(!premia.empty() and (median >= 1.015),
-              F("route risk:  RiskLowSec x10 raises the high-end minerals at the high-sec hubs x%.3f (median of %zu;  allowed at least x1.015):%s",
+        Check(!premia.empty() and (median >= 1.005),
+              F("route risk:  RiskLowSec x10 raises the high-end minerals at the high-sec hubs x%.3f (median of %zu;  allowed at least x1.005):%s",
                 median, premia.size(), detail.c_str()), failures);
 
         // losses

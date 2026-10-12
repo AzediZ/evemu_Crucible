@@ -50,7 +50,7 @@ namespace {
     const uint16_t GroupIndustrial = 28;
     const double DefaultCargoM3 = 5000.0;       // an industrial's hold when the static data has none
     const int64_t ShipEverySeconds = 12 * 3600; // a remote miner ships at least this often (when it has anything)
-    const double RemoteSupplySlack = 0.02;      // remote supply at its reference netback:  the demand and this much over
+    const double RemoteSupplySlack = 0.005;     // remote supply at its reference netback:  the demand and this much over
 
     std::string Fmt(const char* fmt, ...)
     {
@@ -86,10 +86,21 @@ uint16_t World::MapLocation(uint16_t loc, const std::function<uint32_t(uint32_t)
     return (uint16_t)nodeMap(loc);
 }
 
-double World::RemoteShare(uint32_t nodeID, uint16_t typeID) const
+double World::RemoteShare(uint32_t nodeID, uint16_t typeID, int band) const
 {
-    std::map<uint64_t, double>::const_iterator itr = m_remoteShare.find(((uint64_t)nodeID << 16) | typeID);
+    uint64_t key(((uint64_t)nodeID << 16) | typeID);
+    if (band >= 0)
+        key = (key << 2) | (uint64_t)(band & 3) | (1ULL << 63);
+    std::map<uint64_t, double>::const_iterator itr = m_remoteShare.find(key);
     return (itr == m_remoteShare.end()) ? 0.0 : itr->second;
+}
+
+const Route* World::RemoteRoute(uint32_t nodeID, uint8_t band) const
+{
+    for (auto& cur : m_haulPlans)
+        if ((cur.second.site != 0) and (cur.second.site == SiteLoc(nodeID, band)))
+            return &cur.second.route[0];
+    return nullptr;
 }
 
 const SiteInfo* World::Site(uint16_t loc) const
@@ -304,8 +315,11 @@ void World::SplitMining(uint32_t nodeID, uint32_t minerID, const std::vector<dou
         hp.share = share;
         hp.refM3 = m3;
         m_haulPlans[a.actorID] = hp;
-        for (size_t m = 0; m < outs; ++m)
-            m_remoteShare[((uint64_t)nodeID << 16) | m_cells[rp.outputs[m]].typeID] += share[m];
+        for (size_t m = 0; m < outs; ++m) {
+            uint64_t key(((uint64_t)nodeID << 16) | m_cells[rp.outputs[m]].typeID);
+            m_remoteShare[key] += share[m];
+            m_remoteShare[(key << 2) | b | (1ULL << 63)] += share[m];
+        }
         m_minerPlans[a.actorID] = rp;
     }
     // the node's own miner keeps what is left
