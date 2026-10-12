@@ -199,7 +199,8 @@ PyResult CharMgrService::GetLabels(PyCallArgs& call)
 
 PyResult CharMgrService::GetPaperdollState(PyCallArgs& call)
 {
-    return new PyInt(Char::PDState::NoRecustomization);
+    // station "recustomize" prompt:  Resculpting -> AskRecustomizeCharacter, FullRecustomizing -> ...ChangeBloodline
+    return new PyInt(CharacterDB::GetPaperDollState(call.client->GetCharacterID()));
 }
 
 PyResult CharMgrService::GetPublicInfo3(PyCallArgs &call, PyInt* characterID)

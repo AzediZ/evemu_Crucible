@@ -29,6 +29,8 @@
 
 #include "eve-server.h"
 
+#include "../../eve-common/EVE_Character.h"
+
 #include "account/AccountService.h"
 //#include "../../eve-common/EVE_Skills.h"
 
@@ -184,6 +186,37 @@ PyResult Command_freesp(Client* who, CommandDB* db, EVEServiceManager &services,
     if (cRef.get() == nullptr)
         throw CustomError ("Character %u not found", charID);
     cRef->AddFreeSkillPoints(amount);
+    return new PyString("Operation successful.");
+}
+
+PyResult Command_recustomize(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (args.argCount() < 3)
+        throw CustomError ("Correct Usage: /recustomize [charID|me] [state]");
+
+    uint32 charID(0);
+    if (args.arg(1) == "me") {
+        charID = who->GetCharacterID();
+    } else if (args.isNumber(1)) {
+        charID = atol(args.arg(1).c_str());
+    } else {
+        throw CustomError ("Argument 1 should be a character ID ('me'=self)");
+    }
+    if (!IsCharacterID(charID))
+        throw CustomError ("%u is not a character ID", charID);
+    if (!args.isNumber(2))
+        throw CustomError ("Argument 2 should be a paperdoll state (0-4)");
+    int state(atoi(args.arg(2).c_str()));
+    if ((state < Char::PDState::NoRecustomization) or (state > Char::PDState::ForceRecustomize))
+        throw CustomError ("Argument 2 should be a paperdoll state (0-4)");
+
+    CharacterDB::SetPaperDollState(charID, state);
+    // the station caches the state until the character changes
+    Client* pClient(sEntityList.FindClientByCharID(charID));
+    if (pClient != nullptr) {
+        PyTuple* tmp = new PyTuple(0);
+        pClient->SendNotification("OnCharacterHandler", "charid", &tmp, false);
+    }
     return new PyString("Operation successful.");
 }
 

@@ -100,10 +100,8 @@ PyResult CharUnboundMgrService::IsUserReceivingCharacter(PyCallArgs &call) {
 //  called from petitioner (but only when session.characterID is None)
 PyResult CharUnboundMgrService::GetCharacterInfo(PyCallArgs &call) {
     // chars = sm.RemoteSvc('charUnboundMgr').GetCharacterInfo()
-    _log(CLIENT__ERROR, "Called GetCharacterInfo");
-    //   characterID, characterName
-
-    return nullptr;
+    //   rows with characterID, characterName of the account's characters
+    return CharacterDB::GetCharacterList(call.client->GetUserID());
 }
 
 PyResult CharUnboundMgrService::GetCharCreationInfo(PyCallArgs &call) {

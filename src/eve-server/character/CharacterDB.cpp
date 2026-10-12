@@ -26,9 +26,14 @@
 
 #include "eve-server.h"
 
+#include "../../eve-common/EVE_Character.h"
+
 #include "EVEServerConfig.h"
 #include "character/Character.h"
 #include "character/CharacterDB.h"
+#include "mail/MailDB.h"
+#include "mail/MailMgr.h"
+#include "system/CalendarDB.h"
 
 uint32 CharacterDB::NewCharacter(const CharacterData& data, const CorpData& corpData) {
     DBerror err;
@@ -421,11 +426,19 @@ PyRep *CharacterDB::GetCharSelectInfo(uint32 characterID) {
         shipTypeID = row.GetUInt(1);
     }
 
-    /** @todo  not sure how to implement these yet... */
     // these show on char portrait at top left on sel screen
-    uint32 unreadMailCount = 0;
-    uint32 upcomingEventCount = 0;
-    uint32 unprocessedNotifications = 0;
+    uint32 unreadMailCount(MailMgr::GetUnreadCount(characterID));
+    uint32 unprocessedNotifications(MailDB::GetUnprocessedNotificationCount(characterID));
+    uint32 upcomingEventCount(0);
+    {
+        DBQueryResult cres;
+        DBResultRow crow;
+        if (sDatabase.RunQuery(cres,
+                "SELECT c.corporationID, co.allianceID FROM chrCharacters AS c"
+                " LEFT JOIN crpCorporation AS co ON co.corporationID = c.corporationID"
+                " WHERE c.characterID = %u", characterID) and cres.GetRow(crow))
+            upcomingEventCount = CalendarDB::CountUpcomingEvents(characterID, crow.GetUInt(0), crow.IsNull(1) ? 0 : crow.GetUInt(1));
+    }
 
     //res.Reset();
     if (!sDatabase.RunQuery(res,
@@ -433,37 +446,41 @@ PyRep *CharacterDB::GetCharSelectInfo(uint32 characterID) {
         "  %u AS unreadMailCount,"
         "  %u AS upcomingEventCount, "
         "  %u AS unprocessedNotifications, "
-        "  characterID,"
-        "  petitionMessage, "
-        "  gender, "
-        "  bloodlineID, "
-        "  createDateTime, "    //this is char create date
-        "  startDateTime, "     //this is char joined corp date
-        "  corporationID, "
+        "  c.characterID,"
+        "  c.petitionMessage, "
+        "  c.gender, "
+        "  c.bloodlineID, "
+        "  c.createDateTime, "    //this is char create date
+        "  c.startDateTime, "     //this is char joined corp date
+        "  c.corporationID, "
         "  0 AS worldSpaceID, " /* this gives "walking around in [station xxxx]" msgs on login screen when !=0 */
-        "  stationID, "
-        "  solarSystemID, "
-        "  constellationID, "
-        "  regionID, "
-        "  0 AS allianceID, "       /** @todo (allan) reset this once alliances are implemented (already in corpDB) */
-        "  0 AS allianceMemberStartDate,"
-        "  'none' AS shortName, "   /** @todo (allan) this is alliance tickerName. reset this once alliances are implemented */
-        "  bounty, "
-        "  skillQueueEndTime, "
-        "  skillPoints, "
+        "  c.stationID, "
+        "  c.solarSystemID, "
+        "  c.constellationID, "
+        "  c.regionID, "
+        "  COALESCE(co.allianceID, 0) AS allianceID, "      // alliance logo and ticker
+        "  COALESCE(co.allianceMemberStartDate, 0) AS allianceMemberStartDate,"
+        "  COALESCE(a.shortName, '') AS shortName, "
+        "  c.bounty, "
+        "  c.skillQueueEndTime, "
+        "  c.skillPoints, "
         "  %u AS shipTypeID, "
         "  '%s' AS shipName, "
-        "  securityRating, "
-        "  title, "
-        "  balance, "
-        "  aurBalance, "
-        "  15 AS daysLeft, "    /* this calls a subscription renewal warning on char select screen (see pic in gallery) when <= 10 */
-        "  30 AS userType,"     /* 23 is trial acct.  30 is normal */
-        "  paperDollState"      // used for re-customization.  see paperDollState:: in packet_types.h
-        " FROM chrCharacters"
-        " WHERE characterID=%u",
+        "  c.securityRating, "
+        "  c.title, "
+        "  c.balance, "
+        "  c.aurBalance, "
+        /* days of paid game time left (PLEX); a subscription renewal warning shows when <= 10.  NULL = no paid time recorded */
+        "  IF(acc.paidUntil > %lli, CEIL((acc.paidUntil - %lli) / %lli), NULL) AS daysLeft, "
+        "  COALESCE(acc.type, 30) AS userType,"     /* 23 is trial acct.  30 is normal */
+        "  c.paperDollState"      // used for re-customization.  see paperDollState:: in packet_types.h
+        " FROM chrCharacters AS c"
+        " LEFT JOIN crpCorporation AS co ON co.corporationID = c.corporationID"
+        " LEFT JOIN alnAlliance AS a ON a.allianceID = co.allianceID"
+        " LEFT JOIN account AS acc ON acc.accountID = c.accountID"
+        " WHERE c.characterID=%u",
         unreadMailCount, upcomingEventCount, unprocessedNotifications,
-        shipTypeID, shipName.c_str(), characterID))
+        shipTypeID, shipName.c_str(), (int64)GetFileTimeNow(), (int64)GetFileTimeNow(), (int64)EvE::Time::Day, characterID))
     {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
@@ -895,6 +912,54 @@ void CharacterDB::SetCharacterOnlineStatus(uint32 char_id, bool online) {
 
     if ( online )
         sDatabase.RunQuery(err, "UPDATE srvStatus SET Connections = Connections + 1");
+}
+
+uint8 CharacterDB::GetPaperDollState(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT paperDollState FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in GetPaperDollState query: %s", res.error.c_str());
+        return Char::PDState::NoRecustomization;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return Char::PDState::NoRecustomization;
+    return row.GetUInt(0);
+}
+
+uint32 CharacterDB::GetAccountID(uint32 charID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT accountID FROM chrCharacters WHERE characterID = %u", charID)) {
+        codelog(DATABASE__ERROR, "Error in GetAccountID query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+void CharacterDB::SetPaperDollState(uint32 charID, uint8 state)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE chrCharacters SET paperDollState = %u WHERE characterID = %u", state, charID);
+}
+
+void CharacterDB::ClearAvatar(uint32 charID, bool includeSculpts)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM avatars WHERE charID = %u", charID);
+    sDatabase.RunQuery(err, "DELETE FROM avatar_colors WHERE charID = %u", charID);
+    sDatabase.RunQuery(err, "DELETE FROM avatar_modifiers WHERE charID = %u", charID);
+    if (includeSculpts)
+        sDatabase.RunQuery(err, "DELETE FROM avatar_sculpts WHERE charID = %u", charID);
+}
+
+void CharacterDB::ClearPortrait(uint32 charID)
+{
+    DBerror err;
+    sDatabase.RunQuery(err, "DELETE FROM chrPortraitData WHERE charID = %u", charID);
 }
 
 uint32 CharacterDB::GetFreeSkillPoints(uint32 charID)

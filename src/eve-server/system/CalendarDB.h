@@ -29,6 +29,8 @@ class CalendarDB {
 
       static PyRep* GetResponsesToEvent(uint32 eventID);
       static PyRep* GetResponsesForCharacter(uint32 charID);
+      // events from now to the end of next month (the client's "upcoming events") the character can see and hasn't declined
+      static uint32 CountUpcomingEvents(uint32 charID, uint32 corpID, uint32 allianceID);
 
   protected:
 

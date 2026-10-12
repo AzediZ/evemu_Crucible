@@ -110,6 +110,14 @@ public:
 
     static void SetCharacterOnlineStatus(uint32 char_id, bool online=false);
 
+    // recustomization:  paperDollState (Char::PDState) and clearing the stored doll / portrait before they are rebuilt
+    static uint8 GetPaperDollState(uint32 charID);
+    // account owning charID (0 if not found)
+    static uint32 GetAccountID(uint32 charID);
+    static void SetPaperDollState(uint32 charID, uint8 state);
+    static void ClearAvatar(uint32 charID, bool includeSculpts);
+    static void ClearPortrait(uint32 charID);
+
     // unallocated (free) skill points
     static uint32 GetFreeSkillPoints(uint32 charID);
     static void SetFreeSkillPoints(uint32 charID, uint32 points);

@@ -13,6 +13,8 @@ COMMAND( giveisk, Acct::Role::GMH,
          "(entityID) (amount) - Give the specified amount of cash to the specified character. 0=self." )
 COMMAND( freesp, Acct::Role::GMH,
          "(charID|me) (amount) - adds (or with a negative amount takes) unallocated skill points" )
+COMMAND( recustomize, Acct::Role::GMH,
+         "(charID|me) (state) - sets the paperdoll state: 0 none, 1 resculpt, 3 full recustomization (bloodline), 4 forced at login" )
 COMMAND( pop, Acct::Role::ADMIN,
          "(type) (key) (value) - Send an OnRemoteMessage" )
 COMMAND( setbpattr, Acct::Role::CONTENT,

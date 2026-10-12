@@ -281,6 +281,35 @@ PyRep* CalendarDB::GetResponsesToEvent(uint32 eventID)
     return list;
 }
 
+uint32 CalendarDB::CountUpcomingEvents(uint32 charID, uint32 corpID, uint32 allianceID)
+{
+    EvE::TimeParts now = GetTimeParts();
+    uint16 nextYear(now.year);
+    uint8 nextMonth(now.month + 1);
+    if (nextMonth > Calendar::Month::December) {
+        nextMonth = Calendar::Month::January;
+        ++nextYear;
+    }
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT COUNT(*) FROM sysCalendarEvents AS e"
+        " WHERE e.isDeleted = 0 AND e.eventDateTime > %lli"
+        " AND ((e.year = %u AND e.month = %u) OR (e.year = %u AND e.month = %u))"
+        " AND e.ownerID IN (%u, %u, %u, 1)"
+        " AND NOT EXISTS (SELECT 1 FROM sysCalendarResponses AS r WHERE r.eventID = e.eventID AND r.charID = %u AND r.response = %u)",
+        (int64)GetFileTimeNow(), now.year, now.month, nextYear, nextMonth, charID, corpID, allianceID,
+        charID, Calendar::Response::Declined))
+    {
+        codelog(DATABASE__ERROR, "Error in CountUpcomingEvents query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
 void CalendarDB::UpdateEventParticipants()
 {
     DBerror err;

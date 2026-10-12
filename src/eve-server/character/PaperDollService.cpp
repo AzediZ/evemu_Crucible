@@ -25,11 +25,40 @@
 
 #include "eve-server.h"
 
+#include "../../eve-common/EVE_Character.h"
+
 
 #include "character/PaperDollService.h"
+#include "character/Character.h"
+#include "character/CharacterDB.h"
+#include "imageserver/ImageServer.h"
+
+// util.KeyVal doll / portrait info from the character creator -> its dict (nullptr if it isn't one)
+static PyDict* GetKeyValDict(PyRep* rep)
+{
+    if ((rep == nullptr) or !rep->IsObject())
+        return nullptr;
+    PyObject* obj = rep->AsObject();
+    if ((obj->arguments() == nullptr) or !obj->arguments()->IsDict())
+        return nullptr;
+    return obj->arguments()->AsDict();
+}
+
+/* the character being recustomized: the session character, or at character selection (forced recustomization,
+ *  no session character yet) one of the account's characters
+ */
+static void CheckRecustomizeOwner(Client* pClient, uint32 charID)
+{
+    if (pClient->GetCharacterID() != 0) {
+        if (charID != pClient->GetCharacterID())
+            throw CustomError ("You can only recustomize your own character.");
+    } else if (CharacterDB::GetAccountID(charID) != pClient->GetUserID()) {
+        throw CustomError ("You can only recustomize your own character.");
+    }
+}
 
 PaperDollService::PaperDollService() :
-    Service("paperDollServer", eAccessLevel_Character)
+    Service("paperDollServer", eAccessLevel_User)
 {
     this->Add("GetPaperDollData", &PaperDollService::GetPaperDollData);
     this->Add("GetMyPaperDollData", &PaperDollService::GetMyPaperDollData);
@@ -53,15 +82,66 @@ PyResult PaperDollService::ConvertAndSavePaperDoll(PyCallArgs &call) {
 }
 
 PyResult PaperDollService::UpdateExistingCharacterFull(PyCallArgs &call, PyInt* characterID, PyRep* dollInfo, PyRep* portraitInfo, PyBool* dollExists) {
-    call.Dump(PLAYER__CALL_DUMP);
     /*
         sm.RemoteSvc('paperDollServer').UpdateExistingCharacterFull(charID, dollInfo, portraitInfo, dollExists)
-        */
+     * full recustomization (sculpting) needs a granted paperDollState; the state is used up afterwards
+     */
+    uint32 charID(characterID->value());
+    CheckRecustomizeOwner(call.client, charID);
+    switch (CharacterDB::GetPaperDollState(charID)) {
+        case Char::PDState::Resculpting:
+        case Char::PDState::NoExistingCustomization:
+        case Char::PDState::FullRecustomizing:
+        case Char::PDState::ForceRecustomize:
+            break;
+        default:
+            throw CustomError ("Your character is not flagged for full recustomization.");
+    }
+
+    PyDict* doll(GetKeyValDict(dollInfo));
+    PyDict* portrait(GetKeyValDict(portraitInfo));
+    if (doll == nullptr)
+        throw CustomError ("The character appearance data is invalid.");
+
+    CharacterDB::ClearAvatar(charID, true);
+    CharacterAppearance capp;
+        capp.Build(charID, doll);
+    if (portrait != nullptr) {
+        CharacterDB::ClearPortrait(charID);
+        CharacterPortrait cpor;
+            cpor.Build(charID, portrait);
+    }
+    CharacterDB::SetPaperDollState(charID, Char::PDState::NoRecustomization);
+    // the new portrait image was uploaded (photoUploadSvc) just before this call
+    sImageServer.SavePortrait(call.client->GetUserID(), charID);
+
+    _log(CLIENT__MESSAGE, "%s: full recustomization of %u saved.", call.client->GetName(), charID);
     return nullptr;
 }
 
 PyResult PaperDollService::UpdateExistingCharacterLimited(PyCallArgs &call, PyInt* characterID, PyRep* dollData, PyRep* portraitInfo, PyBool* dollExists) {
-    call.Dump(PLAYER__CALL_DUMP);
+    /* limited recustomization (clothes, hair, makeup, portrait) is free at any time.  the client sends no sculpts, the stored ones are kept
+     *  sm.RemoteSvc('paperDollServer').UpdateExistingCharacterLimited(charID, dollData, portraitInfo, dollExists)
+     */
+    uint32 charID(characterID->value());
+    CheckRecustomizeOwner(call.client, charID);
+
+    PyDict* doll(GetKeyValDict(dollData));
+    PyDict* portrait(GetKeyValDict(portraitInfo));
+    if (doll == nullptr)
+        throw CustomError ("The character appearance data is invalid.");
+
+    CharacterDB::ClearAvatar(charID, false);
+    CharacterAppearance capp;
+        capp.Build(charID, doll);
+    if (portrait != nullptr) {
+        CharacterDB::ClearPortrait(charID);
+        CharacterPortrait cpor;
+            cpor.Build(charID, portrait);
+    }
+    sImageServer.SavePortrait(call.client->GetUserID(), charID);
+
+    _log(CLIENT__MESSAGE, "%s: limited recustomization of %u saved.", call.client->GetName(), charID);
     /*
         sm.RemoteSvc('paperDollServer').UpdateExistingCharacterLimited(charID, dollData, portraitInfo, dollExists)
         */
@@ -99,12 +179,19 @@ PyResult PaperDollService::GetMyPaperDollData(PyCallArgs &call, PyInt* character
 {
     call.Dump(PLAYER__CALL_DUMP);
 
+    // at character selection there is no session character yet:  use the (account's) character asked for
+    uint32 charID(call.client->GetCharacterID());
+    if (charID == 0) {
+        CheckRecustomizeOwner(call.client, characterID->value());
+        charID = characterID->value();
+    }
+
 	PyDict* args = new PyDict;
 
-	args->SetItemString( "colors", m_db.GetPaperDollAvatarColors(call.client->GetCharacterID()) );
-	args->SetItemString( "modifiers", m_db.GetPaperDollAvatarModifiers(call.client->GetCharacterID()) );
-	args->SetItemString( "appearance", m_db.GetPaperDollAvatar(call.client->GetCharacterID()) );
-	args->SetItemString( "sculpts", m_db.GetPaperDollAvatarSculpts(call.client->GetCharacterID()) );
+	args->SetItemString( "colors", m_db.GetPaperDollAvatarColors(charID) );
+	args->SetItemString( "modifiers", m_db.GetPaperDollAvatarModifiers(charID) );
+	args->SetItemString( "appearance", m_db.GetPaperDollAvatar(charID) );
+	args->SetItemString( "sculpts", m_db.GetPaperDollAvatarSculpts(charID) );
 
     return new PyObject("util.KeyVal", args);
 }

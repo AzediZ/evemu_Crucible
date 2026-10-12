@@ -96,9 +96,42 @@ CharacterType *CharacterType::Load(uint16 typeID) {
 /*
  * CharacterAppearance
  */
+// doll / portrait data helpers:  a missing or mistyped entry reads as empty (limited recustomization sends no sculpts)
+static PyList* GetDollList(PyDict* data, const char* key)
+{
+    static PyList* empty = new PyList();
+    PyRep* rep = data->GetItemString(key);
+    if ((rep == nullptr) or !rep->IsList())
+        return empty;
+    return rep->AsList();
+}
+
+static PyTuple* GetDollTuple(PyDict* data, const char* key)
+{
+    static PyTuple* empty = nullptr;
+    PyRep* rep = data->GetItemString(key);
+    if ((rep == nullptr) or !rep->IsTuple() or (rep->AsTuple()->size() < 3)) {
+        if (empty == nullptr) {
+            empty = new PyTuple(3);
+            for (uint8 i = 0; i < 3; ++i)
+                empty->SetItem(i, new PyFloat(0.0));
+        }
+        return empty;
+    }
+    return rep->AsTuple();
+}
+
+static float GetDollFloat(PyDict* data, const char* key)
+{
+    PyRep* rep = data->GetItemString(key);
+    if (rep == nullptr)
+        return 0.0f;
+    return (float)PyRep::FloatValue(rep);
+}
+
 void CharacterAppearance::Build(uint32 ownerID, PyDict* data)
 {
-    PyList* colors = data->GetItemString("colors")->AsList();
+    PyList* colors = GetDollList(data, "colors");
     PyList::const_iterator color_cur = colors->begin();
     for (; color_cur != colors->end(); ++color_cur) {
         if ((*color_cur)->IsObjectEx()) {
@@ -116,18 +149,19 @@ void CharacterAppearance::Build(uint32 ownerID, PyDict* data)
                                  PyRep::IntegerValue(color_tuple->GetItem(1)),
                                  PyRep::IntegerValue(color_tuple->GetItem(2)),
                                  PyRep::IntegerValue(color_tuple->GetItem(3)),
-                                 color_tuple->GetItem(4)->AsFloat()->value(),
-                                 color_tuple->GetItem(5)->AsFloat()->value());
+                                 PyRep::FloatValue(color_tuple->GetItem(4)),
+                                 PyRep::FloatValue(color_tuple->GetItem(5)));
         }
     }
 
-    PyObjectEx* appearance = data->GetItemString("appearance")->AsObjectEx();
-    PyObjectEx_Type2* app_obj = (PyObjectEx_Type2*)appearance;
-    PyTuple* app_tuple = app_obj->GetArgs()->AsTuple();
+    PyRep* appearance = data->GetItemString("appearance");
+    if ((appearance != nullptr) and appearance->IsObjectEx()) {
+        PyObjectEx_Type2* app_obj = (PyObjectEx_Type2*)appearance->AsObjectEx();
+        PyTuple* app_tuple = app_obj->GetArgs()->AsTuple();
+        m_db.SetAvatar(ownerID, app_tuple->GetItem(1));
+    }
 
-    m_db.SetAvatar(ownerID, app_tuple->GetItem(1));
-
-    PyList* modifiers = data->GetItemString("modifiers")->AsList();
+    PyList* modifiers = GetDollList(data, "modifiers");
     PyList::const_iterator modif_cur = modifiers->begin();
     for (; modif_cur != modifiers->end(); ++modif_cur) {
         if ((*modif_cur)->IsObjectEx()) {
@@ -146,7 +180,7 @@ void CharacterAppearance::Build(uint32 ownerID, PyDict* data)
         }
     }
 
-    PyList* sculpts = data->GetItemString("sculpts")->AsList();
+    PyList* sculpts = GetDollList(data, "sculpts");
     PyList::const_iterator sculpt_cur = sculpts->begin();
     for (; sculpt_cur != sculpts->end(); sculpt_cur++) {
         if ((*sculpt_cur)->IsObjectEx()) {
@@ -175,54 +209,56 @@ void CharacterAppearance::Build(uint32 ownerID, PyDict* data)
 
 void CharacterPortrait::Build(uint32 charID, PyDict* data)
 {
+    static PyDict* emptyDict = new PyDict();
     PortraitInfo info = PortraitInfo();
 
     info.backgroundID = PyRep::IntegerValue(data->GetItemString("backgroundID"));
     info.lightColorID = PyRep::IntegerValue(data->GetItemString("lightColorID"));
     info.lightID = PyRep::IntegerValue(data->GetItemString("lightID"));
 
-    info.cameraFieldOfView = data->GetItemString("cameraFieldOfView")->AsFloat()->value();
-    info.lightIntensity = data->GetItemString("lightIntensity")->AsFloat()->value();
+    info.cameraFieldOfView = GetDollFloat(data, "cameraFieldOfView");
+    info.lightIntensity = GetDollFloat(data, "lightIntensity");
 
-    PyTuple* cameraPoi = data->GetItemString("cameraPoi")->AsTuple();
-    info.cameraPoiX = cameraPoi->GetItem(0)->AsFloat()->value();
-    info.cameraPoiY = cameraPoi->GetItem(1)->AsFloat()->value();
-    info.cameraPoiZ = cameraPoi->GetItem(2)->AsFloat()->value();
+    PyTuple* cameraPoi = GetDollTuple(data, "cameraPoi");
+    info.cameraPoiX = PyRep::FloatValue(cameraPoi->GetItem(0));
+    info.cameraPoiY = PyRep::FloatValue(cameraPoi->GetItem(1));
+    info.cameraPoiZ = PyRep::FloatValue(cameraPoi->GetItem(2));
 
-    PyTuple* cameraPosition = data->GetItemString("cameraPosition")->AsTuple();
-    info.cameraX = cameraPosition->GetItem(0)->AsFloat()->value();
-    info.cameraY = cameraPosition->GetItem(1)->AsFloat()->value();
-    info.cameraZ = cameraPosition->GetItem(2)->AsFloat()->value();
+    PyTuple* cameraPosition = GetDollTuple(data, "cameraPosition");
+    info.cameraX = PyRep::FloatValue(cameraPosition->GetItem(0));
+    info.cameraY = PyRep::FloatValue(cameraPosition->GetItem(1));
+    info.cameraZ = PyRep::FloatValue(cameraPosition->GetItem(2));
 
-    PyDict* poseData = data->GetItemString("poseData")->AsDict();
-    PyTuple* HeadLookTarget = poseData->GetItemString("HeadLookTarget")->AsTuple();
-    info.headLookTargetX = HeadLookTarget->GetItem(0)->AsFloat()->value();
-    info.headLookTargetY = HeadLookTarget->GetItem(1)->AsFloat()->value();
-    info.headLookTargetZ = HeadLookTarget->GetItem(2)->AsFloat()->value();
+    PyRep* poseRep = data->GetItemString("poseData");
+    PyDict* poseData = ((poseRep != nullptr) and poseRep->IsDict()) ? poseRep->AsDict() : emptyDict;
+    PyTuple* HeadLookTarget = GetDollTuple(poseData, "HeadLookTarget");
+    info.headLookTargetX = PyRep::FloatValue(HeadLookTarget->GetItem(0));
+    info.headLookTargetY = PyRep::FloatValue(HeadLookTarget->GetItem(1));
+    info.headLookTargetZ = PyRep::FloatValue(HeadLookTarget->GetItem(2));
 
-    info.browLeftCurl = poseData->GetItemString("BrowLeftCurl")->AsFloat()->value();
-    info.browLeftUpDown = poseData->GetItemString("BrowLeftUpDown")->AsFloat()->value();
-    info.browLeftTighten = poseData->GetItemString("BrowLeftTighten")->AsFloat()->value();
-    info.browRightCurl = poseData->GetItemString("BrowRightCurl")->AsFloat()->value();
-    info.browRightUpDown = poseData->GetItemString("BrowRightUpDown")->AsFloat()->value();
-    info.browRightTighten = poseData->GetItemString("BrowRightTighten")->AsFloat()->value();
+    info.browLeftCurl = GetDollFloat(poseData, "BrowLeftCurl");
+    info.browLeftUpDown = GetDollFloat(poseData, "BrowLeftUpDown");
+    info.browLeftTighten = GetDollFloat(poseData, "BrowLeftTighten");
+    info.browRightCurl = GetDollFloat(poseData, "BrowRightCurl");
+    info.browRightUpDown = GetDollFloat(poseData, "BrowRightUpDown");
+    info.browRightTighten = GetDollFloat(poseData, "BrowRightTighten");
 
-    info.squintLeft = poseData->GetItemString("SquintLeft")->AsFloat()->value();
-    info.smileLeft = poseData->GetItemString("SmileLeft")->AsFloat()->value();
-    info.frownLeft = poseData->GetItemString("FrownLeft")->AsFloat()->value();
-    info.squintRight = poseData->GetItemString("SquintRight")->AsFloat()->value();
-    info.smileRight = poseData->GetItemString("SmileRight")->AsFloat()->value();
-    info.frownRight = poseData->GetItemString("FrownRight")->AsFloat()->value();
+    info.squintLeft = GetDollFloat(poseData, "SquintLeft");
+    info.smileLeft = GetDollFloat(poseData, "SmileLeft");
+    info.frownLeft = GetDollFloat(poseData, "FrownLeft");
+    info.squintRight = GetDollFloat(poseData, "SquintRight");
+    info.smileRight = GetDollFloat(poseData, "SmileRight");
+    info.frownRight = GetDollFloat(poseData, "FrownRight");
 
-    info.jawUp = poseData->GetItemString("JawUp")->AsFloat()->value();
-    info.jawSideways = poseData->GetItemString("JawSideways")->AsFloat()->value();
-    info.headTilt = poseData->GetItemString("HeadTilt")->AsFloat()->value();
-    info.eyeClose = poseData->GetItemString("EyeClose")->AsFloat()->value();
-    info.eyesLookHorizontal = poseData->GetItemString("EyesLookHorizontal")->AsFloat()->value();
-    info.eyesLookVertical = poseData->GetItemString("EyesLookVertical")->AsFloat()->value();
-    info.orientChar = poseData->GetItemString("OrientChar")->AsFloat()->value();
-    info.portraitPoseNumber = poseData->GetItemString("PortraitPoseNumber")->AsFloat()->value();
-    info.puckerLips = poseData->GetItemString("PuckerLips")->AsFloat()->value();
+    info.jawUp = GetDollFloat(poseData, "JawUp");
+    info.jawSideways = GetDollFloat(poseData, "JawSideways");
+    info.headTilt = GetDollFloat(poseData, "HeadTilt");
+    info.eyeClose = GetDollFloat(poseData, "EyeClose");
+    info.eyesLookHorizontal = GetDollFloat(poseData, "EyesLookHorizontal");
+    info.eyesLookVertical = GetDollFloat(poseData, "EyesLookVertical");
+    info.orientChar = GetDollFloat(poseData, "OrientChar");
+    info.portraitPoseNumber = GetDollFloat(poseData, "PortraitPoseNumber");
+    info.puckerLips = GetDollFloat(poseData, "PuckerLips");
 
     m_db.SetPortraitInfo(charID, info);
 }
