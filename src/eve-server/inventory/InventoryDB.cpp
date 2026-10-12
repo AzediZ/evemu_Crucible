@@ -148,7 +148,7 @@ void InventoryDB::AddTrashLog(uint32 itemID, uint32 ownerID, uint32 locationID, 
     DBerror err;
     if (!sDatabase.RunQuery(err,
         "REPLACE INTO invTrashLog (itemID, ownerID, locationID, flag, trashedBy, trashTime)"
-        " VALUES (%u, %u, %u, %u, %u, %lli)", itemID, ownerID, locationID, flag, byID, GetFileTimeNow()))
+        " VALUES (%u, %u, %u, %u, %u, %lli)", itemID, ownerID, locationID, flag, byID, (int64)GetFileTimeNow()))
         codelog(DATABASE__ERROR, "Error in AddTrashLog query for item %u: %s", itemID, err.c_str());
 }
 
@@ -300,7 +300,7 @@ void InventoryDB::AddAuditLog(uint32 containerID, uint32 actorID, uint8 actionID
     if (!sDatabase.RunQuery(err,
         "INSERT INTO invAuditLog (containerID, logDate, actorID, actionID, status, inventoryMgrLocationID, locationID, flagID, arg1, arg2)"
         " VALUES (%u, %lli, %u, %u, %u, %u, %u, %u, %s, %s)",
-        containerID, GetFileTimeNow(), actorID, actionID, (ok ? 1 : 0), invMgrLocationID, locationID, flagID, a1.c_str(), a2.c_str()))
+        containerID, (int64)GetFileTimeNow(), actorID, actionID, (ok ? 1 : 0), invMgrLocationID, locationID, flagID, a1.c_str(), a2.c_str()))
         codelog(DATABASE__ERROR, "Error in AddAuditLog query for container %u: %s", containerID, err.c_str());
 }
 

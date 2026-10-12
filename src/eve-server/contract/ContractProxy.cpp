@@ -1273,7 +1273,7 @@ PyResult ContractProxy::PlaceBid(PyCallArgs& call, PyInt* contractID, PyRep* bid
     DBerror err;
     if (!sDatabase.RunQuery(err,
         "INSERT INTO ctrBids (contractId, amount, bidderID, bidDateTime, forCorp, bidderCharID) VALUES (%i, %lli, %u, %lli, %u, %u)",
-        c.contractID, amount, bidderID, GetFileTimeNow(), corpBid ? 1 : 0, charID))
+        c.contractID, amount, bidderID, (int64)GetFileTimeNow(), corpBid ? 1 : 0, charID))
     {
         codelog(DATABASE__ERROR, "Failed to record bid on contract %i: %s", c.contractID, err.c_str());
         AccountService::TransferFunds(ownerSystem, bidderID, amount, "Contract auction bid refund", Journal::EntryType::ContractAuctionBidRefund, c.contractID, Account::KeyType::Cash, bidderKey);
@@ -1291,7 +1291,7 @@ PyResult ContractProxy::PlaceBid(PyCallArgs& call, PyInt* contractID, PyRep* bid
 
     // a bid at the buyout price ends the auction now
     if ((c.collateral > 0) and (amount >= c.collateral)) {
-        sDatabase.RunQuery(err, "UPDATE ctrContracts SET dateExpired = %lli WHERE contractId = %i", GetFileTimeNow(), c.contractID);
+        sDatabase.RunQuery(err, "UPDATE ctrContracts SET dateExpired = %lli WHERE contractId = %i", (int64)GetFileTimeNow(), c.contractID);
         ContractUtils::Notify(ContractUtils::IssuerWallet(c), "OnContractBuyout", c.contractID);
     }
 

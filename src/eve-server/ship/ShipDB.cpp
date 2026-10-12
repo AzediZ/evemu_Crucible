@@ -52,7 +52,7 @@ PyRep *ShipDB::GetInsuranceByOwnerID(uint32 ownerID) {
     sDatabase.RunQuery(res,
         "SELECT startDate, shipName, shipID, endDate, ownerID, fraction, typeID, isCorpItem"
         " FROM shipInsurance"
-        " WHERE ownerID = %u AND endDate > %lli", ownerID, GetFileTimeNow() );
+        " WHERE ownerID = %u AND endDate > %lli", ownerID, (int64)GetFileTimeNow() );
 
     return DBResultToRowset(res);
 }

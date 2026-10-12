@@ -550,7 +550,7 @@ void LSCDB::DeleteGag(uint32 charID) {
 
 void LSCDB::LoadGags(std::map<uint32, std::pair<int64, std::string>>& into) {
     DBerror err;
-    if (!sDatabase.RunQuery(err, "DELETE FROM chrChatGags WHERE untilTime <= %lli", GetFileTimeNow()))
+    if (!sDatabase.RunQuery(err, "DELETE FROM chrChatGags WHERE untilTime <= %lli", (int64)GetFileTimeNow()))
         _log(DATABASE__ERROR, "Error in LoadGags query: %s", err.c_str());
 
     DBQueryResult res;

@@ -43,7 +43,7 @@ int CrimeWatch::Initialize()
         " targetID INT UNSIGNED NOT NULL,"
         " expiresAt BIGINT NOT NULL,"
         " PRIMARY KEY (holderID, targetID))");
-    sDatabase.RunQuery(err, "DELETE FROM crimeKillRights WHERE expiresAt < %lli", GetFileTimeNow());
+    sDatabase.RunQuery(err, "DELETE FROM crimeKillRights WHERE expiresAt < %lli", (int64)GetFileTimeNow());
 
     DBQueryResult res;
     if (sDatabase.RunQuery(res, "SELECT holderID, targetID, expiresAt FROM crimeKillRights")) {

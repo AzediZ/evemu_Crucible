@@ -316,7 +316,7 @@ uint16 CorporationDB::CreateMedal(uint32 ownerID, uint32 creatorID, const std::s
     DBerror err;
     sDatabase.RunQueryLID(err, medalID,
         " INSERT INTO crpMedals (ownerID, creatorID, title, description, date)"
-        " VALUES (%u, %u, '%s', '%s', %lli)", ownerID, creatorID, cTitle.c_str(), cDesc.c_str(), GetFileTimeNow());
+        " VALUES (%u, %u, '%s', '%s', %lli)", ownerID, creatorID, cTitle.c_str(), cDesc.c_str(), (int64)GetFileTimeNow());
 
     return medalID;
 }

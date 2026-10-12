@@ -283,7 +283,7 @@ void BillingMgr::Settle(const BillData& bill, uint32 payerID, uint16 fromKey)
     AccountService::TransferFunds(payerID, bill.creditorID, bill.amount, reason, EntryTypeFor(bill.billTypeID), bill.billID, fromKey);
 
     DBerror err;
-    sDatabase.RunQuery(err, "UPDATE bills SET paid = 1, paidDateTime = %lli WHERE billID = %u", GetFileTimeNow(), bill.billID);
+    sDatabase.RunQuery(err, "UPDATE bills SET paid = 1, paidDateTime = %lli WHERE billID = %u", (int64)GetFileTimeNow(), bill.billID);
     m_outOfMoney.erase(bill.billID);
 
     std::map<uint8, std::pair<BillHandler, BillHandler>>::iterator itr = m_handlers.find(bill.billTypeID);

@@ -182,7 +182,7 @@ void PlanetDB::GetExtractorsForPlanet(uint32 planetID, DBQueryResult& res)
         " JOIN piPins AS p ON p.pinID = h.ecuID"
         " JOIN piCCPin AS cc ON cc.pinID = h.ccPinID"
         " WHERE cc.planetID = %u AND p.programType <> 0 AND p.expiryTime > %lli",
-        planetID, GetFileTimeNow()))
+        planetID, (int64)GetFileTimeNow()))
     {
         _log(DATABASE__ERROR, "Error in GetExtractorsForPlanet Query: %s", res.error.c_str());
         return;
@@ -539,7 +539,7 @@ void PlanetDB::SaveLaunch(uint32 contID, uint32 charID, uint32 systemID, uint32 
     if (!sDatabase.RunQuery(err,
         "INSERT INTO piLaunches (itemID, status, charID, solarSystemID, planetID, launchTime, x, y, z) "
         " VALUES (%u, 0, %u, %u, %u, %lli, %f, %f, %f)",
-                           contID, charID, systemID, planetID, GetFileTimeNow(), pos.x, pos.y, pos.z))
+                           contID, charID, systemID, planetID, (int64)GetFileTimeNow(), pos.x, pos.y, pos.z))
         {
             _log(DATABASE__ERROR, "SaveLaunch - Unable to save Launch: %s", err.GetError());
         }
@@ -647,7 +647,7 @@ void PlanetDB::TruncateDepletion(uint32 planetID, uint16 typeID, int64 startTime
 void PlanetDB::MarkCustomsOfficeSpawned(uint32 planetID)
 {
     DBerror err;
-    sDatabase.RunQuery(err, "INSERT IGNORE INTO piCustomsOfficeSpawn (planetID, spawnTime) VALUES (%u, %lli)", planetID, GetFileTimeNow());
+    sDatabase.RunQuery(err, "INSERT IGNORE INTO piCustomsOfficeSpawn (planetID, spawnTime) VALUES (%u, %lli)", planetID, (int64)GetFileTimeNow());
 }
 
 void PlanetDB::GetSpawnedCustomsOffices(const std::vector<uint32>& planetIDs, std::set<uint32>& into)

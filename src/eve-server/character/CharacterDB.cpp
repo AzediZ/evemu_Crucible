@@ -183,7 +183,7 @@ bool CharacterDB::ReportRespec(uint32 characterId)
 {
     DBerror error;
     if (!sDatabase.RunQuery(error, "UPDATE chrCharacters SET freeRespecs = freeRespecs - 1, lastRespecDateTime = %f, nextRespecDateTime = %lli WHERE characterId = %u",
-        GetFileTimeNow(), (GetFileTimeNow() + EvE::Time::Month *3), characterId))
+        GetFileTimeNow(), ((int64)GetFileTimeNow() + EvE::Time::Month *3), characterId))
         return false;
     return true;
 }

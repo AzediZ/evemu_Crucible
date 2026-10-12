@@ -75,7 +75,7 @@ void DBCleaner::PurgeTrashedItems() {
     sDatabase.RunQuery(err, "DELETE FROM crpLockedItems WHERE itemID NOT IN (SELECT itemID FROM entity)");
     // audit logs of containers that are gone, after a year
     sDatabase.RunQuery(err, "DELETE FROM invAuditLog WHERE logDate < %lli AND containerID NOT IN (SELECT itemID FROM entity)",
-            GetFileTimeNow() - (Win32Time_Day * 365));
+            (int64)GetFileTimeNow() - (Win32Time_Day * 365));
 }
 
 void DBCleaner::CleanDungeonEntities() {

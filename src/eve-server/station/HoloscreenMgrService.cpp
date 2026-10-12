@@ -45,7 +45,7 @@ PyResult HoloscreenMgrService::GetRecentEpicArcCompletions(PyCallArgs& call)
     if (!sDatabase.RunQuery(res,
         "SELECT characterID, completionDate FROM chrEpicArcCompletions"
         " WHERE completionDate > %lli ORDER BY completionDate DESC LIMIT 50",
-        GetFileTimeNow() - (EvE::Time::Day * 30)))
+        (int64)GetFileTimeNow() - (EvE::Time::Day * 30)))
     {
         codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
         return new PyList();
