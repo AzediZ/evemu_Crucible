@@ -369,7 +369,6 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     if (mySE->IsFrozen())
         throw UserError ("DeniedTargetSelfFrozen")
                 .AddFormatValue ("targetName", new PyString (mySE->GetName ()));
-    /** @todo SE->IsInvul() incomplete */
     if (mySE->IsInvul())
         throw UserError ("DeniedInvulnerable");
 
@@ -413,7 +412,7 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     }
     // outposts can be locked (they just take no damage outside sov sieges)
     if ((tSE->IsStaticEntity() and !tSE->IsOutpostSE())
-    or (tSE->IsLogin())/** @todo SE->IsLogin() incomplete */
+    or (tSE->IsLogin())
     or (tSE->GetSelf()->HasAttribute(AttrUntargetable)))
         throw UserError ("DeniedTargetEvadesSensors")
                 .AddFormatValue ("targetName", new PyString (tSE->GetName ()));

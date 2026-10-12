@@ -167,17 +167,8 @@ PyObject *CargoContainer::CargoContainerGetInfo() {
 
 void CargoContainer::RemoveItem(InventoryItemRef iRef)
 {
-    /** @todo  put check in here for container owner (if space container) and implement sec penalty */
-    /* http://www.eveinfo.net/wiki/ind~4067.htm
-     *  relative_sec_status_penalty = base_penalty * system_truesec * (1 + (victim_sec_status - agressor_sec_status) / 90)
-     *  The actual drop in security status seen by the attacker is a function of their current security status and the relative penalty:
-     *  security status loss = relative_penalty * (agressor_sec_status + 10)
-     *
-    double modifier = (1 + ((GetChar()->GetSecurityRating() - client->GetSecurityRating()) /90));
-    double penalty = 6.0f * m_system->GetSystemSecurityRating() * modifier;
-    double loss = penalty * (client->GetSecurityRating() + 10);
-    client->GetChar()->secStatusChange( loss );
-    */
+    // theft from someone else's container in space is handled where the item is taken (InventoryBound CheckTheft ->
+    //  CrimeWatch::Theft:  a flag to the owner, no security status loss in Crucible)
 
     if (iRef.get() == nullptr)
         return;

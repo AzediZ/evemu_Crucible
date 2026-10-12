@@ -439,13 +439,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         }
 
         CheckTargetRules(effectID);
-        if (sFxDataMgr.isAssistance(effectID)) {
-            /** @todo criminal shit isnt written yet....fix this once it is.
-            if (m_targetSE->HasPilot())
-                if (m_targetSE->GetPilot()->IsCriminal())
-                    throw UserError ("ModuleActivationDeniedCriminalAssistance");
-             */
-        }
+        // assisting a criminal is not refused in Crucible (no safety):  CrimeCheck() flags the assistant (CrimeWatch::AssistanceAct)
         if (m_targetSE->TargetMgr() != nullptr)
             m_targetSE->TargetMgr()->AddTargetModule(this);
     }

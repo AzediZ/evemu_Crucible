@@ -159,14 +159,7 @@ Client::~Client() {
     m_lsc->CharacterLogout(this);
 
     if (m_char.get() != nullptr) {   // we have valid character
-        /** @todo  - for warping to random point when client logs out in space...
-         *      1)  check client IsInSpace(?)
-         *      2)  set timer to delay removing bubble/sysmgr/destiny...or check based on destiny->isstopped() or timer on destiny->ismoving()
-         *      3)  set current position (DB::chrCharacters.logoutPosition?)  initial code in place for warp-in on login
-         *      4)  generate random point to warp to ** use sMapData.GetRandPointInSystem(systemID, distance)
-         *      5)  _warp to random point, but DONT make/update new bubble with entering ship
-         *      6)  remove client from sysmgr/destiny/server
-         */
+        // a ship logged off in space stays, warps to a random spot or vanishes per the logoff timer (WarpOut() -> LawEnforcement)
 
         sLog.Green("  Client::Logout()","%s (Acct:%u) logging out.", m_char->name(), GetUserID());
 

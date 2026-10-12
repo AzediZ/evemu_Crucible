@@ -66,7 +66,7 @@ PyResult Standing::GetNPCNPCStandings(PyCallArgs &call) {
     return sStandingMgr.GetFactionStandings();
 }
 
-/** @todo  need to add a standing from corpCONCORD to any/all charID, corpID, allyID  for security rating (as seen in client code) */
+// the client also reads the security status as CONCORD's standing to the character (StandingDB::GetCharStandings adds that row)
 
 PyResult Standing::GetSecurityRating(PyCallArgs &call, PyInt* ownerID) {
     CharacterRef cRef = sItemFactory.GetCharacterRef(ownerID->value());

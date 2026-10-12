@@ -830,7 +830,6 @@ void DestinyManager::Stop() {
         return;
     }
 
-    // AP not implemented yet in this version  -allan 4Mar15
     // Clear autopilot
     if (mySE->HasPilot()) {
         mySE->GetPilot()->SetAutoPilot(false);
