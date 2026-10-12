@@ -111,6 +111,8 @@ public:
     };
     // batched:  one statement per 500 lines
     static bool SetNextFreeTimes(const std::vector<LineTimeWrite>& writes);
+    // the stations of the station's constellation with npc lines (the station itself first, then its solar system's)
+    static void StationsWithLinesNear(uint32 stationID, std::vector<uint32>& into);
     // lines' next free times, and whether a player job (not delivered) ends on them after nowTime.  lines gone are left out
     static bool GetLineStatesForSim(const std::vector<uint32>& lineIDs, int64 nowTime, std::map<uint32, std::pair<int64, bool>>& into);
 };

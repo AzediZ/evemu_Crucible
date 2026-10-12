@@ -1111,6 +1111,27 @@ bool FactoryDB::SelectLinesForSim(const std::vector<uint32>& stationIDs, uint8 a
     return true;
 }
 
+void FactoryDB::StationsWithLinesNear(uint32 stationID, std::vector<uint32>& into)
+{
+    into.push_back(stationID);
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT st.stationID FROM staStations AS h"
+        " JOIN staStations AS st ON st.constellationID = h.constellationID AND st.stationID != h.stationID"
+        " WHERE h.stationID = %u"
+        " AND EXISTS (SELECT 1 FROM ramAssemblyLines AS al WHERE al.containerID = st.stationID AND al.ownerID = st.corporationID)"
+        " ORDER BY (st.solarSystemID = h.solarSystemID) DESC, st.stationID",
+        stationID))
+    {
+        _log(DATABASE__ERROR, "Failed to query the stations near %u: %s", stationID, res.error.c_str());
+        return;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
 bool FactoryDB::SetNextFreeTimes(const std::vector<LineTimeWrite>& writes)
 {
     static const size_t Chunk = 500;

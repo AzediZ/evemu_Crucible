@@ -52,8 +52,9 @@ public:
     //  without one
     void PlayerInstalls(uint32 lineID, int64 endTime);
 
-    /* the world's capacity on these lines (nodes:  where a node's jobs run).  probeInstall/probePerHour:  the cost of a
-     *  job the planner prices before booking it (LineInstallCost, LineCostPerHour) */
+    /* the world's capacity on these lines.  a node's jobs run at the stations of its constellation that have lines (its
+     *  own first).  probeInstall/probePerHour:  the cost of a job the planner prices before booking it (LineInstallCost,
+     *  LineCostPerHour) */
     MktSim::LineCapacity* Capacity(const std::vector<MktSim::NodeData>& nodes, double probeInstall, double probePerHour);
 
     /* persistence */

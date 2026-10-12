@@ -357,7 +357,7 @@ int FacilitiesTest()
     {
         HarnessFacilities fac(p);
         LineCapacity cap(fac, 1000.0, 333.0);
-        cap.SetNodeStation(1, Jita);
+        cap.SetNodeStations(1, std::vector<uint32_t>(1, Jita));
         cap.SetSlots(21, 10);
         cap.SetSlots(22, 10);
         T_CHECK_EQ(cap.Slots(21), 10);
@@ -408,7 +408,7 @@ int FacilitiesTest()
         // a restart:  the world's jobs come back on their lines
         HarnessFacilities fac2(p);
         LineCapacity cap2(fac2, 1000.0, 333.0);
-        cap2.SetNodeStation(1, Jita);
+        cap2.SetNodeStations(1, std::vector<uint32_t>(1, Jita));
         cap2.SetSlots(21, 10);
         cap2.SetSlots(22, 10);
         for (size_t i = 1; i < jobs.size(); ++i)
@@ -418,6 +418,53 @@ int FacilitiesTest()
         T_CHECK_EQ(cap2.CurrentLine(jobs[3]), jobs[3].lineID);
         cap2.Release(jobs[3]);
         T_CHECK_EQ(fac2.Jobs(), 13);
+    }
+
+    /* a node works at several stations:  the room adds up, a job goes where there is most */
+    {
+        HarnessFacilities fac(p);
+        const uint32_t hub(60004588), other(60004594);
+        fac.SetStationLines(hub, LineActivity::Manufacturing, 0);      // Rens VI-8 has no manufacturing lines
+        fac.SetStationLines(other, LineActivity::Manufacturing, 10);
+        LineCapacity cap(fac, 1000.0, 333.0);
+        std::vector<uint32_t> stations;
+        stations.push_back(hub);
+        stations.push_back(other);
+        stations.push_back(Jita);
+        cap.SetNodeStations(4, stations);
+        cap.SetSlots(31, 100);
+        T_CHECK_EQ(cap.Free(31, 4, LineActivity::Manufacturing, T0), 3 + 15);
+        SimJob job;
+        job.actorID = 31;
+        job.nodeID = 4;
+        job.stationID = hub;        // the world says the node's station
+        job.typeID = 587;
+        job.runs = 1;
+        job.qtyOut = 1;
+        job.start = T0;
+        job.end = T0 + 3600;
+        T_CHECK(cap.Reserve(job, T0));
+        T_CHECK_EQ(job.stationID, Jita);
+        uint32_t made(1);
+        for (;;) {
+            SimJob next(job);
+            next.stationID = hub;
+            next.lineID = 0;
+            next.end = T0 + 3600 + made;
+            if (!cap.Reserve(next, T0))
+                break;
+            ++made;
+        }
+        T_CHECK_EQ(made, 18);
+        T_CHECK_EQ(cap.Free(31, 4, LineActivity::Manufacturing, T0), 0);
+        // a production site that isn't one of the node's is kept
+        SimJob site(job);
+        site.stationID = 60008494;
+        site.end = T0 + 7200;
+        T_CHECK(cap.Reserve(site, T0));
+        T_CHECK_EQ(site.stationID, 60008494);
+        cap.Release(job);
+        T_CHECK_EQ(cap.Free(31, 4, LineActivity::Manufacturing, T0), 1);
     }
 
     return MktTest::failures;

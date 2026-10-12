@@ -90,8 +90,16 @@ int SimFacilityMgr::Initialize()
 MktSim::LineCapacity* SimFacilityMgr::Capacity(const std::vector<NodeData>& nodes, double probeInstall, double probePerHour)
 {
     m_capacity.reset(new LineCapacity(*this, probeInstall, probePerHour));
-    for (auto& node : nodes)
-        m_capacity->SetNodeStation(node.nodeID, node.stationID);
+    /* until phase 4 has production sites, a node's industry runs at the stations of its constellation (its own first):
+     *  a hub station alone has 50 lines at most (Rens VI-8 none), 15 of them the sim's */
+    uint32 stations(0);
+    for (auto& node : nodes) {
+        std::vector<uint32> nearby;
+        FactoryDB::StationsWithLinesNear(node.stationID, nearby);
+        stations += (uint32)nearby.size();
+        m_capacity->SetNodeStations(node.nodeID, std::vector<uint32_t>(nearby.begin(), nearby.end()));
+    }
+    sLog.Blue("  SimFacilityMgr", "Market sim facilities:  %u nodes work at %u stations.", (uint32)nodes.size(), stations);
     return m_capacity.get();
 }
 
