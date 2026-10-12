@@ -155,6 +155,9 @@ public:
     void RemoveEntity(SystemEntity* pSE);   // this also removes SE* from bubble and sig from AnomalyMgr (if applicable)
     void AddClient(Client* pClient, bool count=false, bool jump=false);
     void AddMarker(SystemEntity* pSE, bool sendBall=false, bool addSignal=false);    // rather specific here.
+    /* the removal of a ball AddMarker(sendBall) gave every client here, for the clients outside its bubble (the bubble
+     *  tells its own when the entity leaves it).  call while the entity is still in its bubble */
+    void RemoveMarkerBall(SystemEntity* pSE);
     void RemoveClient(Client* pClient, bool count=false, bool jump=false);
     void SetDockCount(Client* pClient, bool docked=false);
 
