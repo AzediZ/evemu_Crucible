@@ -117,6 +117,8 @@ public:
 
     // gets Client* for all ingame players
     void GetClients(std::vector<Client* > &result) const;
+    // every solar system that is loaded now
+    void GetSystems(std::vector<SystemManager*> &result) const;
     void GetCorpClients(std::vector<Client*> &result, uint32 corpID) const;
 
     bool IsSystemLoaded(uint32 sysID) { return (m_systems.find(sysID) != m_systems.end()); }

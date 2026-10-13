@@ -334,6 +334,11 @@ void EntityList::GetClients(std::vector<Client*> &result) const {
         result.push_back(cur.second);
 }
 
+void EntityList::GetSystems(std::vector<SystemManager*> &result) const {
+    for (auto cur : m_systems)
+        result.push_back(cur.second);
+}
+
 void EntityList::GetCorpClients(std::vector<Client*> &result, uint32 corpID) const {
     std::map<uint32, corpRole>::const_iterator cItr = m_corpMembers.find(corpID);
     if (cItr == m_corpMembers.end())

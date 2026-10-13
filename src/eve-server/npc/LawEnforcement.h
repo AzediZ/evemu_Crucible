@@ -37,6 +37,7 @@ public:
     void Init();        // sentry guns at gates and stations
     void Process();     // 1Hz, from SystemManager::ProcessTic()
     void Close();       // system unloading.  it deletes our entities
+    void StandDown();   // crime switched off (/crime off): responses leave and the sentry guns go
     bool IsBusy();      // a response is running or a ship is waiting in space.  keeps the system loaded
 
     /* called by CrimeWatch */

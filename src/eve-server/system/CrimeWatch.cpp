@@ -54,6 +54,33 @@ int CrimeWatch::Initialize()
     return 1;
 }
 
+void CrimeWatch::SetEnabled(bool enabled)
+{
+    if (sConfig.crime.Enabled == enabled)
+        return;
+    sConfig.crime.Enabled = enabled;
+    std::vector<SystemManager*> systems;
+    sEntityList.GetSystems(systems);
+    if (enabled) {
+        // systems booted while it was off have no sentry guns yet
+        for (auto cur : systems)
+            cur->GetLaw()->Init();
+    } else {
+        // nobody is a criminal any more: CONCORD, the police and the sentry guns leave, and every pilot's flags clear
+        for (auto cur : systems)
+            cur->GetLaw()->StandDown();
+        std::vector<uint32> flagged;
+        for (auto cur : m_records)
+            flagged.push_back(cur.first);
+        m_records.clear();
+        m_illegal.clear();
+        // an empty dict clears that pilot's flags in the clients in their system
+        for (auto charID : flagged)
+            Notify(charID);
+    }
+    sLog.Blue("      CrimeWatch", "CrimeWatch %s.", (enabled ? "enabled" : "disabled"));
+}
+
 float CrimeWatch::SecurityLevel(float trueSec)
 {
     // the client's cfg.solarsystems pseudoSecurity, then util.FmtSystemSecStatus (python 2 round: halves away from zero)
@@ -390,6 +417,9 @@ void CrimeWatch::NPCAggression(uint32 charID)
 
 bool CrimeWatch::CanTakeFrom(uint32 charID, uint32 ownerID)
 {
+    // with crime off nothing is theft, so the client doesn't warn about it
+    if (!sConfig.crime.Enabled)
+        return true;
     // fleet members in the same system share loot
     Client* pThief(sEntityList.FindClientByCharID(charID));
     Client* pOwner(sEntityList.FindClientByCharID(ownerID));

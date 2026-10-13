@@ -49,6 +49,8 @@ public:
     ~CrimeWatch()   { /* do nothing here */ }
 
     int Initialize();
+    /* switch the crime rules on or off while the server runs (/crime on|off).  <crime><Enabled> sets it at start */
+    void SetEnabled(bool enabled);
 
     /* system security as the client sees it.  true sec rounded to 0.1, with 0 < sec < 0.05 counted as 0.05 (pseudoSecurity) */
     static float SecurityLevel(float trueSec);

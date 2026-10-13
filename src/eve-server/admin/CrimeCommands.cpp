@@ -18,7 +18,11 @@
 #include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
 
-/* /crime (me|charID|entityID) [victimID]
+/* /crime on|off
+ *  switches the crime rules on or off while the server runs.  they start off unless <crime><Enabled> is set.
+ *  off clears every flag, sends CONCORD, the police and the sentry guns away.  no arguments shows which it is
+ *
+ * /crime (me|charID|entityID) [victimID]
  *  starts CONCORD the way the game does, from the first act:
  *   a pilot: an attack on the victim, the same call a weapon cycle makes (CrimeWatch::OffensiveAct), so the normal rules
  *     decide whether it's a crime.  with no victim the victim is you, or a civilian (nobody, never a legal target) if
@@ -28,11 +32,19 @@
  */
 PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    const char* usage("Correct Usage: /crime (me|charID|entityID) [victimID]");
-    if (!sConfig.crime.Enabled)
-        throw CustomError ("CrimeWatch is disabled (<crime><Enabled> in the server config).");
+    const char* usage("Correct Usage: /crime on | off | (me|charID|entityID) [victimID]");
     if (args.argCount() < 2)
-        throw CustomError (usage);
+        return new PyString(std::string("Crime is ") + (sConfig.crime.Enabled ? "on" : "off") + ".  " + usage);
+    if ((args.arg(1) == "on") or (args.arg(1) == "off")) {
+        bool on(args.arg(1) == "on");
+        sCrimeWatch.SetEnabled(on);
+        if (on)
+            return new PyString("Crime is on: aggression flags, CONCORD in 0.5 and up, faction police, gate and station sentry guns,"
+                    " kill rights and the logoff timer.");
+        return new PyString("Crime is off: flags cleared, and CONCORD, the police and the sentry guns are gone.");
+    }
+    if (!sConfig.crime.Enabled)
+        throw CustomError ("Crime is off.  Turn it on with /crime on.");
 
     Client* pAggressor(nullptr);
     SystemEntity* pEntity(nullptr);

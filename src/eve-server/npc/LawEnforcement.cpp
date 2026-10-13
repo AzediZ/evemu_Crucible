@@ -86,6 +86,9 @@ void LawEnforcement::Init()
 {
     if (!sConfig.crime.Enabled or !sConfig.crime.Sentries)
         return;
+    // already placed (/crime on calls this for every loaded system)
+    if (!m_sentries.empty())
+        return;
     if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::Null)
         return;
     SystemData data;
@@ -533,6 +536,21 @@ uint32 LawEnforcement::GetLoggedOffOwner(uint32 shipID)
 bool LawEnforcement::IsBusy()
 {
     return (!m_responses.empty() or !m_loggedOff.empty());
+}
+
+void LawEnforcement::StandDown()
+{
+    for (auto& cur : m_responses)
+        Despawn(cur.second);
+    m_responses.clear();
+    for (auto pSentry : m_sentries) {
+        SystemEntity::SetUnkillable(pSentry->GetID(), false);
+        // out of space, the system and everyone's targets.  the destructor drops its own targets
+        pSentry->Delete();
+        SafeDelete(pSentry);
+    }
+    m_sentries.clear();
+    m_jammed.clear();
 }
 
 void LawEnforcement::Close()

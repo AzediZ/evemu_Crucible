@@ -237,7 +237,7 @@ EVEServerConfig::EVEServerConfig()
     chat.EnforceRookieInHelp = false;
 
     // crime
-    crime.Enabled = true;
+    crime.Enabled = false;     // off at server start.  /crime on turns it on while the server runs
     crime.AggFlagTime = 900 /*s*/;
     crime.CrimFlagTime = 900 /*s*/;
     crime.WeaponFlagTime = 60 /*s*/;
