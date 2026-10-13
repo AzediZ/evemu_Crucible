@@ -41,6 +41,10 @@ public:
     static bool MayTarget(uint8 mode, SystemEntity* pSelf, SystemEntity* pTarget);
 
 private:
+    /* pBy locked or hurt us:  do we answer it?  real damage (threat on us), a criminal (flagged pilot, ambient criminal or
+     *  flagged npc), or for criminals any pilot when the toggle of their band lets them attack players.  a lock alone is no
+     *  reason for navies and CONCORD (an innocent pilot may look at them) */
+    bool Answers(NpcContext& ctx, SystemEntity* pBy);
     // the nearest acceptable target in our bubble (players only when players is set)
     SystemEntity* Nearest(NpcContext& ctx, bool players, bool criminalsOnly);
 

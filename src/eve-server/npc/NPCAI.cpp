@@ -1199,8 +1199,9 @@ void NPCAIMgr::Targeted(SystemEntity* pSE) {
             SystemEntity* pTarget(m_brain->OnAggressed(ctx, pSE));
             if (CanAggro(pTarget))
                 Target(pTarget);
-            // a lock is aggression:  a passive group aggroes on it (4.3)
-            AlertGroup(pSE);
+            // a lock is aggression:  a passive group aggroes on it (4.3).  not for ambient npcs, unless their brain answers it
+            if ((m_ambient == nullptr) or (pTarget != nullptr))
+                AlertGroup(pSE);
         } break;
         case NPCAI::State::Returning:
             // the hard leash ignores everyone until it's home
@@ -1216,7 +1217,8 @@ void NPCAIMgr::Targeted(SystemEntity* pSE) {
                 break;
             bool chase = false;
             BeginLock(pSE, chase);
-            AlertGroup(pSE);
+            if (m_ambient == nullptr)
+                AlertGroup(pSE);
         } break;
     }
 }

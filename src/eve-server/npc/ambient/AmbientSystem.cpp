@@ -916,8 +916,9 @@ void AmbientSystem::ProcessLaunches(int64 now)
             ++itr;
         }
     }
+    // convoy ships:  each one still respects 6.8 rule 3
     for (auto& cur : due)
-        Launch(cur.t, cur.start, now, true);
+        Launch(cur.t, cur.start, now, false);
 }
 
 std::string AmbientSystem::RaceName(uint8 race, uint8 role, const Archetype* pArch) const
@@ -1550,7 +1551,8 @@ bool AmbientSystem::BeginVirtualLeg(Traveller& t, int64 now)
                 if ((pFrom != nullptr) and (pTo != nullptr)) {
                     GPoint dest(pTo->kind == NodeKind::Station ? pTo->dockPos : pTo->pos);
                     GPoint orig(pFrom->kind == NodeKind::Station ? pFrom->dockPos : pFrom->pos);
-                    if ((IsObservedPoint(dest) or IsObservedPoint(orig)) and CapAllows(dest)
+                    bool origWatched(IsObservedPoint(orig));
+                    if ((IsObservedPoint(dest) or origWatched) and CapAllows(dest) and (!origWatched or CapAllows(orig))
                     and (Materialise(t, Start::WarpIn, t.leg, now) != nullptr)) {
                         Note(std::string(RoleName(t.spec.role)) + " warps in");
                         return false;
@@ -1853,11 +1855,18 @@ bool AmbientSystem::MaterialiseSquad(Squad& s, uint32 atNode, uint32 warpTo, uin
     GPoint centre(pNode->pos);
     if (now < s.retryAt)
         return false;
-    if (!CapAllows(centre)) {
+    // the caps where it will be:  its waypoint, or where it warps to
+    GPoint dest(centre);
+    if (warpTo != 0) {
+        double radius(0.0);
+        NodePosition(warpTo, warpKind, dest, radius);
+    }
+    if (!CapAllows(centre) or ((warpTo != 0) and !CapAllows(dest))) {
         s.retryAt = now + 10000;
         return false;
     }
     s.npcIDs.clear();
+    s.killed = 0;
     for (size_t i = 0; i < s.members.size(); ++i) {
         const Archetype* pArch(s.members[i]);
         Traveller t;
@@ -1967,7 +1976,12 @@ void AmbientSystem::ProcessSquads(int64 now)
         // members that landed wait for orders:  loiter at the waypoint
         for (auto pNPC : members) {
             AmbientPilot* pPilot(pNPC->GetAmbientPilot());
-            if ((pPilot != nullptr) and pPilot->AwaitingOrders() and pNPC->GetAIMgr()->IsIdle())
+            if ((pPilot == nullptr) or !pPilot->AwaitingOrders() or !pNPC->GetAIMgr()->IsIdle())
+                continue;
+            // after a crime response (or a GM spawn) they are on another grid:  back to the waypoint first
+            if (pNPC->GetPosition().distance(pWp->pos) > BUBBLE_RADIUS_METERS)
+                pPilot->SquadWarp(wpID, pWp->kind, AmbientRules::UniformMs(m_rng, 0.0, 3000.0), now);
+            else
                 pPilot->SquadLoiter(wpID, std::max<int64>(s.loiterUntil - now, 30000), now);
         }
         if (now < s.loiterUntil)
@@ -2163,7 +2177,7 @@ uint32 AmbientSystem::ForceSpawn(Client* pClient, const std::string& what, uint3
     const Node* pGate(NodeAt(here, NodeKind::Gate));
     const Node* pStation(NodeAt(here, NodeKind::Station));
     for (uint32 i = 0; i < count; ++i) {
-        if ((role >= Role::Hauler) and (role <= Role::Navy)) {
+        if ((role >= Role::Hauler) and (role <= Role::Freighter)) {
             // traffic on your grid:  through your gate, or out of your station
             AmbientRules::Itinerary it;
             if (pGate != nullptr) {

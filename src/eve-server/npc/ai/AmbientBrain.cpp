@@ -117,10 +117,30 @@ SystemEntity* AmbientBrain::Acquire(NpcContext& ctx)
     }
 }
 
+bool AmbientBrain::Answers(NpcContext& ctx, SystemEntity* pBy)
+{
+    if (pBy == nullptr)
+        return false;
+    if (pBy->IsNPCSE())
+        return MayTarget(m_mode, ctx.npc, pBy);
+    // it hurt us (the brain's OnDamage put threat on it, or on the drone's pilot) before OnAggressed() was called
+    if ((ctx.ai->GetThreat(pBy->GetID()) > 0.0f) or (ctx.ai->RecentDamageBy(pBy->GetID()) > 0.0f))
+        return true;
+    SystemEntity* pPilot(ctx.ai->AggroTarget(pBy));
+    if ((pPilot != nullptr) and (pPilot != pBy) and (ctx.ai->GetThreat(pPilot->GetID()) > 0.0f))
+        return true;
+    Client* pClient(pBy->HasPilot() ? pBy->GetPilot() : ((pPilot != nullptr) and pPilot->HasPilot() ? pPilot->GetPilot() : nullptr));
+    if (m_mode == Military)
+        return ((pClient != nullptr) and sCrimeWatch.IsCriminal(pClient->GetCharacterID()));
+    // criminals:  a lock is enough where they go after players anyway
+    float level(CrimeWatch::SecurityLevel(ctx.npc->SystemMgr()->GetSystemSecurityRating()));
+    return ((level >= 0.45f) ? sConfig.ambient.HighSecCriminalsAttackPlayers : sConfig.ambient.LowSecCriminalsAttackPlayers);
+}
+
 SystemEntity* AmbientBrain::OnAggressed(NpcContext& ctx, SystemEntity* pBy)
 {
-    // civilians never fight back:  their pilot flees (AmbientPilot).  navies, CONCORD and criminals shoot back
-    if (m_mode == Civilian)
+    // civilians never fight back:  their pilot flees (AmbientPilot).  navies, CONCORD and criminals shoot back at real attacks
+    if ((m_mode == Civilian) or !Answers(ctx, pBy))
         return nullptr;
     return ctx.ai->AggroTarget(pBy);
 }

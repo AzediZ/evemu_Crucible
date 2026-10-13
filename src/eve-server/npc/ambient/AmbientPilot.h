@@ -102,6 +102,8 @@ private:
     void StopBeams();
 
     void SetSpeed();
+    // ms a flight of distance m may take before we call it stuck
+    int64 TravelMs(double distance) const;
     SystemEntity* GetSE(uint32 id) const;
 
     AmbientNPC* m_npc;              // we do not own this (it owns us)
@@ -123,6 +125,7 @@ private:
 
     int64 m_until;                  // ms:  the current timed part is done
     int64 m_legStart;               // ms
+    int64 m_legTimeout;             // ms:  an approach or short hop longer than this is stuck
     int64 m_uncloakAt;              // ms (0 = not cloaked by us)
     int64 m_lastDamage;             // ms:  the ai's last damage we reacted to
     int64 m_noPreySince;            // ms (0 = we have prey or a fight)

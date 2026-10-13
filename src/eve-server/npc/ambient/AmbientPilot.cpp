@@ -51,6 +51,7 @@ AmbientPilot::AmbientPilot(AmbientNPC* pNPC, AmbientSystem* pSystem, uint64_t se
   m_waitUncloak(false),
   m_until(0),
   m_legStart(0),
+  m_legTimeout(240000),
   m_uncloakAt(0),
   m_lastDamage(0),
   m_noPreySince(0),
@@ -77,6 +78,15 @@ void AmbientPilot::SetLegs(const std::vector<LegData>& legs, size_t first/*0*/)
 SystemEntity* AmbientPilot::GetSE(uint32 id) const
 {
     return ((id == 0) ? nullptr : m_npc->SystemMgr()->GetSE(id));
+}
+
+int64 AmbientPilot::TravelMs(double distance) const
+{
+    // twice the flight at full speed, the align, and a minute to spare
+    const Archetype* pArch(m_npc->GetSpec().arch);
+    double speed((pArch != nullptr) and (pArch->maxVelocity > 1.0f) ? pArch->maxVelocity : 100.0);
+    double align(m_npc->DestinyMgr()->GetAlignTime());
+    return static_cast<int64>(((2.0 * distance / speed) + (2.0 * align) + 60.0) * 1000.0);
 }
 
 void AmbientPilot::SetSpeed()
@@ -117,9 +127,12 @@ void AmbientPilot::StartLeg(int64 now)
 {
     m_legStarted = true;
     m_legStart = now;
+    m_legTimeout = 240000;
     m_warpSeen = false;
     m_shortHop = false;
     m_until = 0;
+    // the reference hull's speed on every leg (the ai's fights and idle use the npc type's own)
+    SetSpeed();
     if (m_leg >= m_legs.size()) {
         // nothing left:  leave the system the way traffic does
         BuildLeave(now);
@@ -160,6 +173,7 @@ void AmbientPilot::StartLeg(int64 now)
         case Leg::ApproachDock: {
             SetSpeed();
             m_goal = m_sys->DockPoint(leg.targetID);
+            m_legTimeout = TravelMs(m_npc->GetPosition().distance(m_goal));
             pDestiny->GotoPoint(m_goal);
         } break;
         case Leg::Dock: {
@@ -272,6 +286,7 @@ void AmbientPilot::DoWarp(const LegData& leg, int64 now)
         back.normalize();
         m_goal = target + (back * landing);
         m_shortHop = true;
+        m_legTimeout = TravelMs(m_npc->GetPosition().distance(m_goal));
         pDestiny->GotoPoint(m_goal);
         return;
     }
@@ -283,7 +298,7 @@ bool AmbientPilot::UpdateWarp(int64 now)
 {
     DestinyManager* pDestiny(m_npc->DestinyMgr());
     if (m_shortHop) {
-        if ((m_npc->GetPosition().distance(m_goal) < 2000.0) or ((now - m_legStart) > 240000)) {
+        if ((m_npc->GetPosition().distance(m_goal) < 2000.0) or ((now - m_legStart) > m_legTimeout)) {
             pDestiny->Stop();
             return true;
         }
@@ -321,8 +336,9 @@ void AmbientPilot::Arrived(int64 now)
         Finish(Removal::Fled);
         return;
     }
-    // nobody watches the grid we landed on:  the rest of the trip goes on off grid (6.8 rule 4, 8.1)
-    if (!m_sys->IsObservedBubble(m_npc->SysBubble())) {
+    /* nobody watches the grid we landed on:  the rest of the trip goes on off grid (6.8 rule 4, 8.1).  the same test as the
+     *  travellers' (a node within a watched bubble's reach counts as watched), so the traveller doesn't come straight back */
+    if (!m_sys->IsObservedBubble(m_npc->SysBubble()) and !m_sys->IsNodeObserved(leg.targetID)) {
         // traffic and miners on their way out go on as travellers.  squads and criminals are the system's to bring back
         const Spec& spec(m_npc->GetSpec());
         bool travels((spec.squadID == 0) and (spec.role != Role::Criminal));
@@ -512,8 +528,16 @@ void AmbientPilot::Tick(int64 now)
         case Leg::ApproachDock: {
             SystemEntity* pStation(GetSE(leg.targetID));
             double toCentre(pStation != nullptr ? m_npc->GetPosition().distance(pStation->GetPosition()) - pStation->GetRadius() : 0.0);
-            if ((m_npc->GetPosition().distance(m_goal) < 500.0) or (toCentre < 1500.0) or ((now - m_legStart) > 240000))
+            double toDock(m_npc->GetPosition().distance(m_goal));
+            if ((toDock < 500.0) or (toCentre < 1500.0)) {
                 NextLeg(now);
+            } else if ((now - m_legStart) > m_legTimeout) {
+                // stuck:  dock if it is close, else head for the dock point again (no vanishing far from the station)
+                if (toDock < 5000.0)
+                    NextLeg(now);
+                else
+                    StartLeg(now);
+            }
         } break;
         case Leg::Loiter:
         case Leg::Visit: {
