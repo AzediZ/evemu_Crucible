@@ -12,6 +12,7 @@
 #include "StaticDataMgr.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/LawEnforcement.h"
+#include "npc/ambient/AmbientSystem.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/Sentry.h"
@@ -228,6 +229,9 @@ void LawEnforcement::Report(uint32 id, const char* name, uint8 kind, uint32 dela
     r.factionID = factionID;
     r.due = GetFileTimeNow() + (int64)delaySeconds * EvE::Time::Second;
     _log(CRIME__INFO, "%s dispatched for %s(%u) in %s, arriving in %us.", KindName(kind), name, id, m_system->GetName(), delaySeconds);
+    // ambient patrols here converge on it too (ambient npc plan 8.4)
+    if (m_system->GetAmbient() != nullptr)
+        m_system->GetAmbient()->OnLawDispatched(id, kind);
 }
 
 bool LawEnforcement::UsesTypeEwar(NPC* pNPC)

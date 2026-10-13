@@ -132,6 +132,22 @@ private:
         int64 nextArrival = 0;      // ms
         int64 nextVisit = 0;        // ms:  the next hauler visit
     };
+    // a CONCORD or navy patrol squad (8.3).  virtual while its waypoint isn't watched
+    struct Squad {
+        uint32 id = 0;
+        uint8 role = 0;                 // Role::Concord or Role::Navy
+        uint8 race = 255;
+        std::vector<const Ambient::Archetype*> members;
+        size_t wp = 0;                  // index into m_wpIDs
+        int64 loiterUntil = 0;          // ms
+        std::vector<uint32> npcIDs;     // materialised members
+        uint32 killed = 0;
+        int64 respawnAt = 0;            // ms:  destroyed, a new one forms then (0 = alive)
+        uint32 respondTo = 0;           // answering a crime (8.4):  the target entity
+        int64 respondUntil = 0;
+        int64 retryAt = 0;              // ms:  the caps refused it, try again then
+        std::shared_ptr<AggroGroup> group;
+    };
     struct PendingLaunch {
         Ambient::Traveller t;
         uint8 start;
@@ -168,6 +184,14 @@ private:
     AmbientNPC* SpawnHaulerVisit(const Node& belt, SystemBubble* pBubble, int64 now);
     // where an arriving ship comes from:  a station (or a gate when there is none) off the target's grid
     const Node* OriginNode(const GPoint& target);
+
+    /* patrols (6.7, 8.3, 8.4) */
+    void BuildSquads(int64 now);
+    void FormSquad(Squad& s);
+    // the squad's members at node atNode:  orbiting it, or (warpTo != 0) warping from it to warpTo
+    bool MaterialiseSquad(Squad& s, uint32 atNode, uint32 warpTo, uint8 warpKind, int64 now);
+    Squad* FindSquad(uint32 squadID);
+    void ProcessSquads(int64 now);
 
     /* traffic (8.1) */
     void TrafficEvent(int64 now);
@@ -222,6 +246,9 @@ private:
     std::vector<PendingRemoval> m_removals;
     std::vector<PendingLaunch> m_launches;
     std::map<uint32, BeltState> m_beltStates;   // belt bubbleID -> its miners' timers
+    std::vector<Squad> m_squads;
+    std::vector<uint32> m_wpIDs;                // patrol waypoints:  stations and gates
+    std::vector<double> m_wpW;
     AmbientSchedule m_sched;
     NpcRng m_rng;
 

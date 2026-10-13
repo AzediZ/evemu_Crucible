@@ -148,6 +148,7 @@ void AmbientSystem::Process()
     ProcessLaunches(now);
     ProcessVirtual(now);
     ProcessBelts(now);
+    ProcessSquads(now);
     if (now >= m_nextLinger) {
         m_nextLinger = now + 5000;
         ProcessLinger(now);
@@ -166,6 +167,7 @@ void AmbientSystem::Activate(int64 now)
     m_sched.Clear();
     if (sConfig.ambient.Traffic and (m_lambda > 0.0))
         m_sched.Push(now + AmbientRules::NextArrivalMs(m_rng, m_lambda), evTraffic);
+    BuildSquads(now);
     m_active = true;
     m_windDownAt = 0;
     m_nextLinger = now + 5000;
@@ -195,6 +197,7 @@ void AmbientSystem::Deactivate(int64 now, const char* why)
     m_gridPlayers.clear();
     m_unwatched.clear();
     m_beltStates.clear();
+    m_squads.clear();
     m_active = false;
     m_windDownAt = 0;
     sAmbientMgr.Register(this, false);
@@ -214,6 +217,7 @@ void AmbientSystem::Close()
     m_gridPlayers.clear();
     m_unwatched.clear();
     m_beltStates.clear();
+    m_squads.clear();
     if (m_active)
         sAmbientMgr.Register(this, false);
     m_active = false;
@@ -777,6 +781,9 @@ void AmbientSystem::OnNPCRemoved(uint32 itemID, bool killed)
     if (killed) {
         ++m_killed;
         Note("killed " + std::to_string(itemID));
+        for (auto& s : m_squads)
+            if (std::find(s.npcIDs.begin(), s.npcIDs.end(), itemID) != s.npcIDs.end())
+                ++s.killed;
     }
 }
 
@@ -1598,12 +1605,307 @@ bool AmbientSystem::AcceptTransit(const Traveller& t, uint32 gateID)
 }
 
 /* ------------------------------------------------------------------------------------------------------------------
- *  law (8.4)
+ *  CONCORD and navy patrol squads (6.7, 8.3, 8.4)
  * ------------------------------------------------------------------------------------------------------------------ */
+void AmbientSystem::BuildSquads(int64 now)
+{
+    m_squads.clear();
+    m_wpIDs.clear();
+    m_wpW.clear();
+    // waypoints:  every station and gate, weighted like traffic (8.3)
+    for (auto& cur : m_stations) {
+        m_wpIDs.push_back(cur.id);
+        m_wpW.push_back(cur.weight);
+    }
+    for (auto& cur : m_gates) {
+        m_wpIDs.push_back(cur.id);
+        m_wpW.push_back(cur.weight);
+    }
+    if (m_wpIDs.empty() or (m_profile.band != AmbientRules::Band::High))
+        return;
+    uint32 concord(sConfig.ambient.ConcordPatrols ? AmbientRules::ConcordSquads(m_profile.band, m_profile.A, m_profile.level,
+                   sConfig.ambient.PatrolSquadsBase, sConfig.ambient.PatrolSquadsMax, sConfig.ambient.DensityMultiplier) : 0);
+    uint32 navy(sConfig.ambient.NavyPatrols ? AmbientRules::NavySquads(m_profile.band, (m_profile.homeRace < Race::Count),
+                m_profile.A, sConfig.ambient.NavySquadsBase, sConfig.ambient.DensityMultiplier) : 0);
+    for (uint32 i = 0; i < (concord + navy); ++i) {
+        Squad s;
+        s.id = sAmbientMgr.NextGroupID();
+        s.role = (i < concord ? Role::Concord : Role::Navy);
+        s.race = (s.role == Role::Navy ? m_profile.homeRace : Race::None);
+        FormSquad(s);
+        if (s.members.empty())
+            continue;
+        s.wp = AmbientRules::PickWeighted(m_rng, m_wpW);
+        if (s.wp == AmbientRules::npos)
+            s.wp = 0;
+        // a random point of its loiter, so squads don't all move together
+        s.loiterUntil = now + AmbientRules::UniformMs(m_rng, 0.0, sConfig.ambient.PatrolLoiterMax * 1000.0);
+        m_squads.push_back(s);
+    }
+    if (!m_squads.empty())
+        _log(AMBIENT__INFO, "%s(%u): %u CONCORD and %u navy patrol squads.", m_system->GetName(), m_system->GetID(), concord, navy);
+}
+
+void AmbientSystem::FormSquad(Squad& s)
+{
+    // 7.2:  CONCORD 2 officers and a captain (a commander too, 25%, in busy systems).  navy 2 frigates and a cruiser, or a
+    //  cruiser and a battleship (20%)
+    const AmbientCatalog& catalog(sAmbientMgr.Catalog());
+    s.members.clear();
+    auto add = [&](uint8 cls) {
+        const Archetype* pArch(catalog.Pick(m_rng, s.role, s.race, cls));
+        if (pArch != nullptr)
+            s.members.push_back(pArch);
+    };
+    if (s.role == Role::Concord) {
+        add(0);
+        add(0);
+        add(1);
+        if ((m_profile.A >= 0.6) and m_rng.Chance(0.25))
+            add(2);
+    } else if (m_rng.Chance(0.2)) {
+        add(1);
+        add(2);
+    } else {
+        add(0);
+        add(0);
+        add(1);
+    }
+    s.npcIDs.clear();
+    s.killed = 0;
+    s.respawnAt = 0;
+    s.respondTo = 0;
+    s.group = m_system->GetSpawnMgr()->GetAggroGroups().Get(NpcAI::GroupKind::Ambient, s.id);
+}
+
+bool AmbientSystem::MaterialiseSquad(Squad& s, uint32 atNode, uint32 warpTo, uint8 warpKind, int64 now)
+{
+    // the squad appears at its waypoint:  orbiting it (8.3), or warping from it to warpTo (observers see them land)
+    const Node* pNode(FindNode(atNode));
+    if (pNode == nullptr)
+        return false;
+    GPoint centre(pNode->pos);
+    if (now < s.retryAt)
+        return false;
+    if (!CapAllows(centre)) {
+        s.retryAt = now + 10000;
+        return false;
+    }
+    s.npcIDs.clear();
+    for (size_t i = 0; i < s.members.size(); ++i) {
+        const Archetype* pArch(s.members[i]);
+        Traveller t;
+        t.spec.arch = pArch;
+        t.spec.role = s.role;
+        t.spec.race = s.race;
+        t.spec.name = pArch->typeName;
+        if (s.role == Role::Concord) {
+            t.spec.ownerID = corpCONCORD;
+            t.spec.factionID = factionCONCORD;
+        } else {
+            t.spec.ownerID = RaceNavyCorp(s.race);
+            t.spec.factionID = RaceFaction(s.race);
+        }
+        t.spec.travellerID = sAmbientMgr.NextTravellerID();
+        t.spec.squadID = s.id;
+        t.atNode = atNode;
+        t.atNodeKind = pNode->kind;
+        t.created = now;
+        t.nextAt = now;
+        GPoint pos(OnSphere(m_rng, centre, pNode->radius + 15000.0, pNode->radius + 30000.0));
+        if (warpTo != 0) {
+            // the leader goes first, the others 0 - 3s later (8.3)
+            if (i > 0)
+                t.legs.push_back(MakeLeg(Leg::Hold, 0, 0, AmbientRules::UniformMs(m_rng, 0.0, 3000.0)));
+            t.legs.push_back(MakeLeg(Leg::WarpTo, warpTo, warpKind));
+            t.legs.push_back(MakeLeg(Leg::Squad));
+            pos = OnSphere(m_rng, centre, pNode->radius + 5000.0, pNode->radius + 15000.0);
+        } else {
+            int64 loiter(std::max<int64>(s.loiterUntil - now, 30000));
+            t.legs.push_back(MakeLeg(Leg::Loiter, atNode, pNode->kind, loiter));
+            t.legs.push_back(MakeLeg(Leg::Squad));
+        }
+        AmbientNPC* pNPC(Materialise(t, Start::Placed, 0, now, &pos, &s.group));
+        if (pNPC != nullptr)
+            s.npcIDs.push_back(pNPC->GetID());
+    }
+    return !s.npcIDs.empty();
+}
+
+AmbientSystem::Squad* AmbientSystem::FindSquad(uint32 squadID)
+{
+    for (auto& cur : m_squads)
+        if (cur.id == squadID)
+            return &cur;
+    return nullptr;
+}
+
+void AmbientSystem::ProcessSquads(int64 now)
+{
+    for (auto& s : m_squads) {
+        // destroyed:  a new squad forms 15 minutes later
+        if (s.respawnAt != 0) {
+            if (now < s.respawnAt)
+                continue;
+            FormSquad(s);
+            s.loiterUntil = now + AmbientRules::UniformMs(m_rng, sConfig.ambient.PatrolLoiterMin * 1000.0,
+                                                          sConfig.ambient.PatrolLoiterMax * 1000.0);
+        }
+        // the members still in space
+        std::vector<AmbientNPC*> members;
+        for (auto itr = s.npcIDs.begin(); itr != s.npcIDs.end();) {
+            std::map<uint32, AmbientNPC*>::iterator nItr(m_npcs.find(*itr));
+            if ((nItr == m_npcs.end()) or nItr->second->IsDead()) {
+                itr = s.npcIDs.erase(itr);
+            } else {
+                members.push_back(nItr->second);
+                ++itr;
+            }
+        }
+        if ((s.killed > 0) and (s.killed >= s.members.size())) {
+            s.respawnAt = now + 900000;
+            s.npcIDs.clear();
+            continue;
+        }
+        if (s.wp >= m_wpIDs.size())
+            s.wp = 0;
+        uint32 wpID(m_wpIDs.empty() ? 0 : m_wpIDs[s.wp]);
+        const Node* pWp(FindNode(wpID));
+        if (pWp == nullptr)
+            continue;
+        bool fighting(false);
+        for (auto pNPC : members)
+            if (!pNPC->GetAIMgr()->IsIdle())
+                fighting = true;
+
+        // answering a crime (8.4):  engage once on the target's grid, until it is gone
+        if (s.respondTo != 0) {
+            SystemEntity* pTarget(m_system->GetSE(s.respondTo));
+            if ((pTarget == nullptr) or pTarget->IsDead() or (now > s.respondUntil)) {
+                s.respondTo = 0;
+            } else {
+                for (auto pNPC : members)
+                    if ((pNPC->SysBubble() == pTarget->SysBubble()) and (pNPC->GetAmbientPilot() != nullptr))
+                        pNPC->GetAmbientPilot()->SquadEngage(pTarget);
+                continue;
+            }
+        }
+
+        bool watched(IsObservedPoint(pWp->pos));
+        if (members.empty() and watched) {
+            // its waypoint became watched:  it is there, orbiting (8.3)
+            if (MaterialiseSquad(s, wpID, 0, 0, now))
+                Note(std::string(RoleName(s.role)) + " squad at " + std::to_string(wpID));
+            continue;
+        }
+        // members that landed wait for orders:  loiter at the waypoint
+        for (auto pNPC : members) {
+            AmbientPilot* pPilot(pNPC->GetAmbientPilot());
+            if ((pPilot != nullptr) and pPilot->AwaitingOrders() and pNPC->GetAIMgr()->IsIdle())
+                pPilot->SquadLoiter(wpID, std::max<int64>(s.loiterUntil - now, 30000), now);
+        }
+        if (now < s.loiterUntil)
+            continue;
+        if (fighting) {
+            s.loiterUntil = now + 30000;
+            continue;
+        }
+        // move on:  the next waypoint (not this one), weighted
+        size_t next(AmbientRules::PickExcept(m_rng, m_wpW, s.wp));
+        if (next == AmbientRules::npos)
+            next = s.wp;
+        uint32 nextID(m_wpIDs[next]);
+        const Node* pNext(FindNode(nextID));
+        if (pNext == nullptr)
+            continue;
+        int64 loiter(AmbientRules::UniformMs(m_rng, sConfig.ambient.PatrolLoiterMin * 1000.0, sConfig.ambient.PatrolLoiterMax * 1000.0));
+        bool nextWatched(IsObservedPoint(pNext->pos));
+        if (!members.empty()) {
+            // the leader warps first, the others 0 - 3s later
+            for (size_t i = 0; i < members.size(); ++i)
+                if (members[i]->GetAmbientPilot() != nullptr)
+                    members[i]->GetAmbientPilot()->SquadWarp(nextID, pNext->kind,
+                                                             (i == 0 ? 0 : AmbientRules::UniformMs(m_rng, 0.0, 3000.0)), now);
+            loiter += 60000;    // the trip
+        } else if (nextWatched) {
+            // from its old waypoint to a watched one:  observers see it land
+            MaterialiseSquad(s, wpID, nextID, pNext->kind, now);
+            loiter += 60000;
+        }
+        s.wp = next;
+        s.loiterUntil = now + loiter;
+    }
+}
+
 void AmbientSystem::OnLawDispatched(uint32 targetID, uint8 kind)
 {
-    // patrol squads come with phase 6
+    // 8.4:  the nearest patrol of that kind warps to the crime, as well as CONCORD's own response (not instead of it)
+    if (!m_active or !sConfig.ambient.PatrolResponse or m_squads.empty())
+        return;
+    uint8 role(Role::None);
+    if (kind == Law::Concord)
+        role = Role::Concord;
+    else if (kind == Law::Navy)
+        role = Role::Navy;
+    if (role == Role::None)
+        return;
+    SystemEntity* pTarget(nullptr);
+    if (IsCharacterID(targetID)) {
+        Client* pClient(sEntityList.FindClientByCharID(targetID));
+        if ((pClient != nullptr) and (pClient->SystemMgr() == m_system) and pClient->IsInSpace() and !pClient->InPod())
+            pTarget = pClient->GetShipSE();
+    } else {
+        pTarget = m_system->GetSE(targetID);
+    }
+    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->SysBubble() == nullptr) or !IsObservedBubble(pTarget->SysBubble()))
+        return;
+    // on the target's grid first, else the one whose waypoint is nearest
+    Squad* pBest(nullptr);
+    double best(0.0);
+    for (auto& s : m_squads) {
+        if ((s.role != role) or (s.respawnAt != 0) or (s.respondTo != 0) or (s.wp >= m_wpIDs.size()))
+            continue;
+        const Node* pWp(FindNode(m_wpIDs[s.wp]));
+        if (pWp == nullptr)
+            continue;
+        double distance(pWp->pos.distance(pTarget->GetPosition()));
+        for (auto id : s.npcIDs) {
+            SystemEntity* pMember(m_system->GetSE(id));
+            if ((pMember != nullptr) and (pMember->SysBubble() == pTarget->SysBubble()))
+                distance = 0.0;
+        }
+        if ((pBest == nullptr) or (distance < best)) {
+            pBest = &s;
+            best = distance;
+        }
+    }
+    if (pBest == nullptr)
+        return;
+    Squad& s(*pBest);
+    s.respondTo = pTarget->GetID();
+    s.respondUntil = GetSteadyTime() + 300000;
+    int64 now(GetSteadyTime());
+    if (s.npcIDs.empty()) {
+        MaterialiseSquad(s, m_wpIDs[s.wp], pTarget->GetID(), NodeKind::Entity, now);
+    } else {
+        size_t i(0);
+        for (auto id : s.npcIDs) {
+            std::map<uint32, AmbientNPC*>::iterator itr(m_npcs.find(id));
+            if ((itr == m_npcs.end()) or (itr->second->GetAmbientPilot() == nullptr))
+                continue;
+            if (itr->second->SysBubble() == pTarget->SysBubble())
+                itr->second->GetAmbientPilot()->SquadEngage(pTarget);
+            else
+                itr->second->GetAmbientPilot()->SquadWarp(pTarget->GetID(), NodeKind::Entity,
+                                                          (i == 0 ? 0 : AmbientRules::UniformMs(m_rng, 0.0, 3000.0)), now);
+            ++i;
+        }
+    }
+    Note(std::string(RoleName(role)) + " patrol answers a crime");
+    _log(AMBIENT__INFO, "%s(%u): %s squad %u answers the crime of %s(%u).", m_system->GetName(), m_system->GetID(), RoleName(role),
+         s.id, pTarget->GetName(), pTarget->GetID());
 }
+
 
 /* ------------------------------------------------------------------------------------------------------------------
  *  /ambient (4.5)
@@ -1646,6 +1948,15 @@ std::string AmbientSystem::Describe()
     str << ".  off grid " << m_virtual.size() << ", queued " << m_launches.size() << "<br>";
     str << "events " << m_events << ", materialised " << m_materialised << ", killed " << m_killed << ", cap hits " << m_capHits
         << ", suppressed arrivals " << m_suppressed << ", " << (m_ticks > 0 ? m_usSum / m_ticks : 0.0) << " us/tick<br>";
+    for (auto& s : m_squads) {
+        str << RoleName(s.role) << " squad " << s.id << ":  " << s.members.size() << " ships, waypoint "
+            << (s.wp < m_wpIDs.size() ? m_wpIDs[s.wp] : 0) << ", " << (s.npcIDs.empty() ? "off grid" : "in space");
+        if (s.respondTo != 0)
+            str << ", answering a crime on " << s.respondTo;
+        if (s.respawnAt != 0)
+            str << ", destroyed";
+        str << "<br>";
+    }
     str << "last events:";
     for (auto& cur : m_log)
         str << " | " << cur;
@@ -1739,6 +2050,40 @@ uint32 AmbientSystem::ForceSpawn(Client* pClient, const std::string& what, uint3
             t.spec.name = RaceName(race, role, pArch);
             if (Materialise(t, start, 0, now) != nullptr)
                 ++made;
+        } else if ((role == Role::Concord) or (role == Role::Navy)) {
+            // a squad of that kind:  at your waypoint, or warping to you from the nearest one
+            if ((role == Role::Navy) and (m_profile.homeRace >= Race::Count)) {
+                why = "no empire navy in this system";
+                break;
+            }
+            if (m_wpIDs.empty()) {
+                why = "no waypoint (station or gate) for a squad";
+                break;
+            }
+            Squad s;
+            s.id = sAmbientMgr.NextGroupID();
+            s.role = role;
+            s.race = (role == Role::Navy ? m_profile.homeRace : Race::None);
+            FormSquad(s);
+            size_t nearest(0);
+            double best(-1.0);
+            for (size_t w = 0; w < m_wpIDs.size(); ++w) {
+                const Node* pWp(FindNode(m_wpIDs[w]));
+                double distance(pWp != nullptr ? pWp->pos.distance(here) : 1e30);
+                if ((best < 0.0) or (distance < best)) {
+                    best = distance;
+                    nearest = w;
+                }
+            }
+            s.wp = nearest;
+            s.loiterUntil = now + AmbientRules::UniformMs(m_rng, sConfig.ambient.PatrolLoiterMin * 1000.0,
+                                                          sConfig.ambient.PatrolLoiterMax * 1000.0);
+            bool atWp(best <= BUBBLE_RADIUS_METERS);
+            if (MaterialiseSquad(s, m_wpIDs[nearest], (atWp ? 0 : pShip->GetID()), NodeKind::Entity, now)) {
+                made += static_cast<uint32>(s.npcIDs.size());
+                m_squads.push_back(s);
+            }
+            break;
         } else if (role == Role::Miner) {
             const Node* pBelt(NodeAt(here, NodeKind::Belt));
             if ((pBelt == nullptr) or !BeltOpen(pShip->SysBubble())) {

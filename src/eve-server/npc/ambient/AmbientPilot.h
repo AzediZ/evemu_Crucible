@@ -56,6 +56,8 @@ public:
     void SquadWarp(uint32 nodeID, uint8 nodeKind, int64 delayMs, int64 now);
     void SquadEngage(SystemEntity* pTarget);
     bool IsBusy() const;
+    // a squad member at its Squad leg:  waiting for the squad's next order
+    bool AwaitingOrders() const;
 
     /* miners (8.2) */
     void ResendBeams(int64 now);

@@ -412,6 +412,11 @@ bool AmbientPilot::IsBusy() const
     return ((kind == Leg::WarpTo) or (kind == Leg::Hold));
 }
 
+bool AmbientPilot::AwaitingOrders() const
+{
+    return (!m_removing and !m_fleeing and (m_leg < m_legs.size()) and (m_legs[m_leg].kind == Leg::Squad));
+}
+
 bool AmbientPilot::MayTarget(SystemEntity* pSE)
 {
     uint8 role(m_npc->GetRole());
