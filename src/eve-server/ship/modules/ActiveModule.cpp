@@ -425,7 +425,12 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
          * AttrDisallowOffensiveModifierBonus
          */
 
-        if (sFxDataMgr.isOffensive(effectID)) {
+        /* missile launchers (useMissiles) and the scripted warp disruption field generator (warpDisruptSphere) aren't offensive
+         *  effects in Crucible's data:  their charge's effect is.  they attack all the same */
+        bool offensive(sFxDataMgr.isOffensive(effectID) or m_launcher);
+        if (IsScriptedDisruptor())
+            offensive = true;
+        if (offensive) {
             // celestials, stations, beacons and the like can't be attacked.  wrecks and containers can (structure only)
             if (m_targetSE->IsItemEntity() or (m_targetSE->IsStaticEntity() and !m_targetSE->IsOutpostSE())) {
                 Clear();
