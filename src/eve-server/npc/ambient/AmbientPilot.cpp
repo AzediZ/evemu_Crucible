@@ -105,8 +105,8 @@ void AmbientPilot::Begin(uint8 start, uint32 startNode, uint8 startNodeKind, int
     SetSpeed();
     switch (start) {
         case Start::JumpIn: {
-            /* 9.2:  session cloaked since before it was added, so no one got the ball.  the uncloak shows the shimmer and adds
-             *  the ball, as for a pilot who jumped in and started moving */
+            /* 9.2:  session cloaked since before it was added, so no one got the ball.  the uncloak adds the ball, as for a
+             *  pilot who jumped in and started moving */
             m_uncloakAt = now + AmbientRules::UniformMs(m_rng, sConfig.ambient.ArrivalCloakMin * 1000.0,
                                                          sConfig.ambient.ArrivalCloakMax * 1000.0);
             m_waitUncloak = true;
@@ -451,10 +451,10 @@ void AmbientPilot::Tick(int64 now)
         if (now < m_uncloakAt)
             return;
         m_uncloakAt = 0;
-        // UnCloak() sends the shimmer before the ball:  observers' clients drop an effect on a ball they don't have yet, so
-        //  the shimmer goes again once the ball is there
+        /* UnCloak() sends the shimmer before the ball, so observers drop it and the ship just appears, as a pilot does.
+         *  never send effects.Uncloak once the ball is there:  npc entities are spaceObject.EntityShip, which has no
+         *  cloakedCopy, and the client's Uncloak.Stop() throws AttributeError on it when the effect ends or the ball goes */
         m_npc->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
-        m_npc->DestinyMgr()->SendCloakFx(false);
         if (m_waitUncloak) {
             m_waitUncloak = false;
             StartLeg(now);
