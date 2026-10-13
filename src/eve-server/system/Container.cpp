@@ -263,6 +263,11 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
     m_corpID = data.corporationID;
     m_ownerID = data.ownerID;
 
+    // StructureSE's ball and slim item use m_data.itemID, which only Init() set.  containers made without Init()
+    //  (npc and mining jetcans, containers loaded with their system, site containers) went out as ball 0,
+    //  so the client never showed them
+    m_data.itemID = m_self->itemID();
+
     if (!sDataMgr.IsStation(m_self->locationID())) { // should NEVER be true (SE object in station???)
         if (m_self->typeID() == EVEDB::invTypes::PlanetaryLaunchContainer) {
             m_deleteTimer.Start(5 *24 *60 *60 *1000);  //5d timer for PI launch.  should probably get this saved value from planet launches
