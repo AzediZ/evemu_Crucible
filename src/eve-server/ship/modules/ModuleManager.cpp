@@ -1498,6 +1498,20 @@ void ModuleManager::CharacterLeavingShip()
      *  is gone.  cargo over capacity is allowed (Crucible keeps items)
      */
     ClearOverloads();
+
+    /* every effect comes off with the pilot (ShipItem::SetPlayer(nullptr) resets the ship, its modules and charges).  the
+     *  modules keep their saved online state (isOnline) but are offline in here, so the next pilot's LoadOnline() puts them
+     *  online again with their effects, cpu and powergrid:  Online() does nothing for a module it thinks is online already,
+     *  which left a ship boarded in space with online modules that did nothing (no mwd capacitor penalty, no plates...)
+     */
+    for (auto cur : m_modules) {
+        if (cur.second == nullptr)
+            continue;
+        if (cur.second->IsActive())
+            cur.second->AbortCycle();
+        if (cur.second->GetModuleState() > Module::State::Offline)
+            cur.second->SetModuleState(Module::State::Offline);
+    }
 }
 
 void ModuleManager::ShipWarping()
