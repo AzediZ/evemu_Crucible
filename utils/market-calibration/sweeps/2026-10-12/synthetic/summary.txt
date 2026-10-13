@@ -1,0 +1,52 @@
+market sim sweep:  33 sets, phases 2,3,4,6, 1 seed(s), synthetic world
+runs finished 132 of 132 (runs.csv;  run the same command again to do the rest)
+complete sets 33;  passing every phase 2/3/4/6 acceptance test (PLAN 4.1 T1 targets aside) 18;  all of them 18
+
+ranked (fails without / with the T1 PLAN 4.1 targets, max and mean use of the tests' room, worst metric):
+  #1   set 18   fails 0/0  max_u 0.51  mean_u 0.24  worst p4.median.10000032     MarketNoise=0.7894  TransientNoise=1.252  MinHalfSpread=0.02174  HalfSpreadScale=1.233  ElasticityScale=0.7625  StockElasticityScale=1.117  FairValueHalfLifeDays=3.072  InternalSpreadShare=0.2732  MiningSlack=0.3129  ProductionSlack=0.7276  HarvestSlack=1.972  HaulerMargin=0.02166  RemoteSupplyElasticity=2.89
+  #2   set 28   fails 0/0  max_u 0.53  mean_u 0.21  worst p4.median.10000030     MarketNoise=1.061  TransientNoise=0.9569  MinHalfSpread=0.02425  HalfSpreadScale=0.8432  ElasticityScale=0.9872  StockElasticityScale=0.8932  FairValueHalfLifeDays=2.883  InternalSpreadShare=0.7106  MiningSlack=0.1875  ProductionSlack=1.003  HarvestSlack=1.866  HaulerMargin=0.03715  RemoteSupplyElasticity=1.615
+  #3   set 0    fails 0/0  max_u 0.57  mean_u 0.23  worst p2.clamp_days          MarketNoise=1.0  TransientNoise=1.0  MinHalfSpread=0.015  HalfSpreadScale=1.0  ElasticityScale=1.0  StockElasticityScale=1.0  FairValueHalfLifeDays=3.0  InternalSpreadShare=0.5  MiningSlack=0.25  ProductionSlack=1.0  HarvestSlack=2.0  HaulerMargin=0.03  RemoteSupplyElasticity=2.0
+  #4   set 23   fails 0/0  max_u 0.58  mean_u 0.23  worst p3.mineral_peak        MarketNoise=0.8688  TransientNoise=1.407  MinHalfSpread=0.01796  HalfSpreadScale=1.223  ElasticityScale=0.7763  StockElasticityScale=1.009  FairValueHalfLifeDays=3.308  InternalSpreadShare=0.2035  MiningSlack=0.2824  ProductionSlack=1.22  HarvestSlack=2.382  HaulerMargin=0.0453  RemoteSupplyElasticity=2.414
+  #5   set 31   fails 0/0  max_u 0.62  mean_u 0.23  worst p4.median.10000030     MarketNoise=0.9472  TransientNoise=1.108  MinHalfSpread=0.01198  HalfSpreadScale=0.9252  ElasticityScale=1.243  StockElasticityScale=0.984  FairValueHalfLifeDays=4.237  InternalSpreadShare=0.4827  MiningSlack=0.3879  ProductionSlack=1.305  HarvestSlack=2.984  HaulerMargin=0.02646  RemoteSupplyElasticity=1.896
+  #6   set 14   fails 0/0  max_u 0.64  mean_u 0.26  worst p3.mineral_peak        MarketNoise=1.208  TransientNoise=1.153  MinHalfSpread=0.01463  HalfSpreadScale=1.118  ElasticityScale=0.7058  StockElasticityScale=0.8632  FairValueHalfLifeDays=2.247  InternalSpreadShare=0.5625  MiningSlack=0.1722  ProductionSlack=0.7026  HarvestSlack=2.761  HaulerMargin=0.03851  RemoteSupplyElasticity=2.956
+  #7   set 25   fails 0/0  max_u 0.69  mean_u 0.25  worst p6.invention_z         MarketNoise=0.9332  TransientNoise=1.051  MinHalfSpread=0.01138  HalfSpreadScale=0.9629  ElasticityScale=0.8637  StockElasticityScale=1.064  FairValueHalfLifeDays=3.81  InternalSpreadShare=0.3922  MiningSlack=0.3007  ProductionSlack=0.8757  HarvestSlack=1.926  HaulerMargin=0.02989  RemoteSupplyElasticity=1.471
+  #8   set 21   fails 0/0  max_u 0.69  mean_u 0.23  worst p4.median.10000030     MarketNoise=0.7599  TransientNoise=0.8276  MinHalfSpread=0.01405  HalfSpreadScale=1.284  ElasticityScale=1.28  StockElasticityScale=1.042  FairValueHalfLifeDays=4.66  InternalSpreadShare=0.3112  MiningSlack=0.1743  ProductionSlack=0.96  HarvestSlack=2.319  HaulerMargin=0.02508  RemoteSupplyElasticity=2.823
+  #9   set 10   fails 0/0  max_u 0.72  mean_u 0.27  worst p3.mineral_peak        MarketNoise=1.168  TransientNoise=1.03  MinHalfSpread=0.01181  HalfSpreadScale=1.038  ElasticityScale=1.043  StockElasticityScale=0.9997  FairValueHalfLifeDays=3.492  InternalSpreadShare=0.4507  MiningSlack=0.3793  ProductionSlack=0.9771  HarvestSlack=1.914  HaulerMargin=0.02275  RemoteSupplyElasticity=2.534
+  #10  set 2    fails 0/0  max_u 0.74  mean_u 0.23  worst p3.mineral_peak        MarketNoise=0.9835  TransientNoise=1.389  MinHalfSpread=0.01804  HalfSpreadScale=1.084  ElasticityScale=1.312  StockElasticityScale=0.7066  FairValueHalfLifeDays=2.145  InternalSpreadShare=0.5545  MiningSlack=0.219  ProductionSlack=0.7931  HarvestSlack=1.695  HaulerMargin=0.03452  RemoteSupplyElasticity=1.175
+  #11  set 29   fails 0/0  max_u 0.76  mean_u 0.24  worst p3.mineral_peak        MarketNoise=0.9142  TransientNoise=0.5306  MinHalfSpread=0.025  HalfSpreadScale=0.8894  ElasticityScale=0.8207  StockElasticityScale=0.8333  FairValueHalfLifeDays=3.624  InternalSpreadShare=0.3606  MiningSlack=0.339  ProductionSlack=1.375  HarvestSlack=2.873  HaulerMargin=0.02359  RemoteSupplyElasticity=1.204
+  #12  set 13   fails 0/0  max_u 0.81  mean_u 0.27  worst p3.mineral_peak        MarketNoise=1.237  TransientNoise=0.6733  MinHalfSpread=0.01944  HalfSpreadScale=1.258  ElasticityScale=0.8967  StockElasticityScale=0.7853  FairValueHalfLifeDays=4.535  InternalSpreadShare=0.6795  MiningSlack=0.368  ProductionSlack=1.478  HarvestSlack=2.291  HaulerMargin=0.03565  RemoteSupplyElasticity=1.331
+  #13  set 27   fails 0/0  max_u 0.82  mean_u 0.32  worst p4.median.10000030     MarketNoise=1.176  TransientNoise=0.7442  MinHalfSpread=0.0135  HalfSpreadScale=1.052  ElasticityScale=1.186  StockElasticityScale=0.935  FairValueHalfLifeDays=3.899  InternalSpreadShare=0.7291  MiningSlack=0.2311  ProductionSlack=1.468  HarvestSlack=2.773  HaulerMargin=0.03398  RemoteSupplyElasticity=1.075
+  #14  set 24   fails 0/0  max_u 0.84  mean_u 0.23  worst p3.mineral_peak        MarketNoise=0.8326  TransientNoise=1.462  MinHalfSpread=0.02251  HalfSpreadScale=0.8315  ElasticityScale=1.17  StockElasticityScale=0.8079  FairValueHalfLifeDays=2.588  InternalSpreadShare=0.7703  MiningSlack=0.2487  ProductionSlack=1.418  HarvestSlack=1.527  HaulerMargin=0.03082  RemoteSupplyElasticity=2.607
+  #15  set 4    fails 0/0  max_u 0.86  mean_u 0.28  worst p3.mineral_peak        MarketNoise=0.7047  TransientNoise=0.6494  MinHalfSpread=0.02387  HalfSpreadScale=0.9558  ElasticityScale=0.7997  StockElasticityScale=0.9431  FairValueHalfLifeDays=3.028  InternalSpreadShare=0.4676  MiningSlack=0.3213  ProductionSlack=0.6826  HarvestSlack=2.548  HaulerMargin=0.04214  RemoteSupplyElasticity=2.333
+
+checks that failed (sets):
+  2:(b) stability                           13 of 33:  3 11 17 32 12 9 22 26 16 19 20 8 6
+  3:mineral shock: the minerals peak at      2 of 33:  5 30
+  6:invention                                1 of 33:  6
+
+rank correlation (Spearman) of each key with the scores and the borderline metrics:
+  metric                   MarketNo Transien MinHalfS HalfSpre Elastici StockEla FairValu Internal MiningSl Producti HarvestS HaulerMa RemoteSu
+  max_u                       +0.10    -0.18    -0.02    -0.14    +0.18    +0.67    +0.05    +0.26    +0.11    -0.23    +0.17    +0.28    -0.11
+  mean_u                      +0.25    -0.30    -0.17    -0.05    +0.00    +0.78    +0.02    +0.34    +0.19    -0.32    +0.27    +0.23    -0.14
+  fails_excl_t1               +0.10    -0.21    -0.04    -0.21    +0.25    +0.75    -0.02    +0.14    +0.07    -0.32    +0.12    +0.24    -0.08
+  p2.index_max                +0.97    -0.04    -0.30    -0.04    -0.05    +0.10    +0.24    +0.29    +0.09    +0.16    +0.24    +0.24    -0.28
+  p2.money_max                -0.47    -0.46    +0.28    +0.09    -0.09    -0.21    +0.04    -0.24    -0.02    +0.21    +0.05    -0.18    +0.02
+  p2.noise.Charges            +0.98    +0.03    -0.34    +0.11    -0.08    -0.02    +0.17    +0.24    +0.02    +0.16    +0.24    +0.21    -0.21
+  p2.noise.Commodities        +0.98    +0.06    -0.30    +0.04    -0.02    -0.04    +0.14    +0.21    +0.12    +0.17    +0.22    +0.19    -0.24
+  p2.noise.Materials          +0.87    +0.14    -0.24    -0.05    +0.01    +0.19    -0.25    +0.27    +0.06    -0.17    -0.04    +0.19    -0.28
+  p2.noise.Modules            +0.84    +0.22    -0.31    +0.29    -0.17    +0.18    +0.04    +0.25    -0.01    -0.08    +0.11    +0.19    -0.11
+  p2.noise.PI                 +1.00    +0.04    -0.29    -0.03    -0.06    +0.01    +0.15    +0.19    +0.10    +0.16    +0.22    +0.18    -0.27
+  p3.mineral_peak             -0.06    -0.29    -0.17    -0.07    +0.22    +0.71    -0.30    +0.09    -0.06    -0.33    -0.05    -0.06    -0.14
+  p3.t1.charges               -0.13    -0.13    -0.13    -0.04    -0.06    +0.89    -0.26    +0.25    +0.02    -0.58    +0.07    +0.09    +0.04
+  p3.t1.drones                +0.05    -0.13    -0.06    +0.20    +0.09    +0.53    +0.02    +0.38    +0.15    -0.02    +0.27    +0.15    -0.13
+  p3.t1.modules               +0.14    -0.29    -0.15    +0.12    -0.05    +0.81    +0.01    +0.54    +0.08    -0.32    +0.15    +0.16    -0.15
+  p3.t1.ships                 +0.65    -0.00    -0.46    -0.16    -0.13    +0.47    -0.08    +0.19    +0.03    -0.26    +0.22    +0.18    -0.13
+  p3.t1cal.charges            -0.14    -0.15    -0.12    -0.05    -0.07    +0.89    -0.29    +0.24    +0.05    -0.59    +0.08    +0.09    +0.02
+  p3.t1cal.drones             +0.06    -0.11    -0.07    +0.18    +0.11    +0.50    +0.02    +0.41    +0.12    -0.01    +0.24    +0.16    -0.13
+  p3.t1cal.modules            +0.15    -0.28    -0.16    +0.12    -0.04    +0.80    +0.00    +0.57    +0.09    -0.29    +0.13    +0.15    -0.14
+  p3.t1cal.ships              +0.65    +0.04    -0.46    -0.11    -0.14    +0.45    -0.08    +0.17    -0.01    -0.26    +0.20    +0.18    -0.08
+  p4.route_risk               -0.10    +0.20    +0.23    +0.37    -0.02    -0.24    +0.03    +0.08    -0.28    -0.00    -0.22    -0.08    -0.10
+  p6.invention_z              -0.11    +0.13    -0.21    -0.04    +0.11    +0.05    +0.07    -0.18    -0.24    +0.00    -0.34    +0.12    +0.28
+  p6.t2.components            -0.05    +0.25    +0.27    +0.14    -0.08    -0.90    +0.12    +0.03    -0.20    +0.45    -0.19    +0.09    +0.04
+  p6.t2.modules               -0.30    -0.24    -0.03    +0.09    -0.15    +0.60    +0.17    -0.27    +0.26    -0.29    +0.46    -0.21    +0.19
+  p6.t2.ships                 -0.31    -0.15    -0.13    -0.00    -0.07    +0.78    -0.24    +0.18    +0.22    -0.43    +0.29    -0.05    -0.10

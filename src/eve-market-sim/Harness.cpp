@@ -46,6 +46,7 @@ namespace {
     const int64_t StartTime = 1325462400;       // 2012-01-02 00:00 UTC, a Monday in the calibration window
     const double MinTradesPerDay = 5.0;         // (d) compares cells with at least this many trades a day
     const int    VolatilityLag = (int)Econ::VolatilityHorizonDays;    // (d) the calibration's horizon (derive.py VOL_LAG)
+    const float  VolatilityFloor = 0.005f;      // derive.py clips volatility to [0.005, 0.6]
 
     struct Options {
         std::string staticPath;                 // empty:  synthetic
@@ -154,6 +155,9 @@ namespace {
             {"InventTime", [&](double v) { p.inventionTimeMultiplier = v; }},
             {"SimBrokerFee", [&](double v) { p.brokerFeeRate = v; }},
             {"VendorStock", [&](double v) { p.vendorStock = (uint32_t)v; }},
+            // phase 5:  the hubs' station lines (HarnessCapacity)
+            {"MaxLineShare", [&](double v) { SetHarnessLineShare(v, -1); }},
+            {"MinFreeLinesPerStation", [&](double v) { SetHarnessLineShare(0.0, (int)v); }},
             // the calibration's per type parameters, scaled (harness only:  StaticData's tuning multipliers)
             {"HalfSpreadScale", [&](double v) { o.halfSpreadScale = (float)v; }},
             {"StockElasticityScale", [&](double v) { o.stockElasticityScale = (float)v; }},
@@ -224,6 +228,7 @@ namespace {
         // (d)
         struct Noise { double realised; double calibrated; size_t cells; };
         std::map<std::string, Noise> noise;    // category -> medians over the compared cells
+        std::map<std::string, Noise> noiseOffFloor;    // the same without the cells calibrated at the volatility floor (info)
         // (e)
         std::vector<BotResult> bots;
         // coverage
@@ -666,7 +671,7 @@ namespace {
         res.violations = world.GetLedger().Violations();
 
         // (d) noise per category:  the volatility of the hub's daily average, measured as the calibration measures it
-        std::map<std::string, std::vector<double>> realised, calibrated;
+        std::map<std::string, std::vector<double>> realised, calibrated, realisedOff, calibratedOff;
         for (auto& cur : series) {
             const TypeData& t(*data.Type(cur.first));
             const char* cat(NoiseCategory(t));
@@ -681,10 +686,20 @@ namespace {
                 continue;
             realised[cat].push_back(v);
             calibrated[cat].push_back(t.volatility);
+            /* (info, phase 7) the calibration clips volatility at 0.005 (derive.py):  a type at the clip was pinned for
+             *  weeks on Tranquility (a sticky ask over hundreds of trades a day), which the sim's few prints a day at
+             *  EconomyScale 0.01 can't reproduce.  the same comparison without those cells */
+            if (t.volatility > VolatilityFloor * 1.02f) {
+                realisedOff[cat].push_back(v);
+                calibratedOff[cat].push_back(t.volatility);
+            }
         }
         for (auto& cur : realised)
             if (cur.second.size() >= 3)
             res.noise[cur.first] = RunResult::Noise{Median(cur.second), Median(calibrated[cur.first]), cur.second.size()};
+        for (auto& cur : realisedOff)
+            if (cur.second.size() >= 3)
+                res.noiseOffFloor[cur.first] = RunResult::Noise{Median(cur.second), Median(calibratedOff[cur.first]), cur.second.size()};
 
         // (e) the bots' net:  isk, plus what they hold at the sim's bid
         auto net = [&](std::initializer_list<uint32_t> ids) {
@@ -947,6 +962,13 @@ int HarnessMain(int argc, char** argv)
         }
         std::snprintf(buf, sizeof(buf), "(d) noise (realised/calibrated %d-day volatility, cells, allowed x0.5..x2):%s", VolatilityLag, noise.c_str());
         Check(noiseOk, buf, failures);
+        std::string offFloor;
+        for (auto& cur : r.noiseOffFloor) {
+            std::snprintf(buf, sizeof(buf), " %s x%.2f (%zu)", cur.first.c_str(),
+                          cur.second.calibrated > 0.0 ? cur.second.realised / cur.second.calibrated : 0.0, cur.second.cells);
+            offFloor += buf;
+        }
+        std::printf("  [info] (d) without the cells calibrated at the %.3f volatility floor:%s\n", VolatilityFloor, offFloor.c_str());
         if (opt.bots) {
             for (auto& b : r.bots) {
                 if (std::strcmp(b.name, "dumper") == 0) {

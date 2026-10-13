@@ -12,7 +12,10 @@ and a summary (with each parameter's rank correlation to the scores):
 per phase and seed), without it the harness's synthetic world (about 1.5-2 minutes per phase).  --space FILE replaces
 the default space (lines 'Key low high [log]'), --set Key=value fixes a key in every set, --baseline adds the
 defaults as set 0, --sets FILE runs given sets (a CSV with a header of keys) instead of drawing them.  Runs whose log
-is complete are not run again (an interrupted sweep resumes);  --rescore only reads the logs of --out.  Keys are the
+is complete are not run again (an interrupted sweep resumes:  the same command with the same --out);  --rescore only
+reads the logs of --out;  --only runs.csv runs just the runs a previous runs.csv lists as missing (when its logs are
+gone;  its results then cover those runs only).  Every scoring writes runs.csv:  one row per run, done or missing,
+with its failed checks and figures.  Keys are the
 harness's scenario keys:  the <marketSim> names (doc/code_and_design_notes/market-sim/TUNING.md) plus
 HalfSpreadScale, StockElasticityScale and ElasticityScale (the calibration's per type parameters, scaled).
 
@@ -129,6 +132,11 @@ def parse_log(phase, path):
         return None
     checks, metrics = {}, {}
     for line in text.splitlines():
+        if phase == '2' and '[info] (d) without the cells calibrated at the' in line:
+            # (d) without the cells at the calibration's volatility floor (not a check;  not scored)
+            for cat, ratio in re.findall(r' (\w+) x([\d.]+) \(\d+\)', line):
+                metrics['p2.noise_off_floor.' + cat] = float(ratio)
+            continue
         m = RE_CHECK.match(line)
         if not m:
             continue
@@ -284,6 +292,8 @@ def main():
     ap.add_argument('--draw-seed', type=int, default=20111129)
     ap.add_argument('--timeout', type=int, default=4 * 3600, help='seconds per harness run')
     ap.add_argument('--rescore', action='store_true', help='only read the logs already in --out')
+    ap.add_argument('--only', metavar='RUNS_CSV',
+                    help='run only the runs a runs.csv lists as missing (set, phase, seed):  resumes a sweep whose logs are gone')
     a = ap.parse_args()
 
     os.makedirs(a.out, exist_ok=True)
@@ -330,6 +340,10 @@ def main():
                 if p == '2':
                     args.append('--no-repeat')
                 jobs.append((i, p, seed, log, args))
+    if a.only:
+        with open(a.only, newline='', encoding='utf-8') as f:
+            todo_keys = set((int(r['set']), r['phase'], int(r['seed'])) for r in csv.DictReader(f) if r['status'] != 'done')
+        jobs = [j for j in jobs if (j[0], j[1], j[2]) in todo_keys]
     if not a.rescore:
         if not a.harness:
             sys.exit('--harness is needed to run (or --rescore)')
@@ -348,16 +362,24 @@ def main():
     # scoring
     rows = []
     all_checks, all_metrics = set(), set()
+    runs = []           # runs.csv:  one row per harness run, finished or not (what a resume still has to do)
     for i, s in enumerate(sets):
         checks, metrics, util, missing = {}, {}, {}, 0
         for (si, p, seed, log, _) in jobs:
             if si != i:
                 continue
             got = parse_log(p, log)
+            run = {'set': i, 'phase': p, 'seed': seed, 'log': os.path.basename(log)}
+            runs.append(run)
             if got is None:
+                run['status'] = 'missing'
                 missing += 1
                 continue
             c, m = got
+            run['status'] = 'done'
+            run['fails'] = sum(1 for ok in c.values() if not ok)
+            run['failed_checks'] = ' | '.join(sorted(k for k, ok in c.items() if not ok))
+            run.update(m)
             for k, ok in c.items():
                 checks.setdefault(k, []).append(ok)
             for k, v in m.items():
@@ -390,12 +412,22 @@ def main():
         for r in rows:
             w.writerow(r)
 
+    run_metrics = sorted(set(k for r in runs for k in r) - {'set', 'phase', 'seed', 'log', 'status', 'fails', 'failed_checks'})
+    with open(os.path.join(a.out, 'runs.csv'), 'w', newline='', encoding='utf-8') as f:
+        w = csv.DictWriter(f, fieldnames=['set', 'phase', 'seed', 'status', 'fails'] + run_metrics + ['failed_checks', 'log'],
+                           extrasaction='ignore')
+        w.writeheader()
+        for r in runs:
+            w.writerow(r)
+
     # the summary
     out = []
     out.append('market sim sweep:  %d sets, phases %s, %d seed(s), %s' % (len(sets), ','.join(phases), a.seeds,
                                                                          a.static or 'synthetic world'))
     complete = [r for r in rows if r['missing_runs'] == 0]
     passing = [r for r in complete if r['fails_excl_t1'] == 0]
+    out.append('runs finished %d of %d (runs.csv;  run the same command again to do the rest)' % (
+        sum(1 for r in runs if r['status'] == 'done'), len(runs)))
     out.append('complete sets %d;  passing every phase %s acceptance test (PLAN 4.1 T1 targets aside) %d;  all of them %d'
                % (len(complete), '/'.join(phases), len(passing), sum(1 for r in complete if r['fails'] == 0)))
     out.append('')
@@ -412,7 +444,7 @@ def main():
             out.append('  %-40s %3d of %d:  %s' % (name, len(bad), len(complete), ' '.join(map(str, bad[:30]))))
     out.append('')
     out.append('rank correlation (Spearman) of each key with the scores and the borderline metrics:')
-    focus = ['max_u', 'mean_u', 'fails_excl_t1'] + [m for m in metric_cols if m.startswith(('p2.noise.', 'p6.t2.', 'p6.invention', 'p3.t1', 'p3.mineral', 'p4.route', 'p2.index_max', 'p2.money_max'))]
+    focus = ['max_u', 'mean_u', 'fails_excl_t1'] + [m for m in metric_cols if m.startswith(('p2.noise.', 'p2.noise_off', 'p6.t2.', 'p6.invention', 'p3.t1', 'p3.mineral', 'p4.route', 'p2.index_max', 'p2.money_max'))]
     out.append('  %-24s' % 'metric' + ''.join('%9s' % k[:8] for k in keys))
     for m in focus:
         line = '  %-24s' % m[:24]
