@@ -22,7 +22,8 @@
 class AgentDB
 {
 public:
-    static void LoadAgentData(uint32 agentID, AgentData& data);
+    // false (data left as is) when agentID has no agtAgents row, i.e. isn't an agent (NPC CEOs and other NPC characters)
+    static bool LoadAgentData(uint32 agentID, AgentData& data);
     static void LoadAgentSkills(uint32 agentID, std::map<uint16, uint8>& data);
 
     /* R&D research projects (chrAgentResearch) */

@@ -23,10 +23,15 @@ public:
     Agent(uint32 id);
     ~Agent()                                            { /* do nothing here */ }
 
+    // always true:  an id that isn't an agent (NPC CEOs and other NPC characters the info window asks about) still binds,
+    //  but IsValid() is false and its data is zeroed
     bool Load();
+    // agentID has an agtAgents row
+    bool IsValid()                                      { return m_valid; }
 
     PyDict* GetLocationWrap();
-    PyObject* GetInfoServiceDetails(Client* pClient);
+    // util.KeyVal, or None for an id that isn't an agent
+    PyRep* GetInfoServiceDetails(Client* pClient);
 
     bool IsLocator()                                    { return m_agentData.locator; }
     bool IsResearch()                                   { return m_agentData.research; }
@@ -103,6 +108,7 @@ protected:
     std::set<uint32>                    m_pendingShare; // charIDs asked whether to share the rewards with their fleet
 
 private:
+    bool m_valid;
     bool m_important;
 
     uint16 m_buttonID;

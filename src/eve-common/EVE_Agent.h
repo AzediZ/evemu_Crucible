@@ -8,24 +8,25 @@
 #ifndef EVE_AGENT_H
 #define EVE_AGENT_H
 
+// zeroed by default:  an Agent whose row isn't found (an NPC character that isn't an agent) must not hand out garbage
 struct AgentData {
-    bool gender;
-    bool locator;
-    bool research;
-    int8 quality;
-    uint8 level;
-    uint8 raceID;
-    uint8 divisionID;
-    uint8 bloodlineID;
-    uint16 typeID;
-    uint16 locationTypeID;
-    uint32 corporationID;
-    uint32 solarSystemID;
-    uint32 stationID;
-    uint32 locationID;
-    uint32 friendCorp;
-    uint32 enemyCorp;
-    uint32 factionID;
+    bool gender = false;
+    bool locator = false;
+    bool research = false;
+    int8 quality = 0;
+    uint8 level = 0;
+    uint8 raceID = 0;
+    uint8 divisionID = 0;
+    uint8 bloodlineID = 0;
+    uint16 typeID = 0;
+    uint16 locationTypeID = 0;
+    uint32 corporationID = 0;
+    uint32 solarSystemID = 0;
+    uint32 stationID = 0;
+    uint32 locationID = 0;
+    uint32 friendCorp = 0;
+    uint32 enemyCorp = 0;
+    uint32 factionID = 0;
     std::string name;
 };
 

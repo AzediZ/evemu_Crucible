@@ -44,6 +44,7 @@
 Agent::Agent(uint32 id)
 : m_agentID(id)
 {
+    m_valid = false;
     m_important = false;
     m_buttonID = 1;
 
@@ -55,7 +56,13 @@ Agent::Agent(uint32 id)
 
 
 bool Agent::Load() {
-    AgentDB::LoadAgentData(m_agentID, m_agentData);
+    m_valid = AgentDB::LoadAgentData(m_agentID, m_agentData);
+    if (!m_valid) {
+        // not an agent:  keep the zeroed data, GetInfoServiceDetails() answers None
+        m_agentData = AgentData();
+        _log(AGENT__TRACE, "Agent::Load() - %u is not an agent", m_agentID);
+        return true;
+    }
     sMissionDataMgr.LoadAgentOffers(m_agentID, m_offers);
 
     if (m_agentData.research)
@@ -358,8 +365,13 @@ uint8 Agent::GetSkillLevel(uint16 skillID)
     return itr->second;
 }
 
-PyObject* Agent::GetInfoServiceDetails(Client* pClient)
+PyRep* Agent::GetInfoServiceDetails(Client* pClient)
 {
+    /* the info window asks every NPC character for this (infosvc GetWndData:  `if details is not None`), and shows
+     *  details.stationID as a location (cfg.evelocations).  an NPC that isn't an agent has no agent details */
+    if (!m_valid)
+        return PyStatic.NewNone();
+
     // can this be static data created when agent is loaded?  avoid creating this everytime it's called.
     PyDict* res = new PyDict();
         res->SetItemString("stationID", new PyInt(m_agentData.stationID) );
