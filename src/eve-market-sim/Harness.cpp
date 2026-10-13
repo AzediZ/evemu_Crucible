@@ -66,6 +66,12 @@ namespace {
         bool        phase4      = false;        // the phase 4 acceptance tests (Phase4Test.cpp) instead
         bool        regional    = false;        // the export's regional nodes too (PLAN 6.1 'auto')
         double      pullApart   = 0.0;          // the other nodes' price ratios x e^(this N) (Phase4Test's arbitrage case)
+        // phase 7 (parameter sweeps, utils/market-calibration/sweep.py)
+        bool        repeat      = true;         // (f):  run the first seed again;  --no-repeat skips it (and (f))
+        std::string historyCsv;                 // the first seed's daily history, all nodes (mktSimHistory's columns)
+        float       halfSpreadScale = 1.0f;     // StaticData's tuning multipliers (scenario keys HalfSpreadScale,
+        float       stockElasticityScale = 1.0f;    //  StockElasticityScale, ElasticityScale)
+        float       elasticityScale = 1.0f;
     };
 
     struct ShockSpec {
@@ -76,7 +82,9 @@ namespace {
         double days;
     };
 
-    // a scenario file:  'key = value' lines (the Params names below) and 'shock = <day> <typeID|g:groupID|c:categoryID> <mult> <days>'
+    /* a scenario file:  'key = value' lines (the Params names below, the <marketSim> names) and
+     *  'shock = <day> <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0|h:typeID> <mult> <days>' (as /mktsim shock;  '#' starts
+     *  a comment).  examples:  src/eve-market-sim/scenarios */
     bool ApplyScenario(const std::string& path, Params& p, Options& o, std::vector<ShockSpec>& shocks, std::string& err)
     {
         std::ifstream f(path.c_str());
@@ -125,6 +133,31 @@ namespace {
             {"HaulerMaxTripValue", [&](double v) { p.haulerMaxTripValue = v; }},
             {"HaulerMargin", [&](double v) { p.haulerMargin = v; }},
             {"RemoteSupplyElasticity", [&](double v) { p.remoteSupplyElasticity = v; }},
+            {"HaulerCargoFactor", [&](double v) { p.haulerCargoFactor = v; }},
+            // phase 7:  the rest of the tuning keys (doc/code_and_design_notes/market-sim/TUNING.md)
+            {"Seed", [&](double v) { p.seed = (uint64_t)v; }},
+            {"TransientNoise", [&](double v) { p.transientNoise = v; }},
+            {"MaxOrdersPerCellSide", [&](double v) { p.maxOrdersPerCellSide = (int)v; }},
+            {"HotCellShare", [&](double v) { p.hotCellShare = v; }},
+            {"KillmailCoverage", [&](double v) { p.killmailCoverage = v; }},
+            {"PodLossRate", [&](double v) { p.podLossRate = v; }},
+            {"InternalSpreadShare", [&](double v) { p.internalSpreadShare = v; }},
+            {"MinMargin", [&](double v) { p.minMargin = v; }},
+            {"ProductionSlack", [&](double v) { p.productionSlack = v; }},
+            {"MiningSlack", [&](double v) { p.miningSlack = v; }},
+            {"MiningM3PerHullDay", [&](double v) { p.miningM3PerHullDay = v; }},
+            {"MaxSimJobHours", [&](double v) { p.maxJobHours = v; }},
+            {"LineInstallCost", [&](double v) { p.lineInstallCost = v; }},
+            {"LineCostPerHour", [&](double v) { p.lineCostPerHour = v; }},
+            {"InventBufferDays", [&](double v) { p.inventBufferDays = v; }},
+            {"MoonHarvestPerHour", [&](double v) { p.moonHarvestPerHour = v; }},
+            {"InventTime", [&](double v) { p.inventionTimeMultiplier = v; }},
+            {"SimBrokerFee", [&](double v) { p.brokerFeeRate = v; }},
+            {"VendorStock", [&](double v) { p.vendorStock = (uint32_t)v; }},
+            // the calibration's per type parameters, scaled (harness only:  StaticData's tuning multipliers)
+            {"HalfSpreadScale", [&](double v) { o.halfSpreadScale = (float)v; }},
+            {"StockElasticityScale", [&](double v) { o.stockElasticityScale = (float)v; }},
+            {"ElasticityScale", [&](double v) { o.elasticityScale = (float)v; }},
         };
         std::string line;
         while (std::getline(f, line)) {
@@ -316,6 +349,9 @@ namespace {
             std::printf("  routes:\n%s", world.RouteInfo(0).c_str());
 
         std::ostringstream csv;
+        // --history-csv:  every node's daily history (the first seed's run)
+        const bool writeHistory(!opt.historyCsv.empty() and (seed == opt.seeds[0]));
+        std::ostringstream history;
         int dayNo(0);
         std::vector<double> v0;              // day 0 values of the index basket
         std::vector<uint32_t> basket;
@@ -399,6 +435,9 @@ namespace {
                     world.ShockLosses((uint16_t)s.id, s.mult, s.days, when);
                 else if (s.kind == 'm')
                     world.ShockMining(s.mult, s.days, when);
+                // phase 6:  h:<typeID> a moon material's or planetary resource's harvest
+                else if (s.kind == 'h')
+                    world.ShockSupply((uint16_t)s.id, s.mult, s.days, when);
                 else
                     world.Shock(s.kind, s.id, s.mult, s.days, when);
             }
@@ -530,6 +569,11 @@ namespace {
             // end of the day:  the day's prices, the index, the clamp, the books
             std::vector<HistoryRow> rows;
             world.TakeFinishedHistory(rows);
+            if (writeHistory)
+                for (auto& r : rows)
+                    // historyDate as the server stores it:  a FILETIME midnight
+                    history << r.regionID << "," << r.typeID << "," << ((int64_t)r.day * SecondsPerDay + 11644473600LL) * 10000000LL << ","
+                            << r.low << "," << r.high << "," << r.sumValue << "," << r.volume << "," << r.trades << "\n";
             for (auto& r : rows)
                 if ((r.regionID == forge) and (r.volume > 0))
                 {
@@ -729,6 +773,10 @@ namespace {
         res.liveOrders = world.LiveOrders();
         if (!opt.exportCsv.empty())
             world.ExportCsv(opt.exportCsv);
+        if (writeHistory) {
+            std::ofstream f(opt.historyCsv.c_str(), std::ios::out | std::ios::trunc | std::ios::binary);
+            f << "regionID,typeID,historyDate,low,high,sumValue,volume,trades\n" << history.str();
+        }
         res.auditCsv = csv.str();
         res.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         return res;
@@ -746,7 +794,8 @@ namespace {
     {
         std::printf("usage: eve-market-sim [--static export.json [--regional] | --synthetic [scale]] [--days N] [--seed N]... [--seeds N]\n"
                     "                      [--scenario file] [--audit-csv file] [--no-bots] [--verbose] [--actors] [--phase3] [--phase4]\n"
-                    "                      [--virtual-lines] [--no-logistics]\n"
+                    "                      [--virtual-lines] [--no-logistics] [--no-repeat] [--export cells.csv] [--history-csv file]\n"
+                    "                      [--phase6] [--trace typeID [--trace-node N]] [--pull-apart sigma]\n"
                     "       eve-market-sim --test <name>\n");
     }
 }
@@ -806,6 +855,10 @@ int HarnessMain(int argc, char** argv)
             opt.pullApart = std::strtod(next(), nullptr);
         else if (a == "--no-logistics")
             noLogistics = true;
+        else if (a == "--no-repeat")
+            opt.repeat = false;
+        else if (a == "--history-csv")
+            opt.historyCsv = next();
         else {
             Usage();
             return 2;
@@ -836,6 +889,12 @@ int HarnessMain(int argc, char** argv)
     }
     if (opt.pullApart > 0.0)
         PullApart(data, opt.pullApart);
+    data.halfSpreadScale = opt.halfSpreadScale;
+    data.stockElasticityScale = opt.stockElasticityScale;
+    data.elasticityScale = opt.elasticityScale;
+    if ((opt.halfSpreadScale != 1.0f) or (opt.stockElasticityScale != 1.0f) or (opt.elasticityScale != 1.0f))
+        std::printf("tuning:  half spreads x%g, stock elasticities x%g, demand elasticities x%g\n", opt.halfSpreadScale,
+                    opt.stockElasticityScale, opt.elasticityScale);
     std::vector<std::string> problems;
     data.Validate(problems);
     for (auto& s : problems)
@@ -906,7 +965,7 @@ int HarnessMain(int argc, char** argv)
         results.push_back(r);
     }
     // (f) determinism:  the first seed again
-    {
+    if (opt.repeat) {
         RunResult again(Run(data, p, opt.seeds[0], opt, shocks));
         char buf[256];
         std::snprintf(buf, sizeof(buf), "(f) determinism:  seed %llu twice gives %s audit csv (%zu bytes)", (unsigned long long)opt.seeds[0],

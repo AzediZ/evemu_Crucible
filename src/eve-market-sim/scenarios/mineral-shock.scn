@@ -1,0 +1,3 @@
+# the phase 3 mineral shock:  the mining fleets bring in half for a week from day 30
+# (the minerals rise, the T1 ships follow their cost within days, all recover within about 30 days)
+shock = 30 m:0 0.5 7

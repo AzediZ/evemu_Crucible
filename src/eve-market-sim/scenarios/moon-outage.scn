@@ -1,0 +1,3 @@
+# a moon material's supply removed for 21 days from day 30 (16644 Dysprosium on the real calibration;  the
+# synthetic world's moon materials have their own ids:  eve-market-sim --phase6 prints the one it uses)
+shock = 30 h:16644 0 21

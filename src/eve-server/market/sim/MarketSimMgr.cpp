@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <functional>
 #include <sstream>
 
@@ -916,7 +917,7 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
     std::string usage("usage: /mktsim status | pause | resume | cell <typeID> [stationID] | actor <actorID> | actors [kind] |"
                       " jobs [actorID] | routes [stationID] | shipments [actorID] | anchor <typeID> <price> [regionID] |"
                       " shock <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0|h:typeID> <mult> <days> |"
-                      " requote <typeID|all> | seed [stationID] | audit [days] | step <ticks> | purge | purgelegacy | export <file>");
+                      " requote <typeID|all> | seed [stationID] | audit [days] | step <ticks> | purge | purgelegacy | export <file> [days]");
     if (sub == "purgelegacy") {
         std::set<std::pair<uint32, uint16>> touched;
         uint32 n(MarketSimDB::PurgeLegacyOrders(touched));
@@ -1095,13 +1096,43 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
     if (sub == "export") {
         if (args.argCount() < 3)
             return usage;
-        // into the log folder, by name only
+        /* into the log folder, by name only.  <name>:  the cells (with their calibration) and the last day's audit
+         *  (World::ExportCsv);  <name>.audit.csv:  mktSimAudit, and <name>.history.csv:  mktSimHistory (money in cents,
+         *  historyDate a FILETIME midnight), both over the last [days] (default 30).  utils/market-calibration/report.py
+         *  reads the three (--export) */
         std::string name(args.arg(2));
         size_t slash(name.find_last_of("/\\"));
         if (slash != std::string::npos)
             name.erase(0, slash + 1);
+        if (name.empty())
+            return usage;
+        int days((args.argCount() > 3) ? std::max(1, std::atoi(args.arg(3).c_str())) : 30);
         std::string path(sConfig.files.logDir + name);
-        return m_world->ExportCsv(path) ? ("Written to " + path + ".") : ("Can't write " + path + ".");
+        // today's history rows go to the database first
+        Flush();
+        if (!m_world->ExportCsv(path))
+            return "Can't write " + path + ".";
+        int32 fromDay(DayOf(now) - days);
+        uint32 auditRows(0), historyRows(0);
+        DBQueryResult res;
+        DBResultRow row;
+        std::ofstream audit((path + ".audit.csv").c_str(), std::ios::out | std::ios::trunc | std::ios::binary);
+        audit << "day,category,amount\n";
+        if (sDatabase.RunQuery(res, "SELECT day, category, amount FROM mktSimAudit WHERE day >= %i ORDER BY day, category", fromDay))
+            for (; res.GetRow(row); ++auditRows)
+                audit << row.GetInt(0) << "," << row.GetText(1) << "," << row.GetInt64(2) << "\n";
+        std::ofstream history((path + ".history.csv").c_str(), std::ios::out | std::ios::trunc | std::ios::binary);
+        history << "regionID,typeID,historyDate,low,high,sumValue,volume,trades\n";
+        if (sDatabase.RunQuery(res, "SELECT regionID, typeID, historyDate, low, high, sumValue, volume, trades FROM mktSimHistory"
+                                    " WHERE historyDate >= %lli ORDER BY regionID, typeID, historyDate",
+                               (long long)MarketSimDB::DayToFileTime(fromDay)))
+            for (; res.GetRow(row); ++historyRows)
+                history << row.GetUInt(0) << "," << row.GetUInt(1) << "," << row.GetInt64(2) << "," << row.GetInt64(3) << ","
+                        << row.GetInt64(4) << "," << row.GetInt64(5) << "," << row.GetInt64(6) << "," << row.GetUInt(7) << "\n";
+        if (!audit or !history)
+            return "Can't write " + path + ".audit.csv or .history.csv.";
+        return Fmt("Written %u cells to %s;  %u audit lines and %u history rows of the last %i days to .audit.csv and .history.csv"
+                   " next to it.", (uint32)m_world->Cells().size(), path.c_str(), auditRows, historyRows, days);
     }
     return usage;
 }

@@ -199,6 +199,11 @@ namespace MktSim {
         std::map<uint16_t, uint16_t>                        blueprints;     // T2 product -> its blueprint (a job uses a run of a copy)
         std::vector<Decryptor>                              decryptors;
         std::map<uint16_t, double>                          moonAmounts;    // moonMiningAmount:  units of a harvesting batch
+        // tuning (the harness's parameter sweeps, phase 7):  World::Build multiplies every cell's half spread, stock
+        //  elasticity and demand elasticity (the calibration's or the plan's default) by these.  1 on the server
+        float halfSpreadScale       = 1.0f;
+        float stockElasticityScale  = 1.0f;
+        float elasticityScale       = 1.0f;
 
         const TypeData* Type(uint16_t typeID) const;
         const GroupCal* Group(uint16_t groupID) const;

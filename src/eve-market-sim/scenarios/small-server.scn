@@ -1,0 +1,2 @@
+# a small private server:  a third of the default economy (books, consumer income and losses scale with it)
+EconomyScale = 0.003

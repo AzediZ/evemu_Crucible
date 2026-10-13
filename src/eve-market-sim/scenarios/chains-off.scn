@@ -1,0 +1,4 @@
+# phase 5 without phase 6:  T2, moon materials, reactions, planetary goods, components and fuel blocks come
+# from the stock model
+EnableT2 = 0
+EnableMoonPI = 0
