@@ -33,6 +33,8 @@ public:
     bool                IsOpen() const                  { return m_open; }
     // black ops covert jump portal generator.  only covert ships can use these portals
     bool                IsCovert();
+    // jumpPortalGeneration, or jumpPortalGenerationBO for the covert one
+    uint16              PortalEffect();
     const JumpDrive::Beacon& GetBeacon() const          { return m_beacon; }
 
 private:

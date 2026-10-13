@@ -16,9 +16,18 @@ m_open(false)
 {
 }
 
+uint16 JumpPortalModule::PortalEffect()
+{
+    // the portal effect isn't the module's default effect in the data (the module button doesn't open a portal), so
+    //  GetDefaultEffect() is 0 here.  that sent the effect as 0, so the client showed no portal and threw on it
+    if (m_modRef->type().HasEffect(EVEEffectID::jumpPortalGenerationBO))
+        return EVEEffectID::jumpPortalGenerationBO;
+    return EVEEffectID::jumpPortalGeneration;
+}
+
 bool JumpPortalModule::IsCovert()
 {
-    return (m_modRef->type().GetDefaultEffect() == EVEEffectID::jumpPortalGenerationBO);
+    return (PortalEffect() == EVEEffectID::jumpPortalGenerationBO);
 }
 
 void JumpPortalModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
@@ -34,7 +43,7 @@ bool JumpPortalModule::OpenPortal(const JumpDrive::Beacon& beacon)
         return false;
 
     // one cycle.  this throws the usual activation errors (capacitor, fuel, offline...)
-    ActiveModule::Activate(m_modRef->type().GetDefaultEffect(), 0, 1);
+    ActiveModule::Activate(PortalEffect(), 0, 1);
     // check the state only.  a one-cycle activation always sets m_Stop (stop when this cycle ends), so checking it
     //  here refused every portal
     if (GetModuleState() != Module::State::Activated)
