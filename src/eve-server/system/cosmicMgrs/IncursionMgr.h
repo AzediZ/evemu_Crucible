@@ -29,13 +29,19 @@ class PyRep;
 class SystemManager;
 
 namespace Incursion {
-    // internal state numbering.  the client gets these plus one (journal)
+    // internal state numbering.  the client numbers them the other way round, see ClientState()
     namespace State {
         enum {
             Established = 0,
             Mobilizing  = 1,
             Withdrawing = 2
         };
+
+        // the Journal's Incursions tab looks its status text up as [Withdrawing, Mobilizing, Established][state]
+        //  (incursionjournal.py, seen in a client traceback), so the client's numbers are Withdrawing 0,
+        //  Mobilizing 1, Established 2.  sending ours plus one gave 3 for Withdrawing, and the IndexError
+        //  left the whole Journal window blank
+        inline int ClientState(int state) { return Withdrawing - state; }
     }
 
     // incSiteObjects.role

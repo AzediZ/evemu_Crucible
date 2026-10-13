@@ -962,7 +962,8 @@ std::string IncursionMgr::Info()
  *   stagingSolarSystemID, rewardGroupID, taleID
  *  the client works out the current value as influence - decayRate * (minutes since lastUpdated - graceTime), so
  *  influence here is the pilots' progress (1 - Sansha influence) and decayRate its loss per minute once the grace
- *  time is over.  state is our state plus one (inferred).  rewardGroupID is the incursion; rewardMgr answers for it
+ *  time is over.  state is the client's numbering, the reverse of ours (see ClientState()).  rewardGroupID is the
+ *  incursion; rewardMgr answers for it
  */
 PyRep* IncursionMgr::GetGlobalReport()
 {
@@ -985,7 +986,7 @@ PyRep* IncursionMgr::GetGlobalReport()
             dict->SetItemString("decayRate", new PyFloat(decay));
             dict->SetItemString("influence", new PyFloat(1.0 - inc.influence));
             dict->SetItemString("lastUpdated", new PyLong(fileNow));
-            dict->SetItemString("state", new PyInt(inc.state + 1));
+            dict->SetItemString("state", new PyInt(Incursion::State::ClientState(inc.state)));
             dict->SetItemString("hasBoss", new PyInt(inc.hasBoss ? 1 : 0));
             dict->SetItemString("stagingSolarSystemID", new PyInt(inc.stagingSystemID));
             dict->SetItemString("rewardGroupID", new PyInt(inc.incursionID));
