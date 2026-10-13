@@ -21,6 +21,14 @@
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
 
+// the id of the bubble a member's ship is in;  0 docked or between bubbles (no ship entity, no bubble)
+static uint32 BubbleIDOf(Client* pClient)
+{
+    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or (pClient->GetShipSE()->SysBubble() == nullptr))
+        return 0;
+    return pClient->GetShipSE()->SysBubble()->GetID();
+}
+
 /*
 FLEET__ERROR
 FLEET__WARNING
@@ -2364,14 +2372,16 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
         return;
     }
 
-    uint16 scopeID(0);
+    uint32 scopeID(0);
     std::vector<Client*> members;
     switch (scope) {
         case Fleet::BCast::Scope::System: {
             scopeID = pFrom->GetSystemID();
         } break;
         case Fleet::BCast::Scope::Bubble: {
-            scopeID = pFrom->GetShipSE()->SysBubble()->GetID();
+            scopeID = BubbleIDOf(pFrom);
+            if (scopeID == 0)
+                return;
         } break;
     }
     switch (group) {
@@ -2384,7 +2394,7 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
                     if (fItr->second->GetSystemID() == scopeID)
                         members.push_back(fItr->second);
                 } else if (scope == Fleet::BCast::Scope::Bubble) {
-                    if (fItr->second->GetShipSE()->SysBubble()->GetID() == scopeID)
+                    if (BubbleIDOf(fItr->second) == scopeID)
                         members.push_back(fItr->second);
                 }
             }
@@ -2400,7 +2410,7 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
                         if (fItr->second->GetSystemID() == scopeID)
                             members.push_back(fItr->second);
                     } else if (scope == Fleet::BCast::Scope::Bubble) {
-                        if (fItr->second->GetShipSE()->SysBubble()->GetID() == scopeID)
+                        if (BubbleIDOf(fItr->second) == scopeID)
                             members.push_back(fItr->second);
                     }
                 }
@@ -2420,7 +2430,7 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
                                 if (member.second->GetSystemID() == scopeID)
                                     members.push_back(member.second);
                             } else if (scope == Fleet::BCast::Scope::Bubble) {
-                                if (member.second->GetShipSE()->SysBubble()->GetID() == scopeID)
+                                if (BubbleIDOf(member.second) == scopeID)
                                     members.push_back(member.second);
                             }
                     }
@@ -2435,7 +2445,7 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
                             if (member.second->GetSystemID() == scopeID)
                                 members.push_back(member.second);
                         } else if (scope == Fleet::BCast::Scope::Bubble) {
-                            if (member.second->GetShipSE()->SysBubble()->GetID() == scopeID)
+                            if (BubbleIDOf(member.second) == scopeID)
                                 members.push_back(member.second);
                         }
                 }
@@ -2525,7 +2535,9 @@ void FleetService::SendFleetUpdate(uint32 fleetID, const char* notifyType, PyTup
 void FleetService::GetFleetMembersOnGrid(Client* pClient, std::vector< uint32 >& data)
 {
     std::vector<Client*> members;
-    uint32 scopeID = pClient->GetShipSE()->SysBubble()->GetID();
+    uint32 scopeID = BubbleIDOf(pClient);
+    if (scopeID == 0)
+        return;
     auto range = m_fleetMembers.equal_range(pClient->GetFleetID());
     for (auto fItr = range.first; fItr != range.second; ++fItr)
         members.push_back(fItr->second);
@@ -2533,7 +2545,7 @@ void FleetService::GetFleetMembersOnGrid(Client* pClient, std::vector< uint32 >&
     for (auto cur : members) {
         if (cur == nullptr)
             continue;
-        if (cur->GetShipSE()->SysBubble()->GetID() == scopeID)
+        if (BubbleIDOf(cur) == scopeID)
             data.push_back(cur->GetCharacterID());
     }
 }
