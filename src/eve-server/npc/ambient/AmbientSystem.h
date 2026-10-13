@@ -267,6 +267,15 @@ private:
     uint64_t m_killed;
     double m_usSum;
     uint32 m_ticks;
+    /* the AMBIENT__STATS window (every npc.StatsInterval) */
+    void WriteStats(int64 now);
+    int64 m_statsAt;            // ms:  the window started
+    uint64_t m_statsEvents;     // the counters when it started
+    uint64_t m_statsMade;
+    uint64_t m_statsCapHits;
+    double m_statsUs;
+    double m_statsMaxUs;
+    uint32 m_statsTicks;
     std::deque<std::string> m_log;              // the last events
     void Note(const std::string& what);
 };

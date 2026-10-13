@@ -88,7 +88,14 @@ AmbientSystem::AmbientSystem(SystemManager* pSystem)
   m_suppressed(0),
   m_killed(0),
   m_usSum(0.0),
-  m_ticks(0)
+  m_ticks(0),
+  m_statsAt(0),
+  m_statsEvents(0),
+  m_statsMade(0),
+  m_statsCapHits(0),
+  m_statsUs(0.0),
+  m_statsMaxUs(0.0),
+  m_statsTicks(0)
 {
     m_kinds.fill(0.0);
 }
@@ -153,8 +160,42 @@ void AmbientSystem::Process()
         m_nextLinger = now + 5000;
         ProcessLinger(now);
     }
-    m_usSum += GetTimeUSeconds() - start;
+    double us(GetTimeUSeconds() - start);
+    m_usSum += us;
     ++m_ticks;
+    m_statsUs += us;
+    m_statsMaxUs = std::max(m_statsMaxUs, us);
+    ++m_statsTicks;
+    if (sConfig.debug.UseProfiling)
+        sProfiler.AddTime(::Profile::npc, us);
+    // telemetry (phase 10):  one AMBIENT__STATS line per active system every npc.StatsInterval
+    if ((sConfig.npc.StatsInterval > 0) and ((now - m_statsAt) >= (static_cast<int64>(sConfig.npc.StatsInterval) * 1000)))
+        WriteStats(now);
+}
+
+void AmbientSystem::WriteStats(int64 now)
+{
+    if ((m_statsAt != 0) and is_log_enabled(AMBIENT__STATS)) {
+        uint32 roles[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (auto& cur : m_npcs)
+            if (cur.second->GetRole() < 8)
+                ++roles[cur.second->GetRole()];
+        _log(AMBIENT__STATS, "%s(%u): %us:  %u ships (traffic %u, miners %u, patrols %u, criminals %u), %u off grid, %u grids watched, "
+             "%llu events, %llu materialised, %llu cap hits (global %u/%u), %.0f us/tick avg, %.0f max",
+             m_system->GetName(), m_system->GetID(), static_cast<uint32>((now - m_statsAt) / 1000), (uint32)m_npcs.size(),
+             roles[Role::Hauler] + roles[Role::Courier] + roles[Role::Freighter], roles[Role::Miner], roles[Role::Navy] + roles[Role::Concord],
+             roles[Role::Criminal], (uint32)m_virtual.size(), (uint32)m_observed.size(),
+             static_cast<unsigned long long>(m_events - m_statsEvents), static_cast<unsigned long long>(m_materialised - m_statsMade),
+             static_cast<unsigned long long>(m_capHits - m_statsCapHits), sAmbientMgr.Materialised(), sConfig.ambient.GlobalCap,
+             (m_statsTicks > 0 ? m_statsUs / m_statsTicks : 0.0), m_statsMaxUs);
+    }
+    m_statsAt = now;
+    m_statsEvents = m_events;
+    m_statsMade = m_materialised;
+    m_statsCapHits = m_capHits;
+    m_statsUs = 0.0;
+    m_statsMaxUs = 0.0;
+    m_statsTicks = 0;
 }
 
 void AmbientSystem::Activate(int64 now)
@@ -173,6 +214,8 @@ void AmbientSystem::Activate(int64 now)
     m_active = true;
     m_windDownAt = 0;
     m_nextLinger = now + 5000;
+    m_statsAt = 0;
+    WriteStats(now);
     m_observed.clear();
     m_gridPlayers.clear();
     sAmbientMgr.Register(this, true);
