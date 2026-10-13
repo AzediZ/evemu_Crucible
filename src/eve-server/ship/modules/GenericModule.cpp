@@ -35,6 +35,7 @@ m_pendingOverload(false),
 m_pendingStopOverload(false),
 m_chargeLoaded(false),
 m_chargeFx(false),
+m_dockedFx(false),
 m_hiPower(false),
 m_medPower(false),
 m_loPower(false),
@@ -74,8 +75,19 @@ void GenericModule::Online()
         return;
     }
     if (pClient->IsDocked() and (!m_shipRef->IsUndocking())) {
+        /* the station's fitting window checks cpu and powergrid itself.  the module's passive and online effects still go
+         *  on the ship:  the server's own numbers (cargo capacity for moving items in, ...) must match the client's.
+         *  rigs and subsystems are on while fitted.  they have no online effect, so the client isn't told about theirs.
+         *  the attribute changes aren't sent:  docked, the client's dogma works them out itself and ignores ours
+         */
         m_ModuleState = Module::State::Online;
-        SetAttribute(AttrOnline, EvilOne, !pClient->IsLogin());
+        SetAttribute(AttrOnline, EvilOne, !pClient->IsLogin() and !isRig() and !isSubSystem());
+        if (!m_dockedFx) {
+            ProcessEffects(FX::State::Passive, true);
+            ProcessEffects(FX::State::Online, true);
+            sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), false);
+            m_dockedFx = true;
+        }
         return;
     }
 
@@ -159,8 +171,16 @@ void GenericModule::Offline()
         return;
     }
     if (pClient->IsDocked()) {
+        bool notify(!m_shipRef->IsUndocking());
         m_ModuleState = Module::State::Offline;
-        SetAttribute(AttrOnline, EvilZero, !m_shipRef->IsUndocking());
+        SetAttribute(AttrOnline, EvilZero, notify);
+        // the effects the docked Online() put on come off (an unfitted expander takes its cargo bonus with it)
+        if (m_dockedFx) {
+            ProcessEffects(FX::State::Passive, false);
+            ProcessEffects(FX::State::Online, false);
+            sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), false);
+            m_dockedFx = false;
+        }
         return;
     }
 

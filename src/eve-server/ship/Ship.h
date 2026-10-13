@@ -156,7 +156,8 @@ public:
     bool IsActive()                                     { return m_isActive; }
     bool IsDocking()                                    { return m_isDocking; }
     bool IsUndocking()                                  { return m_isUndocking; }
-    void SetDocked()                                    { m_isDocking = false; }
+    // the pilot is in the station now.  the effects Dock() took off go back on
+    void SetDocked();
     void SetUndocking(bool set=false)                   { m_isUndocking = set; }
     InventoryItemRef GetTargetRef()                     { return m_targetRef; }
     void ClearTargetRef()                               { m_targetRef = InventoryItemRef(); }

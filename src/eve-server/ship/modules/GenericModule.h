@@ -167,6 +167,10 @@ public:
      */
     bool HasChargeEffects()                             { return m_chargeFx; }
     void ChargeFxReset()                                { m_chargeFx = false; }
+    /* docked, the module's passive and online effects are on the ship while it is online (rigs and subsystems while fitted).
+     *  the client's fitting window works its own numbers out, but the server's (cargo capacity...) come from these.
+     *  a reset of the ship's effects takes them off with everything else */
+    void DockedFxReset()                                { m_dockedFx = false; }
 
     //
     int8 GetModulePowerLevel();
@@ -203,6 +207,7 @@ protected:
     bool                m_pendingStopOverload :1;
     bool                m_chargeLoaded :1;
     bool                m_chargeFx     :1;              // the charge's effects are applied to this module
+    bool                m_dockedFx     :1;              // the passive and online effects are applied, docked
 };
 
 #endif  // _EVE_SHIP_MODULES_GENERIC_MODULE_H

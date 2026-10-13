@@ -648,8 +648,9 @@ bool ModuleManager::AddModule(ModuleItemRef mRef, EVEItemFlags flag)
 
     addModuleRef(flag, pMod);
 
+    // rigs and subsystems are on while fitted (LoadOnline() does the same), modules if they were set online
     if (m_initalized and pShipItem->HasPilot())
-        if (mRef->GetAttribute(AttrOnline).get_bool())
+        if (mRef->GetAttribute(AttrOnline).get_bool() or pMod->isRig() or pMod->isSubSystem())
             pMod->Online();
 
     // verify module's singleton flag is set
@@ -1424,6 +1425,13 @@ void ModuleManager::ChargeFxReset()
             cur.second->ChargeFxReset();
 }
 
+void ModuleManager::DockedFxReset()
+{
+    for (auto cur : m_modules)
+        if (cur.second != nullptr)
+            cur.second->DockedFxReset();
+}
+
 void ModuleManager::UpdateModules(std::vector<uint32> modVec)
 {
     if (is_log_enabled(MODULE__WARNING))
@@ -1433,18 +1441,17 @@ void ModuleManager::UpdateModules(std::vector<uint32> modVec)
     pShipItem->SetAttribute(AttrPowerLoad,   EvilZero);
     // upgradeLoad is worked out from the fitted rigs (UpdateSlotAttributes)
     //OfflineAll();   // set all modules to offline.  this verifies the following Online() call will only online previously-set modules.  (elusive error)
-    if (!modVec.empty()) {
-        _log(MODULE__TRACE, "MM::UpdateModules(modVec)");
-        // gotta add rigs and Subsystems to the vector, as they wont be listed in the "modules to online" list when undocking.
-        GetShipRigs(modVec);
-        GetShipSubSystems(modVec);
-        std::vector< GenericModule* > modList;
-        SortModulesBySlotDec(modVec, modList);
-        /** @todo check this.  may have to rework */
-        for (auto cur : modList) {
-            cur->Update();
-            cur->Online();
-        }
+    _log(MODULE__TRACE, "MM::UpdateModules(modVec)");
+    /* gotta add rigs and Subsystems to the vector, as they wont be listed in the "modules to online" list when undocking.
+     *  also when that list is empty:  a ship with only rigs (or every module offline) keeps its rig bonuses */
+    GetShipRigs(modVec);
+    GetShipSubSystems(modVec);
+    std::vector< GenericModule* > modList;
+    SortModulesBySlotDec(modVec, modList);
+    /** @todo check this.  may have to rework */
+    for (auto cur : modList) {
+        cur->Update();
+        cur->Online();
     }
 }
 

@@ -101,6 +101,8 @@ public:
     InventoryItemRef GetChargeInSlot(EVEItemFlags flag);
     // the ship's effects were reset:  no module has its charge's effects on any more
     void ChargeFxReset();
+    // the ship's effects were reset:  no module has its docked passive and online effects on any more
+    void DockedFxReset();
     // unload charge from module by itemID
     void UnloadModule(uint32 itemID);
     // unload charge from module by flag

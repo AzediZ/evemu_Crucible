@@ -437,6 +437,18 @@ void ShipItem::Dock() {
     ProcessEffects();
 }
 
+void ShipItem::SetDocked()
+{
+    /* Dock() took every effect off while the ship was still in space.  in the station the ship keeps the pilot's skills, its
+     *  hull bonuses and its fitting (modules set online, rigs, subsystems), as it does after a login or boarding here:  the
+     *  server's cargo capacity (and the rest) must match what the client's fitting shows.  nothing is sent, the client
+     *  works its station numbers out itself
+     */
+    if (m_isDocking and (m_pilot != nullptr) and m_pilot->IsDocked())
+        ProcessEffects(true, false);
+    m_isDocking = false;
+}
+
 void ShipItem::Undock() {
     m_isUndocking = true;
 
@@ -2213,8 +2225,9 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
             if (damaged)
                 cur.second->SetAttribute(AttrDamage, damage, false);
         }
-        // the charges' effects on their modules went with the reset
+        // the charges' effects on their modules went with the reset, and so did the modules' docked effects
         m_ModuleManager->ChargeFxReset();
+        m_ModuleManager->DockedFxReset();
 
         // do we remove fx here?  nah, we've reset everything at this point.
     }
@@ -2279,8 +2292,9 @@ void ShipItem::ResetEffects() {
     m_ModuleManager->GetLoadedCharges(charges);
     for (auto cur : charges)
         cur.second->ResetAttributes();
-    // the charges' effects on their modules went with the reset
+    // the charges' effects on their modules went with the reset, and so did the modules' docked effects
     m_ModuleManager->ChargeFxReset();
+    m_ModuleManager->DockedFxReset();
 
     ProcessEffects(true, true/*sDataMgr.IsSolarSystem(locationID())*/);
     _log(EFFECTS__DEBUG, "ShipItem::ResetEffects() - Effects reset in %.3fms", (GetTimeMSeconds() - start));
