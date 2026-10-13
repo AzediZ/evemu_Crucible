@@ -33,6 +33,7 @@ SET( ship_SOURCE
 SET( npcai_SOURCE
      "npcai/FighterWarpTest.cpp"
      "npcai/LawRulesTest.cpp"
+     "npcai/LootRollTest.cpp"
      "npcai/NpcMathTest.cpp"
      "npcai/NpcPolishTest.cpp" )
 SET( utils_SOURCE
@@ -108,3 +109,5 @@ ADD_TEST( NAME "NpcPolishTest"
           COMMAND "${TARGET_NAME}" "npcai/NpcPolishTest" )
 ADD_TEST( NAME "FighterWarpTest"
           COMMAND "${TARGET_NAME}" "npcai/FighterWarpTest" )
+ADD_TEST( NAME "LootRollTest"
+          COMMAND "${TARGET_NAME}" "npcai/LootRollTest" )

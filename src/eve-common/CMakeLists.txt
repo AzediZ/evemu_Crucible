@@ -27,6 +27,7 @@ SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/EVE_Flags.h"
      "${TARGET_INCLUDE_DIR}/EVE_Inventory.h"
      "${TARGET_INCLUDE_DIR}/EVE_LSC.h"
+     "${TARGET_INCLUDE_DIR}/EVE_Loot.h"
      "${TARGET_INCLUDE_DIR}/EVE_Mail.h"
      "${TARGET_INCLUDE_DIR}/EVE_Market.h"
      "${TARGET_INCLUDE_DIR}/EVE_Planet.h"
