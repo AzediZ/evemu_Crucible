@@ -5,6 +5,8 @@
 
 #include "eve-server.h"
 
+#include <iomanip>
+
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "inventory/AttributeEnum.h"

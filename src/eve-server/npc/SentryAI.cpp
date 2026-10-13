@@ -11,6 +11,8 @@
 
 #include "eve-server.h"
 
+#include <iomanip>
+
 #include "Client.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/Sentry.h"

@@ -46,6 +46,7 @@
 
 #include "eve-server.h"
 
+#include <iomanip>
 #include <limits>
 
 #include "Client.h"
