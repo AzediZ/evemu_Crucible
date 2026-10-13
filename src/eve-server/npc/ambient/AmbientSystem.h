@@ -123,6 +123,15 @@ private:
         uint8 reason;
         int64 at;
     };
+    // a watched belt's miners (6.6, 8.2)
+    struct BeltState {
+        uint32 bubbleID = 0;
+        uint32 beltID = 0;
+        bool ice = false;
+        bool warmed = false;        // warm start done (asteroids exist once a pilot is in the belt)
+        int64 nextArrival = 0;      // ms
+        int64 nextVisit = 0;        // ms:  the next hauler visit
+    };
     struct PendingLaunch {
         Ambient::Traveller t;
         uint8 start;
@@ -145,6 +154,20 @@ private:
     void ProcessLaunches(int64 now);
     void ProcessVirtual(int64 now);
     void ProcessLinger(int64 now);
+
+    /* miners (6.6, 8.2) */
+    void ProcessBelts(int64 now);
+    void OnBeltObserved(const Grid& grid, int64 now);
+    // a watched belt may have miners:  no rat spawn there, not a site, asteroids left
+    bool BeltOpen(SystemBubble* pBubble) const;
+    double MinerTarget(bool ice) const;
+    uint32 CountRole(SystemBubble* pBubble, uint8 role) const;
+    // a miner for this belt:  warm (placed mining) or arriving from a station (or gate)
+    AmbientNPC* SpawnMiner(const Node& belt, SystemBubble* pBubble, bool warm, int64 now);
+    // a hauler visit to the miners of this belt
+    AmbientNPC* SpawnHaulerVisit(const Node& belt, SystemBubble* pBubble, int64 now);
+    // where an arriving ship comes from:  a station (or a gate when there is none) off the target's grid
+    const Node* OriginNode(const GPoint& target);
 
     /* traffic (8.1) */
     void TrafficEvent(int64 now);
@@ -198,6 +221,7 @@ private:
     std::deque<Ambient::Traveller> m_virtual;
     std::vector<PendingRemoval> m_removals;
     std::vector<PendingLaunch> m_launches;
+    std::map<uint32, BeltState> m_beltStates;   // belt bubbleID -> its miners' timers
     AmbientSchedule m_sched;
     NpcRng m_rng;
 

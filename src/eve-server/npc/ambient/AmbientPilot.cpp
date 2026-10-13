@@ -748,6 +748,13 @@ void AmbientPilot::StopBeams()
         m_npc->DestinyMgr()->SendSpecialEffect(m_npc->GetID(), cur, moduleType, m_rockID, 0, "effects.Mining", false, false, false, 0, 0);
 }
 
+void AmbientPilot::WarmMiner()
+{
+    if (m_fullAt == 0)
+        m_fullAt = AmbientRules::MinerCycles(m_rng, sConfig.ambient.MinerCyclesMin, sConfig.ambient.MinerCyclesMax);
+    m_cycles = static_cast<uint32>(m_rng.Uniform() * static_cast<double>(m_fullAt > 1 ? m_fullAt - 1 : 0));
+}
+
 void AmbientPilot::ResendBeams(int64 now)
 {
     // a pilot who arrives mid-cycle sees the beams at once (9.4):  the start again, with what is left of the cycle

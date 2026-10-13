@@ -147,6 +147,7 @@ void AmbientSystem::Process()
     ProcessEvents(now);
     ProcessLaunches(now);
     ProcessVirtual(now);
+    ProcessBelts(now);
     if (now >= m_nextLinger) {
         m_nextLinger = now + 5000;
         ProcessLinger(now);
@@ -193,6 +194,7 @@ void AmbientSystem::Deactivate(int64 now, const char* why)
     m_observed.clear();
     m_gridPlayers.clear();
     m_unwatched.clear();
+    m_beltStates.clear();
     m_active = false;
     m_windDownAt = 0;
     sAmbientMgr.Register(this, false);
@@ -211,6 +213,7 @@ void AmbientSystem::Close()
     m_observed.clear();
     m_gridPlayers.clear();
     m_unwatched.clear();
+    m_beltStates.clear();
     if (m_active)
         sAmbientMgr.Register(this, false);
     m_active = false;
@@ -372,6 +375,7 @@ void AmbientSystem::OnGridObserved(const Grid& grid, int64 now, bool newPlayers)
     for (auto& cur : m_gates)
         if (grid.center.distance(cur.pos) <= BUBBLE_RADIUS_METERS)
             WarmStartTraffic(cur, now);
+    OnBeltObserved(grid, now);
 }
 
 bool AmbientSystem::IsObservedBubble(SystemBubble* pBubble) const
@@ -1203,6 +1207,242 @@ void AmbientSystem::WarmStartTraffic(const Node& node, int64 now)
 }
 
 /* ------------------------------------------------------------------------------------------------------------------
+ *  miners (6.6, 8.2, 9.4)
+ * ------------------------------------------------------------------------------------------------------------------ */
+double AmbientSystem::MinerTarget(bool ice) const
+{
+    return AmbientRules::MinerTarget(sConfig.ambient.MinersPerBelt, m_profile.A, m_profile.band, sConfig.ambient.LowSecMinerMultiplier,
+                                     ice, sConfig.ambient.IceMinerFactor, sConfig.ambient.DensityMultiplier, m_diurnal);
+}
+
+uint32 AmbientSystem::CountRole(SystemBubble* pBubble, uint8 role) const
+{
+    uint32 count(0);
+    for (auto& cur : m_npcs)
+        if ((cur.second->SysBubble() == pBubble) and (cur.second->GetRole() == role) and (cur.second->GetAmbientPilot() != nullptr)
+        and !cur.second->GetAmbientPilot()->IsRemoving())
+            ++count;
+    return count;
+}
+
+bool AmbientSystem::BeltOpen(SystemBubble* pBubble) const
+{
+    // no miners where rats live, at sites, or on a mined out belt (6.6)
+    if ((pBubble == nullptr) or !pBubble->IsBelt() or pBubble->IsAnomaly() or pBubble->IsMission() or pBubble->IsIncursion())
+        return false;
+    if ((m_system->GetSpawnMgr() != nullptr) and m_system->GetSpawnMgr()->HasSpawn(pBubble->GetID()))
+        return false;
+    std::vector<AsteroidSE*> rocks;
+    BeltRocks(pBubble, rocks);
+    return !rocks.empty();
+}
+
+void AmbientSystem::OnBeltObserved(const Grid& grid, int64 now)
+{
+    if (!sConfig.ambient.Miners)
+        return;
+    for (auto& cur : m_belts) {
+        if (grid.center.distance(cur.pos) > BUBBLE_RADIUS_METERS)
+            continue;
+        BeltState& state(m_beltStates[grid.id]);
+        if (state.bubbleID == 0) {
+            state.bubbleID = grid.id;
+            state.beltID = cur.id;
+            state.ice = cur.ice;
+            state.nextArrival = now + AmbientRules::UniformMs(m_rng, sConfig.ambient.MinerArrivalMin * 1000.0,
+                                                               sConfig.ambient.MinerArrivalMax * 1000.0);
+            double mean(static_cast<double>(std::max<uint16>(sConfig.ambient.MinerHaulerInterval, 60)));
+            state.nextVisit = now + static_cast<int64>(-std::log(1.0 - m_rng.Uniform()) * mean * 1000.0);
+        }
+        state.warmed = false;
+        return;
+    }
+}
+
+const AmbientSystem::Node* AmbientSystem::OriginNode(const GPoint& target)
+{
+    // a station off the target's grid (weighted), else a gate
+    std::vector<double> w(m_stationW);
+    bool any(false);
+    for (size_t i = 0; i < m_stations.size(); ++i) {
+        if (m_stations[i].pos.distance(target) <= BUBBLE_RADIUS_METERS)
+            w[i] = 0.0;
+        else if (w[i] > 0.0)
+            any = true;
+    }
+    if (any) {
+        size_t idx(AmbientRules::PickWeighted(m_rng, w));
+        if (idx != AmbientRules::npos)
+            return &m_stations[idx];
+    }
+    w = m_gateW;
+    for (size_t i = 0; i < m_gates.size(); ++i)
+        if (m_gates[i].pos.distance(target) <= BUBBLE_RADIUS_METERS)
+            w[i] = 0.0;
+    size_t idx(AmbientRules::PickWeighted(m_rng, w));
+    return (idx == AmbientRules::npos ? nullptr : &m_gates[idx]);
+}
+
+AmbientNPC* AmbientSystem::SpawnMiner(const Node& belt, SystemBubble* pBubble, bool warm, int64 now)
+{
+    const AmbientCatalog& catalog(sAmbientMgr.Catalog());
+    // hull mode:  barges with strip miner beams (9.4).  entity mode, or no barge in the catalog:  Civilian Hulks (A1 fallback)
+    bool hull((sConfig.ambient.MinerModel != "entity") and catalog.HasHullMiners());
+    const Archetype* pArch(nullptr);
+    if (hull) {
+        std::array<double, 4> w(AmbientRules::MinerHullWeights(m_profile.band));
+        size_t cls(AmbientRules::PickWeighted(m_rng, w.data(), w.size()));
+        pArch = catalog.Pick(m_rng, Role::Miner, Race::None, static_cast<uint8>(cls == AmbientRules::npos ? 1 : cls), 0, true);
+        if (pArch == nullptr)
+            pArch = catalog.Pick(m_rng, Role::Miner, Race::None, 255, 0, true);
+    }
+    if (pArch == nullptr)
+        pArch = catalog.Pick(m_rng, Role::Miner, Race::None, 255, 0, false);
+    if (pArch == nullptr)
+        return nullptr;
+
+    Traveller t;
+    uint8 race(AmbientRules::PickRace(m_rng, m_profile.homeRace, m_profile.H));
+    t.spec.arch = pArch;
+    t.spec.role = Role::Miner;
+    t.spec.race = race;
+    t.spec.name = RaceName(race, Role::Miner, pArch);
+    t.spec.factionID = RaceFaction(race);
+    t.spec.travellerID = sAmbientMgr.NextTravellerID();
+    // 7.1:  a corp of the race's faction, preferably one with a station here
+    t.spec.ownerID = 0;
+    if (m_rng.Chance(0.6)) {
+        std::vector<uint32> local;
+        for (auto& cur : m_stations)
+            if ((cur.ownerID != 0) and (FactionRace(sDataMgr.GetCorpFaction(cur.ownerID)) == race))
+                local.push_back(cur.ownerID);
+        if (!local.empty())
+            t.spec.ownerID = local[std::min(static_cast<size_t>(m_rng.Uniform() * local.size()), local.size() - 1)];
+    }
+    if (t.spec.ownerID == 0)
+        t.spec.ownerID = sAmbientMgr.RandomCorp(t.spec.factionID, m_rng);
+    t.created = now;
+    t.nextAt = now;
+
+    if (warm) {
+        // already at work:  near a rock, mining (6.5 warm start)
+        std::vector<AsteroidSE*> rocks;
+        BeltRocks(pBubble, rocks);
+        if (rocks.empty())
+            return nullptr;
+        AsteroidSE* pRock(rocks[std::min(static_cast<size_t>(m_rng.Uniform() * rocks.size()), rocks.size() - 1)]);
+        double range(catalog.MinerRange());
+        GPoint pos(OnSphere(m_rng, pRock->GetPosition(), pRock->GetRadius() + (0.3 * range), pRock->GetRadius() + (0.7 * range)));
+        t.atNode = belt.id;
+        t.atNodeKind = NodeKind::Belt;
+        t.legs.push_back(MakeLeg(Leg::Mine, belt.id, NodeKind::Belt));
+        AmbientNPC* pNPC(Materialise(t, Start::Placed, 0, now, &pos));
+        if ((pNPC != nullptr) and (pNPC->GetAmbientPilot() != nullptr))
+            pNPC->GetAmbientPilot()->WarmMiner();
+        return pNPC;
+    }
+    // arriving:  warps in from a station of the system (or a gate)
+    const Node* pFrom(OriginNode(belt.pos));
+    if (pFrom == nullptr)
+        return nullptr;
+    t.atNode = pFrom->id;
+    t.atNodeKind = pFrom->kind;
+    t.legs.push_back(MakeLeg(Leg::WarpTo, belt.id, NodeKind::Belt));
+    t.legs.push_back(MakeLeg(Leg::Mine, belt.id, NodeKind::Belt));
+    return Materialise(t, Start::WarpIn, 0, now);
+}
+
+AmbientNPC* AmbientSystem::SpawnHaulerVisit(const Node& belt, SystemBubble* pBubble, int64 now)
+{
+    // 8.2:  a hauler warps in to one of the miners, follows it at 1.5km for 45 - 90s, then leaves and docks
+    std::vector<AmbientNPC*> miners;
+    for (auto& cur : m_npcs)
+        if ((cur.second->SysBubble() == pBubble) and (cur.second->GetRole() == Role::Miner))
+            miners.push_back(cur.second);
+    if (miners.empty())
+        return nullptr;
+    AmbientNPC* pMiner(miners[std::min(static_cast<size_t>(m_rng.Uniform() * miners.size()), miners.size() - 1)]);
+    uint8 race(pMiner->GetSpec().race < Race::Count ? pMiner->GetSpec().race : AmbientRules::PickRace(m_rng, m_profile.homeRace, m_profile.H));
+    const Archetype* pArch(sAmbientMgr.Catalog().Pick(m_rng, Role::Hauler, race));
+    if (pArch == nullptr)
+        return nullptr;
+    const Node* pFrom(OriginNode(belt.pos));
+    if (pFrom == nullptr)
+        return nullptr;
+    Traveller t;
+    t.spec.arch = pArch;
+    t.spec.role = Role::Hauler;
+    t.spec.race = race;
+    t.spec.name = RaceName(race, Role::Hauler, pArch);
+    t.spec.factionID = RaceFaction(race);
+    t.spec.ownerID = pMiner->GetSpec().ownerID;     // the miners' own hauler
+    t.spec.travellerID = sAmbientMgr.NextTravellerID();
+    t.atNode = pFrom->id;
+    t.atNodeKind = pFrom->kind;
+    t.created = now;
+    t.nextAt = now;
+    t.legs.push_back(MakeLeg(Leg::WarpTo, pMiner->GetID(), NodeKind::Entity));
+    t.legs.push_back(MakeLeg(Leg::Visit, pMiner->GetID(), 0, AmbientRules::UniformMs(m_rng, 45000.0, 90000.0)));
+    t.legs.push_back(MakeLeg(Leg::Leave));
+    AmbientNPC* pNPC(Materialise(t, Start::WarpIn, 0, now));
+    if (pNPC != nullptr)
+        Note("hauler visits the miners");
+    return pNPC;
+}
+
+void AmbientSystem::ProcessBelts(int64 now)
+{
+    if (m_beltStates.empty())
+        return;
+    for (auto itr = m_beltStates.begin(); itr != m_beltStates.end();) {
+        BeltState& state(itr->second);
+        // a belt nobody watches any more is forgotten (its miners linger, ProcessLinger)
+        bool watched(false);
+        for (auto& cur : m_observed)
+            if (cur.id == state.bubbleID)
+                watched = true;
+        if (!watched or !sConfig.ambient.Miners) {
+            itr = m_beltStates.erase(itr);
+            continue;
+        }
+        ++itr;
+        SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(state.bubbleID));
+        const Node* pBelt(FindNode(state.beltID));
+        if ((pBubble == nullptr) or (pBelt == nullptr) or !BeltOpen(pBubble))
+            continue;
+        uint32 miners(CountRole(pBubble, Role::Miner));
+        double target(MinerTarget(state.ice));
+        if (!state.warmed) {
+            // the steady state at once:  Poisson(M_target) miners at work, less those still here (6.6)
+            state.warmed = true;
+            if (sConfig.ambient.WarmStart) {
+                uint32 n(AmbientRules::PoissonCount(m_rng, target));
+                for (uint32 i = miners; i < n; ++i) {
+                    if (!CapAllows(pBelt->pos))
+                        break;
+                    if (SpawnMiner(*pBelt, pBubble, true, now) != nullptr)
+                        ++miners;
+                }
+            }
+        }
+        // under the target:  one arrives every U(MinerArrivalMin, Max)s
+        if ((miners < static_cast<uint32>(std::floor(target + 0.5))) and (now >= state.nextArrival)) {
+            state.nextArrival = now + AmbientRules::UniformMs(m_rng, sConfig.ambient.MinerArrivalMin * 1000.0,
+                                                               sConfig.ambient.MinerArrivalMax * 1000.0);
+            if (CapAllows(pBelt->pos) and (SpawnMiner(*pBelt, pBubble, false, now) != nullptr))
+                Note("a miner arrives");
+        }
+        // a hauler visit to belts with two miners or more (exponential, mean MinerHaulerInterval)
+        if (sConfig.ambient.MinerHaulerVisits and (now >= state.nextVisit)) {
+            double mean(static_cast<double>(std::max<uint16>(sConfig.ambient.MinerHaulerInterval, 60)));
+            state.nextVisit = now + static_cast<int64>(-std::log(1.0 - m_rng.Uniform()) * mean * 1000.0);
+            if ((miners >= 2) and (CountRole(pBubble, Role::Hauler) == 0) and CapAllows(pBelt->pos))
+                SpawnHaulerVisit(*pBelt, pBubble, now);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------------------------------------------------
  *  off-grid travellers and coherence (6.8)
  * ------------------------------------------------------------------------------------------------------------------ */
 void AmbientSystem::AddVirtual(const Traveller& t)
@@ -1498,6 +1738,14 @@ uint32 AmbientSystem::ForceSpawn(Client* pClient, const std::string& what, uint3
             t.spec.factionID = RaceFaction(race);
             t.spec.name = RaceName(race, role, pArch);
             if (Materialise(t, start, 0, now) != nullptr)
+                ++made;
+        } else if (role == Role::Miner) {
+            const Node* pBelt(NodeAt(here, NodeKind::Belt));
+            if ((pBelt == nullptr) or !BeltOpen(pShip->SysBubble())) {
+                why = "miners need a belt grid with asteroids and no rats";
+                break;
+            }
+            if (SpawnMiner(*pBelt, pShip->SysBubble(), false, now) != nullptr)
                 ++made;
         } else {
             why = std::string(what) + " spawns come with their phase";

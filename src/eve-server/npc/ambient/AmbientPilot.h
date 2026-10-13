@@ -59,6 +59,8 @@ public:
 
     /* miners (8.2) */
     void ResendBeams(int64 now);
+    // a miner placed by a warm start:  some cycles done already, so they don't all leave together
+    void WarmMiner();
     uint32 GetRockID() const                            { return (m_mineState == MineCycling ? m_rockID : 0); }
 
     std::string Describe() const;
