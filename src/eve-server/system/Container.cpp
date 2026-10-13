@@ -276,6 +276,11 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
     m_corpID = data.corporationID;
     m_ownerID = data.ownerID;
 
+    // StructureSE's ball and slim item use m_data.itemID, which only Init() set.  containers made without Init()
+    //  (npc and mining jetcans, containers loaded with their system, site containers) went out as ball 0,
+    //  so the client never showed them
+    m_data.itemID = m_self->itemID();
+
     // exploration site containers are locked until hacked/analyzed/salvaged.  their site decides how long they live
     m_locked = sExplorationMgr.IsLockedType(m_self->typeID());
 
