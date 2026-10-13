@@ -244,20 +244,14 @@ PyResult SkillMgrBound::ApplyFreeSkillPoints(PyCallArgs &call, PyInt* skillTypeI
                 .AddAmount ("pointsRequested", apply)
                 .AddAmount ("pointsRemaining", pool);
 
-    uint32 newSP(currentSP + apply);
-    uint8 newLevel(sRef->GetLevelForSP(newSP));
-    if (newLevel > EvESkill::MAXSKILLLEVEL)
-        newLevel = EvESkill::MAXSKILLLEVEL;
-    sRef->SetAttribute(AttrSkillPoints, newSP, true);
-    sRef->SetAttribute(AttrSkillLevel, newLevel, true);
-    sRef->SaveItem();
-    cRef->SaveSkillHistory(EvESkill::Event::SkillPointsApplied, now, cRef->itemID(), typeID, newLevel, newSP);
+    // the level follows the points and is sent like a trained level-up (Character::AddSkillPoints)
+    apply = cRef->AddSkillPoints(sRef, apply, EvESkill::Event::SkillPointsApplied);
     cRef->SetLastFreeSkillPointApply(now);
     cRef->AddFreeSkillPoints(-(int32)apply);
-    cRef->GetTotalSP();
 
-    _log(SKILL__INFO, "%s(%u): applied %u free skill points to %s (%u -> %u sp, level %u).", \
-            cRef->name(), cRef->itemID(), apply, sRef->name(), currentSP, newSP, newLevel);
+    _log(SKILL__INFO, "%s(%u): applied %u free skill points to %s (%u -> %u sp, level %u).", cRef->name(), cRef->itemID(),
+            apply, sRef->name(), currentSP, sRef->GetAttribute(AttrSkillPoints).get_uint32(),
+            sRef->GetAttribute(AttrSkillLevel).get_uint32());
 
     return new PyInt(cRef->GetFreeSkillPoints());
 }

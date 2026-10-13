@@ -744,9 +744,10 @@ PyResult Command_giveallskills(Client* who, CommandDB* db, EVEServiceManager &se
             skillID = cur.first;
             if (cur.second >= 0) {  // the same check as character->HasSkill(skillID)
                 skill = character->GetCharSkillRef(skillID);
-                skill->SetAttribute(AttrSkillLevel, level);
-                skill->SetAttribute(AttrSkillPoints, skill->GetSPForLevel(level));
-                character->RemoveFromQueue(skill);
+                if (skill.get() == nullptr)
+                    continue;
+                // level, points, client update, queue and history like a trained level-up
+                character->SetSkillPoints(skill, skill->GetSPForLevel(level), EvESkill::Event::GMGift, false);
             } else {
                 std::ostringstream str;
                 str << "Skill Gift by ";
@@ -757,11 +758,14 @@ PyResult Command_giveallskills(Client* who, CommandDB* db, EVEServiceManager &se
                 if (skill.get() == nullptr)
                     throw CustomError ("Unable to create item of type %u.", skillID);
 
+                uint32 newSP(skill->GetSPForLevel(level));
                 skill->SetAttribute(AttrSkillLevel, level);
-                skill->SetAttribute(AttrSkillPoints, skill->GetSPForLevel(level));
+                skill->SetAttribute(AttrSkillPoints, newSP);
                 // this will inform the client that the skill got injected into their brains!
                 skill->ChangeSingleton(true);
                 skill->Move(ownerID, flagSkill, true);
+                skill->SaveItem();
+                character->SaveSkillHistory(EvESkill::Event::GMGift, GetFileTimeNow(), ownerID, skillID, level, newSP);
             }
 
             OnAdminSkillChange oasc;
@@ -770,12 +774,8 @@ PyResult Command_giveallskills(Client* who, CommandDB* db, EVEServiceManager &se
             oasc.newSP = skill->GetSPForLevel(level);
             PyTuple* tmp = oasc.Encode();
             pTarget->QueueDestinyEvent(&tmp);
-
-            //  save gm skill gift in history  -allan
-            //  maybe not for this....WAAAAYYY  to much DB traffic for this.
-            character->SaveSkillHistory(EvESkill::Event::GMGift, Win32TimeNow(), ownerID, skillID, level, \
-            skill->GetAttribute(AttrSkillPoints).get_double());
         }
+        character->GetTotalSP();
         // END LOOP
         // pTarget->SendErrorMsg("You need to relog for skills to get saved and show in character sheet.");
         return new PyString ("Gifting skills complete");
@@ -833,10 +833,8 @@ PyResult Command_giveskill(Client* who, CommandDB* db, EVEServiceManager &servic
             return new PyString ("Skill Gifting Failure - Unable to get item for skillID %u.", skillID);
         }
         newPoints = skill->GetSPForLevel(level);
-        skill->SetAttribute(AttrSkillLevel, level);
-        skill->SetAttribute(AttrSkillPoints, newPoints);
-        //check for and remove this skill from training queue
-        character->RemoveFromQueue(skill);
+        // level, points, client update, queue and history like a trained level-up
+        character->SetSkillPoints(skill, newPoints, EvESkill::Event::GMGift);
     } else {
         // Character does not have this skill
         std::ostringstream str;
@@ -852,11 +850,11 @@ PyResult Command_giveskill(Client* who, CommandDB* db, EVEServiceManager &servic
         skill->SetAttribute(AttrSkillPoints, newPoints);
         skill->ChangeSingleton(true);
         skill->Move(pTarget->GetCharacterID(), flagSkill, true);
+        skill->SaveItem();
+        //  save gm skill gift in history  -allan
+        character->SaveSkillHistory(EvESkill::Event::GMGift, GetFileTimeNow(), ownerID, skillID, level, newPoints);
+        character->GetTotalSP();
     }
-
-    skill->SaveItem();
-    //  save gm skill gift in history  -allan
-    character->SaveSkillHistory(EvESkill::Event::GMGift, GetFileTimeNow(), ownerID, skillID, level, newPoints);
 
     OnAdminSkillChange oasc;
         oasc.skillItemID = skill->itemID();

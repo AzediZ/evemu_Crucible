@@ -33,7 +33,8 @@ SET( npcai_SOURCE
      "npcai/NpcMathTest.cpp"
      "npcai/NpcPolishTest.cpp" )
 SET( utils_SOURCE
-     "utils/EvilNumberTest.cpp" )
+     "utils/EvilNumberTest.cpp"
+     "utils/SkillMathTest.cpp" )
 
 ########################
 # Setup the executable #
@@ -85,6 +86,8 @@ ADD_TEST( NAME "EVEMarshalTest"
           COMMAND "${TARGET_NAME}" "marshal/EVEMarshalTest" )
 ADD_TEST( NAME "EvilNumberTest"
           COMMAND "${TARGET_NAME}" "utils/EvilNumberTest" )
+ADD_TEST( NAME "SkillMathTest"
+          COMMAND "${TARGET_NAME}" "utils/SkillMathTest" )
 ADD_TEST( NAME "ChargeRulesTest"
           COMMAND "${TARGET_NAME}" "ship/ChargeRulesTest" )
 ADD_TEST( NAME "NpcMathTest"

@@ -70,7 +70,7 @@ bool Skill::IsTraining() {
 }
 
 uint8 Skill::GetLevelForSP(uint32 currentSP) {
-    return EvEMath::Skill::LevelForPoints(currentSP, GetAttribute(AttrSkillTimeConstant).get_uint32());
+    return EvEMath::Skill::LevelForPoints(currentSP, GetAttribute(AttrSkillTimeConstant).get_float());
 }
 
 uint32 Skill::GetSPForLevel(uint8 level) {
@@ -169,40 +169,37 @@ void Skill::VerifyAttribs()
 
 void Skill::VerifySP()
 {
+    uint32 spCurrent(GetAttribute(AttrSkillPoints).get_uint32());
+    uint32 level(GetAttribute(AttrSkillLevel).get_uint32());
     if (is_log_enabled(SKILL__MESSAGE))
-        _log(SKILL__MESSAGE, "Begin SP check for %s. level %u: CurrentSP: %u", \
-                name(), GetAttribute(AttrSkillLevel).get_uint32(), GetAttribute(AttrSkillPoints).get_uint32());
+        _log(SKILL__MESSAGE, "Begin SP check for %s. level %u: CurrentSP: %u", name(), level, spCurrent);
 
-    if (GetAttribute(AttrSkillPoints) == EvilZero)
+    if (spCurrent == 0)
         return;
 
-    uint8 level(GetAttribute(AttrSkillLevel).get_uint32() + 1);
     if (level > EvESkill::MAXSKILLLEVEL) {
         level = EvESkill::MAXSKILLLEVEL;
         SetAttribute(AttrSkillLevel, level, false);
     }
-    uint32 spThisLevel(GetSPForLevel(level - 1));
-    uint32 spCurrent(GetAttribute(AttrSkillPoints).get_uint32());
+    // sp below the saved level: the level stands, the sp come up to it
+    uint32 spThisLevel(GetSPForLevel(level));
     if (spCurrent < spThisLevel) {
         _log(SKILL__WARNING, "Skill %s points low.  Updating from %u to %u", name(), spCurrent, spThisLevel);
-        SetAttribute(AttrSkillPoints, spThisLevel, false);
-        // hit it again to be sure it's fixed
-        VerifySP();
-        return;
+        spCurrent = spThisLevel;
+        SetAttribute(AttrSkillPoints, spCurrent, false);
     }
-    uint32 spNextLevel(GetSPForLevel(level));
-    if (spCurrent > spNextLevel) {
-        SetAttribute(AttrSkillLevel, level);
-        if (level > 4) {
-            _log(SKILL__WARNING, " %s - Skillpoints high for L5. Updating SP from %u to %u.", \
-                name(), spCurrent, spNextLevel);
-        } else {
-            _log(SKILL__WARNING, " %s - Skillpoints high. Updating level from %u to %u and SP from %u to %u.", \
-                name(), level - 1, level, spCurrent, spNextLevel);
-        }
-        SetAttribute(AttrSkillPoints, spNextLevel, false);
-        // hit it again to be sure it's fixed
-        VerifySP();
+    // never more than level 5 sp
+    uint32 spMax(GetSPForLevel(EvESkill::MAXSKILLLEVEL));
+    if (spCurrent > spMax) {
+        _log(SKILL__WARNING, " %s - Skillpoints high for L5. Updating SP from %u to %u.", name(), spCurrent, spMax);
+        spCurrent = spMax;
+        SetAttribute(AttrSkillPoints, spCurrent, false);
+    }
+    // sp reaching a higher level (exactly on the boundary counts) raise the level
+    uint8 spLevel(GetLevelForSP(spCurrent));
+    if (spLevel > level) {
+        _log(SKILL__WARNING, " %s - Skillpoints high. Updating level from %u to %u (%u sp).", name(), level, spLevel, spCurrent);
+        SetAttribute(AttrSkillLevel, spLevel, false);
     }
 }
 

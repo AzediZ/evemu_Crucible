@@ -43,6 +43,10 @@
 #include "ship/Ship.h"
 #include "station/StationDataMgr.h"
 
+#include <algorithm>
+#include <utility>
+#include <vector>
+
 /*
  * CharacterTypeData
  */
@@ -1510,6 +1514,106 @@ uint32 Character::LoseSkillLevel(uint16 skillTypeID, uint16 eventID, uint32 spAm
     return lost;
 }
 
+uint32 Character::AddSkillPoints(SkillRef sRef, uint32 points, uint16 eventID, bool spaceNotice/*true*/)
+{
+    uint32 applied(0);
+    ChangeSkillPoints(sRef, points, true, eventID, spaceNotice, applied);
+    return applied;
+}
+
+uint8 Character::SetSkillPoints(SkillRef sRef, uint32 newSP, uint16 eventID, bool spaceNotice/*true*/)
+{
+    uint32 applied(0);
+    return ChangeSkillPoints(sRef, newSP, false, eventID, spaceNotice, applied);
+}
+
+uint8 Character::ChangeSkillPoints(SkillRef sRef, uint32 value, bool add, uint16 eventID, bool spaceNotice, uint32& applied)
+{
+    applied = 0;
+    if (sRef.get() == nullptr)
+        return 0;
+
+    // m_pClient isn't cleared at logoff, so ask the entity list
+    bool online((m_pClient != nullptr) and (sEntityList.FindClientByCharID(m_itemID) == m_pClient));
+    uint16 typeID(sRef->typeID());
+
+    /* a skill in training or in the queue: training stops (CancelSkillInTraining banks the sp trained so far, or finishes the
+     *  level) and the queue is rebuilt below without the levels the skill has after this.  (a logged off character's queue is
+     *  just cleared: AddToSkillQueue needs a client)
+     */
+    bool queued((m_inTraining != nullptr) and (m_inTraining->typeID() == typeID));
+    for (auto cur : m_skillQueue)
+        if (cur.typeID == typeID)
+            queued = true;
+    std::vector<std::pair<uint16, uint8>> requeue;
+    if (queued) {
+        for (auto cur : m_skillQueue)
+            requeue.push_back(std::make_pair(cur.typeID, cur.level));
+        CancelSkillInTraining(online);
+        m_skillQueue.clear();
+    }
+
+    uint8 oldLevel((uint8)std::min<uint32>(sRef->GetAttribute(AttrSkillLevel).get_uint32(), EvESkill::MAXSKILLLEVEL));
+    uint32 oldSP(sRef->GetAttribute(AttrSkillPoints).get_uint32());
+    uint32 maxSP(sRef->GetSPForLevel(EvESkill::MAXSKILLLEVEL));
+    uint32 newSP(value);
+    if (add)
+        newSP = ((oldSP >= maxSP) or (value > maxSP - oldSP)) ? std::max<uint32>(oldSP, maxSP) : oldSP + value;
+    if (newSP > maxSP)
+        newSP = maxSP;
+    uint8 newLevel(sRef->GetLevelForSP(newSP));
+    if (add and (newLevel < oldLevel))
+        newLevel = oldLevel;
+    applied = (newSP > oldSP) ? newSP - oldSP : 0;
+
+    // level first: the client's character sheet reloads on the skillPoints change and has to see the new level with it
+    sRef->SetAttribute(AttrSkillLevel, newLevel, online);
+    sRef->SetAttribute(AttrSkillPoints, newSP, online);
+    sRef->SaveItem();
+    SaveSkillHistory(eventID, GetFileTimeNow(), m_itemID, typeID, newLevel, newSP);
+    GetTotalSP();
+
+    _log(SKILL__INFO, "%s(%u): %s set to %u sp (was %u), level %u -> %u.", name(), m_itemID, sRef->name(), newSP, oldSP, oldLevel, newLevel);
+
+    // a level gained is told the way queue training completion tells it (godma OnSkillTrained -> OnGodmaSkillTrained)
+    if (online and (newLevel > oldLevel)) {
+        OnSkillTrained ost;
+            ost.itemID = sRef->itemID();
+        PyTuple* tmp = ost.Encode();
+        m_pClient->QueueDestinyEvent(&tmp);
+
+        if (spaceNotice and m_pClient->IsInSpace()) {
+            switch (sRef->groupID()) {
+                case EVEDB::invGroups::Trade:
+                case EVEDB::invGroups::Social:
+                case EVEDB::invGroups::Planet_Management:
+                case EVEDB::invGroups::Corporation_Management: {
+                    ;   // these dont touch the ship
+                } break;
+                default: {
+                    m_pClient->SendInfoModalMsg("Skill level gained.<br>Your ship will update to the new skill level the next time you undock.");
+                } break;
+            }
+        }
+    }
+
+    if (queued) {
+        if (online) {
+            for (auto cur : requeue)
+                if (cur.second > GetSkillLevel(cur.first))
+                    AddToSkillQueue(cur.first, cur.second);
+            UpdateSkillQueueEndTime();
+            PyTuple* tmp = new PyTuple(0);
+            m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
+        } else {
+            m_db.UpdateSkillQueueEndTime(0, m_itemID);
+            SaveSkillQueue();
+        }
+    }
+
+    return newLevel;
+}
+
 void Character::SaveSkillHistory(uint16 eventID, double logDate, uint32 characterID, uint16 skillTypeID, uint8 skillLevel, uint32 absolutePoints)
 {
     if (absolutePoints < 1)
@@ -1582,8 +1686,29 @@ void Character::LoadPausedSkillQueue(uint16 typeID)
 {
     m_db.LoadPausedSkillQueue(m_itemID, m_skillQueue);
 
-    if (m_skillQueue.empty())
+    /* levels a skill reached while the queue was paused (free skill points, gm gifts) are dropped.  left in, they would
+     *  train again from the level below and finishing would set the skill back to that level */
+    bool dropped(false);
+    SkillQueue::iterator qItr = m_skillQueue.begin();
+    while (qItr != m_skillQueue.end()) {
+        Skill* queued(GetCharSkillRef(qItr->typeID).get());
+        if ((queued != nullptr) and (qItr->level <= queued->GetAttribute(AttrSkillLevel).get_uint32())) {
+            _log(SKILL__QUEUE, "LoadPausedSkillQueue() - %s level %u already trained.  Dropped.", queued->name(), qItr->level);
+            qItr = m_skillQueue.erase(qItr);
+            dropped = true;
+        } else {
+            ++qItr;
+        }
+    }
+
+    if (m_skillQueue.empty()) {
+        if (dropped) {
+            UpdateSkillQueueEndTime();
+            PyTuple* tmp = new PyTuple(0);
+            m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
+        }
         return;
+    }
 
     Skill* skill(GetCharSkillRef(typeID).get());
     if (typeID != m_skillQueue.front().typeID) {
@@ -1634,6 +1759,12 @@ void Character::LoadPausedSkillQueue(uint16 typeID)
     SaveSkillHistory(EvESkill::Event::TrainingStarted, GetFileTimeNow(), m_itemID, skill->itemID(), m_skillQueue.front().level, skill->GetSPForLevel(m_skillQueue.front().level));
 
     UpdateSkillQueueEndTime();
+
+    // the client still lists the dropped levels
+    if (dropped) {
+        PyTuple* tmp2 = new PyTuple(0);
+        m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp2, false);
+    }
 
     _log(SKILL__QUEUE, "%s(%u)  Paused Skill Queue Loaded and restarted", name(), m_itemID);
 }

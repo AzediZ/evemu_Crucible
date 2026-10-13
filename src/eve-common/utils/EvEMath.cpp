@@ -9,6 +9,8 @@
 
 #include "../eve-common.h"
 
+#include <cmath>
+
 double EvEMath::Units::MetersToLightYears(double meters) {
     return meters / 9460730472580800;
 }
@@ -16,21 +18,26 @@ double EvEMath::Units::MetersToLightYears(double meters) {
 // skill Equations
 uint32 EvEMath::Skill::PointsAtLevel(uint8 level, float rank)
 {
+    // client skillUtil.GetSPForLevelRaw: 250 * rank * 2^(2.5 * (level - 1)), rounded up.  level 0 is 0 sp
+    if (level < 1)
+        return 0;
     if (level > EvESkill::MAXSKILLLEVEL)
         level = EvESkill::MAXSKILLLEVEL;
-    float ret = pow(sqrt(32), (level -1)) * EvESkill::skillPointMultiplier * rank;
-    return (uint32)ceil(ret);
+    double ret(double(rank) * EvESkill::skillPointMultiplier * std::pow(2.0, 2.5 * (level - 1)));
+    return (uint32)std::ceil(ret);
 }
 
-uint8 EvEMath::Skill::LevelForPoints(uint32 currentSP, uint8 rank)
+uint8 EvEMath::Skill::LevelForPoints(uint32 currentSP, float rank)
 {
-    uint16 baseSLC = rank * EvESkill::skillPointMultiplier;
-    if (baseSLC == 0)
+    /* the highest level whose PointsAtLevel() the sp reach.  this used to be log(sp / (250 * rank)) / DIVCONSTANT + 1
+     *  with an integer division and float rounding, which came out a level low at (and just past) most level boundaries
+     *  (rank 1: 1415 sp gave level 1, 8000 gave 2, 45255 gave 3) */
+    if (rank <= 0)
         return 0;
-    if (baseSLC > currentSP)
-        return 0;
-    int8 ret = log(currentSP / baseSLC) / EvESkill::DIVCONSTANT + 1;
-    return (uint8)EvE::min(ret, EvESkill::MAXSKILLLEVEL);
+    for (uint8 level = EvESkill::MAXSKILLLEVEL; level > 0; --level)
+        if (currentSP >= PointsAtLevel(level, rank))
+            return level;
+    return 0;
 }
 
 float EvEMath::Skill::PointsPerMinute(float pAttr, float sAttr)

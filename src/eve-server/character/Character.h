@@ -263,6 +263,16 @@ public:
      *  spAmount > 0 takes that many skill points instead (the level follows the points).
      *  logged in the skill history as eventID.  returns the skill points lost (0 if the skill isn't trained) */
     uint32          LoseSkillLevel(uint16 skillTypeID, uint16 eventID, uint32 spAmount = 0);
+    /* skill points given to a skill (free skill points, gm gifts), handled the way a trained level-up is: the level is worked
+     *  out from the points (several levels at once, capped at 5), level and points are saved and sent to the client
+     *  (OnModuleAttributeChange, level first), OnSkillTrained when the level went up, skill history as eventID.  a skill
+     *  in training stops first (AddSkillPoints puts the points on top of what it trained so far), and the queue is rebuilt
+     *  without the levels the skill now has (OnSkillQueueForciblyUpdated).
+     *  in space, a combat skill's level-up also tells the pilot the ship updates on undock (spaceNotice false skips that,
+     *  for callers doing many skills).  AddSkillPoints never lowers the level and returns the points applied;
+     *  SetSkillPoints returns the new level */
+    uint32          AddSkillPoints(SkillRef sRef, uint32 points, uint16 eventID, bool spaceNotice = true);
+    uint8           SetSkillPoints(SkillRef sRef, uint32 newSP, uint16 eventID, bool spaceNotice = true);
 
     PyRep*          GetSkillHistory();
     uint32          GetTotalSP();
@@ -449,6 +459,8 @@ protected:
     virtual ~Character();
 
     void LoadBookmarks();
+    // AddSkillPoints()/SetSkillPoints().  returns the new level, 'applied' gets the sp change
+    uint8 ChangeSkillPoints(SkillRef sRef, uint32 value, bool add, uint16 eventID, bool spaceNotice, uint32& applied);
 
     /*
      * templated loading system

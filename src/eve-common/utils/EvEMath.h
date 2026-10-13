@@ -29,7 +29,8 @@ namespace EvEMath {
         uint32 PointsAtLevel(uint8 level, float rank);
         // client skillUtil.GetSkillPointsPerMinute (float, no rounding)
         float PointsPerMinute(float pAttr, float sAttr);
-        uint8 LevelForPoints(uint32 currentSP, uint8 rank);
+        // highest level the sp reach (0..5), consistent with PointsAtLevel()
+        uint8 LevelForPoints(uint32 currentSP, float rank);
         int64 EndTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow);
         int64 StartTime(uint32 currentSP, uint32 nextSP, float SPMin, int64 timeNow);
     }
