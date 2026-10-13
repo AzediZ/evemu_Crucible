@@ -30,6 +30,7 @@ SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/EVE_Market.h"
      "${TARGET_INCLUDE_DIR}/EVE_Planet.h"
      "${TARGET_INCLUDE_DIR}/EVE_POS.h"
+     "${TARGET_INCLUDE_DIR}/EVE_Propulsion.h"
      "${TARGET_INCLUDE_DIR}/EVE_Roles.h"
      "${TARGET_INCLUDE_DIR}/EVE_Scanning.h"
      "${TARGET_INCLUDE_DIR}/EVE_Skills.h"

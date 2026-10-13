@@ -82,6 +82,12 @@ public:
      *  with the focused warp disruption script it is a targeted point of infinite strength */
     bool                IsScriptedDisruptor();
 
+    /* afterburners and microwarpdrives (group Propulsion Module).  see EVE_Propulsion.h for the speed formula */
+    bool                IsPropulsionModule() const;
+    /* a running prop module's velocity bonus follows changes of its speed factor, thrust and the ship's mass (overload,
+     *  warp disruption field):  the ship's maxVelocity and the client's ball are brought up to date.  no-op when idle */
+    void                RefreshPropBoost();
+
     /* new effects processing code and updates */
     void                ApplyEffect(int8 state, bool active=false);
     /* common method for all modules that have a visual effect when active */
@@ -155,7 +161,14 @@ private:
     void                StopDisruptField();
     void                FieldPenalties(bool add);       // signature radius, mass and prop mod penalties, no remote assistance
     bool                m_fieldActive;
-    std::map<uint32, double> m_fieldPropDeltas;         // prop module itemID -> speedBoostFactorCalc2 taken off while the field is up
+
+    /* propulsion modules.  speedBoostFactorCalc2 holds the velocity multiplier while the module runs (the dogma effect
+     *  multiplies the ship's maxVelocity by it, and divides it out again when it stops) */
+    double              PropSpeedMultiplier(double shipMass);
+    // a warp scrambler (effect warpScrambleTargetMWDBlockActivation) on our ship blocks modules that need High Speed Maneuvering
+    bool                IsActivationBlocked();
+    // a warp scrambler's cycle on a ship ends that ship's running microwarpdrives
+    void                BlockTargetMWDs();
 
 };
 

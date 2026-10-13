@@ -8,7 +8,11 @@
 
 #include "eve-server.h"
 
+#include <cmath>
+#include <initializer_list>
+
 #include "EVE_Charges.h"
+#include "EVE_Propulsion.h"
 #include "StatisticMgr.h"
 #include "exploration/Probes.h"
 #include "exploration/Scan.h"
@@ -357,7 +361,18 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         Online();
         return;
     }
+    // already running (or finishing its last cycle):  its effects must not go on twice
+    if (m_ModuleState >= Module::State::Deactivating) {
+        _log(MODULE__TRACE, "ActiveModule::Activate - %s(%u) is already %s.", m_modRef->name(), itemID(), GetModuleStateName(m_ModuleState));
+        return;
+    }
     CheckActivationRules();
+    /* Quantum Rise (2008):  "The micro warp drive is now vulnerable to warp scramblers (the 7.5km version).  If you get
+     *  scrambled your MWD will immediately end its cycle."  Crucible's data:  warp scramblers have
+     *  warpScrambleTargetMWDBlockActivation, activationBlocked on the target's modules that need High Speed Maneuvering */
+    if (IsActivationBlocked())
+        throw UserError("ModuleIsBlocked")
+                .AddFormatValue("moduleName", new PyString(m_modRef->itemName()));
     // a module (or any weapon in its bank) that is loading or reloading can't fire
     {
         std::vector<GenericModule*> modules;
@@ -462,6 +477,8 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     // Do initial cycle immediately while we start timer
     CrimeCheck();
     UpdateCycleHeat(true);
+    // a cycle left over from before docking (modules aren't processed in a station) must not shorten this one
+    m_timer.Disable();
     SetTimer(DoCycle());
 
     if (!m_timer.Enabled()) {
@@ -470,6 +487,11 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         return;
     }
 
+    /* prop mods:  the velocity multiplier for the dogma effect (maxVelocity PostMul speedBoostFactorCalc2), from the ship's
+     *  mass with this module's massAddition on it (the same effect adds it) */
+    if (IsPropulsionModule())
+        SetAttribute(AttrSpeedBoostFactorCalc2, PropSpeedMultiplier(m_shipRef->GetAttribute(AttrMass).get_double()
+                + GetAttribute(AttrMassAddition).get_double()), false);
     if (ApplyActiveEffects())
         ApplyEffect(FX::State::Active, true);
     if (IsValidTarget(targetID) and ApplyTargetEffects())
@@ -683,6 +705,10 @@ uint32 ActiveModule::DoCycle() {
 
         m_shipRef->SetShipCapacitorLevel(newCap / shipTotalCapacitor);
     }
+
+    // a warp scrambler shuts the target's microwarpdrives down, every cycle
+    if ((m_targetSE != nullptr) and m_modRef->type().HasEffect(EVEEffectID::warpScrambleTargetMWDBlockActivation))
+        BlockTargetMWDs();
 
     // npcs remember who uses ewar (and neuts) on them, like damage, and which kind (level-one effect threat, npc ai plan 5.7)
     if ((m_targetSE != nullptr) and m_targetSE->IsNPCSE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
@@ -992,6 +1018,9 @@ void ActiveModule::ProcessActiveCycle() {
 
     CrimeCheck();
     UpdateCycleHeat(true);
+    // an overload that started or stopped with this cycle changed the speed factor
+    if (IsPropulsionModule())
+        RefreshPropBoost();
     SetTimer(DoCycle());
 }
 
@@ -1929,7 +1958,6 @@ void ActiveModule::StartDisruptField()
          *  and modules' attributes, and leaving space removed the field.  only the bookkeeping is left over
          */
         m_fieldActive = false;
-        m_fieldPropDeltas.clear();
     }
 
     FieldPenalties(true);
@@ -1948,11 +1976,8 @@ void ActiveModule::StopDisruptField()
     if ((pClient != nullptr) and (pClient->SystemMgr() != nullptr))
         pClient->SystemMgr()->GetInterdictionMgr()->RemoveField(m_shipRef->itemID());
     // a docked ship's attributes were already reset (undocking rebuilds them), so only undo the penalties in space
-    if ((pClient != nullptr) and pClient->IsInSpace()) {
+    if ((pClient != nullptr) and pClient->IsInSpace())
         FieldPenalties(false);
-    } else {
-        m_fieldPropDeltas.clear();
-    }
 }
 
 void ActiveModule::FieldPenalties(bool add)
@@ -1985,15 +2010,22 @@ void ActiveModule::FieldPenalties(bool add)
     data.targAttr = AttrDisallowAssistance;
     data.srcAttr = AttrDisallowAssistance;
     mods.push_back(data);
-    // the prop mods' mass addition shrinks with the hull, or switching them during the field would leave the mass wrong
+    /* prop mods (warpDisruptionFieldEffectOnline):  speed factor -90%, thrust -80%.
+     *  their mass addition shrinks with the hull, or switching them during the field would leave the mass wrong */
     data.math = FX::Math::PostPercent;
     data.fxSrc = FX::Source::Group;
-    data.targAttr = AttrMassAddition;
-    data.srcAttr = AttrMassBonusPercentage;
-    data.grpID = EVEDB::invGroups::Afterburner;
-    mods.push_back(data);
-    data.grpID = EVEDB::invGroups::Microwarpdrive;
-    mods.push_back(data);
+    for (uint16 grpID : {EVEDB::invGroups::Afterburner, EVEDB::invGroups::Microwarpdrive}) {
+        data.grpID = grpID;
+        data.targAttr = AttrMassAddition;
+        data.srcAttr = AttrMassBonusPercentage;
+        mods.push_back(data);
+        data.targAttr = AttrSpeedFactor;
+        data.srcAttr = AttrSpeedFactorBonus;
+        mods.push_back(data);
+        data.targAttr = AttrSpeedBoostFactor;
+        data.srcAttr = AttrSpeedBoostFactorBonus;
+        mods.push_back(data);
+    }
 
     for (auto& cur : mods) {
         if (add) {
@@ -2003,46 +2035,90 @@ void ActiveModule::FieldPenalties(bool add)
         }
     }
 
-    /* prop mod velocity bonus -90%.
-     *   prop mods multiply the ship's maxVelocity by speedBoostFactorCalc2 (1 + speedFactor%) while they run, so the field takes
-     *   90% of the bonus part off that value.  a prop mod already running gets its multiplier on the ship swapped too.
-     *   (the -80% thrust penalty is part of the same reduction: this server's prop formula doesn't use thrust or mass)
-     */
-    double factor(-GetAttribute(AttrSpeedFactorBonus).get_double() / 100.0);   // 0.9
-    double maxVelocity(m_shipRef->GetAttribute(AttrMaxVelocity).get_double());
+    sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), true);
+
+    /* a prop mod running now gets its velocity bonus worked out again from the new speed factor, thrust and mass
+     *  (net -90%:  0.1 x 0.2 / 0.2).  the others only work it out when they start */
     std::vector<InventoryItemRef> modules;
     m_shipRef->GetModuleManager()->GetModuleListOfRefsAsc(modules);
     for (auto modRef : modules) {
-        if ((modRef->groupID() != EVEDB::invGroups::Afterburner) and (modRef->groupID() != EVEDB::invGroups::Microwarpdrive))
-            continue;
-        double calc(modRef->GetAttribute(AttrSpeedBoostFactorCalc2).get_double());
-        double newCalc(calc);
-        if (add) {
-            double delta((calc - 1.0) * factor);
-            m_fieldPropDeltas[modRef->itemID()] = delta;
-            newCalc = calc - delta;
-        } else {
-            std::map<uint32, double>::iterator itr = m_fieldPropDeltas.find(modRef->itemID());
-            if (itr == m_fieldPropDeltas.end())
-                continue;
-            newCalc = calc + itr->second;
-        }
-        if ((calc <= 0) or (newCalc <= 0))
-            continue;
-        modRef->SetAttribute(AttrSpeedBoostFactorCalc2, newCalc, true);
         GenericModule* pMod(m_shipRef->GetModuleManager()->GetModule(modRef->itemID()));
-        if ((pMod != nullptr) and pMod->IsActive())
-            maxVelocity *= (newCalc / calc);
+        if ((pMod == nullptr) or !pMod->IsActive() or (pMod->GetActiveModule() == nullptr)
+        or !pMod->GetActiveModule()->IsPropulsionModule())
+            continue;
+        pMod->GetActiveModule()->RefreshPropBoost();
     }
-    if (!add)
-        m_fieldPropDeltas.clear();
-    m_shipRef->SetAttribute(AttrMaxVelocity, maxVelocity, true);
-
-    sFxProc.ApplyEffects(m_modRef.get(), pClient->GetChar().get(), m_shipRef.get(), true);
 
     // resend mass, agility and speed
     if ((pClient->GetShipSE() != nullptr) and (pClient->GetShipSE()->DestinyMgr() != nullptr))
         pClient->GetShipSE()->DestinyMgr()->SpeedBoost(!add);
+}
+
+bool ActiveModule::IsPropulsionModule() const
+{
+    return ((m_modRef->groupID() == EVEDB::invGroups::Afterburner) or (m_modRef->groupID() == EVEDB::invGroups::Microwarpdrive));
+}
+
+double ActiveModule::PropSpeedMultiplier(double shipMass)
+{
+    return Propulsion::SpeedMultiplier(GetAttribute(AttrSpeedFactor).get_double(), GetAttribute(AttrSpeedBoostFactor).get_double(), shipMass);
+}
+
+void ActiveModule::RefreshPropBoost()
+{
+    if (!IsPropulsionModule() or !IsActive() or !m_shipRef->HasPilot())
+        return;
+    // running, so the ship's mass has our massAddition on it already
+    double oldMult(GetAttribute(AttrSpeedBoostFactorCalc2).get_double());
+    double newMult(PropSpeedMultiplier(m_shipRef->GetAttribute(AttrMass).get_double()));
+    if ((oldMult <= 0.0) or (std::fabs(newMult - oldMult) < 1e-9))
+        return;
+    // swap our multiplier on the ship.  the effect divides the new one out again when the module stops
+    double maxVelocity(m_shipRef->GetAttribute(AttrMaxVelocity).get_double());
+    m_shipRef->SetAttribute(AttrMaxVelocity, maxVelocity / oldMult * newMult, true);
+    SetAttribute(AttrSpeedBoostFactorCalc2, newMult, false);
+    _log(MODULE__TRACE, "ActiveModule::RefreshPropBoost - %s(%u) velocity multiplier %.4f -> %.4f.", m_modRef->name(), itemID(), oldMult, newMult);
+
+    ShipSE* pShipSE(m_shipRef->GetPilot()->GetShipSE());
+    if ((pShipSE != nullptr) and (pShipSE->DestinyMgr() != nullptr))
+        pShipSE->DestinyMgr()->SpeedBoost();
+}
+
+bool ActiveModule::IsActivationBlocked()
+{
+    // only modules that need High Speed Maneuvering (microwarpdrives) are blocked
+    if (!m_modRef->HasReqSkill(EvESkill::HighSpeedManeuvering) or !m_shipRef->HasPilot())
+        return false;
+    ShipSE* pShipSE(m_shipRef->GetPilot()->GetShipSE());
+    if ((pShipSE == nullptr) or (pShipSE->TargetMgr() == nullptr) or !pShipSE->TargetMgr()->HasActiveModules())
+        return false;
+    std::vector<ActiveModule*> modules;
+    pShipSE->TargetMgr()->GetTargetModules(modules);
+    for (auto pMod : modules)
+        if ((pMod != nullptr) and pMod->IsActive()
+        and pMod->GetSelf()->type().HasEffect(EVEEffectID::warpScrambleTargetMWDBlockActivation))
+            return true;
+    return false;
+}
+
+void ActiveModule::BlockTargetMWDs()
+{
+    // player ships only:  npcs work their own "mwd" out (NpcMovement::CheckMWDBlock)
+    if ((m_targetSE == nullptr) or !m_targetSE->IsShipSE())
+        return;
+    ShipItemRef targetShip(m_targetSE->GetShipSE()->GetShipItemRef());
+    if ((targetShip.get() == nullptr) or !targetShip->HasPilot())
+        return;
+    std::vector<InventoryItemRef> modules;
+    targetShip->GetModuleManager()->GetModuleListByReqSkill(EvESkill::HighSpeedManeuvering, modules);
+    for (auto modRef : modules) {
+        GenericModule* pMod(targetShip->GetModuleManager()->GetModule(modRef->itemID()));
+        if ((pMod == nullptr) or !pMod->IsActive() or !pMod->IsActiveModule())
+            continue;
+        _log(MODULE__TRACE, "ActiveModule::BlockTargetMWDs - %s(%u) shuts down %s(%u) on %s.", m_modRef->name(), itemID(),
+                modRef->name(), modRef->itemID(), m_targetSE->GetName());
+        pMod->AbortCycle();
+    }
 }
 
 void ActiveModule::LaunchSnowBall()

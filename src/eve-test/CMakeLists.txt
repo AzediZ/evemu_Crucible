@@ -26,7 +26,8 @@ SET( auth_SOURCE
 SET( marshal_SOURCE
      "marshal/EVEMarshalTest.cpp" )
 SET( ship_SOURCE
-     "ship/ChargeRulesTest.cpp" )
+     "ship/ChargeRulesTest.cpp"
+     "ship/PropulsionTest.cpp" )
 SET( npcai_SOURCE
      "npcai/FighterWarpTest.cpp"
      "npcai/LawRulesTest.cpp"
@@ -90,6 +91,8 @@ ADD_TEST( NAME "SkillMathTest"
           COMMAND "${TARGET_NAME}" "utils/SkillMathTest" )
 ADD_TEST( NAME "ChargeRulesTest"
           COMMAND "${TARGET_NAME}" "ship/ChargeRulesTest" )
+ADD_TEST( NAME "PropulsionTest"
+          COMMAND "${TARGET_NAME}" "ship/PropulsionTest" )
 ADD_TEST( NAME "NpcMathTest"
           COMMAND "${TARGET_NAME}" "npcai/NpcMathTest" )
 ADD_TEST( NAME "LawRulesTest"
