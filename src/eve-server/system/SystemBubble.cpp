@@ -170,8 +170,11 @@ void SystemBubble::ProcessWander(std::vector<SystemEntity *> &wanderers) {
         _log(DESTINY__TRACE, "SystemBubble::ProcessWander() getting dynamicSE");
         pDSE = itr->second->GetDynamicSE();
         if (pDSE == nullptr) {
+            /* an item entity (interdiction sphere, cyno field, ...) doesn't move:  it stays tracked, like an object entity.
+             *  erasing it here left its SysBubble() pointing at a bubble RemoveEmpty() may then free (since bubbles are
+             *  freed), and its removal would use the freed bubble */
             _log(DESTINY__TRACE, "SystemBubble::ProcessWander() pDSE is nullptr");
-            itr = m_dynamicEntities.erase(itr);
+            ++itr;
             continue;
         }
 
@@ -228,6 +231,15 @@ void SystemBubble::ProcessWander(std::vector<SystemEntity *> &wanderers) {
     if (!m_players.empty() and m_spawned) {
         ResetBubbleRatSpawn();
     }
+}
+
+void SystemBubble::Retrack(SystemEntity* pSE) {
+    if ((pSE == nullptr) or (pSE->m_bubble != this))
+        return;
+    if (pSE->IsStaticEntity() or pSE->isGlobal())
+        m_entities[pSE->GetID()] = pSE;
+    else
+        m_dynamicEntities[pSE->GetID()] = pSE;
 }
 
 void SystemBubble::Add(SystemEntity* pSE) {
