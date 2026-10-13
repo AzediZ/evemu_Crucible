@@ -1,0 +1,133 @@
+From 51a8350bd2d1c80ca86552a7b44029a83be8936d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 16:33:29 +0100
+Subject: [PATCH 1/2] Let autopilot and remote Jump/Dock work when the client
+ lands before the server's warp ends
+
+The client and server time warps slightly differently, so the autopilot asks to
+jump (or dock) the moment the client lands, often while the server is still
+decelerating. The server refused with "You can't do this while warping" and the
+autopilot never retried (EvEmu issue #263). Finish a warp that is already slowing
+down onto the requested gate or station instead of refusing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/ship/BeyonceService.cpp   | 38 ++++++++++++++++--------
+ src/eve-server/system/DestinyManager.cpp | 21 +++++++++++++
+ src/eve-server/system/DestinyManager.h   |  5 ++++
+ 3 files changed, 52 insertions(+), 12 deletions(-)
+
+diff --git a/src/eve-server/ship/BeyonceService.cpp b/src/eve-server/ship/BeyonceService.cpp
+index 87d2a2b2..dbac50a8 100644
+--- a/src/eve-server/ship/BeyonceService.cpp
++++ b/src/eve-server/ship/BeyonceService.cpp
+@@ -663,20 +663,26 @@ PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* ship
+     if (pDestiny == nullptr) {
+         codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+         return PyStatic.NewNone();
+-    } else if (pDestiny->IsWarping()) {
+-        call.client->SendNotifyMsg( "You can't do this while warping");
+-        return PyStatic.NewNone();
+-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
+-        return PyStatic.NewNone();
+-    } else if (pDestiny->IsFrozen()) {
+-        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
+-        return PyStatic.NewNone();
+     }
+     SystemManager* pSystem = call.client->SystemMgr();
+     if (pSystem == nullptr) {
+         codelog(CLIENT__ERROR, "%s: Client has no system manager.", call.client->GetName());
+         return PyStatic.NewNone();
+     }
++    if (pDestiny->IsWarping()) {
++        // same client/server warp timing gap as CmdStargateJump: the autopilot docks the moment the client lands
++        SystemEntity* pStation(pSystem->GetSE(celestialID->value()));
++        if ((pStation == nullptr) or !pDestiny->FinishWarpNear(pStation->GetPosition(), pStation->GetRadius() + 25000)) {
++            call.client->SendNotifyMsg( "You can't do this while warping");
++            return PyStatic.NewNone();
++        }
++    }
++    if (pDestiny->AbortIfLoginWarping(true)) {
++        return PyStatic.NewNone();
++    } else if (pDestiny->IsFrozen()) {
++        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
++        return PyStatic.NewNone();
++    }
+ 
+     //  this sets m_dockStationID for radius checks and other things
+     call.client->SetDockStationID( celestialID->value() );
+@@ -720,10 +726,18 @@ PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID,
+     if (pDestiny == nullptr) {
+         codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+         return PyStatic.NewNone();
+-    } else if (pDestiny->IsWarping()) {
+-        call.client->SendNotifyMsg( "You can't do this while warping");
+-        return PyStatic.NewNone();
+-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
++    }
++    if (pDestiny->IsWarping()) {
++        // The autopilot (and Jump from a distance) asks to jump the moment the client lands, which is
++        // often a few seconds before the server's own warp has finished.  If this warp is ending at
++        // this gate, finish it now rather than refusing the jump (refusing leaves the autopilot stuck).
++        SystemEntity* pGate(call.client->SystemMgr() == nullptr ? nullptr : call.client->SystemMgr()->GetSE(fromStargateID->value()));
++        if ((pGate == nullptr) or !pDestiny->FinishWarpNear(pGate->GetPosition(), pGate->GetRadius() + 25000)) {
++            call.client->SendNotifyMsg( "You can't do this while warping");
++            return PyStatic.NewNone();
++        }
++    }
++    if (pDestiny->AbortIfLoginWarping(true)) {
+         return PyStatic.NewNone();
+     } else if (pDestiny->IsFrozen()) {
+         call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index 025ec26a..f8cc3075 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -1808,6 +1808,27 @@ void DestinyManager::WarpStop(double currentShipSpeed) {
+     Halt();
+ }
+ 
++bool DestinyManager::FinishWarpNear(const GPoint& point, double range) {
++    if (m_warpState == nullptr)
++        return true;
++    // only a warp that is already slowing down, and that ends at the place being asked about
++    if (!m_warpState->decel)
++        return false;
++    if (m_targetPoint.distance(point) > range)
++        return false;
++    if (m_targBubble == nullptr)
++        m_targBubble = sBubbleMgr.GetBubble(mySE->SystemMgr(), m_targetPoint);
++
++    _log(AUTOPILOT__MESSAGE, "Destiny::FinishWarpNear(): %s(%u) - client landed first; finishing warp with %.2f m left.", \
++            mySE->GetName(), mySE->GetID(), m_targetDistance);
++
++    // put the ship on its landing point (this also moves it into the target bubble), then end the warp normally
++    m_targetDistance = 0;
++    WarpUpdate(m_speedToLeaveWarp);
++    WarpStop(m_speedToLeaveWarp);
++    return true;
++}
++
+ //called whenever an entity is going away and can no longer be used as a target
+ void DestinyManager::EntityRemoved(SystemEntity *pSE) {
+     if (m_targetEntity.second == pSE) {
+diff --git a/src/eve-server/system/DestinyManager.h b/src/eve-server/system/DestinyManager.h
+index 79cfd22e..930a1159 100644
+--- a/src/eve-server/system/DestinyManager.h
++++ b/src/eve-server/system/DestinyManager.h
+@@ -145,6 +145,11 @@ public:
+ 
+     /* Larger movement */
+     void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr);
++    /* The client and server time warps slightly differently, so the client can land (and the
++     * autopilot ask to jump or dock) while the server is still decelerating.  This finishes a
++     * warp that is already slowing down onto a point within 'range' of 'point'.
++     * Returns true when the ship is no longer warping.  */
++    bool FinishWarpNear(const GPoint& point, double range);
+ 
+     /* Ship State Query functions */
+     bool IsMoving()                                     { return (m_timeFraction > 0); }
+-- 
+2.43.0
+

@@ -1,0 +1,1276 @@
+From 325a37ee6f8a7036c90f995fab3136b550088ebb Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 20:06:51 +0000
+Subject: [PATCH] Cynos, jump drives and jump portals: jump checks, covert
+ cynos, titan and black ops bridges
+
+Jump drive (CmdBeaconJumpFleet / CmdBeaconJumpAlliance): the beacon is looked up again
+before it is used (no crash when the cyno went out after the client cached it), the cyno's
+pilot must be in the jumper's fleet, range is checked against jumpDriveRange,
+jumpDriveCapacitorNeed x capacitorCapacity is taken from the capacitor, and fuel is taken
+correctly across several stacks (every stack smaller than the cost used to be deleted).
+Only black ops may jump to a covert field.
+
+Cynos: the Covert Cynosural Field Generator group gets CynoModule (a Covert Cynosural
+Field I is spawned; cyno jammers don't stop it), so it can be fitted. Survey no longer
+lengthens the cycle. The ship is stopped as well as frozen when the field is lit. The pilot
+is looked up when the module is activated instead of when it is loaded.
+
+Fleet members who join after a cyno is lit or a portal opened are sent OnJumpBeaconChange
+and OnBridgeModeChange for them, on join (FleetService::AddMember) and on GetInitState.
+
+Jump portals: JumpPortalModule for the Jump Portal Generator group. The new
+CmdBridgeToMember and CmdBridgeToStructure open a one-cycle portal: range checked against
+the portal ship's jumpDriveRange, ship stopped and frozen, OnBridgeModeChange sent to the
+fleet (and false when it closes). The module button refuses to activate on its own.
+CmdJumpThroughFleet jumps a fleet member within 2500 m (surface to surface) of the portal
+ship, taking mass x jumpPortalConsumptionMassFactor x light years of the portal ship's fuel
+from its fuel bay. Covert portals take covert ops, stealth bombers and force recons only;
+other portals refuse capitals, black ops and freighters. CmdJumpThroughAlliance replies
+that it isn't supported yet.
+
+Shared checks and helpers are in ship/JumpDrive.cpp.
+---
+ src/eve-server/CMakeLists.txt                 |   8 +-
+ src/eve-server/fleet/FleetBound.cpp           |   5 +
+ src/eve-server/fleet/FleetService.cpp         |   4 +
+ src/eve-server/ship/BeyonceService.cpp        | 279 +++++++-------
+ src/eve-server/ship/BeyonceService.h          |   2 +
+ src/eve-server/ship/JumpDrive.cpp             | 361 ++++++++++++++++++
+ src/eve-server/ship/JumpDrive.h               |  66 ++++
+ src/eve-server/ship/modules/CynoModule.cpp    |  62 ++-
+ src/eve-server/ship/modules/CynoModule.h      |   9 +-
+ src/eve-server/ship/modules/GenericModule.h   |   2 +
+ .../ship/modules/JumpPortalModule.cpp         |  71 ++++
+ .../ship/modules/JumpPortalModule.h           |  43 +++
+ src/eve-server/ship/modules/ModuleFactory.h   |   7 +-
+ 13 files changed, 735 insertions(+), 184 deletions(-)
+ create mode 100644 src/eve-server/ship/JumpDrive.cpp
+ create mode 100644 src/eve-server/ship/JumpDrive.h
+ create mode 100644 src/eve-server/ship/modules/JumpPortalModule.cpp
+ create mode 100644 src/eve-server/ship/modules/JumpPortalModule.h
+
+diff --git a/src/eve-server/CMakeLists.txt b/src/eve-server/CMakeLists.txt
+index f298703..1f32d68 100644
+--- a/src/eve-server/CMakeLists.txt
++++ b/src/eve-server/CMakeLists.txt
+@@ -466,12 +466,14 @@ SET( search_SOURCE
+ 
+ SET( ship_INCLUDE
+      "${TARGET_INCLUDE_DIR}/ship/BeyonceService.h"
++     "${TARGET_INCLUDE_DIR}/ship/JumpDrive.h"
+      "${TARGET_INCLUDE_DIR}/ship/Missile.h"
+      "${TARGET_INCLUDE_DIR}/ship/Ship.h"
+      "${TARGET_INCLUDE_DIR}/ship/ShipDB.h"
+      "${TARGET_INCLUDE_DIR}/ship/ShipService.h")
+ SET( ship_SOURCE
+      "${TARGET_SOURCE_DIR}/ship/BeyonceService.cpp"
++     "${TARGET_SOURCE_DIR}/ship/JumpDrive.cpp"
+      "${TARGET_SOURCE_DIR}/ship/Missile.cpp"
+      "${TARGET_SOURCE_DIR}/ship/Ship.cpp"
+      "${TARGET_SOURCE_DIR}/ship/ShipDB.cpp"
+@@ -491,7 +493,8 @@ SET( ship_modules_INCLUDE
+      "${TARGET_INCLUDE_DIR}/ship/modules/SubSystemModule.h"
+      "${TARGET_INCLUDE_DIR}/ship/modules/TurretFormulas.h"
+      "${TARGET_INCLUDE_DIR}/ship/modules/TurretModule.h"
+-     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h" )
++     "${TARGET_INCLUDE_DIR}/ship/modules/CynoModule.h"
++     "${TARGET_INCLUDE_DIR}/ship/modules/JumpPortalModule.h" )
+ SET( ship_modules_SOURCE
+      "${TARGET_SOURCE_DIR}/ship/modules/ActiveModule.cpp"
+      "${TARGET_SOURCE_DIR}/ship/modules/GenericModule.cpp"
+@@ -504,7 +507,8 @@ SET( ship_modules_SOURCE
+      "${TARGET_SOURCE_DIR}/ship/modules/SubSystemModule.cpp"
+      "${TARGET_SOURCE_DIR}/ship/modules/TurretFormulas.cpp"
+      "${TARGET_SOURCE_DIR}/ship/modules/TurretModule.cpp"
+-     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp" )
++     "${TARGET_SOURCE_DIR}/ship/modules/CynoModule.cpp"
++     "${TARGET_SOURCE_DIR}/ship/modules/JumpPortalModule.cpp" )
+ 
+ SET( standing_INCLUDE
+      "${TARGET_INCLUDE_DIR}/standing/Standing.h"
+diff --git a/src/eve-server/fleet/FleetBound.cpp b/src/eve-server/fleet/FleetBound.cpp
+index 5774fce..c94c4cf 100644
+--- a/src/eve-server/fleet/FleetBound.cpp
++++ b/src/eve-server/fleet/FleetBound.cpp
+@@ -18,6 +18,7 @@
+ 
+ 
+ #include "fleet/FleetBound.h"
++#include "ship/JumpDrive.h"
+ #include "fleet/FleetObject.h"
+ #include "services/ServiceManager.h"
+ 
+@@ -227,6 +228,10 @@ PyResult FleetBound::GetInitState(PyCallArgs &call) {
+     if (is_log_enabled(FLEET__DEBUG))
+         rsp.Dump(FLEET__DEBUG);
+ 
++    // cynos lit and jump portals open in this fleet.  also sent on joining; sent again here in case the client
++    //  resets its lists when it loads the fleet
++    JumpDrive::SendActiveBeacons(call.client);
++
+     //response should be sequenced
+     return rsp.Encode();
+ }
+diff --git a/src/eve-server/fleet/FleetService.cpp b/src/eve-server/fleet/FleetService.cpp
+index 1e4222e..e3ea4e8 100644
+--- a/src/eve-server/fleet/FleetService.cpp
++++ b/src/eve-server/fleet/FleetService.cpp
+@@ -15,6 +15,7 @@
+ #include "eve-server.h"
+ #include "chat/LSCService.h"
+ #include "fleet/FleetService.h"
++#include "ship/JumpDrive.h"
+ #include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
+ #include "services/ServiceManager.h"
+@@ -373,6 +374,9 @@ bool FleetService::AddMember(Client* pClient, uint32 fleetID, int32 wingID, int3
+     SendFleetUpdate(fleetID, "OnFleetJoin", res);
+ 
+     UpdateBoost(fleetID, fleet, wing, squad);
++
++    // cynos lit and jump portals opened before this member joined
++    JumpDrive::SendActiveBeacons(pClient);
+     return true;
+ }
+ 
+diff --git a/src/eve-server/ship/BeyonceService.cpp b/src/eve-server/ship/BeyonceService.cpp
+index f9a158c..9bb180b 100644
+--- a/src/eve-server/ship/BeyonceService.cpp
++++ b/src/eve-server/ship/BeyonceService.cpp
+@@ -34,6 +34,8 @@
+ #include "planet/Moon.h"
+ #include "pos/Structure.h"
+ #include "ship/BeyonceService.h"
++#include "ship/JumpDrive.h"
++#include "ship/modules/JumpPortalModule.h"
+ #include "station/StationDataMgr.h"
+ #include "system/BookmarkService.h"
+ #include "system/Container.h"
+@@ -111,6 +113,8 @@ BeyonceBound::BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Clien
+     this->Add("CmdJumpThroughFleet", &BeyonceBound::CmdJumpThroughFleet);
+     this->Add("CmdJumpThroughAlliance", &BeyonceBound::CmdJumpThroughAlliance);
+     this->Add("CmdJumpThroughCorporationStructure", &BeyonceBound::CmdJumpThroughCorporationStructure);
++    this->Add("CmdBridgeToMember", &BeyonceBound::CmdBridgeToMember);
++    this->Add("CmdBridgeToStructure", &BeyonceBound::CmdBridgeToStructure);
+ 
+     client->SetBeyonce(true);
+     if (client->IsLogin() and !client->IsSetStateSent())
+@@ -829,11 +833,10 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
+ }
+ 
+ /**     ***********************************************************************
+- * @note   these do absolutely nothing at this time....
++ * @note   cynosural jumps, and titan / black ops jump portals (bridges).  checks and helpers are in ship/JumpDrive.cpp
+  */
+ 
+-
+-/** @todo these will need work....
++/** client code for these calls:
+  *    def BridgeToMember(self, charID):
+  *        beaconStuff = sm.GetService('fleet').GetActiveBeaconForChar(charID)
+  *        if beaconStuff is None:
+@@ -910,17 +913,132 @@ PyResult BeyonceBound::UpdateStateRequest(PyCallArgs &call) {
+  *            return
+  *        effect.Activate(beaconID, False)
+  */
++
++// checks shared by jumps and jump portals.  tells the client why and returns false when the ship can't
++static bool CanStartJump(Client* pClient)
++{
++    if (pClient->IsSessionChange()) {
++        pClient->SendNotifyMsg("Session Change currently active.");
++        return false;
++    }
++    if (pClient->GetShipSE() == nullptr)
++        return false;
++
++    DestinyManager* pDestiny = pClient->GetShipSE()->DestinyMgr();
++    if (pDestiny == nullptr) {
++        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", pClient->GetName());
++        return false;
++    } else if (pDestiny->IsWarping()) {
++        pClient->SendNotifyMsg( "You can't do this while warping");
++        return false;
++    } else if (pDestiny->IsFrozen()) {
++        // a lit cyno or an open jump portal holds the ship
++        pClient->SendNotifyMsg( "Your ship is frozen and cannot move");
++        return false;
++    }  else if (pDestiny->AbortIfLoginWarping(true)) {
++        return false;
++    }
++
++    return true;
++}
++
++// opens pClient's jump portal (titan or black ops) to the beacon
++static void OpenJumpPortal(Client* pClient, const JumpDrive::Beacon& beacon)
++{
++    JumpPortalModule* pPortal = JumpDrive::GetPortalModule(pClient);
++    if (pPortal == nullptr) {
++        pClient->SendNotifyMsg("You need an online jump portal generator to open a jump portal.");
++        return;
++    }
++    if (pPortal->IsOpen()) {
++        pClient->SendNotifyMsg("Your jump portal is already open.");
++        return;
++    }
++    if (pClient->GetShipSE()->DestinyMgr()->IsCloaked()) {
++        pClient->SendNotifyMsg("You can't open a jump portal while cloaked.");
++        return;
++    }
++    if (beacon.systemID == pClient->GetSystemID()) {
++        pClient->SendNotifyMsg("That beacon is in this system.");
++        return;
++    }
++    if (beacon.covert and !pPortal->IsCovert()) {
++        pClient->SendNotifyMsg("Only a Black Ops covert jump portal can open to a covert cynosural field.");
++        return;
++    }
++    if (!JumpDrive::CheckRange(pClient, pClient->GetShip(), beacon.systemID, "jump portal"))
++        return;
++
++    if (pPortal->OpenPortal(beacon))
++        pClient->SendNotifyMsg("Jump portal open.  Fleet members within %.0f m of your ship can jump through it.", JumpDrive::PortalUseRange);
++}
++
++PyResult BeyonceBound::CmdBridgeToMember(PyCallArgs &call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID) {
++    // bp.CmdBridgeToMember(charID, beaconID, solarsystemID)
++    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdBridgeToMember");
++    call.Dump(SHIP__WARNING);
++
++    if (!CanStartJump(call.client))
++        return PyStatic.NewNone();
++
++    JumpDrive::Beacon beacon;
++    if (JumpDrive::FindFleetBeacon(call.client, charID->value(), beaconID->value(), beacon))
++        OpenJumpPortal(call.client, beacon);
++
++    return PyStatic.NewNone();
++}
++
++PyResult BeyonceBound::CmdBridgeToStructure(PyCallArgs &call, PyInt* beaconID, PyInt* solarSystemID) {
++    // bp.CmdBridgeToStructure(beaconID, solarSystemID)    to an alliance beacon (cynosural generator array)
++    _log(SHIP__WARNING, "BeyonceBound::Handle_CmdBridgeToStructure");
++    call.Dump(SHIP__WARNING);
++
++    if (!CanStartJump(call.client))
++        return PyStatic.NewNone();
++
++    JumpDrive::Beacon beacon;
++    if (JumpDrive::FindAllianceBeacon(call.client, beaconID->value(), beacon))
++        OpenJumpPortal(call.client, beacon);
++
++    return PyStatic.NewNone();
++}
++
+ PyResult BeyonceBound::CmdJumpThroughFleet(PyCallArgs &call, PyInt* otherCharID, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
+     // sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughFleet, otherCharID, otherShipID, beaconID, solarsystemID)
+     _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughFleet");
+     call.Dump(SHIP__WARNING);
+-    return PyStatic.NewNone();
++
++    if (!CanStartJump(call.client))
++        return PyStatic.NewNone();
++
++    Client* pOwner = sEntityList.FindClientByCharID(otherCharID->value());
++    if ((pOwner == nullptr) or !call.client->InFleet() or (pOwner->GetFleetID() != call.client->GetFleetID())
++    or (pOwner->GetShipID() != (uint32)otherShipID->value())) {
++        call.client->SendNotifyMsg("That jump portal is no longer available to your fleet.");
++        return PyStatic.NewNone();
++    }
++
++    JumpPortalModule* pPortal = JumpDrive::GetPortalModule(pOwner);
++    if ((pPortal == nullptr) or !pPortal->IsOpen() or (pPortal->GetBeacon().item->itemID() != (uint32)beaconID->value())) {
++        call.client->SendNotifyMsg("%s's jump portal is closed.", pOwner->GetName());
++        return PyStatic.NewNone();
++    }
++
++    if (!JumpDrive::PortalJump(call.client, pOwner, pPortal))
++        return PyStatic.NewNone();
++
++    /* return error msg from this call, if applicable, else nodeid and timestamp */
++    // HACK: WE'RE RETURNING BACK THE SAME BOUND SERVICE, IN REALITY A NEW BOUND INSTANCE SHOULD BE CREATED FOR THIS SHIP IN SPECIFIC
++    //       INSTEAD OF REUSING THIS ONE, THIS WOULD HELP KEEP INFORMATION IN/OUT OF MEMORY BASED ON THE BOUND SERVICES
++    return this->GetOID();
+ }
+ 
+ PyResult BeyonceBound::CmdJumpThroughAlliance(PyCallArgs &call, PyInt* otherShipID, PyInt* beaconID, PyInt* solarSystemID) {
+     //sm.StartService('sessionMgr').PerformSessionChange('jump', bp.CmdJumpThroughAlliance, otherShipID, beaconID, solarsystemID)
+     _log(SHIP__WARNING, "BeyonceBound::Handle_CmdJumpThroughAlliance");
+     call.Dump(SHIP__WARNING);
++    /** @todo  alliance (non-fleet) jump portals.  the client finds these through the 'pwn' service, which isn't written */
++    call.client->SendNotifyMsg("Jumping through an alliance member's portal isn't supported yet.  Join their fleet and use Jump Through from there.");
+     return PyStatic.NewNone();
+ }
+ 
+@@ -1003,79 +1121,17 @@ PyResult BeyonceBound::CmdBeaconJumpFleet(PyCallArgs &call, PyInt* characterID,
+     call.Dump(SHIP__WARNING);
+ 
+     _log(AUTOPILOT__MESSAGE, "%s called beacon jump.", call.client->GetName());
+-    if (call.client->IsSessionChange()) {
+-        call.client->SendNotifyMsg("Session Change currently active.");
++    if (!CanStartJump(call.client))
+         return PyStatic.NewNone();
+-    }
+ 
+-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
+-    if (pDestiny == nullptr) {
+-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+-        return PyStatic.NewNone();
+-    } else if (pDestiny->IsWarping()) {
+-        call.client->SendNotifyMsg( "You can't do this while warping");
+-        return PyStatic.NewNone();
+-    } else if (pDestiny->IsFrozen()) {
+-        call.client->SendNotifyMsg( "Your ship is frozen and cannot move");
++    // checks the cyno is still lit and its pilot is still in our fleet
++    JumpDrive::Beacon beacon;
++    if (!JumpDrive::FindFleetBeacon(call.client, characterID->value(), beaconID->value(), beacon))
+         return PyStatic.NewNone();
+-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
+-        return PyStatic.NewNone();
+-    }
+-
+-    InventoryItemRef beacon = sItemFactory.GetItemRefFromID(beaconID->value());
+-
+-    //Check for jump fuel and make sure there is enough fuel available
+-    ShipItemRef ship = call.client->GetShip();
+-
+-    std::vector<InventoryItemRef> fuelBayItems;
+-    std::vector<InventoryItemRef> requiredItems;
+-    uint32 fuelType = ship->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
+-    uint32 fuelBaseConsumption = uint32(ceil(ship->GetAttribute(AttrJumpDriveConsumptionAmount).get_float()));
+-    uint32 fuelQuantity;
+-
+-    GPoint startPosition = SystemDB::GetSolarSystemPosition(call.client->GetSystemID());
+-    GPoint endPosition = SystemDB::GetSolarSystemPosition(beacon->locationID());
+-
+-    GVector heading ( startPosition, endPosition );
+-    double jumpDistance = EvEMath::Units::MetersToLightYears(heading.length());
+-
+-    int8 jumpFuelConservationLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFuelConservation);
+-    int8 jumpFreightersLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFreighters);
+-
+-    if (ship->groupID() == EVEDB::invGroups::JumpFreighter) {
+-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel) * (1 - 0.1 * jumpFreightersLevel)));
+-    } else {
+-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel)));
+-    }
+ 
+-    ship->GetMyInventory()->GetItemsByFlag(flagFuelBay, fuelBayItems);
+-    uint32 quantity = 0;
+-    for (auto cur : fuelBayItems) {
+-        if (cur->type().id() == fuelType) {
+-            quantity += cur->quantity();
+-            requiredItems.push_back(cur);
+-            if (quantity >= fuelQuantity) {
+-                break;
+-            }
+-        }
+-    }
+-    if (quantity < fuelQuantity) {
+-        ship->GetPilot()->SendNotifyMsg("This jump requires you to have %u units of %s in your fuel bay.", fuelQuantity, sItemFactory.GetType(fuelType)->name().c_str());
++    // range, capacitor and fuel
++    if (!JumpDrive::DriveJump(call.client, beacon))
+         return PyStatic.NewNone();
+-    }
+-
+-    for (auto cur : requiredItems) {
+-        if (cur->quantity() > fuelQuantity) {
+-            //If we have all the quantity we need in the current stack, decrement the amount we need and break
+-            cur->AlterQuantity(-fuelQuantity, true);
+-            break;
+-        } else {
+-            //If the stack doesn't have the full amount delete item
+-            cur->SetQuantity(0, true, true);
+-        }
+-    }
+-
+-    call.client->CynoJump(beacon);
+ 
+     /* return error msg from this call, if applicable, else nodeid and timestamp */
+     // returns nodeID and timestamp
+@@ -1090,81 +1146,17 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID,
+     call.Dump(SHIP__WARNING);
+ 
+     _log(AUTOPILOT__MESSAGE, "%s called beacon jump.", call.client->GetName());
+-    if (call.client->IsSessionChange()) {
+-        call.client->SendNotifyMsg("Session Change currently active.");
++    if (!CanStartJump(call.client))
+         return PyStatic.NewNone();
+-    }
+ 
+-    DestinyManager* pDestiny = call.client->GetShipSE()->DestinyMgr();
+-    if (pDestiny == nullptr) {
+-        codelog(CLIENT__ERROR, "%s: Client has no destiny manager!", call.client->GetName());
+-        return PyStatic.NewNone();
+-    } else if (pDestiny->IsWarping()) {
+-        call.client->SendNotifyMsg( "You can't do this while warping");
+-        return PyStatic.NewNone();
+-    }  else if (pDestiny->AbortIfLoginWarping(true)) {
++    // checks the beacon is still online for our alliance
++    JumpDrive::Beacon beacon;
++    if (!JumpDrive::FindAllianceBeacon(call.client, beaconID->value(), beacon))
+         return PyStatic.NewNone();
+-    }
+-
+-    InventoryItemRef beacon = sItemFactory.GetItemRefFromID(beaconID->value());
+ 
+-    //Check for jump fuel and make sure there is enough fuel available
+-    ShipItemRef ship = call.client->GetShip();
+-
+-    std::vector<InventoryItemRef> fuelBayItems;
+-    std::vector<InventoryItemRef> requiredItems;
+-    uint32 fuelType = ship->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
+-    uint32 fuelBaseConsumption = uint32(ceil(ship->GetAttribute(AttrJumpDriveConsumptionAmount).get_float()));
+-    uint32 fuelQuantity;
+-
+-    GPoint startPosition = SystemDB::GetSolarSystemPosition(call.client->GetSystemID());
+-    GPoint endPosition = SystemDB::GetSolarSystemPosition(beacon->locationID());
+-
+-    GVector heading ( startPosition, endPosition );
+-    double jumpDistance = EvEMath::Units::MetersToLightYears(heading.length());
+-
+-    int8 jumpFuelConservationLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFuelConservation);
+-    int8 jumpFreightersLevel = call.client->GetChar()->GetSkillLevel(EvESkill::JumpFreighters);
+-
+-    if (ship->groupID() == EVEDB::invGroups::JumpFreighter) {
+-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel) * (1 - 0.1 * jumpFreightersLevel)));
+-    } else {
+-        fuelQuantity = uint32(ceil(jumpDistance * fuelBaseConsumption * (1 - 0.1 * jumpFuelConservationLevel)));
+-    }
+-
+-    ship->GetMyInventory()->GetItemsByFlag(flagFuelBay, fuelBayItems);
+-    uint32 quantity = 0;
+-    for (auto cur : fuelBayItems) {
+-        if (cur->type().id() == fuelType) {
+-            quantity += cur->quantity();
+-            requiredItems.push_back(cur);
+-            if (quantity >= fuelQuantity) {
+-                break;
+-            }
+-        }
+-    }
+-    if (quantity < fuelQuantity) {
+-        ship->GetPilot()->SendNotifyMsg("This jump requires you to have %u units of %s in your inventory.", fuelQuantity, sItemFactory.GetType(fuelType)->name().c_str());
+-        return nullptr;
+-    }
+-
+-    uint32 quantityLeft = fuelQuantity;
+-    for (auto cur : requiredItems) {
+-        if (cur->quantity() >= quantityLeft) {
+-            //If we have all the quantity we need in the current stack, decrement the amount we need and break
+-            cur->AlterQuantity(-quantityLeft, true);
+-            break;
+-        } else {
+-            //If the stack doesn't have the full amount, decrement the quantity from what we need and zero out the stack
+-            quantityLeft -= cur->quantity();
+-            // Delete item after we zero it's quantity
+-            cur->SetQuantity(0, true, true);
+-        }
+-    }
+-
+-    GPoint position = beacon->position();
+-    position.MakeRandomPointOnSphere(2500.0);
+-    call.client->CynoJump(beacon);
++    // range, capacitor and fuel
++    if (!JumpDrive::DriveJump(call.client, beacon))
++        return PyStatic.NewNone();
+ 
+     /* return error msg from this call, if applicable, else nodeid and timestamp */
+     // returns nodeID and timestamp
+@@ -1173,6 +1165,7 @@ PyResult BeyonceBound::CmdBeaconJumpAlliance(PyCallArgs &call, PyInt* beaconID,
+     return this->GetOID();
+ }
+ 
++
+ PyResult BeyonceBound::CmdFleetRegroup(PyCallArgs &call) {
+     // not sure what this is supposed to do yet
+     _log(SHIP__WARNING, "BeyonceBound::Handle_CmdFleetRegroup");
+diff --git a/src/eve-server/ship/BeyonceService.h b/src/eve-server/ship/BeyonceService.h
+index 96b7313..f9c1bef 100644
+--- a/src/eve-server/ship/BeyonceService.h
++++ b/src/eve-server/ship/BeyonceService.h
+@@ -74,6 +74,8 @@ protected:
+     PyResult CmdJumpThroughCorporationStructure(PyCallArgs& call, PyInt* itemID, PyInt* remoteStructureID, PyInt* remoteSystemID);
+     PyResult CmdBeaconJumpFleet(PyCallArgs& call, PyInt* characterID, PyInt* beaconID, PyInt* solarSystemID);
+     PyResult CmdBeaconJumpAlliance(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
++    PyResult CmdBridgeToMember(PyCallArgs& call, PyInt* charID, PyInt* beaconID, PyInt* solarSystemID);
++    PyResult CmdBridgeToStructure(PyCallArgs& call, PyInt* beaconID, PyInt* solarSystemID);
+     PyResult CmdFleetRegroup(PyCallArgs& call);
+     PyResult CmdFleetTagTarget(PyCallArgs& call, PyInt* itemID, PyString* tag);
+     
+diff --git a/src/eve-server/ship/JumpDrive.cpp b/src/eve-server/ship/JumpDrive.cpp
+new file mode 100644
+index 0000000..9e29af8
+--- /dev/null
++++ b/src/eve-server/ship/JumpDrive.cpp
+@@ -0,0 +1,361 @@
++/**
++ * @name JumpDrive.cpp
++ *   shared checks and helpers for jump drives, cynosural fields and jump portals (titan / black ops bridges)
++ *
++ * @Author:  AzediZ
++ * @date:    11 October 2026
++ */
++
++#include "eve-server.h"
++
++#include "Client.h"
++#include "EntityList.h"
++#include "fleet/FleetService.h"
++#include "inventory/Inventory.h"
++#include "ship/JumpDrive.h"
++#include "ship/modules/CynoModule.h"
++#include "ship/modules/JumpPortalModule.h"
++#include "ship/modules/ModuleManager.h"
++#include "ship/Ship.h"
++#include "system/SystemDB.h"
++#include "system/sov/SovereigntyDataMgr.h"
++
++CynoModule* JumpDrive::GetActiveCyno(Client* pClient)
++{
++    if ((pClient == nullptr) or !pClient->IsInSpace())
++        return nullptr;
++    ShipItemRef sRef = pClient->GetShip();
++    if (sRef.get() == nullptr)
++        return nullptr;
++
++    std::vector<GenericModule*> modules;
++    sRef->GetModuleManager()->GetModulesInBank(flagHiSlot0, modules);
++    for (auto cur : modules)
++        if (cur->IsCynoModule() and cur->GetCynoModule()->IsFieldUp())
++            return cur->GetCynoModule();
++
++    return nullptr;
++}
++
++JumpPortalModule* JumpDrive::GetPortalModule(Client* pClient)
++{
++    if ((pClient == nullptr) or !pClient->IsInSpace())
++        return nullptr;
++    ShipItemRef sRef = pClient->GetShip();
++    if (sRef.get() == nullptr)
++        return nullptr;
++
++    std::vector<GenericModule*> modules;
++    sRef->GetModuleManager()->GetModulesInBank(flagHiSlot0, modules);
++    for (auto cur : modules)
++        if ((cur->GetJumpPortalModule() != nullptr) and cur->isOnline())
++            return cur->GetJumpPortalModule();
++
++    return nullptr;
++}
++
++bool JumpDrive::FindFleetBeacon(Client* pClient, uint32 charID, uint32 beaconID, Beacon& beacon)
++{
++    Client* pOwner = sEntityList.FindClientByCharID(charID);
++    if ((pOwner == nullptr) or !pClient->InFleet() or (pOwner->GetFleetID() != pClient->GetFleetID())) {
++        pClient->SendNotifyMsg("That cynosural field is no longer available to your fleet.");
++        return false;
++    }
++
++    // the client remembers the field from when it was lit, so check it is still there
++    CynoModule* pCyno = GetActiveCyno(pOwner);
++    if ((pCyno == nullptr) or (pCyno->GetFieldID() != beaconID)) {
++        pClient->SendNotifyMsg("%s no longer has a cynosural field lit.", pOwner->GetName());
++        return false;
++    }
++
++    beacon.item = pCyno->GetField();
++    beacon.systemID = pOwner->GetSystemID();
++    beacon.charID = charID;
++    beacon.covert = pCyno->IsCovert();
++    return true;
++}
++
++bool JumpDrive::FindAllianceBeacon(Client* pClient, uint32 beaconID, Beacon& beacon)
++{
++    InventoryItemRef iRef = sItemFactory.GetItemRefFromID(beaconID);
++    if ((iRef.get() == nullptr) or (iRef->groupID() != EVEDB::invGroups::Cynosural_Generator_Array)) {
++        pClient->SendNotifyMsg("That beacon is no longer available.");
++        return false;
++    }
++
++    // an online generator array registers itself as its system's beacon
++    SovereigntyData sovData = svDataMgr.GetSovereigntyData(iRef->locationID());
++    if ((sovData.beaconID != beaconID) or (sovData.allianceID == 0) or ((int32)sovData.allianceID != pClient->GetAllianceID())) {
++        pClient->SendNotifyMsg("That beacon is not online for your alliance.");
++        return false;
++    }
++
++    beacon.item = iRef;
++    beacon.systemID = iRef->locationID();
++    beacon.charID = 0;
++    beacon.covert = false;
++    return true;
++}
++
++double JumpDrive::GetDistanceLY(uint32 fromSystemID, uint32 toSystemID)
++{
++    GVector heading(SystemDB::GetSolarSystemPosition(fromSystemID), SystemDB::GetSolarSystemPosition(toSystemID));
++    return EvEMath::Units::MetersToLightYears(heading.length());
++}
++
++bool JumpDrive::CheckRange(Client* pClient, ShipItemRef sRef, uint32 toSystemID, const char* what)
++{
++    // includes Jump Drive Calibration
++    double range = sRef->GetAttribute(AttrJumpDriveRange).get_double();
++    if (range <= 0) {
++        _log(SHIP__WARNING, "JumpDrive::CheckRange() - %s has no jump drive range.  Not checking range.", sRef->name());
++        return true;
++    }
++
++    double distance = GetDistanceLY(pClient->GetSystemID(), toSystemID);
++    if (distance > range) {
++        pClient->SendNotifyMsg("That system is %.2f light years away, but your %s only reaches %.2f light years.", distance, what, range);
++        return false;
++    }
++
++    return true;
++}
++
++uint32 JumpDrive::GetQuantity(InventoryItemRef holder, EVEItemFlags flag, uint16 typeID)
++{
++    if ((holder.get() == nullptr) or (holder->GetMyInventory() == nullptr))
++        return 0;
++
++    std::vector<InventoryItemRef> items;
++    holder->GetMyInventory()->GetItemsByFlag(flag, items);
++    uint32 quantity(0);
++    for (auto cur : items)
++        if (cur->typeID() == typeID)
++            quantity += cur->quantity();
++
++    return quantity;
++}
++
++bool JumpDrive::TakeItems(InventoryItemRef holder, EVEItemFlags flag, uint16 typeID, uint32 qty)
++{
++    if (qty == 0)
++        return true;
++    if (GetQuantity(holder, flag, typeID) < qty)
++        return false;
++
++    std::vector<InventoryItemRef> items;
++    holder->GetMyInventory()->GetItemsByFlag(flag, items);
++    uint32 left(qty);
++    for (auto cur : items) {
++        if (left == 0)
++            break;
++        if (cur->typeID() != typeID)
++            continue;
++        uint32 stack = cur->quantity();
++        if (stack > left) {
++            cur->AlterQuantity(-((int32)left), true);
++            left = 0;
++        } else {
++            // use up the whole stack
++            left -= stack;
++            cur->SetQuantity(0, true, true);
++        }
++    }
++
++    return true;
++}
++
++bool JumpDrive::DriveJump(Client* pClient, const Beacon& beacon)
++{
++    ShipItemRef sRef = pClient->GetShip();
++    uint16 fuelType = sRef->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
++    if (fuelType == 0) {
++        pClient->SendNotifyMsg("Your ship doesn't have a jump drive.");
++        return false;
++    }
++    if (beacon.systemID == pClient->GetSystemID()) {
++        pClient->SendNotifyMsg("That cynosural field is in this system.");
++        return false;
++    }
++    if (beacon.covert and (sRef->groupID() != EVEDB::invGroups::BlackOps)) {
++        pClient->SendNotifyMsg("Only Black Ops ships can jump to a covert cynosural field.");
++        return false;
++    }
++    if (pClient->IsJump())
++        return false;
++    if (!CheckRange(pClient, sRef, beacon.systemID, "jump drive"))
++        return false;
++
++    // capacitor.  jumpDriveCapacitorNeed is a fraction of capacitor capacity (Jump Drive Operation lowers it)
++    float capacity = sRef->GetAttribute(AttrCapacitorCapacity).get_float();
++    float capNow = sRef->GetAttribute(AttrCapacitorCharge).get_float();
++    float capNeed = sRef->GetAttribute(AttrJumpDriveCapacitorNeed).get_float() * capacity;
++    if (capNow < capNeed) {
++        pClient->SendNotifyMsg("This jump needs %.0f GJ of capacitor, but you only have %.0f GJ.", capNeed, capNow);
++        return false;
++    }
++
++    // fuel, by distance.  Jump Fuel Conservation saves 10% a level, and Jump Freighters another 10% a level in a jump freighter
++    double distance = GetDistanceLY(pClient->GetSystemID(), beacon.systemID);
++    double fuelBase = sRef->GetAttribute(AttrJumpDriveConsumptionAmount).get_double();
++    double fuelFactor = 1 - (0.1 * pClient->GetChar()->GetSkillLevel(EvESkill::JumpFuelConservation));
++    if (sRef->groupID() == EVEDB::invGroups::JumpFreighter)
++        fuelFactor *= 1 - (0.1 * pClient->GetChar()->GetSkillLevel(EvESkill::JumpFreighters));
++    uint32 fuelNeed = uint32(ceil(distance * fuelBase * fuelFactor));
++    if (!TakeItems(sRef, flagFuelBay, fuelType, fuelNeed)) {
++        pClient->SendNotifyMsg("This jump needs %u units of %s in your fuel bay.", fuelNeed, sItemFactory.GetType(fuelType)->name().c_str());
++        return false;
++    }
++
++    if ((capNeed > 0) and (capacity > 0))
++        sRef->SetShipCapacitorLevel((capNow - capNeed) / capacity);
++
++    _log(SHIP__MESSAGE, "%s jump drive: %.2f ly to %s(%u) in system %u, %u fuel, %.0f GJ", pClient->GetName(), distance, \
++            beacon.item->name(), beacon.item->itemID(), beacon.systemID, fuelNeed, capNeed);
++    pClient->CynoJump(beacon.item);
++    return true;
++}
++
++bool JumpDrive::PortalJump(Client* pClient, Client* pOwner, JumpPortalModule* pPortal)
++{
++    ShipSE* pShipSE = pClient->GetShipSE();
++    ShipSE* pOwnerSE = pOwner->GetShipSE();
++    if ((pShipSE == nullptr) or (pOwnerSE == nullptr) or (pClient->GetSystemID() != pOwner->GetSystemID())) {
++        pClient->SendNotifyMsg("You must be in the same system as the jump portal.");
++        return false;
++    }
++
++    double distance = pShipSE->GetPosition().distance(pOwnerSE->GetPosition()) - pShipSE->GetRadius() - pOwnerSE->GetRadius();
++    if (distance > PortalUseRange) {
++        pClient->SendNotifyMsg("You are %.0f m from %s's jump portal.  You need to be within %.0f m to use it.", distance, pOwner->GetName(), PortalUseRange);
++        return false;
++    }
++
++    // the beacon may have gone out since the portal opened
++    const Beacon& beacon = pPortal->GetBeacon();
++    Beacon check;
++    if (beacon.charID != 0) {
++        if (!FindFleetBeacon(pClient, beacon.charID, beacon.item->itemID(), check))
++            return false;
++    } else {
++        SovereigntyData sovData = svDataMgr.GetSovereigntyData(beacon.systemID);
++        if (sovData.beaconID != beacon.item->itemID()) {
++            pClient->SendNotifyMsg("The beacon at the other end of the jump portal is no longer online.");
++            return false;
++        }
++    }
++
++    ShipItemRef sRef = pClient->GetShip();
++    uint32 groupID = sRef->groupID();
++    if (pPortal->IsCovert()) {
++        // covert ops cloak hulls.  the invGroups table has no name for force recon ships (833)
++        if ((groupID != EVEDB::invGroups::CovertOps) and (groupID != EVEDB::invGroups::StealthBomber) and (groupID != 833)) {
++            pClient->SendNotifyMsg("Only covert ops ships, stealth bombers and force recon ships can use a covert jump portal.");
++            return false;
++        }
++    } else {
++        switch (groupID) {
++            case EVEDB::invGroups::Titan:
++            case EVEDB::invGroups::Supercarrier:
++            case EVEDB::invGroups::Carrier:
++            case EVEDB::invGroups::Dreadnought:
++            case EVEDB::invGroups::CapitalIndustrialShip:
++            case EVEDB::invGroups::Freighter:
++            case EVEDB::invGroups::JumpFreighter:
++            case EVEDB::invGroups::BlackOps: {
++                pClient->SendNotifyMsg("Capital ships, Black Ops and freighters can't use a jump portal.");
++                return false;
++            }
++        }
++    }
++    if (pClient->IsJump())
++        return false;
++
++    // fuel comes from the portal ship's fuel bay: jumping ship's mass x the generator's mass factor x distance
++    ShipItemRef oRef = pOwner->GetShip();
++    uint16 fuelType = oRef->GetAttribute(AttrJumpDriveConsumptionType).get_uint32();
++    double massFactor = pPortal->GetAttribute(AttrJumpPortalConsumptionMassFactor).get_double();
++    double ly = GetDistanceLY(pOwner->GetSystemID(), beacon.systemID);
++    uint32 fuelNeed = uint32(ceil(sRef->GetAttribute(AttrMass).get_double() * massFactor * ly));
++    if ((fuelType != 0) and !TakeItems(oRef, flagFuelBay, fuelType, fuelNeed)) {
++        const char* fuelName = sItemFactory.GetType(fuelType)->name().c_str();
++        pClient->SendNotifyMsg("Your jump through the portal needs %u units of %s, but %s's fuel bay doesn't have enough.", fuelNeed, fuelName, pOwner->GetName());
++        if (pOwner != pClient)
++            pOwner->SendNotifyMsg("%s couldn't jump through your portal: it needs %u units of %s from your fuel bay.", pClient->GetName(), fuelNeed, fuelName);
++        return false;
++    }
++
++    _log(SHIP__MESSAGE, "%s jump portal (%s): %.2f ly to %s(%u) in system %u, %u fuel from %s", pClient->GetName(), pOwner->GetName(), ly, \
++            beacon.item->name(), beacon.item->itemID(), beacon.systemID, fuelNeed, oRef->name());
++    pClient->CynoJump(beacon.item);
++    return true;
++}
++
++void JumpDrive::SendBeaconChange(Client* pOwner, uint32 systemID, uint32 fieldID, bool active)
++{
++    if (!pOwner->InFleet())
++        return;
++
++    _log(MODULE__DEBUG, "Sending OnJumpBeaconChange for %s (field %u, active = %s)", pOwner->GetName(), fieldID, active ? "true" : "false");
++    std::vector<Client*> members = sFltSvc.GetFleetClients(pOwner->GetFleetID());
++    for (auto cur : members) {
++        if (cur == nullptr)
++            continue;
++        PyTuple* data = new PyTuple(4);
++            data->SetItem(0, new PyInt(pOwner->GetCharacterID()));
++            data->SetItem(1, new PyInt(systemID));
++            data->SetItem(2, new PyInt(fieldID));
++            data->SetItem(3, new PyBool(active));
++        cur->SendNotification("OnJumpBeaconChange", "clientID", &data);
++    }
++}
++
++void JumpDrive::SendBridgeChange(Client* pOwner, uint32 shipID, uint32 systemID, uint32 beaconID, bool active)
++{
++    if (!pOwner->InFleet())
++        return;
++
++    _log(MODULE__DEBUG, "Sending OnBridgeModeChange for %s (ship %u, beacon %u, active = %s)", pOwner->GetName(), shipID, beaconID, active ? "true" : "false");
++    std::vector<Client*> members = sFltSvc.GetFleetClients(pOwner->GetFleetID());
++    for (auto cur : members) {
++        if (cur == nullptr)
++            continue;
++        PyTuple* data = new PyTuple(4);
++            data->SetItem(0, new PyInt(shipID));
++            data->SetItem(1, new PyInt(systemID));
++            data->SetItem(2, new PyInt(beaconID));
++            data->SetItem(3, new PyBool(active));
++        cur->SendNotification("OnBridgeModeChange", "clientID", &data);
++    }
++}
++
++void JumpDrive::SendActiveBeacons(Client* pClient)
++{
++    if ((pClient == nullptr) or !pClient->InFleet())
++        return;
++
++    std::vector<Client*> members = sFltSvc.GetFleetClients(pClient->GetFleetID());
++    for (auto cur : members) {
++        if (cur == nullptr)
++            continue;
++        CynoModule* pCyno = GetActiveCyno(cur);
++        if (pCyno != nullptr) {
++            PyTuple* data = new PyTuple(4);
++                data->SetItem(0, new PyInt(cur->GetCharacterID()));
++                data->SetItem(1, new PyInt(cur->GetSystemID()));
++                data->SetItem(2, new PyInt(pCyno->GetFieldID()));
++                data->SetItem(3, new PyBool(true));
++            pClient->SendNotification("OnJumpBeaconChange", "clientID", &data);
++        }
++        JumpPortalModule* pPortal = GetPortalModule(cur);
++        if ((pPortal != nullptr) and pPortal->IsOpen()) {
++            PyTuple* data = new PyTuple(4);
++                data->SetItem(0, new PyInt(cur->GetShipID()));
++                data->SetItem(1, new PyInt(pPortal->GetBeacon().systemID));
++                data->SetItem(2, new PyInt(pPortal->GetBeacon().item->itemID()));
++                data->SetItem(3, new PyBool(true));
++            pClient->SendNotification("OnBridgeModeChange", "clientID", &data);
++        }
++    }
++}
+diff --git a/src/eve-server/ship/JumpDrive.h b/src/eve-server/ship/JumpDrive.h
+new file mode 100644
+index 0000000..a656636
+--- /dev/null
++++ b/src/eve-server/ship/JumpDrive.h
+@@ -0,0 +1,66 @@
++/**
++ * @name JumpDrive.h
++ *   shared checks and helpers for jump drives, cynosural fields and jump portals (titan / black ops bridges)
++ *
++ * @Author:  AzediZ
++ * @date:    11 October 2026
++ */
++
++#ifndef _EVE_SHIP_JUMP_DRIVE_H_
++#define _EVE_SHIP_JUMP_DRIVE_H_
++
++#include "inventory/InventoryItem.h"
++
++class Client;
++class CynoModule;
++class JumpPortalModule;
++
++namespace JumpDrive {
++    // how close (surface to surface) a ship must be to a titan or black ops to use its jump portal
++    const float PortalUseRange = 2500.0f;
++
++    // a lit cynosural field or an online alliance beacon (cynosural generator array) that ships can jump to
++    struct Beacon {
++        InventoryItemRef item;
++        uint32 systemID = 0;
++        uint32 charID = 0;      // the character with the cyno lit (0 for an alliance beacon)
++        bool covert = false;    // covert cynosural field, only black ops can use it
++    };
++
++    // the client's active (lit) cynosural field generator, or nullptr
++    CynoModule* GetActiveCyno(Client* pClient);
++    // the client's fitted and online jump portal generator, or nullptr
++    JumpPortalModule* GetPortalModule(Client* pClient);
++
++    // finds the cyno that charID has lit, and checks charID is in pClient's fleet.
++    //  tells pClient why and returns false when there is no such cyno
++    bool FindFleetBeacon(Client* pClient, uint32 charID, uint32 beaconID, Beacon& beacon);
++    // finds an online alliance beacon in pClient's alliance.  tells pClient why and returns false when not found
++    bool FindAllianceBeacon(Client* pClient, uint32 beaconID, Beacon& beacon);
++
++    // distance between two solar systems in light years
++    double GetDistanceLY(uint32 fromSystemID, uint32 toSystemID);
++    // checks toSystemID is within the ship's jump drive range.  tells pClient and returns false when not
++    bool CheckRange(Client* pClient, ShipItemRef sRef, uint32 toSystemID, const char* what);
++
++    // total quantity of typeID in holder's flag
++    uint32 GetQuantity(InventoryItemRef holder, EVEItemFlags flag, uint16 typeID);
++    // removes qty of typeID from holder's flag, across as many stacks as needed.  returns false (and removes nothing) when there isn't enough
++    bool TakeItems(InventoryItemRef holder, EVEItemFlags flag, uint16 typeID, uint32 qty);
++
++    // jumps pClient's ship to the beacon with its own jump drive (capitals, black ops, jump freighters).  checks the ship
++    //  has a jump drive, range, capacitor and fuel, then uses the capacitor and fuel.  tells pClient why and returns false when it can't
++    bool DriveJump(Client* pClient, const Beacon& beacon);
++    // jumps pClient's ship through pOwner's open jump portal.  checks distance to the portal ship, which ships may use the
++    //  portal and the portal ship's fuel, then uses the fuel.  tells pClient why and returns false when it can't
++    bool PortalJump(Client* pClient, Client* pOwner, JumpPortalModule* pPortal);
++
++    // tells fleet members a cyno was lit or went out (OnJumpBeaconChange)
++    void SendBeaconChange(Client* pOwner, uint32 systemID, uint32 fieldID, bool active);
++    // tells fleet members a jump portal opened or closed (OnBridgeModeChange)
++    void SendBridgeChange(Client* pOwner, uint32 shipID, uint32 systemID, uint32 beaconID, bool active);
++    // tells pClient about every cyno lit and jump portal open in its fleet.  for members joining a fleet after these started
++    void SendActiveBeacons(Client* pClient);
++}
++
++#endif  // _EVE_SHIP_JUMP_DRIVE_H_
+diff --git a/src/eve-server/ship/modules/CynoModule.cpp b/src/eve-server/ship/modules/CynoModule.cpp
+index 7503c34..4947ebb 100644
+--- a/src/eve-server/ship/modules/CynoModule.cpp
++++ b/src/eve-server/ship/modules/CynoModule.cpp
+@@ -5,6 +5,7 @@
+   * @date:   8 October 2021
+   */
+ 
++#include "ship/JumpDrive.h"
+ #include "ship/modules/CynoModule.h"
+ #include "system/SystemManager.h"
+ #include "fleet/FleetService.h"
+@@ -19,20 +20,20 @@ cSE(nullptr),
+ m_firstRun(true),
+ m_shipVelocity(0.0f)
+ {
+-    if (!m_shipRef->HasPilot())
+-        return;
+-
+-    pClient = m_shipRef->GetPilot();
+-
+-    // increase scan speed by level of survey skill
+-    float cycleTime = GetAttribute(AttrDuration).get_float();
+-    cycleTime *= (1 + (0.03f * (pClient->GetChar()->GetSkillLevel(EvESkill::Survey, true))));
+-    SetAttribute(AttrDuration, cycleTime);
++    /* the field lasts one cycle of the module (10 minutes), which no skill changes.
++     *  (this used to add 3% a level of Survey, copied from the survey scanner code)
++     */
+ }
+ 
+ void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
+ {
++    // the pilot can change since the module was loaded (relog, someone else boarding the ship)
++    pClient = m_shipRef->GetPilot();
++    if (pClient == nullptr)
++        return;
+     pShipSE = pClient->GetShipSE();
++    if (pShipSE == nullptr)
++        return;
+ 
+     m_firstRun = true;
+     ActiveModule::Activate(effectID, targetID, repeat);
+@@ -45,14 +46,17 @@ void CynoModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
+ 
+     // hack to disable ship movement here
+     m_shipVelocity = pShipSE->DestinyMgr()->GetMaxVelocity();
++    pShipSE->DestinyMgr()->Stop();
+     pShipSE->DestinyMgr()->SetFrozen(true);
+ }
+ 
+ void CynoModule::DeactivateCycle(bool abort)
+ {
+-    SendOnJumpBeaconChange(false);
+-    cSE->Delete();
+-    SafeDelete(cSE);
++    if (cSE != nullptr) {
++        SendOnJumpBeaconChange(false);
++        cSE->Delete();
++        SafeDelete(cSE);
++    }
+     ActiveModule::DeactivateCycle(abort);
+ 
+     // hack to reinstate ship movement here
+@@ -63,6 +67,9 @@ void CynoModule::DeactivateCycle(bool abort)
+ 
+ bool CynoModule::CanActivate()
+ {
++    if ((pClient == nullptr) or (pShipSE == nullptr))
++        return false;
++
+     if (!pClient->InFleet())
+         throw UserError("CynoMustBeInFleet");
+ 
+@@ -78,9 +85,9 @@ bool CynoModule::CanActivate()
+     //if (m_sysMgr->HasCynoJammer())
+     //    throw UserError("CynosuralGenerationJammed");
+ 
+-    //Send message if the system is being jammed
++    //Send message if the system is being jammed.  covert fields aren't stopped by jammers
+     SovereigntyData sovData = svDataMgr.GetSovereigntyData(pClient->GetLocationID());
+-    if (sovData.jammerID != 0) {
++    if ((sovData.jammerID != 0) and !IsCovert()) {
+         pClient->SendNotifyMsg("This system is currently being jammed.");
+         return false;
+     }
+@@ -117,7 +124,7 @@ void CynoModule::CreateCyno()
+         return;
+ 
+     // Create Cyno field here
+-    ItemData cData(EVEDB::invTypes::CynosuralFieldI, pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone);
++    ItemData cData((IsCovert() ? EVEDB::invTypes::CovertCynosuralFieldI : EVEDB::invTypes::CynosuralFieldI), pClient->GetCharacterID(), m_sysMgr->GetID(), flagNone);
+     InventoryItemRef cRef = sItemFactory.SpawnItem(cData);
+ 
+     _log(MODULE__DEBUG, "Creating Cynosural field");
+@@ -133,26 +140,11 @@ void CynoModule::CreateCyno()
+ }
+ 
+ void CynoModule::SendOnJumpBeaconChange(bool active/*false*/) {
+-        //Send ProcessSovStatusChanged Notification
+-        _log(MODULE__DEBUG, "Sending OnJumpBeaconChange (active = %s)", active ? "true" : "false");
+-
+-        uint32 fieldID(0);
+-        if (cSE != nullptr)
+-            fieldID = cSE->GetID();
+-
+-        PyTuple* data = new PyTuple(4);
+-            data->SetItem(0, new PyInt(pClient->GetCharacterID()));
+-            data->SetItem(1, new PyInt(m_sysMgr->GetID()));
+-            data->SetItem(2, new PyInt(fieldID));
+-            data->SetItem(3, new PyBool(active));
+-
+-        std::vector<Client *> fleetClients;
+-        fleetClients = sFltSvc.GetFleetClients(pClient->GetFleetID());
+-        for (auto cur : fleetClients)
+-            if (cur != nullptr) {
+-                cur->SendNotification("OnJumpBeaconChange", "clientID", &data);
+-                _log(MODULE__DEBUG, "OnJumpBeaconChange sent to %s (%u)", cur->GetName(), cur->GetCharID());
+-            }
++    // tells the fleet, so members get "Jump to" (and "Bridge to") for this field.  members joining the fleet later are told
++    //  when they join (JumpDrive::SendActiveBeacons)
++    if ((pClient == nullptr) or (cSE == nullptr))
++        return;
++    JumpDrive::SendBeaconChange(pClient, cSE->GetSelf()->locationID(), GetFieldID(), active);
+ }
+ 
+ /*
+diff --git a/src/eve-server/ship/modules/CynoModule.h b/src/eve-server/ship/modules/CynoModule.h
+index 28a4b41..01c3ef5 100644
+--- a/src/eve-server/ship/modules/CynoModule.h
++++ b/src/eve-server/ship/modules/CynoModule.h
+@@ -22,6 +22,13 @@ public:
+     virtual CynoModule*       GetCynoModule()             { return this; }
+     virtual bool        IsCynoModule() const        { return true; }
+ 
++    /* the lit field.  fleet members' jump drives and jump portals go to it */
++    bool                IsFieldUp()                 { return (cSE != nullptr); }
++    uint32              GetFieldID()                { return ((cSE != nullptr) ? cSE->GetID() : 0); }
++    InventoryItemRef    GetField()                  { return ((cSE != nullptr) ? cSE->GetSelf() : InventoryItemRef(nullptr)); }
++    // covert cynosural field generator.  only black ops can jump to its field, and cyno jammers don't stop it
++    bool                IsCovert()                  { return (groupID() == EVEDB::invGroups::Covert_Cynosural_Field_Generator); }
++
+     /* ActiveModule overrides */
+     virtual void Activate(uint16 effectID, uint32 targetID=0, int16 repeat=0);
+     virtual void DeactivateCycle(bool abort=false);
+@@ -39,7 +46,7 @@ private:
+ 
+     float m_shipVelocity;
+ 
+-    void SendOnJumpBeaconChange(bool status=false);
++    void SendOnJumpBeaconChange(bool active=false);
+     void CreateCyno();
+ };
+ 
+diff --git a/src/eve-server/ship/modules/GenericModule.h b/src/eve-server/ship/modules/GenericModule.h
+index dd3a60d..e34de0e 100644
+--- a/src/eve-server/ship/modules/GenericModule.h
++++ b/src/eve-server/ship/modules/GenericModule.h
+@@ -26,6 +26,7 @@ class TurretModule;
+ class SuperWeapon;
+ class RigModule;
+ class CynoModule;
++class JumpPortalModule;
+ class SubSystemModule;
+ 
+ /* generic module base class */
+@@ -66,6 +67,7 @@ public:
+     virtual RigModule*          GetRigModule()          { return nullptr; }
+     virtual SubSystemModule*    GetSubSystemModule()    { return nullptr; }
+     virtual CynoModule*         GetCynoModule()         { return nullptr; }
++    virtual JumpPortalModule*   GetJumpPortalModule()   { return nullptr; }
+     /* class type helpers.  public for anyone to access. */
+     virtual bool        IsGenericModule() const         { return true; }
+     virtual bool        IsPassiveModule() const         { return false; }
+diff --git a/src/eve-server/ship/modules/JumpPortalModule.cpp b/src/eve-server/ship/modules/JumpPortalModule.cpp
+new file mode 100644
+index 0000000..b5d1d0b
+--- /dev/null
++++ b/src/eve-server/ship/modules/JumpPortalModule.cpp
+@@ -0,0 +1,71 @@
++/**
++ * @name JumpPortalModule.cpp
++ *   jump portal generator module class (titan and black ops bridges)
++ *
++ * @Author:  AzediZ
++ * @date:    11 October 2026
++ */
++
++#include "ship/modules/JumpPortalModule.h"
++#include "system/DestinyManager.h"
++
++JumpPortalModule::JumpPortalModule(ModuleItemRef mRef, ShipItemRef sRef)
++: ActiveModule(mRef, sRef),
++m_beacon(JumpDrive::Beacon()),
++m_open(false)
++{
++}
++
++bool JumpPortalModule::IsCovert()
++{
++    return (m_modRef->type().GetDefaultEffect() == EVEEffectID::jumpPortalGenerationBO);
++}
++
++void JumpPortalModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
++{
++    // the module button.  portals are opened from the "Bridge to" menu, which knows where the portal goes
++    throw CustomError("Open a jump portal with \"Bridge to\" on a fleet member who has a cynosural field lit.");
++}
++
++bool JumpPortalModule::OpenPortal(const JumpDrive::Beacon& beacon)
++{
++    Client* pClient = m_shipRef->GetPilot();
++    if ((pClient == nullptr) or (pClient->GetShipSE() == nullptr) or m_open)
++        return false;
++
++    // one cycle.  this throws the usual activation errors (capacitor, fuel, offline...)
++    ActiveModule::Activate(m_modRef->type().GetDefaultEffect(), 0, 1);
++    if (m_Stop or (GetModuleState() != Module::State::Activated))
++        return false;
++
++    m_beacon = beacon;
++    m_open = true;
++
++    _log(MODULE__DEBUG, "%s opened a jump portal from %s to %s(%u) in system %u", \
++            pClient->GetName(), m_shipRef->name(), m_beacon.item->name(), m_beacon.item->itemID(), m_beacon.systemID);
++
++    // the ship stays put while the portal is open
++    DestinyManager* pDestiny = pClient->GetShipSE()->DestinyMgr();
++    pDestiny->Stop();
++    pDestiny->SetFrozen(true);
++
++    JumpDrive::SendBridgeChange(pClient, m_shipRef->itemID(), m_beacon.systemID, m_beacon.item->itemID(), true);
++    return true;
++}
++
++void JumpPortalModule::DeactivateCycle(bool abort)
++{
++    if (m_open) {
++        m_open = false;
++        Client* pClient = m_shipRef->GetPilot();
++        if (pClient != nullptr) {
++            if (m_beacon.item.get() != nullptr)
++                JumpDrive::SendBridgeChange(pClient, m_shipRef->itemID(), m_beacon.systemID, m_beacon.item->itemID(), false);
++            if (pClient->GetShipSE() != nullptr)
++                pClient->GetShipSE()->DestinyMgr()->SetFrozen(false);
++        }
++        m_beacon = JumpDrive::Beacon();
++    }
++
++    ActiveModule::DeactivateCycle(abort);
++}
+diff --git a/src/eve-server/ship/modules/JumpPortalModule.h b/src/eve-server/ship/modules/JumpPortalModule.h
+new file mode 100644
+index 0000000..22d6e3d
+--- /dev/null
++++ b/src/eve-server/ship/modules/JumpPortalModule.h
+@@ -0,0 +1,43 @@
++/**
++ * @name JumpPortalModule.h
++ *   jump portal generator module class (titan and black ops bridges)
++ *
++ * @Author:  AzediZ
++ * @date:    11 October 2026
++ */
++
++#ifndef _EVE_SHIP_MODULES_JUMP_PORTAL_MODULE_H_
++#define _EVE_SHIP_MODULES_JUMP_PORTAL_MODULE_H_
++
++#include "ship/JumpDrive.h"
++#include "ship/modules/ActiveModule.h"
++
++/* a portal is opened from the client's "Bridge to" menu (BeyonceBound::CmdBridgeToMember / CmdBridgeToStructure),
++ *  which calls OpenPortal().  it stays open for one cycle of the module, during which the ship can't move and fleet
++ *  members near it can jump through (BeyonceBound::CmdJumpThroughFleet).
++ */
++class JumpPortalModule: public ActiveModule
++{
++public:
++    JumpPortalModule(ModuleItemRef mRef, ShipItemRef sRef);
++    virtual ~JumpPortalModule()                         { /* do nothing here */ }
++
++    virtual JumpPortalModule* GetJumpPortalModule()     { return this; }
++
++    /* ActiveModule overrides */
++    virtual void        Activate(uint16 effectID, uint32 targetID=0, int16 repeat=0);
++    virtual void        DeactivateCycle(bool abort=false);
++
++    // opens a portal to the beacon.  returns true when the portal opened
++    bool                OpenPortal(const JumpDrive::Beacon& beacon);
++    bool                IsOpen() const                  { return m_open; }
++    // black ops covert jump portal generator.  only covert ships can use these portals
++    bool                IsCovert();
++    const JumpDrive::Beacon& GetBeacon() const          { return m_beacon; }
++
++private:
++    JumpDrive::Beacon   m_beacon;
++    bool                m_open;
++};
++
++#endif  // _EVE_SHIP_MODULES_JUMP_PORTAL_MODULE_H_
+diff --git a/src/eve-server/ship/modules/ModuleFactory.h b/src/eve-server/ship/modules/ModuleFactory.h
+index 7516745..e8d3724 100644
+--- a/src/eve-server/ship/modules/ModuleFactory.h
++++ b/src/eve-server/ship/modules/ModuleFactory.h
+@@ -37,6 +37,7 @@
+ #include "ship/modules/ModuleItem.h"
+ #include "ship/modules/TurretModule.h"
+ #include "ship/modules/CynoModule.h"
++#include "ship/modules/JumpPortalModule.h"
+ 
+ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
+ {
+@@ -152,8 +153,9 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
+             // Gang Assist Modules:
+             case EVEDB::invGroups::Gang_Coordinator:                        return (new ActiveModule(mRef, sRef));    // Active - external
+             case EVEDB::invGroups::Siege_Module:                            return (new ActiveModule(mRef, sRef));    // Active - external
+-            case EVEDB::invGroups::Jump_Portal_Generator:                   return (new ActiveModule(mRef, sRef));    // Active - external
++            case EVEDB::invGroups::Jump_Portal_Generator:                   return (new JumpPortalModule(mRef, sRef));
+             case EVEDB::invGroups::Cynosural_Field_Generator:               return (new CynoModule(mRef, sRef));
++            case EVEDB::invGroups::Covert_Cynosural_Field_Generator:        return (new CynoModule(mRef, sRef));
+             case EVEDB::invGroups::Clone_Vat_Bay:                           return (new PassiveModule(mRef, sRef));
+ 
+             // Mining Modules:
+@@ -217,8 +219,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
+             case EVEDB::invGroups::Drone_Damage_Modules:
+             case EVEDB::invGroups::ECM_Enhancer:
+             case EVEDB::invGroups::Cloak_Enhancements:
+-            case EVEDB::invGroups::Mining_Enhancer:
+-            case EVEDB::invGroups::Covert_Cynosural_Field_Generator: {
++            case EVEDB::invGroups::Mining_Enhancer: {
+                 return nullptr;
+             }
+             */
+-- 
+2.43.0
+

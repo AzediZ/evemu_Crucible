@@ -1,0 +1,218 @@
+From 53040df0cf4f65a2a51c6ea3470a497752fb9c90 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 18:58:41 +0100
+Subject: [PATCH 3/4] Fix drone and fighter movement, recall to bay and stack
+ launches
+
+- DestinyManager::Orbit: negate the unsigned follow distance as a float. The
+  uint32 wraparound placed orbiting objects ~170,000 km away, so fighters warped
+  back to their target over and over (also affects NPC orbits).
+- Drones fly at their real maxVelocity from launch, so the client is told the
+  right speed; idle orbit changes only the speed fraction.
+- Agile objects (agility < 2s) turn straight to their target point; Turn()
+  steers toward the current direction to the target point.
+- Drop: stop launching a dragged stack at the pilot's drone limit.
+- Guard Orbit()/SetSpeedFraction() against an orbit target already removed.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ CHANGELOG-SANDBOX.md                     | 33 +++++++++++++++++++++++-
+ src/eve-server/npc/Drone.cpp             |  8 +++---
+ src/eve-server/npc/DroneAI.cpp           |  3 ---
+ src/eve-server/ship/ShipService.cpp      |  5 ++++
+ src/eve-server/system/DestinyManager.cpp | 26 ++++++++++++++++---
+ 5 files changed, 65 insertions(+), 10 deletions(-)
+
+diff --git a/CHANGELOG-SANDBOX.md b/CHANGELOG-SANDBOX.md
+index 7898a33e..7c12cbd3 100644
+--- a/CHANGELOG-SANDBOX.md
++++ b/CHANGELOG-SANDBOX.md
+@@ -9,6 +9,37 @@ Newest first.
+ 
+ ---
+ 
++## 2026-10-10: Drone and fighter fixes after the first in-game test
++
++Patch `0003` · Status: **Tested with the test bot**, awaiting in-game test
++
++**Why.** In the first in-game test, fighters showed "Fighting" but never attacked. They flew off in stair-step lines, wouldn't return to the drone bay, and dragging a whole stack out launched 13 when the limit was 10.
++
++**What changed**
++
++- **Orbit bug (existed in EVEmu before these changes).** One calculation in the server's orbit code overflowed, so an orbiting object was sometimes placed about 170,000 km away. Fighters then tried to warp back to their target over and over, which caused the stair-step lines. This probably also affected NPC rats that orbit you.
++- Drones now tell the game client their real top speed (a Dragonfly flies at 2,000 m/s, not its 225 m/s NPC cruise speed), so the client and server agree on where they are.
++- Drones and fighters, which turn within a second, now turn straight toward where they are going. Before, the server turned them a few degrees a second, so returning drones circled the ship in wide loops and were never scooped.
++- Ships following something now steer toward where it is now, not where it was when the order was given.
++- Dragging a whole stack into space launches drones only up to your limit; the rest stay in the bay with a message.
++- Fixed a server crash when drones lost a target that had just been destroyed.
++
++**Files.** `npc/Drone.cpp`, `npc/DroneAI.cpp`, `ship/ShipService.cpp`, `system/DestinyManager.cpp` (under `src/eve-server/`).
++
++**Tested.** With the test bot against a local server: 13 Dragonflies dragged out launched 10; they engaged and destroyed a Raven with no warping, and all 13 went back to the bay on recall. Five Hobgoblin Is engaged, returned and orbited, then went back to the bay.
++
++---
++
++## 2026-10-10: Test bot (tooling, not server code)
++
++Patch `0004` · Status: **In use**
++
++**What.** `src/eve-bot`: a headless client that logs in like the game client and runs a script: create a character, run GM commands, undock, launch drones, engage, recall, check results. It lets server changes be tested before you rebuild. It is only built when CMake is run with `-DEVEMU_BUILD_BOT=ON`, so the Docker build is unaffected.
++
++**Files.** `CMakeLists.txt` (opt-in build switch), `src/eve-bot/`.
++
++---
++
+ ## 2026-10-10: Control panel cleans up Docker's disk space (tooling, not server code)
+ 
+ Status: **In use**
+@@ -32,7 +63,7 @@ Status: **In use**
+ 
+ ## 2026-10-10: Drone and fighter control
+ 
+-Patch `0002` · Status: **Built**, awaiting in-game test
++Patch `0002` · Status: **Built**. The first in-game test found problems, fixed in patch `0003` above.
+ 
+ **Why.** Every drone command from the client replied "Drone Control is not implemented yet". Drones could be launched but not engaged, recalled or scooped by command, and carriers had no working fighters.
+ 
+diff --git a/src/eve-server/npc/Drone.cpp b/src/eve-server/npc/Drone.cpp
+index 8be208da..49a07285 100644
+--- a/src/eve-server/npc/Drone.cpp
++++ b/src/eve-server/npc/Drone.cpp
+@@ -83,6 +83,9 @@ DroneSE::DroneSE(InventoryItemRef drone, EVEServiceManager &services, SystemMana
+     /** @todo update attribs from char skills here....it's not done by Fx system */
+ 
+     m_destiny->UpdateShipVariables();
++    // UpdateShipVariables() gives drones their NPC cruise speed.  Player drones fly at their full
++    //  speed, and the client is told this speed when the drone appears, so set it before launch.
++    m_destiny->SetMaxVelocity(m_self->GetAttribute(AttrMaxVelocity).get_float());
+ 
+     SetResists();
+ 
+@@ -232,9 +235,8 @@ void DroneSE::IdleOrbit(ShipSE* pShipSE/*nullptr*/) {
+     if (!m_online or (pShipSE == nullptr))
+         return;         // error here?
+ 
+-    // TODO:  fix these speeds
+-    // set speed and begin orbit
+-    m_destiny->SetMaxVelocity(500);
++    // idle drones circle their ship at a comfortable speed.  Only the speed fraction changes here;
++    //  the client already knows the drone's top speed, so client and server stay in step.
+     m_destiny->SetSpeedFraction(0.6f);
+     m_destiny->Orbit(pShipSE, m_orbitRange);
+ }
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index d0703165..63f8e53b 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -351,7 +351,6 @@ void DroneAIMgr::StartAttack(SystemEntity* pTarget) {
+     bool chase(false);
+     m_pDrone->TargetMgr()->StartTargeting(pTarget, lockTime, 8, 1.0e15, chase);
+ 
+-    m_pDrone->DestinyMgr()->SetMaxVelocity(m_maxSpeed);
+     m_attackTimer.Start(m_rateOfFire);
+     _log(DRONE__AI_TRACE, "Drone %s(%u): engaging %s(%u).", m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+ 
+@@ -395,13 +394,11 @@ void DroneAIMgr::MoveToward(SystemEntity* pSE, double range, bool orbit) {
+     if (orbit) {
+         if (pDestiny->IsOrbiting() and (pDestiny->GetTargetID() == pSE->GetID()))
+             return;
+-        pDestiny->SetMaxVelocity(m_maxSpeed);
+         pDestiny->SetSpeedFraction(1.0f, true);
+         pDestiny->Orbit(pSE, range);
+     } else {
+         if (pDestiny->IsFollowing() and (pDestiny->GetTargetID() == pSE->GetID()))
+             return;
+-        pDestiny->SetMaxVelocity(m_maxSpeed);
+         pDestiny->SetSpeedFraction(1.0f, true);
+         pDestiny->Follow(pSE, range);
+     }
+diff --git a/src/eve-server/ship/ShipService.cpp b/src/eve-server/ship/ShipService.cpp
+index e02594eb..fcfe2d69 100644
+--- a/src/eve-server/ship/ShipService.cpp
++++ b/src/eve-server/ship/ShipService.cpp
+@@ -373,6 +373,11 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
+                 // This item is a drone, so launch it into space:
+                 if (qty > 1) {
+                     for (uint8 i = 0; i < qty; ++i) {
++                        // a whole stack can be dragged out at once: stop at the pilot's drone limit and leave the rest in the bay
++                        if (pClient->GetShipSE()->MaxActiveDrones() <= pClient->GetShipSE()->DroneCount()) {
++                            pClient->SendNotifyMsg("You cannot launch more than %u drones; the rest stay in your drone bay.", pClient->GetShipSE()->MaxActiveDrones());
++                            break;
++                        }
+                         InventoryItemRef newItem = iRef->Split(1);
+                         if (newItem.get() == nullptr) {
+                             _log(INV__ERROR, "ShipBound::Handle_Drop() - Error splitting item %u. Skipping.", iRef->itemID());
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index f8cc3075..4aeb9abe 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -268,7 +268,8 @@ void DestinyManager::SetSpeedFraction(float fraction/*1.0*/, bool startMovement/
+     // this sets current speed fraction for object.
+ 
+     // if orbiting, call Orbit() and let code reset the variables
+-    if (m_orbiting != 0)
++    //  (the orbited object may already have been removed, e.g. a target that was just destroyed)
++    if ((m_orbiting != 0) and (m_targetEntity.second != nullptr))
+         Orbit(m_targetEntity.second, m_targetDistance);
+ 
+     if ((fraction == m_userSpeedFraction) and (!startMovement)) {
+@@ -920,6 +921,17 @@ bool DestinyManager::IsTurn() {    //this is working.  dont change
+         return false;
+     }
+ 
++    // very agile objects (drones and fighters have an agility of about 1s) change direction within one tic.
++    //  turning them a few degrees per tic instead sends them on wide loops, so returning drones
++    //  could circle their ship for ever without coming close enough to be scooped.
++    if (m_shipAgility < 2.0) {
++        GVector toVec(m_position, m_targetPoint);
++        toVec.normalize();
++        m_shipHeading = toVec;
++        m_targetHeading = toVec;
++        return false;
++    }
++
+     // check for turning angle.  returns true if angle is enough to change movement variables
+     // create isosceles triangle where legs are current direction and destination, then find angle between legs
+     //  it will set m_radians in the range of [-pi,pi].
+@@ -950,6 +962,10 @@ bool DestinyManager::IsTurn() {    //this is working.  dont change
+         m_shipHeading = toVec;
+         return false;
+     }
++    // turn toward where the target point is now, not where it was when the move began.
++    //  (Turn() steers toward m_targetHeading; left stale, a ship following a moving object, or one
++    //  that overshoots its target point, keeps flying the original direction for ever.)
++    m_targetHeading = toVec;
+     if (is_log_enabled(DESTINY__TURN_TRACE)) {
+         _log(DESTINY__TURN_TRACE, "Destiny::IsTurn() - %s(%u): dot: %.5f, radians:%.5f, degrees:%.3f",\
+             mySE->GetName(), mySE->GetID(), dot, m_radians, degrees);
+@@ -1273,13 +1289,15 @@ void DestinyManager::Orbit() {
+         m_orbiting = Destiny::Ball::Orbit::Far;
+         // fudge distance for a smaller orbit
+         // modify this based on calculated distance
+-        mPosAdj = -m_followDistance / 25;
++        // m_followDistance is unsigned: negate it as a float, or the result wraps round to ~171,000 km
++        //  and the orbiting object is thrown across the system (fighters then warp back to their target).
++        mPosAdj = -static_cast<float>(m_followDistance) / 25.0f;
+         _log(DESTINY__ORBIT_TRACE, "2 - too far");
+     } else if (centers < m_followDistance) {
+         m_orbiting = Destiny::Ball::Orbit::Close;
+         // fudge distance for larger orbit
+         // modify this based on calculated distance
+-        mPosAdj = m_followDistance / 25;
++        mPosAdj = static_cast<float>(m_followDistance) / 25.0f;
+         _log(DESTINY__ORBIT_TRACE, "2 - too close");
+     } else {
+         m_orbiting = Destiny::Ball::Orbit::Orbiting;
+@@ -2216,6 +2234,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
+ }
+ 
+ void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {
++    if (pSE == nullptr)
++        return;
+     if ((m_ballMode == Destiny::Ball::Mode::ORBIT)
+     and (m_targetEntity.second == pSE)
+     and (m_targetDistance == static_cast<double>(distance)))
+-- 
+2.43.0
+

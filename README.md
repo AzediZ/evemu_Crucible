@@ -1,6 +1,6 @@
 # [EVEmu](https://evemu.dev) - An EVE Online Emulator
 
-> **This fork:** what it changes on top of EVEmu Crucible (movement, drones, jump drives, turrets, incursions and fixes) is in the **[changelog](CHANGELOG.md)**, newest first and dated.
+> **Crucible Sandbox:** what this repository changes on top of EVEmu Crucible is in the **[changelog](CHANGELOG-SANDBOX.md)**, newest first and dated.
 
 <p align="center">
 	<a href="https://github.com/EvEmu-Project/evemu_Crucible/pulse"><img src="https://img.shields.io/tokei/lines/github/EvEmu-Project/evemu_Crucible" /></a>

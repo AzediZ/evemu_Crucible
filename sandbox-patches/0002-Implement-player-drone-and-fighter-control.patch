@@ -1,0 +1,1977 @@
+From e29d9dfa00bd6afcb6e58c481e866f34641059c0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 16:49:00 +0100
+Subject: [PATCH 2/2] Implement player drone and fighter control
+
+Every drone command from the client replied "Drone Control is not implemented
+yet". This wires them up and reworks the drone AI:
+
+- Engage, Return and Orbit, Return to Drone Bay (drones fly back and are
+  scooped on arrival), Guard, Assist, Abandon, Reconnect to Lost Drones.
+- Drones look up their controlling ship by ID each tick instead of holding a
+  pointer, so docking, jumping, ship loss or logging off can't leave a dangling
+  pointer. Drones beyond control range, or whose ship docks or leaves the
+  system, go inert in space and can be reconnected or scooped later.
+- Aggressive drones defend their ship from anything that locks it.
+- Fighters have no control-range limit, follow targets through warp when
+  "attack and follow" is on, and warp back to their carrier when recalled.
+- Fighter bombers use missile-style damage (explosion radius and velocity).
+- Drone, fighter and carrier skill/hull bonuses applied to damage and to the
+  number of drones a carrier or supercarrier can field.
+- Killed drones free their ship's bandwidth and drone count.
+
+Mining drones and drone delegation reply that they aren't supported yet.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/Client.cpp                 |  21 +
+ src/eve-server/Client.h                   |   5 +
+ src/eve-server/dogmaim/DogmaIMService.cpp |   4 +-
+ src/eve-server/npc/Drone.cpp              | 111 +++-
+ src/eve-server/npc/Drone.h                |  17 +-
+ src/eve-server/npc/DroneAI.cpp            | 694 ++++++++++++++--------
+ src/eve-server/npc/DroneAI.h              |  78 ++-
+ src/eve-server/npc/EntityService.cpp      | 400 ++++++-------
+ src/eve-server/ship/Ship.cpp              | 123 ++++
+ src/eve-server/ship/Ship.h                |  17 +
+ src/eve-server/ship/ShipService.cpp       |   6 +-
+ src/eve-server/system/TargetManager.cpp   |   7 +
+ src/eve-server/system/TargetManager.h     |   1 +
+ 13 files changed, 966 insertions(+), 518 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 12d368f5..c9ba6e81 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -422,6 +422,9 @@ void Client::ProcessClient() {
+             m_undock = false;
+         }
+ 
++    // drones that came back with 'return to drone bay' are scooped here, outside the system's entity loop
++    pShipSE->ProcessDroneScoops();
++
+     if (m_scanTimer.Enabled())
+         if (m_scanTimer.Check(false)) {
+             _log(CLIENT__TIMER, "ProcessClient():  Scan Timer hit for %s(%u).", m_char->name(), m_char->itemID());
+@@ -650,6 +653,20 @@ void Client::WarpOut() {
+     */
+ }
+ 
++void Client::SetDroneSettings(const std::map<int16, int8>& settings)
++{
++    for (auto cur : settings)
++        m_droneSettings[cur.first] = cur.second;
++}
++
++int8 Client::GetDroneSetting(int16 attributeID, int8 defaultValue)
++{
++    std::map<int16, int8>::iterator itr = m_droneSettings.find(attributeID);
++    if (itr == m_droneSettings.end())
++        return defaultValue;
++    return itr->second;
++}
++
+ void Client::SetAutoPilot(bool set/*false*/)
+ {
+     // itemID=10644  flag=*module*  not published - not in client data
+@@ -674,6 +691,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+ 
+     _log(AUTOPILOT__TRACE, "MoveToLocation() - m_autoPilot = %s", (m_autoPilot ? "true" : "false"));
+ 
++    // docking or leaving the system: launched drones stay behind, uncontrolled
++    if ((pShipSE != nullptr) and !m_login and (m_locationID != locationID) and sDataMgr.IsSolarSystem(m_locationID))
++        pShipSE->DropAllDrones();
++
+     if (!m_login and (m_locationID == locationID) and !sDataMgr.IsStation(locationID)) {
+         _log(PLAYER__WARNING, "MoveToLocation() - m_locationID == location");
+         // This is a simple movement
+diff --git a/src/eve-server/Client.h b/src/eve-server/Client.h
+index fbe73283..1a6da451 100644
+--- a/src/eve-server/Client.h
++++ b/src/eve-server/Client.h
+@@ -265,6 +265,10 @@ public:
+     bool IsAutoPilot()                                  { return m_autoPilot; }
+     void SetAutoPilot(bool set=false);
+ 
++    // drone behaviour settings from the drone window (aggressive, focus fire, fighters attack and follow)
++    void SetDroneSettings(const std::map<int16, int8>& settings);
++    int8 GetDroneSetting(int16 attributeID, int8 defaultValue);
++
+     void JumpInEffect();
+     void JumpOutEffect(uint32 locationID);
+ 
+@@ -373,6 +377,7 @@ protected:
+     bool m_packaged;        // used to correctly package updates into a PackagedAction list
+     bool m_portrait;        // used to verify new char pic received
+     bool m_autoPilot;       // set true for using autopilot.
++    std::map<int16, int8> m_droneSettings;
+     bool m_scanProbe;       // scanning with probes
+     bool m_bubbleWait;
+     bool m_setStateSent;
+diff --git a/src/eve-server/dogmaim/DogmaIMService.cpp b/src/eve-server/dogmaim/DogmaIMService.cpp
+index 9dc8c78f..3d1e5bbd 100644
+--- a/src/eve-server/dogmaim/DogmaIMService.cpp
++++ b/src/eve-server/dogmaim/DogmaIMService.cpp
+@@ -979,7 +979,9 @@ PyResult DogmaIMBound::ChangeDroneSettings(PyCallArgs& call, PyDict* settings) {
+     for (PyDict::const_iterator itr = settings->begin(); itr != settings->end(); ++itr)
+         attribs[PyRep::IntegerValueU32(itr->first)] = PyRep::IntegerValue(itr->second);
+ 
+-    call.client->GetShipSE()->UpdateDrones(attribs);
++    call.client->SetDroneSettings(attribs);
++    if (call.client->GetShipSE() != nullptr)
++        call.client->GetShipSE()->UpdateDrones(attribs);
+ 
+     // returns nothing
+     return nullptr;
+diff --git a/src/eve-server/npc/Drone.cpp b/src/eve-server/npc/Drone.cpp
+index c7caf139..8be208da 100644
+--- a/src/eve-server/npc/Drone.cpp
++++ b/src/eve-server/npc/Drone.cpp
+@@ -30,6 +30,7 @@
+ #include "EntityList.h"
+ #include "inventory/AttributeEnum.h"
+ #include "npc/Drone.h"
++#include "ship/Ship.h"
+ #include "system/Container.h"
+ #include "system/Damage.h"
+ #include "system/DestinyManager.h"
+@@ -46,6 +47,7 @@ DroneSE::DroneSE(InventoryItemRef drone, EVEServiceManager &services, SystemMana
+       assert (m_system != nullptr);
+ 
+     m_online = false;
++    m_pShipSE = nullptr;
+ 
+     m_warID = data.factionID;
+     m_allyID = data.allianceID;
+@@ -140,10 +142,7 @@ void DroneSE::RemoveDrone() {
+ }
+ 
+ void DroneSE::Launch(ShipSE* pShipSE) {
+-    m_pShipSE = pShipSE;
+-
+-    m_controllerID = pShipSE->GetID();
+-    m_controllerOwnerID = pShipSE->GetOwnerID();
++    SetController(pShipSE);
+ 
+     m_system->AddEntity(this);
+ 
+@@ -151,28 +150,86 @@ void DroneSE::Launch(ShipSE* pShipSE) {
+ }
+ 
+ void DroneSE::Online(ShipSE* pShipSE/*nullptr*/) {
++    if (pShipSE != nullptr)
++        SetController(pShipSE);
+     m_online = true;
+     StateChange();
++}
+ 
++void DroneSE::Offline(bool gone/*true*/) {
++    // this is called by abandon, scoop and lost control
++    m_destiny->Stop();
++    m_AI->Reset();
++    m_online = false;
++    StateChange(gone);
++}
++
++void DroneSE::SetController(ShipSE* pShipSE) {
+     if (pShipSE == nullptr)
+-        pShipSE = m_pShipSE;
++        return;
++    m_pShipSE = pShipSE;
++    m_controllerID = pShipSE->GetID();
++    m_controllerOwnerID = pShipSE->GetOwnerID();
++    if (pShipSE->HasPilot())
++        m_pClient = pShipSE->GetPilot();
++}
+ 
+-    m_AI->AssignShip(pShipSE);
++ShipSE* DroneSE::FindControllerShip() {
++    if (m_controllerID == 0)
++        return nullptr;
++    SystemEntity* pSE(m_system->GetSE(m_controllerID));
++    if ((pSE == nullptr) or !pSE->IsShipSE())
++        return nullptr;
++    return pSE->GetShipSE();
+ }
+ 
+-void DroneSE::Offline() {
+-    // this is called by abandon also
+-    m_destiny->Stop();
+-    m_AI->AssignShip(nullptr);
+-    m_online = false;
+-    StateChange();
++ShipSE* DroneSE::GetControllerShip() {
++    ShipSE* pShip(FindControllerShip());
++    if (pShip == nullptr)
++        return nullptr;
++    if (!pShip->HasPilot() or (pShip->GetPilot()->GetCharacterID() != m_ownerID))
++        return nullptr;
++    return pShip;
++}
++
++ShipSE* DroneSE::CheckControl() {
++    if (!m_online)
++        return nullptr;
++    ShipSE* pShip(GetControllerShip());
++    if (pShip == nullptr) {
++        // controlling ship docked, jumped, was destroyed or lost its pilot
++        LoseControl();
++        return nullptr;
++    }
++    if (pShip->SysBubble() == nullptr)
++        return nullptr;     // ship is mid-transition; try again next tick
++    return pShip;
++}
++
++void DroneSE::LoseControl() {
++    _log(DRONE__TRACE, "Drone %s(%u) lost contact with controller %u", GetName(), GetID(), m_controllerID);
++    ShipSE* pShip(FindControllerShip());
++    if (pShip != nullptr)
++        pShip->ReleaseDrone(this);
++    if (TargetMgr() != nullptr)
++        TargetMgr()->ClearTargets();
++    m_controllerID = 0;
++    m_controllerOwnerID = 0;
++    m_targetID = 0;
++    m_pShipSE = nullptr;
++    Offline(false);
++}
++
++bool DroneSE::IsFighter() {
++    return ((m_self->groupID() == EVEDB::invGroups::Fighter_Drone)
++         or (m_self->groupID() == EVEDB::invGroups::Fighter_Bomber));
+ }
+ 
+ void DroneSE::IdleOrbit(ShipSE* pShipSE/*nullptr*/) {
+     if (pShipSE == nullptr)
+-        pShipSE = m_pShipSE;
++        pShipSE = GetControllerShip();
+ 
+-    if (!m_online)
++    if (!m_online or (pShipSE == nullptr))
+         return;         // error here?
+ 
+     // TODO:  fix these speeds
+@@ -201,8 +258,10 @@ void DroneSE::Abandon() {
+  *                        [PyNone]
+  */
+ 
+-void DroneSE::StateChange() {
++void DroneSE::StateChange(bool gone/*true*/) {
+     //OnDroneStateChange(droneID, ownerID, controllerID, activityState, droneTypeID, controllerOwnerID, targetID)
++    if (m_bubble == nullptr)
++        return;
+     if (m_online) {
+         OnDroneStateChange du;
+             du.droneID = m_self->itemID();
+@@ -216,6 +275,20 @@ void DroneSE::StateChange() {
+         // bubblecast is faster than destiny::update
+         m_bubble->BubblecastDestinyUpdate(&up, "destiny");
+         //pShipSE->DestinyMgr()->SendSingleDestinyUpdate(&up);
++    } else if (!gone and IsCharacterID(m_ownerID)) {
++        // still in space and still ours, but nobody is controlling it
++        PyList* list = new PyList();
++            list->AddItemInt(m_self->itemID());
++            list->AddItemInt(m_ownerID);
++            list->AddItem(PyStatic.NewNone());
++            list->AddItem(PyStatic.NewNone());
++            list->AddItemInt(m_self->typeID());
++            list->AddItem(PyStatic.NewNone());
++            list->AddItem(PyStatic.NewNone());
++        PyTuple* tuple = new PyTuple(2);
++            tuple->SetItem(0, new PyString("OnDroneStateChange"));
++            tuple->SetItem(1, list);
++        m_bubble->BubblecastDestinyUpdate(&tuple, "destiny");
+     } else {
+         PyList* list = new PyList();
+             list->AddItemInt(m_self->itemID());
+@@ -233,7 +306,7 @@ void DroneSE::StateChange() {
+ }
+ 
+ void DroneSE::TargetAdded(SystemEntity* who) {
+-    /** @todo (Allan) will need code once drones are implemented */
++    m_AI->TargetLocked(who);
+ }
+ 
+ void DroneSE::TargetLost(SystemEntity *who) {
+@@ -372,6 +445,12 @@ void DroneSE::Killed(Damage &damage) {
+     if ((m_bubble == nullptr) or (m_destiny == nullptr) or (m_system == nullptr))
+         return; // make error here?
+ 
++    // free the controlling ship's bandwidth and drone count, and clear it from the pilot's drone window
++    ShipSE* pShip(FindControllerShip());
++    if (pShip != nullptr)
++        pShip->ReleaseDrone(this);
++    Offline(true);
++
+     uint32 killerID = 0;
+     Client* pClient(nullptr);
+     SystemEntity *killer(damage.srcSE);
+diff --git a/src/eve-server/npc/Drone.h b/src/eve-server/npc/Drone.h
+index d8df7194..99eb4540 100644
+--- a/src/eve-server/npc/Drone.h
++++ b/src/eve-server/npc/Drone.h
+@@ -76,8 +76,17 @@ public:
+ 
+     void Launch(ShipSE* pShipSE);           //add drone entity to system
+     void Online(ShipSE* pShipSE=nullptr);         //  if nullptr sent, assign to controlling ship
+-    void Offline();
+-    void StateChange();
++    // gone=true: the drone is leaving space (scooped, abandoned, destroyed).  gone=false: it stays, uncontrolled.
++    void Offline(bool gone=true);
++    void StateChange(bool gone=true);
++
++    /* control.  the controlling ship is looked up by ID each time, never kept as a pointer. */
++    ShipSE* FindControllerShip();           // the controlling ship, if it is still in this system
++    ShipSE* GetControllerShip();            // ...and still flown by the drone's owner
++    ShipSE* CheckControl();                 // as above, and drops control if out of range or pilot gone
++    void SetController(ShipSE* pShipSE);
++    void LoseControl();                     // drone stays in space, owned but uncontrolled, until reconnected
++    bool IsFighter();
+     //begin idle orbit around assigned ship
+     void IdleOrbit(ShipSE* pShipSE=nullptr);
+ 
+@@ -108,9 +117,9 @@ public:
+     bool IsEnabled()                                    { return m_online; }
+ 
+     void AssignShip(ShipSE* pSE)                        { m_AI->AssignShip(pSE); }
+-    void SetTarget(SystemEntity* pSE = nullptr)         { (pSE == nullptr ? 0 : m_targetID = pSE->GetID()); }
++    void SetTarget(SystemEntity* pSE = nullptr)         { m_targetID = (pSE == nullptr ? 0 : pSE->GetID()); }
+ 
+-    ShipSE* GetHomeShip()                               { return m_pShipSE; }
++    ShipSE* GetHomeShip()                               { return GetControllerShip(); }
+ 
+ protected:
+     Client* m_pClient;          //we do not own this
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index 8e024ef9..d0703165 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -5,115 +5,105 @@
+  * @Author:     Allan
+  * @Version:    0.15
+  * @Date:       27Nov19
++ *
++ * Reworked for player drone and fighter control.  Drones look up their controlling
++ * ship by ID every tick instead of holding a pointer to it, so a ship that docks,
++ * jumps, is destroyed or loses its pilot can never leave a drone with a dangling pointer.
+ */
+ 
+ #include "eve-server.h"
+ 
++#include <cmath>
++
+ #include "Client.h"
++#include "EVEServerConfig.h"
+ #include "inventory/AttributeEnum.h"
+ #include "system/DestinyManager.h"
+ #include "npc/Drone.h"
+ #include "npc/DroneAI.h"
++#include "ship/Ship.h"
+ #include "system/Damage.h"
+ #include "system/SystemBubble.h"
++#include "system/SystemManager.h"
++
++namespace {
++    // skill typeIDs used for drone and fighter bonuses
++    const uint16 skillScoutDroneOperation    = 3437;   // +5km drone control range per level
++    const uint16 skillHeavyDroneOperation    = 3441;   // +5% heavy drone damage per level
++    const uint16 skillDroneInterfacing       = 3442;   // +20% drone (and fighter) damage per level
++    const uint16 skillEWDroneInterfacing     = 23566;  // +3km drone control range per level
++    const uint16 skillFighters               = 23069;  // +20% fighter damage per level
++    const uint16 skillCombatDroneOperation   = 24241;  // +5% light and medium drone damage per level
++    const uint16 skillFighterBombers         = 32339;  // +20% fighter bomber damage per level
++
++    const double minWarpRange   = 150000;   // fighters warp to anything further away than this
++    const double scoopRange     = 2500;     // drones are scooped this close to the ship's surface
++}
+ 
+ DroneAIMgr::DroneAIMgr(DroneSE* who)
+ : m_state(DroneAI::State::Idle),
+   m_pDrone(who),
+-  m_assignedShip(nullptr),
+-  m_mainAttackTimer(0),// dont start timer until we have a target
+-  m_processTimer(0),
+-  m_beginFindTarget(0),
+-  m_warpScramblerTimer(0),     //not implemented yet
+-  m_webifierTimer(0),             //not implemented yet
+-  m_sigRadius(who->GetSelf()->GetAttribute(AttrSignatureRadius).get_float()),
+-  m_attackSpeed(who->GetSelf()->GetAttribute(AttrSpeed).get_float()),
+-  m_cruiseSpeed(who->GetSelf()->GetAttribute(AttrEntityCruiseSpeed).get_int()),
+-  m_chaseSpeed(who->GetSelf()->GetAttribute(AttrMaxVelocity).get_int()),
+-  m_entityFlyRange(who->GetSelf()->GetAttribute(AttrEntityFlyRange).get_float() + who->GetSelf()->GetAttribute(AttrMaxRange).get_float()),
+-  m_entityChaseRange(who->GetSelf()->GetAttribute(AttrEntityChaseMaxDistance).get_float() *2),
+-  m_entityOrbitRange(who->GetSelf()->GetAttribute(AttrMaxRange).get_float()),
+-  m_entityAttackRange(who->GetSelf()->GetAttribute(AttrEntityAttackRange).get_float() *2),
+-  m_shieldBoosterDuration(who->GetSelf()->GetAttribute(AttrEntityShieldBoostDuration).get_int()),
+-  m_armorRepairDuration(who->GetSelf()->GetAttribute(AttrEntityArmorRepairDuration).get_int())
++  m_isFighter(false),
++  m_isBomber(false),
++  m_returnToBay(false),
++  m_targetID(0),
++  m_guardID(0),
++  m_order(DroneAI::State::Idle),
++  m_attackTimer(0)
+ {
+-    m_processTimer.Start(5000);     //arbitrary.
+-
+-    // proximityRange (154) tells us how far we "see"
+-
+-    if (m_entityAttackRange < 10000)   // most of these are low...under 6k  that sux for targeting
+-        m_entityAttackRange *= 3;
++    InventoryItemRef self(who->GetSelf());
++    m_isBomber = (self->groupID() == EVEDB::invGroups::Fighter_Bomber);
++    m_isFighter = (m_isBomber or (self->groupID() == EVEDB::invGroups::Fighter_Drone));
++
++    m_maxSpeed = self->GetAttribute(AttrMaxVelocity).get_float();
++    m_optimal = self->GetAttribute(AttrMaxRange).get_float();
++    if (m_optimal < 1)          // fighter bombers have no turret range, only an attack range
++        m_optimal = self->GetAttribute(AttrEntityAttackRange).get_float();
++    if (m_optimal < 1)
++        m_optimal = 2500;
++    m_falloff = self->GetAttribute(AttrFalloff).get_float();
++
++    m_rateOfFire = self->GetAttribute(AttrSpeed).get_uint32();
++    if (m_rateOfFire < 1000)
++        m_rateOfFire = 4000;
++
++    // orbit a little inside optimal so the drone stays in range while it circles
++    m_orbitRange = m_optimal * 0.8;
++    if (m_orbitRange > 5000)
++        m_orbitRange = 5000;
++    if (m_orbitRange < 500)
++        m_orbitRange = 500;
+ }
+ 
+ void DroneAIMgr::Process() {
+     double profileStartTime(GetTimeUSeconds());
+ 
+-    /* Drone::State definitions   -allan 27Nov19
+-     *   Invalid
+-     *   Idle              = 0,  // not doing anything....idle.
+-     *   Combat            = 1,  // fighting - needs targetID
+-     *   Mining            = 2,  // unsure - needs targetID
+-     *   Approaching       = 3,  // too close to chase, but to far to engage
+-     *   Departing         = 4,  // return to ship
+-     *   Departing2        = 5,  // leaving.  different from Departing
+-     *   Pursuit           = 6,  // target out of range to attack/follow, but within npc sight range....use mwd/ab if equiped
+-     *   Fleeing           = 7,  // running away
+-     *   Operating         = 9,  // whats diff from engaged here?  mining maybe?
+-     *   Engaged           = 10, // non-combat? - needs targetID
+-     *   // internal only
+-     *   Unknown           = 8,  // as stated
+-     *   Guarding          = 11,
+-     *   Assisting         = 12,
+-     *   Incapacitated     = 13  // out of control range, but online
+-     */
+-
+-    // test for drone attributes here - aggressive, focus fire, attack/follow
+-    // test for control distance here also.  offline drones outside this  (AttrDroneControlDistance)
+-    switch(m_state) {
+-        case DroneAI::State::Invalid: {
+-            // check everything in this state.   return to ship?
+-        } break;
+-        case DroneAI::State::Idle: {
+-            // orbiting controlling ship
+-        } break;
+-        case DroneAI::State::Engaged: {
+-            //NOTE: getting our pTarget like this is pretty weak...
+-            SystemEntity* pTarget = m_pDrone->TargetMgr()->GetFirstTarget(true);
+-            if (pTarget == nullptr) {
+-                if (m_pDrone->TargetMgr()->HasNoTargets()) {
+-                    _log(DRONE__AI_TRACE, "Drone %s(%u): Stopped engagement, GetFirstTarget() returned NULL.", m_pDrone->GetName(), m_pDrone->GetID());
+-                    SetIdle();
+-                }
+-                return;
+-            } else if (pTarget->SysBubble() == nullptr) {
+-                m_pDrone->TargetMgr()->ClearTarget(pTarget);
+-                //m_pDrone->TargetMgr()->OnTarget(pTarget, TargMgr::Mode::Lost);
+-                return;
+-            }
+-            CheckDistance(pTarget);
+-        } break;
+-
+-        case DroneAI::State::Departing: { // return to ship.  when close enough, set lazy orbit
+-            if (m_pDrone->GetPosition().distance(m_assignedShip->GetPosition()) < m_entityOrbitRange)
+-                SetIdle();
+-        } break;
+-        // not sure how im gonna do these...
+-        case DroneAI::State::Fleeing:
+-        case DroneAI::State::Operating:
+-        case DroneAI::State::Unknown:
+-        case DroneAI::State::Incapacitated:
+-        case DroneAI::State::Guarding:
+-        case DroneAI::State::Assisting:
+-        case DroneAI::State::Combat:
+-        case DroneAI::State::Mining:
+-        case DroneAI::State::Approaching:
+-        case DroneAI::State::Departing2:
+-        case DroneAI::State::Pursuit: {
+-           // do nothing here yet
+-        } break;
+-
+-    //no default on purpose
++    ShipSE* pShip(m_pDrone->CheckControl());
++    if (pShip == nullptr)
++        return;     // control was lost; the drone has gone inert
++
++    // a drone that is aligning for warp or in warp is left alone until it lands
++    DestinyManager* pDestiny(m_pDrone->DestinyMgr());
++    bool inWarp(pDestiny->IsWarping() or (pDestiny->GetState() == Destiny::Ball::Mode::WARP));
++
++    // drones (not fighters) stop responding outside their pilot's control range
++    if (!m_isFighter and !inWarp
++    and (m_pDrone->GetPosition().distance(pShip->GetPosition()) > (ControlRange(pShip) + pShip->GetRadius() + 2000))) {
++        pShip->GetPilot()->SendNotifyMsg("Your %s is out of control range and has gone idle.", m_pDrone->GetName());
++        m_pDrone->LoseControl();
++        return;
+     }
++
++    if (!inWarp) {
++        switch (m_state) {
++            case DroneAI::State::Combat:     ProcessCombat(pShip);   break;
++            case DroneAI::State::Departing:  ProcessReturn(pShip);   break;
++            case DroneAI::State::Guarding:   ProcessGuard(pShip);    break;
++            case DroneAI::State::Assisting:  ProcessAssist(pShip);   break;
++            default:                         ProcessIdle(pShip);     break;
++        }
++    }
++
+     if (sConfig.debug.UseProfiling)
+         sProfiler.AddTime(Profile::drone, GetTimeUSeconds() - profileStartTime);
+ }
+@@ -132,217 +122,404 @@ int8 DroneAIMgr::GetState() {
+     }
+ }
+ 
+-void DroneAIMgr::Return() {
+-    m_assignedShip = m_pDrone->GetHomeShip();
+-    m_pDrone->DestinyMgr()->SetMaxVelocity(m_chaseSpeed);
+-    m_pDrone->DestinyMgr()->Follow(m_assignedShip, m_entityOrbitRange);
+-    m_state = DroneAI::State::Departing;
++void DroneAIMgr::SetState(int8 state) {
++    if (m_state == state)
++        return;
++    _log(DRONE__AI_TRACE, "Drone %s(%u): %s -> %s", m_pDrone->GetName(), m_pDrone->GetID(), \
++            GetStateName(m_state).c_str(), GetStateName(state).c_str());
++    m_state = state;
++    m_pDrone->StateChange();
+ }
+ 
+-void DroneAIMgr::SetIdle() {
+-    if (m_state == DroneAI::State::Idle)
++/* ---------------------------------------------------------------------------
++ * player orders
++ */
++void DroneAIMgr::Engage(SystemEntity* pTarget) {
++    if (pTarget == nullptr)
++        return;
++    m_returnToBay = false;
++    if ((m_order != DroneAI::State::Guarding) and (m_order != DroneAI::State::Assisting))
++        m_order = DroneAI::State::Idle;
++    StartAttack(pTarget);
++}
++
++void DroneAIMgr::Guard(SystemEntity* pGuardee) {
++    if (pGuardee == nullptr)
+         return;
+-    // not doing anything....idle.
+-    _log(DRONE__AI_TRACE, "Drone %s(%u): SetIdle: returning to idle.",
+-         m_pDrone->GetName(), m_pDrone->GetID());
++    DropTarget();
++    m_returnToBay = false;
++    m_order = DroneAI::State::Guarding;
++    m_guardID = pGuardee->GetID();
++    MoveToward(pGuardee, m_pDrone->GetOrbitRange(), true);
++    SetState(DroneAI::State::Guarding);
++}
++
++void DroneAIMgr::Assist(SystemEntity* pAssistee) {
++    if (pAssistee == nullptr)
++        return;
++    DropTarget();
++    m_returnToBay = false;
++    m_order = DroneAI::State::Assisting;
++    m_guardID = pAssistee->GetID();
++    MoveToward(pAssistee, m_pDrone->GetOrbitRange(), true);
++    SetState(DroneAI::State::Assisting);
++}
++
++void DroneAIMgr::SetIdle() {
++    m_order = DroneAI::State::Idle;
++    m_guardID = 0;
++    m_returnToBay = false;
++    if (m_targetID != 0) {
++        SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
++        if ((pTarget != nullptr) and (pTarget->TargetMgr() != nullptr))
++            m_pDrone->TargetMgr()->ClearTarget(pTarget);
++        m_targetID = 0;
++        m_pDrone->SetTarget(nullptr);
++    }
++    m_attackTimer.Disable();
++
++    ShipSE* pShip(m_pDrone->GetControllerShip());
++    if (pShip != nullptr)
++        m_pDrone->IdleOrbit(pShip);
++    SetState(DroneAI::State::Idle);
++}
++
++void DroneAIMgr::Return() {
++    SetIdle();
++    SetState(DroneAI::State::Departing);
++}
++
++void DroneAIMgr::ReturnToBay() {
++    SetIdle();
++    m_returnToBay = true;
++    SetState(DroneAI::State::Departing);
++}
++
++void DroneAIMgr::Reset() {
+     m_state = DroneAI::State::Idle;
++    m_order = DroneAI::State::Idle;
++    m_targetID = 0;
++    m_guardID = 0;
++    m_returnToBay = false;
++    m_attackTimer.Disable();
++}
+ 
+-    // disable ewar timers
+-    m_webifierTimer.Disable();
+-    m_beginFindTarget.Disable();
+-    m_mainAttackTimer.Disable();
+-    m_warpScramblerTimer.Disable();
++/* ---------------------------------------------------------------------------
++ * per-state processing
++ */
++void DroneAIMgr::ProcessIdle(ShipSE* pShip) {
++    // aggressive drones defend their ship from anything that locks it
++    Client* pOwner(pShip->GetPilot());
++    if ((pOwner != nullptr) and (pOwner->GetDroneSetting(AttrDroneIsAgressive, 0) != 0)) {
++        SystemEntity* pHostile(FindHostileFor(pShip));
++        if (pHostile != nullptr) {
++            StartAttack(pHostile);
++            return;
++        }
++    }
+ 
+-    // orbit assigned ship
+-    m_pDrone->IdleOrbit(m_assignedShip);
++    // fighters left behind on another grid warp back to their carrier
++    if (m_isFighter and (m_pDrone->GetPosition().distance(pShip->GetPosition()) > minWarpRange)) {
++        WarpToward(pShip->GetPosition(), 2000);
++        return;
++    }
++
++    DestinyManager* pDestiny(m_pDrone->DestinyMgr());
++    if (!pDestiny->IsOrbiting() or (pDestiny->GetTargetID() != pShip->GetID()))
++        m_pDrone->IdleOrbit(pShip);
+ }
+ 
+-void DroneAIMgr::SetEngaged(SystemEntity* pTarget) {
+-    if (m_state == DroneAI::State::Engaged)
++void DroneAIMgr::ProcessCombat(ShipSE* pShip) {
++    SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
++    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->DestinyMgr() == nullptr)) {
++        DropTarget();
+         return;
+-    _log(DRONE__AI_TRACE, "Drone %s(%u): SetEngaged: %s(%u) begin engaging.",
+-         m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+-    // actively fighting
+-    //   not sure of the actual orbit speed of npc's, but their 'cruise speed' seems a bit slow.
+-    //   this sets orbit speed between cruise speed and quarter of max speed (whether mwb or ab)
+-    //   this will also enable this npc to have a variable speed, instead of fixed upon creation.
+-    m_pDrone->DestinyMgr()->SetMaxVelocity(MakeRandomFloat(m_cruiseSpeed, (m_chaseSpeed /4)));
+-    m_pDrone->DestinyMgr()->Orbit(pTarget, m_entityOrbitRange);  //try to get inside orbit range
+-    m_state = DroneAI::State::Engaged;
+-}
+-
+-void DroneAIMgr::CheckDistance(SystemEntity* pSE)
+-{
+-    //rewrote distance checks for correct logic this time
+-    double dist = m_pDrone->GetPosition().distance(pSE->GetPosition());
+-    if (dist > m_entityAttackRange) {
+-        _log(DRONE__AI_TRACE, "Drone %s(%u): CheckDistance: %s(%u) is too far away (%u).  Return to Idle.",
+-             m_pDrone->GetName(), m_pDrone->GetID(), pSE->GetName(), pSE->GetID(), dist);
+-        if (m_state != DroneAI::State::Idle) {
+-            // target is no longer in npc's "sight range".  unlock target and return to idle.
+-            //   should we do anything else here?  search for another target?  wander around?
+-            ClearTarget(pSE);
++    }
++    DestinyManager* pTargDestiny(pTarget->DestinyMgr());
++    if (pTargDestiny->IsCloaked()) {
++        DropTarget();
++        return;
++    }
++
++    if (pTargDestiny->IsWarping()) {
++        // fighters set to 'attack and follow' chase their target through warp; everything else gives up
++        Client* pOwner(pShip->GetPilot());
++        if (m_isFighter and ((pOwner == nullptr) or (pOwner->GetDroneSetting(AttrFightersAttackAndFollow, 1) != 0))) {
++            WarpToward(pTargDestiny->GetTargetPoint(), m_orbitRange);
++            return;
+         }
++        DropTarget();
+         return;
+-    } else if (dist < m_entityFlyRange) { //within weapon max (and within falloff)
+-        SetEngaged(pSE); //engage and orbit
+-    } else if (dist < m_entityChaseRange) { //within follow
+-       // SetFollowing(pSE);
+-    } else if (dist < m_entityAttackRange) { //within sight
+-       // SetChasing(pSE);
++    }
++
++    double distance(m_pDrone->GetPosition().distance(pTarget->GetPosition()));
++    if (m_isFighter) {
++        if (distance > minWarpRange) {
++            WarpToward(pTarget->GetPosition(), m_orbitRange);
++            return;
++        }
++    } else if (pTarget->GetPosition().distance(pShip->GetPosition()) > ControlRange(pShip)) {
++        // drones will not chase a target out of their pilot's control range
++        DropTarget();
+         return;
+     }
+ 
+-    if (!m_mainAttackTimer.Enabled())
+-        m_mainAttackTimer.Start(m_attackSpeed);
++    MoveToward(pTarget, m_orbitRange, true);
+ 
+-    Attack(pSE);
++    if (!m_pDrone->TargetMgr()->CanAttack())
++        return;     // still locking
++    double surface(distance - pTarget->GetRadius() - m_pDrone->GetRadius());
++    if (surface > (m_optimal + (2 * m_falloff)))
++        return;     // not close enough yet
++    if (m_attackTimer.Check())
++        AttackTarget(pTarget);
+ }
+ 
+-void DroneAIMgr::ClearTargets() {
+-    m_pDrone->TargetMgr()->ClearTargets();
+-}
++void DroneAIMgr::ProcessReturn(ShipSE* pShip) {
++    double distance(m_pDrone->GetPosition().distance(pShip->GetPosition()) - pShip->GetRadius());
++    if (m_isFighter and (distance > minWarpRange)) {
++        WarpToward(pShip->GetPosition(), 2000);
++        return;
++    }
+ 
+-void DroneAIMgr::ClearAllTargets() {
+-    m_pDrone->TargetMgr()->ClearAllTargets();
+-    //m_pDrone->TargetMgr()->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::ClientReq);
+-}
++    if (m_returnToBay) {
++        if (distance <= scoopRange) {
++            // the scoop itself happens in the pilot's tick, outside the system's entity loop
++            pShip->QueueDroneScoop(m_pDrone->GetID());
++            return;
++        }
++        MoveToward(pShip, 0, false);
++        return;
++    }
+ 
+-void DroneAIMgr::Target(SystemEntity* pTarget) {
+-    bool chase = false;
+-    if (!m_pDrone->TargetMgr()->StartTargeting(pTarget, m_pDrone->GetSelf()->GetAttribute(AttrScanSpeed).get_uint32(), (uint8)m_pDrone->GetSelf()->GetAttribute(AttrMaxAttackTargets).get_int(), m_entityAttackRange, chase)) {
+-        _log(DRONE__AI_TRACE, "Drone %s(%u): Targeting of %s(%u) failed.  Clear Target and Return to Idle.",
+-             m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+-        //ClearAllTargets();
++    if (distance <= (m_pDrone->GetOrbitRange() + 1000)) {
+         SetIdle();
+         return;
+     }
+-    m_beginFindTarget.Disable();
+-    CheckDistance(pTarget);
++    MoveToward(pShip, m_pDrone->GetOrbitRange(), false);
++}
+ 
+-    /*
+-    std::map<std::string, PyRep *> arg;
+-    arg["target"] = new PyInt(args.arg);
+-    throw PyException(MakeUserError("DeniedDroneTargetForceField", arg));
+-    */
+- //DeniedDroneTargetForceField
++void DroneAIMgr::ProcessGuard(ShipSE* pShip) {
++    SystemEntity* pGuardee(m_pDrone->SystemMgr()->GetSE(m_guardID));
++    if ((pGuardee == nullptr) or pGuardee->IsDead()) {
++        SetIdle();
++        return;
++    }
++    SystemEntity* pHostile(FindHostileFor(pGuardee));
++    if (pHostile != nullptr) {
++        StartAttack(pHostile);
++        return;
++    }
++    MoveToward(pGuardee, m_pDrone->GetOrbitRange(), true);
+ }
+ 
+-void DroneAIMgr::Targeted(SystemEntity* pAgressor) {
+-    _log(DRONE__AI_TRACE, "Drone %s(%u): Targeted by %s(%u) while %s.",
+-                m_pDrone->GetName(), m_pDrone->GetID(), pAgressor->GetName(), pAgressor->GetID(), GetStateName(m_state).c_str());
+-    switch(m_state) {
+-        case DroneAI::State::Idle: {
+-        } break;
+-        case DroneAI::State::Operating: {
+-        } break;
+-        case DroneAI::State::Unknown: {
+-        } break;
+-        case DroneAI::State::Engaged: {
+-        } break;
+-        case DroneAI::State::Fleeing: {
+-        } break;
+-        case DroneAI::State::Incapacitated: {
+-        } break;
+-        case DroneAI::State::Guarding: {
+-        } break;
+-        case DroneAI::State::Assisting: {
+-        } break;
+-        case DroneAI::State::Combat: {
+-        } break;
+-        case DroneAI::State::Mining: {
+-        } break;
+-        case DroneAI::State::Approaching: {
+-        } break;
+-        case DroneAI::State::Departing: {
+-        } break;
+-        case DroneAI::State::Departing2: {
+-        } break;
+-        case DroneAI::State::Pursuit: {
+-        } break;
++void DroneAIMgr::ProcessAssist(ShipSE* pShip) {
++    SystemEntity* pAssistee(m_pDrone->SystemMgr()->GetSE(m_guardID));
++    if ((pAssistee == nullptr) or pAssistee->IsDead() or (pAssistee->TargetMgr() == nullptr)) {
++        SetIdle();
++        return;
++    }
++    SystemEntity* pTarget(pAssistee->TargetMgr()->GetFirstTarget(true));
++    if ((pTarget != nullptr) and (pTarget != m_pDrone) and (pTarget != pShip) and !pTarget->IsDead()) {
++        StartAttack(pTarget);
++        return;
+     }
++    MoveToward(pAssistee, m_pDrone->GetOrbitRange(), true);
+ }
+ 
+-void DroneAIMgr::TargetLost(SystemEntity* pTarget) {
+-    switch(m_state) {
+-        case DroneAI::State::Engaged: {
+-            if (m_pDrone->TargetMgr()->HasNoTargets()) {
+-                _log(DRONE__AI_TRACE, "Drone %s(%u): Target %s(%u) lost. No targets remain.  Return to Idle.",
+-                     m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+-                SetIdle();
+-            } else {
+-                _log(DRONE__AI_TRACE, "Drone %s(%u): Target %s(%u) lost, but more targets remain.",
+-                     m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
+-            }
++/* ---------------------------------------------------------------------------
++ * helpers
++ */
++void DroneAIMgr::StartAttack(SystemEntity* pTarget) {
++    if ((pTarget == nullptr) or (pTarget->TargetMgr() == nullptr))
++        return;
++
++    // drop any previous target
++    if ((m_targetID != 0) and (m_targetID != pTarget->GetID())) {
++        SystemEntity* pOld(m_pDrone->SystemMgr()->GetSE(m_targetID));
++        if ((pOld != nullptr) and (pOld->TargetMgr() != nullptr))
++            m_pDrone->TargetMgr()->ClearTarget(pOld);
++    }
++
++    m_targetID = pTarget->GetID();
++    m_pDrone->SetTarget(pTarget);
+ 
+-        } break;
++    // lock it.  drones lock from any distance; range is checked when firing.
++    float lockTime(m_pDrone->GetSelf()->GetAttribute(AttrScanSpeed).get_float());
++    if (lockTime < 500)
++        lockTime = 2000;
++    bool chase(false);
++    m_pDrone->TargetMgr()->StartTargeting(pTarget, lockTime, 8, 1.0e15, chase);
+ 
++    m_pDrone->DestinyMgr()->SetMaxVelocity(m_maxSpeed);
++    m_attackTimer.Start(m_rateOfFire);
++    _log(DRONE__AI_TRACE, "Drone %s(%u): engaging %s(%u).", m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
++
++    if (m_state == DroneAI::State::Combat) {
++        m_pDrone->StateChange();    // same state, new target
++    } else {
++        SetState(DroneAI::State::Combat);
++    }
++}
++
++void DroneAIMgr::DropTarget() {
++    if (m_targetID != 0) {
++        SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_targetID));
++        if ((pTarget != nullptr) and (pTarget->TargetMgr() != nullptr))
++            m_pDrone->TargetMgr()->ClearTarget(pTarget);
++        m_targetID = 0;
++        m_pDrone->SetTarget(nullptr);
++    }
++    m_attackTimer.Disable();
++
++    switch (m_order) {
++        case DroneAI::State::Guarding:
++            if (m_state != DroneAI::State::Guarding)
++                SetState(DroneAI::State::Guarding);
++            break;
++        case DroneAI::State::Assisting:
++            if (m_state != DroneAI::State::Assisting)
++                SetState(DroneAI::State::Assisting);
++            break;
+         default:
++            if (m_state == DroneAI::State::Combat)
++                SetIdle();
+             break;
+     }
+ }
+ 
+-void DroneAIMgr::Attack(SystemEntity* pSE)
+-{
+-    if (m_mainAttackTimer.Check()) {
+-        if (pSE == nullptr)
+-            return;
+-        // Check to see if the target still in the bubble (Client warped out)
+-        // fighters/bombers are able to follow.
+-        if (!m_pDrone->SysBubble()->InBubble(pSE->GetPosition())) {
+-            _log(DRONE__AI_TRACE, "Drone %s(%u): Target %s(%u) no longer in bubble.  Clear target and move on",
+-                 m_pDrone->GetName(), m_pDrone->GetID(), pSE->GetName(), pSE->GetID());
+-            ClearTarget(pSE);
+-            return;
+-        }
+-        DestinyManager* pDestiny = pSE->DestinyMgr();
+-        if (pDestiny == nullptr) {
+-            _log(DRONE__AI_TRACE, "Drone %s(%u): Target %s(%u) has no destiny manager.  Clear target and move on",
+-                 m_pDrone->GetName(), m_pDrone->GetID(), pSE->GetName(), pSE->GetID());
+-            ClearTarget(pSE);
++void DroneAIMgr::MoveToward(SystemEntity* pSE, double range, bool orbit) {
++    if (pSE == nullptr)
++        return;
++    DestinyManager* pDestiny(m_pDrone->DestinyMgr());
++    if (orbit) {
++        if (pDestiny->IsOrbiting() and (pDestiny->GetTargetID() == pSE->GetID()))
+             return;
+-        }
+-        // Check to see if the target is not cloaked:
+-        if (pDestiny->IsCloaked()) {
+-            _log(DRONE__AI_TRACE, "Drone %s(%u): Target %s(%u) is cloaked.  Clear target and move on",
+-                 m_pDrone->GetName(), m_pDrone->GetID(), pSE->GetName(), pSE->GetID());
+-            ClearTarget(pSE);
++        pDestiny->SetMaxVelocity(m_maxSpeed);
++        pDestiny->SetSpeedFraction(1.0f, true);
++        pDestiny->Orbit(pSE, range);
++    } else {
++        if (pDestiny->IsFollowing() and (pDestiny->GetTargetID() == pSE->GetID()))
+             return;
+-        }
++        pDestiny->SetMaxVelocity(m_maxSpeed);
++        pDestiny->SetSpeedFraction(1.0f, true);
++        pDestiny->Follow(pSE, range);
++    }
++}
++
++bool DroneAIMgr::WarpToward(const GPoint& point, double landingRange) {
++    DestinyManager* pDestiny(m_pDrone->DestinyMgr());
++    if (pDestiny->IsWarping() or (pDestiny->GetState() == Destiny::Ball::Mode::WARP))
++        return true;
++    _log(DRONE__AI_TRACE, "Drone %s(%u): warping to %.0f,%.0f,%.0f.", m_pDrone->GetName(), m_pDrone->GetID(), point.x, point.y, point.z);
++    pDestiny->WarpTo(point, landingRange);
++    return true;
++}
+ 
+-        if (m_pDrone->TargetMgr()->CanAttack())
+-            AttackTarget(pSE);
++bool DroneAIMgr::IsHostile(SystemEntity* pSE) {
++    if ((pSE == nullptr) or pSE->IsDead() or (pSE == m_pDrone))
++        return false;
++    if (pSE->IsSentrySE())
++        return false;   // gate and station guns: leave them alone
++    if (pSE->IsNPCSE())
++        return true;
++
++    // players (and their drones) count as hostile unless they share our corp or alliance
++    uint32 ownerID(m_pDrone->GetOwnerID());
++    if (pSE->GetOwnerID() == ownerID)
++        return false;
++    if (pSE->IsShipSE() or pSE->IsDroneSE()) {
++        if ((m_pDrone->GetCorporationID() != 0) and (pSE->GetCorporationID() == m_pDrone->GetCorporationID()))
++            return false;
++        if ((m_pDrone->GetAllianceID() != 0) and (pSE->GetAllianceID() == m_pDrone->GetAllianceID()))
++            return false;
++        return true;
+     }
++    return false;
+ }
+ 
+-void DroneAIMgr::ClearTarget(SystemEntity* pSE) {
+-    m_pDrone->TargetMgr()->ClearTarget(pSE);
+-    //m_pDrone->TargetMgr()->OnTarget(pSE, TargMgr::Mode::Lost);
++SystemEntity* DroneAIMgr::FindHostileFor(SystemEntity* pProtected) {
++    if ((pProtected == nullptr) or (pProtected->TargetMgr() == nullptr))
++        return nullptr;
++    std::vector<SystemEntity*> lockers;
++    pProtected->TargetMgr()->GetTargetedBy(lockers);
++    SystemEntity* pBest(nullptr);
++    double bestDistance(0);
++    for (auto cur : lockers) {
++        if (!IsHostile(cur))
++            continue;
++        double distance(m_pDrone->GetPosition().distance(cur->GetPosition()));
++        if ((pBest == nullptr) or (distance < bestDistance)) {
++            pBest = cur;
++            bestDistance = distance;
++        }
++    }
++    return pBest;
++}
+ 
+-    if (m_pDrone->TargetMgr()->HasNoTargets())
+-        SetIdle();
++double DroneAIMgr::ControlRange(ShipSE* pShip) {
++    Client* pPilot(pShip->GetPilot());
++    if (pPilot == nullptr)
++        return 20000;
++    double range(pPilot->GetChar()->GetAttribute(AttrDroneControlDistance).get_float());
++    if (range < 1) {
++        range = 20000;
++        range += 5000 * pPilot->GetChar()->GetSkillLevel(skillScoutDroneOperation);
++        range += 3000 * pPilot->GetChar()->GetSkillLevel(skillEWDroneInterfacing);
++    }
++    return range;
+ }
+ 
+-//also check for special effects and write code to implement them
+-//modifyTargetSpeedRange, modifyTargetSpeedChance
+-//entityWarpScrambleChance
++double DroneAIMgr::DamageModifier() {
++    ShipSE* pShip(m_pDrone->GetControllerShip());
++    if ((pShip == nullptr) or (pShip->GetPilot() == nullptr))
++        return 1.0;
++    CharacterRef pChar(pShip->GetPilot()->GetChar());
++    double mod(1.0 + (0.2 * pChar->GetSkillLevel(skillDroneInterfacing)));
++    if (m_isBomber) {
++        mod *= 1.0 + (0.2 * pChar->GetSkillLevel(skillFighterBombers));
++    } else if (m_isFighter) {
++        mod *= 1.0 + (0.2 * pChar->GetSkillLevel(skillFighters));
++    } else if (m_pDrone->GetSelf()->GetAttribute(AttrDroneBandwidthUsed).get_float() >= 25) {
++        mod *= 1.0 + (0.05 * pChar->GetSkillLevel(skillHeavyDroneOperation));
++    } else {
++        mod *= 1.0 + (0.05 * pChar->GetSkillLevel(skillCombatDroneOperation));
++    }
++    mod *= pShip->CarrierDroneDamageMultiplier();
++    return mod;
++}
+ 
+ void DroneAIMgr::AttackTarget(SystemEntity* pTarget) {
+-    /** @todo  not all drones use lazors...fix this */
+-    //  woot!! --> group:1010        cat:8       Compact Citadel Torpedo         Citadel torpedoes for fighter-bombers
+-
+     // effects are listed in EVE_Effects.h
+     //  NOTE: drones are called 'entities' in client; EVE_Effects has 'entityxxx' for gfx
+     std::string guid = "effects.Laser"; // client looks for 'turret' in ship.ball.modules for 'effects.laser'
+-    //effects.ProjectileFiredForEntities
+     uint32 gfxID = 0;
+     if (m_pDrone->GetSelf()->HasAttribute(AttrGfxTurretID))// graphicID for turret for drone type ships
+         gfxID = m_pDrone->GetSelf()->GetAttribute(AttrGfxTurretID).get_uint32();
+     m_pDrone->DestinyMgr()->SendSpecialEffect(m_pDrone->GetSelf()->itemID(),
+                                              m_pDrone->GetSelf()->itemID(),
+-                                             m_pDrone->GetSelf()->typeID(), //m_pDrone->GetSelf()->GetAttribute(AttrGfxTurretID).get_int(),
++                                             m_pDrone->GetSelf()->typeID(),
+                                              pTarget->GetID(),
+-                                             0,guid,1,1,1,m_attackSpeed,0,gfxID);
++                                             0,guid,1,1,1,m_rateOfFire,0,gfxID);
++
++    float hitModifier(1.0f);
++    if (m_isBomber) {
++        // bombers fire torpedoes: damage scales with the target's signature and speed, like missiles
++        InventoryItemRef self(m_pDrone->GetSelf());
++        double sig(pTarget->GetSelf()->GetAttribute(AttrSignatureRadius).get_float());
++        double cloud(self->GetAttribute(AttrAoeCloudSize).get_float());
++        double aoeVelocity(self->GetAttribute(AttrAoeVelocity).get_float());
++        double drf(self->GetAttribute(AttrAoeDamageReductionFactor).get_float());
++        double drs(self->GetAttribute(AttrAoeDamageReductionSensitivity).get_float());
++        double speed(pTarget->GetVelocity().length());
++        double sizeFactor((cloud > 0) ? (sig / cloud) : 1.0);
++        double speedFactor(1.0);
++        if ((speed > 1) and (drf > 1) and (drs > 1))
++            speedFactor = std::pow(sizeFactor * (aoeVelocity / speed), std::log(drf) / std::log(drs));
++        hitModifier = (float)EvE::min(1.0, EvE::min(sizeFactor, speedFactor));
++    } else {
++        hitModifier = m_formula.GetDroneToHit(m_pDrone, pTarget);
++    }
+ 
+     Damage d(m_pDrone,
+              m_pDrone->GetSelf(),
+@@ -350,15 +527,44 @@ void DroneAIMgr::AttackTarget(SystemEntity* pTarget) {
+              m_pDrone->GetThermal(),
+              m_pDrone->GetEM(),
+              m_pDrone->GetExplosive(),
+-             m_formula.GetDroneToHit(m_pDrone, pTarget),
++             hitModifier,
+              EVEEffectID::targetAttack
+             );
+ 
+     d *= m_pDrone->GetSelf()->GetAttribute(AttrDamageMultiplier).get_float();
++    d *= DamageModifier();
+     d *= sConfig.rates.damageRate;      /** @todo this should be a separate config value */
+     pTarget->ApplyDamage(d);
+ }
+ 
++/* ---------------------------------------------------------------------------
++ * targeting callbacks
++ */
++void DroneAIMgr::Target(SystemEntity* pTarget) {
++    Engage(pTarget);
++}
++
++void DroneAIMgr::Targeted(SystemEntity* pAgressor) {
++    _log(DRONE__AI_TRACE, "Drone %s(%u): Targeted by %s(%u) while %s.",
++                m_pDrone->GetName(), m_pDrone->GetID(), pAgressor->GetName(), pAgressor->GetID(), GetStateName(m_state).c_str());
++}
++
++void DroneAIMgr::TargetLocked(SystemEntity* pTarget) {
++    _log(DRONE__AI_TRACE, "Drone %s(%u): locked %s(%u).", m_pDrone->GetName(), m_pDrone->GetID(), pTarget->GetName(), pTarget->GetID());
++}
++
++void DroneAIMgr::TargetLost(SystemEntity* pTarget) {
++    if ((pTarget != nullptr) and (pTarget->GetID() == m_targetID))
++        DropTarget();
++}
++
++void DroneAIMgr::ClearTargets() {
++    m_pDrone->TargetMgr()->ClearTargets();
++}
++
++void DroneAIMgr::ClearAllTargets() {
++    m_pDrone->TargetMgr()->ClearAllTargets();
++}
+ 
+ std::string DroneAIMgr::GetStateName(int8 stateID)
+ {
+diff --git a/src/eve-server/npc/DroneAI.h b/src/eve-server/npc/DroneAI.h
+index 3ecde7ca..225cc009 100644
+--- a/src/eve-server/npc/DroneAI.h
++++ b/src/eve-server/npc/DroneAI.h
+@@ -5,11 +5,15 @@
+  * @Author:     Allan
+  * @Version:    0.15
+  * @Date:       27Nov19
++ *
++ * Reworked for player drone and fighter control (engage, return, return to bay,
++ * guard, assist, lost control and reconnect, fighters following targets through warp).
+  */
+ 
+ #ifndef __EVEMU_SHIP_DRONEAI_H__
+ #define __EVEMU_SHIP_DRONEAI_H__
+ 
++#include "math/gpoint.h"
+ #include "ship/modules/TurretFormulas.h"
+ 
+ // only for drones
+@@ -38,6 +42,7 @@ namespace DroneAI {
+ }
+ 
+ class DroneSE;
++class ShipSE;
+ class SystemEntity;
+ class Timer;
+ class EvilNumber;
+@@ -48,54 +53,71 @@ public:
+ 
+     void Process();
+ 
++    // targeting callbacks
+     void Target(SystemEntity *by_who);
+     void Targeted(SystemEntity *by_who);
+     void TargetLost(SystemEntity *by_who);
++    void TargetLocked(SystemEntity* pTarget);
+ 
+     void ClearTargets();
+     void ClearAllTargets();
+ 
+     int8 GetState();
+ 
+-    void SetIdle();
+-    void Return();
+-    void AssignShip(ShipSE* pSE)                        { m_assignedShip = pSE; }
++    /* player commands */
++    void Engage(SystemEntity* pTarget);         // attack this target
++    void Guard(SystemEntity* pGuardee);         // stay with this entity and attack whatever targets it
++    void Assist(SystemEntity* pAssistee);       // attack whatever this entity is shooting at
++    void SetIdle();                             // orbit the controlling ship
++    void Return();                              // return to the controlling ship and orbit it
++    void ReturnToBay();                         // return to the controlling ship and be scooped into its drone bay
++    void Reset();                               // forget orders (used when control is lost)
++
++    void AssignShip(ShipSE* pSE)                        { /* controller is looked up by ID each tick */ }
++
++    bool IsReturningToBay()                             { return m_returnToBay; }
+ 
+ protected:
+-    void Attack(SystemEntity* pTarget);
+-    void SetEngaged(SystemEntity* pTarget);
+-    void ClearTarget(SystemEntity* pTarget);
++    void ProcessIdle(ShipSE* pShip);
++    void ProcessCombat(ShipSE* pShip);
++    void ProcessReturn(ShipSE* pShip);
++    void ProcessGuard(ShipSE* pShip);
++    void ProcessAssist(ShipSE* pShip);
++
++    void SetState(int8 state);
++    void StartAttack(SystemEntity* pTarget);
++    void DropTarget();                          // forget the current target and fall back to the previous order
+     void AttackTarget(SystemEntity* pTarget);
+-    void CheckDistance(SystemEntity* pTarget);
++    void MoveToward(SystemEntity* pSE, double range, bool orbit);
++    bool WarpToward(const GPoint& point, double landingRange);
++    SystemEntity* FindHostileFor(SystemEntity* pProtected);
++    bool IsHostile(SystemEntity* pSE);
++    double ControlRange(ShipSE* pShip);
++    double DamageModifier();
+ 
+     int8 m_state;
+     std::string GetStateName(int8 stateID);
+ 
+ private:
+-    //cached to reduce access times. (faster but uses more memory)
+-    double m_sigRadius;
+-    double m_attackSpeed;
+-    double m_entityFlyRange;
+-    double m_entityOrbitRange;
+-    double m_entityChaseRange;
+-    double m_entityAttackRange;
+-
+-    uint32 m_chaseSpeed;
+-    uint32 m_cruiseSpeed;
+-    uint32 m_targetRange;
+-    uint32 m_armorRepairDuration;
+-    uint32 m_shieldBoosterDuration;
+-
+     DroneSE* m_pDrone;
+-    ShipSE* m_assignedShip;
+ 
+     TurretFormulas m_formula;
+ 
+-    Timer m_processTimer;
+-    Timer m_mainAttackTimer;
+-    Timer m_beginFindTarget;
+-    Timer m_warpScramblerTimer;
+-    Timer m_webifierTimer;
++    bool m_isFighter;
++    bool m_isBomber;
++    bool m_returnToBay;
++
++    uint32 m_targetID;          // current attack target
++    uint32 m_guardID;           // entity being guarded (or assisted)
++    int8 m_order;               // standing order to fall back to after a target dies: Idle, Guarding or Assisting
++
++    double m_maxSpeed;
++    double m_orbitRange;
++    double m_optimal;
++    double m_falloff;
++    uint32 m_rateOfFire;
++
++    Timer m_attackTimer;
+ };
+ 
+-#endif  // __EVEMU_SHIP_DRONEAI_H__
+\ No newline at end of file
++#endif  // __EVEMU_SHIP_DRONEAI_H__
+diff --git a/src/eve-server/npc/EntityService.cpp b/src/eve-server/npc/EntityService.cpp
+index 297ef737..f2e04d9e 100644
+--- a/src/eve-server/npc/EntityService.cpp
++++ b/src/eve-server/npc/EntityService.cpp
+@@ -12,8 +12,13 @@
+ 
+ 
+ 
++#include "Client.h"
++#include "EntityList.h"
+ #include "EVEServerConfig.h"
++#include "npc/Drone.h"
+ #include "npc/EntityService.h"
++#include "ship/Ship.h"
++#include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
+ #include "services/ServiceManager.h"
+ 
+@@ -113,267 +118,218 @@ EntityBound::EntityBound(EVEServiceManager &mgr, EntityService& parent, SystemMa
+     this->Add("CmdReconnectToDrones", &EntityBound::CmdReconnectToDrones);
+ }
+ 
+-PyResult EntityBound::CmdEngage(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
+- // ret = entity.CmdEngage(droneIDs, targetID)
+-    /*
+-        [PySubStream 104 bytes]
+-          [PyTuple 4 items]
+-            [PyInt 1]
+-            [PyString "MachoBindObject"]
+-            [PyTuple 2 items]
+-              [PyInt 30000302]
+-              [PyTuple 3 items]
+-                [PyString "CmdEngage"]
+-                [PyTuple 2 items]
+-                  [PyList 5 items]
+-                    [PyIntegerVar 1005909162494]
+-                    [PyIntegerVar 1005902743336]
+-                    [PyIntegerVar 1005909162497]
+-                    [PyIntegerVar 1005909162499]
+-                    [PyIntegerVar 1005909162492]
+-                  [PyIntegerVar 9000000000001190095]
+-                [PyDict 0 kvp]
+-                */
+-    /*
+-      [PySubStream 258 bytes]
+-        [PyTuple 2 items]
+-          [PySubStruct]
+-            [PySubStream 31 bytes]
+-              [PyTuple 2 items]
+-                [PyString "N=790408:2886"]
+-                [PyIntegerVar 129756560501538126]
+-          [PyDict 5 kvp]
+-            [PyIntegerVar 1005909162494]
+-            [PyTuple 2 items]
+-              [PyString "EntityTargetTooDistant"]
+-              [PyDict 2 kvp]
+-                [PyString "targetTypeName"]
+-                [PyTuple 2 items]
+-                  [PyInt 7]
+-                  [PyInt 561]
+-                [PyString "distance"]
+-                [PyFloat 45000]
+-                */
+-    /*
+-      [PySubStream 42 bytes]
+-        [PyTuple 2 items]
+-          [PySubStruct]
+-            [PySubStream 31 bytes]
+-              [PyTuple 2 items]
+-                [PyString "N=790408:2886"]
+-                [PyIntegerVar 129756560847182701]
+-          [PyDict 0 kvp]
+-          */
+-    /*
+-    if (tSE->SysBubble()->HasTower()) {
+-        TowerSE* ptSE = tSE->SysBubble()->GetTowerSE();
+-        if (ptSE->HasForceField())
+-            if (tSE->GetPosition().distance(ptSE->GetPosition()) < ptSE->GetSOI()) {
+-                std::map<std::string, PyRep *> arg;
+-                arg["target"] = new PyInt(args.arg);
+-                throw PyException( MakeUserError("DeniedDroneTargetForceField", arg ));
+-            }
++namespace {
++    /* Each command returns a dict of errors for the client to show; an empty dict means it worked. */
++
++    // the drones in 'ids' that the calling pilot's ship currently controls
++    void CollectControlledDrones(Client* pClient, PyList* ids, std::vector<DroneSE*>& into)
++    {
++        SystemManager* pSystem(pClient->SystemMgr());
++        if ((pSystem == nullptr) or (ids == nullptr) or (pClient->GetShipSE() == nullptr))
++            return;
++        for (PyList::const_iterator itr = ids->begin(); itr != ids->end(); ++itr) {
++            SystemEntity* pSE(pSystem->GetSE(PyRep::IntegerValueU32(*itr)));
++            if ((pSE == nullptr) or !pSE->IsDroneSE())
++                continue;
++            DroneSE* pDrone(pSE->GetDroneSE());
++            if (!pDrone->IsEnabled() or (pDrone->GetControllerID() != pClient->GetShipID()))
++                continue;
++            into.push_back(pDrone);
++        }
+     }
+-        */
+ 
++    // guard and assist targets may be sent as an itemID in space or as a pilot's characterID
++    SystemEntity* FindGuardTarget(Client* pClient, uint32 id)
++    {
++        SystemManager* pSystem(pClient->SystemMgr());
++        if (pSystem == nullptr)
++            return nullptr;
++        SystemEntity* pSE(pSystem->GetSE(id));
++        if (pSE != nullptr)
++            return pSE;
++        if (IsCharacterID(id)) {
++            Client* pOther(sEntityList.FindClientByCharID(id));
++            if ((pOther != nullptr) and (pOther->GetShipSE() != nullptr) and (pOther->SystemMgr() == pSystem))
++                return pOther->GetShipSE();
++        }
++        return nullptr;
++    }
++}
++
++PyResult EntityBound::CmdEngage(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
++    // ret = entity.CmdEngage(droneIDs, targetID)
+     _log(DRONE__TRACE, "EntityBound::Handle_CmdEngage()");
+-    call.Dump(DRONE__DUMP);
++    Client* pClient(call.client);
++    SystemManager* pSystem(pClient->SystemMgr());
++    if (pSystem == nullptr)
++        return new PyDict();
++
++    SystemEntity* pTarget(pSystem->GetSE(targetID->value()));
++    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->TargetMgr() == nullptr) or (pTarget->DestinyMgr() == nullptr)) {
++        pClient->SendNotifyMsg("Your drones cannot engage that.");
++        return new PyDict();
++    }
++    if ((pTarget == pClient->GetShipSE())
++    or (pTarget->IsDroneSE() and (pTarget->GetOwnerID() == pClient->GetCharacterID()))) {
++        pClient->SendNotifyMsg("Your drones will not attack your own ship or drones.");
++        return new PyDict();
++    }
+ 
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(pClient, droneIDs, drones);
++    for (auto pDrone : drones)
++        pDrone->GetAI()->Engage(pTarget);
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdRelinquishControl(PyCallArgs &call, PyList* IDs) {
+- // ret = entity.CmdRelinquishControl(IDs)
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdRelinquishControl()");
+-    call.Dump(DRONE__DUMP);
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++PyResult EntityBound::CmdReturnHome(PyCallArgs &call, PyList* droneIDs) {
++    // ret = entity.CmdReturnHome(droneIDs)
++    // this is 'return and orbit'
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdReturnHome()");
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(call.client, droneIDs, drones);
++    for (auto pDrone : drones)
++        pDrone->GetAI()->Return();
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdDelegateControl(PyCallArgs &call, PyList* droneIDs, PyInt* controllerID) {
+- // ret = entity.CmdDelegateControl(droneIDs, controllerID)
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdDelegateControl()");
+-    call.Dump(DRONE__DUMP);
++PyResult EntityBound::CmdReturnBay(PyCallArgs &call, PyList* droneIDs) {
++    // ret = entity.CmdReturnBay(droneIDs)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdReturnBay()");
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(call.client, droneIDs, drones);
++    for (auto pDrone : drones)
++        pDrone->GetAI()->ReturnToBay();
++    return new PyDict();
++}
+ 
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++PyResult EntityBound::CmdGuard(PyCallArgs &call, PyInt* guardID, PyList* droneIDs) {
++    // ret = entity.CmdGuard(guardID, droneIDs)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdGuard()");
++    SystemEntity* pGuardee(FindGuardTarget(call.client, guardID->value()));
++    if (pGuardee == nullptr) {
++        call.client->SendNotifyMsg("Your drones cannot find that pilot to guard.");
++        return new PyDict();
++    }
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(call.client, droneIDs, drones);
++    for (auto pDrone : drones)
++        pDrone->GetAI()->Guard(pGuardee);
+     return new PyDict();
+ }
+ 
+ PyResult EntityBound::CmdAssist(PyCallArgs &call, PyInt* assistID, PyList* droneIDs) {
+- // ret = entity.CmdAssist(assistID, droneIDs)
++    // ret = entity.CmdAssist(assistID, droneIDs)
+     _log(DRONE__TRACE, "EntityBound::Handle_CmdAssist()");
+-    call.Dump(DRONE__DUMP);
++    SystemEntity* pAssistee(FindGuardTarget(call.client, assistID->value()));
++    if (pAssistee == nullptr) {
++        call.client->SendNotifyMsg("Your drones cannot find that pilot to assist.");
++        return new PyDict();
++    }
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(call.client, droneIDs, drones);
++    for (auto pDrone : drones)
++        pDrone->GetAI()->Assist(pAssistee);
++    return new PyDict();
++}
+ 
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++PyResult EntityBound::CmdAbandonDrone(PyCallArgs &call, PyList* droneIDs) {
++    // ret = entity.CmdAbandonDrone(droneIDs)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdAbandonDrone()");
++    std::vector<DroneSE*> drones;
++    CollectControlledDrones(call.client, droneIDs, drones);
++    for (auto pDrone : drones) {
++        call.client->GetShipSE()->ReleaseDrone(pDrone);
++        pDrone->Abandon();
++    }
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdGuard(PyCallArgs &call, PyInt* guardID, PyList* droneIDs) {
+- // ret = entity.CmdGuard(guardID, droneIDs)
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdGuard()");
+-    call.Dump(DRONE__DUMP);
++PyResult EntityBound::CmdReconnectToDrones(PyCallArgs &call, PyList* droneCandidates) {
++    // ret = entity.CmdReconnectToDrones(droneCandidates)
++    //     for errStr, dicty in ret.iteritems():
++    // the client sends the drones in space it knows are ours.  we also look for any others near the ship.
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdReconnectToDrones()");
++    Client* pClient(call.client);
++    ShipSE* pShip(pClient->GetShipSE());
++    SystemManager* pSystem(pClient->SystemMgr());
++    if ((pShip == nullptr) or (pSystem == nullptr))
++        return new PyDict();
++
++    std::map<uint32, DroneSE*> candidates;
++    if (droneCandidates != nullptr)
++        for (PyList::const_iterator itr = droneCandidates->begin(); itr != droneCandidates->end(); ++itr) {
++            SystemEntity* pSE(pSystem->GetSE(PyRep::IntegerValueU32(*itr)));
++            if ((pSE != nullptr) and pSE->IsDroneSE())
++                candidates[pSE->GetID()] = pSE->GetDroneSE();
++        }
++    if (pShip->SysBubble() != nullptr) {
++        std::map<uint32, SystemEntity*> nearby;
++        pShip->SysBubble()->GetAllEntities(nearby);
++        for (auto cur : nearby)
++            if ((cur.second != nullptr) and cur.second->IsDroneSE())
++                candidates[cur.first] = cur.second->GetDroneSE();
++    }
+ 
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++    double range(pClient->GetChar()->GetAttribute(AttrDroneControlDistance).get_float());
++    if (range < 1)
++        range = 20000 + (5000 * pClient->GetChar()->GetSkillLevel(3437));    // Scout Drone Operation
++
++    uint16 count(0);
++    bool full(false);
++    for (auto cur : candidates) {
++        DroneSE* pDrone(cur.second);
++        if (pDrone->IsEnabled() or (pDrone->GetOwnerID() != pClient->GetCharacterID()))
++            continue;
++        if (!pDrone->IsFighter() and (pDrone->GetPosition().distance(pShip->GetPosition()) > range))
++            continue;
++        if (!pShip->ReconnectDrone(pDrone)) {
++            full = true;
++            break;
++        }
++        ++count;
++    }
++    if (count > 0)
++        pClient->SendNotifyMsg("Reconnected to %u drone%s.", count, (count == 1 ? "" : "s"));
++    if (full)
++        pClient->SendNotifyMsg("You cannot control any more drones with your current skills and drone bandwidth.");
++    else if (count == 0)
++        pClient->SendNotifyMsg("There are no lost drones of yours within control range.");
+     return new PyDict();
+ }
+ 
++/* not supported yet */
+ PyResult EntityBound::CmdMine(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
+- // ret = entity.CmdMine(droneIDs, targetID)
+-    /*
+-     * 16:19:14 [DroneTrace] EntityBound::Handle_CmdMine()
+-     * 16:19:14 [DroneDump]   Call Arguments:
+-     * 16:19:14 [DroneDump]      Tuple: 2 elements
+-     * 16:19:14 [DroneDump]       [ 0]   List: 5 elements
+-     * 16:19:14 [DroneDump]       [ 0]   [ 0]    Integer: 140024264
+-     * 16:19:14 [DroneDump]       [ 0]   [ 1]    Integer: 140024265
+-     * 16:19:14 [DroneDump]       [ 0]   [ 2]    Integer: 140024261
+-     * 16:19:14 [DroneDump]       [ 0]   [ 3]    Integer: 140024262
+-     * 16:19:14 [DroneDump]       [ 0]   [ 4]    Integer: 140024263
+-     * 16:19:14 [DroneDump]       [ 1]    Integer: 450000587
+-     */
+-
++    // ret = entity.CmdMine(droneIDs, targetID)
+     _log(DRONE__TRACE, "EntityBound::Handle_CmdMine()");
+-    call.Dump(DRONE__DUMP);
+-
+-    /** @todo MAKE CHECKS IN MINING LASER FOR DRONES BEFORE COMPLETING THIS FUNCTION  **/
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++    call.client->SendNotifyMsg("Mining drones are not supported on this server yet.");
+     return new PyDict();
+ }
+ 
+ PyResult EntityBound::CmdMineRepeatedly(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
+- // ret = entity.CmdMineRepeatedly(droneIDs, targetID)
+-    /*)
+-     * 16:20:28 [DroneTrace] EntityBound::Handle_CmdMineRepeatedly()
+-     * 16:20:28 [DroneDump]   Call Arguments:
+-     * 16:20:28 [DroneDump]      Tuple: 2 elements
+-     * 16:20:28 [DroneDump]       [ 0]   List: 5 elements
+-     * 16:20:28 [DroneDump]       [ 0]   [ 0]    Integer: 140024264
+-     * 16:20:28 [DroneDump]       [ 0]   [ 1]    Integer: 140024265
+-     * 16:20:28 [DroneDump]       [ 0]   [ 2]    Integer: 140024261
+-     * 16:20:28 [DroneDump]       [ 0]   [ 3]    Integer: 140024262
+-     * 16:20:28 [DroneDump]       [ 0]   [ 4]    Integer: 140024263
+-     * 16:20:28 [DroneDump]       [ 1]    Integer: 450000587
+-     */
++    // ret = entity.CmdMineRepeatedly(droneIDs, targetID)
+     _log(DRONE__TRACE, "EntityBound::Handle_CmdMineRepeatedly()");
+-    call.Dump(DRONE__DUMP);
+-
+-    /** @todo MAKE CHECKS IN MINING LASER FOR DRONES BEFORE COMPLETING THIS FUNCTION  **/
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
+-    return new PyDict();
+-}
+-
+-PyResult EntityBound::CmdUnanchor(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
+- // ret = entity.CmdUnanchor(droneIDs, targetID)
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdUnanchor()");
+-    call.Dump(DRONE__DUMP);
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++    call.client->SendNotifyMsg("Mining drones are not supported on this server yet.");
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdReturnHome(PyCallArgs &call, PyList* droneIDs) {
+- // ret = entity.CmdReturnHome(droneIDs)
+-    // this is return and orbit command
+-    /*
+-02:18:26 [DroneTrace] EntityBound::Handle_CmdReturnHome()
+-02:18:26 [DroneDump]   Call Arguments:
+-02:18:26 [DroneDump]      Tuple: 1 elements
+-02:18:26 [DroneDump]       [ 0]   List: 1 elements
+-02:18:26 [DroneDump]       [ 0]   [ 0]    Integer: 140001219
+-*/
+-    call.Dump(DRONE__DUMP);
+-
+-    //Drone* pDrone = m_sysMgr->GetSE()->GetDroneSE();
+-    //pDrone->DestinyMgr()->Orbit(pShipSE, 800);
+-
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
+-    return new PyDict();
+-}
+-
+-PyResult EntityBound::CmdReturnBay(PyCallArgs &call, PyList* droneIDs) {
+- // ret = entity.CmdReturnBay(droneIDs)
+-    /*
+-        [PySubStream 97 bytes]
+-          [PyTuple 4 items]
+-            [PyInt 1]
+-            [PyString "MachoBindObject"]
+-            [PyTuple 2 items]
+-              [PyInt 30000302]
+-              [PyTuple 3 items]
+-                [PyString "CmdReturnBay"]
+-                [PyTuple 1 items]
+-                  [PyList 5 items]
+-                    [PyIntegerVar 1005909162494]
+-                    [PyIntegerVar 1005902743336]
+-                    [PyIntegerVar 1005909162497]
+-                    [PyIntegerVar 1005909162499]
+-                    [PyIntegerVar 1005909162492]
+-                [PyDict 0 kvp]
+-
+-    [PyTuple 1 items]
+-      [PySubStream 42 bytes]
+-        [PyTuple 2 items]
+-          [PySubStruct]
+-            [PySubStream 31 bytes]
+-              [PyTuple 2 items]
+-                [PyString "N=790408:2886"]
+-                [PyIntegerVar 129756563162318175]
+-          [PyDict 0 kvp]
+-          */
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdReturnBay()");
+-    call.Dump(DRONE__DUMP);
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
+-
+-    // returns nodeID and timestamp and dict of error msg
+-    /*
+-    PyDict* dict = new PyDict();
+-    PyTuple* tuple = new PyTuple(2);
+-        tuple->SetItem(0, new PyString(GetBindStr()));    // node info here
+-        tuple->SetItem(1, new PyLong(GetFileTimeNow()));
+-    PySubStruct* str = new PySubStruct(new PySubStream(tuple));
+-    PyTuple* tuple1 = new PyTuple(2);
+-        tuple1->SetItem(0, str);
+-        tuple1->SetItem(1, dict);
+-    return tuple1;
+-    */
++PyResult EntityBound::CmdDelegateControl(PyCallArgs &call, PyList* droneIDs, PyInt* controllerID) {
++    // ret = entity.CmdDelegateControl(droneIDs, controllerID)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdDelegateControl()");
++    call.client->SendNotifyMsg("Handing drones to other pilots is not supported on this server yet.");
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdAbandonDrone(PyCallArgs &call, PyList* droneIDs) {
+- // ret = entity.CmdAbandonDrone(droneIDs)
+-    /*
+-     * 16:23:23 [DroneTrace] EntityBound::Handle_CmdAbandonDrone()
+-     * 16:23:23 [DroneDump]   Call Arguments:
+-     * 16:23:23 [DroneDump]      Tuple: 1 elements
+-     * 16:23:23 [DroneDump]       [ 0]   List: 1 elements
+-     * 16:23:23 [DroneDump]       [ 0]   [ 0]    Integer: 140024263
+-     */
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdAbandonDrone()");
+-    call.Dump(DRONE__DUMP);
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++PyResult EntityBound::CmdRelinquishControl(PyCallArgs &call, PyList* IDs) {
++    // ret = entity.CmdRelinquishControl(IDs)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdRelinquishControl()");
++    call.client->SendNotifyMsg("Handing drones to other pilots is not supported on this server yet.");
+     return new PyDict();
+ }
+ 
+-PyResult EntityBound::CmdReconnectToDrones(PyCallArgs &call, PyList* droneCandidates) {
+-    // ret = entity.CmdReconnectToDrones(droneCandidates)
+-    //     for errStr, dicty in ret.iteritems():
+-    // this sends a list of drones in local space owned by calling character
+-    /*
+-     * 09:09:48 [DroneDump]   Call Arguments:
+-     * 09:09:48 [DroneDump]      Tuple: 1 elements
+-     * 09:09:48 [DroneDump]       [ 0]   List: 1 elements
+-     * 09:09:48 [DroneDump]       [ 0]   [ 0]    Integer: 140007055
+-     */
+-    _log(DRONE__TRACE, "EntityBound::Handle_CmdReconnectToDrones()");
+-    call.Dump(DRONE__DUMP);
+-
+-    call.client->SendNotifyMsg("Drone Control is not implemented yet.");
++PyResult EntityBound::CmdUnanchor(PyCallArgs &call, PyList* droneIDs, PyInt* targetID) {
++    // ret = entity.CmdUnanchor(droneIDs, targetID)
++    _log(DRONE__TRACE, "EntityBound::Handle_CmdUnanchor()");
++    call.client->SendNotifyMsg("Drones cannot unanchor structures on this server yet.");
+     return new PyDict();
+ }
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index fe48410b..2421d5f0 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -2846,6 +2846,129 @@ void ShipSE::ScoopDrone(SystemEntity* pSE) {
+     m_shipRef->SetAttribute(AttrDroneBandwidthLoad, load, false); // client dont care
+ }
+ 
++void ShipSE::ReleaseDrone(DroneSE* pDrone) {
++    if (pDrone == nullptr)
++        return;
++    std::map<uint32, InventoryItem*>::iterator itr = m_drones.find(pDrone->GetID());
++    if (itr == m_drones.end())
++        return;
++    m_drones.erase(itr);
++    m_scoopQueue.erase(pDrone->GetID());
++    EvilNumber load = m_shipRef->GetAttribute(AttrDroneBandwidthLoad);
++    load -= pDrone->GetSelf()->GetAttribute(AttrDroneBandwidthUsed);
++    if (load.get_float() < 0)
++        load = EvilZero;
++    m_shipRef->SetAttribute(AttrDroneBandwidthLoad, load, false); // client dont care
++}
++
++bool ShipSE::ReconnectDrone(DroneSE* pDrone) {
++    Client* pClient(GetPilot());
++    if ((pClient == nullptr) or (pDrone == nullptr))
++        return false;
++    if (m_drones.find(pDrone->GetID()) != m_drones.end())
++        return true;
++    if (MaxActiveDrones() <= m_drones.size())
++        return false;
++    EvilNumber load = m_shipRef->GetAttribute(AttrDroneBandwidthLoad);
++    load += pDrone->GetSelf()->GetAttribute(AttrDroneBandwidthUsed);
++    if (!(load <= m_shipRef->GetAttribute(AttrDroneBandwidth)))
++        return false;
++    m_shipRef->SetAttribute(AttrDroneBandwidthLoad, load, false); // client dont care
++    m_drones.emplace(pDrone->GetID(), pDrone->GetSelf().get());
++    pDrone->Online(this);
++    pDrone->GetAI()->SetIdle();
++    return true;
++}
++
++void ShipSE::DropAllDrones() {
++    m_scoopQueue.clear();
++    if (m_drones.empty())
++        return;
++    std::vector<uint32> ids;
++    for (auto cur : m_drones)
++        ids.push_back(cur.first);
++    m_drones.clear();
++    m_shipRef->SetAttribute(AttrDroneBandwidthLoad, EvilZero, false); // client dont care
++    if (m_system == nullptr)
++        return;
++    for (auto id : ids) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE != nullptr) and pSE->IsDroneSE())
++            pSE->GetDroneSE()->LoseControl();
++    }
++}
++
++void ShipSE::ProcessDroneScoops() {
++    if (m_scoopQueue.empty())
++        return;
++    std::set<uint32> queue;
++    queue.swap(m_scoopQueue);
++    Client* pClient(GetPilot());
++    if ((pClient == nullptr) or (m_system == nullptr))
++        return;
++    for (auto id : queue) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE == nullptr) or !pSE->IsDroneSE())
++            continue;
++        DroneSE* pDrone(pSE->GetDroneSE());
++        if (pDrone->GetControllerID() != GetID())
++            continue;
++        InventoryItemRef iRef(pSE->GetSelf());
++        bool fits(false);
++        try {
++            m_shipRef->VerifyHoldType(flagDroneBay, iRef, pClient);
++            fits = m_shipRef->GetMyInventory()->ValidateAddItem(flagDroneBay, iRef);
++        } catch (...) {
++            fits = false;
++        }
++        if (!fits) {
++            pClient->SendNotifyMsg("There is no room in your drone bay for the %s, so it will stay out and orbit your ship.", pSE->GetName());
++            pDrone->GetAI()->Return();
++            continue;
++        }
++        iRef->ChangeOwner(pClient->GetCharacterID(), true);
++        pClient->MoveItem(iRef->itemID(), pClient->GetShipID(), flagDroneBay);
++        ScoopDrone(pSE);
++        m_system->RemoveEntity(pSE);
++        SafeDelete(pSE);
++    }
++}
++
++uint32 ShipSE::MaxActiveDrones() {
++    Client* pClient(GetPilot());
++    if (pClient == nullptr)
++        return 0;
++    uint32 count(pClient->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32());
++    // carriers and supercarriers control extra drones per carrier skill level.  only add it here
++    // if the effects system has not already folded it into the character's attribute.
++    if (count > pClient->GetChar()->GetSkillLevel(EvESkill::Drones))
++        return count;
++    struct { uint16 attr; uint16 skill; } races[] = {
++        { AttrCarrierAmarrBonus1, 24311 }, { AttrCarrierCaldariBonus1, 24312 },
++        { AttrCarrierGallenteBonus1, 24313 }, { AttrCarrierMinmatarBonus1, 24314 } };
++    for (auto race : races) {
++        if (m_shipRef->HasAttribute(race.attr)) {
++            count += m_shipRef->GetAttribute(race.attr).get_uint32() * pClient->GetChar()->GetSkillLevel(race.skill);
++            break;
++        }
++    }
++    return count;
++}
++
++double ShipSE::CarrierDroneDamageMultiplier() {
++    Client* pClient(GetPilot());
++    if (pClient == nullptr)
++        return 1.0;
++    // only Caldari and Gallente carriers have a drone and fighter damage bonus
++    if ((m_shipRef->groupID() != EVEDB::invGroups::Carrier) and (m_shipRef->groupID() != EVEDB::invGroups::Supercarrier))
++        return 1.0;
++    if (m_shipRef->HasAttribute(AttrCarrierCaldariBonus2))
++        return 1.0 + (m_shipRef->GetAttribute(AttrCarrierCaldariBonus2).get_float() * pClient->GetChar()->GetSkillLevel(24312) / 100.0);
++    if (m_shipRef->HasAttribute(AttrCarrierGallenteBonus2))
++        return 1.0 + (m_shipRef->GetAttribute(AttrCarrierGallenteBonus2).get_float() * pClient->GetChar()->GetSkillLevel(24313) / 100.0);
++    return 1.0;
++}
++
+ void ShipSE::UpdateDrones(std::map<int16, int8> &attribs) {
+     // update drones in space with new attrib settings
+     for (auto cur : m_drones) {
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index 72287f48..8bb5149f 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -27,6 +27,8 @@
+ #ifndef __SHIP__H__INCL__
+ #define __SHIP__H__INCL__
+ 
++#include <set>
++
+ #include "EVEServerConfig.h"
+ #include "StaticDataMgr.h"
+ #include "effects/EffectsData.h"
+@@ -294,6 +296,7 @@ private:
+ class EVEServiceManager;
+ class InventoryItem;
+ class DestinyManager;
++class DroneSE;
+ class Missile;
+ class SystemManager;
+ class ServiceDB;
+@@ -368,6 +371,19 @@ public:
+     void ScoopDrone(SystemEntity* pSE);
+     // returns current count of drones in space for this ship
+     uint8 DroneCount()                                  { return m_drones.size(); }
++    // forget a launched drone (lost control, destroyed, abandoned) and free its bandwidth
++    void ReleaseDrone(DroneSE* pDrone);
++    // take control of one of the pilot's uncontrolled drones in space again
++    bool ReconnectDrone(DroneSE* pDrone);
++    // ship is docking or leaving the system: its drones stay behind, uncontrolled
++    void DropAllDrones();
++    // drones returning to bay ask to be scooped; the scoops run in the pilot's tick, outside the system's entity loop
++    void QueueDroneScoop(uint32 droneID)                { m_scoopQueue.insert(droneID); }
++    void ProcessDroneScoops();
++    // drones (or fighters) the pilot may have out at once, including carrier and supercarrier bonuses
++    uint32 MaxActiveDrones();
++    // carrier hull bonus to drone and fighter damage (Caldari and Gallente carriers)
++    double CarrierDroneDamageMultiplier();
+ 
+     bool GetFleetSMBUsage()                             { return m_allowFleetSMBUsage; }
+     void SetFleetSMBUsage(bool set=false)               { m_allowFleetSMBUsage = set; }
+@@ -400,6 +416,7 @@ private:
+ 
+     /* launched drones */
+     std::map<uint32, InventoryItem*> m_drones;
++    std::set<uint32> m_scoopQueue;
+ };
+ 
+ #endif /* !__SHIP__H__INCL__ */
+diff --git a/src/eve-server/ship/ShipService.cpp b/src/eve-server/ship/ShipService.cpp
+index 0f24a9f4..e02594eb 100644
+--- a/src/eve-server/ship/ShipService.cpp
++++ b/src/eve-server/ship/ShipService.cpp
+@@ -352,15 +352,15 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
+                     throw CustomError ("Drones are disabled.");
+                 }
+ 
+-                if (pClient->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32() < 1) {
++                if (pClient->GetShipSE()->MaxActiveDrones() < 1) {
+                     throw UserError ("NoDroneManagementAbilities")
+                             .AddFormatValue ("typeID", new PyInt (iRef->typeID ()));
+                     //{'FullPath': u'UI/Messages', 'messageID': 259203, 'label': u'NoDroneManagementAbilitiesBody'}(u'You cannot launch {[item]typeID.nameWithArticle} because you do not have the ability to control any drones.', None, {u'{[item]typeID.nameWithArticle}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'nameWithArticle', 'args': 0, 'kwargs': {}, 'variableName': 'typeID'}})
+                 }
+-                if (pClient->GetChar()->GetAttribute(AttrMaxActiveDrones).get_uint32() <= pClient->GetShipSE()->DroneCount()) {
++                if (pClient->GetShipSE()->MaxActiveDrones() <= pClient->GetShipSE()->DroneCount()) {
+                     throw UserError ("NoDroneManagementAbilitiesLeft")
+                             .AddFormatValue ("item", new PyInt (iRef->typeID ()))
+-                            .AddFormatValue ("limit", new PyInt (pClient->GetChar ()->GetAttribute (AttrMaxActiveDrones).get_uint32()));
++                            .AddFormatValue ("limit", new PyInt (pClient->GetShipSE()->MaxActiveDrones()));
+                     //{'FullPath': u'UI/Messages', 'messageID': 259140, 'label': u'NoDroneManagementAbilitiesLeftBody'}(u'You cannot launch {[item]item.name} because you are already controlling {[numeric]limit} drones, as much as you have skill to.', None, {u'{[numeric]limit}': {'conditionalValues': [], 'variableType': 9, 'propertyName': None, 'args': 0, 'kwargs': {}, 'variableName': 'limit'}, u'{[item]item.name}': {'conditionalValues': [], 'variableType': 2, 'propertyName': 'name', 'args': 0, 'kwargs': {}, 'variableName': 'item'}})
+                 }
+ 
+diff --git a/src/eve-server/system/TargetManager.cpp b/src/eve-server/system/TargetManager.cpp
+index 88a38fca..244ede8c 100644
+--- a/src/eve-server/system/TargetManager.cpp
++++ b/src/eve-server/system/TargetManager.cpp
+@@ -474,6 +474,13 @@ void TargetManager::TargetsCleared() {
+     mySE->GetPilot()->SendNotification("OnMultiEvent", "clientID", &tmp);
+ }
+ 
++void TargetManager::GetTargetedBy(std::vector<SystemEntity*>& into) const
++{
++    for (auto cur : m_targetedBy)
++        if (cur.first != nullptr)
++            into.push_back(cur.first);
++}
++
+ bool TargetManager::IsTargetedBy(SystemEntity* pSE)
+ {
+     return (m_targetedBy.find(pSE) != m_targetedBy.end());
+diff --git a/src/eve-server/system/TargetManager.h b/src/eve-server/system/TargetManager.h
+index 309b7c07..7a01fbc3 100644
+--- a/src/eve-server/system/TargetManager.h
++++ b/src/eve-server/system/TargetManager.h
+@@ -127,6 +127,7 @@ public:
+ 
+     /* NPC AI Methods */
+     bool                IsTargetedBy(SystemEntity *pSE);
++    void                GetTargetedBy(std::vector<SystemEntity*>& into) const;    // everything that has us locked (or is locking us)
+     SystemEntity*       GetFirstTarget(bool need_locked=false);
+     SystemEntity*       GetTarget(uint32 targetID, bool need_locked=true) const;
+ 
+-- 
+2.43.0
+

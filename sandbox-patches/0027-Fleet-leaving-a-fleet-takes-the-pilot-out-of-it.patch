@@ -1,0 +1,133 @@
+From 4a4196e49f3efeb69097f8f4f78f93e359ef25b4 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 15:22:09 +0000
+Subject: [PATCH] Fleet: leaving a fleet takes the pilot out of it
+
+Leaving set the session's fleetid, wingid, squadid, fleetrole,
+fleetbooster and fleetjob to 0.  Out of a fleet the client has None
+there (as at login; a real server's join changes fleetid from None) and
+tests 'session.fleetid is not None', so after leaving it still treated
+the pilot as in a fleet.  Client::UpdateFleetSession now clears them to
+None when the pilot has no fleet.
+
+RemoveMember cleared the fleet, wing and squad leader slots by comparing
+fleetBooster() with the Role values, so a commander who wasn't also the
+booster kept the slot after leaving or logging off: nobody else could
+take it, and the boost code went on reading a Client that had gone.
+Leader and booster slots are now cleared by pointer.  A fleet finder
+advert posted by the leaver is removed, as the finder reads that Client
+for every listing.
+
+LeaveFleet also ends the leaver's own fleet boost (not while logging
+out) and ignores a null client (KickMember on a pilot who is offline).
+Same bugs in upstream master.
+---
+ src/eve-server/Client.cpp             | 13 +++++++++++++
+ src/eve-server/fleet/FleetService.cpp | 26 ++++++++++++++++++++------
+ 2 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index ca5f3af..c21017b 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -2045,6 +2045,19 @@ void Client::UpdateFleetSession(CharFleetData& fleet)
+     m_wing = fleet.wingID;
+     m_squad = fleet.squadID;
+ 
++    // out of a fleet these are None, as they are at login.  the client tests 'session.fleetid is not None', so
++    //  setting them to 0 on leaving left it thinking it was still in a fleet (fleet 0)
++    if (!IsFleetID(m_fleet)) {
++        pSession->Clear("fleetjob");
++        pSession->Clear("fleetrole");
++        pSession->Clear("fleetbooster");
++        pSession->Clear("fleetid");
++        pSession->Clear("wingid");
++        pSession->Clear("squadid");
++        SendSessionChange();
++        return;
++    }
++
+     pSession->SetInt("fleetjob", fleet.job);
+     pSession->SetInt("fleetrole", fleet.role);
+     pSession->SetInt("fleetbooster", fleet.booster);
+diff --git a/src/eve-server/fleet/FleetService.cpp b/src/eve-server/fleet/FleetService.cpp
+index 8918614..2f2108f 100644
+--- a/src/eve-server/fleet/FleetService.cpp
++++ b/src/eve-server/fleet/FleetService.cpp
+@@ -1182,6 +1182,8 @@ void FleetService::GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID)
+ 
+ void FleetService::LeaveFleet(Client* pClient)
+ {
++    if (pClient == nullptr)     // KickMember looks the pilot up by charID, and they may be offline
++        return;
+     Character* pChar = pClient->GetChar().get();
+     if (pChar == nullptr)
+         return;
+@@ -1192,6 +1194,11 @@ void FleetService::LeaveFleet(Client* pClient)
+ 
+     RemoveMember(pClient);
+ 
++    // the leaver's own fleet boost ends with the fleet.  not while logging out, when the ship is on its way out too
++    ShipSE* pShipSE = pClient->GetShipSE();
++    if (pClient->IsLoaded() and (pShipSE != nullptr) and pShipSE->IsBoosted())
++        pShipSE->RemoveBoost();
++
+     CharFleetData fleet = CharFleetData();
+     //call updates on fleet session data
+     pChar->SetFleetData(fleet);
+@@ -1206,12 +1213,14 @@ void FleetService::RemoveMember(Client* pClient)
+     uint32 fleetID = pChar->fleetID();
+ 
+     // update fleet data
++    //  leader and booster slots are matched by pointer.  the leader checks used to test fleetBooster() against the
++    //  Role values, so a leader who wasn't also the booster stayed in the slot after leaving (and after logging off)
+     if (fleetID) {
+         std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
+         if (fItr != m_fleetDataMap.end()) {
+-            if (pChar->fleetBooster() == Fleet::Booster::Fleet)
++            if (fItr->second.booster == pClient)
+                 fItr->second.booster = nullptr;
+-            if (pChar->fleetBooster() == Fleet::Role::FleetLeader)
++            if (fItr->second.leader == pClient)
+                 fItr->second.leader = nullptr;
+         }
+     }
+@@ -1220,9 +1229,9 @@ void FleetService::RemoveMember(Client* pClient)
+     if (pChar->wingID()) {
+         std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(pChar->wingID());
+         if (itr != m_wingDataMap.end()) {
+-            if (pChar->fleetBooster() == Fleet::Booster::Wing)
++            if (itr->second.booster == pClient)
+                 itr->second.booster = nullptr;
+-            if (pChar->fleetBooster() == Fleet::Role::WingLeader)
++            if (itr->second.leader == pClient)
+                 itr->second.leader = nullptr;
+         }
+     }
+@@ -1232,9 +1241,9 @@ void FleetService::RemoveMember(Client* pClient)
+         std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(pChar->squadID());
+         if (itr != m_squadDataMap.end()) {
+             itr->second.members.erase(pChar->itemID());
+-            if (pChar->fleetBooster() == Fleet::Booster::Squad)
++            if (itr->second.booster == pClient)
+                 itr->second.booster = nullptr;
+-            if (pChar->fleetBooster() == Fleet::Role::SquadLeader)
++            if (itr->second.leader == pClient)
+                 itr->second.leader = nullptr;
+         }
+     }
+@@ -1245,6 +1254,11 @@ void FleetService::RemoveMember(Client* pClient)
+             m_fleetMembers.erase(itr);
+             break;
+         }
++
++    // a fleet finder advert keeps the pilot who posted it, and the finder reads them for every listing
++    std::map<uint32, FleetAdvert>::iterator aItr = m_fleetAdvertMap.find(fleetID);
++    if ((aItr != m_fleetAdvertMap.end()) and (aItr->second.leader == pClient))
++        RemoveFleetAdvert(fleetID);
+ }
+ 
+ PyRep* FleetService::GetWings(uint32 fleetID)
+-- 
+2.43.0
+

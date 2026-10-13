@@ -1,0 +1,310 @@
+From 176e97f8de0783b08991f77aee8728cc7cab51ea Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 21:09:06 +0100
+Subject: [PATCH] Release build with ccache and a slim runtime image; panel
+ keeps the compile cache
+
+- Dockerfile: Release instead of Debug; ccache in a BuildKit cache mount so
+  rebuilds only recompile changed files; build dir removed in the same layer;
+  runtime stage on debian:12-slim with only the server, its non-libc shared
+  libraries (gathered with ldd) and the tools the start scripts use; files
+  chowned on COPY instead of a duplicating chown layer; .git no longer copied
+  (the commit hash define forced full recompiles).
+- .dockerignore: drop .git.
+- Control panel: builder prune keeps exec.cachemount records; after a rebuild
+  only records unused for 72h are pruned; Free up space prunes the rest.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ .dockerignore         |   4 +-
+ CHANGELOG-SANDBOX.md  |  19 ++++++++
+ Dockerfile            | 109 +++++++++++++++++++++++++-----------------
+ EVEmuControlPanel.ps1 |  29 ++++++-----
+ 4 files changed, 103 insertions(+), 58 deletions(-)
+
+diff --git a/.dockerignore b/.dockerignore
+index 71fcf6a8..2bd65aa9 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,10 +1,8 @@
+ *
+-!.git
+-.git/objects/*
+ !src
+ !utils
+ !sql
+ !CMakeLists.txt
+ !cmake
+ !dep
+-!config.h.in
+\ No newline at end of file
++!config.h.in
+diff --git a/CHANGELOG-SANDBOX.md b/CHANGELOG-SANDBOX.md
+index 7b1d10d9..a253be00 100644
+--- a/CHANGELOG-SANDBOX.md
++++ b/CHANGELOG-SANDBOX.md
+@@ -18,6 +18,7 @@ Some changes here fix bugs that exist in EVEmu itself; others only make sense fo
+ | Orbit overflow, agile turning, current turn target, stack launch limit, orbit-target crash | `0003` | Yes. The orbit overflow and turn fixes in `DestinyManager.cpp` also help NPCs and could go on their own. |
+ | Stop sent once instead of every tic; no Stop on jump arrival or on reaching an approach target | `0005` | Yes |
+ | eve-bot headless test client | `0004` | Possibly, as an optional developer tool (off by default) |
++| Release build, compile cache and slim runtime image (Dockerfile) | `0006` | Possibly; it changes how everyone's image is built, so offer it separately |
+ | Windows control panel, changelog, patch files | none (tooling) | No, sandbox-only |
+ 
+ Each patch's commit message describes the change in developer terms; the entries below describe it in player terms.
+@@ -29,6 +30,24 @@ Each patch's commit message describes the change in developer terms; the entries
+ 
+ ---
+ 
++## 2026-10-10: Faster, smaller rebuilds (Dockerfile and control panel)
++
++Patch `0006` · Status: **Tested** with a local Docker build, awaiting a rebuild on your PC
++
++**Why.** Every rebuild compiled a large debugging build of the whole server from scratch (10 to 20 minutes) and produced a 2 to 3 GB image packed with compilers. That filled C: once already.
++
++**What changed**
++
++- The server is built as a normal optimised (Release) build.
++- A compile cache is kept between builds, so a rebuild recompiles only the files that changed. In testing, after a one-file change the compile step took about 20 seconds instead of about 8 minutes. The very first rebuild after this change still compiles everything once.
++- The image that runs is a slim Debian image with just the server, its libraries and the tools the start scripts need: about 420 MB instead of 2 to 3 GB. The build folder is deleted within the build step, and file ownership is set while copying, so no layer stores a second copy of the files.
++- `.git` is no longer copied into the build. That makes the build context smaller, and new commits no longer force a full recompile. (The server log now shows `invalid_hash` instead of the commit hash.)
++- Control panel: cleaning up after a rebuild keeps the compile cache, and keeps build files used in the last 3 days so the build tools aren't downloaded each time. **Free up space** removes everything except the compile cache, which is capped at 3 GB.
++
++**Files.** `Dockerfile`, `.dockerignore`, `EVEmuControlPanel.ps1`.
++
++---
++
+ ## 2026-10-10: Autopilot keeps running through jumps; no more warp "bounce"
+ 
+ Patch `0005` · Status: **Tested** (test bot and in game). It improved things, but the autopilot still has open problems; see Known issues.
+diff --git a/Dockerfile b/Dockerfile
+index a51086a3..ad14b1b2 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,73 +1,94 @@
+-# Base image for building EVEmu using Debian 12
+-FROM debian:12 AS base
++# EVEmu server image.
++#
++# Two stages:
++#   build   - compilers and development libraries; compiles the server.  A compile cache (ccache)
++#             is kept between builds, so a rebuild only recompiles files that changed.
++#   runtime - a slim image with just the server, the libraries it links against and the tools
++#             the start scripts need.  This is the image that runs.
++
++# ---------------------------------------------------------------------------
++# Build stage
++# ---------------------------------------------------------------------------
++FROM debian:12 AS build
+ 
+-# Install build dependencies
+ RUN apt-get update && \
+     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+     build-essential \
++    ca-certificates \
++    ccache \
+     cmake \
+-    git \
+-    curl \
+-    wget \
+-    zlib1g-dev \
+-    libmariadb-dev \
+     libboost-all-dev \
++    libmariadb-dev \
+     libtinyxml-dev \
+-    ca-certificates \
+-    g++ \
+-    gdb \
+     libutfcpp-dev \
+-    mariadb-client \
+-    passwd \
++    zlib1g-dev \
+     && apt-get clean && rm -rf /var/lib/apt/lists/*
+ 
+-# Build stage
+-FROM base AS app-build
++# Project files.  .git is left out on purpose: the commit hash would be compiled into every
++# file and make each new commit a full rebuild.
++COPY CMakeLists.txt config.h.in /src/
++COPY cmake /src/cmake
++COPY dep /src/dep
++COPY src /src/src
++COPY utils /src/utils
+ 
+-# Add project files
+-ADD CMakeLists.txt /src/
+-ADD config.h.in /src/
+-ADD /cmake/ /src/cmake
+-ADD /dep/ /src/dep
+-ADD /src/ /src/src
+-ADD /utils/ /src/utils
+-ADD /.git/ /src/.git
+-
+-# Create necessary directories
+-RUN mkdir -p /src/build /app /app/logs /app/server_cache /app/image_cache
+-
+-# Set working directory
+ WORKDIR /src/build
+ 
+-# Configure and build the project
+-RUN cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Debug .. 
+-RUN make -j$(nproc)
+-RUN make install
++# Compile.  The ccache directory is a build cache that survives between builds.
++#  Release: optimised, much smaller and faster to build than the old Debug build.
++#  The build folder is deleted in the same step, so this layer only holds the installed server.
++ENV CCACHE_DIR=/ccache \
++    CCACHE_MAXSIZE=3G \
++    CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime
++RUN --mount=type=cache,id=evemu-ccache,target=/ccache \
++    cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Release \
++          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
++          -DCMAKE_CXX_FLAGS="-fpch-preprocess" .. && \
++    make -j$(nproc) && \
++    make install && \
++    ccache --show-stats | head -20 && \
++    cd / && rm -rf /src/build
++
++# Gather the shared libraries the server needs (except the C/C++ runtime, which every image has).
++RUN mkdir -p /app/lib && \
++    ldd /app/bin/eve-server | awk '/=> \// {print $3}' | \
++    grep -v -E '/(libc|libm|libpthread|libdl|librt|libgcc_s|libstdc\+\+|ld-linux[^/]*)\.so' | \
++    xargs -r -I{} cp -L {} /app/lib/ && \
++    ls /app/lib
+ 
+-# Final runtime image
+-FROM base AS app
++# ---------------------------------------------------------------------------
++# Runtime stage
++# ---------------------------------------------------------------------------
++FROM debian:12-slim AS app
+ 
+ LABEL description="EVEmu Server"
+ 
+-# Copy built assets
+-COPY --from=app-build /src/utils/ /src/utils
+-COPY --from=app-build /app/ /app
++# mariadb-client and curl are used by the database setup scripts; passwd provides useradd.
++RUN apt-get update && \
++    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
++    ca-certificates \
++    curl \
++    mariadb-client \
++    passwd \
++    && apt-get clean && rm -rf /var/lib/apt/lists/* \
++    && useradd evemu
++
++# The server and its libraries, owned by the evemu user as they are copied in
++#  (a separate chown step would store a second copy of every file in the image)
++COPY --from=build --chown=evemu:evemu /app/ /app
++COPY --from=build --chown=evemu:evemu /src/utils/ /src/utils
++RUN echo "/app/lib" > /etc/ld.so.conf.d/evemu.conf && ldconfig
+ 
+ # Add SQL loading tools
+-ADD /sql/ /src/sql
++COPY --chown=evemu:evemu sql/ /src/sql
+ 
+ # Run SQL tool script
+-RUN cd /src/sql && ./get_evedbtool.sh
++RUN cd /src/sql && ./get_evedbtool.sh && chown evemu:evemu evedbtool
+ 
+ # Expose server ports
+ EXPOSE 26000
+ EXPOSE 26001
+ 
+-# Change ownership of the application to evemu
+-RUN useradd evemu
+-RUN chown -R evemu:evemu /app
+-RUN chown -R evemu:evemu /src
+-
+ ENTRYPOINT ["/bin/sh", "/src/utils/container-scripts/entry.sh"]
+ 
+ # Default command
+diff --git a/EVEmuControlPanel.ps1 b/EVEmuControlPanel.ps1
+index d6a45a81..17fa1f43 100644
+--- a/EVEmuControlPanel.ps1
++++ b/EVEmuControlPanel.ps1
+@@ -346,14 +346,21 @@ function Prune([string[]]$cmd) {
+     }
+     return $code
+ }
+-function Clean-Docker {
+-    # Removes untagged old server images and the build cache.
+-    # Never touches volumes (the universe database) or containers.
++function Clean-Docker([bool]$deep) {
++    # Removes untagged old server images and old build files.
++    # Never touches volumes (the universe database) or containers, and keeps the compile cache
++    # (type exec.cachemount), which is what makes rebuilds after small changes take minutes.
++    # After a rebuild, build files used in the last 3 days are kept so the build tools are not
++    # downloaded again; Free up space ($deep) removes those too.
+     Say ''
+     Say 'Removing old server images...'
+     $null = Prune @('image', 'prune', '-f')
+     Say 'Removing leftover build files...'
+-    $null = Prune @('builder', 'prune', '-af')
++    if ($deep) {
++        $null = Prune @('builder', 'prune', '-af', '--filter', 'type!=exec.cachemount')
++    } else {
++        $null = Prune @('builder', 'prune', '-af', '--filter', 'type!=exec.cachemount', '--filter', 'until=72h')
++    }
+ }
+ 
+ '@
+@@ -375,7 +382,7 @@ if (($c -ne 0) -and (-not $fresh)) {
+     Start-Sleep -Seconds 15
+     $c = Dock compose up -d
+ }
+-if ($fresh) { Clean-Docker }
++if ($fresh) { Clean-Docker $false }
+ if ($c -ne 0) { exit $c }
+ Say ''
+ Say 'Containers started. The server takes a minute or two to come online (several minutes on a first start).'
+@@ -394,9 +401,9 @@ exit $c
+ '@
+     Rebuild = @'
+ if (-not (Ensure-Engine)) { exit 1 }
+-Say 'Rebuilding the server from the code in this folder. This can take 10 to 20 minutes...'
++Say 'Rebuilding the server from the code in this folder. The first rebuild takes 10 to 20 minutes; later ones usually a few minutes...'
+ $c = Dock compose up -d --build
+-Clean-Docker
++Clean-Docker $false
+ if ($c -ne 0) { exit $c }
+ Say ''
+ Say 'Rebuilt and started.'
+@@ -406,13 +413,13 @@ exit 0
+ if (-not (Ensure-Engine)) { exit 1 }
+ Say 'Space Docker is using now:'
+ $null = Dock system df
+-Clean-Docker
++Clean-Docker $true
+ Say ''
+ Say 'Space Docker is using after cleaning:'
+ $null = Dock system df
+ Say ''
+ Say 'Your universe (the database) and the server were not touched.'
+-Say 'Docker reuses the freed space for future builds. Its disk image file on Windows may not shrink straight away.'
++Say 'The compile cache (up to 3 GB) is kept so rebuilds stay fast. Docker reuses the freed space; its disk image file on Windows may not shrink straight away.'
+ exit 0
+ '@
+     Wipe = @'
+@@ -424,7 +431,7 @@ $fresh = -not (Test-Image 'evemu_server')
+ if ($fresh) { Say 'The server has not been built on this computer yet, so it is built first. This takes 10 to 20 minutes...' }
+ Say 'Creating a fresh universe. The first start installs the database and stocks the market, which takes several minutes...'
+ $c = Dock compose up -d
+-if ($fresh) { Clean-Docker }
++if ($fresh) { Clean-Docker $false }
+ exit $c
+ '@
+ }
+@@ -953,7 +960,7 @@ $btnRestart.Add_Click({ Invoke-Click { $script:OnlineFor = ''; Start-PanelTask '
+ $btnRebuild.Add_Click({
+     Invoke-Click {
+         if (-not (Confirm-Space)) { return }
+-        if (Ask-YesNo 'Rebuild the server from the code in this folder? It takes 10 to 20 minutes, and the server is restarted at the end. Your universe is kept, and old server images and leftover build files are removed afterwards.') {
++        if (Ask-YesNo 'Rebuild the server from the code in this folder? It takes a few minutes (the first time 10 to 20), and the server is restarted at the end. Your universe is kept, and old server images and leftover build files are removed afterwards.') {
+             Start-PanelTask 'Rebuild server' 'Rebuild'
+         }
+     }
+-- 
+2.43.0
+

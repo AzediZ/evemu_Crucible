@@ -1,0 +1,3345 @@
+From 1ace071d5d80228840d9cef1e4629d57753657c1 Mon Sep 17 00:00:00 2001
+From: Renn <52645875+rennr@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 02:01:47 -0400
+Subject: [PATCH 34/35] feat: concord and kill rights
+
+---
+ cmake/BuildPackage.cmake                      |  16 +-
+ sql/migrations/20261011120000-killrights.sql  |  12 +
+ src/eve-core/log/logtypes.h                   |   5 +
+ src/eve-core/utils/CallStack.cpp              |  38 +-
+ src/eve-server/CMakeLists.txt                 |   2 +
+ src/eve-server/Client.cpp                     |  39 +-
+ src/eve-server/Client.h                       |   1 +
+ src/eve-server/EVEServerConfig.cpp            |  74 +-
+ src/eve-server/EVEServerConfig.h              |  29 +-
+ src/eve-server/admin/GMToolCommands.cpp       |  97 +++
+ src/eve-server/admin/GMToolCommands.h         |   3 +
+ .../character/AggressionMgrService.cpp        |  11 +-
+ src/eve-server/character/Character.cpp        |   8 +-
+ src/eve-server/dogmaim/DogmaIMService.cpp     |   4 +
+ src/eve-server/eve-server.cpp                 |   2 +
+ src/eve-server/inventory/InventoryBound.cpp   |  45 +-
+ src/eve-server/npc/DroneAI.cpp                |  13 +
+ src/eve-server/npc/LawEnforcement.cpp         | 552 +++++++++++++
+ src/eve-server/npc/LawEnforcement.h           | 105 +++
+ src/eve-server/npc/NPC.cpp                    |   5 +-
+ src/eve-server/npc/NPC.h                      |  18 +
+ src/eve-server/npc/NPCAI.cpp                  |  21 +-
+ src/eve-server/npc/Sentry.h                   |   5 +
+ src/eve-server/npc/SentryAI.cpp               |  61 +-
+ src/eve-server/npc/SentryAI.h                 |   4 +
+ src/eve-server/ship/BeyonceService.cpp        |   9 +
+ src/eve-server/ship/Ship.h                    |   3 +
+ src/eve-server/ship/ShipService.cpp           |   3 +
+ src/eve-server/ship/modules/ActiveModule.cpp  |  19 +
+ src/eve-server/ship/modules/ActiveModule.h    |   2 +
+ src/eve-server/standing/Standing.cpp          |   7 +-
+ src/eve-server/standing/StandingDB.cpp        |   7 +-
+ src/eve-server/system/Container.h             |   1 +
+ src/eve-server/system/CrimeWatch.cpp          | 755 +++++++++++++++++-
+ src/eve-server/system/CrimeWatch.h            | 133 ++-
+ src/eve-server/system/Damage.cpp              | 174 +++-
+ src/eve-server/system/SystemEntity.cpp        |  38 +-
+ src/eve-server/system/SystemManager.cpp       |  33 +-
+ src/eve-server/system/SystemManager.h         |   6 +
+ utils/config/eve-server.xml                   |  32 +-
+ 40 files changed, 2249 insertions(+), 143 deletions(-)
+ create mode 100644 sql/migrations/20261011120000-killrights.sql
+ create mode 100644 src/eve-server/npc/LawEnforcement.cpp
+ create mode 100644 src/eve-server/npc/LawEnforcement.h
+
+diff --git a/cmake/BuildPackage.cmake b/cmake/BuildPackage.cmake
+index 90bfd20..a6885ff 100644
+--- a/cmake/BuildPackage.cmake
++++ b/cmake/BuildPackage.cmake
+@@ -47,11 +47,11 @@ MACRO( BUILD_PACKAGE PKG )
+       SHOW_PROGRESS EXPECTED_MD5 "${PKG_MD5}"
+       )
+ 
+-    # If the archive is newer than the extracted
+-    # directory, proceed with extraction
+-    IF( "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}"
+-        IS_NEWER_THAN
+-        "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}" )
++    # If the archive is newer than the extracted directory, or an earlier
++    # extraction never finished (the listfile is written last), extract it
++    SET( PKG_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}" )
++    IF( ( "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}" IS_NEWER_THAN "${PKG_SOURCE_DIR}" )
++        OR ( NOT EXISTS "${PKG_SOURCE_DIR}/CMakeLists.txt" ) )
+       # Print a status message
+       MESSAGE( STATUS "Extracting ${PKG_ARCHIVE}" )
+       # Make sure the extract directory exists
+@@ -62,7 +62,11 @@ MACRO( BUILD_PACKAGE PKG )
+         COMMAND "${CMAKE_COMMAND}" -E
+         tar -xf "${CMAKE_CURRENT_BINARY_DIR}/${PKG_ARCHIVE}"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}"
++        RESULT_VARIABLE PKG_EXTRACT_RESULT
+         )
++      IF( NOT PKG_EXTRACT_RESULT EQUAL 0 )
++        MESSAGE( FATAL_ERROR "Extracting ${PKG_ARCHIVE} failed (${PKG_EXTRACT_RESULT}).  Delete ${PKG_SOURCE_DIR} and configure again." )
++      ENDIF()
+       # Write the CMakeLists.txt
+       FILE( WRITE
+         "${CMAKE_CURRENT_BINARY_DIR}${PKG_EXTRACT_PREFIX}${PKG_ARCHIVE_PREFIX}/CMakeLists.txt"
+@@ -91,4 +95,6 @@ MACRO( BUILD_PACKAGE PKG )
+   UNSET( PKG_ARCHIVE )
+   UNSET( PKG_ARCHIVE_PREFIX )
+   UNSET( PKG_EXTRACT_PREFIX )
++  UNSET( PKG_SOURCE_DIR )
++  UNSET( PKG_EXTRACT_RESULT )
+ ENDMACRO( BUILD_PACKAGE )
+diff --git a/sql/migrations/20261011120000-killrights.sql b/sql/migrations/20261011120000-killrights.sql
+new file mode 100644
+index 0000000..ce5cc22
+--- /dev/null
++++ b/sql/migrations/20261011120000-killrights.sql
+@@ -0,0 +1,12 @@
++-- kill rights (CrimeWatch).  30 days, so they're kept in the db
++-- +migrate Up
++create table if not exists crimeKillRights
++(
++    holderID int unsigned not null,
++    targetID int unsigned not null,
++    expiresAt bigint not null,
++    primary key (holderID, targetID)
++);
++
++-- +migrate Down
++drop table crimeKillRights;
+diff --git a/src/eve-core/log/logtypes.h b/src/eve-core/log/logtypes.h
+index 03689b0..c667682 100644
+--- a/src/eve-core/log/logtypes.h
++++ b/src/eve-core/log/logtypes.h
+@@ -218,6 +218,11 @@ LOG_TYPE( CONCORD, INFO, DISABLED, "ConcordInfo" )
+ LOG_TYPE( CONCORD, TRACE, DISABLED, "ConcordTrace" )
+ LOG_TYPE( CONCORD, AI_TRACE, DISABLED, "ConcordAITrace" )
+ 
++LOG_CATEGORY( CRIME )
++LOG_TYPE( CRIME, ERROR,   ENABLED,  "CrimeError" )
++LOG_TYPE( CRIME, INFO,    ENABLED,  "CrimeInfo" )
++LOG_TYPE( CRIME, TRACE,   DISABLED, "CrimeTrace" )
++
+ LOG_CATEGORY( CORP )
+ LOG_TYPE( CORP, ERROR,   ENABLED, "CorpError" )
+ LOG_TYPE( CORP, WARNING, DISABLED, "CorpWarning" )
+diff --git a/src/eve-core/utils/CallStack.cpp b/src/eve-core/utils/CallStack.cpp
+index 7e75390..5517e33 100644
+--- a/src/eve-core/utils/CallStack.cpp
++++ b/src/eve-core/utils/CallStack.cpp
+@@ -47,11 +47,29 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ #if defined(_WIN32)
+ #include <windows.h>
+ #include <imagehlp.h>
+-#if defined(__MINGW32__)
++// MinGW can read gcc's debug info with binutils' BFD (define EVEMU_USE_BFD and link bfd, iberty, sframe and a zlib >= 1.2.9).
++//  without it, MinGW uses the same dbghelp symbol lookup as MSVC
++#if defined(__MINGW32__) && defined(EVEMU_USE_BFD)
++#define CS_USE_BFD 1
++#endif
++#if defined(_M_AMD64) || defined(__x86_64__)
++#define CS_X64 1
++#endif
++#if defined(CS_USE_BFD)
+ #define PACKAGE         1 // Supress cmake error.
+ #define PACKAGE_VERSION 1 // Supress cmake error.
+ #include <bfd.h>
+ #include <cxxabi.h>
++// binutils 2.34 replaced the bfd_get_section_* macros with bfd_section_* functions that take only the section
++#ifdef bfd_get_section_flags
++#define CS_SECTION_FLAGS(abfd, sec) bfd_get_section_flags(abfd, sec)
++#define CS_SECTION_VMA(abfd, sec)   bfd_get_section_vma(abfd, sec)
++#define CS_SECTION_SIZE(sec)        bfd_get_section_size(sec)
++#else
++#define CS_SECTION_FLAGS(abfd, sec) bfd_section_flags(sec)
++#define CS_SECTION_VMA(abfd, sec)   bfd_section_vma(sec)
++#define CS_SECTION_SIZE(sec)        bfd_section_size(sec)
++#endif
+ #endif
+ #else
+ #include <execinfo.h>
+@@ -115,7 +133,7 @@ public:
+ private:
+     CRITICAL_SECTION cs;
+ } cs;
+-#if defined(__MINGW32__)
++#if defined(CS_USE_BFD)
+ class bfd_usage : noncopyable
+ {
+ public:
+@@ -187,9 +205,9 @@ private:
+     {
+         fnis_para& para = *static_cast<fnis_para*>(tpara);
+         if(!para.function.empty()) return; // We have got the name. 
+-        if(!(bfd_get_section_flags(tabfd, tsec) & SEC_ALLOC)) return; // Allocate space for this section.
+-        bfd_vma vma = bfd_get_section_vma(tabfd, tsec);
+-        if(para.counter < vma || vma+bfd_get_section_size(tsec) <= para.counter) return;        
++        if(!(CS_SECTION_FLAGS(tabfd, tsec) & SEC_ALLOC)) return; // Allocate space for this section.
++        bfd_vma vma = CS_SECTION_VMA(tabfd, tsec);
++        if(para.counter < vma || vma+CS_SECTION_SIZE(tsec) <= para.counter) return;        
+         const char* function = NULL;
+         const char* file = NULL;
+         unsigned int line = 0;
+@@ -200,7 +218,7 @@ private:
+         }
+     }
+ };
+-#endif // __MINGW32__
++#endif // CS_USE_BFD
+ #endif // _WIN32
+ 
+ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
+@@ -214,12 +232,12 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
+         fprintf(stderr, "Error: Failed to initialize symbol context.\n");
+         return;
+     }
+-#ifdef __MINGW32__
++#ifdef CS_USE_BFD
+     bfd_usage bfdu;
+ #endif
+ 
+     // Prepare variables.
+-#if defined(_M_AMD64)
++#if defined(CS_X64)
+     const DWORD machine = IMAGE_FILE_MACHINE_AMD64;
+ #else
+     const DWORD machine = IMAGE_FILE_MACHINE_I386;
+@@ -230,7 +248,7 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
+     CONTEXT context = { 0 };
+     context.ContextFlags = CONTEXT_FULL;
+     RtlCaptureContext(&context);
+-#if defined(_M_AMD64)
++#if defined(CS_X64)
+     frame.AddrPC.Offset = context.Rip;
+     frame.AddrPC.Mode = AddrModeFlat;
+     frame.AddrStack.Offset = context.Rsp;
+@@ -268,7 +286,7 @@ void CallStack::GetCalls(vector<CallStack::CallInfo>& calls)
+         string module_name = Unknown_Module;
+         if(module_base && GetModuleFileNameA(reinterpret_cast<HINSTANCE>(module_base), module_name_raw, MAX_PATH)) module_name = module_name_raw;
+ 
+-#if defined(__MINGW32__)
++#if defined(CS_USE_BFD)
+         string function = bfdu.get_function_name(frame.AddrPC.Offset);
+         if(function.empty())
+         {
+diff --git a/src/eve-server/CMakeLists.txt b/src/eve-server/CMakeLists.txt
+index 2988275..db356b7 100644
+--- a/src/eve-server/CMakeLists.txt
++++ b/src/eve-server/CMakeLists.txt
+@@ -385,6 +385,7 @@ SET( missions_SOURCE
+ 
+ SET( npc_INCLUDE
+      #"${TARGET_INCLUDE_DIR}/npc/Concord.h"
++     "${TARGET_INCLUDE_DIR}/npc/LawEnforcement.h"
+      "${TARGET_INCLUDE_DIR}/npc/Drone.h"
+      "${TARGET_INCLUDE_DIR}/npc/DroneAI.h"
+      "${TARGET_INCLUDE_DIR}/npc/EntityService.h"
+@@ -394,6 +395,7 @@ SET( npc_INCLUDE
+      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h")
+ SET( npc_SOURCE
+      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
++     "${TARGET_SOURCE_DIR}/npc/LawEnforcement.cpp"
+      "${TARGET_SOURCE_DIR}/npc/Drone.cpp"
+      "${TARGET_SOURCE_DIR}/npc/DroneAI.cpp"
+      "${TARGET_SOURCE_DIR}/npc/EntityService.cpp"
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index c21017b..cef7aa7 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -31,6 +31,8 @@
+ #include "../eve-common/EVE_Character.h"
+ //#include "../../eve-common/EVE_Skills.h"
+ 
++#include "system/CrimeWatch.h"
++#include "npc/LawEnforcement.h"
+ #include "Client.h"
+ #include "ConsoleCommands.h"
+ #include "EVEServerConfig.h"
+@@ -112,6 +114,7 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
+     m_packaged = false;
+     m_portrait = false;
+     m_autoPilot = false;
++    m_shipLeftInSpace = false;
+     m_bubbleWait = false;     // allow client processing of subsquent destiny msgs
+     m_charCreation = false;
+     m_setStateSent = false;
+@@ -178,8 +181,9 @@ Client::~Client() {
+         m_char->LogOut();
+     }
+ 
+-    // save shipstate and remove from ItemFactory
+-    m_ship->LogOut();
++    // save shipstate and remove from ItemFactory.  a ship left in space is logged out when it leaves (LawEnforcement)
++    if (!m_shipLeftInSpace)
++        m_ship->LogOut();
+ 
+     m_system->RemoveClient(this, true);
+     // remove char from entitylist
+@@ -636,6 +640,24 @@ void Client::WarpOut() {
+     if (!InPod())
+         m_ship->SetFlag(flagShipOffline);
+     pShipSE->SetPosition(m_ship->position());
++
++    /* logoff timer.  the ship stays in space: 15 minutes if it was in a fight with players,
++     *  otherwise it warps off and vanishes after a minute (two if NPCs were attacking it)
++     */
++    if (sConfig.crime.Enabled and !sConsole.IsShutdown() and (m_system != nullptr) and (pShipSE->SysBubble() != nullptr)) {
++        bool npc(false);
++        bool pvp(sCrimeWatch.LogoffTimer(GetCharacterID(), npc) > 0);
++        // modules stop and lose the pilot's skills while the pilot is still here
++        m_ship->Eject();
++        // off the bubble's pilot list, then back as an empty ship
++        sBubbleMgr.Remove(pShipSE);
++        pShipSE->SetPilot(nullptr);
++        sBubbleMgr.Add(pShipSE);
++        m_system->GetLaw()->AddLoggedOffShip(pShipSE, GetCharacterID(), pvp, npc);
++        m_shipLeftInSpace = true;
++        pShipSE = nullptr;
++        return;
++    }
+     DestroyShipSE();
+     return;
+     /*
+@@ -804,8 +826,13 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+         if (pShipSE != nullptr)
+             pShipSE->ResetShipSystemMgr(m_system);
+ 
++        // the ship we left in space when we logged off may still be there (logoff timer).  carry on from where it is now
++        GPoint shipPos(pt);
++        if (pShipSE == nullptr)
++            m_system->GetLaw()->ReclaimLoggedOffShip(m_shipId, shipPos);
++
+         // once systemData.radius implemented, remove this in favor of below check
+-        m_ship->SetPosition(pt);
++        m_ship->SetPosition(shipPos);
+ 
+         /* comment this block for later use...
+          * m_systemData.radius is not populated yet, and this does weird things with ships
+@@ -817,7 +844,7 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+         }
+         */
+ 
+-        SetDestiny(pt);
++        SetDestiny(shipPos);
+ 
+         // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
+         //  client's autopilot off in every new system
+@@ -832,6 +859,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+ 
+     UpdateSession();
+     SendSessionChange();
++
++    // undock, gate jump, login in space: a live criminal flag brings CONCORD, low security status the faction police
++    if (IsInSpace())
++        sCrimeWatch.OnEnterSpace(this);
+ }
+ 
+ void Client::SetDestiny(const GPoint& pt, bool update/*false*/) {
+diff --git a/src/eve-server/Client.h b/src/eve-server/Client.h
+index 1ea4260..5f4b836 100644
+--- a/src/eve-server/Client.h
++++ b/src/eve-server/Client.h
+@@ -375,6 +375,7 @@ protected:
+     bool m_packaged;        // used to correctly package updates into a PackagedAction list
+     bool m_portrait;        // used to verify new char pic received
+     bool m_autoPilot;       // set true for using autopilot.
++    bool m_shipLeftInSpace; // logoff timer: our ship stays in space after we're gone (LawEnforcement logs it out)
+     bool m_scanProbe;       // scanning with probes
+     bool m_bubbleWait;
+     bool m_setStateSent;
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index c49d1b7..ef8ef35 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -237,12 +237,31 @@ EVEServerConfig::EVEServerConfig()
+     chat.EnforceRookieInHelp = false;
+ 
+     // crime
+-    crime.Enabled = false; //N
+-    crime.AggFlagTime = 900 /*s*/;//N
+-    crime.CrimFlagTime = 900 /*s*/;//N
+-    crime.CWSessionTime = 60 /*s*/;//N
+-    crime.KillRightTime = 900 /*s*/;//N
+-    crime.WeaponFlagTime = 60 /*s*/;//N
++    crime.Enabled = true;
++    crime.AggFlagTime = 900 /*s*/;
++    crime.CrimFlagTime = 900 /*s*/;
++    crime.WeaponFlagTime = 60 /*s*/;
++    crime.KillRightDays = 30;
++    crime.LogoffNPCTime = 120 /*s*/;
++    crime.LogoffWarpTime = 60 /*s*/;
++    crime.SecGainWindow = 900 /*s*/;
++    crime.SecAggressionPenalty = 1.5f;
++    crime.SecShipKillPenalty = 6.0f;
++    crime.SecPodKillPenalty = 37.5f;
++    crime.SecPodKillMinPenalty = 12.5f;
++    crime.CriminalLockdown = true;
++    crime.Concord = true;
++    crime.ConcordResponse = "6,6,7,10,14,19";
++    crime.ConcordWaves = false;
++    crime.ConcordWaveDelay = 10 /*s*/;
++    crime.ConcordLinger = 60 /*s*/;
++    crime.FactionPolice = true;
++    crime.PoliceDelay = 15 /*s*/;
++    crime.PoliceTimeout = 600 /*s*/;
++    crime.Sentries = true;
++    crime.SentriesPerGate = 3;
++    crime.SentriesPerStation = 2;
++    crime.SentryRange = 150000 /*m*/;
+ 
+     // testing
+     testing.EnableDrones = false;
+@@ -873,21 +892,40 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
+ 
+ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
+ {
+-    AddValueParser( "Enabled",          crime.Enabled );
+-    AddValueParser( "AggFlagTime",      crime.AggFlagTime );
+-    AddValueParser( "CrimFlagTime",     crime.CrimFlagTime );
+-    AddValueParser( "CWSessionTime",    crime.CWSessionTime );
+-    AddValueParser( "KillRightTime",    crime.KillRightTime );
+-    AddValueParser( "WeaponFlagTime",   crime.WeaponFlagTime );
++    AddValueParser( "Enabled",              crime.Enabled );
++    AddValueParser( "AggFlagTime",          crime.AggFlagTime );
++    AddValueParser( "CrimFlagTime",         crime.CrimFlagTime );
++    AddValueParser( "WeaponFlagTime",       crime.WeaponFlagTime );
++    AddValueParser( "KillRightDays",        crime.KillRightDays );
++    AddValueParser( "LogoffNPCTime",        crime.LogoffNPCTime );
++    AddValueParser( "LogoffWarpTime",       crime.LogoffWarpTime );
++    AddValueParser( "SecGainWindow",        crime.SecGainWindow );
++    AddValueParser( "SecAggressionPenalty", crime.SecAggressionPenalty );
++    AddValueParser( "SecShipKillPenalty",   crime.SecShipKillPenalty );
++    AddValueParser( "SecPodKillPenalty",    crime.SecPodKillPenalty );
++    AddValueParser( "SecPodKillMinPenalty", crime.SecPodKillMinPenalty );
++    AddValueParser( "CriminalLockdown",     crime.CriminalLockdown );
++    AddValueParser( "Concord",              crime.Concord );
++    AddValueParser( "ConcordResponse",      crime.ConcordResponse );
++    AddValueParser( "ConcordWaves",         crime.ConcordWaves );
++    AddValueParser( "ConcordWaveDelay",     crime.ConcordWaveDelay );
++    AddValueParser( "ConcordLinger",        crime.ConcordLinger );
++    AddValueParser( "FactionPolice",        crime.FactionPolice );
++    AddValueParser( "PoliceDelay",          crime.PoliceDelay );
++    AddValueParser( "PoliceTimeout",        crime.PoliceTimeout );
++    AddValueParser( "Sentries",             crime.Sentries );
++    AddValueParser( "SentriesPerGate",      crime.SentriesPerGate );
++    AddValueParser( "SentriesPerStation",   crime.SentriesPerStation );
++    AddValueParser( "SentryRange",          crime.SentryRange );
+ 
+     const bool result = ParseElementChildren( ele );
+ 
+-    RemoveParser( "Enabled" );
+-    RemoveParser( "AggFlagTime" );
+-    RemoveParser( "CrimFlagTime" );
+-    RemoveParser( "CWSessionTime" );
+-    RemoveParser( "KillRightTime" );
+-    RemoveParser( "WeaponFlagTime" );
++    for (const char* name : {"Enabled", "AggFlagTime", "CrimFlagTime", "WeaponFlagTime", "KillRightDays", "LogoffNPCTime",
++            "LogoffWarpTime", "SecGainWindow", "SecAggressionPenalty", "SecShipKillPenalty", "SecPodKillPenalty",
++            "SecPodKillMinPenalty", "CriminalLockdown", "Concord", "ConcordResponse", "ConcordWaves", "ConcordWaveDelay",
++            "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
++            "SentriesPerStation", "SentryRange"})
++        RemoveParser( name );
+ 
+     return result;
+ }
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index 7ff0b96..e0f2512 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -340,11 +340,30 @@ public:
+     // From <crime>
+     struct {
+         bool Enabled;
+-        uint8 CWSessionTime;
+-        uint8 WeaponFlagTime;
+-        uint16 KillRightTime;
+-        uint16 AggFlagTime;
+-        uint16 CrimFlagTime;
++        uint8 WeaponFlagTime;           // s after an aggressive act before you may dock or jump
++        uint16 AggFlagTime;             // s an aggression flag lasts
++        uint16 CrimFlagTime;            // s the global criminal countdown lasts
++        uint16 KillRightDays;
++        uint16 LogoffNPCTime;           // s a logged-off ship stays when NPCs were attacking it
++        uint16 LogoffWarpTime;          // s a logged-off ship takes to warp off and vanish otherwise
++        uint16 SecGainWindow;           // s only the best npc kill per system in this window raises security status
++        float SecAggressionPenalty;     // % of the distance to -10
++        float SecShipKillPenalty;
++        float SecPodKillPenalty;
++        float SecPodKillMinPenalty;
++        bool CriminalLockdown;          // criminals can't use gates/stations in empire space except in a capsule
++        bool Concord;
++        std::string ConcordResponse;    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5
++        bool ConcordWaves;              // officers and captains first, the commander later
++        uint16 ConcordWaveDelay;        // s
++        uint16 ConcordLinger;           // s CONCORD stays after the criminal's ship is gone
++        bool FactionPolice;
++        uint16 PoliceDelay;             // s
++        uint16 PoliceTimeout;           // s
++        bool Sentries;
++        uint8 SentriesPerGate;
++        uint8 SentriesPerStation;
++        uint32 SentryRange;             // m
+     } crime;
+ 
+     // From <testing>
+diff --git a/src/eve-server/admin/GMToolCommands.cpp b/src/eve-server/admin/GMToolCommands.cpp
+index 34b7ab5..0a0a84b 100644
+--- a/src/eve-server/admin/GMToolCommands.cpp
++++ b/src/eve-server/admin/GMToolCommands.cpp
+@@ -30,6 +30,7 @@
+  *  /nukem              benchmark script
+  *  /entity deploy      WM: /Entity deploy this type
+  *  /heat               testing: shows or sets rack heat
++ *  /crime              testing: commits a crime, to bring CONCORD
+  */
+ 
+ #include "eve-server.h"
+@@ -43,6 +44,11 @@
+ #include "admin/CommandHelper.h"
+ #include "chat/LSCService.h"
+ #include "ship/Ship.h"
++#include "npc/LawEnforcement.h"
++#include "npc/NPC.h"
++#include "system/CrimeWatch.h"
++#include "system/SystemManager.h"
++#include "EVEServerConfig.h"
+ #include "services/ServiceManager.h"
+ 
+ namespace {
+@@ -241,3 +247,94 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
+     snprintf(buf, sizeof(buf), "%s rack heat: high %.1f%%, medium %.1f%%, low %.1f%%", sRef->name(), pct[0], pct[1], pct[2]);
+     return new PyString(buf);
+ }
++
++/* /crime (me|charID|entityID) [victimID]
++ *  starts CONCORD the way the game does, from the first act:
++ *   a pilot: an attack on the victim, the same call a weapon cycle makes (CrimeWatch::OffensiveAct), so the normal rules
++ *     decide whether it's a crime.  with no victim the victim is you, or a civilian (nobody, never a legal target) if
++ *     the pilot is you.  a crime gives the criminal flag, the security status hit, and CONCORD in high-sec.
++ *   an NPC or any other entity: NPCs never commit crimes, so it's marked a criminal as if it had attacked the victim.
++ *     CONCORD comes for it in high-sec, and sentries shoot it in empire space.
++ */
++PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
++{
++    const char* usage("Correct Usage: /crime (me|charID|entityID) [victimID]");
++    if (!sConfig.crime.Enabled)
++        throw CustomError ("CrimeWatch is disabled (<crime><Enabled> in the server config).");
++    if (args.argCount() < 2)
++        throw CustomError (usage);
++
++    Client* pAggressor(nullptr);
++    SystemEntity* pEntity(nullptr);
++    if (args.arg(1) == "me") {
++        pAggressor = pClient;
++    } else if (args.isNumber(1)) {
++        uint32 id(atoi(args.arg(1).c_str()));
++        if (IsCharacterID(id)) {
++            pAggressor = sEntityList.FindClientByCharID(id);
++            if (pAggressor == nullptr)
++                throw CustomError ("Character %u is not online.", id);
++        } else if (pClient->SystemMgr() != nullptr) {
++            pEntity = pClient->SystemMgr()->GetSE(id);
++            if (pEntity == nullptr)
++                throw CustomError ("%u is not in space in your system.", id);
++            if (pEntity->IsStaticEntity())
++                throw CustomError ("%s can't commit crimes.", pEntity->GetName());
++            // a ship with a pilot is the pilot's crime
++            if (pEntity->HasPilot())
++                pAggressor = pEntity->GetPilot();
++        }
++    } else {
++        throw CustomError (usage);
++    }
++
++    SystemManager* pSystem(pAggressor != nullptr ? pAggressor->SystemMgr() : pEntity->SystemMgr());
++    if (pSystem == nullptr)
++        throw CustomError ("The aggressor isn't in a solar system.");
++
++    SystemEntity* pVictim(nullptr);
++    if (args.argCount() > 2) {
++        if (!args.isNumber(2))
++            throw CustomError (usage);
++        pVictim = pSystem->GetSE(atoi(args.arg(2).c_str()));
++        if (pVictim == nullptr)
++            throw CustomError ("Victim %s is not in space in the aggressor's system.", args.arg(2).c_str());
++    } else if ((pAggressor != pClient) and (pClient->GetShipSE() != nullptr) and (pClient->SystemMgr() == pSystem)) {
++        pVictim = pClient->GetShipSE();
++    }
++
++    float trueSec(pSystem->GetSystemSecurityRating());
++    uint8 secClass(CrimeWatch::SecurityClass(trueSec));
++    std::string where(pSystem->GetNameStr() + " (" + std::to_string(CrimeWatch::SecurityLevel(trueSec)).substr(0, 3) + ")");
++    if (secClass == Crime::SecClass::Null)
++        throw CustomError ("%s is null-sec.  There are no crimes there.", where.c_str());
++
++    std::string who, outcome;
++    bool criminal(false);
++    if (pAggressor != nullptr) {
++        who = pAggressor->GetName();
++        if (pVictim != nullptr) {
++            sCrimeWatch.OffensiveAct(pAggressor, pVictim);
++        } else {
++            sCrimeWatch.SimulateCrime(pAggressor);
++        }
++        criminal = sCrimeWatch.IsCriminal(pAggressor->GetCharacterID());
++        if (!criminal)
++            outcome = " The attack on " + std::string(pVictim != nullptr ? pVictim->GetName() : "the victim") + " was legal, so it's no crime.";
++    } else {
++        who = pEntity->GetName();
++        sCrimeWatch.EntityCrime(pEntity, pVictim);
++        criminal = sCrimeWatch.IsCriminal(pEntity->GetID());
++    }
++
++    char buf[256];
++    if (!criminal) {
++        snprintf(buf, sizeof(buf), "%s is not a criminal.%s", who.c_str(), outcome.c_str());
++    } else if ((secClass == Crime::SecClass::High) and sConfig.crime.Concord) {
++        snprintf(buf, sizeof(buf), "%s is now a criminal in %s.  CONCORD arrives in about %us.", who.c_str(), where.c_str(),
++                pSystem->GetLaw()->ConcordDelay());
++    } else {
++        snprintf(buf, sizeof(buf), "%s is now a criminal in %s.  No CONCORD in low-sec, but the sentries will shoot.", who.c_str(), where.c_str());
++    }
++    return new PyString(buf);
++}
+diff --git a/src/eve-server/admin/GMToolCommands.h b/src/eve-server/admin/GMToolCommands.h
+index 51fa0a6..bb24176 100644
+--- a/src/eve-server/admin/GMToolCommands.h
++++ b/src/eve-server/admin/GMToolCommands.h
+@@ -14,5 +14,8 @@ COMMAND( nukem, Acct::Role::ADMIN,
+          "- kills every NPC in your bubble (same as /killallnpcs)" )
+ COMMAND( entity, Acct::Role::SPAWN,
+          "deploy (count) (typeID|\"type name\") - spawns NPCs next to you" )
++COMMAND( crime, Acct::Role::GML,
++         "(me|charID|entityID) [victimID] - commits a crime for testing CONCORD.  a pilot attacks the victim (default: you,"
++         " or a civilian when it's you) through the normal crime rules.  an NPC or other entity is made a criminal" )
+ COMMAND( heat, Acct::Role::VIP,
+          "[hi|med|low|all] [percent] [me|charID] - shows or sets a ship's rack heat.  no arguments shows yours" )
+diff --git a/src/eve-server/character/AggressionMgrService.cpp b/src/eve-server/character/AggressionMgrService.cpp
+index 7d1dccf..524bf86 100644
+--- a/src/eve-server/character/AggressionMgrService.cpp
++++ b/src/eve-server/character/AggressionMgrService.cpp
+@@ -28,6 +28,7 @@
+ 
+ 
+ #include "character/AggressionMgrService.h"
++#include "system/CrimeWatch.h"
+ 
+ AggressionMgrBound::AggressionMgrBound(EVEServiceManager& mgr, AggressionMgrService& parent, uint32 systemID) :
+     EVEBoundObject (mgr, parent),
+@@ -39,13 +40,17 @@ AggressionMgrBound::AggressionMgrBound(EVEServiceManager& mgr, AggressionMgrServ
+ 
+ PyResult AggressionMgrBound::GetCriminalTimeStamps(PyCallArgs &call, PyInt* characterID)
+ {
+-    return new PyDict();
++    // {victimID or None: time of the last act}.  michelle.RefreshCriminalFlagCountDown, on dock and undock
++    return sCrimeWatch.GetCriminalTimeStamps(characterID->value());
+ }
+ 
+ PyResult AggressionMgrBound::CheckLootRightExceptions(PyCallArgs &call, PyInt* containerID)
+ {
+-    // return true to allow looting
+-    return new PyBool(true);
++    // true if we may take from this container without being flagged (the client asks before warning about theft)
++    InventoryItemRef iRef(sItemFactory.GetItemRef(containerID->value()));
++    if (iRef.get() == nullptr)
++        return new PyBool(true);
++    return new PyBool(sCrimeWatch.CanTakeFrom(call.client->GetCharacterID(), iRef->ownerID()));
+ }
+ 
+ AggressionMgrService::AggressionMgrService(EVEServiceManager& mgr) :
+diff --git a/src/eve-server/character/Character.cpp b/src/eve-server/character/Character.cpp
+index da98ac1..8711ec1 100644
+--- a/src/eve-server/character/Character.cpp
++++ b/src/eve-server/character/Character.cpp
+@@ -1387,7 +1387,13 @@ float Character::GetNPCCorpStanding(uint32 fromID, uint32 toID) {
+ 
+ void Character::SetStanding(uint32 fromID, uint32 toID, float standing) {
+     StandingDB::SetStanding(fromID, toID, standing);
+-    PyTuple* payload = new PyTuple(0);
++    if (m_pClient == nullptr)
++        return;
++    // standingsvc.OnStandingSet(fromID, toID, standing)
++    PyTuple* payload = new PyTuple(3);
++        payload->SetItem(0, new PyInt(fromID));
++        payload->SetItem(1, new PyInt(toID));
++        payload->SetItem(2, new PyFloat(standing));
+     m_pClient->SendNotification("OnStandingSet", "charid", payload, false);
+ }
+ 
+diff --git a/src/eve-server/dogmaim/DogmaIMService.cpp b/src/eve-server/dogmaim/DogmaIMService.cpp
+index bd186a7..aec2fd5 100644
+--- a/src/eve-server/dogmaim/DogmaIMService.cpp
++++ b/src/eve-server/dogmaim/DogmaIMService.cpp
+@@ -31,6 +31,7 @@
+ #include "dogmaim/DogmaIMService.h"
+ #include "pos/Tower.h"
+ #include "ship/modules/GenericModule.h"
++#include "npc/LawEnforcement.h"
+ #include "system/Container.h"
+ #include "system/SystemManager.h"
+ #include "station/Station.h"
+@@ -340,6 +341,9 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
+     if (pClient->GetShipID() == targetID->value())
+         throw UserError ("DeniedTargetSelf");
+ 
++    if ((pClient->SystemMgr() != nullptr) and pClient->SystemMgr()->GetLaw()->IsJammed(pClient->GetShipID()))
++        throw CustomError ("Your targeting systems are being jammed by CONCORD.");
++
+     /** @todo pClient->IsUncloak() incomplete */
+     if (pClient->IsUncloak())
+         throw UserError ("DeinedTargetAfterCloak");
+diff --git a/src/eve-server/eve-server.cpp b/src/eve-server/eve-server.cpp
+index cdaa46c..4741c81 100644
+--- a/src/eve-server/eve-server.cpp
++++ b/src/eve-server/eve-server.cpp
+@@ -157,6 +157,7 @@
+ // standing services
+ #include "standing/Standing.h"
+ #include "standing/StandingMgr.h"
++#include "system/CrimeWatch.h"
+ // station services
+ #include "station/HoloscreenMgrService.h"
+ #include "station/InsuranceService.h"
+@@ -765,6 +766,7 @@ int main( int argc, char* argv[] )
+     /* create the StandingMgr singleton */
+     sLog.Green("       ServerInit", "Starting Standings Manager");
+     sStandingMgr.Initialize();
++    sCrimeWatch.Initialize();
+     /* create the FleetService singleton */
+     sLog.Green("       ServerInit", "Starting Fleet Services");
+     sFltSvc.Initialize(newSvcMgr);
+diff --git a/src/eve-server/inventory/InventoryBound.cpp b/src/eve-server/inventory/InventoryBound.cpp
+index c628d07..5319f3f 100644
+--- a/src/eve-server/inventory/InventoryBound.cpp
++++ b/src/eve-server/inventory/InventoryBound.cpp
+@@ -24,6 +24,8 @@
+     Rewrite:    Allan
+ */
+ 
++#include "EntityList.h"
++#include "system/CrimeWatch.h"
+ #include "eve-server.h"
+ #include "../../eve-common/EVE_Station.h"
+ 
+@@ -190,6 +192,41 @@ PyResult InventoryBound::RemoveChargeToCargo(PyCallArgs &call, PyTuple* chargeIn
+     return PyStatic.NewNone();
+ }
+ 
++/* Crucible can flagging: taking from another player's can or wreck in empire space, without the right to, flags you
++ *  to the owner's corporation (or the owner, in an npc corp) for 15 minutes.  it's not a crime.  the client's rules
++ *  (consider.ConfirmTakeFromContainer): secure containers, our own, our corp's, fleet loot and abandoned wrecks are free
++ */
++static void CheckTheft(Client* pClient, InventoryItemRef iRef)
++{
++    if (!sConfig.crime.Enabled or (pClient == nullptr) or !pClient->IsInSpace() or (pClient->SystemMgr() == nullptr))
++        return;
++    SystemEntity* pSE(pClient->SystemMgr()->GetSE(iRef->locationID()));
++    if ((pSE == nullptr) or !(pSE->IsContainerSE() or pSE->IsWreckSE()))
++        return;
++    InventoryItemRef contRef(pSE->GetSelf());
++    if ((contRef->groupID() == EVEDB::invGroups::Secure_Cargo_Container) or (contRef->groupID() == EVEDB::invGroups::Audit_Log_Secure_Container))
++        return;
++    uint32 ownerID(contRef->ownerID());
++    if (!IsCharacterID(ownerID) or (ownerID == pClient->GetCharacterID()))
++        return;
++    if (pSE->IsWreckSE() and pSE->GetWreckSE()->IsAbandoned())
++        return;
++    uint32 ownerCorpID(0);
++    Client* pOwner(sEntityList.FindClientByCharID(ownerID));
++    if (pOwner != nullptr) {
++        ownerCorpID = pOwner->GetCorporationID();
++    } else {
++        CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
++        if (cRef.get() != nullptr)
++            ownerCorpID = cRef->corporationID();
++    }
++    if ((ownerCorpID == pClient->GetCorporationID()) and !IsNPCCorp(ownerCorpID))
++        return;
++    if (sCrimeWatch.CanTakeFrom(pClient->GetCharacterID(), ownerID))
++        return;
++    sCrimeWatch.Theft(pClient, ownerID, ownerCorpID);
++}
++
+ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::optional<PyRep*> sourceContainerID) {
+     _log(INV__MESSAGE, "IB::MultiMerge() called by %s(%u)", m_self->name(), m_itemID);
+     call.Dump(INV__DUMP);
+@@ -233,8 +270,10 @@ PyResult InventoryBound::MultiMerge(PyCallArgs &call, PyList* items, std::option
+             continue;
+         }
+ 
+-        if (pInv->ValidateAddItem(destItem->flag(), srcItem))
++        if (pInv->ValidateAddItem(destItem->flag(), srcItem)) {
++            CheckTheft(call.client, srcItem);
+             destItem->Merge( srcItem, qty, true );
++        }
+         // if false, error is thrown in ValidateAddItem() call
+     }
+     sItemFactory.UnsetUsingClient();
+@@ -491,6 +530,10 @@ PyRep* InventoryBound::MoveItems(Client* pClient, std::vector< int32 >& items, E
+             continue;
+         }
+ 
++        // taking it out of someone else's can or wreck
++        if (iRef->locationID() != m_itemID)
++            CheckTheft(pClient, iRef);
++
+         fromFlag = iRef->flag();
+ 
+         if (moveStack)
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index 8ca858c..1b88141 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -24,6 +24,7 @@
+  *  each call below is idempotent (destiny ignores a command that changes nothing), so they are simply repeated every tick.
+  */
+ 
++#include "system/CrimeWatch.h"
+ #include "eve-server.h"
+ 
+ #include "Client.h"
+@@ -571,6 +572,18 @@ void DroneAIMgr::SendEffect(SystemEntity* pTarget, bool start) {
+ 
+ void DroneAIMgr::Fire(SystemEntity* pTarget) {
+     const DroneStats& stats(m_pDrone->Stats());
++    // crime: the drone's pilot is acting on the target
++    Client* pOwner(m_pDrone->GetControllerClient());
++    if (pOwner == nullptr)
++        pOwner = m_pDrone->GetOwnerClient();
++    if (pOwner != nullptr) {
++        if ((m_action == DroneAI::Action::RepairShield) or (m_action == DroneAI::Action::RepairArmor)) {
++            sCrimeWatch.AssistanceAct(pOwner, pTarget);
++        } else if ((m_action != DroneAI::Action::None) and (m_action != DroneAI::Action::Mine)) {
++            sCrimeWatch.OffensiveAct(pOwner, pTarget);
++        }
++    }
++
+     SendEffect(pTarget, true);
+ 
+     switch (m_action) {
+diff --git a/src/eve-server/npc/LawEnforcement.cpp b/src/eve-server/npc/LawEnforcement.cpp
+new file mode 100644
+index 0000000..44f8ed1
+--- /dev/null
++++ b/src/eve-server/npc/LawEnforcement.cpp
+@@ -0,0 +1,552 @@
++/**
++ * @name LawEnforcement.cpp
++ *   CONCORD, faction police, gate/station sentries and ships left in space by pilots who log off.
++ *   see LawEnforcement.h
++ */
++
++#include "eve-server.h"
++
++#include "Client.h"
++#include "EntityList.h"
++#include "EVEServerConfig.h"
++#include "StaticDataMgr.h"
++#include "inventory/AttributeEnum.h"
++#include "npc/LawEnforcement.h"
++#include "npc/NPC.h"
++#include "npc/Sentry.h"
++#include "ship/Ship.h"
++#include "system/CrimeWatch.h"
++#include "system/DestinyManager.h"
++#include "system/SystemBubble.h"
++#include "system/SystemManager.h"
++#include "system/TargetManager.h"
++
++namespace {
++    // CONCORD police (group 301).  the commander's damage multiplier (100000) makes its weapon effectively one-shot
++    const uint16 typeConcordOfficer     = 3863;     // frigate.  -95% speed web
++    const uint16 typeConcordCaptain     = 3885;     // cruiser.  -95% speed web
++    const uint16 typeConcordCommander   = 11125;    // battleship
++
++    const uint8 wholeResponse = 0;
++    const uint8 firstWave     = 1;
++    const uint8 commanderWave = 2;
++
++    const float tackleScramble = 100.0f;    // more than any number of warp core stabilizers
++
++    // faction police (group 182): a big ship and two smaller ones per empire
++    void GetPoliceTypes(uint32 factionID, std::vector<uint16>& types) {
++        switch (factionID) {
++            case factionAmarr:      types = {11515, 9960, 9962};  break;   // Amarr Surveillance General Major, Sergeant Major, Sergeant
++            case factionAmmatar:    types = {11517, 10099, 10100}; break;  // Ammatar Surveillance
++            case factionKhanid:     types = {11518, 10674, 9988};  break;  // Khanid Surveillance
++            case factionCaldari:    types = {11521, 9971, 10660};  break;  // Caldari Police Commissioner, 1st and 2nd Lieutenant
++            case factionMinmatar:   types = {11520, 9977, 9978};   break;  // Minmatar Security High Captain, 2nd and 1st Rank
++            case factionGallente:
++            default:                types = {11519, 9983, 9984};   break;  // Gallente Police Major, Master Sergeant, Captain
++        }
++    }
++
++    // gate and station guns (group 99)
++    uint16 GetSentryType(uint32 factionID) {
++        switch (factionID) {
++            case factionAmarr:
++            case factionAmmatar:
++            case factionKhanid:     return 1194;    // Amarr Sentry Gun
++            case factionCaldari:    return 3740;    // Caldari Sentry Gun I
++            case factionMinmatar:   return 3743;    // Minmatar Sentry Gun
++            case factionGallente:
++            default:                return 3742;    // Gallente Sentry Gun
++        }
++    }
++
++    // takes an entity out of play: other entities' locks on it, then the system
++    void RemoveLawNPC(SystemManager* pSystem, NPC* pNPC) {
++        SystemEntity::SetUnkillable(pNPC->GetID(), false);
++        if (pNPC->IsDead()) {
++            pSystem->RemoveDeadNPC(pNPC);       // already removed from space when it died
++        } else {
++            if (pNPC->TargetMgr() != nullptr)
++                pNPC->TargetMgr()->ClearFromTargets();
++            pSystem->RemoveNPC(pNPC);
++        }
++        delete pNPC;
++    }
++}
++
++LawEnforcement::LawEnforcement(SystemManager* pSystem, EVEServiceManager& services)
++: m_system(pSystem),
++m_services(services)
++{
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  sentries
++ * ------------------------------------------------------------------------------------------------------------------ */
++void LawEnforcement::Init()
++{
++    if (!sConfig.crime.Enabled or !sConfig.crime.Sentries)
++        return;
++    if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::Null)
++        return;
++    SystemData data;
++    if (!sDataMgr.GetSystemData(m_system->GetID(), data) or (data.factionID == 0))
++        return;
++    uint16 typeID(GetSentryType(data.factionID));
++    uint32 corpID(sDataMgr.GetFactionCorp(data.factionID));
++
++    for (auto cur : m_system->GetGates())
++        SpawnSentries(cur.second, sConfig.crime.SentriesPerGate, typeID, data.factionID, corpID);
++    for (auto cur : m_system->GetEntities())
++        if (cur.second->IsStationSE())
++            SpawnSentries(cur.second, sConfig.crime.SentriesPerStation, typeID, data.factionID, corpID);
++
++    _log(CRIME__TRACE, "%s: %lu sentry guns placed.", m_system->GetName(), m_sentries.size());
++}
++
++void LawEnforcement::SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID, uint32 factionID, uint32 corpID)
++{
++    if (pSE == nullptr)
++        return;
++    for (uint8 i = 0; i < count; ++i) {
++        GPoint pos(pSE->GetPosition());
++        pos.MakeRandomPointOnSphere(pSE->GetRadius() + MakeRandomFloat(5000, 15000));
++        ItemData idata(typeID, corpID, m_system->GetID(), flagNone, "", pos);
++        InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
++        if (iRef.get() == nullptr)
++            continue;
++        FactionData fData = FactionData();
++            fData.allianceID = factionID;
++            fData.factionID = factionID;
++            fData.corporationID = corpID;
++            fData.ownerID = corpID;
++        Sentry* pSentry = new Sentry(iRef, m_services, m_system, fData);
++        pSentry->SetLawSentry(true);
++        m_system->AddEntity(pSentry, false);
++        // gate guns can't be destroyed
++        SystemEntity::SetUnkillable(pSentry->GetID(), true);
++        m_sentries.push_back(pSentry);
++    }
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  responses
++ * ------------------------------------------------------------------------------------------------------------------ */
++uint32 LawEnforcement::ConcordDelay()
++{
++    // response seconds for 1.0, 0.9, 0.8, 0.7, 0.6, 0.5
++    std::vector<uint32> table;
++    std::stringstream ss(sConfig.crime.ConcordResponse);
++    std::string item;
++    while (std::getline(ss, item, ','))
++        table.push_back(atoi(item.c_str()));
++    if (table.size() < 6)
++        table = {6, 6, 7, 10, 14, 19};
++    float level(CrimeWatch::SecurityLevel(m_system->GetSystemSecurityRating()));
++    int idx((int)roundf((1.0f - level) * 10.0f));
++    if (idx < 0)
++        idx = 0;
++    if (idx > 5)
++        idx = 5;
++    return table[idx];
++}
++
++void LawEnforcement::ReportCriminal(Client* pClient)
++{
++    if (!sConfig.crime.Concord or (pClient == nullptr))
++        return;
++    Report(pClient->GetCharacterID(), pClient->GetName(), Law::Concord, ConcordDelay());
++}
++
++void LawEnforcement::ReportCriminalEntity(SystemEntity* pSE)
++{
++    if (!sConfig.crime.Concord or (pSE == nullptr))
++        return;
++    Report(pSE->GetID(), pSE->GetName(), Law::Concord, ConcordDelay());
++}
++
++void LawEnforcement::ReportPoliceTarget(Client* pClient)
++{
++    if (!sConfig.crime.FactionPolice or (pClient == nullptr))
++        return;
++    Report(pClient->GetCharacterID(), pClient->GetName(), Law::Police, sConfig.crime.PoliceDelay);
++}
++
++void LawEnforcement::Report(uint32 id, const char* name, uint8 kind, uint32 delaySeconds)
++{
++    uint64_t key((uint64_t)id * 4 + kind);
++    if (m_responses.find(key) != m_responses.end())
++        return;     // already on their way (or here)
++    Response& r = m_responses[key];
++    r.kind = kind;
++    r.charID = id;
++    r.due = GetFileTimeNow() + (int64)delaySeconds * EvE::Time::Second;
++    _log(CRIME__INFO, "%s dispatched for %s(%u) in %s, arriving in %us.", (kind == Law::Concord ? "CONCORD" : "Faction police"),
++            name, id, m_system->GetName(), delaySeconds);
++}
++
++SystemEntity* LawEnforcement::FindTarget(uint32 charID)
++{
++    // a criminal that isn't a player (GM testing): the entity itself
++    if (!IsCharacterID(charID)) {
++        SystemEntity* pSE(m_system->GetSE(charID));
++        if ((pSE == nullptr) or pSE->IsDead() or (pSE->SysBubble() == nullptr) or (pSE->DestinyMgr() == nullptr))
++            return nullptr;
++        return pSE;
++    }
++    // the ship they're flying here.  never a pod
++    Client* pClient(sEntityList.FindClientByCharID(charID));
++    if ((pClient != nullptr) and pClient->IsInSpace() and (pClient->SystemMgr() == m_system) and !pClient->InPod()) {
++        ShipSE* pShipSE(pClient->GetShipSE());
++        if ((pShipSE != nullptr) and !pShipSE->IsDead() and (pShipSE->SysBubble() != nullptr))
++            return pShipSE;
++    }
++    // or the ship they left in space when they logged off
++    for (auto cur : m_loggedOff)
++        if ((cur.second.charID == charID) and !cur.second.pShipSE->IsDead() and (cur.second.pShipSE->SysBubble() != nullptr)
++        and (cur.second.pShipSE->GetSelf()->groupID() != EVEDB::invGroups::Capsule))
++            return cur.second.pShipSE;
++    return nullptr;
++}
++
++NPC* LawEnforcement::SpawnNPC(uint16 typeID, const GPoint& pos, uint32 factionID, uint32 corpID, uint32 targetID, uint8 role)
++{
++    ItemData idata(typeID, corpID, m_system->GetID(), flagNone, "", pos);
++    InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
++    if (iRef.get() == nullptr) {
++        _log(CRIME__ERROR, "LawEnforcement: unable to spawn type %u in %s.", typeID, m_system->GetName());
++        return nullptr;
++    }
++    FactionData data = FactionData();
++        data.allianceID = factionID;
++        data.factionID = factionID;
++        data.corporationID = corpID;
++        data.ownerID = corpID;
++    NPC* pNPC = new NPC(iRef, m_services, m_system, data);
++    if (!pNPC->Load()) {
++        SafeDelete(pNPC);
++        iRef->Delete();
++        return nullptr;
++    }
++    pNPC->SetLawTarget(targetID, role);
++    m_system->AddNPC(pNPC);
++    pNPC->DestinyMgr()->SetPosition(pos, true);
++    if (role == Law::Concord)
++        SystemEntity::SetUnkillable(pNPC->GetID(), true);   // CONCORD can't be beaten
++    return pNPC;
++}
++
++void LawEnforcement::SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave)
++{
++    std::vector<uint16> types;
++    uint32 factionID(0), corpID(0);
++    if (r.kind == Law::Concord) {
++        factionID = factionCONCORD;
++        corpID = corpCONCORD;
++        if (wave == wholeResponse) {
++            types = {typeConcordCommander, typeConcordCaptain, typeConcordCaptain};
++        } else if (wave == firstWave) {
++            types = {typeConcordOfficer, typeConcordOfficer, typeConcordCaptain};
++        } else {
++            types = {typeConcordCommander};
++        }
++    } else {
++        SystemData data;
++        sDataMgr.GetSystemData(m_system->GetID(), data);
++        factionID = data.factionID;
++        corpID = sDataMgr.GetFactionCorp(factionID);
++        GetPoliceTypes(factionID, types);
++    }
++
++    for (auto typeID : types) {
++        GPoint pos(pTarget->GetPosition());
++        pos.MakeRandomPointOnSphere(MakeRandomFloat(4000, 9000));
++        NPC* pNPC(SpawnNPC(typeID, pos, factionID, corpID, r.shipID, r.kind));
++        if (pNPC != nullptr)
++            r.npcs.push_back(pNPC);
++    }
++    _log(CRIME__INFO, "%s arrived for %s(%u) in %s (%lu ships).", (r.kind == Law::Concord ? "CONCORD" : "Faction police"),
++            pTarget->GetName(), r.shipID, m_system->GetName(), r.npcs.size());
++}
++
++void LawEnforcement::Retarget(Response& r, uint32 shipID)
++{
++    // they're in another ship now (boarded one).  the old one is gone, and so is its tackle
++    ReleaseTackle(r);
++    r.shipID = shipID;
++    for (auto cur : r.npcs)
++        cur->SetLawTarget(shipID, r.kind);
++}
++
++void LawEnforcement::OnLawAttack(NPC* pNPC, SystemEntity* pTarget)
++{
++    if ((pNPC == nullptr) or (pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
++        return;
++    Response* pResponse(nullptr);
++    for (auto& cur : m_responses)
++        if (std::find(cur.second.npcs.begin(), cur.second.npcs.end(), pNPC) != cur.second.npcs.end())
++            pResponse = &cur.second;
++    if ((pResponse == nullptr) or (pResponse->shipID != pTarget->GetID()))
++        return;
++    Response& r = *pResponse;
++
++    // warp scrambled
++    if (r.scram <= 0) {
++        InventoryItemRef shipRef(pTarget->GetSelf());
++        shipRef->SetAttribute(AttrWarpScrambleStatus, shipRef->GetAttribute(AttrWarpScrambleStatus).get_float() + tackleScramble);
++        r.scram = tackleScramble;
++    }
++    // webbed, by every ship that carries a web
++    InventoryItemRef npcRef(pNPC->GetSelf());
++    if (npcRef->HasAttribute(AttrSpeedFactor) and (npcRef->GetAttribute(AttrSpeedFactor).get_float() < 0)) {
++        bool webbing(false);
++        for (auto cur : r.webs)
++            if (cur.get() == npcRef.get())
++                webbing = true;
++        if (!webbing) {
++            pTarget->DestinyMgr()->WebbedMe(npcRef, true);
++            r.webs.push_back(npcRef);
++        }
++    }
++    // jammed: loses its locks and can't lock anything while CONCORD is on it
++    if (!r.jammed and (pTarget->TargetMgr() != nullptr)) {
++        pTarget->TargetMgr()->ClearAllTargets();
++        m_jammed.insert(r.shipID);
++        r.jammed = true;
++    }
++}
++
++void LawEnforcement::ReleaseTackle(Response& r)
++{
++    SystemEntity* pTarget(m_system->GetSE(r.shipID));
++    if ((pTarget != nullptr) and !pTarget->IsDead()) {
++        if (r.scram > 0) {
++            InventoryItemRef shipRef(pTarget->GetSelf());
++            shipRef->SetAttribute(AttrWarpScrambleStatus, shipRef->GetAttribute(AttrWarpScrambleStatus).get_float() - r.scram);
++        }
++        if (pTarget->DestinyMgr() != nullptr)
++            for (auto cur : r.webs)
++                pTarget->DestinyMgr()->WebbedMe(cur, false);
++    }
++    r.scram = 0.0f;
++    r.webs.clear();
++    if (r.jammed) {
++        m_jammed.erase(r.shipID);
++        r.jammed = false;
++    }
++}
++
++void LawEnforcement::Despawn(Response& r)
++{
++    ReleaseTackle(r);
++    for (auto cur : r.npcs)
++        RemoveLawNPC(m_system, cur);
++    r.npcs.clear();
++}
++
++void LawEnforcement::Process()
++{
++    int64 now(GetFileTimeNow());
++    ProcessLoggedOff(now);
++
++    std::map<uint64_t, Response>::iterator itr = m_responses.begin();
++    while (itr != m_responses.end()) {
++        Response& r = itr->second;
++
++        // police can be killed
++        std::vector<NPC*>::iterator nItr = r.npcs.begin();
++        while (nItr != r.npcs.end()) {
++            if ((*nItr)->IsDead()) {
++                RemoveLawNPC(m_system, *nItr);
++                nItr = r.npcs.erase(nItr);
++            } else {
++                ++nItr;
++            }
++        }
++
++        SystemEntity* pTarget(FindTarget(r.charID));
++
++        // on the way
++        if (r.started == 0) {
++            if (now < r.due) {
++                ++itr;
++                continue;
++            }
++            if (pTarget == nullptr) {
++                // not in a ship here: docked, gone, or in a pod.  undocking or jumping in reports them again
++                if (now > (r.due + 60 * EvE::Time::Second)) {
++                    itr = m_responses.erase(itr);
++                    continue;
++                }
++                ++itr;
++                continue;
++            }
++            r.shipID = pTarget->GetID();
++            r.started = now;
++            if ((r.kind == Law::Concord) and sConfig.crime.ConcordWaves) {
++                SpawnWave(r, pTarget, firstWave);
++                r.nextWave = now + (int64)sConfig.crime.ConcordWaveDelay * EvE::Time::Second;
++            } else {
++                SpawnWave(r, pTarget, wholeResponse);
++            }
++            ++itr;
++            continue;
++        }
++
++        // done, waiting to leave
++        if (r.leaveAt != 0) {
++            if (now >= r.leaveAt) {
++                Despawn(r);
++                itr = m_responses.erase(itr);
++            } else {
++                ++itr;
++            }
++            continue;
++        }
++
++        if (r.npcs.empty()) {
++            // police beaten off.  they don't come back until the pilot arrives somewhere again
++            itr = m_responses.erase(itr);
++            continue;
++        }
++
++        if (pTarget == nullptr) {
++            // destroyed, docked, jumped or logged off and gone
++            ReleaseTackle(r);
++            r.leaveAt = now + (int64)(r.kind == Law::Concord ? sConfig.crime.ConcordLinger : 10) * EvE::Time::Second;
++            ++itr;
++            continue;
++        }
++        if (pTarget->GetID() != r.shipID)
++            Retarget(r, pTarget->GetID());
++
++        if (pTarget->SysBubble() != r.npcs.front()->SysBubble()) {
++            if (r.kind == Law::Concord) {
++                // got off the grid.  CONCORD arrives where they went
++                Despawn(r);
++                r.started = 0;
++                r.nextWave = 0;
++                r.due = now + 3 * EvE::Time::Second;
++            } else {
++                // the police can be escaped
++                ReleaseTackle(r);
++                r.leaveAt = now + 10 * EvE::Time::Second;
++            }
++            ++itr;
++            continue;
++        }
++
++        if ((r.nextWave != 0) and (now >= r.nextWave)) {
++            SpawnWave(r, pTarget, commanderWave);
++            r.nextWave = 0;
++        }
++
++        if ((r.kind == Law::Police) and (now > (r.started + (int64)sConfig.crime.PoliceTimeout * EvE::Time::Second)))
++            r.leaveAt = now;
++
++        ++itr;
++    }
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  logoff
++ * ------------------------------------------------------------------------------------------------------------------ */
++void LawEnforcement::AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc)
++{
++    if (pShipSE == nullptr)
++        return;
++    int64 now(GetFileTimeNow());
++    LoggedOff& l = m_loggedOff[pShipSE->GetID()];
++    l.pShipSE = pShipSE;
++    l.charID = charID;
++    l.loggedOff = now;
++    l.pvp = pvp;
++    if (pvp) {
++        // stays where it is, 15 minutes after logoff or after the last attack on it, whichever is later
++        l.removeAt = now + (int64)sConfig.crime.AggFlagTime * EvE::Time::Second;
++    } else {
++        // warps to a random spot and vanishes
++        l.removeAt = now + (int64)(npc ? sConfig.crime.LogoffNPCTime : sConfig.crime.LogoffWarpTime) * EvE::Time::Second;
++        if ((pShipSE->DestinyMgr() != nullptr) and (pShipSE->GetSelf()->GetAttribute(AttrWarpScrambleStatus) <= 0)) {
++            GPoint dest(pShipSE->GetPosition());
++            dest.MakeRandomPointOnSphere(0.5 * ONE_AU_IN_METERS);
++            pShipSE->DestinyMgr()->WarpTo(dest);
++        }
++    }
++    _log(CRIME__INFO, "%s(%u) left in space by %u for %us (%s).", pShipSE->GetName(), pShipSE->GetID(), charID,
++            (uint32)((l.removeAt - now) / EvE::Time::Second), (pvp ? "player aggression" : (npc ? "npc aggression" : "logoff")));
++}
++
++void LawEnforcement::ProcessLoggedOff(int64 now)
++{
++    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.begin();
++    while (itr != m_loggedOff.end()) {
++        LoggedOff& l = itr->second;
++        if (now < l.removeAt) {
++            ++itr;
++            continue;
++        }
++        // a ship that's still being fought over stays
++        bool npcOnly(false);
++        if (l.pvp and (sCrimeWatch.LogoffTimer(l.charID, npcOnly) > 0)) {
++            ++itr;
++            continue;
++        }
++        ShipSE* pShipSE(l.pShipSE);
++        _log(CRIME__INFO, "%s(%u) of %u leaves space.", pShipSE->GetName(), pShipSE->GetID(), l.charID);
++        ShipItemRef shipRef(pShipSE->GetShipItemRef());
++        if (pShipSE->TargetMgr() != nullptr)
++            pShipSE->TargetMgr()->ClearFromTargets();
++        m_system->RemoveEntity(pShipSE);
++        SafeDelete(pShipSE);
++        // what the client did when its pilot logged off: save it and unload it
++        shipRef->LogOut();
++        itr = m_loggedOff.erase(itr);
++    }
++}
++
++bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)
++{
++    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.find(shipID);
++    if (itr == m_loggedOff.end())
++        return false;
++    ShipSE* pShipSE(itr->second.pShipSE);
++    position = pShipSE->GetPosition();
++    if (pShipSE->TargetMgr() != nullptr)
++        pShipSE->TargetMgr()->ClearFromTargets();
++    m_system->RemoveEntity(pShipSE);
++    SafeDelete(pShipSE);
++    m_loggedOff.erase(itr);
++    return true;
++}
++
++uint32 LawEnforcement::GetLoggedOffOwner(uint32 shipID)
++{
++    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.find(shipID);
++    if (itr == m_loggedOff.end())
++        return 0;
++    return itr->second.charID;
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  system
++ * ------------------------------------------------------------------------------------------------------------------ */
++bool LawEnforcement::IsBusy()
++{
++    return (!m_responses.empty() or !m_loggedOff.empty());
++}
++
++void LawEnforcement::Close()
++{
++    // the system deletes every entity, ours included
++    for (auto& cur : m_responses)
++        for (auto npc : cur.second.npcs)
++            SystemEntity::SetUnkillable(npc->GetID(), false);
++    for (auto cur : m_sentries)
++        SystemEntity::SetUnkillable(cur->GetID(), false);
++    for (auto cur : m_loggedOff)
++        cur.second.pShipSE->GetShipItemRef()->SaveShip();
++    m_responses.clear();
++    m_loggedOff.clear();
++    m_sentries.clear();
++    m_jammed.clear();
++}
+diff --git a/src/eve-server/npc/LawEnforcement.h b/src/eve-server/npc/LawEnforcement.h
+new file mode 100644
+index 0000000..2595a3d
+--- /dev/null
++++ b/src/eve-server/npc/LawEnforcement.h
+@@ -0,0 +1,105 @@
++/**
++ * @name LawEnforcement.h
++ *   CONCORD, faction police, gate/station sentries and ships left in space by pilots who log off.
++ *   one per solar system, processed with the system.  the crime rules themselves are in system/CrimeWatch.
++ *
++ * Crucible behaviour (EVElopedia Dec 2011, EVE University 2011, static data):
++ *  CONCORD: 0.5 - 1.0 only.  one response per criminal, after a delay set by the system's security level.
++ *   it scrambles, webs and jams the criminal's ship and destroys it, never the pod.  it can't be killed.
++ *   if the criminal warps off before CONCORD lands, CONCORD arrives where they go.
++ *   by default a CONCORD Police Commander (battleship, an effectively one-shot weapon) and two Police Captains.
++ *   with <ConcordWaves>, Police Officers and Captains come first and the Commander follows.
++ *  faction police: in high-sec, chase pilots whose security status is too low for the system.  they can be escaped.
++ *  sentries: a few guns at every gate and station in empire space, shooting criminals and anyone aggressing their owner.
++ *  logoff: a ship in a fight with players stays in space for 15 minutes after its pilot logs off (or after the last
++ *   attack on it).  otherwise it warps off and vanishes a minute later (two if NPCs were attacking it).
++ */
++
++#ifndef EVEMU_NPC_LAWENFORCEMENT_H
++#define EVEMU_NPC_LAWENFORCEMENT_H
++
++#include "eve-server.h"
++
++class Client;
++class EVEServiceManager;
++class NPC;
++class Sentry;
++class ShipSE;
++class SystemEntity;
++class SystemManager;
++
++class LawEnforcement
++{
++public:
++    LawEnforcement(SystemManager* pSystem, EVEServiceManager& services);
++    ~LawEnforcement()                                   { /* the system owns our entities */ }
++
++    void Init();        // sentry guns at gates and stations
++    void Process();     // 1Hz, from SystemManager::ProcessTic()
++    void Close();       // system unloading.  it deletes our entities
++    bool IsBusy();      // a response is running or a ship is waiting in space.  keeps the system loaded
++
++    /* called by CrimeWatch */
++    void ReportCriminal(Client* pClient);       // send CONCORD
++    void ReportPoliceTarget(Client* pClient);   // send the faction police
++    void ReportCriminalEntity(SystemEntity* pSE);   // send CONCORD after an NPC (GM testing)
++    uint32 ConcordDelay();                      // seconds, for this system's security
++
++    /* CONCORD tackles its target the first time it shoots: scramble, web and jam */
++    void OnLawAttack(NPC* pNPC, SystemEntity* pTarget);
++    bool IsJammed(uint32 shipID)                        { return (m_jammed.find(shipID) != m_jammed.end()); }
++
++    /* logoff */
++    void AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc);
++    // the owner logged back in: removes the ship's entity and gives its position for the new one
++    bool ReclaimLoggedOffShip(uint32 shipID, GPoint& position);
++    // owner of a ship left in space, 0 if this isn't one
++    uint32 GetLoggedOffOwner(uint32 shipID);
++    // the ship was destroyed (its entity is going away)
++    void LoggedOffShipKilled(uint32 shipID)             { m_loggedOff.erase(shipID); }
++
++private:
++    struct Response {
++        uint8 kind = 0;                 // Law::Concord / Law::Police
++        uint32 charID = 0;
++        uint32 shipID = 0;              // the ship being chased, once they're on it
++        int64 due = 0;                  // when they arrive
++        int64 started = 0;
++        int64 nextWave = 0;             // waves: when the commander arrives
++        int64 leaveAt = 0;              // the target is gone: when they leave
++        std::vector<NPC*> npcs;
++        // tackle applied to the target ship
++        float scram = 0.0f;
++        std::vector<InventoryItemRef> webs;
++        bool jammed = false;
++    };
++    // charID * 4 + kind
++    std::map<uint64_t, Response> m_responses;
++
++    struct LoggedOff {
++        ShipSE* pShipSE = nullptr;
++        uint32 charID = 0;
++        int64 loggedOff = 0;
++        int64 removeAt = 0;
++        bool pvp = false;
++    };
++    std::map<uint32, LoggedOff> m_loggedOff;    // shipID
++
++    std::vector<Sentry*> m_sentries;
++    std::set<uint32> m_jammed;
++
++    SystemManager* m_system;
++    EVEServiceManager& m_services;
++
++    void Report(uint32 id, const char* name, uint8 kind, uint32 delaySeconds);
++    SystemEntity* FindTarget(uint32 charID);
++    void SpawnWave(Response& r, SystemEntity* pTarget, uint8 wave);
++    NPC* SpawnNPC(uint16 typeID, const GPoint& pos, uint32 factionID, uint32 corpID, uint32 targetID, uint8 role);
++    void Retarget(Response& r, uint32 shipID);
++    void ReleaseTackle(Response& r);
++    void Despawn(Response& r);
++    void SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID, uint32 factionID, uint32 corpID);
++    void ProcessLoggedOff(int64 now);
++};
++
++#endif  // EVEMU_NPC_LAWENFORCEMENT_H
+diff --git a/src/eve-server/npc/NPC.cpp b/src/eve-server/npc/NPC.cpp
+index f46f407..d897d1a 100644
+--- a/src/eve-server/npc/NPC.cpp
++++ b/src/eve-server/npc/NPC.cpp
+@@ -40,7 +40,10 @@
+ NPC::NPC(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, SpawnMgr* spawnMgr)
+ : DynamicSystemEntity(self, services, system),
+ m_spawnMgr(spawnMgr),
+-m_AI(new NPCAIMgr(this))
++m_AI(new NPCAIMgr(this)),
++m_orbitingID(0),
++m_lawTarget(0),
++m_lawRole(Law::None)
+ {
+     m_allyID = data.allianceID;
+     m_warID = data.factionID;
+diff --git a/src/eve-server/npc/NPC.h b/src/eve-server/npc/NPC.h
+index ba600cb..a8d343e 100644
+--- a/src/eve-server/npc/NPC.h
++++ b/src/eve-server/npc/NPC.h
+@@ -38,6 +38,15 @@ class Missile;
+ class NPCAIMgr;
+ class SystemManager;
+ 
++// law enforcement roles.  these NPCs attack only the ship they were sent for, ignore everyone else, and never pods
++namespace Law {
++    enum {
++        None    = 0,
++        Concord = 1,
++        Police  = 2
++    };
++}
++
+ class NPC
+ : public DynamicSystemEntity
+ {
+@@ -73,6 +82,13 @@ public:
+     void Orbit(SystemEntity* who);
+     void ForceSetSpawner(SpawnMgr* spawnMgr)            { m_spawnMgr = spawnMgr; }
+ 
++    /* law enforcement (see npc/LawEnforcement.h) */
++    void SetLawTarget(uint32 shipID, uint8 role)        { m_lawTarget = shipID; m_lawRole = role; }
++    uint32 GetLawTarget()                               { return m_lawTarget; }
++    uint8 GetLawRole()                                  { return m_lawRole; }
++    bool IsLawEnforcer()                                { return (m_lawRole != Law::None); }
++    bool IsConcord()                                    { return (m_lawRole == Law::Concord); }
++
+     float GetThermal()                                  { return m_therDamage; }
+     float GetEM()                                       { return m_emDamage; }
+     float GetKinetic()                                  { return m_kinDamage; }
+@@ -90,6 +106,8 @@ protected:
+ 
+ private:
+     uint32 m_orbitingID;
++    uint32 m_lawTarget;
++    uint8 m_lawRole;
+ 
+     float m_emDamage;
+     float m_expDamage;
+diff --git a/src/eve-server/npc/NPCAI.cpp b/src/eve-server/npc/NPCAI.cpp
+index f052dff..279ab7a 100644
+--- a/src/eve-server/npc/NPCAI.cpp
++++ b/src/eve-server/npc/NPCAI.cpp
+@@ -43,6 +43,7 @@
+ #include "inventory/AttributeEnum.h"
+ #include "npc/NPC.h"
+ #include "npc/NPCAI.h"
++#include "npc/LawEnforcement.h"
+ #include "ship/Missile.h"
+ #include "system/DestinyManager.h"
+ #include "system/Damage.h"
+@@ -295,7 +296,7 @@ void NPCAIMgr::Process() {
+ 
+     if (m_warpOutTimer.Check(false)) {
+         // disallow warpout if spawn has active respawn timer (spawn is being chained)
+-        if (m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID())) {
++        if ((m_npc->GetSpawnMgr() == nullptr) or m_npc->GetSpawnMgr()->IsChaining(m_npc->SysBubble()->GetID())) {
+             m_state = NPCAI::State::Idle;
+             m_warpOutTimer.Disable();
+         }
+@@ -311,6 +312,16 @@ void NPCAIMgr::Process() {
+      */
+     switch(m_state) {
+         case NPCAI::State::Idle: {
++            if (m_npc->IsLawEnforcer()) {
++                // CONCORD and faction police only go after the ship they were sent for (LawEnforcement moves them if it leaves)
++                SystemEntity* pTarget(m_npc->SystemMgr()->GetSE(m_npc->GetLawTarget()));
++                if ((pTarget == nullptr) or (pTarget->SysBubble() != m_npc->SysBubble()) or (pTarget->DestinyMgr() == nullptr))
++                    break;
++                if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
++                    break;
++                Target(pTarget);
++                break;
++            }
+             if (m_beginFindTarget.Check()) {
+                 std::vector<Client*> clientVec;
+                 clientVec.clear();
+@@ -655,6 +666,8 @@ void NPCAIMgr::Target(SystemEntity* pSE) {
+ void NPCAIMgr::Targeted(SystemEntity* pSE) {
+     if (pSE == nullptr)
+         return;
++    if (m_npc->IsLawEnforcer() and (pSE->GetID() != m_npc->GetLawTarget()))
++        return;
+     double targetTime = GetTargetTime();
+ 
+     _log(NPC__AI_TRACE, "%s(%u): Targeted by %s(%u) while %s.", \
+@@ -797,10 +810,14 @@ void NPCAIMgr::AttackTarget(SystemEntity* pSE) {
+              EVEEffectID::targetAttack
+             );
+ 
+-    if (sConfig.npc.UseDamageMultiplier)
++    if (sConfig.npc.UseDamageMultiplier or m_npc->IsLawEnforcer())
+         if (m_damageMultiplier > 0)
+             d *= m_damageMultiplier;
+ 
++    // CONCORD scrambles, webs and jams its target first
++    if (m_npc->IsConcord())
++        m_npc->SystemMgr()->GetLaw()->OnLawAttack(m_npc, pSE);
++
+     pSE->ApplyDamage(d);
+ }
+ 
+diff --git a/src/eve-server/npc/Sentry.h b/src/eve-server/npc/Sentry.h
+index 4e3d616..9283d90 100644
+--- a/src/eve-server/npc/Sentry.h
++++ b/src/eve-server/npc/Sentry.h
+@@ -50,6 +50,10 @@ public:
+ 
+     SentryAI* GetAIMgr()                                { return m_AI; }
+ 
++    // gate and station guns (npc/LawEnforcement.h): they shoot criminals and anyone aggressing their owner
++    void SetLawSentry(bool set=true)                    { m_lawSentry = set; }
++    bool IsLawSentry()                                  { return m_lawSentry; }
++
+ protected:
+     SentryAI* m_AI;
+ 
+@@ -62,6 +66,7 @@ private:
+     float m_armorDamage = 0;
+     float m_shieldCharge = 0;
+     float m_shieldCapacity = 0;
++    bool m_lawSentry = false;
+ };
+ 
+ #endif  // __NPC_SENTRY_H
+diff --git a/src/eve-server/npc/SentryAI.cpp b/src/eve-server/npc/SentryAI.cpp
+index e7e3542..ddee65f 100644
+--- a/src/eve-server/npc/SentryAI.cpp
++++ b/src/eve-server/npc/SentryAI.cpp
+@@ -16,6 +16,10 @@
+ #include "system/DestinyManager.h"
+ #include "system/Damage.h"
+ #include "system/SystemBubble.h"
++#include "system/CrimeWatch.h"
++#include "npc/Drone.h"
++#include "npc/NPC.h"
++#include "EVEServerConfig.h"
+ 
+ SentryAI::SentryAI(Sentry* who)
+ : m_state(State::Idle),
+@@ -91,6 +95,16 @@ void SentryAI::Process() {
+     */
+     switch(m_state) {
+         case State::Idle: {
++            if (m_npc->IsLawSentry()) {
++                if (m_beginFindTarget.Check()) {
++                    SystemEntity* pTarget(FindLawTarget());
++                    if (pTarget != nullptr)
++                        Target(pTarget);
++                } else if (!m_beginFindTarget.Enabled()) {
++                    m_beginFindTarget.Start(m_attackSpeed);
++                }
++                break;
++            }
+             // The parameter proximityRange (154) tells us how far we "see" (npc's dont have this, but drones do)
+             if (m_beginFindTarget.Check()) {
+                 std::vector<Client*> clientVec;
+@@ -126,6 +140,10 @@ void SentryAI::Process() {
+                 return;
+             }
+             SystemEntity* pTarget = m_npc->TargetMgr()->GetFirstTarget(false);
++            if ((pTarget != nullptr) and m_npc->IsLawSentry() and !IsLawTarget(pTarget)) {
++                ClearTarget(pTarget);
++                return;
++            }
+             if (!pTarget) {
+                 _log(NPC__AI_TRACE, "%s(%u): Stopped %s, GetFirstTarget() returned NULL.", m_npc->GetName(), m_npc->GetID(), GetStateName(m_state).c_str());
+                 SetIdle();
+@@ -311,13 +329,14 @@ void SentryAI::AttackTarget(SystemEntity* pTarget) {
+                                              pTarget->GetID(),
+                                              0,guid,1,1,1,m_attackSpeed,0);
+ 
++    // gate and station guns ignore transversal and signature radius
+     Damage d(m_npc,
+              m_npc->GetSelf(),
+              m_npc->GetKinetic(),
+              m_npc->GetThermal(),
+              m_npc->GetEM(),
+              m_npc->GetExplosive(),
+-             m_formula.GetSentryToHit(m_npc, pTarget),
++             (m_npc->IsLawSentry() ? 1.0f : m_formula.GetSentryToHit(m_npc, pTarget)),
+              EVEEffectID::targetAttack
+     );
+ 
+@@ -356,3 +375,43 @@ std::string SentryAI::GetStateName(SentryAI::State name)
+     }
+     return "Undefined";
+ }
++
++bool SentryAI::IsLawTarget(SystemEntity* pTarget)
++{
++    if ((pTarget == nullptr) or pTarget->IsDead() or (pTarget->DestinyMgr() == nullptr))
++        return false;
++    if (pTarget->DestinyMgr()->IsCloaked() or pTarget->DestinyMgr()->IsWarping())
++        return false;
++    // an NPC made a criminal (GM testing)
++    if (pTarget->IsNPCSE())
++        return ((m_npc->GetPosition().distance(pTarget->GetPosition()) <= sConfig.crime.SentryRange)
++            and sCrimeWatch.IsCriminal(pTarget->GetID()));
++    uint32 charID(0);
++    if (pTarget->IsShipSE()) {
++        if (pTarget->GetPilot() != nullptr) {
++            if (pTarget->GetPilot()->InPod())
++                return false;
++            charID = pTarget->GetPilot()->GetCharacterID();
++        } else {
++            charID = pTarget->GetSelf()->ownerID();     // a ship left in space by a pilot who logged off
++        }
++    } else if (pTarget->IsDroneSE()) {
++        charID = pTarget->GetSelf()->ownerID();
++    }
++    if (!IsCharacterID(charID))
++        return false;
++    if (m_npc->GetPosition().distance(pTarget->GetPosition()) > sConfig.crime.SentryRange)
++        return false;
++    return (sCrimeWatch.IsCriminal(charID) or sCrimeWatch.IsFlaggedTo(charID, m_npc->GetSelf()->ownerID()));
++}
++
++SystemEntity* SentryAI::FindLawTarget()
++{
++    std::map<uint32, SystemEntity*> entities;
++    m_npc->SysBubble()->GetEntities(entities);
++    for (auto cur : entities)
++        if ((cur.second != nullptr) and (cur.second->IsShipSE() or cur.second->IsDroneSE() or cur.second->IsNPCSE())
++        and !((cur.second->IsNPCSE() and cur.second->GetNPCSE()->IsLawEnforcer())) and IsLawTarget(cur.second))
++            return cur.second;
++    return nullptr;
++}
+diff --git a/src/eve-server/npc/SentryAI.h b/src/eve-server/npc/SentryAI.h
+index 560bd23..f874b79 100644
+--- a/src/eve-server/npc/SentryAI.h
++++ b/src/eve-server/npc/SentryAI.h
+@@ -58,6 +58,10 @@ protected:
+ 
+     double GetTargetTime();
+ 
++    // law sentries: a pilot (or their drone) with a global criminal countdown, or flagged to our owner
++    SystemEntity* FindLawTarget();
++    bool IsLawTarget(SystemEntity* pTarget);
++
+     State m_state;
+ 
+     std::string GetStateName(State name);
+diff --git a/src/eve-server/ship/BeyonceService.cpp b/src/eve-server/ship/BeyonceService.cpp
+index 847f322..b811721 100644
+--- a/src/eve-server/ship/BeyonceService.cpp
++++ b/src/eve-server/ship/BeyonceService.cpp
+@@ -24,6 +24,7 @@
+     Rewrite:    Allan
+ */
+ 
++#include "system/CrimeWatch.h"
+ #include "eve-server.h"
+ 
+ #include "Client.h"
+@@ -607,6 +608,10 @@ PyResult BeyonceBound::CmdWarpToStuffAutopilot(PyCallArgs &call, PyInt* destID)
+         return PyStatic.NewNone();
+     }
+ 
++    // >0 means ship cannot warp (warp stabs are neg values, warp scrams are pos values)
++    if (call.client->GetShip()->GetAttribute(AttrWarpScrambleStatus) > 0)
++        throw UserError ("WarpScrambled");
++
+     call.client->SetInvul(false);
+     call.client->SetUndock(false);
+     // AP shit here.....
+@@ -654,6 +659,8 @@ PyResult BeyonceBound::CmdStop(PyCallArgs &call) {
+ 
+ // CmdTurboDock (in client code)
+ PyResult BeyonceBound::CmdDock(PyCallArgs &call, PyInt* celestialID, PyInt* shipID, std::optional<PyRep*> paymentRequired) {
++    // weapons timer and criminal lockdown
++    sCrimeWatch.CheckDockOrJump(call.client, false);
+     _log(AUTOPILOT__MESSAGE, "%s called Dock. AP: %s", call.client->GetName(), (call.client->IsAutoPilot() ? "true" : "false"));
+     if (call.client->IsSessionChange()) {
+         call.client->SendNotifyMsg("Session Change currently active.");
+@@ -718,6 +725,8 @@ PyResult BeyonceBound::CmdTurboDock(PyCallArgs &call, PyInt* stationID, std::opt
+ }
+ 
+ PyResult BeyonceBound::CmdStargateJump(PyCallArgs &call, PyInt* fromStargateID, PyInt* toStargateID, PyInt* shipID) {
++    // weapons timer and criminal lockdown
++    sCrimeWatch.CheckDockOrJump(call.client, true);
+     /*  jump system messages....
+ (67187, `{[location]system.name} Traffic Control: your jump-in clearance has expired.`)
+ (67191, `{[location]system.name} Traffic Control: you have been cleared for jump-in within {[timeinterval]expiration.writtenForm, from=second, to=second}.`)
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index 7c35c55..e9c2b07 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -344,6 +344,9 @@ public:
+ 
+     /* virtual functions default to base class and overridden as needed */
+     virtual void Killed(Damage &fatal_blow);            /* This method is defined in Damage.cpp */
++    // a ship left in space by a pilot who logged off was destroyed (Damage.cpp)
++    void KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
++                         uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition);
+ 
+     /* virtual functions to be overridden in derived classes */
+     virtual void MissileLaunched(Missile* pMissile)     { /* Do nothing here */ }
+diff --git a/src/eve-server/ship/ShipService.cpp b/src/eve-server/ship/ShipService.cpp
+index befaee4..8b900ad 100644
+--- a/src/eve-server/ship/ShipService.cpp
++++ b/src/eve-server/ship/ShipService.cpp
+@@ -22,6 +22,7 @@
+     Rewrite:    Allan
+ */
+ 
++#include "system/CrimeWatch.h"
+ #include "eve-server.h"
+ 
+ 
+@@ -160,6 +161,8 @@ PyResult ShipBound::Board(PyCallArgs &call, PyInt* newShipID, std::optional<PyIn
+                 pShipSE->GetName(), sConfig.world.shipBoardDistance);
+ 
+     pClient->Board(pShipSE);
++    // a criminal in a new ship is still a criminal
++    sCrimeWatch.OnEnterSpace(pClient);
+ 
+     /* return error msg from this call, if applicable (not sure how yet), else nodeid and timestamp */
+     // returns nodeID and timestamp
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 873b81c..85f33f1 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -18,6 +18,8 @@
+ #include "ship/modules/Prospector.h"
+ #include "system/Container.h"
+ #include "system/cosmicMgrs/BeltMgr.h"
++#include "system/CrimeWatch.h"
++#include "effects/EffectsDataMgr.h"
+ 
+ 
+ ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
+@@ -411,6 +413,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+     m_destinyMgr = pShip->DestinyMgr();
+ 
+     // Do initial cycle immediately while we start timer
++    CrimeCheck();
+     UpdateCycleHeat(true);
+     SetTimer(DoCycle());
+ 
+@@ -514,6 +517,21 @@ void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
+     m_destinyMgr = pShip->DestinyMgr();
+ }
+ 
++void ActiveModule::CrimeCheck()
++{
++    if (m_targetSE == nullptr)
++        return;
++    Client* pPilot(m_shipRef->GetPilot());
++    if (pPilot == nullptr)
++        return;
++    // weapons always count (a launcher's effect becomes its charge's after the first cycle)
++    if (m_turret or m_launcher or sFxDataMgr.isOffensive(m_effectID)) {
++        sCrimeWatch.OffensiveAct(pPilot, m_targetSE);
++    } else if (sFxDataMgr.isAssistance(m_effectID)) {
++        sCrimeWatch.AssistanceAct(pPilot, m_targetSE);
++    }
++}
++
+ void ActiveModule::UpdateCycleHeat(bool cycling)
+ {
+     std::vector<GenericModule*> modules;
+@@ -879,6 +897,7 @@ void ActiveModule::ProcessActiveCycle() {
+         return;
+     }
+ 
++    CrimeCheck();
+     UpdateCycleHeat(true);
+     SetTimer(DoCycle());
+ }
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index 0aebbe6..6d147bb 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -84,6 +84,8 @@ protected:
+      *  which modules are heating their rack.  linked weapons do this for the whole group */
+     void                UpdateCycleHeat(bool cycling);
+     void                CheckHeatDamage();
++    /* crime: each cycle on a target is an aggressive (or assisting) act.  CrimeWatch decides if it's a crime */
++    void                CrimeCheck();
+     void                ProcessActiveCycle();           // checks and sets cap use
+     void                UpdateCharge(uint16 attrID, uint16 testAttrID, uint16 srcAttrID, InventoryItemRef iRef);
+     void                UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRef iRef);
+diff --git a/src/eve-server/standing/Standing.cpp b/src/eve-server/standing/Standing.cpp
+index 92909d0..baffc46 100644
+--- a/src/eve-server/standing/Standing.cpp
++++ b/src/eve-server/standing/Standing.cpp
+@@ -25,6 +25,7 @@
+ */
+ 
+ #include "standing/Standing.h"
++#include "system/CrimeWatch.h"
+ 
+ /*  re-write of standing system  -allan 10Apr15
+  * see notes in StandingDB.cpp
+@@ -81,11 +82,7 @@ PyResult Standing::GetMyKillRights(PyCallArgs &call) {
+     // self.killRightsCache, self.killedRightsCache = sm.RemoteSvc('standing2').GetMyKillRights()
+     // each cache holds k,v where key is toID or fromID
+     _log(STANDING__MESSAGE,  "Standing::Handle_GetMyKillRights()");
+-    PyTuple* KillRights = new PyTuple(2);
+-    PyDict* killRightsCache = new PyDict();
+-    PyDict* killedRightsCache = new PyDict();
+-        KillRights->items[0] = killRightsCache;
+-        KillRights->items[1] = killedRightsCache;
++    PyTuple* KillRights = sCrimeWatch.GetKillRights(call.client->GetCharacterID());
+ 
+     if (is_log_enabled(STANDING__RSPDUMP)) {
+         _log(STANDING__RSPDUMP, "Standing::Handle_GetMyKillRights() RSP:" );
+diff --git a/src/eve-server/standing/StandingDB.cpp b/src/eve-server/standing/StandingDB.cpp
+index 9040698..f47084a 100644
+--- a/src/eve-server/standing/StandingDB.cpp
++++ b/src/eve-server/standing/StandingDB.cpp
+@@ -71,8 +71,11 @@ PyRep *StandingDB::GetMyStandings(uint32 charID)
+ PyRep *StandingDB::GetCharStandings(Client *pClient)
+ {
+     DBQueryResult res;
+-    sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repStandings WHERE toID = %u OR fromID = %u",
+-                       pClient->GetCharacterID(), pClient->GetCharacterID());
++    // the client shows its standing from CONCORD as the security status, so that row is always the security status
++    sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repStandings WHERE (toID = %u OR fromID = %u) AND NOT (fromID = %u AND toID = %u)"
++                       " UNION ALL SELECT %u, %u, %f",
++                       pClient->GetCharacterID(), pClient->GetCharacterID(), corpCONCORD, pClient->GetCharacterID(),
++                       corpCONCORD, pClient->GetCharacterID(), pClient->GetSecurityRating());
+     return DBResultToCRowset(res);
+ }
+ 
+diff --git a/src/eve-server/system/Container.h b/src/eve-server/system/Container.h
+index 6037f01..65413f8 100644
+--- a/src/eve-server/system/Container.h
++++ b/src/eve-server/system/Container.h
+@@ -267,6 +267,7 @@ public:
+     void Salvaged()                                     { m_contRef->Salvaged(); }
+     void SetLaunchedByID(uint32 launcherID=0)           { m_launchedByID = launcherID; }
+     bool IsEmpty()                                      { return m_contRef->IsEmpty(); }
++    bool IsAbandoned()                                  { return m_abandoned; }
+ 
+     /** @todo (allan) finish this */
+     double GetOwnerBounty()                             { return 0; }
+diff --git a/src/eve-server/system/CrimeWatch.cpp b/src/eve-server/system/CrimeWatch.cpp
+index 10fe4b1..0fa5083 100644
+--- a/src/eve-server/system/CrimeWatch.cpp
++++ b/src/eve-server/system/CrimeWatch.cpp
+@@ -4,38 +4,747 @@
+  *
+  * @Author:         Allan
+  * @date:   13 March 2016
++ *
++ * Crucible rules, from EVElopedia (Dec 2011 - Mar 2012), EVE University (2011) and the Crucible / Retribution patch notes.
++ *  see CrimeWatch.h for the overview.
+  */
+ 
++#include "eve-server.h"
+ 
+-#include "CrimeWatch.h"
++#include "Client.h"
++#include "EntityList.h"
+ #include "EVEServerConfig.h"
++#include "StaticDataMgr.h"
++#include "character/Character.h"
++#include "inventory/AttributeEnum.h"
++#include "npc/Drone.h"
++#include "npc/LawEnforcement.h"
++#include "npc/NPC.h"
++#include "npc/Sentry.h"
++#include "ship/Ship.h"
++#include "standing/StandingDB.h"
++#include "system/CrimeWatch.h"
++#include "system/SystemManager.h"
++#include "../../eve-common/EVE_Standings.h"
+ 
+-/*
+- * each client(character) will have it's own cw code.
+-the cw system will consist of the following:
++CrimeWatch::CrimeWatch()
++{
++}
+ 
+-    criminal flags
+-    aggression timers
+-    weapon timers
+-    jump/dock timers
+-    kill rights
+-    */
++int CrimeWatch::Initialize()
++{
++    // kill rights last 30 days, so they are kept in the db.  created here too in case the migration hasn't been run
++    DBerror err;
++    sDatabase.RunQuery(err,
++        "CREATE TABLE IF NOT EXISTS crimeKillRights ("
++        " holderID INT UNSIGNED NOT NULL,"
++        " targetID INT UNSIGNED NOT NULL,"
++        " expiresAt BIGINT NOT NULL,"
++        " PRIMARY KEY (holderID, targetID))");
++    sDatabase.RunQuery(err, "DELETE FROM crimeKillRights WHERE expiresAt < %lli", GetFileTimeNow());
+ 
+-/** @todo  set up config variables for timers here */
+-CrimeWatch::CrimeWatch()
+-: t_crimFlag(sConfig.crime.CrimFlagTime *1000),
+-t_aggression(sConfig.crime.AggFlagTime *1000),
+-t_weapon(sConfig.crime.WeaponFlagTime *1000),
+-t_session(sConfig.crime.CWSessionTime *1000),
+-t_killRight(sConfig.crime.KillRightTime *1000)
++    DBQueryResult res;
++    if (sDatabase.RunQuery(res, "SELECT holderID, targetID, expiresAt FROM crimeKillRights")) {
++        DBResultRow row;
++        while (res.GetRow(row))
++            m_killRights[row.GetUInt(0)][row.GetUInt(1)] = row.GetInt64(2);
++    }
++
++    sLog.Blue("      CrimeWatch", "CrimeWatch %s.  %lu kill rights loaded.", (sConfig.crime.Enabled ? "enabled" : "disabled"), m_killRights.size());
++    return 1;
++}
++
++float CrimeWatch::SecurityLevel(float trueSec)
+ {
+-    t_crimFlag.Disable();
+-    t_aggression.Disable();
+-    t_weapon.Disable();
+-    t_session.Disable();
+-    t_killRight.Disable();
++    // the client's cfg.solarsystems pseudoSecurity, then util.FmtSystemSecStatus (python 2 round: halves away from zero)
++    if ((trueSec > 0.0f) and (trueSec < 0.05f))
++        trueSec = 0.05f;
++    float level(roundf(trueSec * 10.0f) / 10.0f);
++    if (level == -0.0f)
++        level = 0.0f;
++    return level;
+ }
+ 
+-void CrimeWatch::Init() {
++uint8 CrimeWatch::SecurityClass(float trueSec)
++{
++    float level(SecurityLevel(trueSec));
++    if (level <= 0.0f)
++        return Crime::SecClass::Null;
++    if (level < 0.45f)
++        return Crime::SecClass::Low;
++    return Crime::SecClass::High;
++}
++
++int64 CrimeWatch::FlagTime()
++{
++    return (int64)sConfig.crime.AggFlagTime * EvE::Time::Second;
++}
++
++int64 CrimeWatch::CrimTime()
++{
++    return (int64)sConfig.crime.CrimFlagTime * EvE::Time::Second;
++}
+ 
++bool CrimeWatch::Live(int64 time, int64 duration)
++{
++    return ((time > 0) and ((time + duration) > GetFileTimeNow()));
++}
++
++void CrimeWatch::Flag(uint32 aggressorID, uint32 victimID, int64 now)
++{
++    m_records[aggressorID].victims[victimID] = now;
++}
++
++bool CrimeWatch::IsCriminal(uint32 charID)
++{
++    std::map<uint32, Record>::iterator itr = m_records.find(charID);
++    if (itr == m_records.end())
++        return false;
++    std::map<uint32, int64>::iterator vItr = itr->second.victims.find(0);
++    if (vItr == itr->second.victims.end())
++        return false;
++    return Live(vItr->second, CrimTime());
++}
++
++bool CrimeWatch::IsFlaggedTo(uint32 aggressorID, uint32 victimID)
++{
++    if ((aggressorID == 0) or (victimID == 0))
++        return false;
++    std::map<uint32, Record>::iterator itr = m_records.find(aggressorID);
++    if (itr == m_records.end())
++        return false;
++    std::map<uint32, int64>::iterator vItr = itr->second.victims.find(victimID);
++    if (vItr == itr->second.victims.end())
++        return false;
++    return Live(vItr->second, FlagTime());
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  who owns the target
++ * ------------------------------------------------------------------------------------------------------------------ */
++bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
++{
++    if (pSE == nullptr)
++        return false;
++
++    Client* pPilot(nullptr);
++    if (pSE->IsShipSE()) {
++        pPilot = pSE->GetPilot();
++        if (pPilot == nullptr) {
++            // an empty ship (ejected, or left in space by a pilot who logged off) still belongs to its owner
++            uint32 ownerID(pSE->GetSelf()->ownerID());
++            if (!IsCharacterID(ownerID))
++                return false;
++            into.charID = ownerID;
++            into.corpID = pSE->GetCorporationID();
++            into.allianceID = pSE->GetAllianceID();
++            into.warFactionID = pSE->GetWarFactionID();
++            CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
++            into.secStatus = (cRef.get() == nullptr ? 0.0f : cRef->GetSecurityRating());
++            into.pod = (pSE->GetSelf()->groupID() == EVEDB::invGroups::Capsule);
++            return true;
++        }
++        into.pod = pPilot->InPod();
++    } else if (pSE->IsDroneSE()) {
++        pPilot = pSE->GetDroneSE()->GetOwnerClient();
++        if (pPilot == nullptr)
++            return false;
++    } else if (pSE->IsNPCSE()) {
++        NPC* pNPC(pSE->GetNPCSE());
++        if (pNPC->IsConcord() or (pSE->GetCorporationID() == corpCONCORD)) {
++            into.concord = true;
++            into.corpID = corpCONCORD;
++            return true;
++        }
++        return false;   // rats, police and navies: shooting them is no crime
++    } else if (pSE->IsSentrySE()) {
++        into.sentry = true;
++        into.corpID = pSE->GetSelf()->ownerID();
++        return true;
++    } else if (pSE->IsPOSSE()) {
++        uint32 corpID(pSE->GetCorporationID());
++        if (IsNPCCorp(corpID) or (corpID == 0))
++            return false;
++        into.structure = true;
++        into.corpID = corpID;
++        into.allianceID = pSE->GetAllianceID();
++        return true;
++    } else {
++        return false;
++    }
++
++    into.charID = pPilot->GetCharacterID();
++    into.corpID = pPilot->GetCorporationID();
++    into.allianceID = pPilot->GetAllianceID();
++    into.warFactionID = pPilot->GetWarFactionID();
++    into.secStatus = pPilot->GetSecurityRating();
++    return true;
++}
++
++namespace {
++    // factional warfare: Caldari/Gallente and Amarr/Minmatar militias may fight anywhere
++    bool EnemyMilitia(int32 a, int32 b) {
++        if ((a == 0) or (b == 0))
++            return false;
++        return (((a == factionCaldari) and (b == factionGallente)) or ((a == factionGallente) and (b == factionCaldari))
++             or ((a == factionAmarr) and (b == factionMinmatar)) or ((a == factionMinmatar) and (b == factionAmarr)));
++    }
++}
++
++/* the client's consider.CanAttackFreely().  the client warns before an act this returns false for.
++ *  wars aren't implemented, so war targets are not free targets yet.
++ */
++bool CrimeWatch::CanAttackFreely(Client* pAggressor, const Owner& target)
++{
++    if (target.structure)
++        return false;
++    uint32 me(pAggressor->GetCharacterID());
++    if (IsOutlaw(target.secStatus))
++        return true;
++    if (!target.pod)
++        if (IsCriminal(target.charID) or IsFlaggedTo(target.charID, me) or IsFlaggedTo(target.charID, pAggressor->GetCorporationID()))
++            return true;
++    std::map<uint32, std::map<uint32, int64>>::iterator itr = m_killRights.find(me);
++    if (itr != m_killRights.end()) {
++        std::map<uint32, int64>::iterator kItr = itr->second.find(target.charID);
++        if ((kItr != itr->second.end()) and (kItr->second > GetFileTimeNow()))
++            return true;
++    }
++    if (EnemyMilitia(pAggressor->GetWarFactionID(), target.warFactionID))
++        return true;
++    return false;
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  aggressive acts
++ * ------------------------------------------------------------------------------------------------------------------ */
++void CrimeWatch::OffensiveAct(Client* pAggressor, SystemEntity* pTarget)
++{
++    if (!sConfig.crime.Enabled or (pAggressor == nullptr) or (pTarget == nullptr))
++        return;
++    SystemManager* pSystem(pAggressor->SystemMgr());
++    if (pSystem == nullptr)
++        return;
++    Owner target;
++    if (!GetOwner(pTarget, target))
++        return;
++    Act(pAggressor, pSystem, target);
++}
++
++void CrimeWatch::Act(Client* pAggressor, SystemManager* pSystem, const Owner& target)
++{
++    uint32 me(pAggressor->GetCharacterID());
++    if (target.charID == me)
++        return;
++    float trueSec(pSystem->GetSystemSecurityRating());
++    uint8 secClass(SecurityClass(trueSec));
++    int64 now(GetFileTimeNow());
++    Record& record = m_records[me];
++    record.lastAct = now;
++
++    // CONCORD: always a crime in empire space
++    if (target.concord) {
++        if (secClass != Crime::SecClass::Null) {
++            Flag(me, 0, now);
++            if (secClass == Crime::SecClass::High)
++                pSystem->GetLaw()->ReportCriminal(pAggressor);
++        }
++        Notify(me);
++        return;
++    }
++    // gate/station sentries: you're flagged to their owner, and they shoot back
++    if (target.sentry) {
++        Flag(me, target.corpID, now);
++        Notify(me);
++        return;
++    }
++
++    if (target.charID != 0) {
++        record.lastPvP = now;
++        m_records[target.charID].lastPvP = now;
++        // members of the same player corp may fight freely
++        if ((target.corpID == pAggressor->GetCorporationID()) and !IsNPCCorp(target.corpID))
++            return;
++    } else if ((target.corpID == pAggressor->GetCorporationID()) or ((target.allianceID != 0) and (target.allianceID == pAggressor->GetAllianceID()))) {
++        return;     // our own structures
++    }
++
++    uint32 victimID(target.structure ? target.corpID : target.charID);
++    bool newFlag(!IsFlaggedTo(me, victimID));
++    bool legal((secClass == Crime::SecClass::Null) or CanAttackFreely(pAggressor, target));
++    Flag(me, victimID, now);
++
++    if (!legal) {
++        Flag(me, 0, now);
++        if (target.charID != 0)
++            m_illegal[target.charID][me] = now;
++        if (newFlag)
++            SecPenalty(pAggressor, target.secStatus, sConfig.crime.SecAggressionPenalty, 0.0f, SecurityLevel(trueSec), "aggression");
++        _log(CRIME__INFO, "%s(%u) committed a crime against %u in %s.", pAggressor->GetName(), me, victimID, pSystem->GetName());
++        if (secClass == Crime::SecClass::High)
++            pSystem->GetLaw()->ReportCriminal(pAggressor);
++    }
++
++    Notify(me);
++}
++
++void CrimeWatch::SimulateCrime(Client* pAggressor)
++{
++    if (!sConfig.crime.Enabled or (pAggressor == nullptr) or (pAggressor->SystemMgr() == nullptr))
++        return;
++    // nobody in particular: no corp, no flags, no kill rights, security status 0.  attacking them is never legal
++    Owner civilian;
++    Act(pAggressor, pAggressor->SystemMgr(), civilian);
++}
++
++void CrimeWatch::EntityCrime(SystemEntity* pAggressor, SystemEntity* pVictim)
++{
++    if (!sConfig.crime.Enabled or (pAggressor == nullptr) or (pAggressor->SystemMgr() == nullptr))
++        return;
++    SystemManager* pSystem(pAggressor->SystemMgr());
++    uint8 secClass(SecurityClass(pSystem->GetSystemSecurityRating()));
++    if (secClass == Crime::SecClass::Null)
++        return;
++    uint32 id(pAggressor->GetID());
++    int64 now(GetFileTimeNow());
++    Flag(id, 0, now);
++    Owner victim;
++    if ((pVictim != nullptr) and GetOwner(pVictim, victim) and (victim.charID != 0))
++        Flag(id, victim.charID, now);
++    _log(CRIME__INFO, "%s(%u) committed a crime in %s.", pAggressor->GetName(), id, pSystem->GetName());
++    // the pilots here see it flashing
++    PyDict* victims(MakeVictimDict(id));
++    SendToSystem(pSystem, id, victims);
++    PyDecRef(victims);
++    if (secClass == Crime::SecClass::High)
++        pSystem->GetLaw()->ReportCriminalEntity(pAggressor);
++}
++
++void CrimeWatch::AssistanceAct(Client* pHelper, SystemEntity* pTarget)
++{
++    if (!sConfig.crime.Enabled or (pHelper == nullptr) or (pTarget == nullptr))
++        return;
++    SystemManager* pSystem(pHelper->SystemMgr());
++    if (pSystem == nullptr)
++        return;
++    Owner target;
++    if (!GetOwner(pTarget, target) or (target.charID == 0))
++        return;
++    uint32 me(pHelper->GetCharacterID());
++    if (target.charID == me)
++        return;
++    uint8 secClass(SecurityClass(pSystem->GetSystemSecurityRating()));
++    if (secClass == Crime::SecClass::Null)
++        return;
++
++    int64 now(GetFileTimeNow());
++    bool changed(false);
++    // helping a criminal or an outlaw is a crime
++    if (IsCriminal(target.charID) or IsOutlaw(target.secStatus)) {
++        Flag(me, 0, now);
++        m_records[me].lastAct = now;
++        changed = true;
++        if (secClass == Crime::SecClass::High)
++            pSystem->GetLaw()->ReportCriminal(pHelper);
++    }
++    // otherwise you take on their fights: whoever they aggressed may shoot you too
++    std::map<uint32, Record>::iterator itr = m_records.find(target.charID);
++    if (itr != m_records.end()) {
++        for (auto cur : itr->second.victims) {
++            if ((cur.first == 0) or (cur.first == me) or (cur.first == pHelper->GetCorporationID()))
++                continue;
++            if (!Live(cur.second, FlagTime()))
++                continue;
++            Flag(me, cur.first, now);
++            changed = true;
++        }
++    }
++    if (changed) {
++        m_records[me].lastAct = now;
++        m_records[me].lastPvP = now;
++        Notify(me);
++    }
++}
++
++void CrimeWatch::Theft(Client* pThief, uint32 ownerID, uint32 ownerCorpID)
++{
++    if (!sConfig.crime.Enabled or (pThief == nullptr) or (pThief->SystemMgr() == nullptr))
++        return;
++    if (SecurityClass(pThief->SystemMgr()->GetSystemSecurityRating()) == Crime::SecClass::Null)
++        return;
++    // flagged to the owner's corporation, or to the owner if they're in an npc corp.  not a crime: CONCORD doesn't care
++    uint32 victimID((IsNPCCorp(ownerCorpID) or (ownerCorpID == 0)) ? ownerID : ownerCorpID);
++    int64 now(GetFileTimeNow());
++    Flag(pThief->GetCharacterID(), victimID, now);
++    m_records[pThief->GetCharacterID()].lastPvP = now;
++    _log(CRIME__INFO, "%s(%u) stole from %u (flagged to %u).", pThief->GetName(), pThief->GetCharacterID(), ownerID, victimID);
++    Notify(pThief->GetCharacterID());
++}
++
++void CrimeWatch::NPCAggression(uint32 charID)
++{
++    if (!sConfig.crime.Enabled)
++        return;
++    m_records[charID].lastNPC = GetFileTimeNow();
++}
++
++bool CrimeWatch::CanTakeFrom(uint32 charID, uint32 ownerID)
++{
++    // fleet members in the same system share loot
++    Client* pThief(sEntityList.FindClientByCharID(charID));
++    Client* pOwner(sEntityList.FindClientByCharID(ownerID));
++    if ((pThief == nullptr) or (pOwner == nullptr))
++        return false;
++    if ((pThief->GetFleetID() == 0) or (pThief->GetFleetID() != pOwner->GetFleetID()))
++        return false;
++    return (pThief->GetSystemID() == pOwner->GetSystemID());
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  timers
++ * ------------------------------------------------------------------------------------------------------------------ */
++uint32 CrimeWatch::WeaponsTimer(uint32 charID)
++{
++    std::map<uint32, Record>::iterator itr = m_records.find(charID);
++    if (itr == m_records.end())
++        return 0;
++    int64 until(itr->second.lastAct + (int64)sConfig.crime.WeaponFlagTime * EvE::Time::Second);
++    int64 now(GetFileTimeNow());
++    if (until <= now)
++        return 0;
++    return (uint32)((until - now) / EvE::Time::Second) + 1;
++}
++
++uint32 CrimeWatch::LogoffTimer(uint32 charID, bool& npcOnly)
++{
++    npcOnly = false;
++    if (!sConfig.crime.Enabled)
++        return 0;
++    std::map<uint32, Record>::iterator itr = m_records.find(charID);
++    if (itr == m_records.end())
++        return 0;
++    if (Live(itr->second.lastPvP, FlagTime()))
++        return sConfig.crime.AggFlagTime;
++    if (Live(itr->second.lastNPC, (int64)sConfig.crime.LogoffNPCTime * EvE::Time::Second))
++        npcOnly = true;
++    return 0;
++}
++
++void CrimeWatch::CheckDockOrJump(Client* pClient, bool jump)
++{
++    if (!sConfig.crime.Enabled or (pClient == nullptr))
++        return;
++    uint32 left(WeaponsTimer(pClient->GetCharacterID()));
++    if (left > 0)
++        throw CustomError ("You can't %s for another %u seconds after an aggressive act.", (jump ? "jump" : "dock"), left);
++    // a criminal is locked out of gates and stations in empire space, except in a capsule
++    if (sConfig.crime.CriminalLockdown and !pClient->InPod() and IsCriminal(pClient->GetCharacterID()))
++        if ((pClient->SystemMgr() != nullptr) and (SecurityClass(pClient->SystemMgr()->GetSystemSecurityRating()) != Crime::SecClass::Null))
++            throw CustomError ("%s Traffic Control has refused your %s request.  Criminals may not use stargates or stations.",
++                    pClient->SystemMgr()->GetName(), (jump ? "jump" : "docking"));
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  client data
++ * ------------------------------------------------------------------------------------------------------------------ */
++PyDict* CrimeWatch::MakeVictimDict(uint32 charID)
++{
++    // {victimID or None: time of the last act}.  the client works out the expiry itself (time + 15 minutes)
++    PyDict* dict = new PyDict();
++    std::map<uint32, Record>::iterator itr = m_records.find(charID);
++    if (itr == m_records.end())
++        return dict;
++    for (auto cur : itr->second.victims) {
++        if (!Live(cur.second, (cur.first == 0 ? CrimTime() : FlagTime())))
++            continue;
++        if (cur.first == 0) {
++            dict->SetItem(PyStatic.NewNone(), new PyLong(cur.second));
++        } else {
++            dict->SetItem(new PyInt(cur.first), new PyLong(cur.second));
++        }
++    }
++    return dict;
++}
++
++PyDict* CrimeWatch::GetCriminalTimeStamps(uint32 charID)
++{
++    return MakeVictimDict(charID);
++}
++
++void CrimeWatch::GetAggressors(SystemManager* pSystem, std::map<int32, PyRep*>& into)
++{
++    if (!sConfig.crime.Enabled or (pSystem == nullptr))
++        return;
++    std::vector<Client*> clients;
++    pSystem->GetClientList(clients);
++    for (auto cur : clients) {
++        PyDict* dict(MakeVictimDict(cur->GetCharacterID()));
++        if (dict->empty()) {
++            PyDecRef(dict);
++            continue;
++        }
++        into[cur->GetCharacterID()] = dict;
++    }
++}
++
++void CrimeWatch::SendToSystem(SystemManager* pSystem, uint32 charID, PyDict* victims)
++{
++    // OnAggressionChange(solarsystemID, {aggressorID: {victimID or None: time}})  the client replaces the aggressor's whole dict
++    std::vector<Client*> clients;
++    pSystem->GetClientList(clients);
++    for (auto cur : clients) {
++        PyDict* aggressors = new PyDict();
++        PyIncRef(victims);
++        aggressors->SetItem(new PyInt(charID), victims);
++        PyTuple* payload = new PyTuple(2);
++            payload->SetItem(0, new PyInt(pSystem->GetID()));
++            payload->SetItem(1, aggressors);
++        cur->SendNotification("OnAggressionChange", "charid", &payload);
++    }
++}
++
++void CrimeWatch::Notify(uint32 charID)
++{
++    Client* pClient(sEntityList.FindClientByCharID(charID));
++    if ((pClient == nullptr) or (pClient->SystemMgr() == nullptr))
++        return;
++    PyDict* victims(MakeVictimDict(charID));
++    SendToSystem(pClient->SystemMgr(), charID, victims);
++    PyDecRef(victims);
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  events
++ * ------------------------------------------------------------------------------------------------------------------ */
++void CrimeWatch::OnEnterSpace(Client* pClient)
++{
++    if (!sConfig.crime.Enabled or (pClient == nullptr) or !pClient->IsInSpace())
++        return;
++    SystemManager* pSystem(pClient->SystemMgr());
++    if (pSystem == nullptr)
++        return;
++    uint32 me(pClient->GetCharacterID());
++    float trueSec(pSystem->GetSystemSecurityRating());
++    uint8 secClass(SecurityClass(trueSec));
++
++    if ((secClass == Crime::SecClass::High) and IsCriminal(me)) {
++        // undocking or jumping in high-sec 'refreshes CONCORD's memory', and they come for the ship
++        Flag(me, 0, GetFileTimeNow());
++        if (!pClient->InPod())
++            pSystem->GetLaw()->ReportCriminal(pClient);
++    }
++    // the pilots in this system learn about our flags
++    Notify(me);
++
++    // faction police chase pilots with low security status in their high-sec systems:
++    //   -2.0 in 1.0 systems, down to -4.5 in 0.5 systems.  they can be escaped, and don't kill pods
++    if (sConfig.crime.FactionPolice and (secClass == Crime::SecClass::High) and !pClient->InPod()) {
++        float level(SecurityLevel(trueSec));
++        float threshold(-2.0f - ((1.0f - level) * 5.0f));
++        if ((roundf(pClient->GetSecurityRating() * 10.0f) / 10.0f) <= threshold)
++            pSystem->GetLaw()->ReportPoliceTarget(pClient);
++    }
++}
++
++void CrimeWatch::OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem)
++{
++    if (!sConfig.crime.Enabled or (pSystem == nullptr))
++        return;
++    float trueSec(pSystem->GetSystemSecurityRating());
++    uint8 secClass(SecurityClass(trueSec));
++    float level(SecurityLevel(trueSec));
++
++    std::map<uint32, std::map<uint32, int64>>::iterator itr = m_illegal.find(victimCharID);
++    if ((itr != m_illegal.end()) and (secClass != Crime::SecClass::Null)) {
++        for (auto cur : itr->second) {
++            if (!Live(cur.second, FlagTime()))
++                continue;
++            Client* pAggressor(sEntityList.FindClientByCharID(cur.first));
++            // the ship kill penalty only lands if the victim didn't fight back.  podding is always a crime
++            bool foughtBack(IsFlaggedTo(victimCharID, cur.first));
++            if (pAggressor != nullptr) {
++                if (pod) {
++                    SecPenalty(pAggressor, victimSec, sConfig.crime.SecPodKillPenalty, sConfig.crime.SecPodKillMinPenalty, level, "pod kill");
++                } else if (!foughtBack) {
++                    SecPenalty(pAggressor, victimSec, sConfig.crime.SecShipKillPenalty, 0.0f, level, "ship kill");
++                }
++            }
++            // kill rights: an illegally destroyed ship whose pilot didn't fight back.  not for pods
++            if (!pod and !foughtBack)
++                GrantKillRight(victimCharID, cur.first);
++        }
++        if (pod)
++            m_illegal.erase(itr);
++    }
++
++    // a kill right is used up when its holder destroys the target's ship
++    if ((killerCharID != 0) and !pod) {
++        std::map<uint32, std::map<uint32, int64>>::iterator kItr = m_killRights.find(killerCharID);
++        if ((kItr != m_killRights.end()) and (kItr->second.find(victimCharID) != kItr->second.end()))
++            RemoveKillRight(killerCharID, victimCharID);
++    }
++}
++
++float CrimeWatch::OnNPCKilled(Character* pChar, InventoryItemRef npcRef, SystemManager* pSystem)
++{
++    if ((pChar == nullptr) or (pSystem == nullptr))
++        return 0.0f;
++    if (pSystem->GetSystemSecurityRating() <= 0)
++        return 0.0f;
++    float killBonus(npcRef->GetAttribute(AttrEntitySecurityStatusKillBonus).get_float());
++    if (killBonus <= 0)
++        return 0.0f;
++
++    // gain = (10 - current) * the npc's security percentage.  only the best npc per system counts every 15 minutes
++    float oldSec(pChar->GetSecurityRating());
++    EvilNumber maxGain(10);
++    bool capped(npcRef->HasAttribute(AttrEntitySecurityMaxGain, maxGain));
++    if (capped and (oldSec >= maxGain.get_float()))
++        return 0.0f;
++    float gain((10.0f - oldSec) * killBonus / 100.0f);
++    gain *= (1.0f + (0.05f * pChar->GetSkillLevel(EvESkill::FastTalk, true)));
++    gain *= sConfig.rates.secRate;
++
++    std::pair<int64, float>& window = m_secGain[pChar->itemID()][pSystem->GetID()];
++    if (!Live(window.first, (int64)sConfig.crime.SecGainWindow * EvE::Time::Second)) {
++        window.first = GetFileTimeNow();
++        window.second = 0.0f;
++    }
++    if (gain <= window.second)
++        return 0.0f;
++    float award(gain - window.second);
++    window.second = gain;
++
++    float newSec(oldSec + award);
++    if (capped and (newSec > maxGain.get_float()))
++        newSec = maxGain.get_float();
++    std::string msg("Security status gained for killing pirates in ");
++    msg += pSystem->GetNameStr();
++    SetSecurityStatus(pChar->itemID(), newSec, msg, Standings::LawEnforcement);
++    return award;
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  security status
++ * ------------------------------------------------------------------------------------------------------------------ */
++/* Crucible penalties (Empyrean Age 1.1 values): aggression 1.5%, ship kill 6%, pod kill 37.5% (never under 12.5%).
++ *  each is a share of the distance down to -10:  new = (old + 10) * (1 - pct / 100) - 10
++ *  scaled by the system's security level, and by 1% per point the victim's status is above (or below) the aggressor's
++ */
++void CrimeWatch::SecPenalty(Client* pAggressor, float victimSec, float basePercent, float minPercent, float level, const char* what)
++{
++    if ((pAggressor == nullptr) or (basePercent <= 0) or (level <= 0))
++        return;
++    float aggSec(pAggressor->GetSecurityRating());
++    float pct(basePercent * level * (1.0f + ((victimSec - aggSec) / 100.0f)));
++    if (pct < minPercent)
++        pct = minPercent;
++    if (pct <= 0)
++        return;
++    float loss((aggSec + 10.0f) * (pct / 100.0f) * sConfig.rates.secRate);
++    std::string msg("Security status lost for ");
++    msg += what;
++    msg += " in ";
++    msg += pAggressor->SystemMgr()->GetNameStr();
++    uint16 eventType(Standings::CombatAggression);
++    if (strcmp(what, "pod kill") == 0) {
++        eventType = Standings::CombatPodKill;
++    } else if (strcmp(what, "ship kill") == 0) {
++        eventType = Standings::CombatShipKill;
++    }
++    SetSecurityStatus(pAggressor->GetCharacterID(), aggSec - loss, msg, eventType);
++}
++
++void CrimeWatch::SetSecurityStatus(uint32 charID, float newSec, const std::string& reason, uint16 eventType)
++{
++    if (newSec > 10.0f)
++        newSec = 10.0f;
++    if (newSec < -10.0f)
++        newSec = -10.0f;
++
++    Client* pClient(sEntityList.FindClientByCharID(charID));
++    CharacterRef cRef(pClient != nullptr ? pClient->GetChar() : sItemFactory.GetCharacterRef(charID));
++    if (cRef.get() == nullptr)
++        return;
++    float oldSec(cRef->GetSecurityRating());
++    if (newSec == oldSec)
++        return;
++    cRef->secStatusChange(newSec - oldSec);
++    // in memory now.  the db copy is what other pilots' clients and logins read
++    DBerror err;
++    sDatabase.RunQuery(err, "UPDATE chrCharacters SET securityRating = %f WHERE characterID = %u", cRef->GetSecurityRating(), charID);
++    // the character sheet's security status history
++    StandingDB::SaveStandingChanges(corpCONCORD, charID, eventType, newSec - oldSec, reason);
++    _log(CRIME__INFO, "Security status of %u: %.4f -> %.4f (%s)", charID, oldSec, cRef->GetSecurityRating(), reason.c_str());
++
++    if (pClient != nullptr) {
++        // the client's security status is its standing from CONCORD
++        PyTuple* payload = new PyTuple(3);
++            payload->SetItem(0, new PyInt(corpCONCORD));
++            payload->SetItem(1, new PyInt(charID));
++            payload->SetItem(2, new PyFloat(cRef->GetSecurityRating()));
++        pClient->SendNotification("OnStandingSet", "charid", &payload);
++    }
++}
++
++/* ------------------------------------------------------------------------------------------------------------------
++ *  kill rights
++ * ------------------------------------------------------------------------------------------------------------------ */
++PyTuple* CrimeWatch::GetKillRights(uint32 charID)
++{
++    // (killRights, killedRights): {targetID: time} I may kill, {holderID: time} who may kill me
++    int64 now(GetFileTimeNow());
++    PyDict* mine = new PyDict();
++    PyDict* onMe = new PyDict();
++    for (auto holder : m_killRights)
++        for (auto target : holder.second) {
++            if (target.second <= now)
++                continue;
++            if (holder.first == charID)
++                mine->SetItem(new PyInt(target.first), new PyLong(target.second));
++            if (target.first == charID)
++                onMe->SetItem(new PyInt(holder.first), new PyLong(target.second));
++        }
++    PyTuple* tuple = new PyTuple(2);
++        tuple->SetItem(0, mine);
++        tuple->SetItem(1, onMe);
++    return tuple;
++}
++
++void CrimeWatch::GrantKillRight(uint32 holderID, uint32 targetID)
++{
++    int64 expires(GetFileTimeNow() + (int64)sConfig.crime.KillRightDays * EvE::Time::Day);
++    m_killRights[holderID][targetID] = expires;
++    DBerror err;
++    sDatabase.RunQuery(err, "REPLACE INTO crimeKillRights (holderID, targetID, expiresAt) VALUES (%u, %u, %lli)", holderID, targetID, expires);
++    _log(CRIME__INFO, "%u gets a kill right on %u.", holderID, targetID);
++    SendKillRightChange(true, expires, holderID, targetID);
++}
++
++void CrimeWatch::RemoveKillRight(uint32 holderID, uint32 targetID)
++{
++    std::map<uint32, std::map<uint32, int64>>::iterator itr = m_killRights.find(holderID);
++    if (itr == m_killRights.end())
++        return;
++    itr->second.erase(targetID);
++    DBerror err;
++    sDatabase.RunQuery(err, "DELETE FROM crimeKillRights WHERE holderID = %u AND targetID = %u", holderID, targetID);
++    _log(CRIME__INFO, "%u used their kill right on %u.", holderID, targetID);
++    SendKillRightChange(false, GetFileTimeNow(), holderID, targetID);
++}
++
++void CrimeWatch::SendKillRightChange(bool set, int64 when, uint32 holderID, uint32 targetID)
++{
++    // consider.OnKillRightChange(set, whenTimestamp, fromID, toID)  fromID holds the right on toID
++    for (uint32 id : {holderID, targetID}) {
++        Client* pClient(sEntityList.FindClientByCharID(id));
++        if (pClient == nullptr)
++            continue;
++        PyTuple* payload = new PyTuple(4);
++            payload->SetItem(0, new PyBool(set));
++            payload->SetItem(1, new PyLong(when));
++            payload->SetItem(2, new PyInt(holderID));
++            payload->SetItem(3, new PyInt(targetID));
++        pClient->SendNotification("OnKillRightChange", "charid", &payload);
++    }
+ }
+diff --git a/src/eve-server/system/CrimeWatch.h b/src/eve-server/system/CrimeWatch.h
+index a47b24c..a957cdb 100644
+--- a/src/eve-server/system/CrimeWatch.h
++++ b/src/eve-server/system/CrimeWatch.h
+@@ -4,6 +4,14 @@
+  *
+  * @Author:         Allan
+  * @date:   13 March 2016
++ *
++ * Crucible (pre-Retribution) crime rules.
++ *  everything is built on aggression flags between two parties: aggressor -> victim (a character or a corporation),
++ *  each kept for 15 minutes after the last act.  the victim, and anyone the client lets attack freely, may shoot back.
++ *  a crime in empire space (0.1 - 1.0) also gives the Global Criminal Countdown (victim 'None' on the wire):
++ *  anyone may shoot the criminal's ship, CONCORD destroys it in 0.5 - 1.0, and gate/station sentries shoot it.
++ *  the client keeps the same table (michelle.aggressors) and works out its warnings, overview flags and the
++ *  neocom countdown from it, so every change is pushed to the pilots in the aggressor's system.
+  */
+ 
+ 
+@@ -12,22 +20,131 @@
+ 
+ 
+ #include "eve-common.h"
++#include "utils/Singleton.h"
++
++class Character;
++class Client;
++class PyDict;
++class PyRep;
++class PyTuple;
++class SystemEntity;
++class SystemManager;
++
++namespace Crime {
++    // the client's util.SecurityClassFromLevel()
++    namespace SecClass {
++        enum {
++            Null    = 0,
++            Low     = 1,
++            High    = 2
++        };
++    }
++}
+ 
+ class CrimeWatch
++: public Singleton<CrimeWatch>
+ {
+ public:
+     CrimeWatch();
+     ~CrimeWatch()   { /* do nothing here */ }
+ 
+-    void Init();
+-protected:
++    int Initialize();
++
++    /* system security as the client sees it.  true sec rounded to 0.1, with 0 < sec < 0.05 counted as 0.05 (pseudoSecurity) */
++    static float SecurityLevel(float trueSec);
++    static uint8 SecurityClass(float trueSec);
++
++    /* aggressive acts.  these decide whether the act is legal, set the flags and tell everyone who needs to know */
++    // attacking: weapons, drones, e-war, neutralizers, targeted area effects...
++    void OffensiveAct(Client* pAggressor, SystemEntity* pTarget);
++    // remote repair, energy transfer, sensor/tracking links...
++    void AssistanceAct(Client* pHelper, SystemEntity* pTarget);
++    // took items from a container or wreck without loot rights
++    void Theft(Client* pThief, uint32 ownerID, uint32 ownerCorpID);
++    // an NPC damaged this pilot's ship (keeps a logging-off ship in space a little longer)
++    void NPCAggression(uint32 charID);
++
++    /* GM testing (/crime) */
++    // the pilot attacks a civilian: an innocent who isn't in the system.  goes through the same rules as a real attack
++    void SimulateCrime(Client* pAggressor);
++    // an NPC (or any other entity) attacks someone it shouldn't.  NPCs never do this on their own
++    void EntityCrime(SystemEntity* pAggressor, SystemEntity* pVictim);
++
++    /* queries */
++    bool IsCriminal(uint32 charID);                             // live global criminal countdown
++    bool IsFlaggedTo(uint32 aggressorID, uint32 victimID);       // aggressor has a live flag towards victim (char or corp)
++    bool IsOutlaw(float secStatus)                               { return (roundf(secStatus * 10.0f) / 10.0f) <= -5.0f; }
++    // seconds left before this pilot may dock or jump after an aggressive act.  0 = free to go
++    uint32 WeaponsTimer(uint32 charID);
++    // how long a ship logging off in space stays there (seconds).  0 = warp off and vanish at the normal rate
++    uint32 LogoffTimer(uint32 charID, bool& npcOnly);
++    // can this pilot use gates/stations?  throws the client's error if not
++    void CheckDockOrJump(Client* pClient, bool jump);
++
++    /* client data */
++    PyDict* GetCriminalTimeStamps(uint32 charID);               // aggressionMgr.GetCriminalTimeStamps
++    void GetAggressors(SystemManager* pSystem, std::map<int32, PyRep*>& into);  // ballpark SetState 'aggressors'
++    PyTuple* GetKillRights(uint32 charID);                      // standing2.GetMyKillRights
++    bool CanTakeFrom(uint32 charID, uint32 ownerID);            // aggressionMgr.CheckLootRightExceptions
++
++    /* events */
++    // the pilot's ship appeared in space: undock, gate jump, login, boarding.  a live GCC brings CONCORD
++    void OnEnterSpace(Client* pClient);
++    // a player's ship (or pod) was destroyed.  sec status penalties, kill rights, kill right use.  killerCharID 0 for NPCs
++    void OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem);
++    // security status gain for killing an NPC (only the best NPC per system per 15 minutes counts).  returns the gain
++    float OnNPCKilled(Character* pChar, InventoryItemRef npcRef, SystemManager* pSystem);
++
++    /* security status.  this is the character's standing from CONCORD as far as the client is concerned */
++    void SetSecurityStatus(uint32 charID, float newSec, const std::string& reason, uint16 eventType);
+ 
+ private:
+-    Timer t_crimFlag;
+-    Timer t_aggression;
+-    Timer t_weapon;
+-    Timer t_session;
+-    Timer t_killRight;
++    struct Record {
++        std::map<uint32, int64> victims;    // victimID (0 = global criminal) -> time of the last act
++        int64 lastAct = 0;                  // last aggressive act (weapons timer)
++        int64 lastPvP = 0;                  // last time this pilot was in a fight with another player
++        int64 lastNPC = 0;                  // last time an NPC damaged this pilot
++    };
++    std::map<uint32, Record> m_records;
++
++    // illegal aggressors of each victim (for ship kill penalties and kill rights)
++    std::map<uint32, std::map<uint32, int64>> m_illegal;    // victimCharID -> aggressorCharID -> time
++    // kill rights: holder -> target -> expiry
++    std::map<uint32, std::map<uint32, int64>> m_killRights;
++    // npc kill sec status gain window: charID -> systemID -> (window start, best gain)
++    std::map<uint32, std::map<uint32, std::pair<int64, float>>> m_secGain;
++
++    int64 FlagTime();
++    int64 CrimTime();
++    bool Live(int64 time, int64 duration);
++    void Flag(uint32 aggressorID, uint32 victimID, int64 now);
++    void Notify(uint32 charID);
++    PyDict* MakeVictimDict(uint32 charID);
++    void SendToSystem(SystemManager* pSystem, uint32 charID, PyDict* victims);
++
++    // who owns what, for the legality rules
++    struct Owner {
++        uint32 charID = 0;              // player-owned: the character
++        uint32 corpID = 0;
++        uint32 allianceID = 0;
++        int32 warFactionID = 0;
++        float secStatus = 0.0f;
++        bool pod = false;
++        bool concord = false;           // CONCORD, attacking them is a crime
++        bool sentry = false;            // gate/station sentry (attacking flags you to its owner)
++        bool structure = false;         // player structure (owned by corpID)
++    };
++    bool GetOwner(SystemEntity* pSE, Owner& into);
++    void Act(Client* pAggressor, SystemManager* pSystem, const Owner& target);
++    bool CanAttackFreely(Client* pAggressor, const Owner& target);
++    void SecPenalty(Client* pAggressor, float victimSec, float basePercent, float minPercent, float level, const char* what);
++    void GrantKillRight(uint32 holderID, uint32 targetID);
++    void RemoveKillRight(uint32 holderID, uint32 targetID);
++    void SendKillRightChange(bool set, int64 when, uint32 holderID, uint32 targetID);
+ };
+ 
+-#endif  // EVEMU_SERVER_CRIMEWATCH_H_
+\ No newline at end of file
++//Singleton
++#define sCrimeWatch \
++( CrimeWatch::get() )
++
++#endif  // EVEMU_SERVER_CRIMEWATCH_H_
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index 258e797..f5fb901 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -42,6 +42,10 @@
+ #include "system/Container.h"
+ #include "system/SystemBubble.h"
+ #include "system/cosmicMgrs/AnomalyMgr.h"
++#include "system/CrimeWatch.h"
++#include "npc/LawEnforcement.h"
++#include "character/CharacterDB.h"
++#include "StaticDataMgr.h"
+ 
+ /*
+ DAMAGE
+@@ -131,6 +135,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
+     // aggressive drones and drones guarding us respond to this
+     DroneSE::OnAggression(this, d.srcSE);
+ 
++    // a pilot shot at by NPCs keeps their ship in space a little longer if they log off
++    if (HasPilot() and (d.srcSE != nullptr) and (d.srcSE->IsNPCSE() or d.srcSE->IsSentrySE()))
++        sCrimeWatch.NPCAggression(GetPilot()->GetCharacterID());
++
+     if (is_log_enabled(DAMAGE__MESSAGE)) {
+         if (d.srcSE->IsNPCSE()) {
+             _log(DAMAGE__MESSAGE, "%s(%u): Initializing %.2f damage from NPC %s(%u) with K:%.3f, T:%.3f, EM:%.3f, E:%.3f",\
+@@ -451,6 +459,12 @@ void ShipSE::Killed(Damage &fatal_blow) {
+     std::string wreck_name = m_self->itemName() + " Wreck";
+ 
+     if (!m_self->HasPilot()) {
++        // a ship left in space by a pilot who logged off is still theirs
++        uint32 ownerID(m_system->GetLaw()->GetLoggedOffOwner(m_self->itemID()));
++        if (ownerID != 0) {
++            KilledLoggedOff(fatal_blow, killer, killerID, pClient, ownerID, wreckTypeID, wreck_name, wreckPosition);
++            return;
++        }
+         // Spawn a wreck for the Ship that was destroyed:
+         ItemData wreckItemData(wreckTypeID, killerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
+         WreckContainerRef wreckItemRef = sItemFactory.SpawnWreckContainer( wreckItemData );
+@@ -493,20 +507,9 @@ void ShipSE::Killed(Damage &fatal_blow) {
+     if (pPilot == nullptr)
+         return;    //  make error here
+ 
+-    if (pClient != nullptr)
+-        if (m_system->GetSystemSecurityRating() > 0) {
+-            /* http://www.eveinfo.net/wiki/ind~4067.htm
+-             *  relative_sec_status_penalty = base_penalty * system_truesec * (1 + (victim_sec_status - agressor_sec_status) / 90)
+-             *  The actual drop in security status seen by the attacker is a function of their current security status and the relative penalty:
+-             *  security status loss = relative_penalty * (agressor_sec_status + 10)
+-             */
+-            /** @todo (allan) check for faction/corp status modifiers here. */
+-            double modifier = (1 + ((pPilot->GetSecurityRating() - pClient->GetSecurityRating()) / 90));
+-            double penalty = 6.0f * m_system->GetSystemSecurityRating() * modifier;
+-            double loss = penalty * ( pClient->GetSecurityRating() + 10);
+-            loss *= sConfig.rates.secRate;
+-            pClient->GetChar()->secStatusChange( loss );
+-        }
++    // security status penalties for everyone who attacked this pilot illegally, kill rights (CrimeWatch)
++    sCrimeWatch.OnShipDestroyed(pPilot->GetCharacterID(), pPilot->InPod(), pPilot->GetSecurityRating(),
++            ((pClient != nullptr) ? pClient->GetCharacterID() : 0), m_system);
+ 
+     /* populate kill data for killMail and save to db  -allan 01May16  --updated 13July17 */
+     KillData data = KillData();
+@@ -631,7 +634,9 @@ void ShipSE::Killed(Damage &fatal_blow) {
+         // this method will reset char variables to last clone state after being podded.  NOTE  *** NOT TESTED YET ***
+         pPilot->ResetAfterPodded();
+     } else {
+-        PayInsurance();
++        // since Crucible, ships destroyed by CONCORD aren't insured
++        if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
++            PayInsurance();
+ 
+         m_destiny->SendJettisonPacket();
+ 
+@@ -676,3 +681,142 @@ void ShipSE::Killed(Damage &fatal_blow) {
+             cur->Move(wreckItemRef->itemID(), flagNone); // populate wreck with items that survived
+     }
+ }
++
++/* a ship (or pod) left in space by a pilot who logged off (logoff timer) was destroyed.  the pilot isn't here, so this
++ *  does what the normal path does through the character: killmail, wreck, insurance, and a new pod in space (or a clone
++ *  in their home station, for a pod).  the character item is moved out before the ship and its contents are deleted
++ */
++void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 killerID, Client* pKillerClient, uint32 ownerID,
++                             uint32 wreckTypeID, const std::string& wreck_name, const GPoint& wreckPosition)
++{
++    m_system->GetLaw()->LoggedOffShipKilled(m_self->itemID());
++    CharacterRef cRef(sItemFactory.GetCharacterRef(ownerID));
++    bool pod(m_self->groupID() == EVEDB::invGroups::Capsule);
++    uint32 locationID(GetLocationID());
++    sCrimeWatch.OnShipDestroyed(ownerID, pod, ((cRef.get() != nullptr) ? cRef->GetSecurityRating() : 0.0f),
++            ((pKillerClient != nullptr) ? pKillerClient->GetCharacterID() : 0), m_system);
++
++    KillData data = KillData();
++        data.solarSystemID = m_system->GetID();
++        data.victimCharacterID = ownerID;
++        data.victimCorporationID = m_corpID;
++        data.victimAllianceID = m_allyID;
++        data.victimFactionID = m_warID;
++        data.victimShipTypeID = m_self->typeID();
++        data.finalCharacterID = killerID;
++        data.finalCorporationID = killer->GetCorporationID();
++        data.finalAllianceID = killer->GetAllianceID();
++        data.finalFactionID = (killer->GetWarFactionID() > 500021 ? 500021 : killer->GetWarFactionID());
++        data.finalShipTypeID = killer->GetTypeID();
++        data.finalWeaponTypeID = ((fatal_blow.weaponRef.get() != nullptr) ? fatal_blow.weaponRef->typeID() : killer->GetTypeID());
++        data.finalSecurityStatus = 0;
++        data.finalDamageDone = fatal_blow.GetTotal();
++        data.victimDamageTaken = m_self->GetAttribute(AttrHP).get_int() + m_self->GetAttribute(AttrArmorHP).get_int()
++                               + m_self->GetAttribute(AttrShieldCapacity).get_int();
++    std::stringstream blob;
++    blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/></items>";
++    data.killBlob = blob.str().c_str();
++    data.killTime = GetFileTimeNow();
++    data.moonID = 0;
++    ServiceDB::SaveKillOrLoss(data);
++
++    if (pod) {
++        MapDB::AddPodKill(locationID);
++        std::string corpse_name(((cRef.get() != nullptr) ? cRef->itemName() : std::string("Unknown")) + "'s Frozen Corpse");
++        ItemData corpseItemData(10041, ownerID, locationID, flagNone, corpse_name.c_str(), wreckPosition);
++        InventoryItemRef corpseRef(sItemFactory.SpawnItem(corpseItemData));
++        if (corpseRef.get() != nullptr) {
++            DBSystemDynamicEntity corpseEntity = DBSystemDynamicEntity();
++                corpseEntity.allianceID = m_allyID;
++                corpseEntity.categoryID = EVEDB::invCategories::Celestial;
++                corpseEntity.corporationID = m_corpID;
++                corpseEntity.factionID = m_warID;
++                corpseEntity.groupID = EVEDB::invGroups::Biomass;
++                corpseEntity.itemID = corpseRef->itemID();
++                corpseEntity.itemName = corpse_name;
++                corpseEntity.ownerID = ownerID;
++                corpseEntity.typeID = 10041;
++                corpseEntity.position = wreckPosition;
++            m_system->BuildDynamicEntity(corpseEntity);
++        }
++        // they wake up in their clone
++        uint32 cloneStationID(0);
++        if ((cRef.get() != nullptr) and CharacterDB::GetCharHomeStation(ownerID, cloneStationID) and (cloneStationID != 0)) {
++            std::string podName(cRef->itemName() + "'s Capsule");
++            ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
++            ShipItemRef newPod(sItemFactory.SpawnShip(podItem));
++            if (newPod.get() != nullptr) {
++                newPod->ChangeSingleton(true);
++                newPod->Move(cloneStationID, flagHangar);
++                newPod->SaveShip();
++                cRef->Move(cloneStationID, flagNone);
++                cRef->SetActiveShip(newPod->itemID());
++                cRef->SetActivePod(newPod->itemID());
++                SystemData sysData;
++                sDataMgr.GetSystemData(sDataMgr.GetStationSystem(cloneStationID), sysData);
++                cRef->SetLocation(cloneStationID, sysData);
++                cRef->ResetClone();
++            }
++        }
++        return;
++    }
++
++    // since Crucible, ships destroyed by CONCORD aren't insured
++    if (!(killer->IsNPCSE() and killer->GetNPCSE()->IsConcord()))
++        PayInsurance();
++    m_destiny->SendJettisonPacket();
++
++    // half of what was aboard survives, rigs never do
++    std::vector<InventoryItemRef> survivedItems;
++    std::map<uint32, InventoryItemRef> contents;
++    GetShipItemRef()->GetMyInventory()->GetInventoryMap(contents);
++    for (auto cur : contents) {
++        if ((cRef.get() != nullptr) and (cur.first == cRef->itemID()))
++            continue;   // the pilot
++        if (IsRigSlot(cur.second->flag()))
++            continue;
++        if (IsEven(MakeRandomInt(0, 100)))
++            survivedItems.push_back(cur.second);
++    }
++
++    // they wake up in their pod, where the ship was.  the pod appears when they log in
++    if (cRef.get() != nullptr) {
++        std::string podName(cRef->itemName() + "'s Capsule");
++        ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
++        ShipItemRef newPod(sItemFactory.SpawnShip(podItem));
++        if (newPod.get() != nullptr) {
++            GPoint podPosition(wreckPosition);
++            podPosition.MakeRandomPointOnSphere(GetShipItemRef()->radius() + newPod->radius() + MakeRandomFloat(100, 200));
++            newPod->ChangeSingleton(true);
++            newPod->Move(m_system->GetID(), flagCapsule);
++            newPod->SetPosition(podPosition);
++            newPod->SaveShip();
++            cRef->Move(newPod->itemID(), flagPilot);
++            cRef->SetActiveShip(newPod->itemID());
++            cRef->SetActivePod(newPod->itemID());
++            cRef->SaveCharacter();
++        }
++    }
++
++    ItemData wreckItemData(wreckTypeID, ownerID, locationID, flagNone, wreck_name.c_str(), wreckPosition, itoa(m_allyID));
++    WreckContainerRef wreckItemRef(sItemFactory.SpawnWreckContainer(wreckItemData));
++    if (wreckItemRef.get() == nullptr)
++        return;
++    DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();
++        wreckEntity.allianceID = killer->GetAllianceID();
++        wreckEntity.categoryID = EVEDB::invCategories::Celestial;
++        wreckEntity.corporationID = killer->GetCorporationID();
++        wreckEntity.factionID = sDataMgr.GetWreckFaction(wreckTypeID);
++        wreckEntity.groupID = EVEDB::invGroups::Wreck;
++        wreckEntity.itemID = wreckItemRef->itemID();
++        wreckEntity.itemName = wreck_name;
++        wreckEntity.ownerID = ownerID;
++        wreckEntity.typeID = wreckTypeID;
++        wreckEntity.position = wreckPosition;
++    if (!m_system->BuildDynamicEntity(wreckEntity, m_self->itemID())) {
++        wreckItemRef->Delete();
++        return;
++    }
++    for (auto cur : survivedItems)
++        cur->Move(wreckItemRef->itemID(), flagNone);
++}
+diff --git a/src/eve-server/system/SystemEntity.cpp b/src/eve-server/system/SystemEntity.cpp
+index 0bb5355..2d52136 100644
+--- a/src/eve-server/system/SystemEntity.cpp
++++ b/src/eve-server/system/SystemEntity.cpp
+@@ -24,6 +24,7 @@
+     Rewrite:    Allan
+ */
+ 
++#include "system/CrimeWatch.h"
+ #include "eve-server.h"
+ 
+ #include "ConsoleCommands.h"
+@@ -218,34 +219,15 @@ void SystemEntity::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 o
+ 
+ /** @todo (allan)  this doesnt need to be here */
+ void SystemEntity::AwardSecurityStatus(InventoryItemRef iRef, Character* pChar) {
+-    //New Status = ((10 - Old Status) * Sec Incr) + Old Status
+-    double oldSec = pChar->GetSecurityRating();
+-    EvilNumber maxGain = 0;
+-    if (iRef->HasAttribute(AttrEntitySecurityMaxGain, maxGain))
+-        if (oldSec > maxGain.get_double())
+-            return;
+-    float killBonus = iRef->GetAttribute(AttrEntitySecurityStatusKillBonus).get_float();
+-    double secAward = (((10 - oldSec) * killBonus) + oldSec) / 100;
+-    secAward *=  (1 + (0.05f * (pChar->GetSkillLevel(EvESkill::FastTalk, true))));      // 5% increase
+-    if (killBonus and secAward) {
+-        secAward *= sConfig.rates.secRate;
+-        sLog.Magenta("SE::AwardSecurityStatus()"," %s(%u): killBonus: %f.  oldSec: %f.  secAward: %f.",
+-                     GetName(), iRef->itemID(), killBonus, oldSec, secAward);
+-        pChar->secStatusChange( secAward );
+-        std::string msg = "Status Change for killing";
+-        if (iRef->HasPilot()) {
+-            msg += iRef->GetPilot()->GetName();
+-            msg += " in ";
+-            msg += m_system->GetNameStr();
+-            sStandingMgr.UpdateStandings(iRef->itemID(), pChar->itemID(), Standings::CombatShipKill, secAward, msg);
+-        } else {
+-            msg += " pirates in ";
+-            msg += m_system->GetNameStr();
+-            sStandingMgr.UpdateStandings(corpCONCORD, pChar->itemID(), Standings::LawEnforcement, secAward, msg);
+-            // decrease standings with faction of this npc kill
+-            sStandingMgr.UpdateStandings(iRef->ownerID(), pChar->itemID(), Standings::CombatShipKill, -secAward, msg);
+-        }
+-    }
++    // security status: (10 - current) * the npc's security percentage, best npc per system per 15 minutes (CrimeWatch)
++    float secAward(sCrimeWatch.OnNPCKilled(pChar, iRef, m_system));
++    if (secAward <= 0)
++        return;
++    sLog.Magenta("SE::AwardSecurityStatus()"," %s(%u): secAward: %f.", GetName(), iRef->itemID(), secAward);
++    // killing pirates costs a little standing with their faction
++    std::string msg("Status Change for killing pirates in ");
++    msg += m_system->GetNameStr();
++    sStandingMgr.UpdateStandings(iRef->ownerID(), pChar->itemID(), Standings::CombatShipKill, -secAward, msg);
+ 
+     /** @todo msg need work for details to appear correctly.  currently working, but could be better. (incomplete, but working)
+      * see data in eve/common/script/util/eveFormat.py:300 for details
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 02151c0..83cfb4f 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -65,6 +65,9 @@
+ #include "system/cosmicMgrs/DungeonMgr.h"
+ #include "system/cosmicMgrs/IncursionMgr.h"
+ #include "system/cosmicMgrs/SpawnMgr.h"
++#include "npc/LawEnforcement.h"
++#include "system/CrimeWatch.h"
++#include "ConsoleCommands.h"
+ #include "station/Outpost.h"
+ #include "services/ServiceManager.h"
+ 
+@@ -76,6 +79,7 @@ m_anomMgr(new AnomalyMgr(this, svc)),
+ m_beltMgr(new BeltMgr(this, svc)),
+ m_dungMgr(new DungeonMgr(this, svc)),
+ m_spawnMgr(new SpawnMgr(this, svc)),
++m_law(new LawEnforcement(this, svc)),
+ m_loaded(false),
+ m_entityChanged(false),
+ m_docked(0),
+@@ -130,6 +134,7 @@ SystemManager::~SystemManager() {
+     SafeDelete(m_anomMgr);
+     SafeDelete(m_beltMgr);
+     SafeDelete(m_spawnMgr);
++    SafeDelete(m_law);
+ }
+ 
+ bool SystemManager::BootSystem() {
+@@ -163,6 +168,9 @@ bool SystemManager::BootSystem() {
+         if (cur.second ->IsOperSE())
+             cur.second->GetPOSSE()->Init();
+ 
++    // gate and station guns
++    m_law->Init();
++
+     // system is loaded.  check for items that need initialization
+     for (auto cur : m_ticEntities)
+         if (cur.second->IsPOSSE())
+@@ -265,6 +273,7 @@ bool SystemManager::ProcessTic() {
+         m_beltMgr->Process();
+     m_dungMgr->Process();
+     m_spawnMgr->Process();
++    m_law->Process();
+ 
+     // drones that reached their ship during this tick
+     ProcessDroneReturns();
+@@ -347,6 +356,9 @@ void SystemManager::UnloadSystem() {
+     /** @todo  this will throw on error.  if called from d'tor, this CANNOT throw.  fix it */
+     //PayBounties();
+     
++    // law enforcement forgets its entities (they're deleted below)
++    m_law->Close();
++
+     // unload belts, which saves and removes roids from system
+     m_beltMgr->ClearAll();
+     // close anomaly mgr, which saves and removes sigs from system
+@@ -1097,6 +1109,16 @@ void SystemManager::RemoveNPC(NPC* pNPC) {
+     pNPC->RemoveNPC();   // this deletes NPC from DB.  NPC's dont jump, so no reason to remove from system unless killed
+ }
+ 
++void SystemManager::RemoveDeadNPC(NPC* pNPC) {
++    if (pNPC == nullptr)
++        return;
++    auto itr = m_npcs.find(pNPC->GetID());
++    if (itr != m_npcs.end()) {
++        m_npcs.erase(itr);
++        sEntityList.RemoveNPC();
++    }
++}
++
+ void SystemManager::AddEntity(SystemEntity* pSE, bool addSignal/*true*/) {
+     if (pSE == nullptr)
+         return;
+@@ -1475,11 +1497,6 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
+         if (cur.second->IsTowerSE())
+             cur.second->GetTowerSE()->GetEffectState(*(into.effectStates));
+ 
+-        /**  @todo (allan)  this needs more work.  should be done same as damageState.  28.2.16
+-        //ss.aggressors is for players undocking/jumping with aggression (uses GetCriminalTimeStamps)  ** see notes in Client::GetAggressors()
+-        if (cur.second->HasPilot() and cur.second->HasAggression())
+-            ss.aggressors[ cur.first ] = cur.second->GetAggressors());
+-        */
+ 
+         /** @todo (allan)  to be written   -jumpbridges is a PyList */
+         //  if (cur.second->IsJumpBridgeSE)
+@@ -1518,6 +1535,9 @@ void SystemManager::MakeSetState(const SystemBubble* pBubble,  SetState& into) c
+         _log( DESTINY__SETSTATE_DECODE, "    Decoded:" );
+         Destiny::DumpUpdate( DESTINY__SETSTATE_DECODE, &( into.destiny_state->content() )[0], (uint32)into.destiny_state->content().size() );
+     }
++
++    // aggression flags of the pilots in this system: {aggressorID: {victimID or None: time}}
++    sCrimeWatch.GetAggressors(const_cast<SystemManager*>(this), into.aggressors);
+ }
+ 
+ void SystemManager::RemoveGlobalBall(uint32 itemID)
+@@ -1856,6 +1876,9 @@ void SystemManager::UpdateData()
+ // checks for if it is safe to mark the system for unloading
+ bool SystemManager::SafeToUnload()
+ {
++    // CONCORD on its way, or ships left in space by pilots who logged off
++    if (m_law->IsBusy() and !sConsole.IsShutdown())
++        return false;
+     for (auto cur: GetEntities() ) {
+         //If there are any ongoing operations by operational static structures, we don't want to unload the system until this is complete
+         if (cur.second->IsPOSSE()) {
+diff --git a/src/eve-server/system/SystemManager.h b/src/eve-server/system/SystemManager.h
+index 22ac471..9229fd0 100644
+--- a/src/eve-server/system/SystemManager.h
++++ b/src/eve-server/system/SystemManager.h
+@@ -50,6 +50,7 @@ class AnomalyMgr;
+ class BeltMgr;
+ class DungeonMgr;
+ class SpawnMgr;
++class LawEnforcement;
+ class EVEServiceManager;
+ 
+ class DynamicEntityFactory {
+@@ -113,6 +114,8 @@ public:
+     SpawnMgr* GetSpawnMgr()                             { return m_spawnMgr; }
+     AnomalyMgr* GetAnomMgr()                            { return m_anomMgr; }
+     DungeonMgr* GetDungMgr()                            { return m_dungMgr; }
++    // CONCORD, faction police, sentries, logged-off ships
++    LawEnforcement* GetLaw()                            { return m_law; }
+ 
+     // range is 0.1 for 1.0 system to 2.0 for -0.9 system
+     float GetSecValue()                                 { return m_secValue; }
+@@ -122,6 +125,8 @@ public:
+ 
+     void AddNPC(NPC* pNPC);
+     void RemoveNPC(NPC* pNPC);
++    // an NPC that was destroyed (and so already removed from space) is going away
++    void RemoveDeadNPC(NPC* pNPC);
+     void AddEntity(SystemEntity* pSE, bool addSignal=true);    // add entity to system, and (optionally) add signal to AnomalyMgr
+     void RemoveEntity(SystemEntity* pSE);   // this also removes SE* from bubble and sig from AnomalyMgr (if applicable)
+     void AddClient(Client* pClient, bool count=false, bool jump=false);
+@@ -195,6 +200,7 @@ private:
+     BeltMgr* m_beltMgr;         //we own this, never NULL.
+     DungeonMgr* m_dungMgr;      //we own this, never NULL.
+     SpawnMgr* m_spawnMgr;       //we own this, never NULL.
++    LawEnforcement* m_law;      //we own this, never NULL.
+ 
+     EVEServiceManager& m_services;
+     LSCService* m_lsc;
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 488b94a..d1a522b 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -263,12 +263,32 @@ boolean can use either 0/1 OR true/false.
+         <AnomalyFaction>0</AnomalyFaction><!-- force anomaly to this faction if !=0   -this is for testing dung spawn system -->
+     </debug>
+ 
+-    <crime><!-- not implemented yet -->
+-        <CrimFlagTime>900</CrimFlagTime> <!-- seconds  (15m default) -->
+-        <AggFlagTime>900</AggFlagTime> <!-- seconds (15m default) -->
+-        <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds (60s default) -->
+-        <CWSessionTime>60</CWSessionTime> <!-- seconds (60s default) -->
+-        <KillRightTime>900</KillRightTime> <!-- seconds (15m default) -->
++    <crime><!-- Crucible (pre-Retribution) crime rules, CONCORD, faction police, sentries and logoff timers -->
++        <Enabled>true</Enabled><!-- bool -->
++        <CrimFlagTime>900</CrimFlagTime> <!-- seconds the global criminal countdown lasts (15m default) -->
++        <AggFlagTime>900</AggFlagTime> <!-- seconds an aggression flag lasts (15m default) -->
++        <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds after an aggressive act before you may dock or jump (60s default) -->
++        <KillRightDays>30</KillRightDays> <!-- days a kill right lasts -->
++        <LogoffNPCTime>120</LogoffNPCTime> <!-- seconds a logged-off ship stays in space when NPCs were attacking it -->
++        <LogoffWarpTime>60</LogoffWarpTime> <!-- seconds a logged-off ship takes to warp off and vanish otherwise.  PvP aggression keeps it for AggFlagTime -->
++        <SecGainWindow>900</SecGainWindow> <!-- seconds.  only the best npc kill per system in this window raises security status -->
++        <SecAggressionPenalty>1.5</SecAggressionPenalty> <!-- % of the distance to -10, scaled by system security -->
++        <SecShipKillPenalty>6.0</SecShipKillPenalty>
++        <SecPodKillPenalty>37.5</SecPodKillPenalty>
++        <SecPodKillMinPenalty>12.5</SecPodKillMinPenalty>
++        <CriminalLockdown>true</CriminalLockdown><!-- criminals can't use gates or stations in empire space, except in a capsule -->
++        <Concord>true</Concord><!-- bool -->
++        <ConcordResponse>6,6,7,10,14,19</ConcordResponse><!-- response seconds in 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 systems -->
++        <ConcordWaves>false</ConcordWaves><!-- true: police officers and captains arrive first, the commander ConcordWaveDelay later -->
++        <ConcordWaveDelay>10</ConcordWaveDelay>
++        <ConcordLinger>60</ConcordLinger><!-- seconds CONCORD stays after the criminal's ship is gone -->
++        <FactionPolice>true</FactionPolice><!-- chase low security status pilots in high-sec -->
++        <PoliceDelay>15</PoliceDelay>
++        <PoliceTimeout>600</PoliceTimeout>
++        <Sentries>true</Sentries><!-- sentry guns at gates and stations in empire space -->
++        <SentriesPerGate>3</SentriesPerGate>
++        <SentriesPerStation>2</SentriesPerStation>
++        <SentryRange>150000</SentryRange><!-- meters -->
+     </crime>
+ 
+     <threads><!-- not implemented yet -->
+-- 
+2.43.0
+
