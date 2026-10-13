@@ -114,7 +114,8 @@ boolean can use either 0/1 OR true/false.
         <turretDamage>1.0</turretDamage><!-- PC turrets multiplier.  DO NOT USE 0.0 -->
         <turretRoF>1.0</turretRoF><!-- PC turrets multiplier.  DO NOT USE 0.0 -->
         <npcBountyMultiply>1.0</npcBountyMultiply><!-- only used if != 1.0 -->
-        <corpCost>20000000</corpCost>
+        <corpCost>1599800</corpCost><!-- isk to found a corporation.  Crucible: 1599800 (the client's const.corporationStartupCost, which its create corporation checks and messages show) -->
+        <allyCost>1000000000</allyCost><!-- isk to found an alliance.  Crucible: 1000000000 (the client's const.allianceCreationCost) -->
         <medalCreateCost>8000000</medalCreateCost>
         <medalAwardCost>5000000</medalAwardCost>
         <WorldDecay>120</WorldDecay><!-- in minutes (2 hour default - 250 max)-->

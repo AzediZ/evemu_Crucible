@@ -102,6 +102,11 @@ EVEServerConfig::EVEServerConfig()
     rates.missileRoF = 1.0;
     rates.turretDamage = 1.0;
     rates.turretRoF = 1.0;
+    /* Crucible corporation registration fee:  1,599,800 ISK, flat, plus Corporation Management I.  the client's own
+     *  const.corporationStartupCost = 1599800 (evelib/appConst.py), which its create corp checks and PlayerCantCreateCorporation
+     *  show (the client never asks the server), and the EVE University wiki "Corporations" page, revisions of 2011-10-20 and
+     *  2012-08-21.  the client's const.allianceCreationCost is 1,000,000,000 ISK (the wiki's "Alliances" page:  one billion ISK).
+     *  a higher corpCost works, but the client then still says 1,599,800 when it turns a player down */
     rates.corpCost = 1599800;
     rates.allyCost = 1000000000;
     rates.medalAwardCost = 5000000;
