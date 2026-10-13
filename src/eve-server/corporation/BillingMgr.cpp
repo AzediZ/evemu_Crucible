@@ -141,6 +141,15 @@ uint32 BillingMgr::PayingCorpFor(uint32 debtorID)
     return 0;
 }
 
+void BillingMgr::RequireBillViewer(Client* pClient)
+{
+    // wallet.py shows the bills tabs to AmAccountantOrJuniorAccountant() only (alliance svc:  AccountantToViewBills)
+    int64 roles = pClient->GetCorpRole();
+    if (CorpMgr::HasRole(roles, Corp::Role::Accountant) or CorpMgr::HasRole(roles, Corp::Role::JuniorAccountant))
+        return;
+    throw UserError("CrpAccessDenied").AddFormatValue("reason", new PyString("You must be an accountant or junior accountant to view bills."));
+}
+
 bool BillingMgr::GetBill(uint32 billID, BillData& into)
 {
     std::vector<BillData> bills;
@@ -276,14 +285,30 @@ void BillingMgr::NotifyPaid(const BillData& bill, uint32 payerID)
     SendBillReceived(bill.debtorID);
 }
 
-void BillingMgr::Settle(const BillData& bill, uint32 payerID, uint16 fromKey)
+bool BillingMgr::Settle(const BillData& bill, uint32 payerID, uint16 fromKey)
 {
-    std::string reason = "Bill payment";
-    // throws NotEnoughMoney / NotEnoughMoneyCorp
-    AccountService::TransferFunds(payerID, bill.creditorID, bill.amount, reason, EntryTypeFor(bill.billTypeID), bill.billID, fromKey);
-
+    // the bill is claimed (unpaid -> paid) before any money moves, so it is paid once only:  a second click, or a bill cancelled
+    //  or paid in the meantime, finds nothing to claim.  a failed transfer gives the claim back
     DBerror err;
-    sDatabase.RunQuery(err, "UPDATE bills SET paid = 1, paidDateTime = %lli WHERE billID = %u", (int64)GetFileTimeNow(), bill.billID);
+    uint32 rows(0);
+    if (!sDatabase.RunQuery(err, rows, "UPDATE bills SET paid = 1, paidDateTime = %lli WHERE billID = %u AND paid = 0",
+                            (int64)GetFileTimeNow(), bill.billID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+        return false;
+    }
+    if (rows == 0)
+        return false;
+
+    std::string reason = "Bill payment";
+    try {
+        // throws NotEnoughMoney / NotEnoughMoneyCorp
+        AccountService::TransferFunds(payerID, bill.creditorID, bill.amount, reason, EntryTypeFor(bill.billTypeID),
+                                      bill.billID, fromKey);
+    } catch (...) {
+        sDatabase.RunQuery(err, "UPDATE bills SET paid = 0, paidDateTime = 0 WHERE billID = %u AND paid = 1", bill.billID);
+        throw;
+    }
     m_outOfMoney.erase(bill.billID);
 
     std::map<uint8, std::pair<BillHandler, BillHandler>>::iterator itr = m_handlers.find(bill.billTypeID);
@@ -292,6 +317,7 @@ void BillingMgr::Settle(const BillData& bill, uint32 payerID, uint16 fromKey)
 
     NotifyPaid(bill, payerID);
     _log(CORP__INFO, "BillingMgr::Settle() - bill %u of %.2f paid by %u", bill.billID, bill.amount, payerID);
+    return true;
 }
 
 void BillingMgr::PayBill(Client* pClient, uint32 billID, uint16 fromAccountKey)
@@ -305,7 +331,8 @@ void BillingMgr::PayBill(Client* pClient, uint32 billID, uint16 fromAccountKey)
     if (IsCharacterID(bill.debtorID)) {
         if (bill.debtorID != pClient->GetCharacterID())
             throw CustomError("That is not your bill.");
-        Settle(bill, bill.debtorID, Account::KeyType::Cash);
+        if (!Settle(bill, bill.debtorID, Account::KeyType::Cash))
+            throw CustomError("That bill has already been settled.");
         return;
     }
 
@@ -318,7 +345,8 @@ void BillingMgr::PayBill(Client* pClient, uint32 billID, uint16 fromAccountKey)
     if ((fromAccountKey < Account::KeyType::Cash) or (fromAccountKey > Account::KeyType::Cash7))
         fromAccountKey = Account::KeyType::Cash;
 
-    Settle(bill, corpID, fromAccountKey);
+    if (!Settle(bill, corpID, fromAccountKey))
+        throw CustomError("That bill has already been settled.");
 }
 
 bool BillingMgr::TryAutoPay(const BillData& bill)
@@ -341,8 +369,8 @@ bool BillingMgr::TryAutoPay(const BillData& bill)
         key = Account::KeyType::Cash;
 
     try {
-        Settle(bill, corpID, key);
-        return true;
+        // false:  paid or cancelled meanwhile, nothing owed
+        return Settle(bill, corpID, key);
     } catch (...) {
         // "{billType} could not be paid automatically" once;  the bill goes overdue unless someone pays it
         if (m_outOfMoney.insert(bill.billID).second) {

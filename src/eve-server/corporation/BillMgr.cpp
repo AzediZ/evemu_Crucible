@@ -54,10 +54,12 @@ PyResult BillMgr::GetBillTypes(PyCallArgs& call) {
 
 PyResult BillMgr::GetCorporationBills(PyCallArgs &call) {
     // wallet:  bills payable by the corp (accountants)
+    BillingMgr::RequireBillViewer(call.client);
     return BillingMgr::GetBillsPayable(call.client->GetCorporationID());
 }
 
 PyResult BillMgr::GetCorporationBillsReceivable(PyCallArgs &call) {
+    BillingMgr::RequireBillViewer(call.client);
     return BillingMgr::GetBillsReceivable(call.client->GetCorporationID());
 }
 

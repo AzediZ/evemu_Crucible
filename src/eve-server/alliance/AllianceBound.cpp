@@ -277,6 +277,9 @@ PyResult AllianceBound::GetBillBalance(PyCallArgs &call, PyInt* billID)
     _log(ALLY__CALL, "AllianceBound::Handle_GetBillBalance() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
+    AllianceManager::RequireMember(call.client, m_allyID);
+    BillingMgr::RequireBillViewer(call.client);
+
     BillData bill = BillData();
     if (!BillingMgr::GetBill(billID->value(), bill) or (bill.debtorID != m_allyID))
         return new PyFloat(0);
@@ -289,6 +292,9 @@ PyResult AllianceBound::GetBills(PyCallArgs &call)
     _log(ALLY__CALL, "AllianceBound::Handle_GetBills() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
 
+    AllianceManager::RequireMember(call.client, m_allyID);
+    BillingMgr::RequireBillViewer(call.client);
+
     return BillingMgr::GetBillsPayable(m_allyID);
 }
 
@@ -297,6 +303,9 @@ PyResult AllianceBound::GetBillsReceivable(PyCallArgs &call)
     //   return self.GetMoniker().GetBillsReceivable()
     _log(ALLY__CALL, "AllianceBound::Handle_GetBillsReceivable() size=%lli", call.tuple->size());
     call.Dump(ALLY__CALL_DUMP);
+
+    AllianceManager::RequireMember(call.client, m_allyID);
+    BillingMgr::RequireBillViewer(call.client);
 
     return BillingMgr::GetBillsReceivable(m_allyID);
 }

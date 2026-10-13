@@ -79,6 +79,8 @@ public:
 
     // corp -> itself, alliance -> its executor corp, character -> 0
     static uint32 PayingCorpFor(uint32 debtorID);
+    // the corp and alliance bill lists are for accountants and junior accountants (and directors).  throws CrpAccessDenied
+    static void RequireBillViewer(Client* pClient);
     static bool GetBill(uint32 billID, BillData& into);
     // sovereignty:  daily upkeep of a claimed system (claim marker, hub and its upgrades), the end of the billing period now is in,
     //  and the prorated upkeep charged when an upgrade is installed (throws NotEnoughMoneyCorp)
@@ -90,8 +92,9 @@ public:
     static PyRep* GetBillsReceivable(uint32 creditorID);
 
 private:
-    // takes the money, marks the bill paid, runs the paid handler and tells the payer
-    void Settle(const BillData& bill, uint32 payerID, uint16 fromKey);
+    // marks the bill paid, takes the money, runs the paid handler and tells the payer.  false when the bill is no longer unpaid
+    //  (paid or cancelled meanwhile);  throws NotEnoughMoney / NotEnoughMoneyCorp, leaving the bill unpaid
+    bool Settle(const BillData& bill, uint32 payerID, uint16 fromKey);
     void NotifyIssued(const BillData& bill);
     void NotifyPaid(const BillData& bill, uint32 payerID);
     // OnBillReceived() to the debtor character or the paying corp's online accountants
