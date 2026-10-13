@@ -1182,6 +1182,8 @@ void FleetService::GetRandUnitIDs(uint32 fleetID, int32& wingID, int32& squadID)
 
 void FleetService::LeaveFleet(Client* pClient)
 {
+    if (pClient == nullptr)     // KickMember looks the pilot up by charID, and they may be offline
+        return;
     Character* pChar = pClient->GetChar().get();
     if (pChar == nullptr)
         return;
@@ -1191,6 +1193,11 @@ void FleetService::LeaveFleet(Client* pClient)
     SendFleetUpdate(pChar->fleetID(), "OnFleetLeave", tuple);
 
     RemoveMember(pClient);
+
+    // the leaver's own fleet boost ends with the fleet.  not while logging out, when the ship is on its way out too
+    ShipSE* pShipSE = pClient->GetShipSE();
+    if (pClient->IsLoaded() and (pShipSE != nullptr) and pShipSE->IsBoosted())
+        pShipSE->RemoveBoost();
 
     CharFleetData fleet = CharFleetData();
     //call updates on fleet session data
@@ -1206,12 +1213,14 @@ void FleetService::RemoveMember(Client* pClient)
     uint32 fleetID = pChar->fleetID();
 
     // update fleet data
+    //  leader and booster slots are matched by pointer.  the leader checks used to test fleetBooster() against the
+    //  Role values, so a leader who wasn't also the booster stayed in the slot after leaving (and after logging off)
     if (fleetID) {
         std::map<uint32, FleetData>::iterator fItr = m_fleetDataMap.find(fleetID);
         if (fItr != m_fleetDataMap.end()) {
-            if (pChar->fleetBooster() == Fleet::Booster::Fleet)
+            if (fItr->second.booster == pClient)
                 fItr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::FleetLeader)
+            if (fItr->second.leader == pClient)
                 fItr->second.leader = nullptr;
         }
     }
@@ -1220,9 +1229,9 @@ void FleetService::RemoveMember(Client* pClient)
     if (pChar->wingID()) {
         std::map<uint32, WingData>::iterator itr = m_wingDataMap.find(pChar->wingID());
         if (itr != m_wingDataMap.end()) {
-            if (pChar->fleetBooster() == Fleet::Booster::Wing)
+            if (itr->second.booster == pClient)
                 itr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::WingLeader)
+            if (itr->second.leader == pClient)
                 itr->second.leader = nullptr;
         }
     }
@@ -1232,9 +1241,9 @@ void FleetService::RemoveMember(Client* pClient)
         std::map<uint32, SquadData>::iterator itr = m_squadDataMap.find(pChar->squadID());
         if (itr != m_squadDataMap.end()) {
             itr->second.members.erase(pChar->itemID());
-            if (pChar->fleetBooster() == Fleet::Booster::Squad)
+            if (itr->second.booster == pClient)
                 itr->second.booster = nullptr;
-            if (pChar->fleetBooster() == Fleet::Role::SquadLeader)
+            if (itr->second.leader == pClient)
                 itr->second.leader = nullptr;
         }
     }
@@ -1245,6 +1254,11 @@ void FleetService::RemoveMember(Client* pClient)
             m_fleetMembers.erase(itr);
             break;
         }
+
+    // a fleet finder advert keeps the pilot who posted it, and the finder reads them for every listing
+    std::map<uint32, FleetAdvert>::iterator aItr = m_fleetAdvertMap.find(fleetID);
+    if ((aItr != m_fleetAdvertMap.end()) and (aItr->second.leader == pClient))
+        RemoveFleetAdvert(fleetID);
 }
 
 PyRep* FleetService::GetWings(uint32 fleetID)
