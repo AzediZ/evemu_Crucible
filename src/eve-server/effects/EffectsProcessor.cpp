@@ -18,6 +18,12 @@
 #include "ship/Ship.h"
 #include "ship/modules/GenericModule.h"
 
+#include <cstddef>
+#include <utility>
+#include <vector>
+
+#include "EVE_DogmaOrder.h"
+
 /*
  * # Effects Logging:
  * EFFECTS=0
@@ -309,21 +315,60 @@ bool FxProc::IsCharItemModifier(const fxData& data)
     return false;
 }
 
+bool FxProc::WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip)
+{
+    using namespace FX;
+    if (data.srcRef.get() == nullptr)
+        return false;
+    // group, owner and module-by-skill modifiers go on other items
+    if ((data.fxSrc == Source::Group) or (data.fxSrc == Source::Owner))
+        return false;
+    if ((data.fxSrc == Source::Skill) and (data.targLoc != Target::Self))
+        return false;
+    switch (data.targLoc) {
+        case Target::Self:
+            return true;
+        case Target::Ship:
+            return ((pShip != nullptr) and (static_cast<InventoryItem*>(pShip) == data.srcRef.get()));
+        case Target::Char:
+            return ((pChar != nullptr) and (static_cast<InventoryItem*>(pChar) == data.srcRef.get()));
+    }
+    return false;
+}
+
 void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update/*false*/, int8 pass/*FX::Pass::All*/)
 {
     double profileStartTime(GetTimeUSeconds());
     using namespace FX;
     //uint8 action = Action::dgmActInvalid;
-    for (auto cur : pItem->GetModifiers()) {  // k,v of assoc, data<math, src, targLoc, targAttr, srcAttr, grpID, typeID>
+    // the modifiers in math order, then made to read their own item's attributes after those are changed (EVE_DogmaOrder.h)
+    std::vector<std::pair<int8, fxData>> mods;
+    std::vector<DogmaOrder::Modifier> nodes;
+    mods.reserve(pItem->GetModifiers().size());
+    nodes.reserve(pItem->GetModifiers().size());
+    for (auto& cur : pItem->GetModifiers()) {
+        if (pass != Pass::All)
+            if (IsCharItemModifier(cur.second) != (pass == Pass::CharItems))
+                continue;
+        mods.push_back(cur);
+        DogmaOrder::Modifier node = DogmaOrder::Modifier();
+        if (cur.second.srcRef.get() != nullptr) {
+            node.srcItem = cur.second.srcRef->itemID();
+            node.srcAttr = cur.second.srcAttr;
+            node.targAttr = cur.second.targAttr;
+            node.writesSrc = WritesOwnItem(cur.second, pChar, pShip);
+            node.remove = cur.second.remove;
+        }
+        nodes.push_back(node);
+    }
+    for (std::size_t idx : DogmaOrder::Order(nodes)) {
+        std::pair<int8, fxData> cur(mods[idx]);  // k,v of assoc, data<math, src, targLoc, targAttr, srcAttr, grpID, typeID>
         /*
         if (cur.second.action) {
             action = cur.second.action;
             continue;
         } */
         //InventoryItemRef srcItemRef = cur.second.srcRef;
-        if (pass != Pass::All)
-            if (IsCharItemModifier(cur.second) != (pass == Pass::CharItems))
-                continue;
 
         std::vector<InventoryItemRef> itemRefVec;
         // affected target depends on source.  get source and target(s) here.

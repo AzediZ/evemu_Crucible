@@ -31,6 +31,9 @@ public:
     void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false, int8 pass=0);
     // modifiers whose targets are the character's own items (skills, implants, boosters)
     static bool     IsCharItemModifier(const fxData& data);
+    /* the modifier changes an attribute of the item it comes from (its source item).  ApplyEffects applies these before the
+     *  modifiers of that item reading the attribute (EVE_DogmaOrder.h) */
+    static bool     WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip);
     /* applies the owner-required-skill modifiers (missile/probe/drone bonuses from skills, implants, boosters, the hull and
      *  fitted modules) to an item that wasn't there when the ship's effects were processed: a charge loaded in space,
      *  a launched probe or bomb.  resets the target's attributes first */

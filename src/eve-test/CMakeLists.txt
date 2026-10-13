@@ -35,6 +35,7 @@ SET( npcai_SOURCE
      "npcai/NpcMathTest.cpp"
      "npcai/NpcPolishTest.cpp" )
 SET( utils_SOURCE
+     "utils/DogmaOrderTest.cpp"
      "utils/EvilNumberTest.cpp"
      "utils/SkillMathTest.cpp" )
 
