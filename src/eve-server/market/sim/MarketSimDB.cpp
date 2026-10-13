@@ -464,8 +464,11 @@ bool MarketSimDB::Flush(World& world, const std::vector<uint32>& cells, const st
     bool ok(true);
     std::vector<std::string> rows;
     // rows under old actor/node numbers would come back as stock of whatever has that number next time
-    if (replaceInventory)
+    if (replaceInventory) {
         ok = Exec("DELETE FROM mktSimInventory") and ok;
+        // the same for the cells of a node number nothing has now (a node added later would take their prices)
+        ok = Exec(Fmt("DELETE FROM mktSimCell WHERE nodeID > %u", (uint32)world.Nodes().size())) and ok;
+    }
 
     for (auto& a : world.Actors()) {
         const Ledger::Account* acct(world.GetLedger().FindAcct(a.actorID));
