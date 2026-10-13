@@ -19,6 +19,7 @@
 #include "../eve-common/EVE_Agent.h"
 #include "EVEServerConfig.h"
 #include "database/EVEDBUtils.h"
+#include "inventory/ItemFactory.h"
 #include "config/ConfigDB.h"
 #include "manufacturing/FactoryDB.h"
 #include "map/MapDB.h"
@@ -64,7 +65,8 @@ m_npcDivisions(nullptr)
     m_stationRegion.clear();
     m_stationSystem.clear();
     m_oreBySecClass.clear();
-    m_LootGroupTypeMap.clear();
+    m_LootNpcTypeMap.clear();
+    m_LootItemMap.clear();
     m_WrecksToTypesMap.clear();
 }
 
@@ -121,7 +123,8 @@ void StaticDataMgr::Clear()
     m_stationRegion.clear();
     m_stationSystem.clear();
     m_oreBySecClass.clear();
-    m_LootGroupTypeMap.clear();
+    m_LootNpcTypeMap.clear();
+    m_LootItemMap.clear();
     m_WrecksToTypesMap.clear();
     m_productToBp.clear();
     m_metaChildren.clear();
@@ -642,25 +645,39 @@ void StaticDataMgr::Populate()
     while (res->GetRow(row)) {
         //SELECT npcGroupID, itemGroupID, groupDropChance FROM lootGroup
         LootGroup lootGroup = LootGroup();
-        lootGroup.lootGroupID = row.GetInt(1);
-        lootGroup.dropChance = row.GetDouble(2);
-        m_LootGroupMap.emplace(row.GetInt(0), lootGroup);
+        lootGroup.lootGroupID = row.GetUInt(1);
+        lootGroup.dropChance = row.GetFloat(2);
+        m_LootGroupMap.emplace(row.GetUInt(0), lootGroup);
+    }
+    if (SystemDB::GetLootNpcTypes(*res)) {
+        while (res->GetRow(row)) {
+            //SELECT npcTypeID, itemGroupID, groupDropChance FROM lootNpcType
+            LootGroup lootGroup = LootGroup();
+            lootGroup.lootGroupID = row.GetUInt(1);
+            lootGroup.dropChance = row.GetFloat(2);
+            m_LootNpcTypeMap.emplace(row.GetUInt(0), lootGroup);
+        }
+    } else {
+        sLog.Warning("    StaticDataMgr", "lootNpcType is missing (run the migrations).  Officers, haulers and sleepers drop by their group only.");
     }
 
-    startTime = GetTimeMSeconds();
+    uint32 itemCount(0);
     SystemDB::GetLootGroupTypes(*res);
     while (res->GetRow(row)) {
-        //SELECT itemGroupID, itemID, itemMetaLevel, minAmount, maxAmount FROM lootItemGroup
-        LootGroupType GroupType = LootGroupType();
-        GroupType.lootGroupID = row.GetInt(0);
-        GroupType.typeID =  row.GetInt(1);
-        GroupType.metaLevel = row.GetInt(2);
-        GroupType.minQuantity = row.GetInt(3);
-        GroupType.maxQuantity = row.GetInt(4);
-        m_LootGroupTypeMap.emplace(row.GetInt(0), GroupType);
+        //SELECT itemGroupID, itemID, itemMetaLevel, itemDropChance, minAmount, maxAmount FROM lootItemGroup (published types)
+        Loot::Item item = Loot::Item();
+        item.typeID = row.GetUInt(1);
+        item.metaLevel = static_cast<uint8>(row.GetInt(2));
+        item.chance = row.GetDouble(3);
+        item.minQty = static_cast<uint32>(std::max<int32>(row.GetInt(4), 1));
+        item.maxQty = static_cast<uint32>(std::max<int32>(row.GetInt(5), 1));
+        m_LootItemMap[row.GetUInt(0)].push_back(item);
+        ++itemCount;
     }
-    sLog.Cyan("    StaticDataMgr", "%lu loot groups and %u loot group types loaded in %.3fms.",
-              m_LootGroupMap.size(), m_LootGroupTypeMap.size(), (GetTimeMSeconds() - startTime));
+    // a fixed npc.RngSeed makes the loot repeatable too
+    m_lootRng.Seed(sConfig.npc.RngSeed != 0 ? sConfig.npc.RngSeed : static_cast<uint32>(std::random_device()()));
+    sLog.Cyan("    StaticDataMgr", "%lu npc group pools, %lu npc type pools, %lu loot groups and %u loot items loaded in %.3fms.",
+              m_LootGroupMap.size(), m_LootNpcTypeMap.size(), m_LootItemMap.size(), itemCount, (GetTimeMSeconds() - startTime));
 
     startTime = GetTimeMSeconds();
     uint32 locationID = 0;
@@ -1025,58 +1042,45 @@ uint32 StaticDataMgr::GetWreckID(uint32 typeID)
     return 0;
 }
 
-void StaticDataMgr::GetLoot(uint32 groupID, std::vector<LootList>& lootList) {
+void StaticDataMgr::GetLoot(uint32 typeID, uint32 groupID, const Loot::Params& params, uint32 missileTypeID, std::vector<Loot::Drop>& drops)
+{
     double profileStartTime(GetTimeUSeconds());
 
-    float randChance(0.0f);
-    uint8 metaLevel(0);
-    std::vector<LootGroupType> lootGrpVec;
-    lootGrpVec.clear();
+    // the type's own pool (officers, hauler tiers, ...) replaces its group's
+    auto range = m_LootNpcTypeMap.equal_range(typeID);
+    if (range.first == range.second)
+        range = m_LootGroupMap.equal_range(groupID);
 
-    // Finds a range containing all elements whose key is k.
-    // pair<iterator, iterator> equal_range(const key_type& k)
-    auto range = m_LootGroupMap.equal_range(groupID);
+    std::vector<Loot::Group> pool;
+    double weights(0.0);
     for (auto it = range.first; it != range.second; ++it) {
-        _log(LOOT__INFO, "checking lootGroup %u with chance of %.2f", it->second.lootGroupID, it->second.dropChance);
-        // make lootMap of lootGroupID's
-        if (MakeRandomFloat(0, 1) < it->second.dropChance) {
-            randChance = MakeRandomFloat(0, 1);
-            metaLevel = 0;
-            if (randChance < 0.1) {
-                metaLevel = 4;
-            } else if (randChance < 0.25) {
-                metaLevel = 3;
-            } else if (randChance < 0.4) {
-                metaLevel = 2;
-            } else if (randChance < 0.6) {
-                metaLevel = 1;
-            }
-            /*need to figure out how to get faction loot for faction wrecks
-             *    elif meta_level == 7:
-             *        drop_chance = 0.15   # Faction stuff = 15%
-             *    elif meta_level == 8:
-             *        drop_chance = 0.15   # Faction projectiles = 15%
-             *    elif meta_level == 9:
-             *        drop_chance = 0.15   # Faction SB's and Missile launchers
-             */
+        auto itr = m_LootItemMap.find(it->second.lootGroupID);
+        if (itr == m_LootItemMap.end())
+            continue;
+        pool.push_back(Loot::Group{it->second.lootGroupID, it->second.dropChance, &itr->second});
+        weights += it->second.dropChance;
+    }
 
-            auto range2 = m_LootGroupTypeMap.equal_range(it->second.lootGroupID);
-            for (auto it2 = range2.first; it2 != range2.second; ++it2)
-                if (it2->second.metaLevel == metaLevel)
-                    lootGrpVec.push_back(it2->second);
-
-            if (!lootGrpVec.empty()) {
-                LootList loot_list;
-                uint16 i = MakeRandomInt(0, lootGrpVec.size());
-                loot_list.itemID = lootGrpVec[i].typeID;
-                loot_list.minDrop = lootGrpVec[i].minQuantity;
-                loot_list.maxDrop = lootGrpVec[i].maxQuantity;
-                lootList.push_back(loot_list);
-                _log(LOOT__INFO, "adding %u to lootList", lootGrpVec[i].typeID);
-                lootGrpVec.clear();
-            }
+    /* the missiles the npc fires (entityMissileTypeID) are one more group of its pool, weighted like its average group.
+     *  they drop as the T1 ammo of the loot tables does (npc.LootOwnMissileChance, npc.LootOwnMissileQty).  npc-only missiles
+     *  (unpublished:  sleepers' Phantasmata etc) never drop
+     */
+    std::vector<Loot::Item> ownMissile;
+    if ((missileTypeID != 0) and !pool.empty() and (sConfig.npc.LootOwnMissileChance > 0)) {
+        const ItemType* pType(sItemFactory.GetType(static_cast<uint16>(missileTypeID)));
+        if ((pType != nullptr) and pType->published() and (pType->marketGroupID() != 0)) {
+            ownMissile.push_back(Loot::Item{missileTypeID, 0, sConfig.npc.LootOwnMissileChance,
+                                            sConfig.npc.LootOwnMissileQty, sConfig.npc.LootOwnMissileQty});
+            pool.push_back(Loot::Group{0, weights / pool.size(), &ownMissile});
         }
     }
+
+    if (!pool.empty())
+        Loot::Roll(m_lootRng, params, pool, drops);
+
+    if (is_log_enabled(LOOT__INFO))
+        _log(LOOT__INFO, "GetLoot(type %u, group %u) - %u groups, rolls %i-%i, group max %u:  %u stacks", typeID, groupID,
+             (uint32)pool.size(), params.rollsMin, params.rollsMax, params.groupMax, (uint32)drops.size());
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::loot, GetTimeUSeconds() - profileStartTime);

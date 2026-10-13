@@ -23,6 +23,7 @@
 #include "../eve-common/EVE_POS.h"
 #include "destiny/DestinyStructs.h"
 #include "../eve-common/EVE_Market.h"
+#include "../eve-common/EVE_Loot.h"
 
 
 //struct CelestialObjectData;
@@ -78,7 +79,10 @@ public:
     bool                GetNPCClasses(uint8 sClass, std::vector<RatSpawnClass>& classMap);
     uint16              GetRandRatType(uint8 sClass, uint16 groupID);
     uint32              GetWreckID(uint32 typeID);  // returns wreck typeID based on given shipTypeID (incomplete, most ships done.)
-    void                GetLoot(uint32 groupID, std::vector<LootList>& lootList);
+    /* an npc's loot (EVE_Loot.h).  the pool is its type's lootNpcType groups, else its group's lootGroup groups.  missileTypeID
+     *  (the npc's entityMissileTypeID, 0 = none) joins the pool as one more group (npc.LootOwnMissileChance)
+     */
+    void                GetLoot(uint32 typeID, uint32 groupID, const Loot::Params& params, uint32 missileTypeID, std::vector<Loot::Drop>& drops);
 
     bool                IsRefinable(uint16 typeID);
     bool                IsRecyclable(uint16 typeID);
@@ -247,8 +251,10 @@ private:
     std::map<uint32, uint32>                            m_WrecksToTypesMap; // typeID/wreckTypeID
 
     /* loot data */
-    std::multimap<uint32, LootGroup>                    m_LootGroupMap;     // typeID/data
-    std::multimap<uint32, LootGroupType>                m_LootGroupTypeMap; // typeID/data
+    std::multimap<uint32, LootGroup>                    m_LootGroupMap;     // npc groupID/data
+    std::multimap<uint32, LootGroup>                    m_LootNpcTypeMap;   // npc typeID/data (replaces its group's pool)
+    std::map<uint32, std::vector<Loot::Item>>           m_LootItemMap;      // lootGroupID/items
+    Loot::Rng                                           m_lootRng;
 
     /* for pricing methods */
     std::map<uint16, std::string>                       m_salvage;          // typeID/name

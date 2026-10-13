@@ -302,7 +302,9 @@ boolean can use either 0/1 OR true/false.
         <RespawnTimer>1200</RespawnTimer><!-- sec.  a killed belt rat (not commanders, haulers or officers) respawns into its group this long after it died, plus RespawnJitter, while one of the group lives (chain ratting).  Crucible: 20-25 min.  1200 default -->
         <RespawnJitter>300</RespawnJitter><!-- sec.  random extra 0..RespawnJitter on each respawn.  300 default (20 min + U(0, 5) min) -->
         <RatFaction>0</RatFaction><!-- force spawn to this faction if !=0 -->
-        <LootDropChance>0.85</LootDropChance><!-- % chance for NPC to drop loot.  75% default -->
+        <LootDropChance>1.0</LootDropChance><!-- chance an npc wreck gets its loot rolls at all.  the npc's data already makes empty wrecks (entityEquipmentMin/Max rolls, loot table chances).  1.0 default -->
+        <LootOwnMissileChance>0.25</LootOwnMissileChance><!-- chance a loot roll on the npc's own missiles (entityMissileTypeID) drops them.  0 = never.  0.25 default (the loot tables' T1 ammo) -->
+        <LootOwnMissileQty>100</LootOwnMissileQty><!-- stack of own missiles such a roll drops.  100 default (the loot tables' T1 ammo) -->
         <UseDamageMultiplier>true</UseDamageMultiplier><!-- bool  - use the damage multiplier in npc data -->
         <!-- chance for a belt/gate npc to follow its target when that ship warps off.  Crucible rats never did (0.0 default).  >0 enables -->
         <WarpFollowChance>0.0</WarpFollowChance>

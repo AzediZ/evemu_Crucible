@@ -346,7 +346,8 @@ void NPC::Killed(Damage &damage) {
         _log(PHYSICS__TRACE, "NPC::Killed() - NPC %s(%u) Position: %.2f,%.2f,%.2f.  Wreck %s(%u) Position: %.2f,%.2f,%.2f.", \
                 GetName(), GetID(), x(), y(), z(), wreckItemRef->name(), wreckItemRef->itemID(), wreckPosition.x, wreckPosition.y, wreckPosition.z);
 
-    if ((MakeRandomFloat() < sConfig.npc.LootDropChance) or (m_allyID == factionRogueDrones))
+    // what drops (and how often nothing does) is the npc's data;  LootDropChance can only thin it out
+    if ((sConfig.npc.LootDropChance >= 1.0f) or (MakeRandomFloat() < sConfig.npc.LootDropChance) or (m_allyID == factionRogueDrones))
         DropLoot(wreckItemRef, m_self->groupID(), killerID);
 
     DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();

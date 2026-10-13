@@ -294,7 +294,9 @@ EVEServerConfig::EVEServerConfig()
     npc.TargetPod = false;
     npc.UseDamageMultiplier = true;
     npc.DefenderMissileChance = 0.0;
-    npc.LootDropChance = 0.75;
+    npc.LootDropChance = 1.0;          // empty wrecks come from the npc's data (entityEquipmentMin/Max, the loot tables' chances)
+    npc.LootOwnMissileChance = 0.25;   // as the loot tables' T1 ammo (lootItemGroup itemDropChance 0.25)
+    npc.LootOwnMissileQty = 100;       // as the loot tables' T1 ammo (lootItemGroup 100-100)
     // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
     npc.SleepEmptyBubbles = true;       // performance:  no ai for idle npcs where no player is
     npc.AuditOnStartup = false;         // logs every npc type's data problems at boot (slow-ish, for content work)
@@ -1151,6 +1153,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "TargetPodSec",             npc.TargetPodSec );
     AddValueParser( "UseDamageMultiplier",      npc.UseDamageMultiplier );
     AddValueParser( "LootDropChance",           npc.LootDropChance );
+    AddValueParser( "LootOwnMissileChance",     npc.LootOwnMissileChance );
+    AddValueParser( "LootOwnMissileQty",        npc.LootOwnMissileQty );
     AddValueParser( "DefenderMissileChance",    npc.DefenderMissileChance );
     AddValueParser( "UseEwar",                  npc.UseEwar );
     AddValueParser( "GroupAggro",               npc.GroupAggro );
@@ -1229,6 +1233,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "TargetPodSec" );
     RemoveParser( "UseDamageMultiplier" );
     RemoveParser( "LootDropChance" );
+    RemoveParser( "LootOwnMissileChance" );
+    RemoveParser( "LootOwnMissileQty" );
     RemoveParser( "DefenderMissileChance" );
     RemoveParser( "UseEwar" );
     RemoveParser( "GroupAggro" );

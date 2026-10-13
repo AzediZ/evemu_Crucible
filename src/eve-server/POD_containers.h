@@ -240,27 +240,10 @@ struct RatSpawnClass { // notes for me while creating/writing/testing
     uint8 cbs;      // commander battleship
 };
 
-/* POD structure for loot groups */
+/* POD structure for loot groups:  a group in an npc's loot pool (lootGroup, lootNpcType) and its share of the rolls */
 struct LootGroup {
-    //uint32 groupID;
-    uint16 lootGroupID;
+    uint32 lootGroupID;
     float dropChance;
-};
-
-/* POD structure for loot types */
-struct LootGroupType {
-    uint8 metaLevel;
-    uint16 lootGroupID;
-    uint16 typeID;
-    uint32 minQuantity;
-    uint32 maxQuantity;
-};
-
-/* POD structure for possible loot drops */
-struct LootList {
-    uint8 minDrop;
-    uint8 maxDrop;
-    uint16 itemID;
 };
 
 /* POD structure for statistic data */

@@ -235,7 +235,7 @@ void Sentry::Killed(Damage &damage) {
         _log(PHYSICS__TRACE, "Sentry::Killed() - Sentry %s(%u) Position: %.2f,%.2f,%.2f.  Wreck %s(%u) Position: %.2f,%.2f,%.2f.", \
         GetName(), GetID(), x(), y(), z(), wreckItemRef->name(), wreckItemRef->itemID(), wreckPosition.x, wreckPosition.y, wreckPosition.z);
 
-    if (MakeRandomFloat() < sConfig.npc.LootDropChance)
+    if ((sConfig.npc.LootDropChance >= 1.0f) or (MakeRandomFloat() < sConfig.npc.LootDropChance))
         DropLoot(wreckItemRef, m_self->groupID(), killerID);
 
     DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();

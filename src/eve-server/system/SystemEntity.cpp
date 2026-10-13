@@ -275,30 +275,41 @@ void SystemEntity::SendDamageStateChanged() {  //working 24Apr15
 
 void SystemEntity::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner) {
     /*   allan 27Nov14    */
-    std::vector<LootList> lootList;
-    sDataMgr.GetLoot(groupID, lootList);
-    if (lootList.empty()) {
+    /* how much the npc drops is its type's data:  entityEquipmentMin/Max rolls, entityEquipmentGroupMax drops of a group
+     *  (EVE_Loot.h).  ships without them (players' ships) drop nothing here
+     */
+    const ItemType& type(m_self->type());
+    if (!type.HasAttribute(AttrEntityEquipmentMax)) {
+        _log(LOOT__INFO, "%s(%u) has no loot rolls (entityEquipmentMax)", m_self->name(), m_self->itemID());
+        return;
+    }
+    Loot::Params params = Loot::Params();
+        params.rollsMin = static_cast<int32>(type.GetAttribute(AttrEntityEquipmentMin).get_int());
+        params.rollsMax = static_cast<int32>(type.GetAttribute(AttrEntityEquipmentMax).get_int());
+        params.groupMax = (type.HasAttribute(AttrEntityEquipmentGroupMax)
+                        ? static_cast<uint32>(std::max<int64>(type.GetAttribute(AttrEntityEquipmentGroupMax).get_int(), 0)) : 0);
+    uint32 missileTypeID(type.HasAttribute(AttrEntityMissileTypeID)
+                        ? static_cast<uint32>(std::max<int64>(type.GetAttribute(AttrEntityMissileTypeID).get_int(), 0)) : 0);
+
+    std::vector<Loot::Drop> drops;
+    sDataMgr.GetLoot(m_self->typeID(), groupID, params, missileTypeID, drops);
+    if (drops.empty()) {
         _log(LOOT__INFO, "lootList empty for %s(%u)", m_self->name(), m_self->itemID());
         return;
     }
 
-    uint32 quantity(0);
-    std::vector<LootList>::iterator itr = lootList.begin();
-    while (itr != lootList.end()) {
-        if (itr->minDrop == itr->maxDrop) {
-            quantity = itr->minDrop;
-        } else {
-            quantity = (uint32)(MakeRandomInt(itr->minDrop, itr->maxDrop));
-        }
-        if (quantity == 0)
-            quantity = 1;
+    for (auto& cur : drops) {
+        uint32 quantity(cur.quantity);
         if (sConfig.rates.DropItem > 1)
             quantity *= sConfig.rates.DropItem;
-
-        ItemData iLoot(itr->itemID, owner, wreckRef->itemID(), flagNone, quantity);
-        wreckRef->AddItem(sItemFactory.SpawnItem(iLoot));
-        _log(LOOT__INFO, "added %u of %u to list for %s(%u)", quantity, itr->itemID, m_self->name(), m_self->itemID());
-        ++itr;
+        ItemData iLoot(cur.typeID, owner, wreckRef->itemID(), flagNone, quantity);
+        InventoryItemRef iRef(sItemFactory.SpawnItem(iLoot));
+        if (iRef.get() == nullptr) {
+            _log(LOOT__ERROR, "unable to spawn %u of %u for %s(%u)", quantity, cur.typeID, m_self->name(), m_self->itemID());
+            continue;
+        }
+        wreckRef->AddItem(iRef);
+        _log(LOOT__INFO, "added %u of %u to list for %s(%u)", quantity, cur.typeID, m_self->name(), m_self->itemID());
     }
 }
 

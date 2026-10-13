@@ -338,7 +338,9 @@ public:
         float WarpFollowChance;
         float TargetPodSec;
         float DefenderMissileChance;
-        float LootDropChance;
+        float LootDropChance;       // chance an npc wreck gets its loot rolls at all.  1 = the data alone decides (rolls and chances, EVE_Loot.h)
+        float LootOwnMissileChance; // chance a loot roll that lands on the npc's own missiles (entityMissileTypeID) drops them.  0 = never
+        uint32 LootOwnMissileQty;   // the stack of own missiles such a roll drops
         float DroneAggroChance;     // chance (per 30s) that a regular rat switches to a drone that damaged it
         // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
         bool SleepEmptyBubbles;     // idle npcs in bubbles without players skip their ai until something wakes them

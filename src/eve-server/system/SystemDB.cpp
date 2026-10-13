@@ -339,10 +339,22 @@ void SystemDB::GetLootGroups(DBQueryResult& res) {
 }
 
 void SystemDB::GetLootGroupTypes(DBQueryResult& res) {
-    if (!sDatabase.RunQuery(res, "SELECT itemGroupID, itemID, itemMetaLevel, minAmount, maxAmount FROM lootItemGroup")) {
+    // types the Crucible client doesn't have (unpublished) can't drop
+    if (!sDatabase.RunQuery(res,
+        "SELECT l.itemGroupID, l.itemID, l.itemMetaLevel, l.itemDropChance, l.minAmount, l.maxAmount"
+        " FROM lootItemGroup AS l"
+        " JOIN invTypes AS t ON t.typeID = l.itemID"
+        " WHERE t.published = 1")) {
         codelog(DATABASE__ERROR, "Error in GetLootGroupTypes query: %s", res.error.c_str());
         return;
     }
+}
+
+bool SystemDB::GetLootNpcTypes(DBQueryResult& res) {
+    // lootNpcType comes with the loot migration.  without it npcs use their group's pool
+    if (!sDatabase.RunQuery(res, "SELECT npcTypeID, itemGroupID, groupDropChance FROM lootNpcType"))
+        return false;
+    return true;
 }
 
 bool SystemDB::GetCelestialObjectData(uint32 celestialID, CelestialObjectData &into) {
