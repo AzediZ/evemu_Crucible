@@ -204,7 +204,7 @@ PyRep *CorporationDB::GetCorpInfo(uint32 corpID) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT corporationID, corporationName, description, creatorID, tickerName,"
-        " url, allianceID, deleted, stationID, ceoID, shares, memberCount, taxRate"
+        " url, NULLIF(allianceID, 0) AS allianceID, deleted, stationID, ceoID, shares, memberCount, taxRate"
         " FROM crpCorporation WHERE corporationID = %u", corpID))
     {
         codelog(CORP__DB_ERROR, "Error in retrieving corporation's data (%u)", corpID);
@@ -221,6 +221,10 @@ PyRep *CorporationDB::GetCorpInfo(uint32 corpID) {
     return DBRowToKeyVal(row);
 }
 
+/* crpCorporation stores "no alliance" / "no militia" as 0, but the client wants None there:
+ *  standingsvc.GetStandingRelationshipEntries skips only None IDs and calls cfg.eveowners.Get(allianceID),
+ *  so a 0 breaks the Standings tab (KeyError RecordNotFound 0).  NULLIF() in the rows/packets sent to the client.
+ */
 PyObject *CorporationDB::GetCorporation(uint32 corpID) {
     // called by corp member. different from GetCorporations() below
     //  not sure what the difference between them is/should be
@@ -233,8 +237,8 @@ PyObject *CorporationDB::GetCorporation(uint32 corpID) {
         "   c.corporationID,c.corporationName,c.description,c.tickerName,c.url,"
         "   c.taxRate,c.minimumJoinStanding,c.corporationType,c.hasPlayerPersonnelManager,"
         "   c.sendCharTerminationMessage,c.creatorID,c.ceoID,c.stationID,c.raceID,"
-        "   c.allianceID,c.shares,c.memberCount,c.memberLimit,c.allowedMemberRaceIDs,"
-        "   c.shape1,c.shape2,c.shape3,c.color1,c.color2,c.color3,c.typeface,c.deleted,c.isRecruiting,c.warFactionID,"
+        "   NULLIF(c.allianceID, 0) AS allianceID,c.shares,c.memberCount,c.memberLimit,c.allowedMemberRaceIDs,"
+        "   c.shape1,c.shape2,c.shape3,c.color1,c.color2,c.color3,c.typeface,c.deleted,c.isRecruiting,NULLIF(c.warFactionID, 0) AS warFactionID,"
         "   w.division1,w.division2,w.division3,w.division4,w.division5,w.division6,"
         "   w.division7,w.walletDivision1,w.walletDivision2,w.walletDivision3,w.walletDivision4,"
         "   w.walletDivision5,w.walletDivision6,w.walletDivision7"
@@ -268,8 +272,8 @@ PyRep *CorporationDB::GetCorporations(uint32 corpID) {
         "   c.corporationID,c.corporationName,c.description,c.tickerName,c.url,"
         "   c.taxRate,c.minimumJoinStanding,c.corporationType,c.hasPlayerPersonnelManager,"
         "   c.sendCharTerminationMessage,c.creatorID,c.ceoID,c.stationID,c.raceID,"
-        "   c.allianceID,c.shares,c.memberCount,c.memberLimit,c.allowedMemberRaceIDs,"
-        "   c.shape1,c.shape2,c.shape3,c.color1,c.color2,c.color3,c.typeface,c.deleted,c.isRecruiting,c.warFactionID,"
+        "   NULLIF(c.allianceID, 0) AS allianceID,c.shares,c.memberCount,c.memberLimit,c.allowedMemberRaceIDs,"
+        "   c.shape1,c.shape2,c.shape3,c.color1,c.color2,c.color3,c.typeface,c.deleted,c.isRecruiting,NULLIF(c.warFactionID, 0) AS warFactionID,"
         "   w.division1,w.division2,w.division3,w.division4,w.division5,w.division6,"
         "   w.division7,w.walletDivision1,w.walletDivision2,w.walletDivision3,w.walletDivision4,"
         "   w.walletDivision5,w.walletDivision6,w.walletDivision7"
@@ -574,7 +578,7 @@ bool CorporationDB::CreateCorporationChangePacket(OnCorporationChanged & cc, uin
     DBResultRow row;
     if (!sDatabase.RunQuery(res,
         " SELECT "
-        "  c.corporationID, c.corporationName, c.description, c.tickerName, c.allianceID, c.warFactionID, c.url, c.taxRate,"
+        "  c.corporationID, c.corporationName, c.description, c.tickerName, NULLIF(c.allianceID, 0), NULLIF(c.warFactionID, 0), c.url, c.taxRate,"
         "  c.minimumJoinStanding, c.corporationType, c.hasPlayerPersonnelManager, c.sendCharTerminationMessage, c.creatorID, c.ceoID, c.stationID, c.raceID, "
         "  c.shares, c.memberCount, c.memberLimit, c.allowedMemberRaceIDs, c.shape1, c.shape2, c.shape3, c.color1, c.color2, c.color3,"
         "  c.typeface, w.division1, w.division2, w.division3, w.division4, w.division5, w.division6, w.division7, w.walletDivision1, w.walletDivision2,"
@@ -644,7 +648,7 @@ bool CorporationDB::CreateCorporationChangePacket(OnCorporationChanged & cc, uin
 
     if (!sDatabase.RunQuery(res,
         " SELECT "
-        "  c.corporationID, c.corporationName, c.description, c.tickerName, c.allianceID, c.warFactionID, c.url, c.taxRate,"
+        "  c.corporationID, c.corporationName, c.description, c.tickerName, NULLIF(c.allianceID, 0), NULLIF(c.warFactionID, 0), c.url, c.taxRate,"
         "  c.minimumJoinStanding, c.corporationType, c.hasPlayerPersonnelManager, c.sendCharTerminationMessage, c.creatorID, c.ceoID, c.stationID, c.raceID, "
         "  c.shares, c.memberCount, c.memberLimit, c.allowedMemberRaceIDs, c.shape1, c.shape2, c.shape3, c.color1, c.color2, c.color3,"
         "  c.typeface, w.division1, w.division2, w.division3, w.division4, w.division5, w.division6, w.division7, w.walletDivision1, w.walletDivision2,"
@@ -715,7 +719,7 @@ bool CorporationDB::CreateCorporationCreatePacket(OnCorporationChanged & cc, uin
     DBResultRow row;
     if (!sDatabase.RunQuery(res,
         " SELECT "
-        "  c.corporationID, c.corporationName, c.description, c.tickerName, c.allianceID, c.warFactionID, c.url, c.taxRate,"
+        "  c.corporationID, c.corporationName, c.description, c.tickerName, NULLIF(c.allianceID, 0), NULLIF(c.warFactionID, 0), c.url, c.taxRate,"
         "  c.minimumJoinStanding, c.corporationType, c.hasPlayerPersonnelManager, c.sendCharTerminationMessage, c.creatorID, c.ceoID, c.stationID, c.raceID, "
         "  c.shares, c.memberCount, c.memberLimit, c.allowedMemberRaceIDs, c.shape1, c.shape2, c.shape3, c.color1, c.color2,c. color3,"
         "  c.typeface, w.division1, w.division2, w.division3, w.division4, w.division5, w.division6, w.division7, w.walletDivision1, w.walletDivision2,"
