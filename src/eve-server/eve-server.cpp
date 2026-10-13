@@ -25,6 +25,8 @@
  */
 
 #include "eve-server.h"
+
+#include <chrono>
 // version
 #include "../eve-common/EVEVersion.h"
 

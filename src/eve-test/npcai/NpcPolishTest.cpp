@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <string>
+#include <cstdint>
 
 #include "NpcLod.h"
 #include "NpcSchedule.h"

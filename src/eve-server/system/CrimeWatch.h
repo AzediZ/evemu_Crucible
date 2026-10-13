@@ -21,6 +21,8 @@
 #define EVEMU_SERVER_CRIMEWATCH_H_
 
 
+#include <cstdint>
+
 #include "eve-common.h"
 #include "utils/Singleton.h"
 

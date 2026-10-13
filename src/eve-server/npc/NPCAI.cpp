@@ -46,6 +46,8 @@
 
 #include "eve-server.h"
 
+#include <limits>
+
 #include "Client.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"

@@ -26,6 +26,8 @@
 #include "eve-test.h"
 
 #include <cmath>
+#include <cstdint>
+#include <string>
 
 #include "LawRules.h"
 #include "NpcMath.h"

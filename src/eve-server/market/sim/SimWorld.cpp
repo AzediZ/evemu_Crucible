@@ -1741,7 +1741,7 @@ void World::Daily(int64_t t)
 void World::Hourly(int64_t t)
 {
     // consumer income, for the hours since the last payment (at most MaxCatchUpHours after a downtime)
-    int64_t from(std::max(m_lastIncome, t - 3600LL * m_p.maxCatchUpHours));
+    int64_t from(std::max<int64_t>(m_lastIncome, t - (int64_t)3600 * m_p.maxCatchUpHours));
     double hours((double)(t - from) / 3600.0);
     m_lastIncome = t;
     if (hours > 0.0) {

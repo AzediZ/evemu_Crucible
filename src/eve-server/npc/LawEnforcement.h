@@ -25,6 +25,8 @@
 #ifndef EVEMU_NPC_LAWENFORCEMENT_H
 #define EVEMU_NPC_LAWENFORCEMENT_H
 
+#include <cstdint>
+
 #include "eve-server.h"
 
 class AggroGroup;

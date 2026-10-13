@@ -31,6 +31,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <cstdlib>
 
 #include "HarnessData.h"
 #include "HarnessFacilities.h"

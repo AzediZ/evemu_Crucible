@@ -34,6 +34,7 @@
 #if _WIN32
 #include <psapi.h>
 #include <tlhelp32.h>
+#include <chrono>
 #endif
 #include "StatisticMgr.h"
 #include "effects/EffectsProcessor.h"

@@ -30,6 +30,8 @@
 #ifndef _EVE_NPC_AI_AGGROGROUP_H_
 #define _EVE_NPC_AI_AGGROGROUP_H_
 
+#include <cstdint>
+
 #include "eve-server.h"
 
 class NPC;

@@ -26,6 +26,7 @@
 #include "eve-test.h"
 
 #include <cmath>
+#include <cstdint>
 
 #include "NpcMath.h"
 #include "NpcRng.h"
