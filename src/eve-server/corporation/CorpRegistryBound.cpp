@@ -4,6 +4,8 @@
  *
  */
 
+#include <algorithm>
+#include <cctype>
 #include <string>
 
 #include "EVE_Corp.h"
@@ -40,6 +42,65 @@
  * CORP__DB_INFO
  * CORP__DB_MESSAGE
  */
+
+namespace {
+// characters, not bytes:  names arrive as utf-8
+size_t Utf8Length(const std::string& str)
+{
+    size_t count(0);
+    for (const unsigned char c : str)
+        if ((c & 0xC0) != 0x80)
+            ++count;
+    return count;
+}
+
+bool HasControlChar(const std::string& str)
+{
+    for (const unsigned char c : str)
+        if ((c < 0x20) or (c == 0x7F))
+            return true;
+    return false;
+}
+
+/* the name and ticker rules of the client's messages (CorpNameInvalid*, CorpTickerNameInvalid*).  the Crucible client
+ *  only checks that both are not empty, the server gives the rest.  throws UserError */
+void ValidateNewCorpNames(CorporationDB& db, const std::string& name, const std::string& ticker)
+{
+    // "Minimum length for a corporation name is 4 characters." / "Maximum length for a corporation name is 24 characters."
+    size_t nameLength(Utf8Length(name));
+    if (nameLength < 4)
+        throw UserError("CorpNameInvalidMinLength");
+    if (nameLength > 24)
+        throw UserError("CorpNameInvalidMaxLength");
+    if (std::isspace(static_cast<unsigned char>(name.front())))
+        throw UserError("CorpNameInvalidFirstChar");
+    if (std::isspace(static_cast<unsigned char>(name.back())))
+        throw UserError("CorpNameInvalidLastChar");
+    // this hits db directly, so test for possible sql injection code
+    if (HasControlChar(name))
+        throw UserError("CorpNameInvalidSomeChar");
+    for (const auto& cur : badCharsSearch)
+        if (EvE::icontains(name, cur))
+            throw UserError("CorpNameInvalidSomeChar");
+    // verify they're not using bad words in their corp name
+    for (const auto& cur : badWords)
+        if (EvE::icontains(name, cur))
+            throw UserError("CorpNameInvalidBannedWord");
+    if (CorporationDB::IsCorpNameTaken(name))
+        throw UserError("CorpNameInvalidTaken");
+
+    // the client's ticker field takes up to 5 characters
+    size_t tickerLength(Utf8Length(ticker));
+    if ((tickerLength < 1) or (tickerLength > 5) or HasControlChar(ticker)
+    or std::all_of(ticker.begin(), ticker.end(), [](unsigned char c) { return std::isspace(c) != 0; }))
+        throw UserError("CorpTickerNameInvalid");
+    for (const auto& cur : badCharsSearch)
+        if (EvE::icontains(ticker, cur))
+            throw UserError("CorpTickerNameInvalid");
+    if (db.IsTickerTaken(ticker))
+        throw UserError("CorpTickerNameInvalidTaken");
+}
+}
 
 CorpRegistryBound::CorpRegistryBound(EVEServiceManager& mgr, CorpRegistryService& parent, CorporationDB& db, uint32 corpID) :
     EVEBoundObject(mgr, parent),
@@ -579,79 +640,99 @@ PyResult CorpRegistryBound::AddCorporation(PyCallArgs &call,
     Call_AddCorporation args;
     if (!args.Decode(&call.tuple)) {
         codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
-        return nullptr;
+        throw CustomError("The corporation could not be created:  its details were not understood.");
     }
 
-    // verify they're not using bad words in their corp name
-    for (const auto cur : badWords)
-        if (EvE::icontains(args.corpName, cur))
-            throw CustomError ("Corp Name contains banned words");
+    /* the client's own checks first (corp_ui_home.ShowCreateCorpForm, bco_members.MemberCanCreateCorporation), with its
+     *  messages:  docked, not at a player owned station, the Corporation Management skill, not a CEO */
+    uint32 charID(pClient->GetCharacterID());
+    uint32 stationID(pClient->GetStationID());
+    if (!pClient->IsDocked() or !sDataMgr.IsStation(stationID))
+        throw UserError("CanOnlyCreateCorpInStation");
+    uint32 stationOwnerID(m_db.GetStationOwner(stationID));
+    if (IsOutpost(stationID) or IsPlayerCorp(stationOwnerID))
+        throw UserError("CanNotCreateCorpAtPlayerOwnedStation");
 
-    // this hits db directly, so test for possible sql injection code
-    for (const auto cur : badCharsSearch)
-        if (EvE::icontains(args.corpName, cur))
-            throw CustomError ("Corp Name contains invalid characters");
+    // see EVEServerConfig.cpp (rates.corpCost) for the Crucible value and its sources
+    double corp_cost(sConfig.rates.corpCost);
+    /* the client's MemberCanCreateCorporation wants the skill (at any level) and its message says so;  the server wants
+     *  level 1, as CEO candidates do (CorpMgr::CanRunForCEO):  the corp's member limit is 10 per level */
+    if (pClient->GetChar()->GetSkillLevel(EvESkill::CorporationManagement) < 1)
+        throw UserError("PlayerCantCreateCorporation")
+                // the client passes the plain number:  {'cost': const.corporationStartupCost}
+                .AddFormatValue("cost", new PyFloat(corp_cost));
+    if (IsPlayerCorp(pClient->GetCorporationID()) and (CorporationDB::GetCorporationCEO(pClient->GetCorporationID()) == charID))
+        throw UserError("CEOCannotCreateCorporation");
 
+    // the create corp form's fields (form.CreateCorp.Submit only checks they are not empty)
+    ValidateNewCorpNames(m_db, args.corpName, args.corpTicker);
 
-    // this hits db directly, so test for possible sql injection code
-    for (const auto cur : badCharsSearch)
-        if (EvE::icontains(args.corpTicker, cur))
-            throw CustomError ("Corp Ticker contains invalid characters");
+    // "Your wallet contains only {balance}, but you require {amount} to complete this operation."
+    double balance(pClient->GetBalance(Account::CreditType::ISK));
+    if (balance < corp_cost)
+        throw UserError("NotEnoughMoney")
+                .AddISK("amount", corp_cost)
+                .AddISK("balance", balance);
 
-    // verify ticker is available
-    if (m_db.IsTickerTaken(args.corpTicker))
-        throw UserError ("CorpTickerNameInvalidTaken");
-
-    double corp_cost = sConfig.rates.corpCost;
-    if (pClient->GetBalance(Account::CreditType::ISK) < corp_cost) {
-        _log(SERVICE__ERROR, "%s: Cannot afford corporation startup costs!", pClient->GetName());
-        // send error to client here?
-        return nullptr;
-    }
-
-    //adding a corporation will affect eveStaticOwners, so we gotta invalidate the cache...
-    //  call to db.AddCorporation() will update eveStaticOwners with new corp
-    PyString* cache_name = new PyString( "config.StaticOwners" );
-    this->m_cache->InvalidateCache( cache_name );
-    PySafeDecRef( cache_name );
-
-    // Register new corp
-    uint32 corpID(0);
-    if (!m_db.AddCorporation(args, pClient, corpID)) {
-        codelog(SERVICE__ERROR, "New corporation creation failed.");
-        return nullptr;
-    }
-
-    // make sure AI is set correctly in db.  sometimes it's not (cause i forget)
-    if (!IsPlayerCorp(corpID)) {
-        // not sure what to do here yet....delete everything, make sure db autoincrement is set right then reapply
-        _log(CORP__ERROR, "Auto Increment improperly set in DB.");
-        pClient->SendErrorMsg("Server Error when creating corp.  CorpID invalid.");
-        return nullptr;
-    }
-
-    // create default role title data
-    m_db.CreateTitleData(corpID);
-
-    //take the money, send wallet blink event record the transaction in their journal.
+    /* the corp and its fee are one piece of work:  nothing is charged when the corp can't be created, and the corp is
+     *  rolled back when the charge fails.  TransferFunds() changes nothing when it throws */
     std::string reason = "DESC: Creating new corporation: ";
     reason += args.corpName;
     reason += " (";
     reason += args.corpTicker;
     reason += ")";
 
-    AccountService::TransferFunds(
-        pClient->GetCharacterID(),
-        m_db.GetStationOwner(pClient->GetStationID()),  // station owner files paperwork, this is fee for that
-        corp_cost,
-        reason.c_str(),
-        Journal::EntryType::CorporationRegistrationFee,
-        pClient->GetStationID(),
-        Account::KeyType::Cash
-    );
+    uint32 corpID(0);
+    {
+        DBTransaction tx("create corporation");
+        // Register new corp (also writes eveStaticOwners)
+        if (!m_db.AddCorporation(args, pClient, corpID)) {
+            tx.Rollback();
+            codelog(SERVICE__ERROR, "New corporation creation failed.");
+            throw CustomError("The corporation could not be created.  You have not been charged.");
+        }
 
-    // add corp event for creating new corp
-    m_db.AddItemEvent(corpID, pClient->GetCharacterID(), Corp::EventType::CreatedCorporation);
+        // make sure AI is set correctly in db.  sometimes it's not (cause i forget)
+        if (!IsPlayerCorp(corpID)) {
+            tx.Rollback();
+            // make sure db autoincrement is set right then try again
+            _log(CORP__ERROR, "Auto Increment improperly set in DB:  new corpID %u is not a player corp ID.", corpID);
+            throw CustomError("Server Error when creating corp.  CorpID invalid.  You have not been charged.");
+        }
+
+        // create default role title data
+        m_db.CreateTitleData(corpID);
+        // add corp event for creating new corp
+        m_db.AddItemEvent(corpID, charID, Corp::EventType::CreatedCorporation);
+
+        // take the money, send wallet blink event, record the transaction in their journal (refCorporationRegistrationFee,
+        //  argID the new corp).  the station owner files the paperwork, the fee is for that
+        try {
+            AccountService::TransferFunds(charID, stationOwnerID, corp_cost, reason.c_str(),
+                                          Journal::EntryType::CorporationRegistrationFee, corpID, Account::KeyType::Cash);
+        } catch (...) {
+            tx.Rollback();
+            throw;
+        }
+
+        if (!tx.Commit()) {
+            // nothing of the corp was saved (lost connection):  give the fee back
+            _log(CORP__ERROR, "%s: corporation '%s' was not saved.  Refunding the %.2f ISK fee.", pClient->GetName(),
+                 args.corpName.c_str(), corp_cost);
+            try {
+                AccountService::TransferFunds(stationOwnerID, charID, corp_cost, "Refund: " + reason,
+                                              Journal::EntryType::CorporationRegistrationFee, 0, Account::KeyType::Cash);
+            } catch (...) {
+                _log(CORP__ERROR, "%s: refund of the corporation fee failed.", pClient->GetName());
+            }
+            throw CustomError("The corporation could not be created (database error).  The fee was refunded.");
+        }
+    }
+
+    //adding a corporation affects eveStaticOwners, so we gotta invalidate the cache...
+    PyString* cache_name = new PyString( "config.StaticOwners" );
+    this->m_cache->InvalidateCache( cache_name );
+    PySafeDecRef( cache_name );
 
     // create corp channel
     this->m_lsc->CreateSystemChannel(corpID);

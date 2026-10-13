@@ -136,6 +136,8 @@ public:
     static void GetContactLabelMasks(uint32 ownerID, const std::vector<int32>& contactIDs, std::map<int32, int64>& into);
 
     bool IsTickerTaken(std::string ticker);
+    // an npc or player corporation already has this name (the db collation decides case)
+    static bool IsCorpNameTaken(const std::string& name);
     bool AddCorporation(Call_AddCorporation & corpInfo, Client* pClient, uint32 & corpID);
     bool CreateCorporationChangePacket(OnCorporationChanged & cc, uint32 oldCorpID, uint32 newCorpID);
     bool CreateCorporationCreatePacket(OnCorporationChanged & cc, uint32 oldCorpID, uint32 newCorpID);
