@@ -46,6 +46,7 @@ namespace {
     };
     const double MinLocalFleet = 20.0;          // as PlanMining's MinFleet
     const double MinRemoteFleet = 10.0;
+    const double RemoteSlackFactor = 2.0;       // a remote fleet's mining slack, x MiningSlack (its supply curve's room)
     const size_t MaxTripLines = 128;            // cargo lines in one hull
     const uint16_t GroupIndustrial = 28;
     const double DefaultCargoM3 = 5000.0;       // an industrial's hold when the static data has none
@@ -283,7 +284,7 @@ void World::SplitMining(uint32_t nodeID, uint32_t minerID, const std::vector<dou
             p.need[m] = plan.need[m] * share[m];
         }
         // a remote fleet has twice the slack:  how much of it mines is the netback's call (RemoteMinerStep)
-        double capacity(m3 * (1.0 + ((band < 0) ? 1.0 : 2.0) * m_p.miningSlack));
+        double capacity(m3 * (1.0 + ((band < 0) ? 1.0 : RemoteSlackFactor) * m_p.miningSlack));
         double size(std::max((band < 0) ? MinLocalFleet : MinRemoteFleet, std::round(capacity / std::max(1.0, m_p.miningM3PerHullDay))));
         p.m3PerHull = capacity / size;
         for (auto& h : p.fleet)
@@ -307,7 +308,7 @@ void World::SplitMining(uint32_t nodeID, uint32_t minerID, const std::vector<dou
         a.ownerCorpID = m_static.ActorCorp(nodeID, ActorKind::Miner, 0);
         a.regionID = node.regionID;
         a.nodeID = nodeID;
-        a.capacity = m3 * (1.0 + 2.0 * m_p.miningSlack);
+        a.capacity = m3 * (1.0 + RemoteSlackFactor * m_p.miningSlack);
         m_actors.push_back(a);
         HaulPlan hp;
         hp.nodeA = nodeID;
@@ -871,7 +872,14 @@ void World::RemoteMinerStep(Actor& a, int64_t t, double dt)
         need[m] = std::min(need[m], share * mc.dBar * (1.0 + RemoteSupplySlack) * RemoteResponse(hp, mc));
         need[m] = std::max(need[m], 0.05 * plan.need[m]);
     }
-    double capacity(hulls * plan.m3PerHull * MiningShockOf(t));
+    /* a mining shock (m:0) cuts every fleet to its share of the mining capacity PLAN 11 phase 3 defines, the reference
+     *  need x (1 + MiningSlack), as the node's miner's:  the extra slack a remote fleet has is its supply curve's room
+     *  (the netback's call), and the shock takes it too.  else -50 % leaves the minerals of less secure space 75 % of
+     *  their reference m3 and the node's own 62.5 % */
+    double shock(MiningShockOf(t));
+    double capacity(hulls * plan.m3PerHull * shock);
+    if (shock < 1.0)
+        capacity *= (1.0 + m_p.miningSlack) / (1.0 + RemoteSlackFactor * m_p.miningSlack);
     std::vector<bool> allowed(plan.ores.size(), true);
     for (size_t o = 0; o < plan.ores.size(); ++o)
         allowed[o] = (plan.mix[o] > 0.0);
