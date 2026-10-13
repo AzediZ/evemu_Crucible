@@ -1134,7 +1134,7 @@ void FactoryDB::StationsWithLinesNear(uint32 stationID, std::vector<uint32>& int
 
 bool FactoryDB::SetNextFreeTimes(const std::vector<LineTimeWrite>& writes)
 {
-    static const size_t Chunk = 500;
+    static constexpr size_t Chunk = 500;
     bool ok(true);
     for (size_t i = 0; i < writes.size(); i += Chunk) {
         std::string cases, ids;

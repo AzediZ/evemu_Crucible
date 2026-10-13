@@ -39,9 +39,9 @@ namespace MktSim {
     };
 
     namespace Logi {
-        static const int Profiles = 3;                  // shortest, balanced, safest
+        static constexpr int Profiles = 3;                  // shortest, balanced, safest
         static const double ProfileLambda[Profiles] = { 0.0, 1.0, 5.0 };
-        static const double RouteRefValue = 1e9;        // the cargo value the profiles' weights assume
+        static constexpr double RouteRefValue = 1e9;        // the cargo value the profiles' weights assume
 
         // SecBand of a system's security:  high >= 0.45, low > 0, null otherwise
         uint8_t Band(float security);

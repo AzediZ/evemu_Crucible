@@ -14,7 +14,7 @@
 
 class SeenList {
 public:
-    static const size_t Capacity = 32;
+    static constexpr size_t Capacity = 32;
 
     SeenList()                                          { Clear(); }
 

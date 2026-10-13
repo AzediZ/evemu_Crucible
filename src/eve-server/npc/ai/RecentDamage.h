@@ -14,8 +14,8 @@
 
 class RecentDamage {
 public:
-    static const size_t Capacity = 16;
-    static const int64_t Window = 30000;    // ms
+    static constexpr size_t Capacity = 16;
+    static constexpr int64_t Window = 30000;    // ms
 
     RecentDamage()                                      { Clear(); }
 

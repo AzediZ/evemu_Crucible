@@ -131,7 +131,7 @@ struct NpcShotRecord {
 /* the last few shots of one shooter */
 class NpcShotLog {
 public:
-    static const size_t Capacity = 6;
+    static constexpr size_t Capacity = 6;
     void Add(const NpcShotRecord& rec)                  { m_recs[m_next] = rec;  m_next = (m_next + 1) % Capacity;  if (m_count < Capacity) ++m_count; }
     size_t Size() const                                 { return m_count; }
     // 0 = the newest

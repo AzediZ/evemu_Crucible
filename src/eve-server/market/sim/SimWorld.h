@@ -52,7 +52,7 @@
 
 namespace MktSim {
 
-    static const int MaxLevels = 5;
+    static constexpr int MaxLevels = 5;
 
     // the tunables (eve-server.xml <marketSim>, the harness scenario).  defaults are the plan's (PLAN 9.6) unless noted
     struct Params {

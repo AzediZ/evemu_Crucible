@@ -19,7 +19,7 @@ namespace Charges {
     /* reloadTime (attribute 1795) is only set on hybrid turrets in Crucible (5s).
      *  every other module that loads charges takes the attribute's dogma default, 10s (dgmAttributeTypes.defaultValue)
      */
-    static const uint32 DefaultReloadTimeMS = 10000;
+    static constexpr uint32 DefaultReloadTimeMS = 10000;
 
     inline uint32 ReloadTimeMS(double reloadTimeAttr)
     {

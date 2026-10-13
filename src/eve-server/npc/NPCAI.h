@@ -339,7 +339,7 @@ private:
 
     // remote armor repairs reserved on us (5.9)
     struct Reservation { float amount; int64 until; };
-    static const size_t c_reservations = 4;
+    static constexpr size_t c_reservations = 4;
     Reservation m_reserved[c_reservations];
     // group assists on us (NpcAI::Buff)
     struct BuffState { float mult; int64 until; };

@@ -81,7 +81,7 @@ private:
     // the switch timer in use (ms)
     static int64 SwitchTimerMs(const NpcProfile& profile);
 
-    static const size_t c_maxRanked = 16;
+    static constexpr size_t c_maxRanked = 16;
 
     double m_preferredSig;      // 1655, else our own signature (0 = 1650 is off)
     int64 m_nextEval;           // ms

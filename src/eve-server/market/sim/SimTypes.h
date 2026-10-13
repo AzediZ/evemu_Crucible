@@ -24,7 +24,7 @@ namespace MktSim {
     typedef int64_t Cents;
     typedef int64_t Units;
 
-    static const int64_t SecondsPerDay = 86400;
+    static constexpr int64_t SecondsPerDay = 86400;
 
     // mktCalType.simClass (PLAN 4.4)
     namespace SimClass {
@@ -188,8 +188,8 @@ namespace MktSim {
 
     /* phase 4:  where the ledger keeps goods that are not at a market node (Ledger's nodeID).  a node's production sites
      *  (low/null-sec stations its remote miners work at) are SiteLoc(node, band);  goods on the way are at TransitLoc */
-    static const uint16_t SiteLocBase = 0x4000;
-    static const uint16_t TransitLoc = 0xFFFF;
+    static constexpr uint16_t SiteLocBase = 0x4000;
+    static constexpr uint16_t TransitLoc = 0xFFFF;
     inline uint16_t SiteLoc(uint32_t nodeID, uint8_t band)  { return (uint16_t)(SiteLocBase + nodeID * 4 + (band & 3)); }
     inline bool     IsSiteLoc(uint32_t loc)             { return (loc >= SiteLocBase) and (loc < TransitLoc); }
     inline uint32_t SiteNode(uint32_t loc)              { return (loc - SiteLocBase) / 4; }
@@ -242,7 +242,7 @@ namespace MktSim {
         uint32_t dbQty;
         int64_t  dbIssued;
     };
-    static const uint32_t VendorCell = 0xFFFFFFFFu;
+    static constexpr uint32_t VendorCell = 0xFFFFFFFFu;
 
     // an order of a player (character or player corp) as the sim sees it
     struct PlayerOrder {

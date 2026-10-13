@@ -13,7 +13,7 @@
 
 class ThreatTable {
 public:
-    static const size_t Capacity = 16;
+    static constexpr size_t Capacity = 16;
 
     struct Entry {
         uint32_t id;
