@@ -116,7 +116,6 @@ m_frozen(false)
     m_maxShipSpeed = 100.0f;
     m_requestedSpeed = 100.0f;
     m_speedBuff = 1.0f;
-    m_shipWarpSpeed = 1.0f;
     m_timeToEnterWarp = 10.0f;
     m_shipMaxAccelTime = 0.0f;
     m_preTractorMass = 1.0f;
@@ -641,6 +640,22 @@ void DestinyManager::ApplyWarpTo(const GPoint& where, double minRange, int32 war
     m_warpFactor = warpFactor;
     m_warpDistance = -1.0;
     m_ballMode = Destiny::Ball::Mode::WARP;
+}
+
+/* the warp speed is read from the live attributes every time, so whatever changed warpSpeedMultiplier since the ship came into
+ *  space (rigs, implants, subsystems, PostPercent on 600) counts.  WarpTo() sends it to the client and flies the warp with it
+ */
+int32 DestinyManager::GetWarpSpeed() const {
+    double multiplier(1.0), base(1.0);
+    InventoryItemRef iRef(mySE->GetSelf());
+    if (iRef.get() != nullptr) {
+        EvilNumber value(EvilZero);
+        if (iRef->HasAttribute(AttrWarpSpeedMultiplier, value))
+            multiplier = value.get_double();
+        if (iRef->HasAttribute(AttrBaseWarpSpeed, value))
+            base = value.get_double();
+    }
+    return WarpSpeed::ShipFactor(multiplier, base);
 }
 
 SystemEntity* DestinyManager::GetFollowTarget() {
@@ -1574,9 +1589,7 @@ Battleships 0.155
     m_mass = sRef->GetAttribute(AttrMass).get_float();
     m_massMKg = m_mass / 1000000; //changes mass from Kg to milliKg (10^-6)
 
-    // this will catch speeds/needs for all ships (player and npc), and is easier to do here.
-    if (sRef->HasAttribute(AttrWarpSpeedMultiplier))
-        m_shipWarpSpeed = sRef->GetAttribute(AttrWarpSpeedMultiplier).get_float();
+    // this will catch speeds/needs for all ships (player and npc), and is easier to do here.  (warp speed is read live, GetWarpSpeed())
     if (sRef->HasAttribute(AttrInetia))
         m_shipInertia = sRef->GetAttribute(AttrInetia).get_float();
     if (sRef->HasAttribute(AttrMaxVelocity))

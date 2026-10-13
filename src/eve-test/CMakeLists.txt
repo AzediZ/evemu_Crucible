@@ -28,7 +28,8 @@ SET( marshal_SOURCE
 SET( ship_SOURCE
      "ship/ChargeRulesTest.cpp"
      "ship/PropulsionTest.cpp"
-     "ship/WarpCapacitorTest.cpp" )
+     "ship/WarpCapacitorTest.cpp"
+     "ship/WarpSpeedTest.cpp" )
 SET( npcai_SOURCE
      "npcai/FighterWarpTest.cpp"
      "npcai/LawRulesTest.cpp"
@@ -97,6 +98,8 @@ ADD_TEST( NAME "PropulsionTest"
           COMMAND "${TARGET_NAME}" "ship/PropulsionTest" )
 ADD_TEST( NAME "WarpCapacitorTest"
           COMMAND "${TARGET_NAME}" "ship/WarpCapacitorTest" )
+ADD_TEST( NAME "WarpSpeedTest"
+          COMMAND "${TARGET_NAME}" "ship/WarpSpeedTest" )
 ADD_TEST( NAME "NpcMathTest"
           COMMAND "${TARGET_NAME}" "npcai/NpcMathTest" )
 ADD_TEST( NAME "LawRulesTest"

@@ -439,15 +439,15 @@ PyResult Command_shipvars(Client* pClient, CommandDB* db, EVEServiceManager &ser
     DestinyManager* dm = pClient->GetShipSE()->DestinyMgr();
     GPoint heading(dm->GetHeading());
 
-    char reply[300];
-    snprintf(reply, 300,
+    char reply[512];
+    snprintf(reply, sizeof(reply),
              "Destiny Variable List for %s<br><br>" //60
              "ShipID: %u<br>"
              "Mass: %.2f<br>" //28
              "AlignTime: %.2f<br>" //27
              "AccelTime: %.2f<br>"
              "MaxSpeed: %.2f<br>" //27
-             "WarpSpeed: %.2f<br>" //27
+             "WarpSpeed: %.1f AU/s<br>" //32
              "WarpTime: %.2f<br>" //27
              "WarpDropSpeed: %.2f<br>" //27
              "Radius: %.2f<br>" //27
@@ -456,7 +456,7 @@ PyResult Command_shipvars(Client* pClient, CommandDB* db, EVEServiceManager &ser
              "Inertia: %.3f<br>" //27
              "Heading: %.3f,%.3f,%.3f<br>", //21
                 pClient->GetShipSE()->GetName(), pClient->GetShipID(), dm->GetMass(), dm->GetAlignTime(),
-             dm->GetAccelTime(), dm->GetMaxVelocity(), (float)(dm->GetWarpSpeed() /10), dm->GetWarpTime(),
+             dm->GetAccelTime(), dm->GetMaxVelocity(), (dm->GetWarpSpeed() / 10.0), dm->GetWarpTime(),
              dm->GetWarpDropSpeed(), dm->GetRadius(), dm->GetCapNeed(), dm->GetAgility(), dm->GetInertia(),
              heading.x, heading.y, heading.z
             );

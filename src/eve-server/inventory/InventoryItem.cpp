@@ -1315,14 +1315,11 @@ bool InventoryItem::Populate(Rsp_CommonGetInfo_Entry& result )
         }
     }
 
-    for (AttrMapItr itr = pAttributeMap->begin(), end = pAttributeMap->end(); itr != end; ++itr) {
-        //localization.GetByLabel('UI/Fitting/FittingWindow/WarpSpeed', distText=util.FmtDist(max(1.0, bws) * wsm * 3 * const.AU, 2))
-        if ((*itr).first == AttrWarpSpeedMultiplier) {
-            result.attributes[AttrWarpSpeedMultiplier] = new PyFloat((*itr).second.get_float() /3);
-        } else {
-            result.attributes[(*itr).first] = (*itr).second.GetPyObject();
-        }
-    }
+    /* warpSpeedMultiplier goes as it is.  the client shows max(1, bws) x wsm x 3 AU/s (Show Info, fitting window), and that is the
+     *  speed the ship warps at (DestinyManager::GetWarpSpeed(), EVE_Warp.h)
+     */
+    for (AttrMapItr itr = pAttributeMap->begin(), end = pAttributeMap->end(); itr != end; ++itr)
+        result.attributes[(*itr).first] = (*itr).second.GetPyObject();
 
     // a booster's working effects (the character sheet lists those)  (F15)
     if ((m_data.flag == flagBooster) and IsCharacterID(m_data.locationID)) {

@@ -51,7 +51,7 @@ inline Step Decide(const Situation& s)
         return Step::Stay;
     if (s.destinationBlocked)
         return Step::Stay;
-    // we got there first (fighters warp at 1 AU/s, carriers at 0.5)
+    // we got there first (fighters warp at 3 AU/s, carriers at 1.5)
     if (s.anchorWarping and (s.distance <= WarpInRange * 2.0))
         return Step::Wait;
     return Step::Warp;

@@ -193,7 +193,9 @@ public:
     void SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 moduleTypeID, uint32 targetID, uint32 chargeTypeID, std::string guid, bool isOffensive, bool start, bool isActive, int32 duration, uint32 repeat, PyRep* graphicInfo) const;
 
     //  functions to return protected variables for SystemBubble exclusive WarpTo updates and other methods that need Destiny Variables
-    int32 GetWarpSpeed()                                { return static_cast<int32>(m_shipWarpSpeed * 10); }
+    /* this ship's warp speed as destiny's warpFactor (AU/s x 10):  max(1, baseWarpSpeed) x warpSpeedMultiplier x 3 AU/s from the
+     *  live (modified) attributes, as the client shows it (EVE_Warp.h).  npcs, drones and fighters, which have neither, get 3 AU/s */
+    int32 GetWarpSpeed() const;
     uint32 GetTargetID()                                { return m_targetEntity.first; }
     SystemEntity* GetTargetEntity()                     { return m_targetEntity.second; }
     GPoint GetTargetPoint()                             { return m_targetPoint; }
@@ -242,7 +244,6 @@ protected:
     float m_speedBuff;                  // npc group speed assist (1 = none)
     // m_maxShipSpeed = m_requestedSpeed x the web factor;  tells the client when it changed and update is set
     void ApplySpeed(bool update);
-    float m_shipWarpSpeed;              //in au/s
     float m_timeToEnterWarp;            //in s
     float m_shipMaxAccelTime;           //in s      - time to reach 99.99% of max speed from a stop
     float m_preTractorMass;             //in kg     - mass to restore when a tractor beam lets go

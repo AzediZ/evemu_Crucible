@@ -574,7 +574,7 @@ void DroneAIMgr::StopMoving() {
 /* fighters and bombers warping after their controlling ship or a target they follow (FighterWarpRules.h).  an anchor in warp
  *  is followed to its exit point (fixed once it is in warp proper:  DestinyManager::RealWarp()), one that has landed elsewhere
  *  to where it is.  we come out FighterWarp::WarpInRange short.  the warp is an ordinary destiny WarpTo, so the client gets
- *  a WarpTo with our own warp speed (fighters have no warpSpeedMultiplier:  its default, 1, against a carrier's 0.5) and the
+ *  a WarpTo with our own warp speed (fighters have no warpSpeedMultiplier:  its default, 1, gives 3 AU/s against a carrier's 1.5) and the
  *  warp effect;  the client and DestinyManager then fly it.  entering warp clears our locks and everyone's on us
  *  (OnWarpActivated), and we move from bubble to bubble like any warping ship (UpdateWarpBubble)
  */
