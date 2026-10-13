@@ -87,6 +87,12 @@ LOG_TYPE( ALLY, PKT_TRACE, DISABLED, "AllyPktTrace" )
 LOG_TYPE( ALLY, DB_ERROR,   ENABLED, "AllyDBError" )
 LOG_TYPE( ALLY, DB_WARNING, DISABLED, "AllyDBWarning" )
 
+LOG_CATEGORY( AMBIENT )
+LOG_TYPE( AMBIENT, WARN,  ENABLED,  "AmbientWarning" )    // ambient npc catalog and boot data problems (npc/ambient)
+LOG_TYPE( AMBIENT, INFO,  DISABLED, "AmbientInfo" )       // systems going active and idle, squads, criminal events
+LOG_TYPE( AMBIENT, TRACE, DISABLED, "AmbientTrace" )      // every ambient npc's legs (spawn, warp, jump, dock, mine, removal)
+LOG_TYPE( AMBIENT, STATS, DISABLED, "AmbientStats" )      // one line per active system every npc.StatsInterval
+
 LOG_CATEGORY( ATTRIBUTE )
 LOG_TYPE( ATTRIBUTE, ERROR,   ENABLED, "Attr Error" )
 LOG_TYPE( ATTRIBUTE, WARNING, DISABLED, "Attr Warning" )

@@ -605,6 +605,68 @@ public:
         bool NpcFactionAggression;      // attacking an NPC makes its faction's sentries (and navy) hostile for SentryAggression
     } crime;
 
+    // From <ambient>  (ambient npcs:  traffic, patrols, miners, criminals.  doc/code_and_design_notes/ambient-npc-plan.md 5)
+    struct {
+        bool Enabled;                       // master switch.  off:  no ambient npc anywhere and no boot queries
+        bool Traffic;                       // gate and station traffic (haulers, couriers, freighters, navy transit)
+        bool ConcordPatrols;                // CONCORD patrol squads in high sec
+        bool NavyPatrols;                   // faction navy squads in the faction's own high sec
+        bool Miners;                        // belt miners and their hauler visits
+        bool Criminals;                     // criminal (pirate) events
+        bool HighSecCriminalsAttackPlayers; // high sec criminals go after players unprovoked (off:  only NPC traffic, miners and pilots who shoot them)
+        bool LowSecCriminalsAttackPlayers;  // low sec criminals go after players like a small rat spawn
+        float DensityMultiplier;            // x every rate and target count.  caps still apply
+        float HighSecMultiplier;            // x traffic in 0.5 - 1.0 systems
+        float LowSecMultiplier;             // x traffic in 0.1 - 0.4 systems
+        float LowSecMinerMultiplier;        // x miners per belt in low sec
+        float TrafficRateAtHub;             // traffic events per minute at busyness 1 (Jita)
+        float TrafficRateFloor;             // the fewest traffic events per minute of a system (x the security band multiplier)
+        float BusynessExponent;             // gamma of the rate formula.  higher widens the gap between hubs and backwaters
+        float JumpFalloff;                  // jumps at which a market hub's pull drops to 1/e
+        float DiurnalAmplitude;             // day/night swing of every rate (0 = off)
+        uint8 DiurnalPeakHour;              // UTC hour of peak activity
+        float ConvoyChance;                 // chance a traffic event brings 2-4 ships of one owner 5-20s apart
+        uint16 GridCap;                     // ambient ships per bubble
+        uint16 HubGridCap;                  // ambient ships per bubble at hub grids (Jita 4-4)
+        float HubThreshold;                 // market score at or above which a station (or a system's gates) counts as a hub grid
+        uint16 SystemCap;                   // ambient ships per system
+        uint16 GlobalCap;                   // ambient ships on the server
+        uint16 VirtualCap;                  // off-grid travellers kept per system (the oldest go first)
+        float SpeedOverRef;                 // x the reference player hull's max velocity:  an ambient npc's speed cap
+        float MinersPerBelt;                // miners per watched belt at busyness 1 in high sec
+        uint16 MinerArrivalMin;             // seconds between miner arrivals while a belt is under its target
+        uint16 MinerArrivalMax;             // seconds
+        uint8 MinerCyclesMin;               // laser cycles until a miner is full
+        uint8 MinerCyclesMax;               // laser cycles
+        float MinerRockSwitchChance;        // chance after each cycle (from the 2nd) to move to another rock
+        std::string MinerModel;             // hull = mining barges with strip miner beams.  entity = Civilian Hulk entities without beams
+        bool MinerHaulerVisits;             // a hauler visits belts with 2 or more miners
+        uint16 MinerHaulerInterval;         // seconds, mean time between hauler visits per belt
+        float IceMinerFactor;               // x miners on ice belts
+        float PatrolSquadsBase;             // CONCORD squads at busyness 0.5
+        uint8 PatrolSquadsMax;              // CONCORD squads per system
+        float NavySquadsBase;               // navy squads at busyness 0.5
+        uint16 PatrolLoiterMin;             // seconds a patrol spends at a waypoint
+        uint16 PatrolLoiterMax;             // seconds
+        bool PatrolsEngageCriminals;        // patrols attack criminals on their grid (flagged players, never pods, and ambient criminals)
+        bool PatrolResponse;                // a patrol warps to a crime CONCORD was dispatched to (CONCORD's own response still comes)
+        float MilitaryHpScale;              // x shield, armor and hull of ambient navy ships (attacking them is suicide)
+        float CriminalsPerHourHigh;         // high sec criminal events per hour at 0.55 (fewer in safer systems)
+        float CriminalsPerHourLow;          // low sec criminal events per hour
+        float CriminalFleeHull;             // a criminal tries to warp off below this structure fraction
+        uint16 CriminalHuntTimeout;         // seconds without prey before a criminal leaves
+        uint16 WindDownSeconds;             // seconds ambient keeps running after the last player leaves space in a system
+        uint16 GridLingerSeconds;           // seconds miners and loiterers stay on a grid nobody watches
+        uint8 ArrivalCloakMin;              // seconds gate arrivals stay session cloaked
+        uint8 ArrivalCloakMax;              // seconds
+        uint8 JumpTransitMin;               // seconds from a gate jump to the arrival in the next system
+        uint8 JumpTransitMax;               // seconds
+        uint16 JumpOutRemoveDelay;          // ms from the jump-out effect to the silent removal (the client hides the ship at 880ms)
+        bool WarmStart;                     // a grid that becomes watched gets its steady-state population at once
+        uint16 MarketRefreshMinutes;        // minutes between re-reads of the market hub turnover (0 = boot only)
+        uint32 RngSeed;                     // 0 = clock.  non-zero makes ambient decisions repeatable
+    } ambient;
+
     // From <sov>
     struct {
         float MilitaryPointsPerBountyISK;   // military index points per isk of npc bounty killed in the system
@@ -698,6 +760,7 @@ protected:
     bool ProcessStandings( const TiXmlElement* ele );
     bool ProcessChat( const TiXmlElement* ele );
     bool ProcessCrime( const TiXmlElement* ele );
+    bool ProcessAmbient( const TiXmlElement* ele );
     bool ProcessSov( const TiXmlElement* ele );
     bool ProcessPOS( const TiXmlElement* ele );
     bool ProcessCorp( const TiXmlElement* ele );

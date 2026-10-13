@@ -559,6 +559,69 @@ boolean can use either 0/1 OR true/false.
         <NpcFactionAggression>false</NpcFactionAggression><!-- bool - the NPC aggression timer (EVElopedia "Combat Timers" 2012): attacking an NPC makes its faction's gate/station guns (and its navy, with FactionNavy) hostile for SentryAggression.  off by default (plan decision 11) -->
     </crime>
 
+    <ambient><!-- ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md):  traffic through gates and stations, CONCORD and navy patrols, belt
+             miners and criminals in empire space (sec > 0) where players are in space.  transient (nothing saved), never in Local.  attacking
+             the civilians and navies is a crime as attacking a pilot would be;  no bounties -->
+        <Enabled>true</Enabled><!-- bool - master switch.  off:  no ambient npc anywhere and no boot queries -->
+        <Traffic>true</Traffic><!-- bool - gate and station traffic (haulers, couriers, freighters, navy transit) -->
+        <ConcordPatrols>true</ConcordPatrols><!-- bool - CONCORD patrol squads in high sec -->
+        <NavyPatrols>true</NavyPatrols><!-- bool - faction navy squads in the faction's own high sec -->
+        <Miners>true</Miners><!-- bool - belt miners and their hauler visits -->
+        <Criminals>true</Criminals><!-- bool - criminal (pirate) events -->
+        <HighSecCriminalsAttackPlayers>false</HighSecCriminalsAttackPlayers><!-- bool - high sec criminals go after players unprovoked (off:  only NPC traffic, miners and pilots who shoot them) -->
+        <LowSecCriminalsAttackPlayers>true</LowSecCriminalsAttackPlayers><!-- bool - low sec criminals go after players like a small rat spawn -->
+        <DensityMultiplier>1.0</DensityMultiplier><!-- x every rate and target count.  caps still apply -->
+        <HighSecMultiplier>1.0</HighSecMultiplier><!-- x traffic in 0.5 - 1.0 systems -->
+        <LowSecMultiplier>0.25</LowSecMultiplier><!-- x traffic in 0.1 - 0.4 systems -->
+        <LowSecMinerMultiplier>0.6</LowSecMinerMultiplier><!-- x miners per belt in low sec -->
+        <TrafficRateAtHub>24.0</TrafficRateAtHub><!-- traffic events per minute at busyness 1 (Jita) -->
+        <TrafficRateFloor>0.2</TrafficRateFloor><!-- the fewest traffic events per minute of a system (x the security band multiplier) -->
+        <BusynessExponent>1.5</BusynessExponent><!-- gamma of the rate formula.  higher widens the gap between hubs and backwaters -->
+        <JumpFalloff>2.5</JumpFalloff><!-- jumps at which a market hub's pull drops to 1/e -->
+        <DiurnalAmplitude>0.25</DiurnalAmplitude><!-- day/night swing of every rate (0 = off) -->
+        <DiurnalPeakHour>19</DiurnalPeakHour><!-- UTC hour of peak activity -->
+        <ConvoyChance>0.10</ConvoyChance><!-- chance a traffic event brings 2-4 ships of one owner 5-20s apart -->
+        <GridCap>15</GridCap><!-- ambient ships per bubble -->
+        <HubGridCap>25</HubGridCap><!-- ambient ships per bubble at hub grids (Jita 4-4) -->
+        <HubThreshold>0.6</HubThreshold><!-- market score at or above which a station (or a system's gates) counts as a hub grid -->
+        <SystemCap>60</SystemCap><!-- ambient ships per system -->
+        <GlobalCap>800</GlobalCap><!-- ambient ships on the server -->
+        <VirtualCap>200</VirtualCap><!-- off-grid travellers kept per system (the oldest go first) -->
+        <SpeedOverRef>1.0</SpeedOverRef><!-- x the reference player hull's max velocity:  an ambient npc's speed cap -->
+        <MinersPerBelt>3.0</MinersPerBelt><!-- miners per watched belt at busyness 1 in high sec -->
+        <MinerArrivalMin>60</MinerArrivalMin><!-- seconds between miner arrivals while a belt is under its target -->
+        <MinerArrivalMax>240</MinerArrivalMax><!-- seconds -->
+        <MinerCyclesMin>4</MinerCyclesMin><!-- laser cycles until a miner is full -->
+        <MinerCyclesMax>10</MinerCyclesMax><!-- laser cycles -->
+        <MinerRockSwitchChance>0.3</MinerRockSwitchChance><!-- chance after each cycle (from the 2nd) to move to another rock -->
+        <MinerModel>hull</MinerModel><!-- hull = mining barges with strip miner beams.  entity = Civilian Hulk entities without beams -->
+        <MinerHaulerVisits>true</MinerHaulerVisits><!-- bool - a hauler visits belts with 2 or more miners -->
+        <MinerHaulerInterval>600</MinerHaulerInterval><!-- seconds, mean time between hauler visits per belt -->
+        <IceMinerFactor>0.5</IceMinerFactor><!-- x miners on ice belts -->
+        <PatrolSquadsBase>1.0</PatrolSquadsBase><!-- CONCORD squads at busyness 0.5 -->
+        <PatrolSquadsMax>4</PatrolSquadsMax><!-- CONCORD squads per system -->
+        <NavySquadsBase>0.5</NavySquadsBase><!-- navy squads at busyness 0.5 -->
+        <PatrolLoiterMin>180</PatrolLoiterMin><!-- seconds a patrol spends at a waypoint -->
+        <PatrolLoiterMax>480</PatrolLoiterMax><!-- seconds -->
+        <PatrolsEngageCriminals>true</PatrolsEngageCriminals><!-- bool - patrols attack criminals on their grid (flagged players, never pods, and ambient criminals) -->
+        <PatrolResponse>true</PatrolResponse><!-- bool - a patrol warps to a crime CONCORD was dispatched to (CONCORD's own response still comes) -->
+        <MilitaryHpScale>3.0</MilitaryHpScale><!-- x shield, armor and hull of ambient navy ships (attacking them is suicide) -->
+        <CriminalsPerHourHigh>1.0</CriminalsPerHourHigh><!-- high sec criminal events per hour at 0.55 (fewer in safer systems) -->
+        <CriminalsPerHourLow>3.0</CriminalsPerHourLow><!-- low sec criminal events per hour -->
+        <CriminalFleeHull>0.5</CriminalFleeHull><!-- a criminal tries to warp off below this structure fraction -->
+        <CriminalHuntTimeout>300</CriminalHuntTimeout><!-- seconds without prey before a criminal leaves -->
+        <WindDownSeconds>300</WindDownSeconds><!-- seconds ambient keeps running after the last player leaves space in a system -->
+        <GridLingerSeconds>90</GridLingerSeconds><!-- seconds miners and loiterers stay on a grid nobody watches -->
+        <ArrivalCloakMin>2</ArrivalCloakMin><!-- seconds gate arrivals stay session cloaked -->
+        <ArrivalCloakMax>6</ArrivalCloakMax><!-- seconds -->
+        <JumpTransitMin>8</JumpTransitMin><!-- seconds from a gate jump to the arrival in the next system -->
+        <JumpTransitMax>15</JumpTransitMax><!-- seconds -->
+        <JumpOutRemoveDelay>1500</JumpOutRemoveDelay><!-- ms from the jump-out effect to the silent removal (the client hides the ship at 880ms) -->
+        <WarmStart>true</WarmStart><!-- bool - a grid that becomes watched gets its steady-state population at once -->
+        <MarketRefreshMinutes>60</MarketRefreshMinutes><!-- minutes between re-reads of the market hub turnover (0 = boot only) -->
+        <RngSeed>0</RngSeed><!-- 0 = clock.  non-zero makes ambient decisions repeatable -->
+    </ambient>
+
     <sov><!-- sovereignty development indices (Dominion/Crucible rules: one level is 9.6M points, indices decay about a level every 4 days) -->
         <MilitaryPointsPerBountyISK>0.1</MilitaryPointsPerBountyISK><!-- military index points per isk of bounty of npcs killed in the system (before the gain modifier of the current level) -->
         <IndustrialPointsPerM3>1.0</IndustrialPointsPerM3><!-- industrial index points per m3 of ore and ice mined in the system (before the gain modifier) -->

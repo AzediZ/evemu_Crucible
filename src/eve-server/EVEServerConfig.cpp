@@ -502,6 +502,66 @@ EVEServerConfig::EVEServerConfig()
     crime.FactionNavyStanding = -5.0f;
     crime.NpcFactionAggression = false;     // plan decision 11 (EVElopedia "Combat Timers" 2012)
 
+    // ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md 5).  off unless the xml turns them on
+    ambient.Enabled = false;
+    ambient.Traffic = true;
+    ambient.ConcordPatrols = true;
+    ambient.NavyPatrols = true;
+    ambient.Miners = true;
+    ambient.Criminals = true;
+    ambient.HighSecCriminalsAttackPlayers = false;
+    ambient.LowSecCriminalsAttackPlayers = true;
+    ambient.DensityMultiplier = 1.0f;
+    ambient.HighSecMultiplier = 1.0f;
+    ambient.LowSecMultiplier = 0.25f;
+    ambient.LowSecMinerMultiplier = 0.6f;
+    ambient.TrafficRateAtHub = 24.0f;
+    ambient.TrafficRateFloor = 0.2f;
+    ambient.BusynessExponent = 1.5f;
+    ambient.JumpFalloff = 2.5f;
+    ambient.DiurnalAmplitude = 0.25f;
+    ambient.DiurnalPeakHour = 19;
+    ambient.ConvoyChance = 0.10f;
+    ambient.GridCap = 15;
+    ambient.HubGridCap = 25;
+    ambient.HubThreshold = 0.6f;
+    ambient.SystemCap = 60;
+    ambient.GlobalCap = 800;
+    ambient.VirtualCap = 200;
+    ambient.SpeedOverRef = 1.0f;
+    ambient.MinersPerBelt = 3.0f;
+    ambient.MinerArrivalMin = 60;
+    ambient.MinerArrivalMax = 240;
+    ambient.MinerCyclesMin = 4;
+    ambient.MinerCyclesMax = 10;
+    ambient.MinerRockSwitchChance = 0.3f;
+    ambient.MinerModel = "hull";
+    ambient.MinerHaulerVisits = true;
+    ambient.MinerHaulerInterval = 600;
+    ambient.IceMinerFactor = 0.5f;
+    ambient.PatrolSquadsBase = 1.0f;
+    ambient.PatrolSquadsMax = 4;
+    ambient.NavySquadsBase = 0.5f;
+    ambient.PatrolLoiterMin = 180;
+    ambient.PatrolLoiterMax = 480;
+    ambient.PatrolsEngageCriminals = true;
+    ambient.PatrolResponse = true;
+    ambient.MilitaryHpScale = 3.0f;
+    ambient.CriminalsPerHourHigh = 1.0f;
+    ambient.CriminalsPerHourLow = 3.0f;
+    ambient.CriminalFleeHull = 0.5f;
+    ambient.CriminalHuntTimeout = 300;
+    ambient.WindDownSeconds = 300;
+    ambient.GridLingerSeconds = 90;
+    ambient.ArrivalCloakMin = 2;
+    ambient.ArrivalCloakMax = 6;
+    ambient.JumpTransitMin = 8;
+    ambient.JumpTransitMax = 15;
+    ambient.JumpOutRemoveDelay = 1500;
+    ambient.WarmStart = true;
+    ambient.MarketRefreshMinutes = 60;
+    ambient.RngSeed = 0;
+
     // sov
     sov.MilitaryPointsPerBountyISK = 0.1f;
     sov.IndustrialPointsPerM3 = 1.0f;
@@ -605,6 +665,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "missions",    &EVEServerConfig::ProcessMissions );
     AddMemberParser( "agents",      &EVEServerConfig::ProcessAgents );
     AddMemberParser( "crime",       &EVEServerConfig::ProcessCrime );
+    AddMemberParser( "ambient",     &EVEServerConfig::ProcessAmbient );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
     AddMemberParser( "corp",        &EVEServerConfig::ProcessCorp );
@@ -638,6 +699,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "missions" );
     RemoveParser( "agents" );
     RemoveParser( "crime" );
+    RemoveParser( "ambient" );
     RemoveParser( "sov" );
     RemoveParser( "pos" );
     RemoveParser( "corp" );
@@ -1667,6 +1729,87 @@ bool EVEServerConfig::ProcessCrime( const TiXmlElement* ele )
             "ConcordLinger", "FactionPolice", "PoliceDelay", "PoliceTimeout", "Sentries", "SentriesPerGate",
             "SentriesPerStation", "SentryRange",
             "SentryRetarget", "SentryAggression", "ConcordScriptedTackle", "FactionNavy", "FactionNavyStanding", "NpcFactionAggression"})
+        RemoveParser( name );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessAmbient( const TiXmlElement* ele )
+{
+    AddValueParser( "Enabled",                        ambient.Enabled );
+    AddValueParser( "Traffic",                        ambient.Traffic );
+    AddValueParser( "ConcordPatrols",                 ambient.ConcordPatrols );
+    AddValueParser( "NavyPatrols",                    ambient.NavyPatrols );
+    AddValueParser( "Miners",                         ambient.Miners );
+    AddValueParser( "Criminals",                      ambient.Criminals );
+    AddValueParser( "HighSecCriminalsAttackPlayers",  ambient.HighSecCriminalsAttackPlayers );
+    AddValueParser( "LowSecCriminalsAttackPlayers",   ambient.LowSecCriminalsAttackPlayers );
+    AddValueParser( "DensityMultiplier",              ambient.DensityMultiplier );
+    AddValueParser( "HighSecMultiplier",              ambient.HighSecMultiplier );
+    AddValueParser( "LowSecMultiplier",               ambient.LowSecMultiplier );
+    AddValueParser( "LowSecMinerMultiplier",          ambient.LowSecMinerMultiplier );
+    AddValueParser( "TrafficRateAtHub",               ambient.TrafficRateAtHub );
+    AddValueParser( "TrafficRateFloor",               ambient.TrafficRateFloor );
+    AddValueParser( "BusynessExponent",               ambient.BusynessExponent );
+    AddValueParser( "JumpFalloff",                    ambient.JumpFalloff );
+    AddValueParser( "DiurnalAmplitude",               ambient.DiurnalAmplitude );
+    AddValueParser( "DiurnalPeakHour",                ambient.DiurnalPeakHour );
+    AddValueParser( "ConvoyChance",                   ambient.ConvoyChance );
+    AddValueParser( "GridCap",                        ambient.GridCap );
+    AddValueParser( "HubGridCap",                     ambient.HubGridCap );
+    AddValueParser( "HubThreshold",                   ambient.HubThreshold );
+    AddValueParser( "SystemCap",                      ambient.SystemCap );
+    AddValueParser( "GlobalCap",                      ambient.GlobalCap );
+    AddValueParser( "VirtualCap",                     ambient.VirtualCap );
+    AddValueParser( "SpeedOverRef",                   ambient.SpeedOverRef );
+    AddValueParser( "MinersPerBelt",                  ambient.MinersPerBelt );
+    AddValueParser( "MinerArrivalMin",                ambient.MinerArrivalMin );
+    AddValueParser( "MinerArrivalMax",                ambient.MinerArrivalMax );
+    AddValueParser( "MinerCyclesMin",                 ambient.MinerCyclesMin );
+    AddValueParser( "MinerCyclesMax",                 ambient.MinerCyclesMax );
+    AddValueParser( "MinerRockSwitchChance",          ambient.MinerRockSwitchChance );
+    AddValueParser( "MinerModel",                     ambient.MinerModel );
+    AddValueParser( "MinerHaulerVisits",              ambient.MinerHaulerVisits );
+    AddValueParser( "MinerHaulerInterval",            ambient.MinerHaulerInterval );
+    AddValueParser( "IceMinerFactor",                 ambient.IceMinerFactor );
+    AddValueParser( "PatrolSquadsBase",               ambient.PatrolSquadsBase );
+    AddValueParser( "PatrolSquadsMax",                ambient.PatrolSquadsMax );
+    AddValueParser( "NavySquadsBase",                 ambient.NavySquadsBase );
+    AddValueParser( "PatrolLoiterMin",                ambient.PatrolLoiterMin );
+    AddValueParser( "PatrolLoiterMax",                ambient.PatrolLoiterMax );
+    AddValueParser( "PatrolsEngageCriminals",         ambient.PatrolsEngageCriminals );
+    AddValueParser( "PatrolResponse",                 ambient.PatrolResponse );
+    AddValueParser( "MilitaryHpScale",                ambient.MilitaryHpScale );
+    AddValueParser( "CriminalsPerHourHigh",           ambient.CriminalsPerHourHigh );
+    AddValueParser( "CriminalsPerHourLow",            ambient.CriminalsPerHourLow );
+    AddValueParser( "CriminalFleeHull",               ambient.CriminalFleeHull );
+    AddValueParser( "CriminalHuntTimeout",            ambient.CriminalHuntTimeout );
+    AddValueParser( "WindDownSeconds",                ambient.WindDownSeconds );
+    AddValueParser( "GridLingerSeconds",              ambient.GridLingerSeconds );
+    AddValueParser( "ArrivalCloakMin",                ambient.ArrivalCloakMin );
+    AddValueParser( "ArrivalCloakMax",                ambient.ArrivalCloakMax );
+    AddValueParser( "JumpTransitMin",                 ambient.JumpTransitMin );
+    AddValueParser( "JumpTransitMax",                 ambient.JumpTransitMax );
+    AddValueParser( "JumpOutRemoveDelay",             ambient.JumpOutRemoveDelay );
+    AddValueParser( "WarmStart",                      ambient.WarmStart );
+    AddValueParser( "MarketRefreshMinutes",           ambient.MarketRefreshMinutes );
+    AddValueParser( "RngSeed",                        ambient.RngSeed );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"Enabled", "Traffic", "ConcordPatrols", "NavyPatrols", "Miners", "Criminals",
+            "HighSecCriminalsAttackPlayers", "LowSecCriminalsAttackPlayers", "DensityMultiplier",
+            "HighSecMultiplier", "LowSecMultiplier", "LowSecMinerMultiplier", "TrafficRateAtHub",
+            "TrafficRateFloor", "BusynessExponent", "JumpFalloff", "DiurnalAmplitude", "DiurnalPeakHour",
+            "ConvoyChance", "GridCap", "HubGridCap", "HubThreshold", "SystemCap", "GlobalCap",
+            "VirtualCap", "SpeedOverRef", "MinersPerBelt", "MinerArrivalMin", "MinerArrivalMax",
+            "MinerCyclesMin", "MinerCyclesMax", "MinerRockSwitchChance", "MinerModel", "MinerHaulerVisits",
+            "MinerHaulerInterval", "IceMinerFactor", "PatrolSquadsBase", "PatrolSquadsMax",
+            "NavySquadsBase", "PatrolLoiterMin", "PatrolLoiterMax", "PatrolsEngageCriminals",
+            "PatrolResponse", "MilitaryHpScale", "CriminalsPerHourHigh", "CriminalsPerHourLow",
+            "CriminalFleeHull", "CriminalHuntTimeout", "WindDownSeconds", "GridLingerSeconds",
+            "ArrivalCloakMin", "ArrivalCloakMax", "JumpTransitMin", "JumpTransitMax", "JumpOutRemoveDelay",
+            "WarmStart", "MarketRefreshMinutes", "RngSeed"})
         RemoveParser( name );
 
     return result;
