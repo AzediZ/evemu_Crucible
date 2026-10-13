@@ -2261,6 +2261,19 @@ void Client::UpdateFleetSession(CharFleetData& fleet)
     m_wing = fleet.wingID;
     m_squad = fleet.squadID;
 
+    // out of a fleet these are None, as they are at login.  the client tests 'session.fleetid is not None', so
+    //  setting them to 0 on leaving left it thinking it was still in a fleet (fleet 0)
+    if (!IsFleetID(m_fleet)) {
+        pSession->Clear("fleetjob");
+        pSession->Clear("fleetrole");
+        pSession->Clear("fleetbooster");
+        pSession->Clear("fleetid");
+        pSession->Clear("wingid");
+        pSession->Clear("squadid");
+        SendSessionChange();
+        return;
+    }
+
     pSession->SetInt("fleetjob", fleet.job);
     pSession->SetInt("fleetrole", fleet.role);
     pSession->SetInt("fleetbooster", fleet.booster);

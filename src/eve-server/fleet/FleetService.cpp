@@ -1505,6 +1505,11 @@ void FleetService::LeaveFleet(Client* pClient)
         pClient->GetShipSE()->RemoveLinkBonuses();
     UpdateLinks(fleetID);
 
+    // the leaver's own fleet boost ends with the fleet.  not while logging out, when the ship is on its way out too
+    ShipSE* pShipSE = pClient->GetShipSE();
+    if (pClient->IsLoaded() and (pShipSE != nullptr) and pShipSE->IsBoosted())
+        pShipSE->RemoveBoost();
+
     CharFleetData fleet = CharFleetData();
     //call updates on fleet session data
     pChar->SetFleetData(fleet);
