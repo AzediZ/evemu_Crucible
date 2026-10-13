@@ -113,6 +113,10 @@ public:
     void Untrack(SystemEntity* pSE);
     void Remove(SystemEntity* pSE);
     void ProcessWander(std::vector< SystemEntity* >& wanderers);
+    /* a wanderer ProcessWander() took out of the dynamic map that stays in this bubble (BubbleManager::Process():  a bad
+     *  position, or still inside after all):  tracked again, without any ball updates (the clients still have it).  an
+     *  entity whose SysBubble() is this bubble must be tracked, or RemoveEmpty() frees the bubble under it */
+    void Retrack(SystemEntity* pSE);
 
     void SendAddBalls(SystemEntity* to_who);
     void SendAddBalls2(SystemEntity* to_who);

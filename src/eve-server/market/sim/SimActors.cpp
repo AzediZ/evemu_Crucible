@@ -570,7 +570,9 @@ bool World::LoadJob(const SimJob& job)
     if (job.qtyOut <= 0)
         return false;
     const Actor& a(m_actors[job.actorID - 1]);
-    if ((a.kind != ActorKind::Manufacturer) or (a.nodeID != job.nodeID) or (m_static.Type(job.typeID) == nullptr))
+    // (a manufacturer retired with its node, which left the hub list, has no node:  its job goes, as the boot log says)
+    if ((a.kind != ActorKind::Manufacturer) or (a.state != 0) or (a.nodeID != job.nodeID) or (Node(job.nodeID) == nullptr)
+        or (m_static.Type(job.typeID) == nullptr))
         return false;
     SimJob j(job);
     if (j.stationID == 0)

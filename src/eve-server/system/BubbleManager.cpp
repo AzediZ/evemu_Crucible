@@ -107,11 +107,18 @@ void BubbleManager::Process() {
                     // position error.  this will screw things up.  if haspilot, send error.
                     if (cur->HasPilot())
                         cur->GetPilot()->SendErrorMsg("Internal Server Error.  Ref: ServerError 35148<br>Please either dock or relog.");
+                    /* it stays in its bubble, tracked:  ProcessWander() took it out of the bubble's map, and an untracked
+                     *  entity's bubble looks empty to RemoveEmpty(), which frees it under the entity's SysBubble() */
+                    if (cur->SysBubble() != nullptr)
+                        cur->SysBubble()->Retrack(cur);
                     continue;
                 }
                 _log(DESTINY__WARNING, "BubbleManager::Process() - Wanderer %s(%u) in system %s(%u) is being added to a bubble.", \
                         cur->GetName(), cur->GetID(), cur->SystemMgr()->GetName(), cur->SystemMgr()->GetID());
                 CheckBubble(cur);
+                // (CheckBubble() leaves one still inside its bubble where it is:  tracked again there, as above)
+                if (cur->SysBubble() != nullptr)
+                    cur->SysBubble()->Retrack(cur);
             }
             m_wanderers.clear();
         }

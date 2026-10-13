@@ -953,7 +953,7 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
     }
     if (sub == "actors") {
         // a kind by number or name (market maker 1, producer 2, consumer 3, vendor 4, miner 5, reprocessor 6,
-        //  manufacturer 7, loot 8, hauler 9, remote miner 10)
+        //  manufacturer 7, loot 8, hauler 9, remote miner 10, inventor 11, harvester 12, reactor 13, planetary 14)
         int kind(0);
         if (args.argCount() > 2) {
             std::string k(args.arg(2));
@@ -998,6 +998,9 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
             return usage;
         uint16 typeID((uint16)std::strtoul(args.arg(2).c_str(), nullptr, 10));
         double price(std::strtod(args.arg(3).c_str(), nullptr));
+        // (inf or nan would become the cells' anchor and their order prices)
+        if (!std::isfinite(price) or (price > 1e13))
+            return usage;
         uint32 region((args.argCount() > 4) ? (uint32)std::strtoul(args.arg(4).c_str(), nullptr, 10) : 0);
         uint32 n(m_world->SetAnchor(typeID, price, region, now));
         m_pendingAudit.push_back(AuditLine{DayOf(now), Fmt("gm.anchor.%u.%u.by%u", typeID, region, who->GetCharacterID()), Econ::ToCents(price)});
@@ -1016,6 +1019,9 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
         }
         uint32 id((uint32)std::strtoul(what.c_str(), nullptr, 10));
         double mult(std::strtod(args.arg(3).c_str(), nullptr)), days(std::strtod(args.arg(4).c_str(), nullptr));
+        // (inf or nan would reach the prices;  the end time is now + days, in seconds as an int64)
+        if (!std::isfinite(mult) or !std::isfinite(days) or (mult > 1000.0) or (days > 3650.0))
+            return usage;
         // phase 3:  ship losses (l:<hullTypeID>, l:0 every hull) and the miners' fleets (m:0)
         if (((kind == 'l') or (kind == 'm')) and (mult >= 0.0) and (days > 0.0)) {
             if (kind == 'l')

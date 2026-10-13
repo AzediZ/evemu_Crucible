@@ -560,6 +560,13 @@ bool DroneSE::FinishReturnToBay() {
     ShipSE* pShip(GetController());
     if (pShip == nullptr)
         return false;
+    /* a delegate's fighter isn't theirs:  it goes back to its owner (ReleaseControl() hands it back when the owner can
+     *  take it) instead of into the delegate's bay.  ScoopTo() would give the delegate the item, after handing control to
+     *  the owner and re-applying the owner's bonuses on the way */
+    if ((m_controllerOwnerID != 0) and (m_controllerOwnerID != m_ownerID)) {
+        ReleaseControl();
+        return false;
+    }
     try {
         ScoopTo(pShip, flagDroneBay);
         return true;
