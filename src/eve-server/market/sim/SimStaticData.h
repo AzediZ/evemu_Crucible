@@ -134,6 +134,42 @@ namespace MktSim {
         float    refineTake     = 0.05f;
     };
 
+    /* phase 6:  how the advanced chains make things (SimChains.cpp).  quantities are units (reactions:  invTypeReactions
+     *  quantity x the type's moonMiningAmount, as TowerSE::ProcessUnits) */
+    namespace RecipeKind {
+        enum : uint8_t {
+            Invention       = 1,    // a T1 blueprint copy and datacores (and a decryptor) -> runs of a T2 blueprint copy, by chance
+            Reaction        = 2,    // a POS reaction cycle (invTypeReactions)
+            Planetary       = 3     // a planetary factory cycle (piSchematics, piTypeMap)
+        };
+    }
+    struct Recipe {
+        uint8_t  kind           = 0;
+        uint16_t id             = 0;    // the T1 blueprint (invention), the reaction type, the schematic
+        std::vector<std::pair<uint16_t, double>> inputs;    // used up per run (data interfaces and skills aren't)
+        std::vector<std::pair<uint16_t, double>> outputs;   // per run (invention:  the T2 blueprint, runs of it per success)
+        double   seconds        = 0.0;  // per run (invention:  the T1 blueprint's researchTechTime)
+        double   chance         = 1.0;  // invention:  the output blueprint's chanceOfRE (the base chance, before skills)
+        uint16_t decryptorGroup = 0;    // invention:  the decryptors its data interface takes (0:  none)
+        uint32_t maxRuns        = 0;    // invention:  the output blueprint's maxProductionLimit (caps a decryptor's runs)
+    };
+    /* a manufacturing job's materials (T2, components):  per unit made (a run makes portionSize), the base materials with
+     *  the recycled T1 item's taken off and no waste (they take the blueprint's waste at the copy's material level), and
+     *  the extra materials (the T1 item, components, R.A.M.:  quantity x damagePerJob) */
+    struct ChainBill {
+        std::vector<std::pair<uint16_t, double>> base;
+        std::vector<std::pair<uint16_t, double>> extra;
+        double   wasteFactor    = 0.1;  // invBlueprintTypes.wasteFactor / 100
+    };
+    struct Decryptor {
+        uint16_t typeID         = 0;
+        uint16_t groupID        = 0;
+        double   chance         = 1.0;  // inventionPropabilityMultiplier
+        double   runs           = 0.0;  // inventionMaxRunModifier
+        double   me             = 0.0;  // inventionMEModifier
+        double   pe             = 0.0;  // inventionPEModifier
+    };
+
     class StaticData {
     public:
         std::map<uint16_t, TypeData>                        types;
@@ -157,6 +193,12 @@ namespace MktSim {
         std::vector<std::pair<uint32_t, uint32_t>>          jumps;          // (from, to) solar systems
         std::vector<MapStation>                             stations;
         std::map<uint16_t, uint8_t>                         oreBands;       // ore groupID -> bands with its belts (1 << SecBand)
+        // phase 6:  the advanced chains (PLAN 6.4).  a product they can't make stays with the stock model
+        std::vector<Recipe>                                 recipes;        // invention, reactions, planetary schematics
+        std::map<uint16_t, ChainBill>                       bills;          // T2 and components -> their job's materials
+        std::map<uint16_t, uint16_t>                        blueprints;     // T2 product -> its blueprint (a job uses a run of a copy)
+        std::vector<Decryptor>                              decryptors;
+        std::map<uint16_t, double>                          moonAmounts;    // moonMiningAmount:  units of a harvesting batch
 
         const TypeData* Type(uint16_t typeID) const;
         const GroupCal* Group(uint16_t groupID) const;

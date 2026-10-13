@@ -102,6 +102,16 @@ public:
     static void LoadShipments(std::vector<MktSim::SimTrip>& into);
     // mktSimShipment, rewritten when the shipments changed (inside Flush's transaction)
     static bool FlushShipments(MktSim::World& world);
+    /* phase 6:  the advanced chains */
+    /* invention (a T1 blueprint's activity 8 requirements, the T2 blueprint's chanceOfRE and runs, the data interface's
+     *  decryptor group), decryptors (their invention attributes), reactions (invTypeReactions x moonMiningAmount),
+     *  planetary schematics (piSchematics, piTypeMap), the bills of T2, T3 and components (invTypeMaterials less the
+     *  recycled T1 item's, ramTypeRequirements x damagePerJob, wasteFactor) and the T2 products' blueprints.  after
+     *  LoadCalibration */
+    static void LoadChains(MktSim::StaticData& data);
+    // per npc corp:  its research fields (crpNPCCorporationResearchFields), the reaction blueprints and the planetary
+    //  goods it trades (crpNPCCorporationTrades).  for choosing the corps the phase 6 actors trade as
+    static void LoadChainCorpData(std::map<uint32, std::array<uint32, 3>>& into);
 
     /* history */
     static bool HasHistoryBefore(uint32 regionID, uint16 typeID, int64 fileTime);

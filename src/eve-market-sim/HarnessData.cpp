@@ -7,9 +7,11 @@
   *
   */
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 
@@ -139,6 +141,11 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
     data.vendors.clear();
     data.losses.clear();
     data.fits.clear();
+    data.recipes.clear();
+    data.bills.clear();
+    data.blueprints.clear();
+    data.decryptors.clear();
+    data.moonAmounts.clear();
     AddHubs(data);
     Gen g(seed ^ 0x5EEDDA7Aull);
     auto count = [scale](int n) { return std::max(1, (int)std::lround(n * scale)); };
@@ -336,6 +343,293 @@ void BuildSynthetic(StaticData& data, uint64_t seed, double scale)
     }
     AddSyntheticIndustry(data, seed);
     AddSyntheticGeography(data, seed);
+    AddSyntheticChains(data, seed);
+}
+
+void AddSyntheticChains(StaticData& data, uint64_t seed)
+{
+    /* phase 6:  the advanced chains on top of the phase 2/3 world, with their own draws (the earlier types keep their
+     *  prices and volumes).  moon:  8 raw materials -> 4 intermediates -> 4 composites (reactions, POS fuel), a gas and a
+     *  polymer;  the world's 20 components are built of the composites;  T2:  invention recipes for the world's T2 (datacores,
+     *  decryptors, the base chance of modules 0.4 and ships 0.3) and their bills (the T1 item, components, Morphite);
+     *  planetary:  3 P0 -> 3 P1 -> 2 P2, and a fuel block of them and an npc vendor's oxygen.  the volumes of the
+     *  intermediate goods are what the chains use (PLAN 4.1:  traded volume about consumption) */
+    Gen g(seed ^ 0xC4A1D5ull);
+    const uint16_t Morphite = 11399;
+    std::vector<uint16_t> t2, components;
+    for (auto& cur : data.types) {
+        if (cur.second.simClass == SimClass::MfgT2)
+            t2.push_back(cur.first);
+        else if (cur.second.simClass == SimClass::Component)
+            components.push_back(cur.first);
+    }
+    if (t2.empty() or components.empty() or (data.types.find(Morphite) == data.types.end()))
+        return;
+    uint16_t next(36000), nextRecipe(44000), nextBlueprint(40000);
+    double tradesPerUnit(2.0);          // Params::tradesPerUnit:  traded volume = 2 x what is used
+    auto addType = [&](uint16_t groupID, uint8_t category, uint8_t simClass, double price, double vol) -> TypeData& {
+        TypeData t(Base(next++, groupID, category, simClass));
+        t.refPrice = price;
+        t.basePrice = price;
+        t.volatility = (float)g.LogN(vol, 0.3);
+        t.volume = 0.01;
+        data.types[t.typeID] = t;
+        return data.types[t.typeID];
+    };
+    // reactions:  'quantities' in units (as the server's loader gives them, x moonMiningAmount)
+    auto reaction = [&](std::vector<std::pair<uint16_t, double>> in, uint16_t out, double qty) {
+        Recipe r;
+        r.kind = RecipeKind::Reaction;
+        r.id = nextRecipe++;
+        r.inputs = in;
+        r.outputs.push_back(std::make_pair(out, qty));
+        r.seconds = 3600.0;
+        data.recipes.push_back(r);
+    };
+    const double fuelPerHour(10.0);
+    // planetary:  P0 (extracted) -> P1 (3000 -> 20, half an hour) -> P2 (40 + 40 -> 5, an hour)
+    std::vector<uint16_t> p0, p1, p2;
+    for (int i = 0; i < 3; ++i) {
+        TypeData& t(addType((uint16_t)(1032 + i), Category::PIResource, SimClass::PI, g.LogN(4.0, 0.3), 0.039));
+        t.lotSize = 10000;
+        p0.push_back(t.typeID);
+    }
+    for (int i = 0; i < 3; ++i) {
+        TypeData& t(addType(1042, Category::PICommodity, SimClass::PI, 3000.0 * data.types[p0[i]].refPrice / 20.0 * 1.3, 0.039));
+        t.lotSize = 1000;
+        Recipe r;
+        r.kind = RecipeKind::Planetary;
+        r.id = nextRecipe++;
+        r.inputs.push_back(std::make_pair(p0[i], 3000.0));
+        r.outputs.push_back(std::make_pair(t.typeID, 20.0));
+        r.seconds = 1800.0;
+        data.recipes.push_back(r);
+        p1.push_back(t.typeID);
+    }
+    for (int i = 0; i < 2; ++i) {
+        uint16_t a(p1[i]), b(p1[i + 1]);
+        TypeData& t(addType(1034, Category::PICommodity, SimClass::PI, (40.0 * data.types[a].refPrice + 40.0 * data.types[b].refPrice) / 5.0 * 1.3, 0.039));
+        t.lotSize = 100;
+        Recipe r;
+        r.kind = RecipeKind::Planetary;
+        r.id = nextRecipe++;
+        r.inputs.push_back(std::make_pair(a, 40.0));
+        r.inputs.push_back(std::make_pair(b, 40.0));
+        r.outputs.push_back(std::make_pair(t.typeID, 5.0));
+        r.seconds = 3600.0;
+        data.recipes.push_back(r);
+        p2.push_back(t.typeID);
+    }
+    // an npc vendor's oxygen and the fuel block (T1, 40 a run):  P1, P2 and oxygen
+    TypeData oxygen(Base(next++, 280, Category::Commodity, SimClass::NpcVendor));
+    oxygen.basePrice = 95.0;
+    oxygen.refPrice = 95.0;
+    oxygen.priceSource = 7;
+    data.types[oxygen.typeID] = oxygen;
+    TypeData fuel(Base(next++, 1136, Category::Material, SimClass::MfgT1));
+    fuel.portionSize = 40;
+    fuel.bom.push_back(std::make_pair(p1[2], 8.0 / 40.0));
+    fuel.bom.push_back(std::make_pair(p2[0], 20.0 / 40.0));
+    fuel.bom.push_back(std::make_pair(p2[1], 10.0 / 40.0));
+    fuel.bom.push_back(std::make_pair(oxygen.typeID, 20.0 / 40.0));
+    double fuelCost(0.0);
+    for (auto& in : fuel.bom)
+        fuelCost += in.second * data.types[in.first].refPrice;
+    fuel.refPrice = fuelCost * 1.15;
+    fuel.basePrice = fuel.refPrice;
+    fuel.buildCostRef = fuelCost;
+    fuel.buildSeconds = 300.0;
+    fuel.lotSize = 400;
+    fuel.volatility = 0.03f;
+    fuel.volume = 5.0;
+    data.types[fuel.typeID] = fuel;
+    const double fuelPrice(fuel.refPrice);
+
+
+    // moon:  raw (harvested, 100 a batch;  about 1.6 x the fuel an array burns for it), intermediates (2 raw -> 200), composites (2 intermediates -> 200), priced at
+    //  their inputs and fuel x 1.15
+    std::vector<uint16_t> raw, inter, comp;
+    for (int i = 0; i < 8; ++i) {
+        TypeData& t(addType(427, Category::Material, SimClass::Reaction, fuelPerHour * fuelPrice / 100.0 * g.LogN(1.6, 0.5), 0.039));
+        t.lotSize = 1000;
+        data.moonAmounts[t.typeID] = 100.0;
+        raw.push_back(t.typeID);
+    }
+    for (int i = 0; i < 4; ++i) {
+        uint16_t a(raw[(2 * i) % 8]), b(raw[(2 * i + 1) % 8]);
+        double cost((100.0 * data.types[a].refPrice + 100.0 * data.types[b].refPrice + fuelPerHour * fuelPrice) / 200.0);
+        TypeData& t(addType(428, Category::Material, SimClass::Reaction, cost * 1.15, 0.039));
+        t.lotSize = 1000;
+        reaction({ std::make_pair(a, 100.0), std::make_pair(b, 100.0) }, t.typeID, 200.0);
+        inter.push_back(t.typeID);
+    }
+    for (int i = 0; i < 4; ++i) {
+        uint16_t a(inter[i]), b(inter[(i + 1) % 4]);
+        double cost((100.0 * data.types[a].refPrice + 100.0 * data.types[b].refPrice + fuelPerHour * fuelPrice) / 200.0);
+        TypeData& t(addType(429, Category::Material, SimClass::Reaction, cost * 1.15, 0.039));
+        t.lotSize = 1000;
+        reaction({ std::make_pair(a, 100.0), std::make_pair(b, 100.0) }, t.typeID, 200.0);
+        comp.push_back(t.typeID);
+    }
+    // gas (ships harvest it, no fuel) and a polymer of it and a raw material
+    TypeData& gas(addType(711, 2, SimClass::Mined, 900.0, 0.039));
+    gas.lotSize = 1000;
+    double polyCost((100.0 * gas.refPrice + 100.0 * data.types[raw[0]].refPrice + fuelPerHour * fuelPrice) / 100.0);
+    uint16_t gasID(gas.typeID);
+    TypeData& poly(addType(974, Category::Material, SimClass::Reaction, polyCost * 1.15, 0.039));
+    poly.lotSize = 100;
+    poly.unitsPerDay = 4e4;
+    reaction({ std::make_pair(gasID, 100.0), std::make_pair(raw[0], 100.0) }, poly.typeID, 100.0);
+
+    // the components:  built of two composites (an unresearched original's bill is x1.1:  price / bill about 1.1)
+    for (auto id : components) {
+        TypeData& t(data.types[id]);
+        ChainBill b;
+        b.wasteFactor = 0.1;
+        double value(t.refPrice / 1.2);
+        uint16_t a(comp[g.Pick(comp.size())]), c(comp[g.Pick(comp.size())]);
+        if (a == c)
+            c = comp[(std::find(comp.begin(), comp.end(), a) - comp.begin() + 1) % comp.size()];
+        b.base.push_back(std::make_pair(a, std::max(1.0, std::round(0.6 * value / data.types[a].refPrice))));
+        b.base.push_back(std::make_pair(c, std::max(1.0, std::round(0.4 * value / data.types[c].refPrice))));
+        data.bills[id] = b;
+    }
+
+    // datacores and decryptors (loot);  their volumes follow the inventions below
+    std::vector<uint16_t> datacores, decryptors[2];
+    for (int i = 0; i < 6; ++i) {
+        TypeData& t(addType(333, Category::Commodity, SimClass::Salvage, g.LogN(1.0e5, 0.4), 0.05));
+        t.lotSize = 10;
+        datacores.push_back(t.typeID);
+    }
+    static const double decAttr[3][3] = { { 1.2, 1.0, 2.0 }, { 0.6, 9.0, -2.0 }, { 1.1, 0.0, 3.0 } };   // chance, runs, ME
+    for (int k = 0; k < 2; ++k) {
+        for (int i = 0; i < 3; ++i) {
+            TypeData& t(addType((uint16_t)(728 + k), 35, SimClass::Salvage, g.LogN(4.0e5, 0.4), 0.06));
+            Decryptor d;
+            d.typeID = t.typeID;
+            d.groupID = (uint16_t)(728 + k);
+            d.chance = decAttr[i][0];
+            d.runs = decAttr[i][1];
+            d.me = decAttr[i][2];
+            d.pe = 0.0;
+            data.decryptors.push_back(d);
+            decryptors[k].push_back(t.typeID);
+        }
+    }
+
+    // T2:  invention (from the T1 item of its bill) and the bill (the extras it had, plus Morphite)
+    std::map<uint16_t, double> datacoreUse;         // units a day at TQ scale
+    double attempts(0.0);
+    for (auto id : t2) {
+        TypeData& t(data.types[id]);
+        bool ship(t.categoryID == Category::Ship);
+        double t2Max(ship ? 10.0 : 100.0), base(ship ? 0.3 : 0.4);
+        uint16_t bp(nextBlueprint++);
+        data.blueprints[id] = bp;
+        Recipe r;
+        r.kind = RecipeKind::Invention;
+        r.id = (uint16_t)(bp + 2000);
+        uint16_t d1(datacores[g.Pick(datacores.size())]), d2(datacores[g.Pick(datacores.size())]);
+        if (d1 == d2)
+            d2 = datacores[(std::find(datacores.begin(), datacores.end(), d1) - datacores.begin() + 1) % datacores.size()];
+        double q(ship ? 8.0 : 2.0);
+        r.inputs.push_back(std::make_pair(std::min(d1, d2), q));
+        r.inputs.push_back(std::make_pair(std::max(d1, d2), q));
+        r.outputs.push_back(std::make_pair(bp, (double)std::max(1, (int)std::floor(t2Max / 10.0))));
+        r.seconds = ship ? 30000.0 : 9000.0;
+        r.chance = base;
+        r.decryptorGroup = (uint16_t)(ship ? 729 : 728);
+        r.maxRuns = (uint32_t)t2Max;
+        data.recipes.push_back(r);
+        ChainBill b;
+        b.wasteFactor = 0.1;
+        double cost(0.0);
+        for (auto& in : t.bom)
+            cost += in.second * data.types[in.first].refPrice;
+        b.extra = t.bom;
+        b.base.push_back(std::make_pair(Morphite, std::max(1.0, std::round(0.04 * cost / data.types[Morphite].refPrice))));
+        data.bills[id] = b;
+        // what its invention uses a day (modules 10 runs a success, ships 1), at about the base chance x 1.26 (skills)
+        double perAttempt(base * 1.26 * r.outputs.front().second);
+        double a(t.unitsPerDay / tradesPerUnit / perAttempt);
+        attempts += a;
+        for (auto& in : r.inputs)
+            datacoreUse[in.first] += a * in.second;
+    }
+    for (auto id : datacores)
+        data.types[id].unitsPerDay = tradesPerUnit * std::max(10.0, datacoreUse[id]);
+    for (int k = 0; k < 2; ++k)
+        for (auto id : decryptors[k])
+            data.types[id].unitsPerDay = tradesPerUnit * std::max(5.0, 0.05 * attempts);
+
+    // the moon volumes:  what the components use (their own consumption and the T2's), down the reactions
+    std::map<uint16_t, double> use;                 // units a day at TQ scale
+    for (auto id : components)
+        use[id] += data.types[id].unitsPerDay / tradesPerUnit;
+    for (auto id : t2)
+        for (auto& in : data.types[id].bom)
+            if (data.types[in.first].simClass == SimClass::Component)
+                use[in.first] += in.second * data.types[id].unitsPerDay / tradesPerUnit;
+    double runsAll(0.0);
+    use[poly.typeID] += poly.unitsPerDay / tradesPerUnit;
+    for (auto id : components)
+        for (auto& in : data.bills[id].base)
+            use[in.first] += 1.1 * in.second * use[id];
+    for (auto it = data.recipes.rbegin(); it != data.recipes.rend(); ++it) {
+        if (it->kind != RecipeKind::Reaction)
+            continue;
+        double runs(use[it->outputs.front().first] / it->outputs.front().second);
+        runsAll += runs;
+        for (auto& in : it->inputs)
+            use[in.first] += runs * in.second;
+    }
+    for (auto id : raw)
+        data.types[id].unitsPerDay = tradesPerUnit * std::max(1e4, use[id]);
+    for (auto id : inter)
+        data.types[id].unitsPerDay = tradesPerUnit * std::max(1e4, use[id]);
+    for (auto id : comp)
+        data.types[id].unitsPerDay = tradesPerUnit * std::max(1e4, use[id]);
+    data.types[gasID].unitsPerDay = tradesPerUnit * std::max(1e4, use[gasID]);
+    double harvestHours(0.0);
+    for (auto id : raw)
+        harvestHours += data.types[id].unitsPerDay / tradesPerUnit / 100.0;
+
+    // what the towers burn (harvesting arrays and reaction arrays) and as much again for the other towers (consumers)
+    double fuelUse(fuelPerHour * (harvestHours + runsAll));
+    fuel.unitsPerDay = tradesPerUnit * 2.0 * std::max(1e3, fuelUse);
+    data.types[fuel.typeID].unitsPerDay = fuel.unitsPerDay;
+    // the planetary volumes:  what the fuel block uses and as much again (other uses) of P1 and P2, what they use of P0
+    std::map<uint16_t, double> piUse, total;
+    for (auto& in : fuel.bom)
+        piUse[in.first] += in.second * fuel.unitsPerDay / tradesPerUnit;
+    for (auto it = data.recipes.rbegin(); it != data.recipes.rend(); ++it) {
+        if (it->kind != RecipeKind::Planetary)
+            continue;
+        uint16_t out(it->outputs.front().first);
+        total[out] = 2.0 * piUse[out];
+        double runs(total[out] / it->outputs.front().second);
+        for (auto& in : it->inputs)
+            piUse[in.first] += runs * in.second;
+    }
+    for (auto id : p0)
+        total[id] = piUse[id];
+    for (auto ids : { &p0, &p1, &p2 })
+        for (auto id : *ids)
+            data.types[id].unitsPerDay = tradesPerUnit * std::max(100.0, total[id]);
+
+    // every new type trades at every hub (the regional shares as the others')
+    for (auto& cur : data.types) {
+        if ((cur.first < 36000) or (cur.first >= next) or !SimClass::HasCells(cur.second.simClass))
+            continue;
+        for (size_t n = 1; n < data.nodes.size(); ++n) {
+            RegionTypeCal r = RegionTypeCal();
+            r.priceRatio = (float)std::exp(0.03 * g.N());
+            r.unitsShare = (float)(data.regionDefault[data.nodes[n].regionID].unitsShare * std::exp(0.1 * g.N()));
+            r.activeShare = 1.0f;
+            data.region[std::make_pair(data.nodes[n].regionID, cur.first)] = r;
+        }
+    }
 }
 
 void AddSyntheticIndustry(StaticData& data, uint64_t seed)
@@ -546,6 +840,11 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
     data.vendors.clear();
     data.losses.clear();
     data.fits.clear();
+    data.recipes.clear();
+    data.bills.clear();
+    data.blueprints.clear();
+    data.decryptors.clear();
+    data.moonAmounts.clear();
     AddHubs(data);
     data.regionDefault.clear();
 
@@ -669,6 +968,56 @@ bool LoadExport(const std::string& path, StaticData& data, std::string& err)
         itr->second.refine.clear();
         for (auto& line : cur.second["materials"].a)
             itr->second.refine.push_back(std::make_pair((uint16_t)line[0].Num(), line[1].Num() / portion));
+    }
+    // phase 6:  the chains (gen_market_calibration.py's "chains", as MarketSimDB::LoadChains loads them)
+    {
+        const Json& ch(doc["chains"]);
+        auto lines = [](const Json& a, std::vector<std::pair<uint16_t, double>>& into) {
+            for (auto& l : a.a)
+                into.push_back(std::make_pair((uint16_t)l[0].Num(), l[1].Num()));
+        };
+        for (auto& r : ch["recipes"].a) {
+            Recipe rc;
+            rc.kind = (uint8_t)r["kind"].Num();
+            rc.id = (uint16_t)r["id"].Num();
+            lines(r["inputs"], rc.inputs);
+            lines(r["outputs"], rc.outputs);
+            rc.seconds = r["seconds"].Num();
+            rc.chance = r["chance"].Num(1.0);
+            rc.decryptorGroup = (uint16_t)r["decryptorGroup"].Num();
+            rc.maxRuns = (uint32_t)r["maxRuns"].Num();
+            data.recipes.push_back(rc);
+        }
+        for (auto& cur : ch["bills"].o) {
+            ChainBill b;
+            lines(cur.second["base"], b.base);
+            lines(cur.second["extra"], b.extra);
+            b.wasteFactor = cur.second["wasteFactor"].Num(0.1);
+            data.bills[(uint16_t)std::atoi(cur.first.c_str())] = b;
+        }
+        for (auto& cur : ch["blueprints"].o)
+            data.blueprints[(uint16_t)std::atoi(cur.first.c_str())] = (uint16_t)cur.second.Num();
+        for (auto& d : ch["decryptors"].a) {
+            Decryptor x;
+            x.typeID = (uint16_t)d[0].Num();
+            x.groupID = (uint16_t)d[1].Num();
+            x.chance = d[2].Num(1.0);
+            x.runs = d[3].Num();
+            x.me = d[4].Num();
+            x.pe = d[5].Num();
+            data.decryptors.push_back(x);
+        }
+        for (auto& cur : ch["moonAmounts"].o)
+            data.moonAmounts[(uint16_t)std::atoi(cur.first.c_str())] = cur.second.Num();
+        /* what T2, T3 and components reprocess into (invTypeMaterials, as the server has it):  the 'bom' base above has
+         *  the invented copy's waste in (x1.5), and a reprocessing floor that high buys every T2 charge for its minerals */
+        for (auto& cur : ch["materials"].o) {
+            std::map<uint16_t, TypeData>::iterator itr = data.types.find((uint16_t)std::atoi(cur.first.c_str()));
+            if (itr == data.types.end())
+                continue;
+            itr->second.refine.clear();
+            lines(cur.second, itr->second.refine);
+        }
     }
     if (data.types.empty()) {
         err = "no types in " + path;

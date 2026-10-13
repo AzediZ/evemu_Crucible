@@ -33,6 +33,9 @@ namespace MktHarness {
     size_t AddRegionalNodes(MktSim::StaticData& data);
     // phase 4:  the other nodes' calibrated price ratios pulled apart, each x e^(sigma N) (a test of the arbitrage)
     void PullApart(MktSim::StaticData& data, double sigma);
+    // phase 6:  moon materials and reactions, components of them, T2 invention, planetary goods and a fuel block
+    //  (BuildSynthetic calls it)
+    void AddSyntheticChains(MktSim::StaticData& data, uint64_t seed);
 
     // the --export-json snapshot (types, bills of materials, refine outputs, the mktCal* rows).  false and a message
     //  when the file can't be read

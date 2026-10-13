@@ -55,9 +55,11 @@ int Goods::Sign(uint8_t flow)
     switch (flow) {
         case Production: case Seed: case Vendor: case PlayerToSim: case Reconcile:
         case Mined: case Loot: case Dropped: case Manufactured: case Refined:
+        case Invented: case Harvested: case Extracted:
             return 1;
         case SimToPlayer: case Consumption: case Materials: case RefineTax: case Destroyed: case Spoiled:
         case Transport:
+        case Fuel:
             return -1;
     }
     return 0;
@@ -83,6 +85,10 @@ const char* Goods::Name(uint8_t flow)
         case Destroyed:     return "goods.sink.destroyed";
         case Spoiled:       return "goods.sink.spoiled";
         case Transport:     return "goods.sink.transport";
+        case Invented:      return "goods.faucet.invented";
+        case Harvested:     return "goods.faucet.harvested";
+        case Extracted:     return "goods.faucet.extracted";
+        case Fuel:          return "goods.sink.fuel";
     }
     return "goods.unknown";
 }
@@ -100,6 +106,10 @@ const char* ActorKind::Name(uint8_t kind)
         case LootSource:    return "loot source";
         case Hauler:        return "hauler";
         case RemoteMiner:   return "remote miner";
+        case Inventor:      return "inventor";
+        case Harvester:     return "harvester";
+        case Reactor:       return "reactor";
+        case Planetary:     return "planetary";
     }
     return "?";
 }

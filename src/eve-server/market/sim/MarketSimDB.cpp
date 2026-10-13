@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include "market/sim/MarketSimDB.h"
+#include "market/sim/SimChains.h"
 #include "market/sim/SimEconomy.h"
 #include "market/sim/SimFacilityMgr.h"
 
@@ -1033,4 +1034,226 @@ bool MarketSimDB::FlushShipments(World& world)
     if (!ok)
         world.MarkTripsChanged();
     return ok;
+}
+
+/************************************************************************************************************************
+ * phase 6:  the advanced chains
+ */
+
+void MarketSimDB::LoadChains(StaticData& data)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    auto known = [&data](uint32 typeID) { return data.types.find((uint16)typeID) != data.types.end(); };
+    // moonMiningAmount:  the units of a harvesting batch and of a reaction's quantity (TowerSE::ProcessUnits)
+    if (sDatabase.RunQuery(res, "SELECT typeID, IFNULL(valueFloat, valueInt) FROM dgmTypeAttributes WHERE attributeID = 726"))
+        while (res.GetRow(row))
+            if (row.GetDouble(1) > 0.0)
+                data.moonAmounts[(uint16)row.GetUInt(0)] = row.GetDouble(1);
+    auto amount = [&data](uint16 typeID) {
+        std::map<uint16, double>::const_iterator itr = data.moonAmounts.find(typeID);
+        return (itr == data.moonAmounts.end()) ? 1.0 : std::max(1.0, itr->second);
+    };
+
+    // the bills of T2, T3 and components:  invTypeMaterials less the recycled requirement's materials, and the extras
+    std::map<uint32, std::vector<std::pair<uint16, double>>> mats;
+    if (sDatabase.RunQuery(res, "SELECT typeID, materialTypeID, quantity FROM invTypeMaterials WHERE quantity > 0 ORDER BY typeID, materialTypeID"))
+        while (res.GetRow(row))
+            mats[row.GetUInt(0)].push_back(std::make_pair((uint16)row.GetUInt(1), (double)row.GetUInt(2)));
+    struct Req { uint16 typeID; double qty, damage; bool recycle; };
+    std::map<uint32, std::vector<Req>> reqs;
+    if (sDatabase.RunQuery(res,
+        "SELECT r.typeID, r.requiredTypeID, r.quantity, r.damagePerJob, r.extra FROM ramTypeRequirements r"
+        " JOIN invTypes i ON i.typeID = r.requiredTypeID JOIN invGroups g ON g.groupID = i.groupID"
+        " WHERE r.activityID = 1 AND g.categoryID <> 16 ORDER BY r.typeID, r.requiredTypeID"))
+        while (res.GetRow(row))
+            reqs[row.GetUInt(0)].push_back(Req{(uint16)row.GetUInt(1), (double)row.GetUInt(2), row.GetDouble(3), row.GetUInt(4) != 0});
+    std::map<uint16, uint16> blueprintOf;
+    if (sDatabase.RunQuery(res, "SELECT productTypeID, blueprintTypeID, wasteFactor FROM invBlueprintTypes ORDER BY productTypeID, blueprintTypeID")) {
+        while (res.GetRow(row)) {
+            std::map<uint16, TypeData>::const_iterator t = data.types.find((uint16)row.GetUInt(0));
+            if ((t == data.types.end()) or (blueprintOf.count(t->first) > 0))
+                continue;
+            blueprintOf[t->first] = (uint16)row.GetUInt(1);
+            uint8 cls(t->second.simClass);
+            if ((cls != SimClass::MfgT2) and (cls != SimClass::MfgT3) and (cls != SimClass::Component))
+                continue;
+            double portion((double)std::max<uint32>(1, t->second.portionSize));
+            std::map<uint16, double> base;
+            for (auto& m : mats[t->first])
+                base[m.first] += m.second;
+            ChainBill bill;
+            bill.wasteFactor = row.GetDouble(2) / 100.0;
+            for (auto& r : reqs[row.GetUInt(1)]) {
+                if (r.recycle)
+                    for (auto& m : mats[r.typeID])
+                        if (base.count(m.first) > 0)
+                            base[m.first] = std::max(0.0, base[m.first] - m.second * r.qty);
+                if (r.damage > 0.0)
+                    bill.extra.push_back(std::make_pair(r.typeID, r.qty * r.damage / portion));
+            }
+            for (auto& b : base)
+                if (b.second > 0.0)
+                    bill.base.push_back(std::make_pair(b.first, b.second / portion));
+            if (!bill.base.empty() or !bill.extra.empty())
+                data.bills[t->first] = bill;
+            if (cls == SimClass::MfgT2)
+                data.blueprints[t->first] = blueprintOf[t->first];
+        }
+    }
+
+    /* invention (RamMethods::GetInventionData):  a T2 blueprint with a chance, invented from the blueprint of its T1 parent;
+     *  the T1 blueprint's datacores (the data interface is not used up:  FactoryDB::GetRAMRequirements), its decryptor group,
+     *  the runs of a max-run T1 copy (EvEMath::RAM::InventionRuns) */
+    struct InvReq { std::vector<std::pair<uint16, double>> inputs; uint16 decryptorGroup = 0; };
+    std::map<uint32, InvReq> invReqs;
+    if (sDatabase.RunQuery(res,
+        "SELECT r.typeID, r.requiredTypeID, r.quantity * r.damagePerJob, i.groupID, IFNULL(a.valueInt, a.valueFloat)"
+        " FROM ramTypeRequirements r JOIN invTypes i ON i.typeID = r.requiredTypeID JOIN invGroups g ON g.groupID = i.groupID"
+        " LEFT JOIN dgmTypeAttributes a ON a.typeID = r.requiredTypeID AND a.attributeID = 1115"
+        " WHERE r.activityID = 8 AND g.categoryID <> 16 ORDER BY r.typeID, r.requiredTypeID"))
+    {
+        while (res.GetRow(row)) {
+            InvReq& ir(invReqs[row.GetUInt(0)]);
+            if (row.GetUInt(3) == Chains::Group::DataInterface) {
+                ir.decryptorGroup = row.IsNull(4) ? 0 : (uint16)row.GetDouble(4);
+                continue;
+            }
+            if (row.GetDouble(2) > 0.0)
+                ir.inputs.push_back(std::make_pair((uint16)row.GetUInt(1), row.GetDouble(2)));
+        }
+    }
+    uint32 inventions(0);
+    if (sDatabase.RunQuery(res,
+        "SELECT b2.blueprintTypeID, b2.chanceOfRE, b2.maxProductionLimit, b1.blueprintTypeID, b1.researchTechTime, b1.maxProductionLimit"
+        " FROM invBlueprintTypes b2"
+        " JOIN invMetaTypes m ON m.typeID = b2.productTypeID AND m.metaGroupID = 2"
+        " JOIN invBlueprintTypes b1 ON b1.productTypeID = m.parentTypeID"
+        " WHERE b2.chanceOfRE > 0 ORDER BY b2.blueprintTypeID, b1.blueprintTypeID"))
+    {
+        std::set<uint32> seen;
+        while (res.GetRow(row)) {
+            if (!seen.insert(row.GetUInt(0)).second)
+                continue;
+            std::map<uint32, InvReq>::const_iterator ir = invReqs.find(row.GetUInt(3));
+            if ((ir == invReqs.end()) or ir->second.inputs.empty())
+                continue;
+            uint32 t1Max(std::max<uint32>(1, row.GetUInt(5))), t2Max(std::max<uint32>(1, row.GetUInt(2)));
+            Recipe r;
+            r.kind = RecipeKind::Invention;
+            r.id = (uint16)row.GetUInt(3);
+            r.inputs = ir->second.inputs;
+            r.outputs.push_back(std::make_pair((uint16)row.GetUInt(0),
+                                               (double)EvEMath::RAM::InventionRuns((int16)std::min<uint32>(t1Max, 32767), t1Max, t2Max, 0)));
+            r.seconds = row.GetDouble(4);
+            r.chance = row.GetDouble(1);
+            r.decryptorGroup = ir->second.decryptorGroup;
+            r.maxRuns = t2Max;
+            data.recipes.push_back(r);
+            ++inventions;
+        }
+    }
+    // decryptors:  their chance multiplier, runs, ME and PE modifiers
+    if (sDatabase.RunQuery(res,
+        "SELECT a.typeID, i.groupID,"
+        " MAX(IF(a.attributeID = 1112, IFNULL(a.valueFloat, a.valueInt), NULL)), MAX(IF(a.attributeID = 1124, IFNULL(a.valueFloat, a.valueInt), NULL)),"
+        " MAX(IF(a.attributeID = 1113, IFNULL(a.valueFloat, a.valueInt), NULL)), MAX(IF(a.attributeID = 1114, IFNULL(a.valueFloat, a.valueInt), NULL))"
+        " FROM dgmTypeAttributes a JOIN invTypes i ON i.typeID = a.typeID"
+        " WHERE a.attributeID IN (1112, 1113, 1114, 1124) GROUP BY a.typeID, i.groupID ORDER BY a.typeID"))
+    {
+        while (res.GetRow(row)) {
+            if (!known(row.GetUInt(0)))
+                continue;
+            Decryptor d;
+            d.typeID = (uint16)row.GetUInt(0);
+            d.groupID = (uint16)row.GetUInt(1);
+            d.chance = row.IsNull(2) ? 1.0 : row.GetDouble(2);
+            d.runs = row.IsNull(3) ? 0.0 : row.GetDouble(3);
+            d.me = row.IsNull(4) ? 0.0 : row.GetDouble(4);
+            d.pe = row.IsNull(5) ? 0.0 : row.GetDouble(5);
+            data.decryptors.push_back(d);
+        }
+    }
+
+    // reactions (an hour's cycle, quantities x moonMiningAmount) and planetary schematics (a cycle of cycleTime)
+    uint32 reactions(0), schematics(0);
+    if (sDatabase.RunQuery(res, "SELECT reactionTypeID, input, typeID, quantity FROM invTypeReactions ORDER BY reactionTypeID, input, typeID")) {
+        Recipe r;
+        auto done = [&]() {
+            if ((r.id != 0) and !r.inputs.empty() and !r.outputs.empty()) {
+                data.recipes.push_back(r);
+                ++reactions;
+            }
+            r = Recipe();
+        };
+        while (res.GetRow(row)) {
+            if (row.GetUInt(0) != r.id) {
+                done();
+                r.kind = RecipeKind::Reaction;
+                r.id = (uint16)row.GetUInt(0);
+                r.seconds = 3600.0;
+            }
+            uint16 typeID((uint16)row.GetUInt(2));
+            double qty((double)row.GetUInt(3) * amount(typeID));
+            if (row.GetUInt(1) != 0)
+                r.inputs.push_back(std::make_pair(typeID, qty));
+            else
+                r.outputs.push_back(std::make_pair(typeID, qty));
+        }
+        done();
+    }
+    if (sDatabase.RunQuery(res,
+        "SELECT s.schematicID, s.cycleTime, m.typeID, m.quantity, CAST(m.isInput AS UNSIGNED)"
+        " FROM piSchematics s JOIN piTypeMap m ON m.schematicID = s.schematicID ORDER BY s.schematicID, m.typeID"))
+    {
+        Recipe r;
+        auto done = [&]() {
+            if ((r.id != 0) and !r.inputs.empty() and !r.outputs.empty() and (r.seconds > 0.0)) {
+                data.recipes.push_back(r);
+                ++schematics;
+            }
+            r = Recipe();
+        };
+        while (res.GetRow(row)) {
+            if (row.GetUInt(0) != r.id) {
+                done();
+                r.kind = RecipeKind::Planetary;
+                r.id = (uint16)row.GetUInt(0);
+                r.seconds = row.GetDouble(1);
+            }
+            std::pair<uint16, double> line((uint16)row.GetUInt(2), (double)row.GetUInt(3));
+            if (row.GetUInt(4) != 0)
+                r.inputs.push_back(line);
+            else
+                r.outputs.push_back(line);
+        }
+        done();
+    }
+
+    // the sim's copy of the invention chance must be the server's (EvEMath::RAM::InventionChance)
+    double mine(Chains::InventionChance(0.4, 5, 5, 4, 1, 1.2)), server(EvEMath::RAM::InventionChance(0.4f, 5, 5, 4, 1, 1.2f));
+    if (std::fabs(mine - server) > 1e-4)
+        _log(MARKET__SIM, "Market sim:  its invention chance (%.5f) differs from the server's (%.5f):  SimChains.cpp is out of date.", mine, server);
+    _log(MARKET__SIM, "Market sim:  %u inventions, %u decryptors, %u reactions, %u schematics, %u bills.", inventions,
+         (uint32)data.decryptors.size(), reactions, schematics, (uint32)data.bills.size());
+}
+
+void MarketSimDB::LoadChainCorpData(std::map<uint32, std::array<uint32, 3>>& into)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    // research fields (the Hi-Tech corps' R&D agents)
+    if (sDatabase.RunQuery(res, "SELECT corporationID, COUNT(*) FROM crpNPCCorporationResearchFields GROUP BY corporationID"))
+        while (res.GetRow(row))
+            into[row.GetUInt(0)][0] = row.GetUInt(1);
+    // reaction blueprints (category 24) and planetary goods (categories 41 to 43) traded
+    if (sDatabase.RunQuery(res,
+        "SELECT t.corporationID, SUM(g.categoryID = 24), SUM(g.categoryID IN (41, 42, 43)) FROM crpNPCCorporationTrades t"
+        " JOIN invTypes i ON i.typeID = t.typeID JOIN invGroups g ON g.groupID = i.groupID GROUP BY t.corporationID"))
+    {
+        while (res.GetRow(row)) {
+            into[row.GetUInt(0)][1] = row.GetUInt(1);
+            into[row.GetUInt(0)][2] = row.GetUInt(2);
+        }
+    }
 }

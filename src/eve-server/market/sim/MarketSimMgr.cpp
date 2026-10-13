@@ -154,6 +154,15 @@ void MarketSimMgr::ReadParams()
     p.haulerCargoFactor = std::max(1.0, c.HaulerCargoFactor);
     p.haulerMargin = std::max(0.0, c.HaulerMargin);
     p.remoteSupplyElasticity = std::max(0.0, c.RemoteSupplyElasticity);
+    // phase 6:  the advanced chains, at the server's own invention chance and time multipliers (RamMethods)
+    p.enableT2 = c.EnableT2;
+    p.enableMoonPI = c.EnableMoonPI;
+    p.inventChance = sConfig.ram.InventChance;
+    p.inventionTimeMultiplier = sConfig.ram.InventTime;
+    p.inventBufferDays = std::max(0.0, c.InventBufferDays);
+    p.harvestSlack = std::max(0.0, c.HarvestSlack);
+    p.posFuelPerArrayHour = std::max(0.0, c.PosFuelPerArrayHour);
+    p.moonHarvestPerHour = std::max(0.01, c.MoonHarvestPerHour);
     m_params = p;
 }
 
@@ -215,6 +224,8 @@ bool MarketSimMgr::LoadStatic(std::string& why)
     MarketSimDB::LoadIndustry(m_static);
     if (m_params.logistics and m_params.actors)
         MarketSimDB::LoadLogistics(m_static);
+    // phase 6:  invention, reactions, planetary schematics, the T2 and component bills
+    MarketSimDB::LoadChains(m_static);
     MarketSimDB::LoadVendorOffers(m_static, sConfig.marketSim.VendorStations, m_hubs);
     PickCorps();
 
@@ -297,6 +308,35 @@ void MarketSimMgr::PickCorps()
             m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Miner, (uint8)0)] = miner;
         if ((refiner != 0) or (miner != 0))
             m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Reprocessor, (uint8)0)] = (refiner != 0) ? refiner : miner;
+    }
+
+    /* phase 6 (PLAN 6.4):  the inventor trades as the node faction's corp with the most research fields (Hi-Tech:  the
+     *  R&D agents' corps), the harvester and the reactor as the one selling the most reaction blueprints (Chemical), the
+     *  planetary producer as the one trading the most planetary goods.  without one:  the raw goods market maker's corp */
+    std::map<uint32, std::array<uint32, 3>> chains;
+    MarketSimDB::LoadChainCorpData(chains);
+    for (auto& node : m_static.nodes) {
+        if (node.factionID == 0)
+            continue;
+        for (int k = 0; k < 3; ++k) {
+            uint32 pick(0), top(0);
+            for (auto& cur : chains) {
+                if ((faction[cur.first] != node.factionID) or (cur.second[k] <= top))
+                    continue;
+                top = cur.second[k];
+                pick = cur.first;
+            }
+            if (pick == 0)
+                continue;
+            if (k == 0) {
+                m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Inventor, (uint8)0)] = pick;
+            } else if (k == 1) {
+                m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Harvester, (uint8)0)] = pick;
+                m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Reactor, (uint8)0)] = pick;
+            } else {
+                m_static.actorCorp[std::make_tuple(node.nodeID, (uint8)ActorKind::Planetary, (uint8)0)] = pick;
+            }
+        }
     }
 }
 
@@ -492,6 +532,9 @@ bool MarketSimMgr::LoadSaved(int64 now)
             m_world->LossShocks()[(uint16)hull] = std::make_pair(mult, (int64)until);
         else if ((cur.first == "shock:mining") and (std::sscanf(cur.second.c_str(), "%lf,%lld", &mult, &until) == 2))
             m_world->MiningShock() = std::make_pair(mult, (int64)until);
+        // phase 6:  a harvested or extracted type's supply
+        else if ((std::sscanf(cur.first.c_str(), "shock:supply:%u", &hull) == 1) and (std::sscanf(cur.second.c_str(), "%lf,%lld", &mult, &until) == 2))
+            m_world->SupplyShocks()[(uint16)hull] = std::make_pair(mult, (int64)until);
     }
 
     // the manufacturers' jobs (their inputs were used when they started;  the output comes when they end)
@@ -663,6 +706,10 @@ std::map<std::string, std::string> MarketSimMgr::StateMap() const
             s[Fmt("shock:loss:%u", cur.first)] = Fmt("%.9g,%lld", cur.second.first, (long long)cur.second.second);
     if (m_world->MiningShock().second > Now())
         s["shock:mining"] = Fmt("%.9g,%lld", m_world->MiningShock().first, (long long)m_world->MiningShock().second);
+    // phase 6
+    for (auto& cur : m_world->SupplyShocks())
+        if (cur.second.second > Now())
+            s[Fmt("shock:supply:%u", cur.first)] = Fmt("%.9g,%lld", cur.second.first, (long long)cur.second.second);
     return s;
 }
 
@@ -868,7 +915,7 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
     std::string sub((args.argCount() > 1) ? args.arg(1) : "status");
     std::string usage("usage: /mktsim status | pause | resume | cell <typeID> [stationID] | actor <actorID> | actors [kind] |"
                       " jobs [actorID] | routes [stationID] | shipments [actorID] | anchor <typeID> <price> [regionID] |"
-                      " shock <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0> <mult> <days> |"
+                      " shock <typeID|g:groupID|c:categoryID|l:hullTypeID|m:0|h:typeID> <mult> <days> |"
                       " requote <typeID|all> | seed [stationID] | audit [days] | step <ticks> | purge | purgelegacy | export <file>");
     if (sub == "purgelegacy") {
         std::set<std::pair<uint32, uint16>> touched;
@@ -978,6 +1025,14 @@ std::string MarketSimMgr::Command(Client* who, const Seperator& args)
             _log(MARKET__SIM, "Market sim:  %s set %s x%.3f for %.1f days.", who->GetName(), (kind == 'l') ? "ship losses" : "mining", mult, days);
             Flush();
             return Fmt("%s x%.3f for %.1f days.", (kind == 'm') ? "Mining" : (id ? Fmt("Losses of type %u", id).c_str() : "Every hull's losses"), mult, days);
+        }
+        // phase 6:  the supply of a harvested (moon, gas) or extracted (planetary) type, h:<typeID>
+        if ((kind == 'h') and (id != 0) and (mult >= 0.0) and (days > 0.0)) {
+            m_world->ShockSupply((uint16)id, mult, days, now);
+            m_pendingAudit.push_back(AuditLine{DayOf(now), Fmt("gm.shock.h%u.by%u", id, who->GetCharacterID()), (int64)std::llround(mult * 1e6)});
+            _log(MARKET__SIM, "Market sim:  %s set the supply of type %u x%.3f for %.1f days.", who->GetName(), id, mult, days);
+            Flush();
+            return Fmt("Supply of type %u x%.3f for %.1f days.", id, mult, days);
         }
         if ((id == 0) or !(mult > 0.0) or !(days > 0.0) or ((kind != 't') and (kind != 'g') and (kind != 'c')))
             return usage;

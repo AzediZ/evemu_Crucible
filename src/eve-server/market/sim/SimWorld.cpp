@@ -125,11 +125,12 @@ double World::Mid(const Cell& c) const
 double World::CostNow(const Cell& c) const
 {
     const TypeData* t(m_static.Type(c.typeID));
-    if ((t == nullptr) or t->bom.empty())
+    if ((t == nullptr) or BomOf(c).empty())
         return 0.0;
     const NodeData* node(Node(c.nodeID));
     double cost(0.0);
-    for (auto& in : t->bom) {
+    // (phase 6:  a chain's own bill where it has one)
+    for (auto& in : BomOf(c)) {
         std::map<uint64_t, uint32_t>::const_iterator itr = m_cellIndex.find(((uint64_t)c.nodeID << 16) | in.first);
         if (itr != m_cellIndex.end()) {
             cost += in.second * Value(m_cells[itr->second]);
@@ -463,6 +464,9 @@ void World::Seed(int64_t now, uint32_t nodeID, bool freshOnly)
     // phase 4:  the hauling hulls
     if (m_p.actors and m_p.logistics)
         SeedHaulers(nodeID, freshOnly);
+    // phase 6:  the inventors' first copies (SimChains.cpp)
+    if (ChainsT2())
+        ChainSeed(nodeID, freshOnly);
 }
 
 void World::Start(int64_t now, bool catchUp)
@@ -1992,6 +1996,7 @@ std::string World::CellInfo(uint16_t typeID, uint32_t stationID) const
         }
         out << Fmt("  today:  %lld traded, low %.2f high %.2f, last %.2f.  bought from players today %lld\n",
                    (long long)c.dVol, Econ::ToIsk(c.dLow), Econ::ToIsk(c.dHigh), c.lastClear, (long long)c.dIntake);
+        out << ChainCellInfo(c);        // phase 6 (SimChains.cpp)
     }
     std::string s(out.str());
     return s.empty() ? Fmt("type %u has no cell%s.", typeID, stationID ? " at that station" : "") : s;
@@ -2048,6 +2053,9 @@ std::string World::ActorInfo(uint32_t actorID) const
                 out << Fmt("  %u x%lld", u.first, (long long)u.second);
             out << "\n";
         }
+        out << JobList(actorID);
+    } else if (a.kind >= ActorKind::Inventor) {
+        out << ChainInfo(actorID);      // phase 6 (SimChains.cpp)
         out << JobList(actorID);
     }
     if ((a.kind == ActorKind::Hauler) or (a.kind == ActorKind::RemoteMiner))

@@ -59,6 +59,7 @@ namespace {
         uint16_t    trace       = 0;            // print this type's cell every day
         uint32_t    traceNode   = 1;            // at this node
         std::string exportCsv;                  // the first run's cells and audit at the end (World::ExportCsv)
+        bool        phase6      = false;        // --phase6:  the phase 6 acceptance tests (Phase6Test.cpp) instead
         bool        actors      = false;        // print the phase 3 actors at the start and the end
         bool        phase3      = false;        // the phase 3 acceptance tests (Phase3Test.cpp) instead
         bool        stationLines = true;        // jobs on the hubs' station lines (phase 5);  false:  the world's virtual lines
@@ -106,6 +107,12 @@ namespace {
             {"Actors", [&](double v) { p.actors = (v != 0.0); }},
             {"HotCellMinutes", [&](double v) { p.hotCellMinutes = (int)v; }},
             {"ColdCellMinutes", [&](double v) { p.coldCellMinutes = (int)v; }},
+            // phase 6
+            {"EnableT2", [&](double v) { p.enableT2 = (v != 0.0); }},
+            {"EnableMoonPI", [&](double v) { p.enableMoonPI = (v != 0.0); }},
+            {"InventChance", [&](double v) { p.inventChance = v; }},
+            {"HarvestSlack", [&](double v) { p.harvestSlack = v; }},
+            {"PosFuelPerArrayHour", [&](double v) { p.posFuelPerArrayHour = v; }},
             {"Days", [&](double v) { o.days = (int)v; }},
             // phase 4
             {"EnableLogistics", [&](double v) { p.logistics = (v != 0.0); }},
@@ -554,6 +561,8 @@ namespace {
                                 "  lossWant %.2f (rate %.3f, drops %.3f, rest %.3f)\n",
                                 day, std::exp(tc->lnV), tc->vStar, std::exp(tc->lnAnchor), (long long)(s ? s->qty + s->reserved : 0), (long long)(s ? s->reserved : 0),
                                 tc->targetStock, tc->dBar, tc->d0, avg, (long long)vol, tc->clampDays, tc->lossWant, tc->lossRate, tc->dropRate, tc->dcGen);
+                    // phase 6:  how a chain makes it, and its inputs at the node
+                    std::printf("%s", world.ChainCellInfo(*tc).c_str());
                 }
             }
             res.indexMin = std::min(res.indexMin, index);
@@ -676,6 +685,33 @@ namespace {
                 }
                 std::printf("  T1 made / expected (isk):  %.3f\n", sumM / std::max(1.0, sumE));
             }
+            {
+                // phase 6:  the chains' goods, what the reference says the sim makes and uses a day (all nodes) against
+                //  what it made and its actors bought
+                std::map<uint16_t, std::pair<double, double>> ref;      // type -> (made, used)
+                for (auto& c : world.Cells())
+                    if ((c.supply >= Supply::Invented) or (c.simClass == SimClass::Component)) {
+                        ref[c.typeID].first += world.RefMade(c.nodeID, c.typeID);
+                        ref[c.typeID].second += world.RefDerived(c.nodeID, c.typeID);
+                    }
+                // the first hub's chain cells that are sold out at the end, and why (at most 12)
+                int shown(0);
+                for (auto& c : world.Cells()) {
+                    if ((c.nodeID != data.nodes[0].nodeID) or (c.supply < Supply::Invented) or (shown >= 12))
+                        continue;
+                    const Ledger::Stock* s(world.GetLedger().FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
+                    if ((s != nullptr) and ((s->qty + s->reserved) > 0))
+                        continue;
+                    std::printf("  sold out:  %s", world.CellInfo(c.typeID, data.nodes[0].stationID).c_str());
+                    ++shown;
+                }
+                std::printf("  chains per day over the run:  reference made / used, made, bought by actors\n");
+                for (auto& r : ref) {
+                    std::map<uint16_t, Units>::const_iterator m = world.Made().find(r.first), b = world.ActorBought().find(r.first);
+                    std::printf("    type %u:  ref %.4g / %.4g, made %.4g, bought %.4g\n", r.first, r.second.first, r.second.second,
+                                (m == world.Made().end()) ? 0.0 : (double)m->second / opt.days, (b == world.ActorBought().end()) ? 0.0 : (double)b->second / opt.days);
+                }
+            }
             std::printf("  per day over the run:  bought by actors (materials, ships), made\n");
             for (auto& cur : world.ActorBought()) {
                 const TypeData* t(data.Type(cur.first));
@@ -718,6 +754,8 @@ namespace {
 int Phase3Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days, bool stationLines);
 int Phase4Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
 
+// phase 6 (Phase6Test.cpp)
+int Phase6Main(const StaticData& data, const Params& p, const std::vector<uint64_t>& seeds, int days);
 int HarnessMain(int argc, char** argv)
 {
     Options opt;
@@ -754,6 +792,8 @@ int HarnessMain(int argc, char** argv)
             opt.exportCsv = next();
         else if (a == "--actors")
             opt.actors = true;
+        else if (a == "--phase6")
+            opt.phase6 = true;
         else if (a == "--phase3")
             opt.phase3 = true;
         else if (a == "--virtual-lines")
@@ -803,6 +843,8 @@ int HarnessMain(int argc, char** argv)
     std::printf("market sim harness:  %zu types, %zu nodes, %zu vendor offers, %d days, %zu seed(s), EconomyScale %g\n",
                 data.types.size(), data.nodes.size(), data.vendors.size(), opt.days, opt.seeds.size(), p.economyScale);
 
+    if (opt.phase6)
+        return Phase6Main(data, p, opt.seeds, opt.days);
     if (opt.phase3)
         return Phase3Main(data, p, opt.seeds, opt.days, opt.stationLines);
     if (opt.phase4)

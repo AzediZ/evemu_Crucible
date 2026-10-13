@@ -35,6 +35,7 @@ SET( INCLUDE
      "${SERVER_SOURCE_DIR}/market/MarketMatch.h" )
 SET( SOURCE
      "${TARGET_SOURCE_DIR}/eve-market-sim.cpp"
+     "${TARGET_SOURCE_DIR}/ChainsTest.cpp"
      "${TARGET_SOURCE_DIR}/FacilitiesTest.cpp"
      "${TARGET_SOURCE_DIR}/Harness.cpp"
      "${TARGET_SOURCE_DIR}/HarnessData.cpp"
@@ -44,6 +45,7 @@ SET( SOURCE
      "${TARGET_SOURCE_DIR}/MatchTest.cpp"
      "${TARGET_SOURCE_DIR}/Phase3Test.cpp"
      "${TARGET_SOURCE_DIR}/Phase4Test.cpp"
+     "${TARGET_SOURCE_DIR}/Phase6Test.cpp"
      "${TARGET_SOURCE_DIR}/SimTest.cpp" )
 # the sim core, shared with eve-server
 SET( core_INCLUDE
@@ -58,9 +60,11 @@ SET( core_INCLUDE
      "${SERVER_SOURCE_DIR}/market/sim/SimRng.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimStaticData.h"
      "${SERVER_SOURCE_DIR}/market/sim/SimTypes.h"
-     "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h" )
+     "${SERVER_SOURCE_DIR}/market/sim/SimWorld.h"
+     "${SERVER_SOURCE_DIR}/market/sim/SimChains.h" )
 SET( core_SOURCE
      "${SERVER_SOURCE_DIR}/market/sim/SimActors.cpp"
+     "${SERVER_SOURCE_DIR}/market/sim/SimChains.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimEconomy.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimFacilities.cpp"
      "${SERVER_SOURCE_DIR}/market/sim/SimHaulers.cpp"
@@ -106,6 +110,8 @@ ADD_TEST( NAME "MarketSimActorsTest"
           COMMAND "${TARGET_NAME}" --test actors )
 ADD_TEST( NAME "MarketSimLogisticsTest"
           COMMAND "${TARGET_NAME}" --test logistics )
+ADD_TEST( NAME "MarketSimChainsTest"
+          COMMAND "${TARGET_NAME}" --test chains )
 # the phase 2 acceptance tests:  a simulated year at EconomyScale 0.01, five seeds, plus a determinism rerun
 ADD_TEST( NAME "MarketSimAcceptance"
           COMMAND "${TARGET_NAME}" --synthetic --days 365 --seeds 5 )
@@ -120,3 +126,8 @@ SET_TESTS_PROPERTIES( "MarketSimPhase3" PROPERTIES TIMEOUT 3600 )
 ADD_TEST( NAME "MarketSimPhase4"
           COMMAND "${TARGET_NAME}" --synthetic --phase4 --days 120 --seeds 2 )
 SET_TESTS_PROPERTIES( "MarketSimPhase4" PROPERTIES TIMEOUT 3600 )
+# the phase 6 acceptance tests:  a moon material's supply removed against a control run, T2 price / bill at steady state,
+#  invention successes against the configured chance, every chain running, the books (Phase6Test.cpp)
+ADD_TEST( NAME "MarketSimPhase6"
+          COMMAND "${TARGET_NAME}" --synthetic --phase6 --days 100 --seeds 3 )
+SET_TESTS_PROPERTIES( "MarketSimPhase6" PROPERTIES TIMEOUT 3600 )

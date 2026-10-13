@@ -238,6 +238,9 @@ void World::BuildActors(int64_t /*now*/)
                 m->supply = Supply::Refined;
         }
     }
+    // phase 6:  T2, components, moon materials, planetary goods, fuel blocks (SimChains.cpp)
+    if (ChainsT2() or ChainsMoonPI())
+        ChainSupply();
 
     /* 2.  the loss model (PLAN 6.3):  hulls lost a day = public killmails / KillmailCoverage x EconomyScale x the node's
      *  share of the hull's trade.  the consumers' losses come back as demand for the hull and its fit;  the fit's
@@ -282,13 +285,19 @@ void World::BuildActors(int64_t /*now*/)
     auto expectedMade = [](const Cell& c) {
         return std::max(0.0, std::max(0.0, c.dc - c.lossRate) + c.lossRate - c.dropRate);
     };
-    for (auto& c : m_cells) {
-        if (c.supply != Supply::Manufactured)
-            continue;
-        double made(expectedMade(c));
-        for (auto& in : m_static.Type(c.typeID)->bom)
-            derived[((uint64_t)c.nodeID << 16) | in.first] += made * in.second;
+    if (ChainsT2() or ChainsMoonPI()) {
+        // phase 6:  through every chain, from the final goods down (SimChains.cpp)
+        ChainDerived(derived);
+    } else {
+        for (auto& c : m_cells) {
+            if (c.supply != Supply::Manufactured)
+                continue;
+            double made(expectedMade(c));
+            for (auto& in : m_static.Type(c.typeID)->bom)
+                derived[((uint64_t)c.nodeID << 16) | in.first] += made * in.second;
+        }
     }
+    m_refDerived = derived;
 
     // 4.  per node:  the miner's plan (its fleet loses hulls and fits like anyone), then the other actors.  phase 4:  the
     //  routes and sites first (PlanMining leaves the ores of less secure space to remote miners)
@@ -408,6 +417,9 @@ void World::BuildActors(int64_t /*now*/)
     // phase 4:  the haulers, and the remote miners' hauling
     if (m_p.logistics)
         BuildHaulers();
+    // phase 6:  inventors, harvesters, reactors, planetary producers (SimChains.cpp)
+    if (ChainsT2() or ChainsMoonPI())
+        ChainActors();
 }
 
 void World::PlanMining(uint32_t nodeID)
@@ -436,12 +448,8 @@ void World::PlanMining(uint32_t nodeID)
     for (size_t m = 0; m < minerals.size(); ++m) {
         const Cell& mc(m_cells[minerals[m]]);
         need[m] = mc.dc;
-        double der(0.0);
-        for (auto& c : m_cells)
-            if ((c.nodeID == nodeID) and (c.supply == Supply::Manufactured))
-                for (auto& in : m_static.Type(c.typeID)->bom)
-                    if (in.first == mc.typeID)
-                        der += std::max(0.0, std::max(0.0, c.dc - c.lossRate) + c.lossRate - c.dropRate) * in.second;
+        // what the node's industry takes (BuildActors' derived demand)
+        double der(RefDerived(nodeID, mc.typeID));
         // what the rest of industry uses (T2, capitals, ...:  the stock model's), at least MineralOtherShare
         need[m] = der + std::max(mc.dc - der, m_p.mineralOtherShare * std::max(mc.dc, der));
     }
@@ -554,7 +562,12 @@ void World::SeedActors(int64_t /*now*/, uint32_t nodeID, bool freshOnly)
 
 bool World::LoadJob(const SimJob& job)
 {
-    if ((job.actorID == 0) or (job.actorID > m_actors.size()) or (job.qtyOut <= 0))
+    if ((job.actorID == 0) or (job.actorID > m_actors.size()))
+        return false;
+    // phase 6 (SimChains.cpp):  a chain actor's (an invention that failed gives nothing:  qtyOut 0)
+    if (m_actors[job.actorID - 1].kind >= ActorKind::Inventor)
+        return ChainLoadJob(job);
+    if (job.qtyOut <= 0)
         return false;
     const Actor& a(m_actors[job.actorID - 1]);
     if ((a.kind != ActorKind::Manufacturer) or (a.nodeID != job.nodeID) or (m_static.Type(job.typeID) == nullptr))
@@ -858,6 +871,10 @@ void World::StepActor(Actor& a, int64_t t)
         case ActorKind::LootSource:     LootStep(a, t, dt); break;
         case ActorKind::Hauler:         HaulerStep(a, t); break;
         case ActorKind::RemoteMiner:    RemoteMinerStep(a, t, dt); break;
+        case ActorKind::Inventor:
+        case ActorKind::Harvester:
+        case ActorKind::Reactor:
+        case ActorKind::Planetary:      ChainStep(a, t, dt); break;     // phase 6 (SimChains.cpp)
     }
 }
 
@@ -1102,13 +1119,15 @@ void World::ManufacturerStep(Actor& a, int64_t t, double /*dt*/)
         double maxUnits(std::max((double)portion, std::floor(m_p.maxJobHours / std::max(1e-6, hours))));
         Units units(std::max<Units>(1, (Units)std::ceil(std::min(gap, maxUnits) / (double)portion)) * portion);
         double cost(0.0);
-        for (auto& in : type.bom) {
+        for (auto& in : BomOf(c)) {
             Cell* ic(FindCell(node, in.first));
-            if (ic == nullptr) {
+            // phase 6:  an input the npc vendors sell (a fuel block's oxygen)
+            double vendor((ic == nullptr) ? VendorPrice(in.first) : 0.0);
+            if ((ic == nullptr) and !(vendor > 0.0)) {
                 cost = -1.0;
                 break;
             }
-            cost += in.second * ExpectBuy(*ic);
+            cost += in.second * ((ic == nullptr) ? vendor : ExpectBuy(*ic));
         }
         if (cost < 0.0)
             continue;
@@ -1135,14 +1154,16 @@ void World::ManufacturerStep(Actor& a, int64_t t, double /*dt*/)
         Units runs(cand.units / portion);
         // the inputs:  what it holds first, the rest bought at the node
         std::vector<std::pair<uint16_t, Units>> perRun;
-        for (auto& in : type.bom)
+        for (auto& in : BomOf(c))
             perRun.push_back(std::make_pair(in.first, std::max<Units>(1, (Units)std::llround(in.second * (double)portion))));
         /* only as many runs as every input allows (what it holds and what the market maker can spare):  inputs bought for
          *  a job that then can't start would sit idle while others need them.  a shortage shows in the input's stock */
         Units feasible(runs);
         for (auto& in : perRun) {
             Cell* ic(FindCell(node, in.first));
-            Units avail(Held(a.actorID, node, in.first) + ((ic != nullptr) ? Spare(*ic, in.second * runs) : 0));
+            // (the npc vendors have any amount)
+            Units avail(Held(a.actorID, node, in.first) + ((ic != nullptr) ? Spare(*ic, in.second * runs)
+                                                           : ((VendorPrice(in.first) > 0.0) ? in.second * runs : 0)));
             feasible = std::min<Units>(feasible, avail / in.second);
         }
         if (feasible <= 0)
@@ -1154,6 +1175,8 @@ void World::ManufacturerStep(Actor& a, int64_t t, double /*dt*/)
             Cell* ic(FindCell(node, in.first));
             if (ic != nullptr)
                 BuyAtNode(a.actorID, *ic, need, InternalBuy(*ic), Spare(*ic, need), t);
+            else
+                BuyVendor(a.actorID, node, in.first, need);
         }
         feasible = runs;
         for (auto& in : perRun)
@@ -1198,6 +1221,10 @@ void World::CompleteJob(uint32_t jobID, int64_t t)
     SimJob job(itr->second);
     m_jobs.erase(itr);
     m_jobsChanged = true;
+    if (ChainJob(job)) {
+        ChainJobDone(job, t);       // phase 6 (SimChains.cpp)
+        return;
+    }
     m_capacity->Release(job);
     MakerPlan& plan(m_makerPlans[job.actorID]);
     Units& wip(plan.wip[job.typeID]);
@@ -1223,7 +1250,8 @@ void World::LootStep(Actor& a, int64_t t, double dt)
             double expected((c.vStar > 0.0) ? c.vStar : Mid(c));
             double response(std::pow(expected / std::max(1e-9, std::exp(c.lnAnchor)), m_p.lootPriceResponse));
             response = std::min(4.0, std::max(0.25, response));
-            double rate(std::max(0.0, c.dcGen + c.lossRate + c.minerRate - c.dropRate) * m_p.supplyFactor * response);
+            // (phase 6:  and what the sim's industry uses of it, datacores, decryptors, T1 modules for T2)
+            double rate(std::max(0.0, c.dcGen + c.lossRate + c.minerRate + c.derivedRef - c.dropRate) * m_p.supplyFactor * response);
             Units u((Units)Rng::Poisson(rate * dt, Rng::Hash64(m_p.seed, a.actorID, (uint64_t)t, hLootSupply, c.typeID)));
             /* a type down to half its target is refilled within LootRestockDays, deterministically (a random refill of a
              *  thin type, a lot or two a day, leaves some shelf somewhere empty for days):  an empty shelf gets a
