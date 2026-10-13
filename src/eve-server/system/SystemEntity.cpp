@@ -413,6 +413,9 @@ PyDict* ItemSystemEntity::MakeSlimItem() {
         slim->SetItemString("itemID",       new PyLong(m_self->itemID()));
         slim->SetItemString("typeID",       new PyInt(m_self->typeID()));
         slim->SetItemString("ownerID",      new PyInt(m_ownerID));
+        // the name the overview shows.  without it the client fell back to the type name ("Celestial Beacon")
+        slim->SetItemString("name",         new PyString(m_self->itemName()));
+        slim->SetItemString("nameID",       PyStatic.NewNone());
         if (m_self->groupID() == EVEDB::invGroups::Warp_Gate) {
             // this is incomplete........
             slim->SetItemString("dunSkillLevel", PyStatic.NewNone());   //?

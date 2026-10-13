@@ -1012,15 +1012,25 @@ PyRep* IncursionMgr::GetSystems()
 }
 
 // rewardMgr.GetDelayedRewardsByGroupIDs(): {rewardGroupID: [util.KeyVal(rewardQuantity = LP in the pool)]}
-PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyList* groupIDs)
+PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyRep* groupIDs)
 {
     PyDict* dict = new PyDict();
+    std::vector<PyRep*> ids;
     if (groupIDs == nullptr)
         return dict;
-    for (PyList::const_iterator itr = groupIDs->begin(); itr != groupIDs->end(); ++itr) {
-        if (!(*itr)->IsInt())
+    if (groupIDs->IsTuple()) {
+        for (PyTuple::const_iterator itr = groupIDs->AsTuple()->begin(); itr != groupIDs->AsTuple()->end(); ++itr)
+            ids.push_back(*itr);
+    } else if (groupIDs->IsList()) {
+        for (PyList::const_iterator itr = groupIDs->AsList()->begin(); itr != groupIDs->AsList()->end(); ++itr)
+            ids.push_back(*itr);
+    } else if (groupIDs->IsInt()) {
+        ids.push_back(groupIDs);
+    }
+    for (auto cur : ids) {
+        if ((cur == nullptr) or !cur->IsInt())
             continue;
-        uint32 incursionID = (*itr)->AsInt()->value();
+        uint32 incursionID = cur->AsInt()->value();
         uint32 lp = (sConfig.incursion.DelayedLP ? IncursionDB::GetPoolLP(incursionID, charID) : 0);
         PyDict* reward = new PyDict();
             reward->SetItemString("rewardQuantity", new PyInt(lp));

@@ -17,8 +17,9 @@ public:
     RewardMgrService();
 
 protected:
-    // the Journal's Incursions tab: {rewardGroupID: [util.KeyVal(rewardQuantity)]}
-    PyResult GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyList* groupIDs);
+    // the Journal's Incursions tab: {rewardGroupID: [util.KeyVal(rewardQuantity)]}.  groupIDs is a tuple from the
+    //  Crucible client (seen in a server log), so take any sequence
+    PyResult GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs);   // the client sends a tuple
 };
 
 #endif  // EVEMU_MAP_REWARDMGRSERVICE_H_

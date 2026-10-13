@@ -174,8 +174,11 @@ void SystemBubble::ProcessWander(std::vector<SystemEntity *> &wanderers) {
         _log(DESTINY__TRACE, "SystemBubble::ProcessWander() getting dynamicSE");
         pDSE = itr->second->GetDynamicSE();
         if (pDSE == nullptr) {
+            // items that can't move (acceleration gates, site beacons and structures, cyno fields...) can't wander off.
+            //  erasing them here dropped them from the bubble while they still pointed at it, so a minute after
+            //  spawning they were missing from every later arrival's AddBalls (an incursion beacon with no gate)
             _log(DESTINY__TRACE, "SystemBubble::ProcessWander() pDSE is nullptr");
-            itr = m_dynamicEntities.erase(itr);
+            ++itr;
             continue;
         }
 

@@ -21,7 +21,7 @@ RewardMgrService::RewardMgrService() :
     this->Add("GetDelayedRewardsByGroupIDs", &RewardMgrService::GetDelayedRewardsByGroupIDs);
 }
 
-PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyList* groupIDs)
+PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs)
 {
     return sIncursionMgr.GetDelayedRewards(call.client->GetCharacterID(), groupIDs);
 }

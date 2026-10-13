@@ -215,7 +215,7 @@ public:
     PyRep* GetGlobalReport();
     PyRep* GetSystems();
     // rewardMgr: the character's LP in each incursion's pool
-    PyRep* GetDelayedRewards(uint32 charID, PyList* groupIDs);
+    PyRep* GetDelayedRewards(uint32 charID, PyRep* groupIDs);
 
     // GM commands.  each returns a message for the caller
     std::string Start(uint32 constellationID = 0);

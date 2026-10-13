@@ -222,56 +222,41 @@ PyRep *ConfigDB::GetMultiLocationsEx(const std::vector<int32> &entityIDs) {
         }
     }
 
-    DBQueryResult res;
-    std::string ids = "";
-
+    // one query for all three kinds.  separate queries into the same result kept only the last one's rows,
+    //  so a request mixing kinds (planets and site beacons, say) lost every name but the last kind's
+    std::vector<std::string> parts;
+    std::string ids;
     if (staticItems.size()) {
         ListToINString(staticItems, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            " itemID AS locationID,"
-            " itemName AS locationName,"
-            " x, y, z,"
+        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z,"
             " itemNameID AS locationNameID"   //locationName = localization.GetByMessageID(self.locationNameID)
-            " FROM mapDenormalize"
-            " WHERE itemID in (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
-        }
+            " FROM mapDenormalize WHERE itemID in (" + ids + ")");
         ids = "";
     }
-
     if (dynamicItems.size()) {
         ListToINString(dynamicItems, ids);
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            " itemID AS locationID,"
-            " itemName AS locationName,"
-            " x, y, z,"
-            " NULL AS locationNameID"
-            " FROM entity"
-            " WHERE itemID in (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
-        }
+        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
+            " FROM entity WHERE itemID in (" + ids + ")");
         ids = "";
     }
-
     if (asteroidItems.size()) {
         ListToINString(asteroidItems, ids);
         sLog.Warning("GetMultiLocationsEx", "Asteroid Items (%s) requested.", ids.c_str());
-        if (!sDatabase.RunQuery(res,
-            "SELECT "
-            " itemID AS locationID,"
-            " itemName AS locationName,"
-            " x, y, z,"
-            " NULL AS locationNameID"
-            " FROM sysAsteroids"
-            " WHERE itemID in (%s)", ids.c_str()))
-        {
-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
-        }
+        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
+            " FROM sysAsteroids WHERE itemID in (" + ids + ")");
     }
+
+    std::string query;
+    for (auto& cur : parts) {
+        if (!query.empty())
+            query += " UNION ALL ";
+        query += cur;
+    }
+    DBQueryResult res;
+    if (query.empty())
+        query = "SELECT itemID AS locationID, itemName AS locationName, x, y, z, itemNameID AS locationNameID FROM mapDenormalize WHERE 0";
+    if (!sDatabase.RunQuery(res, "%s", query.c_str()))
+        codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
 
     return DBResultToTupleSet(res);
 }
