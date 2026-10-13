@@ -1,0 +1,34 @@
+# the shipped <marketSim> defaults, written out (a starting point:  copy, change, run with --scenario).
+# keys are the <marketSim> names (doc/code_and_design_notes/market-sim/TUNING.md);  '#' starts a comment.
+# eve-market-sim --synthetic --days 365 --scenario defaults.scn
+EconomyScale = 0.01
+MarketNoise = 1.0
+TransientNoise = 1.0
+MinHalfSpread = 0.015
+MaxPriceDeviation = 2.0
+FairValueHalfLifeDays = 3
+QuoteLevels = 3
+QuoteDepthDays = 1.0
+RequoteThreshold = 0.01
+PlayerTradeWeight = 0.1
+BuyBand = 0.10
+SellBand = 0.10
+MoneyDaysTarget = 30
+ControllerKp = 0.3
+ControllerKi = 0.02
+Actors = 1
+InternalSpreadShare = 0.5
+MinMargin = 0.02
+ProductionSlack = 1.0
+MiningSlack = 0.25
+EnableLogistics = 1
+RiskLowSec = 0.002
+HaulerMargin = 0.03
+RemoteSupplyElasticity = 2.0
+EnableT2 = 1
+EnableMoonPI = 1
+HarvestSlack = 2.0
+# harness only:  the calibration's half spreads, stock and demand elasticities, scaled
+HalfSpreadScale = 1.0
+StockElasticityScale = 1.0
+ElasticityScale = 1.0

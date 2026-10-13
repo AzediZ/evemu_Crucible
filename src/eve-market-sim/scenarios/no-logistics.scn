@@ -1,0 +1,2 @@
+# phase 3 without phase 4:  every node mines all its ores itself, nothing is hauled
+EnableLogistics = 0

@@ -1,0 +1,35 @@
+set,phase,seed,status,fails,p6.invention_z,p6.moon_components,p6.moon_t2,p6.t2.charges,p6.t2.components,p6.t2.drones,p6.t2.modules,p6.t2.ships,failed_checks,log
+0,2,1,missing,,,,,,,,,,,set000_p2_s1.log
+0,6,1,done,2,-1.32,1.011,1.004,1.293,0.971,1.107,1.016,1.186,6:T2 charges | 6:moon removal,set000_p6_s1.log
+1,2,1,missing,,,,,,,,,,,set001_p2_s1.log
+1,6,1,done,2,0.2,1.012,1.003,1.284,0.972,1.14,1.019,1.194,6:T2 charges | 6:moon removal,set001_p6_s1.log
+2,2,1,missing,,,,,,,,,,,set002_p2_s1.log
+2,6,1,done,3,-0.31,1.009,1.004,1.311,0.978,1.103,1.023,1.213,6:T2 charges | 6:T2 ships | 6:moon removal,set002_p6_s1.log
+3,2,1,missing,,,,,,,,,,,set003_p2_s1.log
+3,6,1,done,2,-0.79,1.012,1.004,1.285,0.969,1.115,1.019,1.196,6:T2 charges | 6:moon removal,set003_p6_s1.log
+4,2,1,missing,,,,,,,,,,,set004_p2_s1.log
+4,6,1,done,2,1.28,1.009,1.006,1.31,0.972,1.076,1.016,1.195,6:T2 charges | 6:moon removal,set004_p6_s1.log
+5,2,1,missing,,,,,,,,,,,set005_p2_s1.log
+5,6,1,done,3,0.29,1.033,1.007,1.316,0.971,1.102,1.021,1.216,6:T2 charges | 6:T2 ships | 6:moon removal,set005_p6_s1.log
+6,2,1,missing,,,,,,,,,,,set006_p2_s1.log
+6,6,1,done,2,1.41,1.019,1.006,1.273,0.969,1.119,1.011,1.183,6:T2 charges | 6:moon removal,set006_p6_s1.log
+7,2,1,missing,,,,,,,,,,,set007_p2_s1.log
+7,6,1,done,2,1.03,1.009,1.0,1.275,0.969,1.162,1.024,1.18,6:T2 charges | 6:moon removal,set007_p6_s1.log
+8,2,1,missing,,,,,,,,,,,set008_p2_s1.log
+8,6,1,done,2,0.37,1.007,1.002,1.265,0.967,1.135,1.015,1.181,6:T2 charges | 6:moon removal,set008_p6_s1.log
+9,2,1,missing,,,,,,,,,,,set009_p2_s1.log
+9,6,1,done,2,-1.82,1.016,1.002,1.275,0.978,1.102,1.004,1.177,6:T2 charges | 6:moon removal,set009_p6_s1.log
+10,2,1,missing,,,,,,,,,,,set010_p2_s1.log
+10,6,1,done,4,2.49,1.006,1.007,1.296,0.976,1.093,1.015,1.216,6:T2 charges | 6:T2 ships | 6:invention | 6:moon removal,set010_p6_s1.log
+11,2,1,missing,,,,,,,,,,,set011_p2_s1.log
+11,6,1,done,3,1.37,1.028,1.006,1.309,0.971,1.126,1.029,1.23,6:T2 charges | 6:T2 ships | 6:moon removal,set011_p6_s1.log
+12,2,1,missing,,,,,,,,,,,set012_p2_s1.log
+12,6,1,done,2,-0.48,1.004,1.001,1.278,0.964,1.14,1.016,1.194,6:T2 charges | 6:moon removal,set012_p6_s1.log
+13,2,1,missing,,,,,,,,,,,set013_p2_s1.log
+13,6,1,done,2,-1.05,1.006,1.002,1.277,0.966,1.111,1.008,1.177,6:T2 charges | 6:moon removal,set013_p6_s1.log
+14,2,1,missing,,,,,,,,,,,set014_p2_s1.log
+14,6,1,done,3,-2.09,1.011,1.002,1.301,0.973,1.104,1.013,1.191,6:T2 charges | 6:invention | 6:moon removal,set014_p6_s1.log
+15,2,1,missing,,,,,,,,,,,set015_p2_s1.log
+15,6,1,done,2,0.11,1.006,1.003,1.282,0.968,1.144,1.025,1.186,6:T2 charges | 6:moon removal,set015_p6_s1.log
+16,2,1,missing,,,,,,,,,,,set016_p2_s1.log
+16,6,1,missing,,,,,,,,,,,set016_p6_s1.log

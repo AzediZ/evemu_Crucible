@@ -296,9 +296,9 @@ void World::Build(int64_t now)
         c.dRef = c.dc;
         // the round trip has to lose:  2h >= broker fee on both orders + sales tax + a margin
         double feeFloor(m_p.simPaysFees ? (m_p.brokerFeeRate + m_p.salesTaxRate / 2.0 + 0.0025) : 0.0025);
-        c.h = Econ::HalfSpread(m_static.HalfSpread(t), m_p.minHalfSpread, feeFloor);
-        c.theta = m_static.StockElasticity(t);
-        c.eta = m_static.Elasticity(t);
+        c.h = Econ::HalfSpread(m_static.HalfSpread(t) * m_static.halfSpreadScale, m_p.minHalfSpread, feeFloor);
+        c.theta = m_static.StockElasticity(t) * m_static.stockElasticityScale;
+        c.eta = m_static.Elasticity(t) * m_static.elasticityScale;
         c.wc = m_static.CostPassThrough(t);
         c.coverDays = m_static.CoverDays(t);
         c.costRef = 0.0;
@@ -2154,12 +2154,18 @@ bool World::ExportCsv(const std::string& path) const
     std::ofstream f(path.c_str(), std::ios::out | std::ios::trunc);
     if (!f)
         return false;
-    f << "nodeID,stationID,typeID,V,anchor,refLocal,d0,dBar,targetStock,stock,reserved,h,levels,flags,clampDays,vStar,simClass,sigma\n";
+    // phase 7:  the cells with their calibration (refPrice, volatility, unitsPerDay:  mktCalType) and what shapes their
+    //  prices, for utils/market-calibration/report.py and offline analysis.  the first 18 columns are phase 2's
+    f << "nodeID,stationID,typeID,V,anchor,refLocal,d0,dBar,targetStock,stock,reserved,h,levels,flags,clampDays,vStar,simClass,sigma,"
+         "regionID,groupID,categoryID,supply,theta,eta,wc,dc,lossRate,refPrice,volatility,unitsPerDay\n";
     for (auto& c : m_cells) {
         const Ledger::Stock* s(m_ledger.FindInv(c.mm, (uint16_t)c.nodeID, c.typeID));
-        f << Fmt("%u,%u,%u,%.4f,%.4f,%.4f,%.4f,%.4f,%.1f,%lld,%lld,%.4f,%u,%u,%u,%.4f,%u,%.4f\n", c.nodeID, Node(c.nodeID)->stationID, c.typeID,
+        const TypeData& t(*m_static.Type(c.typeID));
+        f << Fmt("%u,%u,%u,%.6g,%.6g,%.6g,%.6g,%.6g,%.1f,%lld,%lld,%.4f,%u,%u,%u,%.6g,%u,%.4f,", c.nodeID, Node(c.nodeID)->stationID, c.typeID,
                  Value(c), std::exp(c.lnAnchor), c.refLocal, c.d0, c.dBar, c.targetStock, (long long)(s ? s->qty : 0),
                  (long long)(s ? s->reserved : 0), c.h, c.levels, c.flags, c.clampDays, c.vStar, c.simClass, c.sigma);
+        f << Fmt("%u,%u,%u,%u,%.3f,%.3f,%.3f,%.6g,%.6g,%.6g,%.4f,%.6g\n", Node(c.nodeID)->regionID, t.groupID, t.categoryID, c.supply,
+                 c.theta, c.eta, c.wc, c.dc, c.lossRate, t.refPrice, t.volatility, t.unitsPerDay);
     }
     f << "\nday,category,amount\n";
     for (auto& line : m_auditLines)

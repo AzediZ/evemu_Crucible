@@ -102,12 +102,28 @@ namespace {
         return hubs;
     }
 
+    // phase 7:  scenario overrides (SetHarnessLineShare);  <= 0 / < 0:  the default
+    double   s_maxLineShare = 0.0;
+    int      s_minFreeLines = -1;
+
     FacilityParams HarnessFacilityParams(const Params& p)
     {
         FacilityParams fp;          // the server's defaults (<marketSim> MaxLineShare, MinFreeLinesPerStation, ...)
         fp.maxJobHours = p.maxJobHours;
+        if (s_maxLineShare > 0.0)
+            fp.maxLineShare = s_maxLineShare;
+        if (s_minFreeLines >= 0)
+            fp.minFreeLines = (uint32_t)s_minFreeLines;
         return fp;
     }
+}
+
+void SetHarnessLineShare(double maxLineShare, int minFreeLines)
+{
+    if (maxLineShare > 0.0)
+        s_maxLineShare = maxLineShare;
+    if (minFreeLines >= 0)
+        s_minFreeLines = minFreeLines;
 }
 
 HarnessCapacity::HarnessCapacity(const std::vector<NodeData>& nodes, const Params& p)

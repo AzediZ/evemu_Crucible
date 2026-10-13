@@ -187,3 +187,24 @@ between the window halves) is printed by every run.
 
 `sql/base`, all migrations up, then `20261013120100` and `20261013120000` down, and both up again, with statements
 split as sql-migrate splits them: no errors, and the row counts match the generator's.
+
+## Tuning tools (market sim phase 7)
+
+Two more stdlib scripts sit here; the guide to them is `doc/code_and_design_notes/market-sim/TUNING.md` (every
+`<marketSim>` key, the acceptance tests, the sweep results) and `RUNBOOK.md` (operating the server).
+
+- `sweep.py`: Latin-hypercube parameter sweeps of the offline harness (`eve-market-sim`). It draws N sets over the
+  main tuning keys, runs the phase 2, 3, 4 and 6 acceptance tests of every set in parallel processes, reads their
+  PASS/FAIL lines and figures, and writes a ranked `sweep.csv` and `summary.txt` (each key's rank correlation with the
+  scores). `--static export.json` runs on the calibration (`--export-json` above), without it on the harness's
+  synthetic world.
+- `report.py`: compares a running server's market with this calibration (the database through the mariadb client,
+  the files `/mktsim export` writes, or the harness's `--export` / `--history-csv` output): per category the price
+  index, realised volatility with the same 5-day estimator as `derive.horizon_volatility`, traded volume against the
+  calibrated volume at `EconomyScale`, the hubs against the Forge, the last audit day, and the worst outliers.
+
+**Defaults.** The 2026-10-12 sweeps (`doc/code_and_design_notes/market-sim/SWEEP_STATUS.md`, results in
+`sweeps/2026-10-12/`) left every `<marketSim>` default unchanged, on the owner's decision: the defaults pass every
+phase 2–6 acceptance test on the synthetic world, and the real-data borderlines (AT (d) modules, T2 price / bill,
+the moon removal, Amarr's line capacity) don't move with any key in the space. `sweeps/` holds derived aggregates
+only (sets, per-run checks and figures, rankings), no logs.

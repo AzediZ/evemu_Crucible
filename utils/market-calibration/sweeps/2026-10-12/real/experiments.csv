@@ -1,0 +1,16 @@
+run,mode,days,seed,scenario,longest_clamp_days,cells_clamped_over_3,index_max,noise_modules,noise_modules_off_floor,result
+baseline,phase2,120,1,(defaults),107,6,1.097,2.16,1.43,(b) fails: T2 stock-outs at Amarr (Focused Medium Beam Laser II 107 days);  (d) Modules fails
+baseline40,phase2 --no-bots,40,1,(defaults),27,5,,2.25,,(b) fails (Amarr T2)
+virtual-lines,phase2 --no-bots --virtual-lines,40,1,(defaults),1,0,1.052,2.12,,(b) passes:  the Amarr stock-outs come from station line capacity
+ls05,phase2 --no-bots,40,1,MaxLineShare = 0.5,3,0,1.052,2.15,,(b) passes (owner decision 12.7 keeps 0.3)
+iss02,phase2 --no-bots,40,1,InternalSpreadShare = 0.2,24,1,,2.03,,
+tn05,phase2 --no-bots,40,1,TransientNoise = 0.5,27,6,,2.12,,
+mn08,phase2 --no-bots,40,1,MarketNoise = 0.8,27,5,,2.16,,
+hs08,phase2 --no-bots,40,1,HalfSpreadScale = 0.8,28,4,,2.06,,
+se07,phase2 --no-bots,40,1,StockElasticityScale = 0.7,0,0,1.042,2.18,,clamp hidden (V* stays under Kmax);  the stock-outs remain
+se05,phase2 --no-bots,40,1,StockElasticityScale = 0.5,0,0,1.035,2.13,,clamp hidden
+jh6,phase2 --no-bots,40,1,MaxSimJobHours = 6,27,5,1.046,2.09,,
+es03,phase2 --no-bots,40,1,EconomyScale = 0.03,33,406,1.202,1.90,1.37,(b) fails widely:  line capacity at 3x the economy
+es03v,phase2 --no-bots --virtual-lines,40,1,EconomyScale = 0.03,1,0,1.079,1.73,1.26,passes:  more prints a day lower the noise floor
+p6_nologistics,phase6 --no-logistics,100,1,(defaults),,,,,,all phase 6 tests pass:  moon products x2.16 / components x2.22;  T2 charges x1.197;  ships x1.107;  invention -1.31 sigma
+p6_ls05,phase6,100,1,MaxLineShare = 0.5,,,,,,moon removal and T2 charges (x1.291) fail as with the defaults:  not line capacity;  invention +0.08 sigma

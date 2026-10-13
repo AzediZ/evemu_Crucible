@@ -1,0 +1,2 @@
+# a demand boom:  1.5 x the demand for every module (category 7) for 30 days from day 30
+shock = 30 c:7 1.5 30

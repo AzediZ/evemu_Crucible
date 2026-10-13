@@ -47,6 +47,10 @@ private:
     double   m_playerBusy;
 };
 
+/* phase 7 (scenario keys MaxLineShare, MinFreeLinesPerStation):  every HarnessCapacity made afterwards uses these instead
+ *  of FacilityParams' defaults.  <= 0 / < 0 keeps a default */
+void SetHarnessLineShare(double maxLineShare, int minFreeLines);
+
 /* the world's capacity in the harness (World::SetCapacity before Build), as the server books it:  a node works at the
  *  npc stations of its hub's constellation that have lines (SimFacilityMgr::Capacity, Crucible's staStations and
  *  ramAssemblyLines:  50 manufacturing lines each, none at Rens VI-8), its own station first;  a node at another

@@ -1,0 +1,41 @@
+market sim sweep:  6 sets, phases 2,3,4,6, 3 seed(s), synthetic world
+runs finished 36 of 72 (runs.csv;  run the same command again to do the rest)
+complete sets 0;  passing every phase 2/3/4/6 acceptance test (PLAN 4.1 T1 targets aside) 0;  all of them 0
+
+ranked (fails without / with the T1 PLAN 4.1 targets, max and mean use of the tests' room, worst metric):
+  #1   set 4    fails 0/0  max_u 0.57  mean_u 0.18  worst p2.clamp_days          ElasticityScale=1.243  FairValueHalfLifeDays=4.237  HalfSpreadScale=0.9252  HarvestSlack=2.984  HaulerMargin=0.02646  InternalSpreadShare=0.4827  MarketNoise=0.9472  MinHalfSpread=0.01198  MiningSlack=0.3879  ProductionSlack=1.305  RemoteSupplyElasticity=1.896  StockElasticityScale=0.984  TransientNoise=1.108
+  #2   set 5    fails 0/0  max_u 0.58  mean_u 0.28  worst p2.noise.Materials     ElasticityScale=0.7058  FairValueHalfLifeDays=2.247  HalfSpreadScale=1.118  HarvestSlack=2.761  HaulerMargin=0.03851  InternalSpreadShare=0.5625  MarketNoise=1.208  MinHalfSpread=0.01463  MiningSlack=0.1722  ProductionSlack=0.7026  RemoteSupplyElasticity=2.956  StockElasticityScale=0.8632  TransientNoise=1.153
+  #3   set 1    fails 0/0  max_u 0.83  mean_u 0.32  worst p3.mineral_peak        ElasticityScale=0.7625  FairValueHalfLifeDays=3.072  HalfSpreadScale=1.233  HarvestSlack=1.972  HaulerMargin=0.02166  InternalSpreadShare=0.2732  MarketNoise=0.7894  MinHalfSpread=0.02174  MiningSlack=0.3129  ProductionSlack=0.7276  RemoteSupplyElasticity=2.89  StockElasticityScale=1.117  TransientNoise=1.252
+  #4   set 2    fails 1/1  max_u 1.05  mean_u 0.31  worst p3.mineral_peak        ElasticityScale=0.9872  FairValueHalfLifeDays=2.883  HalfSpreadScale=0.8432  HarvestSlack=1.866  HaulerMargin=0.03715  InternalSpreadShare=0.7106  MarketNoise=1.061  MinHalfSpread=0.02425  MiningSlack=0.1875  ProductionSlack=1.003  RemoteSupplyElasticity=1.615  StockElasticityScale=0.8932  TransientNoise=0.9569
+  #5   set 0    fails 1/1  max_u 1.27  mean_u 0.34  worst p3.mineral_peak        ElasticityScale=1.0  FairValueHalfLifeDays=3.0  HalfSpreadScale=1.0  HarvestSlack=2.0  HaulerMargin=0.03  InternalSpreadShare=0.5  MarketNoise=1.0  MinHalfSpread=0.015  MiningSlack=0.25  ProductionSlack=1.0  RemoteSupplyElasticity=2.0  StockElasticityScale=1.0  TransientNoise=1.0
+  #6   set 3    fails 1/1  max_u 1.34  mean_u 0.28  worst p3.mineral_peak        ElasticityScale=0.7763  FairValueHalfLifeDays=3.308  HalfSpreadScale=1.223  HarvestSlack=2.382  HaulerMargin=0.0453  InternalSpreadShare=0.2035  MarketNoise=0.8688  MinHalfSpread=0.01796  MiningSlack=0.2824  ProductionSlack=1.22  RemoteSupplyElasticity=2.414  StockElasticityScale=1.009  TransientNoise=1.407
+
+checks that failed (sets):
+
+rank correlation (Spearman) of each key with the scores and the borderline metrics:
+  metric                   Elastici FairValu HalfSpre HarvestS HaulerMa Internal MarketNo MinHalfS MiningSl Producti RemoteSu StockEla Transien
+  max_u                                                                                                                                        
+  mean_u                                                                                                                                       
+  fails_excl_t1                                                                                                                                
+  p2.index_max                                                                                                                                 
+  p2.money_max                                                                                                                                 
+  p2.noise.Charges                                                                                                                             
+  p2.noise.Commodities                                                                                                                         
+  p2.noise.Materials                                                                                                                           
+  p2.noise.Modules                                                                                                                             
+  p2.noise.PI                                                                                                                                  
+  p2.noise_off_floor.Charg                                                                                                                     
+  p2.noise_off_floor.Commo                                                                                                                     
+  p2.noise_off_floor.Mater                                                                                                                     
+  p2.noise_off_floor.Modul                                                                                                                     
+  p2.noise_off_floor.PI                                                                                                                        
+  p3.mineral_peak                                                                                                                              
+  p3.t1.charges                                                                                                                                
+  p3.t1.drones                                                                                                                                 
+  p3.t1.modules                                                                                                                                
+  p3.t1.ships                                                                                                                                  
+  p3.t1cal.charges                                                                                                                             
+  p3.t1cal.drones                                                                                                                              
+  p3.t1cal.modules                                                                                                                             
+  p3.t1cal.ships                                                                                                                               
+  p4.route_risk                                                                                                                                
