@@ -108,6 +108,9 @@ public:
     // a player's ship (or pod) was destroyed.  sec status penalties, kill rights, kill right use.  killerCharID 0 for NPCs
     //  a self-destruct has no killer: the victim's aggressors get no penalties or kill rights
     void OnShipDestroyed(uint32 victimCharID, bool pod, float victimSec, uint32 killerCharID, SystemManager* pSystem, bool selfDestruct = false);
+    /* a pilot destroyed a protected ambient npc (a hauler, miner or navy ship:  ambient npc plan 10.4):  the ship kill security
+     *  penalty (as for a neutral pilot's ship) and a fresh criminal flag.  CONCORD is on its way from the attack already */
+    void AmbientKilled(Client* pKiller, SystemManager* pSystem);
     // security status gain for killing an NPC (only the best NPC per system per 15 minutes counts).  returns the gain
     float OnNPCKilled(Character* pChar, InventoryItemRef npcRef, SystemManager* pSystem);
 
@@ -160,6 +163,7 @@ private:
         bool sentry = false;            // gate/station sentry (attacking flags you to its owner)
         uint32 protectedID = 0;         // law sentry:  the gate or station it guards (Crimewatch 1 aggression)
         bool structure = false;         // player structure (owned by corpID)
+        bool ambient = false;           // a protected ambient npc (civilian or navy, ambient npc plan 10.1), owned by corpID
     };
     bool GetOwner(SystemEntity* pSE, Owner& into);
     void Act(Client* pAggressor, SystemManager* pSystem, const Owner& target);

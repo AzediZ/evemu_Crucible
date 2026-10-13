@@ -22,6 +22,7 @@
 #include "npc/LawEnforcement.h"
 #include "npc/NPC.h"
 #include "npc/Sentry.h"
+#include "npc/ambient/AmbientNPC.h"
 #include "npc/ai/LawRules.h"
 #include "ship/Ship.h"
 #include "standing/StandingDB.h"
@@ -241,6 +242,16 @@ bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
             into.corpID = corpCONCORD;
             return true;
         }
+        /* ambient npcs (ambient npc plan 10.1):  shooting the civilians, miners and navies is a crime, as shooting a neutral
+         *  pilot would be.  ambient criminals are free targets like rats */
+        if (AmbientNPC* pAmb = pNPC->GetAmbientNPC()) {
+            if (!pAmb->IsProtected())
+                return false;
+            into.ambient = true;
+            into.corpID = pSE->GetCorporationID();
+            into.secStatus = 0.0f;
+            return true;
+        }
         return false;   // rats, police and navies: shooting them is no crime
     } else if (pSE->IsSentrySE()) {
         // pirate and deadspace guns are rats like the npcs around them (most of them were npc entities until they became
@@ -363,6 +374,22 @@ void CrimeWatch::Act(Client* pAggressor, SystemManager* pSystem, const Owner& ta
         Notify(me);
         return;
     }
+    /* a protected ambient npc (ambient npc plan 10.1):  flagged to its corp and a global criminal in empire space (sentries shoot,
+     *  in low sec too), the aggression penalty once, and CONCORD in high sec */
+    if (target.ambient) {
+        if (secClass != Crime::SecClass::Null) {
+            bool newFlag(!IsFlaggedTo(me, target.corpID));
+            Flag(me, target.corpID, now);
+            Flag(me, 0, now);
+            if (newFlag)
+                SecPenalty(pAggressor, target.secStatus, sConfig.crime.SecAggressionPenalty, 0.0f, SecurityLevel(trueSec), "aggression");
+            _log(CRIME__INFO, "%s(%u) attacked an ambient ship of %u in %s.", pAggressor->GetName(), me, target.corpID, pSystem->GetName());
+            if (secClass == Crime::SecClass::High)
+                pSystem->GetLaw()->ReportCriminal(pAggressor);
+        }
+        Notify(me);
+        return;
+    }
 
     if (target.charID != 0) {
         record.lastPvP = now;
@@ -390,6 +417,21 @@ void CrimeWatch::Act(Client* pAggressor, SystemManager* pSystem, const Owner& ta
             pSystem->GetLaw()->ReportCriminal(pAggressor);
     }
 
+    Notify(me);
+}
+
+void CrimeWatch::AmbientKilled(Client* pKiller, SystemManager* pSystem)
+{
+    if (!sConfig.crime.Enabled or (pKiller == nullptr) or (pSystem == nullptr))
+        return;
+    float trueSec(pSystem->GetSystemSecurityRating());
+    if (SecurityClass(trueSec) == Crime::SecClass::Null)
+        return;
+    uint32 me(pKiller->GetCharacterID());
+    int64 now(GetFileTimeNow());
+    SecPenalty(pKiller, 0.0f, sConfig.crime.SecShipKillPenalty, 0.0f, SecurityLevel(trueSec), "ship kill");
+    Flag(me, 0, now);
+    m_records[me].lastAct = now;
     Notify(me);
 }
 

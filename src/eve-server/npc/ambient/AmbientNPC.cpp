@@ -7,11 +7,13 @@
 
 #include "Client.h"
 #include "EVEServerConfig.h"
+#include "EntityList.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/ambient/AmbientMgr.h"
 #include "npc/ambient/AmbientNPC.h"
 #include "npc/ambient/AmbientPilot.h"
 #include "packets/Destiny.h"
+#include "system/CrimeWatch.h"
 #include "system/Damage.h"
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
@@ -144,5 +146,18 @@ void AmbientNPC::Killed(Damage& damage)
 {
     if (m_pilot != nullptr)
         m_pilot->OnKilled();
+    // 10.4:  a pilot (or his drones) who destroys a protected ambient ship takes the ship kill penalty
+    SystemEntity* pKiller(damage.srcSE);
+    if (IsProtected() and (pKiller != nullptr)) {
+        Client* pClient(nullptr);
+        if (pKiller->HasPilot()) {
+            pClient = pKiller->GetPilot();
+        } else if (pKiller->IsDroneSE()) {
+            pClient = sEntityList.FindClientByCharID(pKiller->GetSelf()->ownerID());
+        }
+        if (pClient != nullptr)
+            sCrimeWatch.AmbientKilled(pClient, m_system);
+    }
+    // the wreck (no bounty or security gain:  Load() zeroed them)
     NPC::Killed(damage);
 }
