@@ -52,7 +52,8 @@ namespace NpcAI {
             Dungeon     = 2,    // DungeonMgr live group, id = liveGroupID
             DungeonRoom = 3,    // npcs placed in a dungeon room (no spawn group), id = (instanceID << 8) | room index
             GM          = 4,    // one /spawn command, id = AggroGroupRegistry::NextGMBatch()
-            Law         = 5     // one law enforcement response (phase 4, LawEnforcement)
+            Law         = 5,    // one law enforcement response (phase 4, LawEnforcement)
+            Ambient     = 6     // an ambient patrol squad or criminal group (npc/ambient), id = squadID or groupID
         };
     }
 }

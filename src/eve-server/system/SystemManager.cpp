@@ -71,6 +71,8 @@
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "npc/LawEnforcement.h"
+#include "npc/ambient/AmbientNPC.h"
+#include "npc/ambient/AmbientSystem.h"
 #include "system/CrimeWatch.h"
 #include "system/Interdiction.h"
 #include "ConsoleCommands.h"
@@ -86,6 +88,7 @@ m_beltMgr(new BeltMgr(this, svc)),
 m_dungMgr(new DungeonMgr(this, svc)),
 m_spawnMgr(new SpawnMgr(this, svc)),
 m_law(new LawEnforcement(this, svc)),
+m_ambient(nullptr),
 m_interdiction(new InterdictionMgr(this)),
 m_loaded(false),
 m_entityChanged(false),
@@ -102,8 +105,11 @@ m_tutorialSiteID(0),
 m_droneIndexStamp(0),
 m_droneIndexBusy(0),
 m_droneIndexDirty(true),
-m_aiTick(0)
+m_aiTick(0),
+m_inSpaceTick(0),
+m_inSpace(0)
 {
+    m_ambient = new AmbientSystem(this);
     m_minutes = 0;
 
     m_npcs.clear();
@@ -150,6 +156,7 @@ SystemManager::~SystemManager() {
     SafeDelete(m_beltMgr);
     SafeDelete(m_spawnMgr);
     SafeDelete(m_law);
+    SafeDelete(m_ambient);
     SafeDelete(m_interdiction);
 }
 
@@ -304,6 +311,8 @@ bool SystemManager::ProcessTic() {
     m_dungMgr->Process();
     m_spawnMgr->Process();
     m_law->Process();
+    // ambient npcs (one branch while no player is in space here)
+    m_ambient->Process();
 
     // customs office and gantry timers (anchoring, upgrading, unanchoring, reinforcement)
     for (auto cur : m_planetMap) {
@@ -405,6 +414,8 @@ void SystemManager::UnloadSystem() {
     
     // law enforcement forgets its entities (they're deleted below)
     m_law->Close();
+    // so do the ambient npcs
+    m_ambient->Close();
     // so do the warp disruption fields
     m_interdiction->Clear();
 
@@ -1316,6 +1327,9 @@ void SystemManager::OnNPCRemoved(SystemEntity* pSE)
             m_dungMgr->OnEntityRemoved(itemID);
         }
     }
+    // an ambient npc:  its system forgets it (the system frees it below, like any other)
+    if (pSE->IsNPCSE() and (pSE->GetNPCSE()->GetAmbientNPC() != nullptr))
+        m_ambient->OnNPCRemoved(itemID, killed);
     // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed
     if (pSE->TargetMgr() != nullptr) {
         pSE->TargetMgr()->ClearModules();
@@ -2161,6 +2175,18 @@ void SystemManager::GetMoonsInRange(const GPoint& pos, double range, std::vector
     for (auto cur : m_moonMap)
         if ((pos.distance(cur.second->GetPosition()) - cur.second->GetRadius()) <= range)
             into.push_back(cur.second);
+}
+
+uint32 SystemManager::PlayersInSpace()
+{
+    if ((m_inSpaceTick == m_aiTick) and (m_aiTick != 0))
+        return m_inSpace;
+    m_inSpaceTick = m_aiTick;
+    m_inSpace = 0;
+    for (auto& cur : m_clients)
+        if ((cur.second != nullptr) and cur.second->IsInSpace() and (cur.second->GetShipSE() != nullptr))
+            ++m_inSpace;
+    return m_inSpace;
 }
 
 void SystemManager::GetClientList(std::vector< Client* >& cVec)

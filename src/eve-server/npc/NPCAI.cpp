@@ -57,6 +57,7 @@
 #include "npc/LawEnforcement.h"
 #include "npc/NPCEwar.h"
 #include "npc/ai/AggroGroup.h"
+#include "npc/ambient/AmbientPilot.h"
 #include "npc/ai/NpcBrain.h"
 #include "npc/ai/NpcLod.h"
 #include "npc/ai/NpcMath.h"
@@ -120,6 +121,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_brain(nullptr),
   m_move(nullptr),
   m_support(nullptr),
+  m_ambient(nullptr),
   m_destiny(who->DestinyMgr()),
   m_self(who->GetSelf())
 {
@@ -183,6 +185,16 @@ void NPCAIMgr::CreateBrain()
     }
     _log(NPC__AI_TRACE, "%s(%u): %s brain (%s profile).", m_npc->GetName(), m_npc->GetID(), m_brain->GetName(),
             NpcAI::GetTierName(m_profile->tier));
+}
+
+void NPCAIMgr::SetBrain(NpcBrain* pBrain)
+{
+    // only before the first Process() made one (CreateBrain() keeps a brain it was given)
+    if (m_brain == nullptr) {
+        m_brain = pBrain;
+    } else {
+        SafeDelete(pBrain);
+    }
 }
 
 NpcContext NPCAIMgr::MakeContext()
@@ -291,11 +303,12 @@ void NPCAIMgr::Process() {
                 m_sched.StartPeriodic(NpcAct::Think, now, 1000);
             if (m_sched.Due(NpcAct::Think, now)) {
                 /* out past our leash with nothing to do:  home first, instead of a new fight that the leash would cut short
-                 *  at once (being shot still gets its answer, the queued aggressor above) */
-                if (IdleGoHome())
+                 *  at once (being shot still gets its answer, the queued aggressor above).  ambient npcs have no home or
+                 *  passive group:  their pilot flies them */
+                if ((m_ambient == nullptr) and IdleGoHome())
                     break;
                 // a passive group wakes up when someone comes too close
-                if (CheckProximity())
+                if ((m_ambient == nullptr) and CheckProximity())
                     return;
                 SystemEntity* pTarget(m_brain->Acquire(ctx));
                 if (pTarget != nullptr) {
@@ -305,12 +318,13 @@ void NPCAIMgr::Process() {
                         AlertGroup(pTarget);
                     return;
                 }
-                // wander, and now and then pick something else to wander around (phase 5)
-                if (sConfig.npc.IdleWander and !m_idleHome)
+                // wander, and now and then pick something else to wander around (phase 5).  not an ambient npc:  its pilot flies it
+                if (sConfig.npc.IdleWander and !m_idleHome and (m_ambient == nullptr))
                     if (!m_isWandering or m_sched.Due(NpcAct::Wander, now))
                         SetWander();
             }
-            StartWarpOutTimer();
+            if (m_ambient == nullptr)
+                StartWarpOutTimer();
         } break;
         case NPCAI::State::Acquiring:
         case NPCAI::State::Engaged: {
@@ -392,6 +406,9 @@ void NPCAIMgr::Process() {
 
 bool NPCAIMgr::CheckDormant()
 {
+    // ambient npcs never sleep:  they come and go with the players (ambient npc plan 4.3)
+    if (m_ambient != nullptr)
+        return false;
     SystemBubble* pBubble(m_npc->SysBubble());
     if (m_dormant) {
         // a player arrived, or something is happening to us
@@ -694,6 +711,14 @@ void NPCAIMgr::BeginWarp(int8 state/*NPCAI::State::WarpOut*/)
 void NPCAIMgr::WarpOutComplete()
 {
     m_sched.Stop(NpcAct::WarpOut);
+    // an ambient npc's warps are its pilot's:  no home, no spawn manager.  a criminal that fled is done fleeing
+    if (m_ambient != nullptr) {
+        if ((m_state == NPCAI::State::WarpOut) or (m_state == NPCAI::State::WarpFollow) or (m_state == NPCAI::State::Fleeing)) {
+            m_state = NPCAI::State::Idle;
+            m_move->Calm();
+        }
+        return;
+    }
     /* wherever an npc lands is home, the first warp-in of a belt spawn too:  those are created 1000+ km off grid,
      *  and the leash would otherwise pull every fight back there.  not after the leash's own warp home (a warp disruption
      *  field may have pulled it short) */
@@ -749,8 +774,8 @@ bool NPCAIMgr::TryWarpFollow(SystemEntity* pSE)
 
 bool NPCAIMgr::CheckLeash(int64 now)
 {
-    // law enforcement goes where its target goes
-    if (m_npc->IsLawEnforcer())
+    // law enforcement goes where its target goes.  so do ambient npcs (they travel:  no home)
+    if (m_npc->IsLawEnforcer() or (m_ambient != nullptr))
         return false;
     double distance(m_npc->GetPosition().distance(m_home));
     uint8 leash(NpcMath::LeashState(distance, m_profile->wanderRange, sConfig.npc.LeashSoftScale, sConfig.npc.LeashHardScale,
@@ -766,7 +791,7 @@ bool NPCAIMgr::CheckLeash(int64 now)
 
 bool NPCAIMgr::IdleGoHome()
 {
-    if (m_npc->IsLawEnforcer() or (m_destiny == nullptr) or m_destiny->IsWarping())
+    if (m_npc->IsLawEnforcer() or (m_ambient != nullptr) or (m_destiny == nullptr) or m_destiny->IsWarping())
         return false;
     double distance(m_npc->GetPosition().distance(m_home));
     if (NpcMath::LeashState(distance, m_profile->wanderRange, sConfig.npc.LeashSoftScale, sConfig.npc.LeashHardScale,
@@ -1075,6 +1100,10 @@ void NPCAIMgr::SetIdle(bool clearLocks/*true*/) {
 
     //disallow warpout if anomaly, incursion or mission rat (and by config)
     StartWarpOutTimer();
+
+    // an ambient npc's pilot resumes its itinerary
+    if (m_ambient != nullptr)
+        m_ambient->OnCombatEnded();
 }
 
 void NPCAIMgr::CheckDistance(SystemEntity* pSE)
@@ -1388,8 +1417,8 @@ void NPCAIMgr::AlertGroup(SystemEntity* pAggressor)
 {
     if ((pAggressor == nullptr) or (m_group.get() == nullptr) or m_npc->IsLawEnforcer())
         return;
-    // players' ships and drones only (npcs never fight npcs)
-    if (!pAggressor->IsShipSE() and !pAggressor->IsDroneSE())
+    // players' ships and drones only (npcs never fight npcs, except ambient npcs:  a squad or criminal group joins in on npcs too)
+    if (!pAggressor->IsShipSE() and !pAggressor->IsDroneSE() and !((m_ambient != nullptr) and pAggressor->IsNPCSE()))
         return;
     m_group->Alert(m_npc, pAggressor);
     // groups linked to ours (dunSpawnGroups.aggroLink) aggro with us
@@ -1434,7 +1463,9 @@ bool NPCAIMgr::CanAggro(SystemEntity* pSE)
 {
     if ((pSE == nullptr) or (pSE == m_npc) or pSE->IsDead())
         return false;
-    if (!pSE->IsShipSE() and !pSE->IsDroneSE())
+    // players' ships and drones.  an ambient npc also fights the npcs its pilot allows (criminals, their prey, ambient plan 8.6)
+    if (!pSE->IsShipSE() and !pSE->IsDroneSE()
+    and !((m_ambient != nullptr) and pSE->IsNPCSE() and m_ambient->MayTarget(pSE)))
         return false;
     if ((pSE->SysBubble() == nullptr) or (pSE->SysBubble() != m_npc->SysBubble()))
         return false;

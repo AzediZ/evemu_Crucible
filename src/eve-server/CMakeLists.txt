@@ -71,6 +71,7 @@ SET( account_SOURCE
 
 SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/AlertService.h"
+     "${TARGET_INCLUDE_DIR}/admin/AmbientCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/debug_commands.h"
      "${TARGET_INCLUDE_DIR}/admin/AllCommands.h"
      "${TARGET_INCLUDE_DIR}/admin/AllCommandsList.h"
@@ -91,6 +92,7 @@ SET( admin_INCLUDE
      "${TARGET_INCLUDE_DIR}/admin/CommandHelper.h" )
 SET( admin_SOURCE
      "${TARGET_SOURCE_DIR}/admin/AlertService.cpp"
+     "${TARGET_SOURCE_DIR}/admin/AmbientCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/debug_commands.cpp"
      "${TARGET_SOURCE_DIR}/admin/AllCommands.cpp"
      "${TARGET_SOURCE_DIR}/admin/ClientStatLogger.cpp"
@@ -454,6 +456,9 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/Sentry.h"
      "${TARGET_INCLUDE_DIR}/npc/SentryAI.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/AggroGroup.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/AmbientBrain.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/AmbientRules.h"
+     "${TARGET_INCLUDE_DIR}/npc/ai/AmbientSchedule.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/FighterWarpRules.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawBrain.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/LawRules.h"
@@ -470,7 +475,13 @@ SET( npc_INCLUDE
      "${TARGET_INCLUDE_DIR}/npc/ai/RecentDamage.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/SeenList.h"
      "${TARGET_INCLUDE_DIR}/npc/ai/SentryBrain.h"
-     "${TARGET_INCLUDE_DIR}/npc/ai/ThreatTable.h")
+     "${TARGET_INCLUDE_DIR}/npc/ai/ThreatTable.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientCatalog.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientMgr.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientNPC.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientPilot.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientSystem.h"
+     "${TARGET_INCLUDE_DIR}/npc/ambient/AmbientTypes.h")
 SET( npc_SOURCE
      #"${TARGET_SOURCE_DIR}/npc/Concord.cpp"
      "${TARGET_SOURCE_DIR}/npc/LawEnforcement.cpp"
@@ -483,6 +494,7 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/Sentry.cpp"
      "${TARGET_SOURCE_DIR}/npc/SentryAI.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/AggroGroup.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ai/AmbientBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/LawBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/LevelOneBrain.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcBrain.cpp"
@@ -490,7 +502,12 @@ SET( npc_SOURCE
      "${TARGET_SOURCE_DIR}/npc/ai/NpcMovement.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcProfile.cpp"
      "${TARGET_SOURCE_DIR}/npc/ai/NpcSupport.cpp"
-     "${TARGET_SOURCE_DIR}/npc/ai/SentryBrain.cpp" )
+     "${TARGET_SOURCE_DIR}/npc/ai/SentryBrain.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ambient/AmbientCatalog.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ambient/AmbientMgr.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ambient/AmbientNPC.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ambient/AmbientPilot.cpp"
+     "${TARGET_SOURCE_DIR}/npc/ambient/AmbientSystem.cpp" )
 
 SET( planet_INCLUDE
      "${TARGET_INCLUDE_DIR}/planet/Colony.h"

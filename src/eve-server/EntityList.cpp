@@ -42,6 +42,7 @@
 #include "map/MapDB.h"
 #include "market/MarketMgr.h"
 #include "market/sim/MarketSimMgr.h"
+#include "npc/ambient/AmbientMgr.h"
 #include "market/sim/SimFacilityMgr.h"
 #include "missions/MissionDataMgr.h"
 #include "station/Station.h"
@@ -288,6 +289,7 @@ void EntityList::Process() {
 
         // these need 1Hz tics
         sCivMgr.Process();
+        sAmbientMgr.Process();  // ambient npcs:  transits between systems, the market score refresh
         sLocatorMgr.Process();
         sBubbleMgr.Process();
         sExplorationMgr.Process();

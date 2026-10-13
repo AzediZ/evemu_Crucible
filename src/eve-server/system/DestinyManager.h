@@ -165,6 +165,9 @@ public:
     void Cloak(uint8 mode = Destiny::Cloak::Session);
     // Destiny::Cloak::None uncloaks any mode.  otherwise only that mode is dropped (movement only breaks a session cloak)
     void UnCloak(uint8 mode = Destiny::Cloak::None);
+    /* the gate cloak for an entity not in space yet (an ambient npc's gate arrival):  no fx and no ball removal, as nobody
+     *  has its ball.  UnCloak(Session) then shows the shimmer and adds the ball */
+    void SetSessionCloakSilently()                      { m_cloakMode = Destiny::Cloak::Session; }
 
     PyResult AttemptDockOperation();
     void Undock(GPoint dir);

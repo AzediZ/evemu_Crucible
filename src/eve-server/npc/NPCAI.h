@@ -60,6 +60,7 @@ namespace NPCAI {
 }
 
 class AggroGroup;
+class AmbientPilot;
 class NPC;
 class NPCEwar;
 class NpcBrain;
@@ -135,6 +136,11 @@ public:
     void SetGroup(const std::shared_ptr<AggroGroup>& group);
     AggroGroup* GetGroup()                              { return m_group.get(); }
     void SetRole(uint8 role)                            { m_role = role; }
+    /* ambient npcs (npc/ambient, ambient npc plan 4.3).  the brain (we own it) before our first Process();  the pilot flies the
+     *  ship while we are idle:  no wander, leash, warp-out timer or sleep, and npc targets it allows */
+    void SetBrain(NpcBrain* pBrain);
+    void SetAmbient(AmbientPilot* pPilot)               { m_ambient = pPilot; }
+    AmbientPilot* GetAmbient()                          { return m_ambient; }
     uint8 GetRole() const                               { return m_role; }
     // we came with a dungeon wave:  our first target may be the weakest ship (npc.WaveWeakestChance)
     void SetWave(bool wave = true)                      { m_wave = wave; }
@@ -328,6 +334,7 @@ private:
     NpcBrain* m_brain;          // we own this.  made on the first Process()
     NpcMovement* m_move;        // we own this
     NpcSupport* m_support;      // we own this.  nullptr when our type has no remote repair, group assist or remote ecm
+    AmbientPilot* m_ambient;    // we do not own this (the ambient npc does).  nullptr for every other npc
     DestinyManager* m_destiny;
     InventoryItemRef m_self;
     std::shared_ptr<const NpcProfile> m_profile;

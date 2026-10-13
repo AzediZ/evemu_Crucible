@@ -47,6 +47,7 @@ class SetState;
 class DestinyManager;
 class DroneSE;
 
+class AmbientSystem;
 class AnomalyMgr;
 class BeltMgr;
 class DungeonMgr;
@@ -121,6 +122,8 @@ public:
     uint8 GetRatSpawnCount()                            { return m_activeRatSpawns; }
     uint16 GetRoidSpawnCount()                          { return m_activeRoidSpawns; }
     uint32 PlayerCount()                                { return m_players; }
+    // players whose ship is in space here (PlayerCount() counts docked pilots too).  counted once per tick
+    uint32 PlayersInSpace();
     uint32 GetSysNPCCount()                             { return m_npcs.size(); }
 
     // CosmicMgr interface
@@ -130,6 +133,8 @@ public:
     DungeonMgr* GetDungMgr()                            { return m_dungMgr; }
     // CONCORD, faction police, sentries, logged-off ships
     LawEnforcement* GetLaw()                            { return m_law; }
+    // ambient npcs:  traffic, patrols, miners, criminals (npc/ambient/AmbientSystem.h)
+    AmbientSystem* GetAmbient()                         { return m_ambient; }
     // warp disruption fields (bubbles) and the warp rules
     InterdictionMgr* GetInterdictionMgr()               { return m_interdiction; }
 
@@ -258,6 +263,7 @@ private:
     DungeonMgr* m_dungMgr;      //we own this, never NULL.
     SpawnMgr* m_spawnMgr;       //we own this, never NULL.
     LawEnforcement* m_law;      //we own this, never NULL.
+    AmbientSystem* m_ambient;   //we own this, never NULL.
     InterdictionMgr* m_interdiction;    //we own this, never NULL.
 
     EVEServiceManager& m_services;
@@ -326,6 +332,8 @@ private:
     void FreeRemovedNPCs();
     NpcStats m_npcStats;                                // telemetry window (NPC__AI_STATS every npc.StatsInterval)
     uint64_t m_aiTick;                                  // ticks so far (npc level of detail)
+    uint64_t m_inSpaceTick;                             // PlayersInSpace():  the tick its count is for
+    uint32 m_inSpace;
 
     // running self-destructs
     struct SelfDestructData {

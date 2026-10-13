@@ -9,6 +9,7 @@
 #include "admin/DungeonCommands.h"
 #include "admin/GMToolCommands.h"
 #include "admin/NpcAICommands.h"
+#include "admin/AmbientCommands.h"
 #include "admin/MarketSimCommands.h"
 #include "admin/SimFacilityCommands.h"
 

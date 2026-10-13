@@ -755,6 +755,10 @@ bool DestinyManager::IsMassive() const {
     // CloakBall clears it too
     if (m_cloakMode != Destiny::Cloak::None)
         return false;
+    /* ambient npcs (traffic, miners, patrols) fly like player ships:  solid only with bumping on.  they dock and jump at the
+     *  same points players do, which a massive ball can't reach */
+    if (mySE->IsNPCSE() and (mySE->GetNPCSE()->GetAmbientNPC() != nullptr))
+        return sConfig.cosmic.BumpEnabled;
     if (mySE->IsNPCSE() or mySE->IsMissileSE())
         return true;
     if (mySE->IsShipSE())

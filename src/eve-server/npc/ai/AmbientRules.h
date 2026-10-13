@@ -433,17 +433,20 @@ namespace Node {
         Gate    = 0,
         Station = 1,
         Belt    = 2,
-        Planet  = 3     // planet or moon
+        Planet  = 3,    // planet or moon
+        Entity  = 4     // a ship or other entity (a patrol answering a crime)
     };
 }
-// gate:  radius + 500 - 2500.  station:  2 - 12 km from the dock point.  belt:  5 - 25 km.  planet or moon:  10 - 40 km
+/* gate:  radius + 500 - 2500.  station:  2 - 12 km from the dock point.  belt:  5 - 25 km.  planet or moon:  10 - 40 km off
+ *  its surface.  an entity:  5 - 15 km */
 inline double LandingDistance(NpcRng& rng, uint8_t nodeKind, double radius)
 {
     switch (nodeKind) {
         case Node::Gate:    return radius + rng.Range(500.0, 2500.0);
         case Node::Station: return rng.Range(2000.0, 12000.0);
         case Node::Belt:    return rng.Range(5000.0, 25000.0);
-        default:            return rng.Range(10000.0, 40000.0);
+        case Node::Entity:  return rng.Range(5000.0, 15000.0);
+        default:            return radius + rng.Range(10000.0, 40000.0);
     }
 }
 

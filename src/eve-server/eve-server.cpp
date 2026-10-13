@@ -141,6 +141,7 @@
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
 #include "market/sim/MarketSimMgr.h"
+#include "npc/ambient/AmbientMgr.h"
 #include "market/sim/SimFacilityMgr.h"
 // missions services
 #include "missions/MissionMgrService.h"
@@ -817,6 +818,8 @@ int main( int argc, char* argv[] )
     // its station capacity first:  the jobs and their lines (players' installs check them even with the sim off)
     sSimFacilities.Initialize();
     sMktSim.Initialize();
+    /* ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md):  the catalog and the market scores.  read-only SELECTs */
+    sAmbientMgr.Initialize();
     std::printf("\n");     // spacer
 
     // clear dynamic system data (player counts, etc) on server start

@@ -31,6 +31,7 @@
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/SystemEntity.h"
 
+class AmbientNPC;
 class EVEServiceManager;
 class DestinyManager;
 class InventoryItem;
@@ -57,6 +58,8 @@ public:
 
     /* class type pointer querys. */
     virtual NPC* GetNPCSE()                             { return this; }
+    // an ambient npc (npc/ambient/AmbientNPC.h:  traffic, patrols, miners, criminals), else nullptr
+    virtual AmbientNPC* GetAmbientNPC()                 { return nullptr; }
     /* class type tests. */
     virtual bool IsNPCSE()                              { return true; }
 
