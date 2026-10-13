@@ -31,6 +31,7 @@ SET( ship_SOURCE
      "ship/WarpCapacitorTest.cpp"
      "ship/WarpSpeedTest.cpp" )
 SET( npcai_SOURCE
+     "npcai/AmbientRulesTest.cpp"
      "npcai/FighterWarpTest.cpp"
      "npcai/LawRulesTest.cpp"
      "npcai/LootRollTest.cpp"
@@ -111,3 +112,5 @@ ADD_TEST( NAME "FighterWarpTest"
           COMMAND "${TARGET_NAME}" "npcai/FighterWarpTest" )
 ADD_TEST( NAME "LootRollTest"
           COMMAND "${TARGET_NAME}" "npcai/LootRollTest" )
+ADD_TEST( NAME "AmbientRulesTest"
+          COMMAND "${TARGET_NAME}" "npcai/AmbientRulesTest" )
