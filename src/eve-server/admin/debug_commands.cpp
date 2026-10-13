@@ -1003,7 +1003,7 @@ PyResult Command_warpto(Client* pClient, CommandDB* db, EVEServiceManager &servi
 
     pClient->SetInvul(false);
     pClient->SetUndock(false);
-    pDestiny->WarpTo(warpToPoint, static_cast<int32>(distance + (pClient->GetShipSE()->GetRadius() * 2)), false, pSE);
+    pDestiny->WarpTo(warpToPoint, static_cast<int32>(distance + (pClient->GetShipSE()->GetRadius() * 2)), false, pSE, 0, false, true);   // gm warps are free
 
     char reply[128];
     if (distance >= 1000) {
@@ -1362,7 +1362,7 @@ PyResult Command_bubblewarp(Client* pClient, CommandDB* db, EVEServiceManager &s
         throw CustomError ("Cannot warp to bubble %u because it is in %s and you are in %s", \
                     bubbleID, pBubble->GetSystem()->GetName(), pClient->GetSystemName().c_str());
 
-    pClient->GetShipSE()->DestinyMgr()->WarpTo(pBubble->GetCenter());
+    pClient->GetShipSE()->DestinyMgr()->WarpTo(pBubble->GetCenter(), 0, false, nullptr, 0, false, true);   // gm warps are free
 
     int size(50);
     char* reply = Memory::Allocator::NewArray<char>(&sAllocators.tickAllocator, size);

@@ -69,6 +69,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "utils/Buffer.h"
+#include "EVE_Warp.h"
 #include <cstdlib>
 #include <cmath>
 
@@ -680,10 +681,17 @@ void DestinyManager::OnWarpActivated() {
                 mySE->GetName(), mySE->GetID(), m_effectStamp, m_warpDistance / DST_AU,
                 m_targetPoint.x, m_targetPoint.y, m_targetPoint.z, static_cast<double>(m_warpFactor) * 0.1);
 
-    //drain cap (acceleration gate warps are free)
+    /* drain cap as the warp drive engages (acceleration gate, login and GM warps are free).  WarpTo() worked out the cost;
+     *  the capacitor may have recharged or been used while aligning, so take the cost off what is there now
+     */
     if (mySE->HasPilot()) {
-        if (!m_freeWarp)
-            mySE->GetSelf()->SetAttribute(AttrCapacitorCharge, m_capNeeded);
+        if (!m_freeWarp and (m_capNeeded > 0.0)) {
+            InventoryItemRef sRef(mySE->GetSelf());
+            double charge(sRef->GetAttribute(AttrCapacitorCharge).get_double());
+            sRef->SetAttribute(AttrCapacitorCharge, std::max<double>(charge - m_capNeeded, 0.0));
+            _log(DESTINY__WARP_TRACE, "Destiny::OnWarpActivated(): %s(%u) - warp drive took %.2f GJ (%.2f -> %.2f).",
+                    mySE->GetName(), mySE->GetID(), m_capNeeded, charge, std::max<double>(charge - m_capNeeded, 0.0));
+        }
         mySE->GetShipSE()->Warp();
         m_capNeeded = 0;
     }
@@ -1079,7 +1087,7 @@ void DestinyManager::GotoPoint(const GPoint& point) {
     SendSingleDestinyUpdate(&up);   // consumed
 }
 
-void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/, bool gateWarp/*false*/) {
+void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/, bool gateWarp/*false*/, bool freeWarp/*false*/) {
     /* warp order..
      * pick destination -> align/accel -> aura "warp drive active" -> cap drain -> accel
      *      -> enter warp -> warp -> decel -> leave warp -> coast -> stop
@@ -1153,43 +1161,52 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
                 SetPosition(mySE->GetPosition(), true);
             return;
         }
+    }
 
-        Client *pClient = mySE->GetPilot();
+    /* capacitor:  ship mass x warpCapacitorNeed x warp distance in AU (EVE_Warp.h), taken when the warp drive engages
+     *  (OnWarpActivated).  the ship's live attributes carry Warp Drive Operation, the 'Rogue' FY implants, Warp Core
+     *  Optimizer rigs and the mass of a running mwd or afterburner.  only piloted ships pay:  npcs, drones and fighters
+     *  have no capacitor model for warp.  acceleration gates, the login warp-in and GM warps are free
+     */
+    bool freeCap(gateWarp or freeWarp or !mySE->HasPilot() or mySE->GetPilot()->IsLoginWarping());
+    double capCost(0.0);
+    if (!freeCap) {
+        Client* pClient(mySE->GetPilot());
+        InventoryItemRef sRef(mySE->GetSelf());
+        double charge(sRef->GetAttribute(AttrCapacitorCharge).get_double());
+        double mass(sRef->GetAttribute(AttrMass).get_double());
+        double need(sRef->GetAttribute(AttrWarpCapacitorNeed).get_double());
+        double capNeeded(WarpCapacitor::Need(mass, need, warpDistance));
 
-        /*  capacitor for warp formulas from https://oldforums.eveonline.com/?a=topic&threadID=332116
-         *  Energy to warp = warpCapacitorNeed * mass * au * (1 - warp_drive_operation_skill_level * 0.10)
-         */
-        double currentShipCap = pClient->GetShip()->GetAttribute(AttrCapacitorCharge).get_double();
-        double skillMod = (1.0 - (0.1 * pClient->GetChar()->GetSkillLevel(EvESkill::WarpDriveOperation)));
-        double capNeeded = m_mass * m_warpCapacitorNeed * (warpDistance / DST_AU) * skillMod;
+        _log(DESTINY__WARP_TRACE, "Destiny::WarpTo() - %s(%u): %.4f AU needs %.2f GJ (mass %.0f, warpCapacitorNeed %.4g).  capacitor %.2f",
+                mySE->GetName(), mySE->GetID(), warpDistance / DST_AU, capNeeded, mass, need, charge);
 
-        _log(DESTINY__WARNING, "Warp Cap need for %s(%u) is %.4f", mySE->GetName(), mySE->GetID(), capNeeded);
-
-        //  check if ship has enough capacitor to warp full distance
-        if (capNeeded > currentShipCap) {
-            // not enough cap.  warp as far as we can towards the destination
-            double possibleAU = currentShipCap / (m_mass * m_warpCapacitorNeed * skillMod);
-            if (possibleAU * DST_AU < static_cast<double>(minWarpDistance)) {
-                // if not enough cap to do min warp, cancel and return
-                pClient->SendErrorMsg("You don't have enough capacitor charge to warp.");
-                _log(DESTINY__WARNING, "Destiny::WarpTo() - %s(%u): Capacitor needed vs current  %.3f / %.3f",
-                        mySE->GetName(), mySE->GetID(), capNeeded, currentShipCap);
+        if (capNeeded > charge) {
+            // not enough cap.  warp as far as it lasts towards the destination (WarpingWithAvailablePower)
+            double reach(WarpCapacitor::Reach(charge, mass, need));
+            if (reach < static_cast<double>(minWarpDistance)) {
+                _log(DESTINY__WARP_TRACE, "Destiny::WarpTo() - %s(%u): capacitor %.2f GJ reaches %.0fm, under the minimum warp.  warp refused.",
+                        mySE->GetName(), mySE->GetID(), charge, reach);
+                if (pClient->CanThrow())
+                    throw UserError("WarpTooShort");
+                pClient->SendRemoteMessage("WarpTooShort");
                 return;
             }
             // a warp shortened by a bubble may still end before the capacitor runs out
-            if (!dragged or ((possibleAU * DST_AU) < m_position.distance(destination))) {
+            if (!dragged or (reach < m_position.distance(destination))) {
                 toDestination.normalize();
-                destination = m_position + (toDestination * (possibleAU * DST_AU));
+                destination = m_position + (toDestination * reach);
                 minRange = 0.0;
                 distance = 0;
             }
-            m_capNeeded = 0;
-        } else {
-            m_capNeeded = currentShipCap - capNeeded;
+            capNeeded = charge;
+            pClient->SendRemoteMessage("WarpingWithAvailablePower");
         }
+        capCost = capNeeded;
     }
-
-    m_freeWarp = gateWarp;
+    // (a refused warp leaves the one already under way as it was)
+    m_freeWarp = freeCap;
+    m_capNeeded = capCost;
 
     // warping stops a running self-destruct
     if (mySE->IsShipSE() and mySE->HasPilot() and (mySE->SystemMgr() != nullptr))
@@ -1565,7 +1582,7 @@ Battleships 0.155
     if (sRef->HasAttribute(AttrMaxVelocity))
         m_requestedSpeed = sRef->GetAttribute(AttrMaxVelocity).get_float();
     if (sRef->HasAttribute(AttrWarpCapacitorNeed))
-        m_warpCapacitorNeed = sRef->GetAttribute(AttrWarpCapacitorNeed).get_float() *2;
+        m_warpCapacitorNeed = sRef->GetAttribute(AttrWarpCapacitorNeed).get_double();
 
     // drones set their own speed for what they are doing (see DroneAIMgr)
     if (mySE->IsNPCSE())

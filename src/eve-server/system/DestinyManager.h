@@ -140,7 +140,7 @@ public:
     /* Larger movement */
     // warpSpeed is warp speed in AU/s * 10 (as GetWarpSpeed()); 0 uses this ship's own speed.  fleet warps pass the slowest speed of the group
     // gateWarp:  an acceleration gate's warp (no capacitor, not stopped or dragged by warp disruption fields)
-    void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr, int32 warpSpeed = 0, bool gateWarp = false);
+    void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr, int32 warpSpeed = 0, bool gateWarp = false, bool freeWarp = false);
 
     /* Ship State Query functions */
     bool IsMoving()                                     { return ((m_ballMode != Destiny::Ball::Mode::STOP) or (m_velocity.lengthSquared() > 1.0)); }
@@ -248,9 +248,9 @@ protected:
     float m_preTractorMass;             //in kg     - mass to restore when a tractor beam lets go
 
     double m_radius;                    //in m
-    double m_capNeeded;                 //in GJ     - capacitor left after the warp drive engages
-    bool m_freeWarp;                    // this warp costs no capacitor (acceleration gate)
-    double m_warpCapacitorNeed;         //in GJ     - capacitor charged needed to initiate warp
+    double m_capNeeded;                 //in GJ     - capacitor the warp drive takes when it engages
+    bool m_freeWarp;                    // this warp costs no capacitor (acceleration gate, login warp-in, GM, no pilot)
+    double m_warpCapacitorNeed;         //in GJ/kg/AU - the ship's warpCapacitorNeed (WarpTo() reads the live attribute)
     double m_shipAgility;               //in s      - time constant of movement (mass * inertia / 1e6)
     double m_shipInertia;               //          - inertia modifier.  this is the client ball's 'agility'
 
