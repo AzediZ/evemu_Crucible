@@ -193,6 +193,13 @@ private:
     Squad* FindSquad(uint32 squadID);
     void ProcessSquads(int64 now);
 
+    /* criminals (6.7, 8.5) */
+    double CriminalRatePerMin() const;
+    uint32 PirateFaction();
+    void CriminalEvent(int64 now);
+    // count criminals of the region's pirate faction arrive at node (a gate:  jump in, a belt:  warp in).  the number made
+    uint32 SpawnCriminals(const Node& node, uint32 count, int64 now);
+
     /* traffic (8.1) */
     void TrafficEvent(int64 now);
     // a traffic ship for this itinerary:  spec and legs, starting at its first node.  false:  no archetype fits

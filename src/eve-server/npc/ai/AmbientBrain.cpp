@@ -90,6 +90,9 @@ SystemEntity* AmbientBrain::Nearest(NpcContext& ctx, bool players, bool criminal
 
 SystemEntity* AmbientBrain::Acquire(NpcContext& ctx)
 {
+    // still in the gate cloak of its arrival:  nothing yet (9.2)
+    if ((ctx.npc->DestinyMgr() != nullptr) and ctx.npc->DestinyMgr()->IsCloaked())
+        return nullptr;
     switch (m_mode) {
         case Military: {
             // 8.4:  criminals on our grid, players with the global criminal countdown (never pods) and npcs alike

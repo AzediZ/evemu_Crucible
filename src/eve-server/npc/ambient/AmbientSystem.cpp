@@ -167,6 +167,8 @@ void AmbientSystem::Activate(int64 now)
     m_sched.Clear();
     if (sConfig.ambient.Traffic and (m_lambda > 0.0))
         m_sched.Push(now + AmbientRules::NextArrivalMs(m_rng, m_lambda), evTraffic);
+    if (CriminalRatePerMin() > 0.0)
+        m_sched.Push(now + AmbientRules::NextArrivalMs(m_rng, CriminalRatePerMin()), evCriminal);
     BuildSquads(now);
     m_active = true;
     m_windDownAt = 0;
@@ -844,6 +846,13 @@ void AmbientSystem::ProcessEvents(int64 now)
                     break;
                 TrafficEvent(now);
                 m_sched.Push(now + AmbientRules::NextArrivalMs(m_rng, m_lambda), evTraffic);
+            } break;
+            case evCriminal: {
+                double rate(CriminalRatePerMin());
+                if (!(rate > 0.0))
+                    break;
+                CriminalEvent(now);
+                m_sched.Push(now + AmbientRules::NextArrivalMs(m_rng, rate), evCriminal);
             } break;
             default:
                 break;
@@ -1605,6 +1614,120 @@ bool AmbientSystem::AcceptTransit(const Traveller& t, uint32 gateID)
 }
 
 /* ------------------------------------------------------------------------------------------------------------------
+ *  criminals (6.7, 8.5)
+ * ------------------------------------------------------------------------------------------------------------------ */
+double AmbientSystem::CriminalRatePerMin() const
+{
+    if (!sConfig.ambient.Criminals)
+        return 0.0;
+    return AmbientRules::CriminalRatePerHour(m_profile.band, m_profile.level, m_profile.A, sConfig.ambient.CriminalsPerHourHigh,
+                                             sConfig.ambient.CriminalsPerHourLow, sConfig.ambient.DensityMultiplier) / 60.0;
+}
+
+uint32 AmbientSystem::PirateFaction()
+{
+    // the faction belt rats here belong to (sDataMgr.GetRegionRatFaction), else any of the five
+    static const uint32 pirates[] = {factionAngel, factionBloodRaider, factionGuristas, factionSanshas, factionSerpentis};
+    uint32 faction(sDataMgr.GetRegionRatFaction(m_profile.regionID));
+    for (auto cur : pirates)
+        if (cur == faction)
+            return faction;
+    return pirates[std::min(static_cast<size_t>(m_rng.Uniform() * 5.0), static_cast<size_t>(4))];
+}
+
+void AmbientSystem::CriminalEvent(int64 now)
+{
+    /* where they go (6.7):  a watched belt with miners, a watched gate with traffic, and in low sec (when they attack players)
+     *  any watched belt or gate with a player.  nowhere:  skipped */
+    bool low(m_profile.band == AmbientRules::Band::Low);
+    bool players(low ? sConfig.ambient.LowSecCriminalsAttackPlayers : sConfig.ambient.HighSecCriminalsAttackPlayers);
+    std::vector<std::pair<const Node*, uint32>> targets;    // node, bubbleID
+    for (auto& grid : m_observed) {
+        SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(grid.id));
+        if (pBubble == nullptr)
+            continue;
+        const Node* pBelt(NodeAt(grid.center, NodeKind::Belt));
+        const Node* pGate(NodeAt(grid.center, NodeKind::Gate));
+        if ((pBelt != nullptr) and pBubble->IsBelt()) {
+            if ((CountRole(pBubble, Role::Miner) > 0) or (players and pBubble->HasPlayers()))
+                targets.push_back(std::make_pair(pBelt, grid.id));
+        } else if ((pGate != nullptr) and pBubble->IsGate()) {
+            uint32 traffic(CountRole(pBubble, Role::Hauler) + CountRole(pBubble, Role::Courier) + CountRole(pBubble, Role::Freighter));
+            if ((traffic > 0) or (players and pBubble->HasPlayers()))
+                targets.push_back(std::make_pair(pGate, grid.id));
+        }
+    }
+    if (targets.empty())
+        return;
+    const auto& target(targets[std::min(static_cast<size_t>(m_rng.Uniform() * targets.size()), targets.size() - 1)]);
+    SpawnCriminals(*target.first, AmbientRules::CriminalGroupSize(m_rng), now);
+}
+
+uint32 AmbientSystem::SpawnCriminals(const Node& node, uint32 count, int64 now)
+{
+    uint32 faction(PirateFaction());
+    uint32 groupID(sAmbientMgr.NextGroupID());
+    std::shared_ptr<AggroGroup> group(m_system->GetSpawnMgr()->GetAggroGroups().Get(NpcAI::GroupKind::Ambient, groupID));
+    // at a gate they jump in;  at a belt they warp in from a planet (or a station) off grid
+    const Node* pFrom(nullptr);
+    if (node.kind != NodeKind::Gate) {
+        std::vector<std::pair<double, const Node*>> found;
+        for (auto& cur : m_planets)
+            if (cur.pos.distance(node.pos) > BUBBLE_RADIUS_METERS)
+                found.push_back(std::make_pair(cur.pos.distance(node.pos), &cur));
+        if (found.empty())
+            pFrom = OriginNode(node.pos);
+        else
+            pFrom = found[std::min(static_cast<size_t>(m_rng.Uniform() * found.size()), found.size() - 1)].second;
+        if (pFrom == nullptr)
+            return 0;
+    }
+    uint32 made(0);
+    for (uint32 i = 0; i < count; ++i) {
+        const Archetype* pArch(sAmbientMgr.Catalog().Pick(m_rng, Role::Criminal, Race::None,
+                                                          AmbientRules::CriminalClass(m_rng, m_profile.band), faction));
+        if (pArch == nullptr)
+            pArch = sAmbientMgr.Catalog().Pick(m_rng, Role::Criminal, Race::None, 0, faction);
+        if (pArch == nullptr)
+            pArch = sAmbientMgr.Catalog().Pick(m_rng, Role::Criminal);
+        if (pArch == nullptr)
+            break;
+        Traveller t;
+        t.spec.arch = pArch;
+        t.spec.role = Role::Criminal;
+        t.spec.name = pArch->typeName;
+        t.spec.factionID = pArch->pirateFaction;
+        t.spec.ownerID = sDataMgr.GetFactionCorp(pArch->pirateFaction);
+        t.spec.travellerID = sAmbientMgr.NextTravellerID();
+        t.spec.groupID = groupID;
+        t.created = now;
+        t.nextAt = now;
+        uint8 start(Start::JumpIn);
+        if (node.kind == NodeKind::Gate) {
+            t.atNode = node.id;
+            t.atNodeKind = NodeKind::Gate;
+            t.legs.push_back(MakeLeg(Leg::Hold, 0, 0, AmbientRules::UniformMs(m_rng, 1000.0, 6000.0)));
+        } else {
+            t.atNode = pFrom->id;
+            t.atNodeKind = pFrom->kind;
+            t.legs.push_back(MakeLeg(Leg::WarpTo, node.id, node.kind));
+            start = Start::WarpIn;
+        }
+        t.legs.push_back(MakeLeg(Leg::Hunt));
+        if (!CapAllows(node.pos))
+            break;
+        if (Materialise(t, start, 0, now, nullptr, &group) != nullptr)
+            ++made;
+    }
+    if (made > 0) {
+        Note(std::to_string(made) + " criminals at " + std::to_string(node.id));
+        _log(AMBIENT__INFO, "%s(%u): %u %s criminals arrive at %u.", m_system->GetName(), m_system->GetID(), made,
+             sDataMgr.GetFactionName(faction).c_str(), node.id);
+    }
+    return made;
+}
+
+/* ------------------------------------------------------------------------------------------------------------------
  *  CONCORD and navy patrol squads (6.7, 8.3, 8.4)
  * ------------------------------------------------------------------------------------------------------------------ */
 void AmbientSystem::BuildSquads(int64 now)
@@ -2092,8 +2215,19 @@ uint32 AmbientSystem::ForceSpawn(Client* pClient, const std::string& what, uint3
             }
             if (SpawnMiner(*pBelt, pShip->SysBubble(), false, now) != nullptr)
                 ++made;
+        } else if (role == Role::Criminal) {
+            // at your gate or belt:  the whole group at once
+            const Node* pNode(NodeAt(here, NodeKind::Gate));
+            if (pNode == nullptr)
+                pNode = NodeAt(here, NodeKind::Belt);
+            if (pNode == nullptr) {
+                why = "criminals need a gate or belt grid";
+                break;
+            }
+            made += SpawnCriminals(*pNode, count, now);
+            break;
         } else {
-            why = std::string(what) + " spawns come with their phase";
+            why = std::string(what) + " can't be spawned";
             break;
         }
     }
