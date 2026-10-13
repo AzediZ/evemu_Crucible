@@ -954,7 +954,9 @@ void CorpMgr::IssueRentBill(uint32 officeID)
 
 void CorpMgr::OnRentPaid(const BillData& bill)
 {
-    // another 30 days from the end of the current lease, and the bill for the period after that
+    // another 30 days from the end of the current lease.  the bill for the period after that is issued when the period just paid
+    //  for begins (ProcessOffices), not now:  issuing it here put an identical bill straight back in the wallet's bills list,
+    //  so a paid rent bill never seemed to go away (and every click paid another month ahead)
     uint32 officeID = StationDB::GetCorpOffice(bill.debtorID, bill.externalID2, false);
     OfficeData odata = OfficeData();
     if ((officeID == 0) or !StationDB::GetOfficeData(officeID, odata))
@@ -963,7 +965,6 @@ void CorpMgr::OnRentPaid(const BillData& bill)
     int64 expiry = EvE::max(odata.expiryTime, (int64)GetFileTimeNow()) + OfficeRentalPeriod;
     StationDB::SetOfficeLease(officeID, expiry, 0);
     m_warnedOffices.erase(officeID);
-    IssueRentBill(officeID);
 }
 
 void CorpMgr::OnRentOverdue(const BillData& bill)
@@ -1097,12 +1098,15 @@ void CorpMgr::ProcessOffices()
 
     int64 now = GetFileTimeNow();
 
-    // offices without a rent bill (rented before bills existed):  billed for their next period, with a week to pay when the lease already ran out
+    // offices without a rent bill:  the next period's bill is issued once the period already paid for has begun (its rent was
+    //  paid ahead), due when that period ends.  offices rented before bills existed get a week to pay when their lease already ran out
     std::vector<uint32> ids;
     StationDB::GetOfficesWithoutBill(ids);
     for (auto cur : ids) {
         OfficeData odata = OfficeData();
         if (!StationDB::GetOfficeData(cur, odata))
+            continue;
+        if (odata.expiryTime > now + OfficeRentalPeriod)
             continue;
         if (odata.expiryTime < now + EvE::Time::Day)
             StationDB::SetOfficeLease(cur, now + 7 * EvE::Time::Day, 0);
