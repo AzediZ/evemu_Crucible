@@ -37,6 +37,8 @@ public:
     const AmbientCatalog& Catalog() const               { return m_catalog; }
     // the server-wide random numbers (seeded from ambient.RngSeed)
     NpcRng& Rng()                                       { return m_rng; }
+    // the ambient wrecks' loot rolls (EVE_Loot.h)
+    Loot::Rng& LootRng()                                { return m_lootRng; }
     // a seed for one ambient object's own rng
     uint64_t Seed() const                               { return m_seed; }
     uint32 NextTravellerID()                            { return ++m_travellerID; }
@@ -97,6 +99,7 @@ private:
     int64 m_nextMarketRefresh;
 
     NpcRng m_rng;
+    Loot::Rng m_lootRng;
     AmbientCatalog m_catalog;
     std::vector<Node> m_nodes;
     std::map<uint32, double> m_regionShare;     // regionID -> R

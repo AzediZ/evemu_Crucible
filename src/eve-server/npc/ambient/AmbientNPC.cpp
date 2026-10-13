@@ -9,6 +9,9 @@
 #include "EVEServerConfig.h"
 #include "EntityList.h"
 #include "inventory/AttributeEnum.h"
+#include "inventory/InventoryItem.h"
+#include "inventory/ItemFactory.h"
+#include "system/Container.h"
 #include "npc/ambient/AmbientMgr.h"
 #include "npc/ambient/AmbientNPC.h"
 #include "npc/ambient/AmbientPilot.h"
@@ -140,6 +143,56 @@ void AmbientNPC::EncodeDestiny(Buffer& into)
         mass.allianceID = -1;
     into.Append(mass);
     m_destiny->EncodeDestiny(into);
+}
+
+void AmbientNPC::DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner)
+{
+    if (wreckRef.get() == nullptr)
+        return;
+    std::vector<Loot::Item> items;
+    switch (m_spec.role) {
+        case Ambient::Role::Navy:
+        case Ambient::Role::Concord:
+            return;
+        case Ambient::Role::Criminal:
+            // a pirate's own loot data (the loot work's pool of its type and group)
+            NPC::DropLoot(wreckRef, groupID, owner);
+            return;
+        case Ambient::Role::Miner: {
+            // some of the ore it was mining:  20 - 120 m3 of it
+            SystemEntity* pRock((m_pilot != nullptr) ? m_system->GetSE(m_pilot->GetLastRockID()) : nullptr);
+            uint16 oreType(pRock != nullptr ? pRock->GetTypeID() : 1230);   // Veldspar
+            const ItemType* pOre(sItemFactory.GetType(oreType));
+            double volume((pOre != nullptr) and (pOre->volume() > 0.0f) ? pOre->volume() : 0.1);
+            uint32 lo(static_cast<uint32>(std::max(1.0, 20.0 / volume)));
+            uint32 hi(static_cast<uint32>(std::max(1.0, 120.0 / volume)));
+            items.push_back(Loot::Item{oreType, 0, 0.8, lo, hi});
+        } break;
+        default:
+            items = sAmbientMgr.Catalog().TradeGoods();
+            break;
+    }
+    if (items.empty())
+        return;
+    // 0 - 2 rolls, one drop per group:  a wreck holds a stack or two, often nothing
+    Loot::Params params = Loot::Params();
+        params.rollsMin = 0;
+        params.rollsMax = 2;
+        params.groupMax = 0;
+    std::vector<Loot::Group> pool(1, Loot::Group{0, 1.0, &items});
+    std::vector<Loot::Drop> drops;
+    Loot::Roll(sAmbientMgr.LootRng(), params, pool, drops);
+    for (auto& cur : drops) {
+        uint32 quantity(cur.quantity);
+        if (sConfig.rates.DropItem > 1)
+            quantity *= sConfig.rates.DropItem;
+        ItemData iLoot(cur.typeID, owner, wreckRef->itemID(), flagNone, quantity);
+        InventoryItemRef iRef(sItemFactory.SpawnItem(iLoot));
+        if (iRef.get() == nullptr)
+            continue;
+        wreckRef->AddItem(iRef);
+        _log(LOOT__INFO, "ambient %s(%u):  %u of %u in its wreck", GetName(), GetID(), quantity, cur.typeID);
+    }
 }
 
 void AmbientNPC::Killed(Damage& damage)

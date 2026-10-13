@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "EVE_Loot.h"
 #include "npc/ambient/AmbientTypes.h"
 
 class NpcRng;
@@ -39,6 +40,10 @@ public:
     uint32 MinerCycleMs() const                         { return m_minerCycleMs; }
     double MinerRange() const                           { return m_minerRange; }
 
+    /* a little low-value loot (10.4):  the trade goods haulers carry, resolved by name at boot (A8).  miners carry a little ore
+     *  of their rock (AmbientNPC), navy and CONCORD nothing, criminals their own loot data */
+    const std::vector<Loot::Item>& TradeGoods() const  { return m_tradeGoods; }
+
     size_t Valid() const                                { return m_types.size(); }
     size_t Dropped() const                              { return m_dropped; }
     std::string Describe() const;
@@ -55,7 +60,10 @@ private:
     };
     bool Validate(const Entry& e, const std::map<uint32, uint32>& graphics, Ambient::Archetype& into);
 
+    void LoadLoot();
+
     std::deque<Ambient::Archetype> m_types;     // stable pointers
+    std::vector<Loot::Item> m_tradeGoods;
     std::map<uint16, const Ambient::Archetype*> m_byType;
     size_t m_dropped;
     uint16 m_minerModule;

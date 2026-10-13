@@ -272,7 +272,8 @@ public:
 
 
     /* public generic functions handled in base class. */
-    void                        DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner);
+    // what a wreck holds (the npc's loot data, EVE_Loot.h).  ambient npcs bring their own (npc/ambient/AmbientNPC.h)
+    virtual void                DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner);
     void                        AwardSecurityStatus(InventoryItemRef iRef, Character* pChar);
     // pays this entity's bounty (entityKillBounty) to its killer (npcs and destructible sentries)
     void                        AwardBounty(Client* pClient);

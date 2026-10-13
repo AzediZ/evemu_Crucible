@@ -64,6 +64,8 @@ public:
     // a miner placed by a warm start:  some cycles done already, so they don't all leave together
     void WarmMiner();
     uint32 GetRockID() const                            { return (m_mineState == MineCycling ? m_rockID : 0); }
+    // the rock it mined last (0 = none):  its ore is the miner's loot
+    uint32 GetLastRockID() const                        { return m_rockID; }
 
     std::string Describe() const;
 

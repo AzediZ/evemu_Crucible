@@ -148,6 +148,7 @@ void AmbientMgr::Initialize()
     if (m_seed == 0)
         m_seed = static_cast<uint64_t>(GetSteadyTime()) ^ (static_cast<uint64_t>(std::time(nullptr)) << 20);
     m_rng.Seed(m_seed, 0x414D4249);   // "AMBI"
+    m_lootRng.Seed(static_cast<uint32>(m_seed ^ (m_seed >> 32)));
 
     // the catalog's graphics check:  every entity and ship type's graphicID
     std::map<uint32, uint32> graphics;

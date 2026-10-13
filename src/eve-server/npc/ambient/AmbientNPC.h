@@ -32,6 +32,9 @@ public:
     virtual bool Load();
     // crime consequences of killing a protected ambient ship (10.4), then NPC::Killed()
     virtual void Killed(Damage& damage);
+    /* 10.4:  a little low-value loot.  haulers a few trade goods, miners some ore of their rock, criminals their own loot data,
+     *  navy and CONCORD nothing (CONCORD wrecks were empty in Crucible) */
+    virtual void DropLoot(WreckContainerRef wreckRef, uint32 groupID, uint32 owner);
 
     // takes ownership
     void AttachPilot(AmbientPilot* pPilot);

@@ -194,6 +194,38 @@ void AmbientCatalog::Load(const std::map<uint32, uint32>& graphics)
     }
     if (m_minerCycleMs < 10000)
         m_minerCycleMs = 10000;
+    LoadLoot();
+}
+
+void AmbientCatalog::LoadLoot()
+{
+    // 10.4, A8:  common trade goods, by name;  a name the data doesn't have is dropped with a warning
+    m_tradeGoods.clear();
+    static const char* goods[] = {"Spirits", "Tobacco", "Frozen Plant Seeds", "Antibiotics", "Consumer Electronics",
+                                  "Mechanical Parts", "Water"};
+    std::string list;
+    for (auto cur : goods) {
+        if (!list.empty())
+            list += ",";
+        list += "'";
+        list += cur;
+        list += "'";
+    }
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res, "SELECT typeID, typeName FROM invTypes WHERE typeName IN (%s)", list.c_str()))
+        return;
+    std::map<std::string, uint32> found;
+    while (res.GetRow(row))
+        found[row.GetText(1)] = row.GetUInt(0);
+    for (auto cur : goods) {
+        std::map<std::string, uint32>::iterator itr(found.find(cur));
+        if (itr == found.end()) {
+            _log(AMBIENT__WARN, "AmbientCatalog: trade good '%s' isn't in invTypes.  dropped", cur);
+            continue;
+        }
+        m_tradeGoods.push_back(Loot::Item{itr->second, 0, 0.6, 5, 60});
+    }
 }
 
 const Archetype* AmbientCatalog::Pick(NpcRng& rng, uint8 role, uint8 race/*None*/, uint8 hullClass/*255*/,
@@ -243,6 +275,7 @@ std::string AmbientCatalog::Describe() const
     str << m_types.size() << " types valid, " << m_dropped << " dropped (";
     for (uint8 i = 1; i < 8; ++i)
         str << (i > 1 ? ", " : "") << RoleName(i) << " " << count[i];
-    str << ").  strip miner cycle " << (m_minerCycleMs / 1000) << "s, range " << static_cast<uint32>(m_minerRange) << "m";
+    str << ").  strip miner cycle " << (m_minerCycleMs / 1000) << "s, range " << static_cast<uint32>(m_minerRange) << "m.  "
+        << m_tradeGoods.size() << " trade goods";
     return str.str();
 }
