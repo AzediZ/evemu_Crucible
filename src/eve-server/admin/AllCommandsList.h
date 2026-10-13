@@ -8,7 +8,6 @@
 #include "admin/debug_commands.h"
 #include "admin/DungeonCommands.h"
 #include "admin/IncursionCommands.h"
-#include "admin/CrimeCommands.h"
 #include "admin/GMToolCommands.h"
 
 //clean up macros
