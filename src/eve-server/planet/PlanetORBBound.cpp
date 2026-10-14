@@ -57,7 +57,13 @@ BoundDispatcher* PlanetORB::BindObject(Client* client, PyRep* bindParameters) {
 }
 
 void PlanetORB::BoundReleased (PlanetORBBound* bound) {
+    // the bound deletes itself after this:  a cached pointer would be handed to the next client binding this system
+    auto it = this->m_instances.find (bound->GetSystemID());
 
+    if (it == this->m_instances.end ())
+        return;
+
+    this->m_instances.erase (it);
 }
 PlanetORBBound::PlanetORBBound(EVEServiceManager& mgr, PlanetORB& parent, uint32 systemID) :
     EVEBoundObject(mgr, parent),
