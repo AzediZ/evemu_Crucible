@@ -29,6 +29,9 @@
 
 #include "utils/utils_time.h"
 
+// boost::gregorian came in through boost/asio.hpp up to about 1.86;  newer boost needs it named
+#include <boost/date_time/gregorian/gregorian_types.hpp>
+
 // Number of days in month in normal year
 static const int daysOfMonth[] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
 
