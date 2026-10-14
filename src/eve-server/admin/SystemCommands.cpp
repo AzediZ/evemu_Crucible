@@ -35,6 +35,7 @@
 #include "pos/PosMgrDB.h"
 #include "pos/Tower.h"
 #include "pos/Structure.h"
+#include "system/sov/SovereigntyDataMgr.h"
 #include "tables/invGroups.h"
 #include "tables/invCategories.h"
 
@@ -1238,7 +1239,21 @@ PyResult Command_sov(Client* pClient, CommandDB* db, EVEServiceManager &services
      *  ' /sov complete ' + str(itemID)     (the client's GM menu, 'Complete State')
      *  /sov (anchor|online|offline|unanchor|complete) (itemID)
      *  sovereignty structures, platforms, customs offices or any other structure.  at once, without the delays
+     *  /sov tenure (level) [solarSystemID]
+     *  sets the claim's strategic ("Sovereignty") index, 0-5, by backdating its claim time
      */
+    if ((args.argCount() > 1) and (args.arg(1) == "tenure")) {
+        if ((args.argCount() < 3) or !args.isNumber(2) or (atoi(args.arg(2).c_str()) < 0) or (atoi(args.arg(2).c_str()) > 5)
+        or ((args.argCount() > 3) and !args.isNumber(3)))
+            throw CustomError ("Correct Usage: /sov tenure (level 0-5) [solarSystemID]");
+        uint8 level(static_cast<uint8>(atoi(args.arg(2).c_str())));
+        uint32 systemID((args.argCount() > 3) ? static_cast<uint32>(atoi(args.arg(3).c_str())) : pClient->GetSystemID());
+        uint8 was(svDataMgr.GetStrategicLevel(systemID));
+        if (!svDataMgr.SetStrategicLevel(systemID, level))
+            throw CustomError ("System %u has no sovereignty claim.", systemID);
+        return new PyString("Strategic index of system " + std::to_string(systemID) + " set from level " + std::to_string(was)
+                            + " to " + std::to_string(level) + " (held " + std::to_string(svDataMgr.GetClaimDays(systemID)) + " days).");
+    }
     return StructureStateCommand(pClient, args, "sov");
 }
 

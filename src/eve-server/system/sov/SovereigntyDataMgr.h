@@ -158,6 +158,9 @@ public:
     void UpdateSystemJammerID(uint32 systemID, uint32 jammerID);
     void UpdateSystemBeaconID(uint32 systemID, uint32 beaconID);
     void UpdateClaim(uint32 systemID);
+    /* GM:  backdate the claim so it has held sovereignty long enough for this strategic ("Sovereignty") index level,
+     *  0-5.  the client works the level out from claimTime, so this is what it shows.  false if there is no claim */
+    bool SetStrategicLevel(uint32 systemID, uint8 level);
 
     /* development indices */
     // systems without a faction outside w-space can be claimed and gather indices

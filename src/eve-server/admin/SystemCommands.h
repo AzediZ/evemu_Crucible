@@ -37,7 +37,7 @@ COMMAND( killallnpcs, Acct::Role::ADMIN,
 COMMAND( cloak, Acct::Role::VIP,
          " - instantly and unconditionally toggles cloak state of your vessel")
 COMMAND( sov, Acct::Role::CONTENT,
-         "(anchor|online|offline|unanchor|complete) (itemID) - anchors, onlines, offlines or unanchors a structure at once, without the delays (sovereignty structures, starbases, platforms, customs offices).  online anchors first, unanchor offlines first.  complete finishes the running anchoring/onlining/unanchoring now")
+         "(anchor|online|offline|unanchor|complete) (itemID) | tenure (level) [solarSystemID] - anchors, onlines, offlines or unanchors a structure at once, without the delays (sovereignty structures, starbases, platforms, customs offices).  online anchors first, unanchor offlines first.  complete finishes the running anchoring/onlining/unanchoring now.  tenure sets the claim's strategic (Sovereignty) index level 0-5 by backdating its claim time")
 COMMAND( pos, Acct::Role::PROGRAMMER,
          "(anchor|online|offline|unanchor|complete) (itemID) | fuel [towerID] [hours] - the same as /sov (any structure, at once), or fills a control tower's fuel and strontium bays")
 COMMAND( hop, Acct::Role::CONTENT,

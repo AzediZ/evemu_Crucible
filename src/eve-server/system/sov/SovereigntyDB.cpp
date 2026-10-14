@@ -86,6 +86,16 @@ void SovereigntyDB::SetContested(uint32 systemID, uint8 sbuGates)
     }
 }
 
+void SovereigntyDB::SetClaimTime(uint32 systemID, int64 claimTime)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+                            "UPDATE mapSystemSovInfo SET claimTime=%lli WHERE solarSystemID=%u", (long long)claimTime, systemID))
+    {
+        codelog(SOV__ERROR, "Error in changing claim time: %s", err.c_str());
+    }
+}
+
 void SovereigntyDB::SetHubID(uint32 systemID, uint32 hubID)
 {
     DBerror err;
