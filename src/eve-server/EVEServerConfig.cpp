@@ -607,7 +607,7 @@ EVEServerConfig::EVEServerConfig()
     debug.BeanCount = false;
     debug.StackTrace = false;
     debug.BubbleTrack = false;
-    debug.IsTestServer = true;
+    debug.IsTestServer = false;
     debug.UseProfiling = false;
     debug.PositionHack = false;
     debug.UseShipTracking = false;

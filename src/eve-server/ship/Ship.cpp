@@ -1260,7 +1260,12 @@ void ShipItem::RemoveRig(InventoryItemRef iRef) {
     if (iRef.get() == nullptr)
         return;
     m_ModuleManager->UninstallRig(iRef->itemID());
-    iRef->Move(itemID(), flagCargoHold, true);
+    // Crucible:  a rig is destroyed when it's taken off (the client warns first).  A test server keeps it, in the cargo hold
+    if (sConfig.debug.IsTestServer) {
+        iRef->Move(itemID(), flagCargoHold, true);
+    } else {
+        iRef->Delete();
+    }
 }
 
 void ShipItem::ReplaceCharges(EVEItemFlags flag, InventoryItemRef newCharge)

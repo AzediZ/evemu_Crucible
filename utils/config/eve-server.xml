@@ -520,7 +520,7 @@ boolean can use either 0/1 OR true/false.
     <debug><!-- switches for various server methods -->
         <BubbleTrack>false</BubbleTrack><!-- bool - create jetcans at center and edges of bubble (7 per bubble) -->
         <SpawnTest>false</SpawnTest><!-- bool - enables 5s respawn timer -->
-        <IsTestServer>true</IsTestServer>  <!--  bool   -some functions disabled for live server -->
+        <IsTestServer>false</IsTestServer>  <!--  bool - test server conveniences:  only 3 signatures per system (and one is always a wormhole), sites respawn after 10 s, a rig taken off a ship goes to the cargo hold instead of being destroyed, extra debug logging, /mktsim step.  false = Crucible behaviour -->
         <UseProfiling>false</UseProfiling><!-- bool  - use internal memobj code profiling system -->
         <ProfileTraceTime>5000</ProfileTraceTime><!-- msec  profile time above this will print StackTrace  default: 500 -->
         <UseShipTracking>false</UseShipTracking><!-- bool -->

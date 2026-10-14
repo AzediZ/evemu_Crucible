@@ -470,8 +470,8 @@ void ModuleManager::UninstallRig(uint32 itemID)
         }
     }
 
-    if (!sConfig.debug.IsTestServer)
-        pMod->RemoveRig();
+    // this only takes the rig's effects off.  ShipItem::RemoveRig destroys it (a rig wearing down and staying in
+    //  the ship here also deleted the item in the middle of a move when a rig left the ship any other way)
     deleteModuleRef(pMod->flag(), pMod);
 }
 
