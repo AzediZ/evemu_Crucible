@@ -196,6 +196,11 @@ void ListToINString( const std::vector<int32>& ints, std::string& into, const ch
             // last value to be printed
             format_index += snprintf( &into[ format_index ], 11, "%i", *cur );
     }
+
+    // drop the unused room reserved above.  it was left as NULs, so c_str() read fine, but anything that
+    //  used the string itself ("... IN (" + ids + ")") carried the NULs along and cut the query short
+    if( format_index < into.size() )
+        into.resize( format_index );
 }
 
 void MakeUpperString( const char* source, char* target )

@@ -335,6 +335,8 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const 
         // there are 216 groups in the entity category.  im not testing all of them.
         case EVEDB::invCategories::Entity: {
             switch (type.groupID()) {
+                // mission containers in the entity category are site containers (incursions)
+                case EVEDB::invGroups::Mission_Container:
                 case EVEDB::invGroups::Spawn_Container: {
                     return CargoContainer::_LoadItem<CargoContainer>(itemID, type, data);
                 } break;
@@ -464,6 +466,7 @@ InventoryItemRef InventoryItem::Spawn(ItemData &data)
         } break;
         case EVEDB::invCategories::Entity: {
             switch (iType->groupID()) {
+                case EVEDB::invGroups::Mission_Container:
                 case EVEDB::invGroups::Spawn_Container: {
                     return CargoContainer::Spawn(data);
                 } break;

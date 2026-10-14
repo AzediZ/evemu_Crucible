@@ -195,8 +195,9 @@
 #define IsCharType(typeID) \
  ((typeID >= minCharType) && (typeID <= maxCharType))
 
+// 3260 is the Sansha supercarrier wreck (incursion motherships), the one wreck type outside the range
 #define IsWreckTypeID(typeID) \
- ((typeID > 26467) && (typeID < 30826))
+ ((((typeID) > 26467) && ((typeID) < 30826)) || ((typeID) == 3260))
 
 #define IsCharacterID(itemID) \
  ((itemID >= minCharacter) && (itemID <= maxCharacter))
