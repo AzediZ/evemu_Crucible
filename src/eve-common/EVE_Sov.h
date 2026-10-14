@@ -16,6 +16,14 @@
   *
   *  sovMgr.GetSystemSovereigntyInfo() must be None wherever no alliance holds a claim:  the sov dashboard looks up
   *  cfg.eveowners.Get(sovInfo.allianceID) and the PI/POS code treats any allianceID as a foreign sovereign.
+  *
+  *  sovereignty blockade (Dominion rules, unchanged in Crucible):
+  *   a Sovereignty Blockade Unit anchors 30-150 km from a stargate, one per gate, only where sovereignty is claimed.
+  *   the claim's 'contested' (sovMgr.GetSystemSovereigntyInfo and ProcessSovStatusChanged) is the number of stargates
+  *   with an online SBU, whoever owns it.  the client (sovSvc.GetContestedState) shows 'Vulnerable' when
+  *   contested * 2 > the system's stargates and 'Contested' for any smaller count above 0.
+  *   while more than half the gates are blockaded the claiming TCU and the claim's hub can be attacked and no TCU can be
+  *   onlined (CantOnlineDisruptorsOnline).  when the count drops back to half or less they are invulnerable again.
   */
 
 
@@ -76,6 +84,50 @@ namespace SovRules {
             case SpaceKind::Claimable:  break;
         }
         return "";
+    }
+
+    /* sovereignty blockade.  sbuGates is the number of stargates with an online SBU, gates the system's stargates */
+
+    // more than half the stargates are blockaded:  the claim (TCU and hub) is vulnerable.  sovSvc.GetContestedState
+    inline bool SbuThresholdMet(uint32_t sbuGates, uint32_t gates)
+    {
+        return ((sbuGates > 0) and ((uint64_t)sbuGates * 2 > (uint64_t)gates));
+    }
+
+    enum class Blockade : uint8_t {
+        None,           // no stargate has an online SBU
+        Contested,      // some do, half of the gates or fewer ('Contested')
+        Vulnerable      // more than half do ('Vulnerable')
+    };
+
+    inline Blockade BlockadeState(uint32_t sbuGates, uint32_t gates)
+    {
+        if (sbuGates == 0)
+            return Blockade::None;
+        return (SbuThresholdMet(sbuGates, gates) ? Blockade::Vulnerable : Blockade::Contested);
+    }
+
+    // the count as sent in 'contested' and kept in mapSystemSovInfo.contested (tinyint unsigned)
+    inline uint8_t ContestedValue(uint32_t sbuGates)
+    {
+        return (sbuGates > 255 ? 255 : (uint8_t)sbuGates);
+    }
+
+    // what the holding alliance hears when the count goes from oldGates to newGates
+    struct BlockadeChange {
+        bool newSbu;            // another gate has an online SBU (notificationTypeSovDisruptorMsg)
+        bool vulnerable;        // the threshold was crossed upwards (notificationTypeAllStructVulnerableMsg, flag vulnerable audio)
+        bool stable;            // ...and back down (notificationTypeAllStrucInvulnerableMsg, 'Sovereignty claim stable')
+    };
+
+    inline BlockadeChange CompareBlockade(uint32_t oldGates, uint32_t newGates, uint32_t gates)
+    {
+        BlockadeChange change = BlockadeChange();
+        change.newSbu = (newGates > oldGates);
+        bool was(SbuThresholdMet(oldGates, gates)), now(SbuThresholdMet(newGates, gates));
+        change.vulnerable = (now and !was);
+        change.stable = (was and !now);
+        return change;
     }
 }
 

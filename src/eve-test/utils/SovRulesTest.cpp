@@ -88,6 +88,49 @@ int utils_SovRulesTest( int /*argc*/, char* /*argv*/[] )
     Check(::strlen(LaunchRefusal(SpaceKind::NpcNull)) > 0, "no sov structures in npc null-sec");
     Check(::strlen(LaunchRefusal(SpaceKind::Wormhole)) > 0, "no sov structures in w-space");
 
+    // sovereignty blockade:  vulnerable once SBUs are online at more than half the stargates (contested * 2 > gates)
+    Check(!SbuThresholdMet(0, 3), "no SBU, no blockade");
+    Check(!SbuThresholdMet(1, 3), "1 of 3 gates is contested, not vulnerable");
+    Check(SbuThresholdMet(2, 3), "2 of 3 gates is vulnerable");
+    Check(SbuThresholdMet(3, 3), "3 of 3 gates is vulnerable");
+    Check(!SbuThresholdMet(1, 2), "1 of 2 gates is exactly half:  not vulnerable");
+    Check(SbuThresholdMet(2, 2), "2 of 2 gates is vulnerable");
+    Check(SbuThresholdMet(1, 1), "the only gate of a dead end is vulnerable");
+    Check(!SbuThresholdMet(2, 4), "2 of 4 gates is exactly half:  not vulnerable");
+    Check(SbuThresholdMet(3, 4), "3 of 4 gates is vulnerable");
+    Check(!SbuThresholdMet(3, 7) and SbuThresholdMet(4, 7), "7 gates need 4");
+    Check(!SbuThresholdMet(0, 0), "a system without gates can't be blockaded");
+    Check(SbuThresholdMet(0xFFFFFFFFu, 0xFFFFFFFFu), "no overflow doubling the count");
+
+    // the header text the client derives from 'contested'
+    Check(BlockadeState(0, 3) == Blockade::None, "0 of 3:  no text");
+    Check(BlockadeState(1, 3) == Blockade::Contested, "1 of 3:  'Contested'");
+    Check(BlockadeState(2, 3) == Blockade::Vulnerable, "2 of 3:  'Vulnerable'");
+    Check(BlockadeState(1, 2) == Blockade::Contested, "1 of 2:  'Contested'");
+    Check(BlockadeState(5, 9) == Blockade::Vulnerable, "5 of 9:  'Vulnerable'");
+    Check(BlockadeState(4, 9) == Blockade::Contested, "4 of 9:  'Contested'");
+
+    // 'contested' is the count (the column is a tinyint unsigned)
+    Check(ContestedValue(0) == 0, "contested 0");
+    Check(ContestedValue(2) == 2, "contested is the count, not a flag");
+    Check(ContestedValue(300) == 255, "contested saturates at 255");
+
+    // notifications to the holding alliance
+    BlockadeChange change = CompareBlockade(0, 1, 3);
+    Check(change.newSbu and !change.vulnerable and !change.stable, "1st SBU of 3 gates:  disruption detected only");
+    change = CompareBlockade(1, 2, 3);
+    Check(change.newSbu and change.vulnerable and !change.stable, "2nd SBU of 3 gates:  detected and vulnerable");
+    change = CompareBlockade(2, 3, 3);
+    Check(change.newSbu and !change.vulnerable and !change.stable, "3rd SBU of 3 gates:  already vulnerable");
+    change = CompareBlockade(3, 2, 3);
+    Check(!change.newSbu and !change.vulnerable and !change.stable, "3 -> 2 of 3 gates:  still vulnerable");
+    change = CompareBlockade(2, 1, 3);
+    Check(!change.newSbu and !change.vulnerable and change.stable, "2 -> 1 of 3 gates:  claim stable");
+    change = CompareBlockade(1, 0, 3);
+    Check(!change.newSbu and !change.vulnerable and !change.stable, "last SBU gone below the threshold:  nothing new");
+    change = CompareBlockade(2, 2, 3);
+    Check(!change.newSbu and !change.vulnerable and !change.stable, "no change, no notification");
+
     ::printf("%d failure(s)\n", failures);
     return (failures == 0 ? 0 : 1);
 }
