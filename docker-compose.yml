@@ -1,7 +1,10 @@
 services:
   server:
     image: "evemu_server"
-    build: . #Build image from source repository
+    build: #Build image from source repository
+      context: .
+      args:
+        - WITH_GDB=${RUN_GDB:-FALSE} # gdb is only in the image when it's built with RUN_GDB=TRUE (see Dockerfile)
     container_name: server
     volumes:
       - ./config:/app/etc

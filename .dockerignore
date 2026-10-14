@@ -1,6 +1,4 @@
 *
-!.git
-.git/objects/*
 !src
 !utils
 !sql

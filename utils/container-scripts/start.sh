@@ -26,6 +26,10 @@ cp /src/utils/config/gmtools.py /app/etc/
 #Start eve-server
 echo "Starting eve-server..."
 cd /app/bin/
+if [ "$RUN_WITH_GDB" == "TRUE" ] && ! command -v gdb >/dev/null 2>&1; then
+    echo "=== RUN_GDB is TRUE, but this image was built without gdb.  Rebuild it with RUN_GDB=TRUE set to add gdb ==="
+    RUN_WITH_GDB=FALSE
+fi
 if [ "$RUN_WITH_GDB" == "TRUE" ]; then
     echo "=== Running EVEmu with gdb ==="
     gdb -ex run ./eve-server
