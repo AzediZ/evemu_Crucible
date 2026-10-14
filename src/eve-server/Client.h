@@ -228,6 +228,9 @@ public:
 
     void UpdateBubble();
     void WarpIn();
+    // the login warp back to the logoff point (EVE_Logoff.h) is planned but not under way yet.  it starts with the first SetState
+    bool IsLoginWarpPending();
+    void StartLoginWarp();
     void WarpOut();
     void EnterSystem(uint32 systemID);     // only called by gm command, and only if (bubble == null)
     // this will accept null coords and adjust position to random moon

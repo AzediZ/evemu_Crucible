@@ -535,14 +535,6 @@ void Client::ProcessClient() {
                     }
                     m_ship->GetModuleManager()->UpdateChargeQty();  //  <<<< huge hack here....cant find another way to do it yet.
                     } break;
-                case Player::State::LoginWarp: {
-                    _log(CLIENT__TIMER, "ProcessClient()::CheckState():  case: LoginWarp");
-                    pShipSE->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
-                    pShipSE->DestinyMgr()->LoginWarpTo(m_loginWarpPoint);
-                    // a refused warp must not leave the pilot unable to move (IsLoginWarping())
-                    if (!pShipSE->DestinyMgr()->IsAligningForWarp() and !pShipSE->DestinyMgr()->IsWarping())
-                        SetLoginWarpComplete();
-                    } break;
                 case Player::State::Jump: {
                     _log(CLIENT__TIMER, "ProcessClient()::CheckState():  case: Jump");
                     ExecuteJump();
@@ -636,23 +628,17 @@ void Client::UpdateBubble() {
 // `WarpIn` is executed upon player login, but should only be executed if the
 // player was in space when they last logged out.
 //
-// The login warp-in process is a multi-step process. First, the player's ship
-// is immediately moved to where the warp back to their logoff point starts
+// The player's ship is put where the warp back to their logoff point starts
 // (EVE_Logoff.h): where the ship sits if it is still in space, else a random
-// spot 1,000,000 km away from the logoff point.
+// spot 1,000,000 km away from the logoff point.  The warp itself goes out with
+// the first (and only) SetState the client gets (`SetBallPark` ->
+// `StartLoginWarp`), so the pilot is in warp from the moment space appears.
 //
-// However, merely setting the position isn't enough. The client needs to
-// subsequently synchronize the state of the player & the surrounding bubble
-// with the server, so `UpdateBubble` is called. This is important because
-// during the process of establishing the warp vector, the player's ship is
-// going to be aligning to warp for a few seconds, and so the client needs to
-// know what's in its current bubble for that duration.
-//
-// During the development of `WarpIn()`, it was observed that the behavior of
-// the ship was inconsistent if `Destiny->WarpTo()` was called immediately after
-// the above position change and `UpdateBubble` calls. So instead, the session
-// state timer is set to 0, and the player's client state is set to `LoginWarp`,
-// which allows the warp to get processed on the next server tick.
+// No second SetState goes out here:  the client's overview keeps its entries
+// by itemID with weak references to the balls of the first state, skips those
+// itemIDs when the new balls come in (overview.py _DoBallsAdded), and then drops
+// the entries whose old balls are gone, so it ends up empty until a tab change
+// rebuilds it.
 //
 // See: `Client::IsLoginWarping`
 //
@@ -666,22 +652,41 @@ void Client::WarpIn() {
         m_ship->SetFlag(flagNone);
     }
 
-    UpdateBubble();
+    m_clientState = Player::State::Idle;
 
     // a ship still in space where its pilot logged off (it couldn't warp away):  no warp.  the login cloak until it moves
-    if (m_loginWarpPoint.isZero()) {
+    if (m_loginWarpPoint.isZero() and !m_loginWarpRandomPoint.isZero()) {
         SetLoginWarpComplete();
-        m_clientState = Player::State::Idle;
         m_cloakTimer.Start(Player::Timer::LoginCloak);
-        return;
     }
+    // otherwise the login warp went out with the SetState, or goes with it once the client has its ballpark
+    //  (SetBallPark()), or it is over already
+}
 
-    // This will queue up the login warp-in on the next server tick. Calling
-    // SetStateTimer allows it to be processed on the next tick instead of
-    // getting timed out and ignored by a session change timer.
-    SetStateTimer(0);
+bool Client::IsLoginWarpPending() {
+    if (m_loginWarpPoint.isZero() or !sDataMgr.IsSolarSystem(m_locationID))
+        return false;
+    if ((pShipSE == nullptr) or (pShipSE->DestinyMgr() == nullptr))
+        return false;
+    return (!pShipSE->DestinyMgr()->IsAligningForWarp() and !pShipSE->DestinyMgr()->IsWarping());
+}
 
-    m_clientState = Player::State::LoginWarp;
+/* the login warp (EVE_Logoff.h).  called just before the first SetState goes out, so the ship is in that state aligned at
+ *  full speed in warp mode, and the WarpTo (and the warp effect) follow it in the same tick:  the client is in warp from
+ *  its first tick in space.
+ *  a ball that came in already in warp proper (effectStamp set) would fly on in the client's destiny, but without a WarpTo
+ *  the client has no warp destination (spaceMgr.py OnBallparkCall 'WarpTo' -> warpDestinationCache[3]), and its warp
+ *  tunnel effect needs one (Warp.py Prepare -> AlignToDirection, Start -> GetWarpCollisions).  a WarpTo sent to a ball in
+ *  warp proper starts that warp over (Ballpark::WarpTo -> effectStamp -1, as DestinyManager::ApplyWarpTo), so the warp
+ *  starts here, at the state's stamp
+ */
+void Client::StartLoginWarp() {
+    DestinyManager* pDestiny(pShipSE->DestinyMgr());
+    pDestiny->UnCloak(Destiny::Cloak::Session);
+    pDestiny->LoginWarpTo(m_loginWarpPoint);
+    // a refused warp must not leave the pilot unable to move (IsLoginWarping())
+    if (!pDestiny->IsAligningForWarp() and !pDestiny->IsWarping())
+        SetLoginWarpComplete();
 }
 
 void Client::WarpOut() {
@@ -984,6 +989,9 @@ void Client::SetBallPark() {
         return;
     }
     if (!m_setStateSent and m_beyonce) {  // MUST have beyonce before sending state data.
+        // login in space:  the warp back to the logoff point is under way in this state
+        if (IsLoginWarpPending())
+            StartLoginWarp();
         pShipSE->DestinyMgr()->SendSetState();
         m_ballparkTimer.Disable();
         if (IsGateJump()) {

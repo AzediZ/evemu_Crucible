@@ -69,6 +69,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "utils/Buffer.h"
+#include "EVE_Logoff.h"
 #include "EVE_Warp.h"
 #include <cstdlib>
 #include <cmath>
@@ -1286,13 +1287,21 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
  *  stopped would first align, so it comes in aligned at full speed instead:  the client's align check (1 - cos < 0.01 and
  *  |v| > 0.75 maxVel, Ballpark::Evolve) passes on its first tick and it goes straight into warp.  the velocity goes out
  *  before the WarpTo, in the same tick.  free (no capacitor), and warp disruption doesn't stop it (IsLoginWarping())
+ *
+ *  the pilot's own client gets this in its first state (Client::StartLoginWarp(), called just before SendSetState()):  the
+ *  ball is in that SetState aligned at full speed in warp mode, and the WarpTo follows it in the same tick.  the WarpTo
+ *  is what gives the client the warp's destination (spaceMgr.py OnBallparkCall -> warpDestinationCache), without which
+ *  its warp tunnel effect (Warp.py Prepare/Start) can't run.  everyone else gets the velocity and the WarpTo after the
+ *  ball (the login cloak comes off first)
  */
 void DestinyManager::LoginWarpTo(const GPoint& where) {
-    GVector dir(m_position, where);
+    Logoff::Vec vel(Logoff::LoginVelocity(Logoff::Vec{m_position.x, m_position.y, m_position.z},
+            Logoff::Vec{where.x, where.y, where.z}, static_cast<double>(m_maxShipSpeed)));
+    GVector dir(vel.x, vel.y, vel.z);
     if (dir.lengthSquared() > 0.0) {
+        m_velocity = dir;
         dir.normalize();
         m_shipHeading = dir;
-        m_velocity = dir * m_maxShipSpeed;
         SetBallVelocity bv;
             bv.entityID = mySE->GetID();
             bv.x = m_velocity.x;

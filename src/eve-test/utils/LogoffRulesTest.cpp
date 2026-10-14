@@ -114,6 +114,19 @@ int utils_LogoffRulesTest( int /*argc*/, char* /*argv*/[] )
     LoginPlan edge(PlanLogin(logoff, true, V(logoff.x + minWarp, logoff.y, logoff.z), dir, minWarp));
     Check(edge.warp, "the shortest warp the server takes is still a warp");
 
+    ::printf("login warp:\n");
+    const double maxVel(312.5);
+    Logoff::Vec vel(LoginVelocity(gone.start, gone.target, maxVel));
+    Check(Near(Distance(vel, Logoff::Vec()), maxVel), "the ship comes in at full speed");
+    Check(AlignedForWarp(gone.start, vel, gone.target, maxVel), "... aligned:  the client enters warp on its first tick");
+    Logoff::Vec parkedVel(LoginVelocity(parked.start, parked.target, maxVel));
+    Check(AlignedForWarp(parked.start, parkedVel, parked.target, maxVel), "also from where a parked ship sits");
+    Check(!AlignedForWarp(gone.start, Logoff::Vec(), gone.target, maxVel), "a stopped ship isn't aligned");
+    Check(!AlignedForWarp(gone.start, V(-vel.x, -vel.y, -vel.z), gone.target, maxVel), "nor one going the other way");
+    Check(!AlignedForWarp(gone.start, V(vel.x * 0.7, vel.y * 0.7, vel.z * 0.7), gone.target, maxVel), "nor one under 75% speed");
+    Logoff::Vec none(LoginVelocity(logoff, logoff, maxVel));
+    Check((none.x == 0.0) and (none.y == 0.0) and (none.z == 0.0), "no velocity when it is already there");
+
     ::printf("%s\n", (failures ? "LogoffRulesTest FAILED" : "LogoffRulesTest passed"));
     return failures;
 }

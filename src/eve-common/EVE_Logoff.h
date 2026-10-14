@@ -112,6 +112,33 @@ namespace Logoff {
         return plan;
     }
 
+    /* the client's check for entering warp from a WarpTo (Ballpark::Evolve, as DestinyManager::IsAlignedForWarp):  moving
+     *  within ~8 degrees of the destination (1 - cos < 0.01) at over 75% of max velocity */
+    inline bool AlignedForWarp(const Vec& pos, const Vec& vel, const Vec& target, double maxVelocity)
+    {
+        double dist(Distance(pos, target)), speed(Distance(vel, Vec()));
+        if (!(dist > 0.0) or !(speed > 0.0))
+            return false;
+        double cosine(((target.x - pos.x) * vel.x + (target.y - pos.y) * vel.y + (target.z - pos.z) * vel.z) / (dist * speed));
+        if (std::fabs(1.0 - cosine) >= 0.01)
+            return false;
+        return ((speed * speed) > (maxVelocity * 0.5625 * maxVelocity));
+    }
+
+    /* the login warp's velocity:  at full speed towards the logoff point, so the ship goes into its first state already
+     *  aligned (AlignedForWarp()) and enters warp on the client's first tick.  zero when it is already there */
+    inline Vec LoginVelocity(const Vec& start, const Vec& target, double maxVelocity)
+    {
+        Vec v;
+        double dist(Distance(start, target));
+        if (!(dist > 0.0))
+            return v;
+        v.x = (target.x - start.x) / dist * maxVelocity;
+        v.y = (target.y - start.y) / dist * maxVelocity;
+        v.z = (target.z - start.z) / dist * maxVelocity;
+        return v;
+    }
+
 }
 
 #endif  // EVE_LOGOFF_H
