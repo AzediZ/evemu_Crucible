@@ -25,6 +25,7 @@
 */
 
 #include "EVE_Consts.h"
+#include "EVE_Logoff.h"
 #include "EVE_Player.h"
 #include "eve-server.h"
 #include "../eve-common/EVEVersion.h"
@@ -312,11 +313,29 @@ bool Client::SelectCharacter(int32 charID/*0*/)
     GPoint pos(NULL_ORIGIN);
 
     if (sDataMgr.IsSolarSystem(m_locationID)) {
-        pos = m_ship->position();
-
-        m_loginWarpPoint = pos;
-        m_loginWarpRandomPoint = m_ship->position();
-        m_loginWarpRandomPoint.MakeRandomPointOnSphere(0.5*ONE_AU_IN_METERS);
+        /* logoff (EVE_Logoff.h):  the ship is in warp back to where its pilot logged off.  the ship was saved there when it
+         *  left space;  one still in space (logoff timer) knows it, and warps back from where it sits.  one that left space
+         *  starts from a random spot 1,000,000 km away
+         */
+        GPoint logoff(m_ship->position());
+        bool inSpace(m_system->GetLaw()->GetLogoffPoint(m_shipId, logoff));
+        SystemData sysData = SystemData();
+        sDataMgr.GetSystemData(m_locationID, sysData);
+        if (!Logoff::Usable(Logoff::Vec{logoff.x, logoff.y, logoff.z}, sysData.radius)) {
+            // nowhere we can put it.  somewhere near a planet
+            GPoint fallback(sMapData.GetRandPointOnPlanet(m_locationID));
+            _log(PLAYER__ERROR, "%s(%u) - logoff point %.2f,%.2f,%.2f of ship %u is unusable.  warping to %.2f,%.2f,%.2f instead.",
+                    m_char->name(), charID, logoff.x, logoff.y, logoff.z, m_shipId, fallback.x, fallback.y, fallback.z);
+            logoff = fallback;
+        }
+        GPoint dir(NULL_ORIGIN);
+        dir.MakeRandomPointOnSphere(1.0);
+        Logoff::LoginPlan plan(Logoff::PlanLogin(Logoff::Vec{logoff.x, logoff.y, logoff.z}, inSpace,
+                Logoff::Vec{m_ship->position().x, m_ship->position().y, m_ship->position().z}, Logoff::Vec{dir.x, dir.y, dir.z},
+                static_cast<double>(minWarpDistance)));
+        m_loginWarpRandomPoint = GPoint(plan.start.x, plan.start.y, plan.start.z);
+        // zero:  no warp (WarpIn())
+        m_loginWarpPoint = (plan.warp ? GPoint(plan.target.x, plan.target.y, plan.target.z) : NULL_ORIGIN);
 
         MoveToLocation(m_locationID, m_loginWarpRandomPoint);
 
@@ -519,7 +538,10 @@ void Client::ProcessClient() {
                 case Player::State::LoginWarp: {
                     _log(CLIENT__TIMER, "ProcessClient()::CheckState():  case: LoginWarp");
                     pShipSE->DestinyMgr()->UnCloak(Destiny::Cloak::Session);
-                    pShipSE->DestinyMgr()->WarpTo(m_loginWarpPoint);
+                    pShipSE->DestinyMgr()->LoginWarpTo(m_loginWarpPoint);
+                    // a refused warp must not leave the pilot unable to move (IsLoginWarping())
+                    if (!pShipSE->DestinyMgr()->IsAligningForWarp() and !pShipSE->DestinyMgr()->IsWarping())
+                        SetLoginWarpComplete();
                     } break;
                 case Player::State::Jump: {
                     _log(CLIENT__TIMER, "ProcessClient()::CheckState():  case: Jump");
@@ -615,8 +637,9 @@ void Client::UpdateBubble() {
 // player was in space when they last logged out.
 //
 // The login warp-in process is a multi-step process. First, the player's ship
-// is immediately moved to a position around 0.5 AU away from their logged-out
-// position.
+// is immediately moved to where the warp back to their logoff point starts
+// (EVE_Logoff.h): where the ship sits if it is still in space, else a random
+// spot 1,000,000 km away from the logoff point.
 //
 // However, merely setting the position isn't enough. The client needs to
 // subsequently synchronize the state of the player & the surrounding bubble
@@ -645,6 +668,14 @@ void Client::WarpIn() {
 
     UpdateBubble();
 
+    // a ship still in space where its pilot logged off (it couldn't warp away):  no warp.  the login cloak until it moves
+    if (m_loginWarpPoint.isZero()) {
+        SetLoginWarpComplete();
+        m_clientState = Player::State::Idle;
+        m_cloakTimer.Start(Player::Timer::LoginCloak);
+        return;
+    }
+
     // This will queue up the login warp-in on the next server tick. Calling
     // SetStateTimer allows it to be processed on the next tick instead of
     // getting timed out and ignored by a session change timer.
@@ -662,8 +693,16 @@ void Client::WarpOut() {
         m_ship->SetFlag(flagShipOffline);
     pShipSE->SetPosition(m_ship->position());
 
-    /* logoff timer.  the ship stays in space: 15 minutes if it was in a fight with players,
-     *  otherwise it warps off and vanishes after a minute (two if NPCs were attacking it)
+    /* the pilot logged off before the login warp got under way:  the ship is still at the start of its warp back, and
+     *  the logoff point it was going back to stays the one to keep (EVE_Logoff.h)
+     */
+    GPoint keepLogoff(NULL_ORIGIN);
+    if (IsLoginWarping() and !m_loginWarpPoint.isZero() and (pShipSE->DestinyMgr() != nullptr)
+    and !pShipSE->DestinyMgr()->IsAligningForWarp() and !pShipSE->DestinyMgr()->IsWarping())
+        keepLogoff = m_loginWarpPoint;
+
+    /* logoff timer (EVE_Logoff.h).  the ship stays in space, finishes any warp, makes its emergency warp and stays a
+     *  minute (two if NPCs were attacking it), 15 if it was in a fight with players
      */
     if (sConfig.crime.Enabled and !sConsole.IsShutdown() and (m_system != nullptr) and (pShipSE->SysBubble() != nullptr)) {
         bool npc(false);
@@ -674,12 +713,15 @@ void Client::WarpOut() {
         sBubbleMgr.Remove(pShipSE);
         pShipSE->SetPilot(nullptr);
         sBubbleMgr.Add(pShipSE);
-        m_system->GetLaw()->AddLoggedOffShip(pShipSE, GetCharacterID(), pvp, npc);
+        m_system->GetLaw()->AddLoggedOffShip(pShipSE, GetCharacterID(), pvp, npc, keepLogoff);
         m_shipLeftInSpace = true;
         pShipSE = nullptr;
         return;
     }
     DestroyShipSE();
+    // saved where the pilot logged off (the destructor saves it)
+    if (!keepLogoff.isZero())
+        m_ship->SetPosition(keepLogoff);
     return;
     /*
     SetInvulTimer(Player::Timer::WarpOutInvul);

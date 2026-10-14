@@ -6,6 +6,8 @@
 
 #include "eve-server.h"
 
+#include "EVE_Logoff.h"
+
 #include "Client.h"
 #include "EntityList.h"
 #include "EVEServerConfig.h"
@@ -41,6 +43,23 @@ namespace {
     const float tackleScramble = 100.0f;    // more than any number of warp core stabilizers (crime.ConcordScriptedTackle)
 
     const uint16 effectConcordTargetJam = 3710;     // concordTargetJam (not in EVEEffectID)
+
+    // a logged-off ship that is still moving after this long (s) is taken as at rest (a warp that never ends)
+    const int64 logoffMaxMoving = 600;
+
+    Logoff::Vec ToLogoffVec(const GPoint& p) {
+        Logoff::Vec v;
+        v.x = p.x;
+        v.y = p.y;
+        v.z = p.z;
+        return v;
+    }
+
+    // aligning for a warp or in one
+    bool InWarp(ShipSE* pShipSE) {
+        DestinyManager* pDestiny(pShipSE->DestinyMgr());
+        return ((pDestiny != nullptr) and (pDestiny->IsAligningForWarp() or pDestiny->IsWarping()));
+    }
 
     // faction police (group 182): a big ship and two smaller ones per empire
     void GetPoliceTypes(uint32 factionID, std::vector<uint16>& types) {
@@ -746,7 +765,7 @@ void LawEnforcement::Process()
 /* ------------------------------------------------------------------------------------------------------------------
  *  logoff
  * ------------------------------------------------------------------------------------------------------------------ */
-void LawEnforcement::AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc)
+void LawEnforcement::AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc, const GPoint& keepLogoff/*0*/)
 {
     if (pShipSE == nullptr)
         return;
@@ -756,20 +775,57 @@ void LawEnforcement::AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, 
     l.charID = charID;
     l.loggedOff = now;
     l.pvp = pvp;
-    if (pvp) {
-        // stays where it is, 15 minutes after logoff or after the last attack on it, whichever is later
-        l.removeAt = now + (int64)sConfig.crime.AggFlagTime * EvE::Time::Second;
-    } else {
-        // warps to a random spot and vanishes
-        l.removeAt = now + (int64)(npc ? sConfig.crime.LogoffNPCTime : sConfig.crime.LogoffWarpTime) * EvE::Time::Second;
-        if ((pShipSE->DestinyMgr() != nullptr) and (pShipSE->GetSelf()->GetAttribute(AttrWarpScrambleStatus) <= 0)) {
-            GPoint dest(pShipSE->GetPosition());
-            dest.MakeRandomPointOnSphere(0.5 * ONE_AU_IN_METERS);
-            pShipSE->DestinyMgr()->WarpTo(dest);
+    l.npc = npc;
+    l.removeAt = 0;
+    l.logoffPoint = pShipSE->GetPosition();
+    if (!keepLogoff.isZero() and !InWarp(pShipSE)) {
+        // it is already away from where its pilot logged off
+        l.logoffPoint = keepLogoff;
+        SetLogoffRest(l, now);
+        return;
+    }
+    // a ship in warp finishes it.  where it lands is where its pilot logged off
+    if (Logoff::OnLogoff(InWarp(pShipSE), false) == Logoff::Exit::FinishWarp) {
+        l.stage = (uint8)Logoff::Exit::FinishWarp;
+        _log(CRIME__INFO, "%s(%u) left in space by %u while in warp (%s).", pShipSE->GetName(), pShipSE->GetID(), charID,
+                (pvp ? "player aggression" : (npc ? "npc aggression" : "logoff")));
+        return;
+    }
+    StartLogoffExit(l, now);
+}
+
+void LawEnforcement::StartLogoffExit(LoggedOff& l, int64 now)
+{
+    ShipSE* pShipSE(l.pShipSE);
+    DestinyManager* pDestiny(pShipSE->DestinyMgr());
+    l.logoffPoint = pShipSE->GetPosition();
+    // one emergency warp, 1,000,000 km in a random direction.  scramblers stop it, a bubble refuses it (WarpTo())
+    if ((pDestiny != nullptr) and (Logoff::OnLogoff(false, pShipSE->IsWarpScrambled()) == Logoff::Exit::Warp)) {
+        // the ship decloaks for it (a gate or login cloak, a cloaking device its pilot left running)
+        if (pDestiny->IsCloaked())
+            pDestiny->UnCloak();
+        GPoint dir(NULL_ORIGIN);
+        dir.MakeRandomPointOnSphere(1.0);
+        Logoff::Vec dest(Logoff::EmergencyWarpPoint(ToLogoffVec(l.logoffPoint), ToLogoffVec(dir)));
+        pDestiny->WarpTo(GPoint(dest.x, dest.y, dest.z));
+        if (InWarp(pShipSE)) {
+            l.stage = (uint8)Logoff::Exit::Warp;
+            _log(CRIME__INFO, "%s(%u) of %u makes its emergency warp from %.0f,%.0f,%.0f.", pShipSE->GetName(), pShipSE->GetID(),
+                    l.charID, l.logoffPoint.x, l.logoffPoint.y, l.logoffPoint.z);
+            return;
         }
     }
-    _log(CRIME__INFO, "%s(%u) left in space by %u for %us (%s).", pShipSE->GetName(), pShipSE->GetID(), charID,
-            (uint32)((l.removeAt - now) / EvE::Time::Second), (pvp ? "player aggression" : (npc ? "npc aggression" : "logoff")));
+    SetLogoffRest(l, now);
+}
+
+void LawEnforcement::SetLogoffRest(LoggedOff& l, int64 now)
+{
+    l.stage = (uint8)Logoff::Exit::Stay;
+    l.removeAt = Logoff::LeaveSpaceAt(now, l.pvp, (int64)sConfig.crime.AggFlagTime * EvE::Time::Second,
+            (int64)(l.npc ? sConfig.crime.LogoffNPCTime : sConfig.crime.LogoffWarpTime) * EvE::Time::Second);
+    _log(CRIME__INFO, "%s(%u) of %u is at rest at %.0f,%.0f,%.0f and stays in space for %us (%s).", l.pShipSE->GetName(),
+            l.pShipSE->GetID(), l.charID, l.pShipSE->GetPosition().x, l.pShipSE->GetPosition().y, l.pShipSE->GetPosition().z,
+            (uint32)((l.removeAt - now) / EvE::Time::Second), (l.pvp ? "player aggression" : (l.npc ? "npc aggression" : "logoff")));
 }
 
 void LawEnforcement::ProcessLoggedOff(int64 now)
@@ -777,6 +833,22 @@ void LawEnforcement::ProcessLoggedOff(int64 now)
     std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.begin();
     while (itr != m_loggedOff.end()) {
         LoggedOff& l = itr->second;
+        // still finishing its own warp, or in its emergency warp
+        if ((l.stage != (uint8)Logoff::Exit::Stay) and InWarp(l.pShipSE)
+        and (now < (l.loggedOff + logoffMaxMoving * EvE::Time::Second))) {
+            ++itr;
+            continue;
+        }
+        if (l.stage == (uint8)Logoff::Exit::FinishWarp) {
+            StartLogoffExit(l, now);
+            ++itr;
+            continue;
+        }
+        if (l.stage == (uint8)Logoff::Exit::Warp) {
+            SetLogoffRest(l, now);
+            ++itr;
+            continue;
+        }
         if (now < l.removeAt) {
             ++itr;
             continue;
@@ -794,7 +866,9 @@ void LawEnforcement::ProcessLoggedOff(int64 now)
             pShipSE->TargetMgr()->ClearFromTargets();
         m_system->RemoveEntity(pShipSE);
         SafeDelete(pShipSE);
-        // what the client did when its pilot logged off: save it and unload it
+        // saved where its pilot logged off:  the login warp takes them back there.  what the client did when its pilot
+        //  logged off: save it and unload it
+        shipRef->SetPosition(l.logoffPoint);
         shipRef->LogOut();
         itr = m_loggedOff.erase(itr);
     }
@@ -812,6 +886,20 @@ bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)
     m_system->RemoveEntity(pShipSE);
     SafeDelete(pShipSE);
     m_loggedOff.erase(itr);
+    return true;
+}
+
+bool LawEnforcement::GetLogoffPoint(uint32 shipID, GPoint& into)
+{
+    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.find(shipID);
+    if (itr == m_loggedOff.end())
+        return false;
+    LoggedOff& l = itr->second;
+    // still finishing the warp it was in:  its pilot goes on to where it was going
+    if ((l.stage == (uint8)Logoff::Exit::FinishWarp) and (l.pShipSE->DestinyMgr() != nullptr))
+        into = l.pShipSE->DestinyMgr()->GetTargetPoint();
+    else
+        into = l.logoffPoint;
     return true;
 }
 
@@ -844,8 +932,13 @@ void LawEnforcement::Close()
     }
     for (auto sentryID : m_sentries)
         SystemEntity::SetUnkillable(sentryID, false);
-    for (auto cur : m_loggedOff)
+    // saved where their pilots logged off (ProcessLoggedOff())
+    for (auto cur : m_loggedOff) {
+        GPoint logoffPoint(cur.second.logoffPoint);
+        GetLogoffPoint(cur.first, logoffPoint);
+        cur.second.pShipSE->GetShipItemRef()->SetPosition(logoffPoint);
         cur.second.pShipSE->GetShipItemRef()->SaveShip();
+    }
     m_responses.clear();
     m_npcResponse.clear();
     m_loggedOff.clear();

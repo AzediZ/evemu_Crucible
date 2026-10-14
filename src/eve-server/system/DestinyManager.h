@@ -141,6 +141,8 @@ public:
     // warpSpeed is warp speed in AU/s * 10 (as GetWarpSpeed()); 0 uses this ship's own speed.  fleet warps pass the slowest speed of the group
     // gateWarp:  an acceleration gate's warp (no capacitor, not stopped or dragged by warp disruption fields)
     void WarpTo(const GPoint& where, int32 distance = 0, bool autoPilot = false, SystemEntity* pSE = nullptr, int32 warpSpeed = 0, bool gateWarp = false, bool freeWarp = false);
+    // the warp back to the logoff point at login (EVE_Logoff.h):  the ship is already aligned at full speed, so it enters warp at once
+    void LoginWarpTo(const GPoint& where);
 
     /* Ship State Query functions */
     bool IsMoving()                                     { return ((m_ballMode != Destiny::Ball::Mode::STOP) or (m_velocity.lengthSquared() > 1.0)); }

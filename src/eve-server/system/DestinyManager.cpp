@@ -1282,6 +1282,28 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
     SendSingleDestinyUpdate(&up, true);   // consumed
 }
 
+/* login after a logoff in space:  the pilot is in warp back to where they logged off.  a ship that comes into space
+ *  stopped would first align, so it comes in aligned at full speed instead:  the client's align check (1 - cos < 0.01 and
+ *  |v| > 0.75 maxVel, Ballpark::Evolve) passes on its first tick and it goes straight into warp.  the velocity goes out
+ *  before the WarpTo, in the same tick.  free (no capacitor), and warp disruption doesn't stop it (IsLoginWarping())
+ */
+void DestinyManager::LoginWarpTo(const GPoint& where) {
+    GVector dir(m_position, where);
+    if (dir.lengthSquared() > 0.0) {
+        dir.normalize();
+        m_shipHeading = dir;
+        m_velocity = dir * m_maxShipSpeed;
+        SetBallVelocity bv;
+            bv.entityID = mySE->GetID();
+            bv.x = m_velocity.x;
+            bv.y = m_velocity.y;
+            bv.z = m_velocity.z;
+        PyTuple* up = bv.Encode();
+        SendSingleDestinyUpdate(&up);   // consumed
+    }
+    WarpTo(where, 0, false, nullptr, 0, false, true);
+}
+
 void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {
     if (pSE == nullptr)
         return;

@@ -18,8 +18,10 @@
  *  faction navy (crime.FactionNavy, off by default):  the same for pilots with bad standing with the system's faction, or
  *   (crime.NpcFactionAggression) who attacked one of its npcs.
  *  sentries: a few guns at every gate and station in empire space, shooting criminals and anyone aggressing their owner.
- *  logoff: a ship in a fight with players stays in space for 15 minutes after its pilot logs off (or after the last
- *   attack on it).  otherwise it warps off and vanishes a minute later (two if NPCs were attacking it).
+ *  logoff (EVE_Logoff.h): the ship finishes any warp it is in, then makes one emergency warp 1,000,000 km away (not when
+ *   scrambled or in a bubble).  a ship in a fight with players stays in space for 15 minutes (renewed while it is still
+ *   attacked), otherwise it leaves space a minute after it came to rest (two if NPCs were attacking it).  it is saved at the
+ *   point its pilot logged off from, where the login warp takes them back.
  */
 
 #ifndef EVEMU_NPC_LAWENFORCEMENT_H
@@ -67,9 +69,13 @@ public:
     static bool UsesTypeEwar(NPC* pNPC);
 
     /* logoff */
-    void AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc);
+    /* keepLogoff:  the pilot logged off again before their login warp got under way.  the ship already sits at the
+     *  start of that warp, away from this logoff point, which it keeps.  zero:  where the ship is (or lands) */
+    void AddLoggedOffShip(ShipSE* pShipSE, uint32 charID, bool pvp, bool npc, const GPoint& keepLogoff = GPoint(0, 0, 0));
     // the owner logged back in: removes the ship's entity and gives its position for the new one
     bool ReclaimLoggedOffShip(uint32 shipID, GPoint& position);
+    // where the pilot of a ship still in space logged off (the login warp goes back there).  false if this isn't one
+    bool GetLogoffPoint(uint32 shipID, GPoint& into);
     // owner of a ship left in space, 0 if this isn't one
     uint32 GetLoggedOffOwner(uint32 shipID);
     // the ship was destroyed (its entity is going away)
@@ -121,8 +127,11 @@ private:
         ShipSE* pShipSE = nullptr;
         uint32 charID = 0;
         int64 loggedOff = 0;
-        int64 removeAt = 0;
+        int64 removeAt = 0;             // 0 while it is still moving (finishing its warp, or in its emergency warp)
         bool pvp = false;
+        bool npc = false;
+        uint8 stage = 0;                // Logoff::Exit:  FinishWarp, Warp (emergency warp under way), Stay (at rest)
+        GPoint logoffPoint = GPoint(0, 0, 0);   // where the pilot left it (where it landed, for a logoff in warp)
     };
     std::map<uint32, LoggedOff> m_loggedOff;    // shipID
 
@@ -155,6 +164,10 @@ private:
     void Despawn(Response& r);
     void SpawnSentries(SystemEntity* pSE, uint8 count, uint16 typeID, uint32 factionID, uint32 corpID);
     void ProcessLoggedOff(int64 now);
+    // the ship is at rest where its pilot left it (or landed):  the emergency warp, or it stays
+    void StartLogoffExit(LoggedOff& l, int64 now);
+    // the ship came to rest:  its time in space starts
+    void SetLogoffRest(LoggedOff& l, int64 now);
 };
 
 #endif  // EVEMU_NPC_LAWENFORCEMENT_H

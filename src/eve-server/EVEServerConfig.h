@@ -575,8 +575,8 @@ public:
         uint16 AggFlagTime;             // s an aggression flag lasts
         uint16 CrimFlagTime;            // s the global criminal countdown lasts
         uint16 KillRightDays;
-        uint16 LogoffNPCTime;           // s a logged-off ship stays when NPCs were attacking it
-        uint16 LogoffWarpTime;          // s a logged-off ship takes to warp off and vanish otherwise
+        uint16 LogoffNPCTime;           // s a logged-off ship stays (at rest) when NPCs were attacking it
+        uint16 LogoffWarpTime;          // s a logged-off ship stays in space otherwise, once at rest after its emergency warp
         uint16 SecGainWindow;           // s only the best npc kill per system in this window raises security status
         float SecAggressionPenalty;     // % of the distance to -10
         float SecShipKillPenalty;

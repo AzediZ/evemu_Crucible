@@ -452,8 +452,8 @@ protected:
     GPoint m_dockPoint;
     // upon login, the player needs to warp to a location, but the warp
     // has to be queued to the next tick after login events have been processed
-    GPoint m_loginWarpPoint;
-    GPoint m_loginWarpRandomPoint;
+    GPoint m_loginWarpPoint;        // where the pilot logged off (EVE_Logoff.h).  zero:  no warp, the ship is already there
+    GPoint m_loginWarpRandomPoint;  // where the login warp starts
 
     std::set<LSCChannel*>   m_channels;    //we do not own these.
     std::map<uint32, bool>  m_hangarLoaded;
