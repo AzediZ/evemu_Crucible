@@ -27,6 +27,13 @@ services:
     #  time for the save;  the stop ends as soon as the server has exited
     stop_grace_period: 2m
     init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
+    # Docker keeps everything the server prints (docker logs server) in a file that otherwise grows for as long as
+    #  the container exists.  Keep the last 100 MB, in 5 files of 20 MB
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
     # cap_add: #This is required for gdb to work
     #   - SYS_PTRACE
 
@@ -39,6 +46,11 @@ services:
     # If you want to connect to the Database pick your host port to map it to, (host-port:container-port) below. 
     #ports:
     #  - "3306:3306"  
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       - MARIADB_RANDOM_ROOT_PASSWORD=true
       - MARIADB_USER=evemu

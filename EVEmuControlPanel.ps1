@@ -136,6 +136,23 @@ function Test-ServerOnline($st) {
     # The server prints "EVEmu Server is Online" once it has finished booting.
     if (-not $st -or $st.Server -ne 'running') { return $false }
     if ($script:OnlineFor -eq $st.ServerStartedAt) { return $true }
+    # At the same moment it marks itself online in the database, with the time.  Checked first: on a long run
+    #  that line can be gone from Docker's log, which keeps only the last 100 MB (docker-compose.yml)
+    $r = Invoke-Sql 'SELECT Online+0, startTime FROM srvStatus WHERE AI = 1' 6000
+    if ($r.ExitCode -eq 0) {
+        $f = ([string]$r.Output).Trim() -split '\s+'
+        $since = [int64]0
+        if (($f.Count -ge 2) -and ($f[0] -eq '1') -and [int64]::TryParse($f[1], [ref]$since)) {
+            try {
+                $started = [DateTimeOffset]::ParseExact($st.ServerStartedAt.Substring(0, 19), 'yyyy-MM-ddTHH:mm:ss',
+                    [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
+                if ($since -ge ($started.ToUnixTimeSeconds() - 5)) {
+                    $script:OnlineFor = $st.ServerStartedAt
+                    return $true
+                }
+            } catch { }
+        }
+    }
     $r = Invoke-Cli $script:Docker ('logs --since ' + $st.ServerStartedAt + ' server') 8000
     if (([string]$r.Output + [string]$r.Error) -match 'EVEmu Server is Online') {
         $script:OnlineFor = $st.ServerStartedAt

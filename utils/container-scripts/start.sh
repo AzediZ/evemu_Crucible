@@ -30,6 +30,10 @@ if [ ! -f "/app/etc/motd.txt" ]; then
     cp /src/utils/config/motd.txt /app/etc/
 fi
 
+# The server writes a new log file into /app/logs at every start (logDir in eve-server.xml), inside the container.
+#  Keep the newest 20
+ls -1t /app/logs/*.log 2>/dev/null | tail -n +21 | xargs -r rm -f --
+
 echo "Installing devtools and GM tools..."
 cp /src/utils/config/devtools.raw /app/etc/
 cp /src/utils/config/gmtools.py /app/etc/
