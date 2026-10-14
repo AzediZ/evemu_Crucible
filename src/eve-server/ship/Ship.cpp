@@ -3137,7 +3137,9 @@ void ShipSE::EncodeDestiny( Buffer& into) {
     into.Append( head);
     MassSector mass = MassSector();
         mass.mass = m_destiny->GetMass();
-        mass.cloak = (m_destiny->IsCloaked() ? 1 : 0);
+        // a gate/login (session) cloak only hides the ball from everyone else;  it never reaches the pilot's own client
+        //  (SendCloakBall(), UnCloak()), so its ball must not come in flagged cloaked either:  nothing would ever clear it
+        mass.cloak = ((m_destiny->IsCloaked() and (m_destiny->GetCloakMode() != Destiny::Cloak::Session)) ? 1 : 0);
         mass.harmonic = m_harmonic;
         mass.corporationID = m_corpID;
         mass.allianceID = (IsAlliance(m_allyID) ? m_allyID : -1);
