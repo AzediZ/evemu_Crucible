@@ -53,9 +53,14 @@ public:
     static const uint32 MAX_CHANNEL_ID;
     /* world.globalChat:  the one server-wide channel ("Global") every character is put in at login.
      *  an int (user-style) channel the server owns, below BASE_CHANNEL_ID and clear of the ids the Crucible client keeps
-     *  for CCP's help channels (lscengine __configvalues__: rookieHelpChannel 1, helpChannelEN 2, DE 40, RU 55, JA 56)
+     *  for CCP's help channels (lscengine __configvalues__: rookieHelpChannel 1, helpChannelEN 2, DE 40, RU 55, JA 56).
+     *  the client's requests for those help channels are answered with Global
      */
     static const int32 GLOBAL_CHANNEL_ID;
+    /* world.globalChat off:  "Rookie Help", the client's rookieHelpChannel.  new pilots (ROLE_NEWBIE) join it at login and
+     *  the Help window's button (any help id) joins it.  the only server-wide channel then
+     */
+    static const int32 ROOKIE_HELP_CHANNEL_ID;
 
     LSCService(EVEServiceManager& mgr, CommandDispatcher *cd);
     ~LSCService();

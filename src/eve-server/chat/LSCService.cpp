@@ -63,7 +63,8 @@
 // Set the base (minimum) and maximum numbers for any user-created chat channel.
 const int32 LSCService::BASE_CHANNEL_ID = 2100000000;      //trial accts are spam-restricted to 1m input buffer when channelID < 2100000000
 const uint32 LSCService::MAX_CHANNEL_ID = 0xFFFFFFFF;
-const int32 LSCService::GLOBAL_CHANNEL_ID = 3;
+const int32 LSCService::GLOBAL_CHANNEL_ID = HelpChannels::Global;
+const int32 LSCService::ROOKIE_HELP_CHANNEL_ID = HelpChannels::RookieHelp;
 std::string LSCService::s_motd;
 
 LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
@@ -344,11 +345,20 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
     }
 
     std::set<int32> toJoin;
+    // the help channel (Global, or Rookie Help) a request for one of the client's help ids stands for.  0 = none asked for
+    int32 helpChannelID(0);
 
     PyList::const_iterator cur = channelIDs->begin();
     for (; cur != channelIDs->end(); cur++) {
         if ((*cur)->IsInt()) {
-            toJoin.insert((*cur)->AsInt()->value());
+            int32 channelID((*cur)->AsInt()->value());
+            int32 routed(HelpChannels::Route(channelID, sConfig.world.globalChat));
+            if (routed != 0) {
+                // there is no such channel:  answered below by asking the client to join the real one
+                helpChannelID = routed;
+            } else {
+                toJoin.insert(channelID);
+            }
         } else if ((*cur)->IsTuple()) {
             PyTuple* prt = (*cur)->AsTuple();
             if (prt->items.size() != 1 or !prt->items[0]->IsTuple()) {
@@ -368,6 +378,16 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
         }
     }
 
+    /* chat.EnforceRookieInHelp (world.globalChat off):  only new pilots (ROLE_NEWBIE, an account's first 30 days) and GMs
+     *  get into Rookie Help.  the others' requests are dropped without a message, as for a channel that doesn't exist
+     */
+    if (!sConfig.world.globalChat and sConfig.chat.EnforceRookieInHelp and !IsGM(call.client)
+    and ((call.client->GetAccountRole() & Acct::Role::NEWBIE) != Acct::Role::NEWBIE)) {
+        toJoin.erase(HelpChannels::RookieHelp);
+        if (helpChannelID == HelpChannels::RookieHelp)
+            helpChannelID = 0;
+    }
+
     PyList *ml = new PyList();
     LSCChannel* channel(nullptr);
     uint32 charID = call.client->GetCharacterID();
@@ -377,10 +397,6 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
         int32 channelID = *curs;
         if (channelID == 0)
             continue;
-        if (sConfig.chat.EnforceRookieInHelp)
-            if ((channelID == 1) or (channelID == 2))
-                if (((role->value() & Acct::Role::NEWBIE) != Acct::Role::NEWBIE) or ((role->value() & Acct::Role::EPLAYER) != Acct::Role::EPLAYER))
-                    continue;
 
         channel = GetChannelByID(channelID);
         if (channel == nullptr)
@@ -438,6 +454,24 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
     }
 
     ProcessLoginText(call.client, toJoin);
+
+    /* a help id stands for helpChannelID.  answering it with that channel in this reply would not do:  the client takes the
+     *  entry (lscengine JoinChannels/__JoinChannelHelper use the id the reply gives) but isn't waiting for that id, so its
+     *  messages (the login MOTD) could come before the reply and be dropped, and an entry for a channel it already has
+     *  pops an error.  so the client is asked to join it the normal way (LSC.JoinChannel, which does nothing for a channel
+     *  it already has open), and the help id gets no entry, which the client ignores
+     */
+    if ((helpChannelID != 0) and (toJoin.find(helpChannelID) == toJoin.end())) {
+        LSCChannel* pHelp(GetChannelByID(helpChannelID));
+        std::map<uint32, bool>::iterator itr = m_loginText.find(charID);
+        // already asked for by the login (ProcessLoginText)
+        bool asked((helpChannelID == GLOBAL_CHANNEL_ID) and (itr != m_loginText.end()) and itr->second);
+        if ((pHelp != nullptr) and !pHelp->IsJoined(charID) and !asked) {
+            if ((helpChannelID == GLOBAL_CHANNEL_ID) and (itr != m_loginText.end()))
+                itr->second = true;
+            call.client->SendServiceCall("LSC", "JoinChannel", new_tuple(new PyInt(helpChannelID)));
+        }
+    }
 
     if (is_log_enabled(LSC__RSP_DUMP))
         ml->Dump(LSC__RSP_DUMP, "   ");
@@ -1512,16 +1546,20 @@ void LSCService::DeleteSystemChannel(int32 channelID)
 void LSCService::CreateStaticChannels() {
     /* Crucible's default channels are all made by the client asking for them (lscengine InitChannels/OnSessionChanged):
      *  Local (('solarsystemid2', id),), constellation (on by default), region (off by default), corp, alliance, fleet,
-     *  militia and the character's own mailing list.  the server makes those on demand (CreateSystemChannel), so the only
-     *  server-wide channel is Global, when world.globalChat is on.  CCP's Rookie Help (1) and Help (2/40/55/56) channels
-     *  are not made:  the client's join of them just finds nothing (no message)
+     *  militia and the character's own mailing list.  the server makes those on demand (CreateSystemChannel).
+     *  the client also asks for CCP's Rookie Help (new pilots, at login) and Help channels (the Help window's button).
+     *  the server has one channel for those:  Global when world.globalChat is on (every character is in it), else
+     *  Rookie Help.  requests for the other help ids are answered with it (JoinChannels, EVE_Motd.h HelpChannels)
      */
-    if (!sConfig.world.globalChat)
-        return;
-
+    LSCChannel* pChan(nullptr);
     // groupMessageID/channelMessageID CHAT_SYSTEM_CHANNEL (-1): the client shows the displayName, under "System Channels"
-    LSCChannel* pChan = CreateChannel(GLOBAL_CHANNEL_ID, 1/*ownerSystem*/, "Global", "", nullptr, "global",
-                                      LSC::Type::normal, cspa, -1, -1, false);
+    if (sConfig.world.globalChat) {
+        pChan = CreateChannel(GLOBAL_CHANNEL_ID, 1/*ownerSystem*/, "Global", "", nullptr, "global",
+                              LSC::Type::normal, cspa, -1, -1, false);
+    } else {
+        pChan = CreateChannel(ROOKIE_HELP_CHANNEL_ID, 1/*ownerSystem*/, "Rookie Help", "", nullptr, "rookiehelp",
+                              LSC::Type::normal, cspa, -1, -1, false);
+    }
     // the client checks int channels against their access list: everyone may talk
     if ((pChan != nullptr) and !pChan->HasDefaultMod())
         pChan->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));

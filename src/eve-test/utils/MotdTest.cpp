@@ -92,6 +92,18 @@ int utils_MotdTest( int /*argc*/, char* /*argv*/[] )
     Check(Motd::IsGMRole(Acct::Role::GMH), "GMH is");
     Check(Motd::IsGMRole(Acct::Role::ADMIN), "ADMIN is");
 
+    ::printf("help channels:\n");
+    using HelpChannels::Route;
+    Check(Route(1, true) == HelpChannels::Global, "Global on:  Rookie Help is Global");
+    Check((Route(2, true) == 3) and (Route(40, true) == 3) and (Route(55, true) == 3) and (Route(56, true) == 3),
+          "... and so is every language's Help");
+    Check(Route(3, true) == 0, "... Global itself is just Global");
+    Check(Route(1, false) == 0, "Global off:  Rookie Help is itself");
+    Check((Route(2, false) == 1) and (Route(40, false) == 1) and (Route(55, false) == 1) and (Route(56, false) == 1),
+          "... and every language's Help is Rookie Help");
+    Check((Route(3, false) == 0) and (Route(10, true) == 0) and (Route(100, false) == 0) and (Route(2100000001, true) == 0),
+          "other channels are not help channels");
+
     ::printf("%s\n", (failures ? "MotdTest FAILED" : "MotdTest passed"));
     return failures;
 }

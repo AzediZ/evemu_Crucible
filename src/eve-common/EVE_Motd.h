@@ -8,6 +8,8 @@
   *  MOTD takes):  <color=0xAARRGGBB>, <b>, <i>, <u>, <br>, <url=...>, <fontsize=N>.  each line break in the file becomes
   *  a <br>.  a line whose first non-blank character is '#' is a comment.  blank lines at the start and the end are dropped.
   *  an empty file (or one with only comments) means no MOTD.
+  *
+  *  also the server's two chat channels and how the client's help channel requests are answered (HelpChannels)
   */
 
 
@@ -125,6 +127,44 @@ namespace Motd {
             if (c >= 0x80)
                 return false;
         return true;
+    }
+}
+
+
+/* the Crucible client keeps CCP's help channel ids in lscengine's __configvalues__:  rookieHelpChannel 1, helpChannelEN 2,
+ *  helpChannelDE 40, helpChannelRU 55, helpChannelJA 56.  it asks for Rookie Help at login when the session has ROLE_NEWBIE
+ *  (lscengine InitChannels), and the Help window's button asks for Rookie Help (newbies) and the help channel of the
+ *  client's language (help.py JoinHelpChannel).  the server answers them with its one channel for that:
+ *  Global (world.globalChat), else Rookie Help
+ */
+namespace HelpChannels {
+
+    // world.globalChat off:  the client's rookieHelpChannel
+    static constexpr int32_t RookieHelp = 1;
+    // world.globalChat on:  clear of the client's help ids and of every old static channel
+    static constexpr int32_t Global = 3;
+
+    inline bool IsClientHelpID(int32_t id)
+    {
+        switch (id) {
+            case 1:     // rookieHelpChannel
+            case 2:     // helpChannelEN
+            case 40:    // helpChannelDE
+            case 55:    // helpChannelRU
+            case 56:    // helpChannelJA
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // the channel a request for id is answered with.  0 = not a help id, or id is that channel itself
+    inline int32_t Route(int32_t id, bool globalChat)
+    {
+        if (!IsClientHelpID(id))
+            return 0;
+        int32_t target(globalChat ? Global : RookieHelp);
+        return ((id == target) ? 0 : target);
     }
 }
 
