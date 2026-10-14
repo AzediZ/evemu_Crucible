@@ -2402,10 +2402,7 @@ void Client::SendSessionChange()
         packet->Dump(CLIENT__SESSION_DUMP, dumper);
     }
 
-    QueuePacket(packet);
-
-    // clean up packet after being created by 'new'
-    //SafeDelete(packet);
+    QueuePacket(packet);    // frees the packet
 
     if (checkChannels and (m_lsc != nullptr))
         m_lsc->EnforceMembership(this);

@@ -120,8 +120,17 @@ void EVEClientSession::QueuePacket(PyPacket* packet) {
 
     if (res == nullptr) {
         sLog.Error("QueuePacket", "%s: Failed to encode a packet.", GetAddress().c_str());
+        SafeDelete(packet);
         return;
     }
+
+    // the encoded rep now holds the packet's payload, named payload and context key (Encode doesn't
+    //  clone them), and QueueRep frees it once it's sent.  Let go of them here, then free the packet
+    //  itself:  it was never deleted, so every packet sent to a client leaked.
+    packet->payload = nullptr;
+    packet->named_payload = nullptr;
+    packet->contextKey = nullptr;
+    SafeDelete(packet);
 
     mNet->QueueRep(res);
 }
