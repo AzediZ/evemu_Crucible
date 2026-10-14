@@ -22,6 +22,8 @@
 
 #include "Client.h"
 #include "EVEServerConfig.h"
+#include "EVE_Sov.h"
+#include "StaticDataMgr.h"
 
 #include "account/AccountService.h"
 #include "inventory/ItemDB.h"
@@ -197,8 +199,14 @@ void PlanetMgr::ValidateCommandCenter(uint32 itemID, uint16 typeID)
         if ((uint32)level < planets)
             throw UserError("CannotPlaceCommandCenterNotEnoughSkill").AddAmount("maxPlanets", (int)planets);
     }
-    uint32 sovAllianceID = svDataMgr.GetSystemAllianceID(m_planet->SystemMgr()->GetID());
-    if ((sovAllianceID != 0) and (sovAllianceID != (uint32)m_client->GetAllianceID()))
+    // only an alliance claim (the allianceID of sovMgr.GetSystemSovereigntyInfo) keeps everyone else out.  empire, npc
+    //  null-sec, unclaimed null-sec and w-space are open to all
+    uint32 systemID(m_planet->SystemMgr()->GetID());
+    SystemData sysData = SystemData();
+    sDataMgr.GetSystemData(systemID, sysData);
+    uint32 sovAllianceID = svDataMgr.GetSystemAllianceID(systemID);
+    if (SovRules::ReportsClaim(SovRules::Classify(systemID, sysData.factionID, sysData.securityRating), sovAllianceID)
+    and (sovAllianceID != (uint32)m_client->GetAllianceID()))
         throw UserError("SovPreventsCommandPin");
 }
 

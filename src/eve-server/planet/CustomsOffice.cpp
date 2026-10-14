@@ -21,6 +21,7 @@
 
 #include "Client.h"
 #include "EntityList.h"
+#include "EVE_Customs.h"
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "manufacturing/Blueprint.h"
@@ -33,6 +34,7 @@
 #include "planet/PlanetDB.h"
 #include "pos/Structure.h"
 #include "system/Container.h"
+#include "system/CrimeWatch.h"
 #include "system/Damage.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
@@ -176,6 +178,9 @@ void CustomsSE::AnchorOrbital(Client* pClient)
     if (m_cData.state != EVEPOS::EntityState::Unanchored)
         throw CustomError ("The %s is already anchored.", m_self->name());
     CheckCorpAccess(pClient, Corp::Role::EquipmentConfig);
+    // high-sec planets keep CONCORD's offices
+    if (!CustomsRules::GantryAllowed(CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::High))
+        throw CustomError ("A %s can't be anchored in high security space.", m_self->name());
 
     // the planet closest to the gantry, no further than PIGantryMaxDistanceKm from its surface, without an office
     uint32 planetID(m_system->GetClosestPlanetID(GetPosition()));
@@ -460,36 +465,36 @@ void CustomsSE::UpdateSettings(int8 selectedHour, int8 standingValue, bool ally,
 float CustomsSE::GetTaxRate(Client* pClient)
 {
     /* the rate this character pays here, -1 when they may not use the office.
-     *  Crucible:  CONCORD's high security offices charge the doubled npc rate (defaultCustomsOfficeTaxRate, 10%),
-     *   Interbus' offices a little more (npcCustomsOfficeTaxRate of the Interbus office, 17%).
+     *  Crucible:  npc offices charge npcCustomsOfficeTaxRate of their type.  CONCORD's high security Customs Office
+     *   has none and takes the dogma default (10%), Interbus' offices a little more (17% on the Interbus office).
+     *   defaultCustomsOfficeTaxRate (5%) is a new player office's rate, not an npc one.
      *   player offices charge what their owner set for the corporation, the alliance or the character's standing with
-     *   the owner, and only let in those (Player Owned Customs Office dev blog, 18 Oct 2011)
+     *   the owner, and only let in those (Player Owned Customs Office dev blog, 18 Oct 2011).  sovereignty plays no part
      */
     if (m_ownerID == corpCONCORD)
-        return sPIDataMgr.GetTypeAttribute(EVEDB::invTypes::PlanetaryCustomsOffice, AttrdefaultCustomsOfficeTaxRate) * sConfig.cosmic.PICONCORDTaxMultiplier;
+        return sPIDataMgr.GetTypeAttribute(EVEDB::invTypes::PlanetaryCustomsOffice, AttrnpcCustomsOfficeTaxRate) * sConfig.cosmic.PICONCORDTaxMultiplier;
     if (m_ownerID == corpInterbus)
         return sPIDataMgr.GetTypeAttribute(EVEDB::invTypes::InterbusCustomsOffice, AttrnpcCustomsOfficeTaxRate) * sConfig.cosmic.PIInterbusTaxMultiplier;
     if (!IsPlayerCorp(m_ownerID))
-        return sPIDataMgr.GetTypeAttribute(m_self->typeID(), AttrdefaultCustomsOfficeTaxRate);
+        return sPIDataMgr.GetTypeAttribute(m_self->typeID(), AttrnpcCustomsOfficeTaxRate);
 
     using namespace EVEPOS;
-    if (pClient->GetCorporationID() == m_ownerID)
-        return m_cData.taxRateValues[TaxValues::Corp];
-    if (m_cData.allowAlliance and IsAlliance(m_allyID) and (pClient->GetAllianceID() == m_allyID))
-        return m_cData.taxRateValues[TaxValues::Alliance];
-    if (m_cData.allowStandings) {
-        int8 tier = GetStandingTier(pClient);
-        if (tier < m_cData.standingValue)
-            return -1;
-        switch (tier) {
-            case StandingValues::StandingHigh:      return m_cData.taxRateValues[TaxValues::StandingHigh];
-            case StandingValues::StandingGood:      return m_cData.taxRateValues[TaxValues::StandingGood];
-            case StandingValues::StandingNeutral:   return m_cData.taxRateValues[TaxValues::StandingNeutral];
-            case StandingValues::StandingBad:       return m_cData.taxRateValues[TaxValues::StandingBad];
-            default:                                return m_cData.taxRateValues[TaxValues::StandingHorrible];
-        }
-    }
-    return -1;
+    CustomsRules::PlayerOffice office = CustomsRules::PlayerOffice();
+        office.allowAlliance    = m_cData.allowAlliance;
+        office.allowStandings   = m_cData.allowStandings;
+        office.minStanding      = m_cData.standingValue;
+        office.corporation      = m_cData.taxRateValues[TaxValues::Corp];
+        office.alliance         = m_cData.taxRateValues[TaxValues::Alliance];
+        office.standingHorrible = m_cData.taxRateValues[TaxValues::StandingHorrible];
+        office.standingBad      = m_cData.taxRateValues[TaxValues::StandingBad];
+        office.standingNeutral  = m_cData.taxRateValues[TaxValues::StandingNeutral];
+        office.standingGood     = m_cData.taxRateValues[TaxValues::StandingGood];
+        office.standingHigh     = m_cData.taxRateValues[TaxValues::StandingHigh];
+    bool corpMember(pClient->GetCorporationID() == m_ownerID);
+    bool allianceMember(IsAlliance(m_allyID) and (pClient->GetAllianceID() == m_allyID));
+    // the standing lookups only when the standing rates decide
+    int8 tier(CustomsRules::NeedsStanding(office, corpMember, allianceMember) ? GetStandingTier(pClient) : CustomsRules::StandingNeutral);
+    return CustomsRules::PlayerOfficeRate(office, corpMember, allianceMember, tier);
 }
 
 int8 CustomsSE::GetStandingTier(Client* pClient)
@@ -510,18 +515,7 @@ int8 CustomsSE::GetStandingTier(Client* pClient)
             break;
         }
     }
-    using namespace EVEPOS::StandingValues;
-    if (!found)
-        return StandingNeutral;
-    if (standing >= 10)
-        return StandingHigh;
-    if (standing >= 5)
-        return StandingGood;
-    if (standing > -5)
-        return StandingNeutral;
-    if (standing > -10)
-        return StandingBad;
-    return StandingHorrible;
+    return CustomsRules::StandingTier(found, standing);
 }
 
 bool CustomsSE::CanStore(uint16 typeID)

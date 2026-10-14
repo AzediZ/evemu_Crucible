@@ -27,6 +27,7 @@
 
 #include "EntityList.h"
 #include "Client.h"
+#include "EVE_Customs.h"
 #include "packets/Planet.h"
 #include "planet/PlanetORBBound.h"
 #include "planet/CustomsOffice.h"
@@ -139,16 +140,7 @@ PyResult PlanetORBBound::UpdateSettings(PyCallArgs& call, PyInt* orbitalID, PyRe
     dict.standingHigh = clamp(dict.standingHigh);
     int64 hour = std::min((int64)23, std::max((int64)0, PyRep::IntegerValue(reinforceValue)));
     double standing = (standingValue->IsFloat() ? standingValue->AsFloat()->value() : (double)PyRep::IntegerValue(standingValue));
-    int8 standingLevel = EVEPOS::StandingValues::StandingHorrible;
-    if (standing >= 10) {
-        standingLevel = EVEPOS::StandingValues::StandingHigh;
-    } else if (standing >= 5) {
-        standingLevel = EVEPOS::StandingValues::StandingGood;
-    } else if (standing > -5) {
-        standingLevel = EVEPOS::StandingValues::StandingNeutral;
-    } else if (standing > -10) {
-        standingLevel = EVEPOS::StandingValues::StandingBad;
-    }
+    int8 standingLevel = CustomsRules::StandingTier(true, standing);
     bool allowAlliance = (allowAllianceValue->IsBool() ? allowAllianceValue->AsBool()->value() : (PyRep::IntegerValue(allowAllianceValue) != 0));
     bool allowStandings = (allowStandingsValue->IsBool() ? allowStandingsValue->AsBool()->value() : (PyRep::IntegerValue(allowStandingsValue) != 0));
 

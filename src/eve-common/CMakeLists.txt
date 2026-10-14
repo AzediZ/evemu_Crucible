@@ -20,6 +20,7 @@ SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/EVE_Charges.h"
      "${TARGET_INCLUDE_DIR}/EVE_Consts.h"
      "${TARGET_INCLUDE_DIR}/EVE_Corp.h"
+     "${TARGET_INCLUDE_DIR}/EVE_Customs.h"
      "${TARGET_INCLUDE_DIR}/EVE_Defines.h"
      "${TARGET_INCLUDE_DIR}/EVE_DogmaOrder.h"
      "${TARGET_INCLUDE_DIR}/EVE_Dungeon.h"
