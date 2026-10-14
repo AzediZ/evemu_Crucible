@@ -982,10 +982,21 @@ Sov::UpgradeBlock SovereigntyDataMgr::CheckUpgradeRequirements(uint32 systemID, 
         }
     }
 
-    // outpost upgrades are not supported.  no Crucible infrastructure upgrade uses this
-    if (pType->HasAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel))
-        if (pType->GetAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel).get_int() > 0)
-            return Sov::UpgradeBlock::Outpost;
+    /* sovSvc.CanInstallUpgrade:  an outpost of the sovereign's alliance in the system at least at this upgrade level.
+     *  no Crucible infrastructure upgrade has the attribute (dgmTypeAttributes), so this never blocks with the data */
+    if (pType->HasAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel)) {
+        int32 level(pType->GetAttribute(AttrsovUpgradeRequiredOutpostUpgradeLevel).get_int());
+        if (level > 0) {
+            uint32 outpostID(stDataMgr.GetOutpostInSystem(systemID));
+            StationData stData = StationData();
+            if ((outpostID == 0) or !stDataMgr.GetStationData(outpostID, stData))
+                return Sov::UpgradeBlock::Outpost;
+            uint32 allianceID(GetSystemAllianceID(systemID));
+            if ((allianceID == 0) or (PosMgrDB::GetCorpAllianceID(stData.corporationID) != allianceID)
+            or (stData.upgradeLevel < level))
+                return Sov::UpgradeBlock::Outpost;
+        }
+    }
 
     return Sov::UpgradeBlock::None;
 }
