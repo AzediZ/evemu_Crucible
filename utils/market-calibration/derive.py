@@ -1,6 +1,6 @@
 """
 derive.py - turns the static data, the market history and the killmails into the mktCal* tables
-(doc/code_and_design_notes/market-sim/PLAN.md section 4):  type classes, robust price/volume/volatility statistics,
+(doc/code_and_design_notes/planning/market-sim/PLAN.md section 4):  type classes, robust price/volume/volatility statistics,
 recursive bill-of-materials costs, the gap filling for types without history, regional and weekday shape, meta
 ratios, losses and fit baskets.  Stdlib only;  every loop runs over sorted keys, so the output is deterministic.
 """

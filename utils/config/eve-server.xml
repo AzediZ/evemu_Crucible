@@ -174,7 +174,7 @@ boolean can use either 0/1 OR true/false.
         <InsuranceMultiplierT3>1.0</InsuranceMultiplierT3><!-- float - insurance value multiplier for strategic cruisers -->
     </market>
 
-    <!-- the simulated market economy (doc/code_and_design_notes/market-sim/PLAN.md).  NPC corporations quote real buy and
+    <!-- the simulated market economy (doc/code_and_design_notes/planning/market-sim/PLAN.md).  NPC corporations quote real buy and
          sell orders at the trade hubs, priced from Crucible-era market history (the mktCal* tables), and trade with
          players through the normal market.  every ISK and item it trades is accounted for (/mktsim audit).  GM: /mktsim -->
     <marketSim>
@@ -321,12 +321,12 @@ boolean can use either 0/1 OR true/false.
         <DroneAggroChance>0.10</DroneAggroChance><!-- chance (checked every 30s) that a regular rat switches to a drone that damaged it.  sleepers use threat instead -->
         <LeashRange>0</LeashRange><!-- m.  deprecated:  every npc's leash comes from its entityMaxWanderRange (LeashSoftScale/LeashHardScale below).  > 0 replaces the hard leash range (logged at boot).  0 default -->
         <TargetSwitchTime>0</TargetSwitchTime><!-- s.  level-one npcs (sleepers, incursion sansha, officers) switch targets at most this often.  0 = the type's AI_TargetSwitchTimer (1416, dgm default 60s:  "the time that must pass between one target switch and another").  0 default.  (ThreatRadius is gone:  they consider everything within R_acq) -->
-        <!-- npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1) -->
+        <!-- npc ai foundations (doc/code_and_design_notes/planning/npc-ai/PLAN.md phases 0-1) -->
         <SleepEmptyBubbles>true</SleepEmptyBubbles><!-- bool  idle npcs in a bubble without players skip their ai (movement still runs) until a player arrives, they are locked, damaged or their group is alerted.  true default -->
         <RequireWeaponEffects>true</RequireWeaponEffects><!-- bool  Crucible dogma:  npc turrets need effect 10 (targetAttack), missiles effect 569 (missileLaunchingForEntity).  false = attribute-only gating (the old behaviour, for comparison).  true default -->
         <AuditOnStartup>false</AuditOnStartup><!-- bool  build the ai profile of every npc type at boot and log the data problems (channel NPC__AI_WARN) and their counts.  /npcai audit does the same on demand.  false default -->
         <RngSeed>0</RngSeed><!-- integer  seed of every npc's random numbers (combined with its itemID), for reproducible ai tests.  0 = from the clock.  0 default -->
-        <!-- npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8).  [DD] = design decision, no era number -->
+        <!-- npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8).  [DD] = design decision, no era number -->
         <AcquireRange>100000</AcquireRange><!-- m.  an npc looks for (and locks) targets within max(entityAttackRange, this), in its bubble.  [DD] belt rats engage on landing.  100000 default -->
         <AcquireDrones>true</AcquireDrones><!-- bool  a player's drone can be a standard rat's first target (era: "new spawns may aggro drones").  true default -->
         <DroneRetaliation>1</DroneRetaliation><!-- 1 = an idle rat hit by a drone shoots the drone, 0 = the drone's pilot when in sight (the old way).  1 default -->
@@ -345,7 +345,7 @@ boolean can use either 0/1 OR true/false.
         <HaulerFleeDelay>30</HaulerFleeDelay><!-- s.  an unharmed belt hauler warps off (and is gone) this long after a player arrives;  a damaged one tries at once, whenever it isn't scrambled.  30 default -->
         <CommanderFlee>true</CommanderFlee><!-- bool  a belt commander whose escorts are all dead warps to another belt when it isn't scrambled.  true default -->
         <RespectInterdiction>true</RespectInterdiction><!-- bool  npc warps are refused inside, and pulled by, warp disruption fields like players'.  true default -->
-        <!-- npc ai phase 3:  level-one ai for sleepers, incursion sansha, asteroid officers and 5 unique npcs (doc/code_and_design_notes/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9).  threat numbers are [DD]:  tune with /npcai -->
+        <!-- npc ai phase 3:  level-one ai for sleepers, incursion sansha, asteroid officers and 5 unique npcs (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9).  threat numbers are [DD]:  tune with /npcai -->
         <L1EvalInterval>5</L1EvalInterval><!-- s.  how often a level-one npc re-scores its candidates (score = (1 + threat) x signature x drone x range x lock):  target switch, locks on the best ones, newcomers.  5 default -->
         <L1SwitchMargin>1.10</L1SwitchMargin><!-- a level-one npc switches only to a target scoring more than this x its primary (and only AI_TargetSwitchTimer after its last switch).  1.10 default -->
         <L1ThreatDecay>0.90</L1ThreatDecay><!-- level-one threat x this every L1ThreatDecayInterval (below 1 it is forgotten).  0.90 default -->
@@ -357,7 +357,7 @@ boolean can use either 0/1 OR true/false.
         <L1NewcomerThreat>1.2</L1NewcomerThreat><!-- incursion sansha:  a ship coming into sight that wasn't seen for L1NewcomerMemory gets at least this x the primary's threat (era:  "they most likely will change targets to any newcomers").  1.2 default -->
         <L1NewcomerMemory>300</L1NewcomerMemory><!-- s.  300 default -->
         <RemoteEcmJamTime>5</RemoteEcmJamTime><!-- s.  the incursion capitals' remote ecm burst (every 5 min, sooner with more than 60 players) jams every player ship on grid this long.  [DD]  5 default -->
-        <!-- npc ai phase 5:  polish, level of detail, telemetry, difficulty (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, 6.7;  operator guide:  doc/code_and_design_notes/npc-ai/OPERATING.md) -->
+        <!-- npc ai phase 5:  polish, level of detail, telemetry, difficulty (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7;  operator guide:  doc/code_and_design_notes/planning/npc-ai/OPERATING.md) -->
         <SoftLeashCooldown>20</SoftLeashCooldown><!-- s.  after the soft leash turned an npc back it chases at least this long before it may turn back again.  [DD]  20 default -->
         <LinkAlertInterval>5</LinkAlertInterval><!-- s.  an npc or sentry tells the groups linked to its own (dunSpawnGroups.aggroLink) at most this often.  [DD]  5 default -->
         <SleeperCapitalReinforcements>2</SleeperCapitalReinforcements><!-- sleeper battleships that warp in for each capital ship a sleeper sees (once per capital and site;  era:  "several battleships for each capital").  0 = off.  2 default -->
@@ -556,7 +556,7 @@ boolean can use either 0/1 OR true/false.
         <SentriesPerGate>3</SentriesPerGate>
         <SentriesPerStation>2</SentriesPerStation>
         <SentryRange>150000</SentryRange><!-- meters -->
-        <!-- npc ai plan phase 4 (doc/code_and_design_notes/npc-ai/PLAN.md 4.8 - 4.10).  Crimewatch 1 sentries (EVElopedia "Sentry guns", Dec 2011):
+        <!-- npc ai plan phase 4 (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.8 - 4.10).  Crimewatch 1 sentries (EVElopedia "Sentry guns", Dec 2011):
              gate/station guns shoot pilots with a global criminal countdown and pilots who attacked the gate/station they guard (or its guns),
              with their ships and drones;  every hit lands (no transversal or signature radius).  low-sec guns need a countdown, -5 isn't enough -->
         <SentryRetarget>30</SentryRetarget><!-- seconds between a gun's random re-picks among its eligible targets -->
@@ -567,7 +567,7 @@ boolean can use either 0/1 OR true/false.
         <NpcFactionAggression>false</NpcFactionAggression><!-- bool - the NPC aggression timer (EVElopedia "Combat Timers" 2012): attacking an NPC makes its faction's gate/station guns (and its navy, with FactionNavy) hostile for SentryAggression.  off by default (plan decision 11) -->
     </crime>
 
-    <ambient><!-- ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md):  traffic through gates and stations, CONCORD and navy patrols, belt
+    <ambient><!-- ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md):  traffic through gates and stations, CONCORD and navy patrols, belt
              miners and criminals in empire space (sec > 0) where players are in space.  transient (nothing saved), never in Local.  attacking
              the civilians and navies is a crime as attacking a pilot would be;  no bounties -->
         <Enabled>true</Enabled><!-- bool - master switch.  off:  no ambient npc anywhere and no boot queries -->

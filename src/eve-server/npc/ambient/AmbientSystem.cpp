@@ -1,6 +1,6 @@
  /**
   * @name AmbientSystem.cpp
-  *   the ambient npcs of one solar system (doc/code_and_design_notes/ambient-npc-plan.md 3, 4, 6, 8, 11).  see AmbientSystem.h
+  *   the ambient npcs of one solar system (doc/code_and_design_notes/planning/ambient-npc-plan.md 3, 4, 6, 8, 11).  see AmbientSystem.h
   */
 
 #include "eve-server.h"

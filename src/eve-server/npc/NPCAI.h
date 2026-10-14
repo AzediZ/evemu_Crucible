@@ -36,7 +36,7 @@
 #include "npc/ai/ThreatTable.h"
 
 namespace NPCAI {
-    // doc/code_and_design_notes/npc-ai/PLAN.md 6.3.  (dormant is a flag:  IsDormant())
+    // doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.3.  (dormant is a flag:  IsDormant())
     namespace State {
         enum {
             Invalid     = -1,
@@ -70,7 +70,7 @@ class SystemEntity;
 struct NpcContext;
 struct NpcProfile;
 
-/* the npc ai state machine (doc/code_and_design_notes/npc-ai/PLAN.md 6.3).  the policy (whom to go after) is the
+/* the npc ai state machine (doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.3).  the policy (whom to go after) is the
  *  npc's brain (npc/ai/NpcBrain.h), the data its profile (npc/ai/NpcProfile.h), the timing its schedule
  *  (npc/ai/NpcSchedule.h), the rolls its own rng (npc/ai/NpcRng.h, seeded from npc.RngSeed and its itemID),
  *  how it flies its movement (npc/ai/NpcMovement.h) and who it fights with its aggro group (npc/ai/AggroGroup.h) */

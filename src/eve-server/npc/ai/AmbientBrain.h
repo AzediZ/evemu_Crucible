@@ -1,6 +1,6 @@
  /**
   * @name AmbientBrain.h
-  *   the policy of ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md 8.6).  AmbientSystem makes it and hands it to
+  *   the policy of ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md 8.6).  AmbientSystem makes it and hands it to
   *   the npc's ai (NPCAIMgr::SetBrain) before its first Process().  modes:
   *    Civilian  haulers, couriers, freighters, miners:  never acquire or retaliate (the pilot flees), never sleep
   *    Military  navy and CONCORD:  fight back, the squad joins in, and (ambient.PatrolsEngageCriminals) go after criminals on

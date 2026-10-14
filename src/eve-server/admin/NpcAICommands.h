@@ -1,7 +1,7 @@
 
 /**
  * @name NpcAICommands.h
- *     npc ai observability (doc/code_and_design_notes/npc-ai/PLAN.md 6.9)
+ *     npc ai observability (doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.9)
  */
 
 //no macroguard on purpose

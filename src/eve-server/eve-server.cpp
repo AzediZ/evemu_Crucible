@@ -818,7 +818,7 @@ int main( int argc, char* argv[] )
     // its station capacity first:  the jobs and their lines (players' installs check them even with the sim off)
     sSimFacilities.Initialize();
     sMktSim.Initialize();
-    /* ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md):  the catalog and the market scores.  read-only SELECTs */
+    /* ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md):  the catalog and the market scores.  read-only SELECTs */
     sAmbientMgr.Initialize();
     std::printf("\n");     // spacer
 

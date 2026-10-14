@@ -1,6 +1,6 @@
  /**
   * @name AmbientCatalog.cpp
-  *   the ambient npcs' ship types (doc/code_and_design_notes/ambient-npc-plan.md section 7).  see AmbientCatalog.h
+  *   the ambient npcs' ship types (doc/code_and_design_notes/planning/ambient-npc-plan.md section 7).  see AmbientCatalog.h
   */
 
 #include "eve-server.h"

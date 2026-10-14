@@ -1,6 +1,6 @@
  /**
   * @name AmbientNPC.cpp
-  *   one ambient ship in space (doc/code_and_design_notes/ambient-npc-plan.md 4.2, 9.1).  see AmbientNPC.h
+  *   one ambient ship in space (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.2, 9.1).  see AmbientNPC.h
   */
 
 #include "eve-server.h"

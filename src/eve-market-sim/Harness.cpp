@@ -136,7 +136,7 @@ namespace {
             {"HaulerMargin", [&](double v) { p.haulerMargin = v; }},
             {"RemoteSupplyElasticity", [&](double v) { p.remoteSupplyElasticity = v; }},
             {"HaulerCargoFactor", [&](double v) { p.haulerCargoFactor = v; }},
-            // phase 7:  the rest of the tuning keys (doc/code_and_design_notes/market-sim/TUNING.md)
+            // phase 7:  the rest of the tuning keys (doc/code_and_design_notes/planning/market-sim/TUNING.md)
             {"Seed", [&](double v) { p.seed = (uint64_t)v; }},
             {"TransientNoise", [&](double v) { p.transientNoise = v; }},
             {"MaxOrdersPerCellSide", [&](double v) { p.maxOrdersPerCellSide = (int)v; }},

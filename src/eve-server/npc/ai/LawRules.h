@@ -1,6 +1,6 @@
  /**
   * @name LawRules.h
-  *   the pure rules of Crucible law enforcement (doc/code_and_design_notes/npc-ai/PLAN.md 4.8 - 4.10, phase 4):
+  *   the pure rules of Crucible law enforcement (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.8 - 4.10, phase 4):
   *   CONCORD's response delay, the faction police and navy thresholds, and the Crimewatch 1 sentry timers.
   *   header only and dependency free (also used by eve-test, npcai/LawRulesTest)
   */

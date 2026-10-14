@@ -1,4 +1,4 @@
--- the market simulation's state (doc/code_and_design_notes/market-sim/PLAN.md 8).  money is in cents (BIGINT), quantities
+-- the market simulation's state (doc/code_and_design_notes/planning/market-sim/PLAN.md 8).  money is in cents (BIGINT), quantities
 --  in units.  the calibration tables (mktCal*) come with 20261013120000-market-calibration-schema.sql
 --   mktSimState      name/value:  schema version, seed, sim clock, start day, money controller, paused, GM overrides
 --   mktSimNode       the market nodes (stations the sim quotes at)

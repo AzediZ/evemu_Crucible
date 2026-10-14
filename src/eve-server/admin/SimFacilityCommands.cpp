@@ -1,6 +1,6 @@
  /**
   * @name SimFacilityCommands.cpp
-  *   /simfacility:  the market simulation's station lines (doc/code_and_design_notes/market-sim/PLAN.md 6.6)
+  *   /simfacility:  the market simulation's station lines (doc/code_and_design_notes/planning/market-sim/PLAN.md 6.6)
   *
   * @date:          15Oct26
   *

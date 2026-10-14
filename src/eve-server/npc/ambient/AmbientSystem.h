@@ -1,6 +1,6 @@
  /**
   * @name AmbientSystem.h
-  *   the ambient npcs of one solar system (doc/code_and_design_notes/ambient-npc-plan.md 3, 4.1, 6, 11), owned by its
+  *   the ambient npcs of one solar system (doc/code_and_design_notes/planning/ambient-npc-plan.md 3, 4.1, 6, 11), owned by its
   *   SystemManager like LawEnforcement.  it does nothing until a player is in space here (and never at sec <= 0 or in
   *   wormholes), then:  keeps the observed grids (bubbles with players in space, and where they are warping to), runs the
   *   Poisson event scheduler, the off-grid travellers, materialises ships on observed grids only (caps), removes them when

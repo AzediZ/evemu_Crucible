@@ -177,7 +177,7 @@ public:
         float InsuranceMultiplierT3;
     } market;
 
-    // from <marketSim>:  the simulated market economy (doc/code_and_design_notes/market-sim/PLAN.md 9.6)
+    // from <marketSim>:  the simulated market economy (doc/code_and_design_notes/planning/market-sim/PLAN.md 9.6)
     struct {
         bool Enabled;                   // master switch.  off at boot leaves the sim's orders alone (they stay backed)
         uint32 Seed;                    // rng seed
@@ -342,13 +342,13 @@ public:
         float LootOwnMissileChance; // chance a loot roll that lands on the npc's own missiles (entityMissileTypeID) drops them.  0 = never
         uint32 LootOwnMissileQty;   // the stack of own missiles such a roll drops
         float DroneAggroChance;     // chance (per 30s) that a regular rat switches to a drone that damaged it
-        // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
+        // npc ai foundations (doc/code_and_design_notes/planning/npc-ai/PLAN.md phases 0-1)
         bool SleepEmptyBubbles;     // idle npcs in bubbles without players skip their ai until something wakes them
         bool AuditOnStartup;        // build every npc profile at boot and log the data problems found
         bool RequireWeaponEffects;  // turrets need effect 10, missiles effect 569 (false = attribute-only gating, the old behaviour)
         uint32 RngSeed;             // seed of every npc's random numbers (with its itemID).  0 = from the clock
         uint32 RespawnJitter;       // s.  a killed belt rat respawns RespawnTimer + U(0, RespawnJitter) after it died
-        // npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8)
+        // npc ai phase 2:  Crucible-faithful standard ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.2-4.4, 5.4-5.6, 5.8)
         uint32 AcquireRange;        // m.  R_acq = max(entityAttackRange, this):  how far an npc looks for (and locks) targets
         bool AcquireDrones;         // standard rats may pick a player's drone as their first target
         uint32 DroneRetaliation;    // 1 = an idle rat hit by a drone shoots the drone, 0 = the drone's pilot (when in sight)
@@ -367,7 +367,7 @@ public:
         uint32 HaulerFleeDelay;     // s.  an unharmed hauler warps off this long after a player arrives
         bool CommanderFlee;         // a commander whose escorts are all dead warps to another belt
         bool RespectInterdiction;   // npc warps are stopped and pulled by warp disruption fields like players'
-        // npc ai phase 3:  level-one ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9)
+        // npc ai phase 3:  level-one ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.6, 4.7, 5.7-5.9)
         uint32 L1EvalInterval;      // s.  how often a level-one npc re-scores its candidates (switch, locks, newcomers)
         float L1SwitchMargin;       // a level-one npc switches only to a target scoring more than this x its primary
         float L1ThreatDecay;        // level-one threat x this every L1ThreatDecayInterval
@@ -379,7 +379,7 @@ public:
         float L1NewcomerThreat;     // incursion:  a newcomer gets at least this x the primary's threat
         uint32 L1NewcomerMemory;    // s.  a ship not seen this long counts as a newcomer again
         uint32 RemoteEcmJamTime;    // s.  how long the incursion capitals' remote ecm burst jams every ship on grid
-        // npc ai phase 5:  polish (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, 6.7;  OPERATING.md)
+        // npc ai phase 5:  polish (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7;  OPERATING.md)
         uint32 SoftLeashCooldown;   // s.  after a soft leash an npc chases at least this long before it turns back again
         uint32 LinkAlertInterval;   // s.  linked groups (dunSpawnGroups.aggroLink) are told at most this often per member
         uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for each capital a sleeper sees.  0 = off
@@ -605,7 +605,7 @@ public:
         bool NpcFactionAggression;      // attacking an NPC makes its faction's sentries (and navy) hostile for SentryAggression
     } crime;
 
-    // From <ambient>  (ambient npcs:  traffic, patrols, miners, criminals.  doc/code_and_design_notes/ambient-npc-plan.md 5)
+    // From <ambient>  (ambient npcs:  traffic, patrols, miners, criminals.  doc/code_and_design_notes/planning/ambient-npc-plan.md 5)
     struct {
         bool Enabled;                       // master switch.  off:  no ambient npc anywhere and no boot queries
         bool Traffic;                       // gate and station traffic (haulers, couriers, freighters, navy transit)

@@ -1,6 +1,6 @@
  /**
   * @name AmbientBrain.cpp
-  *   the policy of ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md 8.4 - 8.6).  see AmbientBrain.h
+  *   the policy of ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md 8.4 - 8.6).  see AmbientBrain.h
   */
 
 #include "eve-server.h"

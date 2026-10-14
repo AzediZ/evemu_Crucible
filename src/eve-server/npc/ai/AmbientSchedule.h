@@ -1,6 +1,6 @@
  /**
   * @name AmbientSchedule.h
-  *   the ambient npcs' event queue (doc/code_and_design_notes/ambient-npc-plan.md 4.1):  a min-heap of timed events, earliest
+  *   the ambient npcs' event queue (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.1):  a min-heap of timed events, earliest
   *   first, ties in the order they were pushed.  header only and dependency free (also used by eve-test)
   */
 

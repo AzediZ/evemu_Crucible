@@ -1,4 +1,4 @@
--- the market simulation's phase 4 logistics (doc/code_and_design_notes/market-sim/PLAN.md 6.5, 8):  a shipment is a hull
+-- the market simulation's phase 4 logistics (doc/code_and_design_notes/planning/market-sim/PLAN.md 6.5, 8):  a shipment is a hull
 --  carrying goods between a node and a node, or from a node's low/null-sec site to it.  mktSimShipment (made by
 --  20261013130100-market-sim.sql) has one row per cargo line;  the rows of one hull share tripID, and hullTypeID is the
 --  hull its loss destroys.  state:  0 arrives, 1 is lost on the way (rolled when it left).  the goods themselves are the

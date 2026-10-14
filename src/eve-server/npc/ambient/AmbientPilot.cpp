@@ -1,6 +1,6 @@
  /**
   * @name AmbientPilot.cpp
-  *   the pilot of one ambient ship (doc/code_and_design_notes/ambient-npc-plan.md section 8, 9).  see AmbientPilot.h
+  *   the pilot of one ambient ship (doc/code_and_design_notes/planning/ambient-npc-plan.md section 8, 9).  see AmbientPilot.h
   */
 
 #include "eve-server.h"

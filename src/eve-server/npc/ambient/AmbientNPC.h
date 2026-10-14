@@ -1,6 +1,6 @@
  /**
   * @name AmbientNPC.h
-  *   one ambient ship in space (doc/code_and_design_notes/ambient-npc-plan.md 4.2):  an NPC with its spec (archetype, role,
+  *   one ambient ship in space (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.2):  an NPC with its spec (archetype, role,
   *   name, owner), the reference hull's flight data written on its item, its own slim item and ball, and the pilot that flies
   *   its itinerary (AmbientPilot).  transient:  category 11 types get temp items, hull mode miners (category 6) temp items too.
   *   always removed through AmbientSystem::QueueRemoval(), never from inside its own Process()

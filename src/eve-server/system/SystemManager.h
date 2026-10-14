@@ -149,7 +149,7 @@ public:
     void RemoveNPC(NPC* pNPC);
     // an NPC that was destroyed (and so already removed from space) is going away
     void RemoveDeadNPC(NPC* pNPC);
-    /* npc ai (doc/code_and_design_notes/npc-ai/PLAN.md phase 5):  npcs and sentries that leave space (killed, GM /unspawn)
+    /* npc ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5):  npcs and sentries that leave space (killed, GM /unspawn)
      *  without an owner freeing them are freed at the start of the next tick.  their destructor calls this (someone else
      *  freed them first:  forget them, here and in the npc list) */
     void ForgetRemovedNPC(SystemEntity* pSE);

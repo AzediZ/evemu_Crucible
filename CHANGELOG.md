@@ -2,7 +2,7 @@
 
 Changes on top of [EvEmu-Project/evemu_Crucible](https://github.com/EvEmu-Project/evemu_Crucible) `master` at `f55b488` ("Streamline docker (#318)").
 
-This file comes from AzediZ's drones repository (`master` up to `2e131b9`), merged into this branch. The rest of this branch's work (F01-F24, the NPC AI and the market simulation) is described in `doc/TODO_COMPLETION_REPORT.md` and the plans under `doc/code_and_design_notes/`.
+This file comes from AzediZ's drones repository (`master` up to `2e131b9`), merged into this branch. The rest of this branch's work (F01-F24, the NPC AI and the market simulation) is described in `doc/code_and_design_notes/planning/reports/TODO_COMPLETION_REPORT.md` and the plans under `doc/code_and_design_notes/`.
 
 ## Movement (by Renn)
 

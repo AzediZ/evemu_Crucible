@@ -20,7 +20,7 @@
     Place - Suite 330, Boston, MA 02111-1307, USA, or go to
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
-    the law enforcement rules of doc/code_and_design_notes/npc-ai/PLAN.md 4.8 - 4.10 (phase 4)
+    the law enforcement rules of doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.8 - 4.10 (phase 4)
 */
 
 #include "eve-test.h"

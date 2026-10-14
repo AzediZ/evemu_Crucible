@@ -292,7 +292,7 @@ PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
      *            -- (sceneType = staging, vanguard)
      */
 
-    // incursions are not implemented (doc/code_and_design_notes/incursions):  an incursion manager would return a list of (solarSystemID, sceneType)
+    // incursions are not implemented (doc/code_and_design_notes/planning/incursions):  an incursion manager would return a list of (solarSystemID, sceneType)
     return new PyList();
 }
 

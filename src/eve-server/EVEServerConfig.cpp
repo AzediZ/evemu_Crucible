@@ -297,7 +297,7 @@ EVEServerConfig::EVEServerConfig()
     npc.LootDropChance = 1.0;          // empty wrecks come from the npc's data (entityEquipmentMin/Max, the loot tables' chances)
     npc.LootOwnMissileChance = 0.25;   // as the loot tables' T1 ammo (lootItemGroup itemDropChance 0.25)
     npc.LootOwnMissileQty = 100;       // as the loot tables' T1 ammo (lootItemGroup 100-100)
-    // npc ai foundations (doc/code_and_design_notes/npc-ai/PLAN.md phases 0-1)
+    // npc ai foundations (doc/code_and_design_notes/planning/npc-ai/PLAN.md phases 0-1)
     npc.SleepEmptyBubbles = true;       // performance:  no ai for idle npcs where no player is
     npc.AuditOnStartup = false;         // logs every npc type's data problems at boot (slow-ish, for content work)
     npc.RequireWeaponEffects = true;    // Crucible dogma:  what an npc can fire comes from its effects (10, 569)
@@ -502,7 +502,7 @@ EVEServerConfig::EVEServerConfig()
     crime.FactionNavyStanding = -5.0f;
     crime.NpcFactionAggression = false;     // plan decision 11 (EVElopedia "Combat Timers" 2012)
 
-    // ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md 5).  off unless the xml turns them on
+    // ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md 5).  off unless the xml turns them on
     ambient.Enabled = false;
     ambient.Traffic = true;
     ambient.ConcordPatrols = true;

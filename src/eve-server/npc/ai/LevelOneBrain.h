@@ -1,6 +1,6 @@
  /**
   * @name LevelOneBrain.h
-  *   the level-one ai (doc/code_and_design_notes/npc-ai/PLAN.md 4.6, 4.7, 5.7;  phase 3):  every type with
+  *   the level-one ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.6, 4.7, 5.7;  phase 3):  every type with
   *   AI_ShouldUseTargetSwitching (1648) > 0.  the 30 sleepers, the 32 incursion sansha (2 capitals), the 20 asteroid officers
   *   and 5 unique npcs (2943 Hybrid Slaver Hounds has 1648 = 2:  treated as 1, logged by its profile).
   *

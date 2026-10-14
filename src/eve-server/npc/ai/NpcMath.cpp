@@ -1,7 +1,7 @@
  /**
   * @name NpcMath.cpp
   *   pure formulas shared by players, npcs, drones, sentries and starbase batteries
-  *   (doc/code_and_design_notes/npc-ai/PLAN.md section 5).  see NpcMath.h
+  *   (doc/code_and_design_notes/planning/npc-ai/PLAN.md section 5).  see NpcMath.h
   *
   *   this file is also compiled into eve-test, so it includes nothing from the server
   */

@@ -1,5 +1,5 @@
 # the shipped <marketSim> defaults, written out (a starting point:  copy, change, run with --scenario).
-# keys are the <marketSim> names (doc/code_and_design_notes/market-sim/TUNING.md);  '#' starts a comment.
+# keys are the <marketSim> names (doc/code_and_design_notes/planning/market-sim/TUNING.md);  '#' starts a comment.
 # eve-market-sim --synthetic --days 365 --scenario defaults.scn
 EconomyScale = 0.01
 MarketNoise = 1.0

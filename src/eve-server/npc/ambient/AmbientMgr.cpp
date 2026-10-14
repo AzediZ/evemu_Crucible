@@ -1,6 +1,6 @@
  /**
   * @name AmbientMgr.cpp
-  *   the ambient npcs' server-wide part (doc/code_and_design_notes/ambient-npc-plan.md 3, 4.1, 6.2, 6.3).  see AmbientMgr.h
+  *   the ambient npcs' server-wide part (doc/code_and_design_notes/planning/ambient-npc-plan.md 3, 4.1, 6.2, 6.3).  see AmbientMgr.h
   */
 
 #include "eve-server.h"

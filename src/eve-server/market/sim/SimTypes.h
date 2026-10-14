@@ -1,7 +1,7 @@
 
  /**
   * @name SimTypes.h
-  *   market simulation:  the plain data the economy core works on (doc/code_and_design_notes/market-sim/PLAN.md).
+  *   market simulation:  the plain data the economy core works on (doc/code_and_design_notes/planning/market-sim/PLAN.md).
   *   nothing here (or anywhere in the core:  SimTypes, SimRng, SimClock, SimStaticData, SimEconomy, SimLedger,
   *   SimWorld) depends on the server, so the server and the offline harness (src/eve-market-sim) share it
   *

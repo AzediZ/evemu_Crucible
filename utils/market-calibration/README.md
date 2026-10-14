@@ -1,7 +1,7 @@
 # Market simulation calibration data
 
 These tools build the calibration tables of the simulated market economy
-(`doc/code_and_design_notes/market-sim/PLAN.md`, sections 4.4–4.5): what every market type was worth, how much of it
+(`doc/code_and_design_notes/planning/market-sim/PLAN.md`, sections 4.4–4.5): what every market type was worth, how much of it
 traded, how noisy its price was, how trade spread over regions and weekdays, and which ships were lost with which
 fits. The source is Crucible-era market history and killmails from EVE Ref; the output is a generated migration,
 `sql/migrations/20261013120100-market-calibration.sql`, which fills the tables that
@@ -190,7 +190,7 @@ split as sql-migrate splits them: no errors, and the row counts match the genera
 
 ## Tuning tools (market sim phase 7)
 
-Two more stdlib scripts sit here; the guide to them is `doc/code_and_design_notes/market-sim/TUNING.md` (every
+Two more stdlib scripts sit here; the guide to them is `doc/code_and_design_notes/planning/market-sim/TUNING.md` (every
 `<marketSim>` key, the acceptance tests, the sweep results) and `RUNBOOK.md` (operating the server).
 
 - `sweep.py`: Latin-hypercube parameter sweeps of the offline harness (`eve-market-sim`). It draws N sets over the
@@ -203,7 +203,7 @@ Two more stdlib scripts sit here; the guide to them is `doc/code_and_design_note
   index, realised volatility with the same 5-day estimator as `derive.horizon_volatility`, traded volume against the
   calibrated volume at `EconomyScale`, the hubs against the Forge, the last audit day, and the worst outliers.
 
-**Defaults.** The 2026-10-12 sweeps (`doc/code_and_design_notes/market-sim/SWEEP_STATUS.md`, results in
+**Defaults.** The 2026-10-12 sweeps (`doc/code_and_design_notes/planning/market-sim/SWEEP_STATUS.md`, results in
 `sweeps/2026-10-12/`) left every `<marketSim>` default unchanged, on the owner's decision: the defaults pass every
 phase 2–6 acceptance test on the synthetic world, and the real-data borderlines (AT (d) modules, T2 price / bill,
 the moon removal, Amarr's line capacity) don't move with any key in the space. `sweeps/` holds derived aggregates

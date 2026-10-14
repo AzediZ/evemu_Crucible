@@ -1,6 +1,6 @@
  /**
   * @name SimFacilities.h
-  *   market simulation:  facility capacity (doc/code_and_design_notes/market-sim/PLAN.md 6.6, phase 5).  the sim's
+  *   market simulation:  facility capacity (doc/code_and_design_notes/planning/market-sim/PLAN.md 6.6, phase 5).  the sim's
   *   manufacturing, research, copying and invention jobs take npc station assembly lines, and its refining is metered per
   *   station, while players can always still use the stations:
   *     - per station and activity the sim holds at most floor(MaxLineShare x lines) jobs, and leaves at least

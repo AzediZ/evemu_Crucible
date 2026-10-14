@@ -1,6 +1,6 @@
  /**
   * @name AmbientPilot.h
-  *   the pilot of one ambient ship (doc/code_and_design_notes/ambient-npc-plan.md section 8):  it flies the ship's itinerary leg
+  *   the pilot of one ambient ship (doc/code_and_design_notes/planning/ambient-npc-plan.md section 8):  it flies the ship's itinerary leg
   *   by leg (hold, warp, approach a gate and jump, approach a dock and dock, loiter, mine, visit a miner, hunt) as a small timed
   *   state machine, with the reference hull's speed and warp speed.  fights belong to the npc's ai (NPCAIMgr with an
   *   AmbientBrain):  while it isn't idle the pilot waits, and resumes its leg when the fight is over.  civilians flee when hurt.

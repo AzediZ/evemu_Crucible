@@ -1,6 +1,6 @@
  /**
   * @name SentryBrain.h
-  *   sentry gun policy (doc/code_and_design_notes/npc-ai/PLAN.md 4.10, 4.11, 6.4, 6.6;  phase 4):  WHO a sentry shoots.
+  *   sentry gun policy (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.10, 4.11, 6.4, 6.6;  phase 4):  WHO a sentry shoots.
   *   SentryAI (npc/SentryAI.h) does HOW:  locking, the primary, the drift-free turret and missile schedule, ewar.  sentries
   *   don't move, so they have their own small brain interface next to the npcs' NpcBrain (npc/ai/NpcBrain.h).
   *

@@ -20,7 +20,7 @@
     Place - Suite 330, Boston, MA 02111-1307, USA, or go to
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
-    npc ai phase 5 (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, 6.7):  level of detail, cpu budget, difficulty
+    npc ai phase 5 (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7):  level of detail, cpu budget, difficulty
     presets, telemetry and the shot log
 */
 

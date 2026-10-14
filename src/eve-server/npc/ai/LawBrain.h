@@ -1,6 +1,6 @@
  /**
   * @name LawBrain.h
-  *   CONCORD, faction police and faction navy (doc/code_and_design_notes/npc-ai/PLAN.md 4.8, 4.9, 6.4;  phase 4).
+  *   CONCORD, faction police and faction navy (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.8, 4.9, 6.4;  phase 4).
   *   LawEnforcement (npc/LawEnforcement.h) sends them after one ship (NPC::GetLawTarget) and moves them when its pilot boards
   *   another one.  they go after that ship only:  they never pick anyone on their own, never answer anyone else, never join a
   *   group, never sleep and the leash doesn't hold them.  their tackle is their data ewar (NPCEwar for police and navy;

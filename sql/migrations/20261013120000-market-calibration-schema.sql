@@ -1,4 +1,4 @@
--- Market simulation calibration tables (doc/code_and_design_notes/market-sim/PLAN.md section 4.4).  Filled by the
+-- Market simulation calibration tables (doc/code_and_design_notes/planning/market-sim/PLAN.md section 4.4).  Filled by the
 --  generated 20261013120100-market-calibration.sql (utils/market-calibration/gen_market_calibration.py) from EVE Ref
 --  (data.everef.net) market history and killmail archives;  EVE Online data (c) CCP hf.
 --  Prices are ISK as DOUBLE (the sim's runtime ledger uses int64 cents).  Every column is NOT NULL, so readers never

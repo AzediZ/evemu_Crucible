@@ -1,7 +1,7 @@
 
 /**
  * @name NpcAICommands.cpp
- *     npc ai observability (doc/code_and_design_notes/npc-ai/PLAN.md 6.9)
+ *     npc ai observability (doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.9)
  *
  *   /npcai [itemID|target|near] [verbose]   an npc's (or sentry's) tier, brain, state, primary, locks with lock progress,
  *                                            top threat, next-due timers, profile values (ranges, lock time to you,

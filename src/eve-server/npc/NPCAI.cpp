@@ -25,7 +25,7 @@
     AI Version: 0.58
 */
 
-/*  Crucible-era npc ai (doc/code_and_design_notes/npc-ai/PLAN.md):
+/*  Crucible-era npc ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md):
  *   standard rats (StandardBrain, phase 2):  nearest player ship or drone within R_acq, lock at once and fire after the
  *    data's reaction delay, keep the primary until it's gone, alert the aggro group (members join after their reaction
  *    delay, on the same target with probability entityReactionFactor), now and then turn on a drone that hurt them, orbit at

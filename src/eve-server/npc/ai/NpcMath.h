@@ -1,7 +1,7 @@
  /**
   * @name NpcMath.h
   *   pure formulas shared by players, npcs, drones, sentries and starbase batteries
-  *   (doc/code_and_design_notes/npc-ai/PLAN.md section 5)
+  *   (doc/code_and_design_notes/planning/npc-ai/PLAN.md section 5)
   *
   *   no server dependencies:  every input is a parameter, and random draws are passed in (u in [0,1)),
   *   so the results are deterministic.  src/eve-test/npcai/NpcMathTest.cpp checks the plan's worked values.

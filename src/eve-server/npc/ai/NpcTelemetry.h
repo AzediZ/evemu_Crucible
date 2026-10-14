@@ -1,6 +1,6 @@
  /**
   * @name NpcTelemetry.h
-  *   what the npc ai of one system did lately, for tuning against expectations (doc/code_and_design_notes/npc-ai/PLAN.md
+  *   what the npc ai of one system did lately, for tuning against expectations (doc/code_and_design_notes/planning/npc-ai/PLAN.md
   *   phase 5:  "a periodic NPC__AI_STATS line per system (engaged count, mean lock time, hit ratio, switches per minute)").
   *
   *   SystemManager owns one window per system.  the npcs and sentries count into it as they go, the system closes each

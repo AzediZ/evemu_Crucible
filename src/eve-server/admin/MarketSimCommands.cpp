@@ -1,7 +1,7 @@
 
  /**
   * @name MarketSimCommands.cpp
-  *   /mktsim:  the market simulation's GM command (doc/code_and_design_notes/market-sim/PLAN.md 9.5)
+  *   /mktsim:  the market simulation's GM command (doc/code_and_design_notes/planning/market-sim/PLAN.md 9.5)
   *
   * @date:          13Oct26
   *

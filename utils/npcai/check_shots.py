@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_shots.py - the npc ai fairness audit (doc/code_and_design_notes/npc-ai/PLAN.md phase 5, section 5.1).
+"""check_shots.py - the npc ai fairness audit (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, section 5.1).
 
 Every turret shot of an npc or sentry is logged on DAMAGE__TRACE_NPC (players', drones' and starbases' on DAMAGE__TRACE)
 with every term that decided it (ship/modules/TurretFormulas.cpp, TurretFormulas::Roll):

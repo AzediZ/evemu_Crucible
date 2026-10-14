@@ -1,6 +1,6 @@
  /**
   * @name NpcLod.h
-  *   level of detail, cpu budget and difficulty presets of the npc ai (doc/code_and_design_notes/npc-ai/PLAN.md 6.7, phase 5)
+  *   level of detail, cpu budget and difficulty presets of the npc ai (doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.7, phase 5)
   *
   *   level of detail (per npc and tick):
   *    Near   a player is in the npc's bubble:  the ai runs every tick (1 Hz)

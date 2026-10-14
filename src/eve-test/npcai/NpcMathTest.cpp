@@ -20,7 +20,7 @@
     Place - Suite 330, Boston, MA 02111-1307, USA, or go to
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
-    the worked values and edge cases of doc/code_and_design_notes/npc-ai/PLAN.md section 5 and its appendix
+    the worked values and edge cases of doc/code_and_design_notes/planning/npc-ai/PLAN.md section 5 and its appendix
 */
 
 #include "eve-test.h"

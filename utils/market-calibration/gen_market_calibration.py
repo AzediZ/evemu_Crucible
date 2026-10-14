@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 gen_market_calibration.py - builds the market simulation's calibration data (the mktCal* tables of
-doc/code_and_design_notes/market-sim/PLAN.md section 4.4) from Crucible-era EVE Ref market history and killmails,
+doc/code_and_design_notes/planning/market-sim/PLAN.md section 4.4) from Crucible-era EVE Ref market history and killmails,
 and writes it as a generated migration plus a manifest of every source file.
 
     python -I utils/market-calibration/gen_market_calibration.py --history <dir> [--killmails <dir>]

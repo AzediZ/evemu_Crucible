@@ -1,6 +1,6 @@
  /**
   * @name NpcSupport.h
-  *   what an npc does for its friends (doc/code_and_design_notes/npc-ai/PLAN.md 4.7, 5.8, 5.9;  phase 3).  any tier with
+  *   what an npc does for its friends (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.7, 5.8, 5.9;  phase 3).  any tier with
   *   the effect, never law enforcement.  made by NPCAIMgr only for types that have one of these:
   *
   *   remote repair (NPCRemoteArmorRepair 3852:  sleeper wardens, preservers, keepers, upholders;  NPCRemoteShieldBoost 3855:

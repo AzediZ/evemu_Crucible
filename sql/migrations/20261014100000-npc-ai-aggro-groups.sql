@@ -1,4 +1,4 @@
--- npc ai phase 2 (doc/code_and_design_notes/npc-ai/PLAN.md 4.3, 6.5):  the aggro mode of each dungeon spawn group.
+-- npc ai phase 2 (doc/code_and_design_notes/planning/npc-ai/PLAN.md 4.3, 6.5):  the aggro mode of each dungeon spawn group.
 --  proactive (0, the default) groups acquire on their own, as before.  passive (1) groups wait until a member is damaged,
 --  ewar'd or locked, or a player ship or drone comes within aggroRange of a member (0 = <npc><PassiveAggroRange>).
 --  groups of one dungeon with the same non-zero aggroLink aggro together.

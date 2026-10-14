@@ -108,7 +108,7 @@ void NPC::Process() {
 
     /* the ai, by level of detail:  every tick near players, every npc.LodFarInterval elsewhere in the system, not at all in a
      *  system without players, busy npcs always.  idle npcs away from players also skip the tick once the system used
-     *  npc.TickBudget us of npc ai in it (npc/ai/NpcLod.h, doc/code_and_design_notes/npc-ai/PLAN.md 6.7) */
+     *  npc.TickBudget us of npc ai in it (npc/ai/NpcLod.h, doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.7) */
     NpcStats& stats(m_system->GetNpcStats());
     ++stats.curNpcs;
     uint8 tier(NpcLod::TierOf((m_bubble != nullptr) and m_bubble->HasPlayers(), m_system->PlayerCount() > 0));

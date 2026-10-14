@@ -1,6 +1,6 @@
  /**
   * @name AmbientMgr.h
-  *   the ambient npcs' server-wide part (doc/code_and_design_notes/ambient-npc-plan.md 3, 4.1):  the ship catalog, the market
+  *   the ambient npcs' server-wide part (doc/code_and_design_notes/planning/ambient-npc-plan.md 3, 4.1):  the ship catalog, the market
   *   hub scores and region shares (read once at boot with SELECTs, never from the running market sim), the empire npc corps,
   *   the system busyness profiles, the inter-system transit queue (coherence, 6.8), the global cap and the /ambient texts.
   *   each loaded system's own part is its AmbientSystem

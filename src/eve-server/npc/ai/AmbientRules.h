@@ -1,6 +1,6 @@
  /**
   * @name AmbientRules.h
-  *   the pure rules of the ambient npcs (doc/code_and_design_notes/ambient-npc-plan.md section 6):  security band,
+  *   the pure rules of the ambient npcs (doc/code_and_design_notes/planning/ambient-npc-plan.md section 6):  security band,
   *   busyness, event rates, the Poisson sampler, grid and itinerary weights, hull and race picks, caps, miner, patrol and
   *   criminal numbers, landing distances and the warp factor of a reference hull.
   *   header only and dependency free (also used by eve-test, npcai/AmbientRulesTest).  every draw takes the caller's NpcRng

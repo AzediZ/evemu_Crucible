@@ -1,6 +1,6 @@
 /**
  * @name AmbientCommands.h
- *     ambient npc observability and tests (doc/code_and_design_notes/ambient-npc-plan.md 4.5)
+ *     ambient npc observability and tests (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.5)
  */
 
 //no macroguard on purpose

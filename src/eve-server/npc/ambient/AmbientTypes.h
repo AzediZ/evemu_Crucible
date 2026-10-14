@@ -1,6 +1,6 @@
  /**
   * @name AmbientTypes.h
-  *   the ambient npcs' shared data (doc/code_and_design_notes/ambient-npc-plan.md 4.1):  roles, races, archetypes, the spec of
+  *   the ambient npcs' shared data (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.1):  roles, races, archetypes, the spec of
   *   one ambient ship, its legs, an off-grid traveller and a system's busyness profile
   */
 

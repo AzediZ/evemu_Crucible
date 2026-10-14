@@ -4,7 +4,7 @@
   * @Author:    Allan
   * @date:      23 April 2017
   *
-  *   npc ai plan (doc/code_and_design_notes/npc-ai/PLAN.md 6.6, phase 4):  the state machine of a gun that doesn't move.
+  *   npc ai plan (doc/code_and_design_notes/planning/npc-ai/PLAN.md 6.6, phase 4):  the state machine of a gun that doesn't move.
   *   whom it shoots is its brain's call (npc/ai/SentryBrain.h:  Crimewatch 1 gate and station guns, pirate and deadspace
   *   sentries).  this class does the mechanics:  locks (capped by maxLockedTargets), an explicit primary, one drift-free
   *   NpcSchedule (think, turret, missile, retarget), the firing gates (completed lock, entityAttackRange), the type's ewar.

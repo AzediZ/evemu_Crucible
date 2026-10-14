@@ -1,6 +1,6 @@
 /**
  * @name AmbientCommands.cpp
- *     ambient npc observability and tests (doc/code_and_design_notes/ambient-npc-plan.md 4.5)
+ *     ambient npc observability and tests (doc/code_and_design_notes/planning/ambient-npc-plan.md 4.5)
  *
  *   /ambient                       this system:  active or not, busyness and its terms, rates, watched grids, ships by role,
  *                                   off-grid travellers, cap hits, the last events, us per tick

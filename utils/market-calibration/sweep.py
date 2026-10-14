@@ -16,7 +16,7 @@ is complete are not run again (an interrupted sweep resumes:  the same command w
 reads the logs of --out;  --only runs.csv runs just the runs a previous runs.csv lists as missing (when its logs are
 gone;  its results then cover those runs only).  Every scoring writes runs.csv:  one row per run, done or missing,
 with its failed checks and figures.  Keys are the
-harness's scenario keys:  the <marketSim> names (doc/code_and_design_notes/market-sim/TUNING.md) plus
+harness's scenario keys:  the <marketSim> names (doc/code_and_design_notes/planning/market-sim/TUNING.md) plus
 HalfSpreadScale, StockElasticityScale and ElasticityScale (the calibration's per type parameters, scaled).
 
 Stdlib only.  The draw is deterministic (--draw-seed).

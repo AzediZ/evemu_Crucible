@@ -1,6 +1,6 @@
  /**
   * @name AmbientCatalog.h
-  *   the ambient npcs' ship types (doc/code_and_design_notes/ambient-npc-plan.md section 7):  haulers, couriers, freighters,
+  *   the ambient npcs' ship types (doc/code_and_design_notes/planning/ambient-npc-plan.md section 7):  haulers, couriers, freighters,
   *   navy, CONCORD, criminals and miners, each with its reference player hull's flight data.  every type is validated at
   *   boot (it exists, its category, a graphic, a neutral bracket for civilians and law);  a bad one is dropped with an
   *   AMBIENT__WARN line

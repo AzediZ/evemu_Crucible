@@ -20,7 +20,7 @@
     Place - Suite 330, Boston, MA 02111-1307, USA, or go to
     http://www.gnu.org/copyleft/lesser.txt.
     ------------------------------------------------------------------------------------
-    the ambient npc rules of doc/code_and_design_notes/ambient-npc-plan.md section 6 (tests U1 - U22, section 13)
+    the ambient npc rules of doc/code_and_design_notes/planning/ambient-npc-plan.md section 6 (tests U1 - U22, section 13)
 */
 
 #include "eve-test.h"
