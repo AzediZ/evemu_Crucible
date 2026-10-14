@@ -255,7 +255,8 @@ void MarketDB::GetMatchingSellOrders(uint32 regionID, uint16 typeID, double maxP
 
 void MarketDB::GetExpiredOrders(int64 now, uint32 limit, std::vector<uint32>& into)
 {
-    // seeded npc orders and market bot orders are not owned by characters or player corps and never expire here
+    // seeded npc orders and market bot orders are not owned by characters or player corps and never expire here.
+    //  reads only those orders, by the ownerID and isCorp indexes (without the isCorp index it read every order)
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT orderID FROM mktOrders"
@@ -534,6 +535,15 @@ void MarketDB::DeleteTransactionsBefore(int64 time)
 {
     DBerror err;
     sDatabase.RunQuery(err, "DELETE FROM mktTransactions WHERE transactionDate < %lli", time);
+}
+
+void MarketDB::DeleteHistoryBefore(int64 time, int64 simTime)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM mktHistory WHERE historyDate < %lli", time))
+        codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
+    if (!sDatabase.RunQuery(err, "DELETE FROM mktSimHistory WHERE historyDate < %lli", simTime))
+        codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
 }
 
 PyRep *MarketDB::GetMarketGroups() {

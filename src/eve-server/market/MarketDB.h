@@ -76,6 +76,8 @@ public:
     // one row for today (since midnight), or an empty rowset
     static PyRep* GetHistoryToday(uint32 regionID, uint16 typeID, int64 midnight);
     static void DeleteTransactionsBefore(int64 time);
+    // daily price history from before 'time' and market sim day rows from before 'simTime'
+    static void DeleteHistoryBefore(int64 time, int64 simTime);
 
 
     /* for base price estimator */

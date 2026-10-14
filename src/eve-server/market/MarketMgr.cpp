@@ -246,6 +246,9 @@ void MarketMgr::UpdatePriceHistory()
     // transactions are kept as long as the history is served
     if (sConfig.market.DeleteOldTransactions)
         MarketDB::DeleteTransactionsBefore(oldest);
+    /* the history itself isn't read after HistoryDays either (each day adds a row for every region and type traded).
+     *  the market sim's days also make the insurance index, so they're kept for InsuranceIndexDays if that's longer */
+    MarketDB::DeleteHistoryBefore(oldest, std::min<int64>(oldest, midnight - (EvE::Time::Day * sConfig.market.InsuranceIndexDays)));
 
     _log(MARKET__MESSAGE, "UpdatePriceHistory - rolled up %u days in %.3fms.", count, (GetTimeMSeconds() - start));
 
