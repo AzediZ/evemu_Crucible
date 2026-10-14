@@ -98,6 +98,8 @@ out/
 
 # evenmu runtime
 config/
+# universe backups made by the control panel
+/backups/
 
 # doxygen output
 doxygen/

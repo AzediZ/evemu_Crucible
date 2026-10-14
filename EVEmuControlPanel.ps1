@@ -376,6 +376,77 @@ function Prune([string[]]$cmd) {
     }
     return $code
 }
+function Write-LfFile([string]$path, [string]$text) {
+    # shell scripts for the containers:  Linux line endings, no byte order mark
+    [System.IO.File]::WriteAllText($path, $text.Replace("`r`n", "`n"), (New-Object System.Text.UTF8Encoding($false)))
+}
+function Test-ServerRunning {
+    $s = & $docker inspect -f '{{.State.Running}}' server 2>$null
+    return ($LASTEXITCODE -eq 0) -and ((@($s) -join '').Trim() -eq 'true')
+}
+function Start-Database {
+    # starts only the database container (the server depends on it, not the other way round) and waits until
+    #  it answers
+    $c = Dock compose up -d db
+    if ($c -ne 0) { return $false }
+    $deadline = (Get-Date).AddMinutes(2)
+    while ($true) {
+        & $docker exec db mariadb-admin -uevemu -pevemu ping 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { return $true }
+        if ((Get-Date) -gt $deadline) {
+            Say 'The database did not answer within 2 minutes.'
+            return $false
+        }
+        Start-Sleep -Seconds 2
+    }
+}
+function Stop-ServerForBackup {
+    # the server's shutdown save puts everything in the database first.  True if it was running
+    if (-not (Test-ServerRunning)) { return $false }
+    Say 'Stopping the server first, so everything is saved to the database...'
+    $null = Dock compose stop server
+    return $true
+}
+function Run-InDb([string]$name, [string]$script) {
+    # runs a shell script inside the database container.  Copied in as a file, so nothing needs quoting
+    $local = Join-Path $env:TEMP $name
+    Write-LfFile $local $script
+    $c = Dock cp $local ('db:/tmp/' + $name)
+    Remove-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue
+    if ($c -ne 0) { return $c }
+    $c = Dock exec db bash ('/tmp/' + $name)
+    & $docker exec db rm -f ('/tmp/' + $name) 2>&1 | Out-Null
+    return $c
+}
+function Backup-Universe([string]$suffix) {
+    # Saves the whole universe database to backups\universe-<date>_<time><suffix>.sql.gz in this folder.
+    #  The database container must be running.  Returns the file's path, or '' if it failed
+    $dir = Join-Path (Get-Location).Path 'backups'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    $name = 'universe-' + (Get-Date -Format 'yyyy-MM-dd_HHmmss') + $suffix + '.sql.gz'
+    $path = Join-Path $dir $name
+    Say ('Backing up the universe to backups\' + $name + ' (this takes a minute or two)...')
+    # (a list of lines, not a here-string: this whole header is itself inside one)
+    $sh = @(
+        'set -o pipefail',
+        'export MYSQL_PWD=evemu',
+        'rm -f /tmp/evemu-backup.sql.gz',
+        'mariadb-dump -uevemu --single-transaction --quick --routines --triggers --events --hex-blob evemu | gzip -1 > /tmp/evemu-backup.sql.gz || exit 1',
+        # the dump's last line says it finished
+        'gunzip -c /tmp/evemu-backup.sql.gz | tail -n 1 | grep -q "^-- Dump completed" || { echo "The backup did not finish."; exit 1; }',
+        ''
+    ) -join "`n"
+    $c = Run-InDb 'evemu-backup.sh' $sh
+    if ($c -eq 0) { $c = Dock cp 'db:/tmp/evemu-backup.sql.gz' $path }
+    & $docker exec db rm -f /tmp/evemu-backup.sql.gz 2>&1 | Out-Null
+    if (($c -ne 0) -or -not (Test-Path -LiteralPath $path)) {
+        Say 'The backup failed (see the lines above). Nothing was changed.'
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+        return ''
+    }
+    Say ('Backup saved: ' + $path + ' (' + [math]::Round((Get-Item -LiteralPath $path).Length / 1MB, 1) + ' MB)')
+    return $path
+}
 function Clean-Docker([bool]$deep) {
     # Removes untagged old server images and old build files.
     # Never touches volumes (the universe database) or containers, and keeps the compile cache
@@ -456,9 +527,67 @@ Say 'Your universe (the database) and the server were not touched.'
 Say 'The compile caches are kept so rebuilds stay fast. Docker reuses the freed space; its disk image file on Windows may not shrink straight away.'
 exit 0
 '@
+    Backup = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+$wasRunning = Stop-ServerForBackup
+if (-not (Start-Database)) { exit 1 }
+$file = Backup-Universe ''
+if ($wasRunning) {
+    Say 'Starting the server again...'
+    $null = Dock compose up -d
+}
+if (-not $file) { exit 1 }
+Say ''
+Say 'To go back to this point later, use "Restore backup..." and pick this file.'
+exit 0
+'@
+    Restore = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+$restore = __RESTORE__
+if (-not (Test-Path -LiteralPath $restore)) { Say ('Cannot find ' + $restore + '. Nothing was changed.'); exit 1 }
+$null = Stop-ServerForBackup
+if (-not (Start-Database)) { exit 1 }
+Say 'First, a backup of the universe as it is now, in case you want it back...'
+$safety = Backup-Universe '-before-restore'
+if (-not $safety) { exit 1 }
+Say ''
+Say ('Restoring ' + $restore + '...')
+$c = Dock cp $restore 'db:/tmp/evemu-restore.sql.gz'
+if ($c -ne 0) { Say 'Could not copy the backup into the database container. Nothing was changed.'; exit 1 }
+$sh = @"
+set -o pipefail
+export MYSQL_PWD=evemu
+gunzip -t /tmp/evemu-restore.sql.gz || { echo 'The backup file is damaged.  Nothing was changed.'; rm -f /tmp/evemu-restore.sql.gz; exit 2; }
+mariadb -uevemu -e 'DROP DATABASE IF EXISTS evemu; CREATE DATABASE evemu;'
+gunzip -c /tmp/evemu-restore.sql.gz | mariadb -uevemu evemu
+status=`$?
+rm -f /tmp/evemu-restore.sql.gz
+exit `$status
+"@
+$c = Run-InDb 'evemu-restore.sh' $sh
+if ($c -eq 2) { exit 1 }
+if ($c -ne 0) {
+    Say ''
+    Say 'The restore failed part way. Your universe as it was is in:'
+    Say ('  ' + $safety)
+    Say 'Restore that file to get it back.'
+    exit 1
+}
+Say 'Restored. Starting the server (it updates the database first if the backup is from older code)...'
+$c = Dock compose up -d
+exit $c
+'@
     Wipe = @'
 if (-not (Ensure-Engine)) { exit 1 }
 if (-not (Test-Folder)) { exit 1 }
+if ($backupFirst) {
+    $null = Stop-ServerForBackup
+    if (-not (Start-Database)) { exit 1 }
+    if (-not (Backup-Universe '-before-wipe')) { Say 'The universe was not wiped.'; exit 1 }
+    Say ''
+}
 Say 'Deleting the server, its database and caches...'
 $c = Dock compose down -v
 if ($c -ne 0) { exit $c }
@@ -597,16 +726,16 @@ $script:Docker = Get-DockerPath
 $form = New-Object System.Windows.Forms.Form
 $form.Text = $script:AppName
 $form.Font = $script:BaseFont
-$form.Size = New-Object System.Drawing.Size(1010, 700)
-$form.MinimumSize = New-Object System.Drawing.Size(960, 560)
+$form.Size = New-Object System.Drawing.Size(1010, 760)
+$form.MinimumSize = New-Object System.Drawing.Size(960, 620)
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 
 $main = New-Object System.Windows.Forms.TableLayoutPanel
 $main.Dock = [System.Windows.Forms.DockStyle]::Fill
 $main.ColumnCount = 1
-$main.RowCount = 9
+$main.RowCount = 11
 [void]$main.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
-for ($i = 0; $i -lt 8; $i++) {
+for ($i = 0; $i -lt 10; $i++) {
     [void]$main.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
 }
 [void]$main.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
@@ -627,9 +756,16 @@ $btnStop    = New-Button 'Stop server'    'Stops the server. Your universe is ke
 $btnRestart = New-Button 'Restart server' 'Stops and starts the server.'
 $btnRebuild = New-Button 'Rebuild server' 'Rebuilds the server from the code in this folder. Use this after the code has been updated. Cleans up after itself.'
 $btnClean   = New-Button 'Free up space'  'Shows how much room Docker is using, then removes old server images and leftover build files. Your universe is not touched.'
-$btnWipe    = New-Button 'Wipe universe...' 'Deletes the whole database and starts a fresh universe.'
 $btnFolder  = New-Button 'Open folder'    'Opens the EVEmu folder.'
-$serverRow.Controls.AddRange([System.Windows.Forms.Control[]]@($btnStart, $btnStop, $btnRestart, $btnRebuild, $btnClean, $btnWipe, $btnFolder))
+$serverRow.Controls.AddRange([System.Windows.Forms.Control[]]@($btnStart, $btnStop, $btnRestart, $btnRebuild, $btnClean, $btnFolder))
+
+# Universe buttons
+$universeRow = New-Row
+$btnBackup   = New-Button 'Back up now'     'Saves the whole universe to the backups folder. A running server is stopped (so it saves first) and started again afterwards.'
+$btnRestore  = New-Button 'Restore backup...' 'Puts the universe back to a backup you pick. The universe as it is now is backed up first.'
+$btnBackups  = New-Button 'Open backups'    'Opens the backups folder.'
+$btnWipe     = New-Button 'Wipe universe...' 'Deletes the whole database and starts a fresh universe. Offers a backup first.'
+$universeRow.Controls.AddRange([System.Windows.Forms.Control[]]@($btnBackup, $btnRestore, $btnBackups, $btnWipe))
 
 # Game buttons
 $gameRow = New-Row
@@ -703,7 +839,7 @@ $actBox.BackColor = [System.Drawing.Color]::White
 $actBox.WordWrap = $true
 $actBox.DetectUrls = $false
 $actBox.Font = $script:MonoFont
-$actBox.Text = 'Output from Start, Stop, Restart, Rebuild, Free up space and Wipe appears here.'
+$actBox.Text = 'Output from Start, Stop, Restart, Rebuild, Free up space, backups and Wipe appears here.'
 $tabAct.Controls.Add($actBox)
 
 [void]$tabs.TabPages.Add($tabLog)
@@ -713,11 +849,13 @@ $main.Controls.Add((New-Header 'Status'), 0, 0)
 $main.Controls.Add($statusRow, 0, 1)
 $main.Controls.Add((New-Header 'Server'), 0, 2)
 $main.Controls.Add($serverRow, 0, 3)
-$main.Controls.Add((New-Header 'Game'), 0, 4)
-$main.Controls.Add($gameRow, 0, 5)
-$main.Controls.Add((New-Header 'Accounts'), 0, 6)
-$main.Controls.Add($acctRow, 0, 7)
-$main.Controls.Add($tabs, 0, 8)
+$main.Controls.Add((New-Header 'Universe'), 0, 4)
+$main.Controls.Add($universeRow, 0, 5)
+$main.Controls.Add((New-Header 'Game'), 0, 6)
+$main.Controls.Add($gameRow, 0, 7)
+$main.Controls.Add((New-Header 'Accounts'), 0, 8)
+$main.Controls.Add($acctRow, 0, 9)
+$main.Controls.Add($tabs, 0, 10)
 
 $strip = New-Object System.Windows.Forms.StatusStrip
 $script:StripLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
@@ -745,6 +883,8 @@ function Update-Buttons {
     $btnRebuild.Enabled = -not $busy
     $btnClean.Enabled   = -not $busy
     $btnWipe.Enabled    = -not $busy
+    $btnBackup.Enabled  = $engine -and (-not $busy) -and ($st.Db -ne 'missing')
+    $btnRestore.Enabled = $engine -and (-not $busy) -and ($st.Db -ne 'missing')
     $btnRefreshAcc.Enabled = $dbUp
     $btnAdmin.Enabled   = $dbUp -and ($null -ne $combo.SelectedItem)
 }
@@ -906,7 +1046,7 @@ function Remove-OldTaskFiles {
     } catch { }
 }
 
-function Start-PanelTask([string]$title, [string]$key) {
+function Start-PanelTask([string]$title, [string]$key, [hashtable]$vars = @{}) {
     if ($null -ne $script:TaskProcess) { return }
     if (-not $script:Docker) { $script:Docker = Get-DockerPath }
     if (-not $script:Docker) {
@@ -917,7 +1057,9 @@ function Start-PanelTask([string]$title, [string]$key) {
     $stamp = [string]$PID + '_' + (Get-Date -Format 'yyyyMMddHHmmssfff')
     $script:TaskLog = Join-Path $env:TEMP ('evemu_panel_task_' + $stamp + '.log')
     $script:TaskScript = Join-Path $env:TEMP ('evemu_panel_task_' + $stamp + '.ps1')
-    $text = Build-TaskScript $script:TaskBodies[$key]
+    $body = $script:TaskBodies[$key]
+    foreach ($k in $vars.Keys) { $body = $body.Replace($k, $vars[$k]) }
+    $text = Build-TaskScript $body
     [System.IO.File]::WriteAllText($script:TaskScript, $text, (New-Object System.Text.UTF8Encoding($true)))
     Add-Content -LiteralPath $script:TaskLog -Value ('== ' + $title + ' (' + (Get-Date -Format 'HH:mm:ss') + ') ==') -Encoding UTF8
 
@@ -1017,15 +1159,59 @@ $btnRebuild.Add_Click({
 })
 $btnWipe.Add_Click({
     Invoke-Click {
-        $msg = 'This deletes the whole database: every account, character, ship, corporation and market order. A fresh universe is created and the market restocked.' + "`r`n`r`n" + 'It cannot be undone. Wipe the universe?'
+        $msg = 'This deletes the whole database: every account, character, ship, corporation and market order. A fresh universe is created and the market restocked.' + "`r`n`r`n" + 'Wipe the universe?'
         if (Ask-YesNo $msg 'Warning') {
             if ((Test-ServerImage) -eq $false) {
                 if (-not (Confirm-Space)) { return }
             }
+            $backup = '$false'
+            $st = $script:LastState
+            if ($st -and $st.EngineUp -and ($st.Db -ne 'missing')) {
+                $r = [System.Windows.Forms.MessageBox]::Show('Back up the universe first, so you can restore it later? (Recommended. It takes a minute or two.)', $script:AppName, [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Question)
+                if ($r -eq [System.Windows.Forms.DialogResult]::Cancel) { return }
+                if ($r -eq [System.Windows.Forms.DialogResult]::Yes) { $backup = '$true' }
+            }
             $script:OnlineFor = ''
             $script:AccountsLoaded = $false
-            Start-PanelTask 'Wipe universe' 'Wipe'
+            Start-PanelTask 'Wipe universe' 'Wipe' @{ '$backupFirst' = $backup }
         }
+    }
+})
+$btnBackup.Add_Click({
+    Invoke-Click {
+        $st = $script:LastState
+        $msg = 'Back up the whole universe to the backups folder?'
+        if ($st -and ($st.Server -eq 'running')) {
+            $msg = $msg + "`r`n`r`n" + 'The server is stopped first (it saves everything as it stops) and started again afterwards, so anyone in game is logged out for a few minutes.'
+        }
+        if (Ask-YesNo $msg) {
+            $script:OnlineFor = ''
+            Start-PanelTask 'Back up universe' 'Backup'
+        }
+    }
+})
+$btnRestore.Add_Click({
+    Invoke-Click {
+        $dir = Join-Path $script:ComposeDir 'backups'
+        $dlg = New-Object System.Windows.Forms.OpenFileDialog
+        $dlg.Title = 'Pick the backup to restore'
+        $dlg.Filter = 'Universe backups (*.sql.gz)|*.sql.gz'
+        if (Test-Path -LiteralPath $dir) { $dlg.InitialDirectory = $dir }
+        if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+        $file = $dlg.FileName
+        $msg = 'Put the universe back to this backup?' + "`r`n`r`n" + (Split-Path -Leaf $file) + "`r`n`r`n" + 'Everything since then is replaced. The universe as it is now is backed up first, so you can go back. The server is stopped while this runs and started again at the end.'
+        if (Ask-YesNo $msg 'Warning') {
+            $script:OnlineFor = ''
+            $script:AccountsLoaded = $false
+            Start-PanelTask 'Restore backup' 'Restore' @{ '__RESTORE__' = (Quote-Ps $file) }
+        }
+    }
+})
+$btnBackups.Add_Click({
+    Invoke-Click {
+        $dir = Join-Path $script:ComposeDir 'backups'
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $dir + '"')
     }
 })
 $btnClean.Add_Click({ Invoke-Click { Start-PanelTask 'Free up space' 'FreeSpace' } })
