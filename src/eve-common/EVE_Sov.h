@@ -22,8 +22,10 @@
   *   the claim's 'contested' (sovMgr.GetSystemSovereigntyInfo and ProcessSovStatusChanged) is the number of stargates
   *   with an online SBU, whoever owns it.  the client (sovSvc.GetContestedState) shows 'Vulnerable' when
   *   contested * 2 > the system's stargates and 'Contested' for any smaller count above 0.
-  *   while more than half the gates are blockaded the claiming TCU and the claim's hub can be attacked and no TCU can be
-  *   onlined (CantOnlineDisruptorsOnline).  when the count drops back to half or less they are invulnerable again.
+  *   while more than half the gates are blockaded the claim's hub (and the holder's outposts) can be attacked and no TCU
+  *   can be onlined (CantOnlineDisruptorsOnline).  the claiming TCU also needs the hub and the holder's outposts gone
+  *   (EVElopedia Sovereignty guide, CCP Abathur 'Storming the Gates':  "AND").  when the count drops back to half or
+  *   less they are invulnerable again.
   */
 
 
@@ -113,9 +115,19 @@ namespace SovRules {
         return (sbuGates > 255 ? 255 : (uint8_t)sbuGates);
     }
 
-    // what the holding alliance hears when the count goes from oldGates to newGates
+    /* the claiming TCU:  only once the threshold is met and the holder has neither an online hub (the claim's hubID)
+     *  nor an outpost/conquerable station in the system
+     */
+    inline bool TcuVulnerable(uint32_t sbuGates, uint32_t gates, bool holderHasHub, bool holderHasStation)
+    {
+        return (SbuThresholdMet(sbuGates, gates) and !holderHasHub and !holderHasStation);
+    }
+
+    /* what the holding alliance hears when the count goes from oldGates to newGates.
+     *  'Sovereignty Blockade Unit activity detected' (notificationTypeSovDisruptorMsg, API 'Sovereignty disruptor
+     *  anchored') goes out when an SBU anchors, not here
+     */
     struct BlockadeChange {
-        bool newSbu;            // another gate has an online SBU (notificationTypeSovDisruptorMsg)
         bool vulnerable;        // the threshold was crossed upwards (notificationTypeAllStructVulnerableMsg, flag vulnerable audio)
         bool stable;            // ...and back down (notificationTypeAllStrucInvulnerableMsg, 'Sovereignty claim stable')
     };
@@ -123,7 +135,6 @@ namespace SovRules {
     inline BlockadeChange CompareBlockade(uint32_t oldGates, uint32_t newGates, uint32_t gates)
     {
         BlockadeChange change = BlockadeChange();
-        change.newSbu = (newGates > oldGates);
         bool was(SbuThresholdMet(oldGates, gates)), now(SbuThresholdMet(newGates, gates));
         change.vulnerable = (now and !was);
         change.stable = (was and !now);

@@ -115,21 +115,27 @@ int utils_SovRulesTest( int /*argc*/, char* /*argv*/[] )
     Check(ContestedValue(2) == 2, "contested is the count, not a flag");
     Check(ContestedValue(300) == 255, "contested saturates at 255");
 
+    // the claiming TCU also needs the holder's hub and outposts gone
+    Check(TcuVulnerable(2, 3, false, false), "2 of 3 gates, no hub, no outpost:  the TCU is vulnerable");
+    Check(!TcuVulnerable(2, 3, true, false), "an online hub protects the TCU");
+    Check(!TcuVulnerable(2, 3, false, true), "the holder's outpost protects the TCU");
+    Check(!TcuVulnerable(1, 3, false, false), "1 of 3 gates:  the TCU stays invulnerable");
+
     // notifications to the holding alliance
     BlockadeChange change = CompareBlockade(0, 1, 3);
-    Check(change.newSbu and !change.vulnerable and !change.stable, "1st SBU of 3 gates:  disruption detected only");
+    Check(!change.vulnerable and !change.stable, "1st SBU of 3 gates:  nothing yet");
     change = CompareBlockade(1, 2, 3);
-    Check(change.newSbu and change.vulnerable and !change.stable, "2nd SBU of 3 gates:  detected and vulnerable");
+    Check(change.vulnerable and !change.stable, "2nd SBU of 3 gates:  vulnerable");
     change = CompareBlockade(2, 3, 3);
-    Check(change.newSbu and !change.vulnerable and !change.stable, "3rd SBU of 3 gates:  already vulnerable");
+    Check(!change.vulnerable and !change.stable, "3rd SBU of 3 gates:  already vulnerable");
     change = CompareBlockade(3, 2, 3);
-    Check(!change.newSbu and !change.vulnerable and !change.stable, "3 -> 2 of 3 gates:  still vulnerable");
+    Check(!change.vulnerable and !change.stable, "3 -> 2 of 3 gates:  still vulnerable");
     change = CompareBlockade(2, 1, 3);
-    Check(!change.newSbu and !change.vulnerable and change.stable, "2 -> 1 of 3 gates:  claim stable");
+    Check(!change.vulnerable and change.stable, "2 -> 1 of 3 gates:  claim stable");
     change = CompareBlockade(1, 0, 3);
-    Check(!change.newSbu and !change.vulnerable and !change.stable, "last SBU gone below the threshold:  nothing new");
-    change = CompareBlockade(2, 2, 3);
-    Check(!change.newSbu and !change.vulnerable and !change.stable, "no change, no notification");
+    Check(!change.vulnerable and !change.stable, "last SBU gone below the threshold:  nothing new");
+    change = CompareBlockade(1, 2, 2);
+    Check(change.vulnerable, "2-gate system:  both gates needed");
 
     ::printf("%d failure(s)\n", failures);
     return (failures == 0 ? 0 : 1);
