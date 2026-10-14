@@ -2487,7 +2487,9 @@ void FleetService::FleetBroadcast(Client* pFrom, uint32 itemID, int8 scope, int8
     //OnFleetBroadcast(name, group, charID, solarSystemID, itemID):
     //   ('HealCapacitor', 3, 95895066, 30003500, 1019274373727L, None)))
 
-    PyTuple* payload = new PyTuple(5);
+    // six items:  the broadcast name is the sixth.  a 5-slot tuple threw std::out_of_range on SetItem(5), and nothing
+    //  caught it, so every fleet broadcast stopped the server
+    PyTuple* payload = new PyTuple(6);
         payload->SetItem(0, new PyString(msg));
         payload->SetItem(1, new PyInt(group));
         payload->SetItem(2, new PyInt(pFrom->GetCharacterID()));
