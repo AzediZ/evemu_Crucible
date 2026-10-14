@@ -1319,6 +1319,12 @@ PyResult InventoryBound::Build(PyCallArgs &call) {
     // Retrieve the SE object for the egg itself
     SystemEntity* egg = call.client->SystemMgr()->GetEntityByID(m_itemID);
 
+    if ((egg == nullptr) or (egg->GetPOSSE() == nullptr) or (m_self->GetMyInventory() == nullptr)) {
+        _log(POS__ERROR, "InventoryBound::Build() - %s(%u) is not a construction platform in space with a cargo hold.", m_self->name(), m_itemID);
+        call.client->SendNotifyMsg("This operation requires an outpost construction platform in space.");
+        return nullptr;
+    }
+
     // Check if anchored, and if not return nullptr and error
     if (egg->GetPOSSE()->GetState() != EVEPOS::StructureState::Anchored) {
         call.client->SendNotifyMsg("This operation requires the construction platform to be anchored.");

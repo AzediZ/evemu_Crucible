@@ -316,6 +316,12 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const 
                 case EVEDB::invGroups::Wreck: {
                     return WreckContainer::_LoadItem<WreckContainer>(itemID, type, data);
                 } break;
+                // outpost construction platforms hold the outpost's materials and are anchored like structures.
+                //  PlatformSE and InventoryBound::Build take them as StructureItems, so load them as one:  as a plain
+                //  CelestialObject (no inventory) the factory's StaticCast to StructureItem crashed the server
+                case EVEDB::invGroups::Construction_Platform: {
+                    return StructureItem::_LoadItem<StructureItem>(itemID, type, data);
+                } break;
                 case EVEDB::invGroups::Force_Field:
                 default: {
                     // generic Celestial Object
