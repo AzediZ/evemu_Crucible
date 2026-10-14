@@ -29,6 +29,8 @@
 
 #include "eve-server.h"
 
+#include <boost/algorithm/string.hpp>
+
 #include "../../eve-common/EVE_Character.h"
 
 #include "account/AccountService.h"
@@ -57,6 +59,7 @@
 #include "corporation/CorporationDB.h"
 #include "admin/CommandHelper.h"
 #include "chat/LSCService.h"
+#include "services/ServiceManager.h"
 #include "ship/Ship.h"
 #include "station/StationDataMgr.h"
 #include "ship/modules/GenericModule.h"
@@ -1200,6 +1203,38 @@ PyResult Command_chatban(Client* who, CommandDB* db, EVEServiceManager &services
         pTarget->SendNotifyMsg("You have been banned from chat for %s: %s", length.c_str(), reason.c_str());
     sLog.Yellow("Command", "%s: chat-banned %u for %s: %s", who->GetName(), charID, length.c_str(), reason.c_str());
     return new PyString("Chat-banned " + std::to_string(charID) + " for " + length + ".  /ungag lifts it.");
+}
+
+PyResult Command_motd(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    // /motd [reload]  the login MOTD (LSCService::LoadMOTD, etc/motd.txt), sent to you the way login sends it
+    bool reload(false);
+    if (args.argCount() == 2) {
+        if (!boost::algorithm::iequals(args.arg(1), "reload"))
+            throw CustomError ("Correct Usage: /motd [reload]");
+        reload = true;
+    } else if (args.argCount() > 2) {
+        throw CustomError ("Correct Usage: /motd [reload]");
+    }
+
+    std::string result;
+    if (reload) {
+        std::string err;
+        if (!LSCService::LoadMOTD(err))
+            throw CustomError ("MOTD not reloaded: %s.  The MOTD in use is unchanged.", err.c_str());
+        sLog.Yellow("Command", "%s: reloaded the login MOTD from %s (%u bytes).", who->GetName(), LSCService::GetMOTDPath().c_str(),
+                    (uint32)LSCService::GetMOTD().size());
+        result = "MOTD reloaded from " + LSCService::GetMOTDPath() + ".  ";
+    }
+
+    if (LSCService::GetMOTD().empty())
+        return new PyString(result + "The MOTD is empty:  nobody gets one at login.");
+
+    LSCService* pLSC(services.Lookup <LSCService>("LSC"));
+    LSCChannel* pChan(pLSC == nullptr ? nullptr : pLSC->SendLoginText(who, true, false));
+    if (pChan == nullptr)
+        return new PyString(result + "You are in neither Global nor Local, so it can't be shown.");
+    return new PyString(result + "MOTD shown in " + pChan->GetDisplayName() + ".");
 }
 
 PyResult Command_givelp(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)

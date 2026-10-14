@@ -54,3 +54,5 @@ COMMAND( whois, Acct::Role::GMH,
         "(charID|\"name\") - shows account, corp, location and status of a character (online or not)")
 COMMAND( chatban, Acct::Role::GML,
         "(charID|\"name\") [days|perm] [\"reason\"] - gags a character in every chat channel, online or offline (lift with /ungag)")
+COMMAND( motd, Acct::Role::GMH,
+        "[reload] - shows you the login MOTD (etc/motd.txt) the way it is sent at login.  reload: rereads motd.txt first")
