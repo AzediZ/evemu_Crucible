@@ -387,7 +387,9 @@ static std::string SovLaunchError(Client* pClient, SystemManager* pSystem, Inven
     uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(pClient->GetSystemID()));
     switch (iRef->groupID()) {
         case EVEDB::invGroups::Sovereignty_Blockade_Units: {
-            // near a stargate, in a system claimed by someone else, one per gate
+            /* near a stargate, in a claimed system, one per gate.  whoever owns it, an online SBU counts:  "an alliance can
+             *  even disrupt their own sovereignty claim by onlining SBUs in their own system" (EVElopedia Sovereignty guide)
+             */
             bool atGate(false);
             for (auto cur : pSystem->GetOperationalStatics())
                 if (cur.second->IsGateSE() and (cur.second->SysBubble() == pShipSE->SysBubble()))
@@ -396,8 +398,6 @@ static std::string SovLaunchError(Client* pClient, SystemManager* pSystem, Inven
                 return "Sovereignty blockade units must be deployed near a stargate.";
             if (sovAllianceID == 0)
                 return "You cannot launch a Sovereignty Blockade Unit in an unclaimed system.";
-            if (sovAllianceID == (uint32)pClient->GetAllianceID())
-                return "You cannot launch a Sovereignty Blockade Unit in a system claimed by your alliance";
             SystemEntity* pGate(pSystem->GetClosestGateSE(pShipSE->GetPosition()));
             if ((pGate != nullptr) and pGate->GetGateSE()->HasSBU())
                 return "There is already a Sovereignty Blockade Unit on this stargate.";

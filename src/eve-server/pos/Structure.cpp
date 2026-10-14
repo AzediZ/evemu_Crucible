@@ -765,16 +765,28 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
     {
         if (m_gateSE == nullptr)
             throw CustomError ("The %s can only be anchored near a stargate.", m_self->name());
-        //verify anchor distance from stargate
+        //verify anchor distance from stargate:  anchorDistanceMin/Max (30-150 km).  GMs may anchor closer
         uint32 distance(m_gateSE->GetPosition().distance(m_self->position()));
-        //uint32 anchorMin(m_self->GetAttribute(AttrAnchorDistanceMin).get_uint32());
+        uint32 anchorMin(pClient == nullptr ? 1000 : m_self->GetAttribute(AttrAnchorDistanceMin).get_uint32());
         uint32 anchorMax(m_self->GetAttribute(AttrAnchorDistanceMax).get_uint32());
+        if ((distance > anchorMax) or (distance < anchorMin))
+            throw UserError("CantAnchorDisruptorNoStargate")
+                    .AddFormatValue("minDist", new PyInt(anchorMin / 1000))
+                    .AddFormatValue("maxDist", new PyInt(anchorMax / 1000));
 
-        if (distance > anchorMax)
-            throw CustomError ("You cannot anchor the %s farther than %u meters from a stargate.", m_self->name(), anchorMax);
-
-        if (distance < 1000)
-            throw CustomError ("You cannot anchor the %s closer than %u meters from a stargate.", m_self->name(), 1000);
+        if (pClient != nullptr) {
+            // a blockade needs a claim to blockade
+            if (svDataMgr.GetSystemAllianceID(m_system->GetID()) == 0)
+                throw UserError("CantAnchoredDisruptorNotClaimed");
+            // one SBU per stargate
+            for (auto cur : m_system->GetOperationalStatics()) {
+                if ((cur.first == m_data.itemID) or (cur.second == nullptr) or !cur.second->IsSBUSE())
+                    continue;
+                StructureSE* pSBU(cur.second->GetPOSSE());
+                if ((pSBU->GetGateSE() == m_gateSE) and (pSBU->GetState() > EVEPOS::StructureState::Unanchored))
+                    throw UserError("CantAnchorDisruptorTooClose");
+            }
+        }
 
         // position is within range.  allow anchoring
         m_destiny->SetPosition(pos);
@@ -903,6 +915,13 @@ void StructureSE::Activate(Client* pClient, int32 effectID)
 
     // sovereignty and infrastructure upgrade requirements
     CheckSovRequirements(true);
+    // a blockade needs a claim to blockade
+    if (m_sbu and (pClient != nullptr) and (svDataMgr.GetSystemAllianceID(m_system->GetID()) == 0))
+        throw UserError("CantOnlineDisruptorNotClaimed");
+    // no claim while SBUs are online at more than half the stargates, whoever owns them
+    if (m_tcu and SovereigntyDataMgr::IsBlockaded(m_system))
+        throw UserError("CantOnlineDisruptorsOnline")
+                .AddFormatValue("tower", new PyString(m_self->itemName()));
     // jump bridges need a link
     if (m_bridge and (GetJumpBridgeSE() != nullptr))
         GetJumpBridgeSE()->CheckOnline();
