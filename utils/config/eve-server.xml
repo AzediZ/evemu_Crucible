@@ -659,6 +659,7 @@ boolean can use either 0/1 OR true/false.
         <BillsEnabled>true</BillsEnabled><!-- bool - office rent is billed every 30 days and unpaid offices are impounded; alliances get monthly maintenance bills.  false = offices never expire -->
         <CloseAllianceOnUnpaidBill>true</CloseAllianceOnUnpaidBill><!-- bool - an alliance whose maintenance bill goes overdue is closed -->
         <BillGraceDays>0</BillGraceDays><!-- days after a bill's due date before it counts as unpaid -->
+        <PauseBillsWhileOff>true</PauseBillsWhileOff><!-- bool - bill, office rent and war bill due dates move on by the time the server was off, so a break from playing doesn't make bills overdue.  false = due dates run on real time -->
     </corp>
 
     <war><!-- wars between player corporations and alliances (Crucible: declared by corporation vote or by the alliance executor, hostile 24 hours after declaration, weekly bills, 24 hour grace when a war ends) -->

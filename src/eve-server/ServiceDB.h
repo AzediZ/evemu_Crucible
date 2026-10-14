@@ -54,6 +54,9 @@ public:
     static bool GetConstant(const char *name, uint32 &into);
 
     static void SetServerOnlineStatus(bool online=false);
+    // the last time the server was running (FILETIME), saved every minute and at shutdown.  0 = never saved
+    static void SaveHeartbeat();
+    static int64 GetLastHeartbeat();
     static void SetAccountOnlineStatus(uint32 accountID, bool online=false);
     static void SetAccountBanStatus(uint32 accountID, bool banned=false);
     static void SaveServerStats(double threads, float rss, float vm, float user, float kernel, uint32 items, uint32 bubbles);

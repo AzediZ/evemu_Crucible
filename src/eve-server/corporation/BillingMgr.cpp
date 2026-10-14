@@ -29,6 +29,7 @@
 
 #include "Client.h"
 #include "EntityList.h"
+#include "ServiceDB.h"
 #include "account/AccountService.h"
 #include "alliance/AllianceDB.h"
 #include "corporation/BillingMgr.h"
@@ -125,6 +126,28 @@ int BillingMgr::Initialize()
 {
     sLog.Blue("       BillingMgr", "Billing Manager Initialized.");
     return 1;
+}
+
+void BillingMgr::PauseForDowntime()
+{
+    int64 now = GetFileTimeNow();
+    int64 last = ServiceDB::GetLastHeartbeat();
+    ServiceDB::SaveHeartbeat();
+    if (!sConfig.corp.PauseBillsWhileOff or (last <= 0) or (last >= now))
+        return;
+    int64 off = now - last;
+    // a quick restart isn't worth it (the heartbeat is saved once a minute)
+    if (off < 5 * EvE::Time::Minute)
+        return;
+
+    DBerror err;
+    sDatabase.RunQuery(err, "UPDATE bills SET dueDateTime = dueDateTime + %lli WHERE paid = 0", off);
+    sDatabase.RunQuery(err, "UPDATE staOffices SET expiryDateTime = expiryDateTime + %lli WHERE expiryDateTime > 0 AND impounded = 0", off);
+    sDatabase.RunQuery(err, "UPDATE alnBilling SET nextBillDateTime = nextBillDateTime + %lli WHERE nextBillDateTime > 0", off);
+    sDatabase.RunQuery(err, "UPDATE sovBilling SET nextBillDateTime = nextBillDateTime + %lli WHERE nextBillDateTime > 0", off);
+    sDatabase.RunQuery(err, "UPDATE crpWars SET nextBillTime = nextBillTime + %lli WHERE nextBillTime > 0 AND timeFinished IS NULL", off);
+    sLog.Blue("       BillingMgr", "The server was off for %.1f hours:  bill and office rent due dates moved on by that much.",
+              (double)off / EvE::Time::Hour);
 }
 
 void BillingMgr::RegisterHandlers(uint8 billTypeID, BillHandler onPaid, BillHandler onOverdue)

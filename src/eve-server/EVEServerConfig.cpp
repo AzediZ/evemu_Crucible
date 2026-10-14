@@ -589,6 +589,7 @@ EVEServerConfig::EVEServerConfig()
     corp.BillsEnabled = true;
     corp.CloseAllianceOnUnpaidBill = true;
     corp.BillGraceDays = 0;
+    corp.PauseBillsWhileOff = true;
     war.Enabled = true;
     war.CorpWarCost = 2000000.0;
     war.AllianceWarCost = 50000000.0;
@@ -1863,11 +1864,12 @@ bool EVEServerConfig::ProcessCorp( const TiXmlElement* ele )
     AddValueParser( "BillsEnabled",                 corp.BillsEnabled );
     AddValueParser( "CloseAllianceOnUnpaidBill",    corp.CloseAllianceOnUnpaidBill );
     AddValueParser( "BillGraceDays",                corp.BillGraceDays );
+    AddValueParser( "PauseBillsWhileOff",           corp.PauseBillsWhileOff );
 
     const bool result = ParseElementChildren( ele );
 
     for (const char* name : {"StasisHours", "CEOVoteMinSharePercent", "CEOVoteCooldownDays", "SanctionDays", "EnforceRaceLimit",
-            "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays"})
+            "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays", "PauseBillsWhileOff"})
         RemoveParser( name );
 
     return result;

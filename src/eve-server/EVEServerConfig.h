@@ -699,6 +699,7 @@ public:
         bool BillsEnabled;                  // office rent and alliance maintenance bills; false = offices never expire
         bool CloseAllianceOnUnpaidBill;     // an alliance whose maintenance bill goes overdue is closed
         uint32 BillGraceDays;               // days after a bill's due date before the overdue handling runs
+        bool PauseBillsWhileOff;            // bill, office rent and war bill due dates move on by the time the server was off
     } corp;
 
     // From <war>  (F22: wars between player corporations and alliances)

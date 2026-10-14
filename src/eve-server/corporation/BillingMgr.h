@@ -61,6 +61,10 @@ public:
     BillingMgr();
 
     int Initialize();
+
+    // run once at start, before anything loads bills:  moves unpaid bill, office rent, alliance and sov billing and
+    //  war bill dates on by the time the server was off, so time away doesn't make bills overdue (corp PauseBillsWhileOff)
+    static void PauseForDowntime();
     // every ~5 minutes:  auto-pay bills due within a day, overdue bills, alliance maintenance bills
     void Process();
 

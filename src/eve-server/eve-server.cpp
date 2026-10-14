@@ -598,6 +598,9 @@ int main( int argc, char* argv[] )
     dbClean.Initialize();
     std::printf("\n");
 
+    // bill and rent dates skip the time the server was off.  before anything loads them
+    BillingMgr::PauseForDowntime();
+
     // start up the image server
     sLog.Green("       ServerInit", "Starting Image Server");
     sImageServer.Run();
@@ -1011,8 +1014,10 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
      */
     sLog.Warning("   ServerShutdown", "Main loop has stopped." );
     sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
-    if (!sConsole.IsDbError())
+    if (!sConsole.IsDbError()) {
+        ServiceDB::SaveHeartbeat();
         ServiceDB::SetServerOnlineStatus(false);
+    }
     /* stop TCP listener */
     tcps.Close();
     sLog.Warning("   ServerShutdown", "TCP listener stopped." );

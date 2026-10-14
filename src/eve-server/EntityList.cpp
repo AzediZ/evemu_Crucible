@@ -340,6 +340,7 @@ void EntityList::Process() {
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {
             ++m_minutes;
+            GuardTick("the heartbeat", 0, []{ ServiceDB::SaveHeartbeat(); });  // 1m  the last time the server ran (bills skip the time it was off)
             GuardTick("the mission manager", 0, []{ sMissionDataMgr.Process(); });  // 1m
             GuardTick("the war manager", 0, []{ sWarMgr.Process(); });  // 1m  war notifications and bills
             GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count

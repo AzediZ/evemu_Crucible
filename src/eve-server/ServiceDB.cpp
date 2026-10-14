@@ -201,6 +201,25 @@ void ServiceDB::SetServerOnlineStatus(bool online) {
     //  restart was gone when the pilot pressed apply (saving a paused queue already replaces the old one)
 }
 
+void ServiceDB::SaveHeartbeat() {
+    DBerror err;
+    // GetFileTimeNow() is a double:  passed to %lli as it is, the number written is garbage
+    if (!sDatabase.RunQuery(err, "UPDATE srvStatus SET lastHeartbeat = %lli WHERE AI = 1", (int64)GetFileTimeNow()))
+        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+}
+
+int64 ServiceDB::GetLastHeartbeat() {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT lastHeartbeat FROM srvStatus WHERE AI = 1")) {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return 0;
+    return row.GetInt64(0);
+}
+
 void ServiceDB::SetAccountOnlineStatus(uint32 accountID, bool online) {
     DBerror err;
     if (!sDatabase.RunQuery(err, "UPDATE account SET online = %u WHERE accountID= %u ", (online?1:0), accountID)) {
