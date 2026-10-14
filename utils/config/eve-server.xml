@@ -697,6 +697,7 @@ boolean can use either 0/1 OR true/false.
         <autoReconnect>true</autoReconnect><!-- bool  enable auto Reconnect on lost connection -->
         <dbTimeout>2</dbTimeout><!-- seconds  timeout value for db response, in seconds  default: 2s  **NOT USED** -->
         <pingTime>10</pingTime><!-- minutes  ping db every x minutes  default: 10m  **NOT USED**  hard-coded to 10m -->
+        <haltAfterMinutes>5</haltAfterMinutes><!-- minutes  if the database can't be reached, nothing players do is saved:  they're told, and the server stops after this long unless it's back.  0: keeps running  default: 5 -->
     </database>
 
     <files>

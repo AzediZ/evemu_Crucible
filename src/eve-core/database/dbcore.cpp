@@ -58,6 +58,8 @@ pPort(3306),
 pTxDepth(0),
 pTxFailed(false),
 pTxRollback(false),
+pDownSince(0),
+pLastAttempt(0),
 pTxThreadID(0)
 {
     mysql_thread_init();    // this is for each thread used for db connections
@@ -112,6 +114,11 @@ void DBcore::Connect(uint* errnum, char* errbuf)
 } else
     sLog.Error(" DataBase Manager", "Connection Timeout Option Failed");
 */
+    // a database that doesn't answer fails the connect after this long, rather than the OS's TCP timeout
+    unsigned int connTimeout = 5/*s*/;
+    if (mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void*)&connTimeout) != 0)
+        sLog.Error(" DataBase Manager", "Connection Timeout Option Failed");
+
     if (pReconnect) {
         my_bool reconnect = true;
         if (mysql_options(mysql, MYSQL_OPT_RECONNECT, (void*)&reconnect) == 0) // this will enable auto-reconnect...and render my Reconnect() worthless
@@ -148,6 +155,12 @@ bool DBcore::Reconnect()
         pTxFailed = true;
         sLog.Error("         DBCore", "Database connection lost inside transaction '%s'.  It is rolled back and fails.", TxName().c_str());
     }
+    /* while the database can't be reached, a new connection is tried at most every 5 seconds:  the queries in between
+     *  fail at once instead of each waiting on a connect.  (this returned pStatus, so a failed reconnect read as true) */
+    double now(GetTimeMSeconds());
+    if ((pDownSince.load() > 0) and ((now - pLastAttempt) < 5000))
+        return false;
+    pLastAttempt = now;
     _log(DATABASE__MESSAGE, "DBCore attempting to recover...");
     Close();
     mysql = mysql_init(nullptr);
@@ -157,10 +170,26 @@ bool DBcore::Reconnect()
     MutexLock lock(MDatabase);
     Connect(&errnum, errbuf);
 
-    if (pStatus == Connected)
+    if (pStatus == Connected) {
+        if (pDownSince.load() > 0)
+            sLog.Green("         DBCore", "The database is back after %.0f seconds.", (now - pDownSince.load()) / 1000);
+        pDownSince = 0;
         _log(DATABASE__MESSAGE, "DBCore recovery successful.  Continuing.");
+        return true;
+    }
+    if (pDownSince.load() == 0) {
+        pDownSince = now;
+        sLog.Error("         DBCore", "The database can't be reached.  Nothing is saved until it's back.");
+    }
+    return false;
+}
 
-    return pStatus;
+double DBcore::DownSeconds() const
+{
+    double since(pDownSince.load());
+    if (since == 0)
+        return 0;
+    return (GetTimeMSeconds() - since) / 1000;
 }
 
 void DBcore::Initialize(std::string host, std::string user, std::string password, std::string database, bool compress/*false*/,
@@ -349,15 +378,21 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool 
     if (mysql == nullptr) {
         pStatus = Error;
         codelog(DATABASE__ERROR, "DBCore - mysql = null");
-        if (!Reconnect())
+        if (!Reconnect()) {
+            err.SetError(CR_SERVER_GONE_ERROR, "The database can't be reached.");
             return false;
+        }
     }
 
     if (pStatus != Connected) {
-        codelog(DATABASE__ERROR, "DBCore - Status != Connected");
-        _log(DATABASE__MESSAGE, "DBCore error detected.  Look for error msgs in logs prior to this point.");
-        if (!Reconnect())
+        if (pDownSince.load() == 0) {   // not again for every query while the database is away
+            codelog(DATABASE__ERROR, "DBCore - Status != Connected");
+            _log(DATABASE__MESSAGE, "DBCore error detected.  Look for error msgs in logs prior to this point.");
+        }
+        if (!Reconnect()) {
+            err.SetError(CR_SERVER_GONE_ERROR, "The database can't be reached.");
             return false;
+        }
     }
     // a reconnect just now failed the transaction
     if (TxRefused_locked(err, query))
@@ -387,12 +422,15 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool 
         // there are many correctable errors to check for
         if ((num == CR_SERVER_LOST) or (num == CR_SERVER_GONE_ERROR)) {
             _log(DATABASE__ERROR, "DBCore error - server lost or gone.");
-            if (!Reconnect())
+            if (!Reconnect()) {
+                err.SetError(num, mysql_error(mysql));
                 return false;
+            }
         }
 
+        // once:  a connection that's lost again straight away fails the query rather than trying for ever
         if ((pStatus == Connected) and retry)
-            return DoQuery_locked(err, query, querylen, retry);
+            return DoQuery_locked(err, query, querylen, false);
 
         err.SetError(num, mysql_error(mysql));
         codelog(DATABASE__ERROR, "DBCore Query - #%u in '%s': %s", err.GetErrNo(), query, err.c_str());

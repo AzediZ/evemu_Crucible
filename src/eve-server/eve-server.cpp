@@ -195,6 +195,7 @@ static const char* const SRV_CONFIG_FILE = EVEMU_ROOT "/etc/eve-server.xml";
 static void SetupSignals();
 static void CatchSignal( int sig_num );
 static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher);
+static void CheckDatabase();
 
 static volatile bool m_run = true;
 
@@ -923,6 +924,8 @@ int main( int argc, char* argv[] )
 
             sEntityList.Process();
 
+            CheckDatabase();
+
             /*  process console commands, if any, and check for 'exit' command */
             if (!sConsole.Process())
                 m_run = false;
@@ -1005,6 +1008,42 @@ static void CatchSignal( int sig_num )
         m_run = false;
     else
         sConsole.HaltServer();
+}
+
+/* While the database can't be reached nothing players do is saved (DBcore tries to reconnect every 5 seconds).  Tell them,
+ *  and stop the server if it isn't back within <database><haltAfterMinutes>:  the shutdown skips the save, which would
+ *  fail.  Before, the server kept running for good with nothing saved */
+static void CheckDatabase()
+{
+    static bool s_told(false);
+    double down(sDatabase.DownSeconds());
+    std::vector<Client*> list;
+    if (down <= 0) {
+        if (s_told) {
+            s_told = false;
+            sEntityList.GetClients(list);
+            for (auto cur : list)
+                cur->SendNotifyMsg("The server's database is back.  What you do is saved again.");
+        }
+        return;
+    }
+    uint16 limit(sConfig.database.haltAfterMinutes);
+    if (!s_told and (down >= 10)) {
+        s_told = true;
+        sEntityList.GetClients(list);
+        for (auto cur : list) {
+            if (limit > 0)
+                cur->SendInfoModalMsg("The server has lost its database, so nothing you do now is saved.  If it isn't back within %u minute%s, the server stops.",
+                                      limit, (limit == 1 ? "" : "s"));
+            else
+                cur->SendInfoModalMsg("The server has lost its database, so nothing you do now is saved until it's back.");
+        }
+    }
+    if ((limit > 0) and (down >= limit * 60.0) and !sConsole.IsShutdown()) {
+        sLog.Error("        Main Loop", "The database has been unreachable for %u minute%s.  Stopping the server (nothing can be saved).",
+                   limit, (limit == 1 ? "" : "s"));
+        sConsole.HaltServer(true);
+    }
 }
 
 static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher)

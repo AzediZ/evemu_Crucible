@@ -407,6 +407,7 @@ public:
         bool autoReconnect;
         uint dbTimeout;
         uint8 pingTime;
+        uint16 haltAfterMinutes;    // minutes the server keeps running while the database can't be reached.  0: never stops
         /// A port at which the database server listens.
         uint16 port;
         /// Hostname of database server.

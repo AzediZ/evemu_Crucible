@@ -737,6 +737,8 @@ void MarketSimMgr::Flush()
         m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
         m_world->MarkJobsChanged();
         m_world->MarkTripsChanged();
+        // again at the next flush time:  while the database is away, every second filled the log
+        m_lastFlush = Now();
         return;
     }
     m_pendingAudit.clear();

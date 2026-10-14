@@ -628,6 +628,7 @@ EVEServerConfig::EVEServerConfig()
     database.autoReconnect = false;
     database.dbTimeout = 2/*s*/;
     database.pingTime = 10/*m*/;
+    database.haltAfterMinutes = 5;
 
     // files
     files.logDir = "../log/";
@@ -1372,6 +1373,7 @@ bool EVEServerConfig::ProcessDatabase( const TiXmlElement* ele )
     AddValueParser( "autoReconnect",    database.autoReconnect );
     AddValueParser( "dbTimeout",        database.dbTimeout );
     AddValueParser( "pingTime",         database.pingTime );
+    AddValueParser( "haltAfterMinutes", database.haltAfterMinutes );
 
     const bool result = ParseElementChildren( ele );
 
@@ -1386,6 +1388,7 @@ bool EVEServerConfig::ProcessDatabase( const TiXmlElement* ele )
     RemoveParser( "autoReconnect" );
     RemoveParser( "dbTimeout" );
     RemoveParser( "pingTime" );
+    RemoveParser( "haltAfterMinutes" );
 
     return result;
 }

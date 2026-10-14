@@ -27,6 +27,7 @@
 #define __DATABASE__DBCORE_H__INCL__
 
 // MySQL headers
+#include <atomic>
 #include <mysql.h>
 #include <mysqld_error.h>
 #include <errmsg.h>
@@ -170,6 +171,8 @@ public:
     void    ping();
 
     eStatus GetStatus() const { return pStatus; }
+    // seconds the database has been unreachable (a reconnect failed and none has worked since), 0 while it's there
+    double  DownSeconds() const;
 
     /* transactions (use DBTransaction below).  they nest:  only the outermost Start/Commit reaches the server.  they make
      *  a piece of work all-or-nothing for a crash:  the server's objects in memory are not rolled back, so callers commit
@@ -226,6 +229,11 @@ private:
     bool    pTxRollback;
     unsigned long pTxThreadID;
     std::vector<std::string> pTxNames;
+
+    // while the database can't be reached:  when that started and when a reconnect was last tried (GetTimeMSeconds),
+    //  0 while it's there.  read by the main loop (DownSeconds)
+    std::atomic<double> pDownSince;
+    double  pLastAttempt;
 };
 
 #define sDatabase \
