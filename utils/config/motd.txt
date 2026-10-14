@@ -14,8 +14,4 @@
 #  - write '<' and '>' that should show as text as &lt; and &gt;.
 #  - the file is UTF-8.  an empty file (or only comments) means no MOTD.
 #
-<br><color=0xff007fff><b>Welcome to the EVEmu <u>EVE Online: Crucible</u> Emulator</b></color>
-
-<color=0xff00ff00><b>Rules:</b></color>  <color=0xffffffff>No scamming, spamming, advertising or begging in public channels.</color>
-<color=0xff00ff00><b>How to contact a GM:</b></color>  <color=0xffffffff>File a petition (F12 - Petitions - New Petition).</color>
-<color=0xff00ff00><b>ISK Advertising:</b></color>  <color=0xffff0000>EVEmu does not authorize any person or site to sell ISK for real money.</color>
+<br><color=0xff007fff><b>Welcome to the EVEmu Crucible Emulator</b></color>
