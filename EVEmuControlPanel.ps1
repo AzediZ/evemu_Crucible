@@ -1,0 +1,1102 @@
+# EVEmu Control Panel
+# A small Windows app for running a local EVEmu server without typing Docker commands.
+# Start it with "EVEmu Control Panel.bat" from the same folder as docker-compose.yml.
+# Works with the Windows PowerShell 5.1 that ships with Windows 10 and 11.
+
+$ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Settings and constants
+# ---------------------------------------------------------------------------
+$script:AppName       = 'EVEmu Control Panel'
+$script:SettingsDir   = Join-Path $env:APPDATA 'EVEmuControlPanel'
+$script:SettingsPath  = Join-Path $script:SettingsDir 'settings.json'
+$script:AdminRole     = '7203507614729375744'   # ROLE_BOSS: everything, including /giveallskills
+$script:DevRole       = '7131450020691447808'   # ROLE_DEV: the default for new accounts
+$script:ServerAddress = '127.0.0.1'
+# Progress files for long jobs. Each job gets new ones (see Start-PanelTask), so a second panel
+# window or a virus scanner holding an old file open cannot block the next job.
+$script:TaskLog       = Join-Path $env:TEMP ('evemu_panel_task_' + $PID + '.log')
+$script:TaskScript    = Join-Path $env:TEMP ('evemu_panel_task_' + $PID + '.ps1')
+$script:TaskProcess   = $null
+$script:TaskTitle     = ''
+$script:OnlineFor     = ''      # StartedAt of the server run we have seen come online
+$script:LastState     = $null
+$script:LastLog       = ''
+$script:PlayerTick    = 0
+$script:InStatusTick  = $false
+$script:AccountsLoaded = $false
+$script:Accounts      = @{}
+
+function Load-Settings {
+    $s = @{ composeDir = ''; clientExe = '' }
+    if (Test-Path -LiteralPath $script:SettingsPath) {
+        try {
+            $j = Get-Content -LiteralPath $script:SettingsPath -Raw | ConvertFrom-Json
+            if ($j.composeDir) { $s.composeDir = [string]$j.composeDir }
+            if ($j.clientExe)  { $s.clientExe  = [string]$j.clientExe }
+        } catch { }
+    }
+    return $s
+}
+
+function Save-Settings {
+    if (-not (Test-Path -LiteralPath $script:SettingsDir)) {
+        New-Item -ItemType Directory -Path $script:SettingsDir | Out-Null
+    }
+    ($script:Settings | ConvertTo-Json) | Set-Content -LiteralPath $script:SettingsPath -Encoding UTF8
+}
+
+function Get-DockerPath {
+    $cmd = Get-Command docker.exe -ErrorAction SilentlyContinue
+    if (-not $cmd) { $cmd = Get-Command docker -ErrorAction SilentlyContinue }
+    if ($cmd) { return $cmd.Path }
+    if ($env:ProgramFiles) {
+        $fallback = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe'
+        if (Test-Path -LiteralPath $fallback) { return $fallback }
+    }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
+# Running short commands (status checks, database queries)
+# ---------------------------------------------------------------------------
+function Invoke-Cli {
+    param([string]$FilePath, [string]$Arguments, [int]$TimeoutMs = 8000)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    $psi.Arguments = $Arguments
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    if ($script:ComposeDir) { $psi.WorkingDirectory = $script:ComposeDir }
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    try {
+        [void]$p.Start()
+    } catch {
+        return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = $_.Exception.Message }
+    }
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit($TimeoutMs)) {
+        try { $p.Kill() } catch { }
+        return [pscustomobject]@{ ExitCode = -2; Output = ''; Error = 'Timed out' }
+    }
+    $p.WaitForExit()
+    return [pscustomobject]@{ ExitCode = $p.ExitCode; Output = [string]$outTask.Result; Error = [string]$errTask.Result }
+}
+
+function Invoke-Sql([string]$Sql, [int]$TimeoutMs = 8000) {
+    # Runs one SQL statement inside the database container and returns tab-separated rows.
+    $sqlArg = $Sql.Replace('"', '\"')
+    $arguments = 'exec db mariadb -uevemu -pevemu evemu -N -B -e "' + $sqlArg + '"'
+    return Invoke-Cli $script:Docker $arguments $TimeoutMs
+}
+
+# ---------------------------------------------------------------------------
+# Server state
+# ---------------------------------------------------------------------------
+function Get-ServerState {
+    $st = [pscustomobject]@{
+        DockerFound = $true; EngineUp = $false
+        Server = 'missing'; ServerStartedAt = ''; ServerExit = 0
+        Db = 'missing'
+    }
+    if (-not $script:Docker) { $script:Docker = Get-DockerPath }
+    if (-not $script:Docker) { $st.DockerFound = $false; return $st }
+
+    $r = Invoke-Cli $script:Docker 'inspect -f "{{.Name}}|{{.State.Status}}|{{.State.StartedAt}}|{{.State.ExitCode}}" server db' 6000
+    $err = [string]$r.Error
+    if ($r.ExitCode -lt 0) { return $st }
+    if ($err -match 'error during connect|failed to connect|Cannot connect|daemon is not running|dockerDesktopLinuxEngine|Internal Server Error') {
+        return $st
+    }
+    $st.EngineUp = $true
+    foreach ($line in ([string]$r.Output -split "`r?`n")) {
+        $parts = $line.Trim().Split('|')
+        if ($parts.Count -lt 4) { continue }
+        $name = $parts[0].TrimStart('/')
+        if ($name -eq 'server') {
+            $st.Server = $parts[1]
+            $st.ServerStartedAt = $parts[2]
+            $exitCode = 0
+            if ([int]::TryParse($parts[3], [ref]$exitCode)) { $st.ServerExit = $exitCode }
+        } elseif ($name -eq 'db') {
+            $st.Db = $parts[1]
+        }
+    }
+    return $st
+}
+
+function Test-ServerOnline($st) {
+    # The server prints "EVEmu Server is Online" once it has finished booting.
+    if (-not $st -or $st.Server -ne 'running') { return $false }
+    if ($script:OnlineFor -eq $st.ServerStartedAt) { return $true }
+    $r = Invoke-Cli $script:Docker ('logs --since ' + $st.ServerStartedAt + ' server') 8000
+    if (([string]$r.Output + [string]$r.Error) -match 'EVEmu Server is Online') {
+        $script:OnlineFor = $st.ServerStartedAt
+        return $true
+    }
+    return $false
+}
+
+function Get-PlayersOnline {
+    $r = Invoke-Sql 'SELECT COUNT(*) FROM chrCharacters WHERE online=1' 6000
+    if ($r.ExitCode -eq 0) { return ([string]$r.Output).Trim() }
+    return '?'
+}
+
+function Get-RoleName([string]$role) {
+    if ($role -eq $script:AdminRole) { return 'Admin' }
+    if ($role -eq $script:DevRole) { return 'Developer' }
+    return 'Other'
+}
+
+function Clean-Log([string]$raw) {
+    # Strips terminal colour codes and the console's "Command not recognized" noise.
+    $esc = [string][char]27
+    $t = $raw -replace ($esc + '\[[0-9;]*[A-Za-z]'), ''
+    $lines = $t -split "`r?`n" | Where-Object { $_ -notmatch 'Command not recognized' }
+    return (($lines | ForEach-Object { $_ }) -join "`r`n").TrimEnd()
+}
+
+function Read-SharedText([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    try {
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+            return $sr.ReadToEnd()
+        } finally {
+            $fs.Dispose()
+        }
+    } catch {
+        return ''
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Disk space. Docker keeps every image and build file inside one disk image
+# file. If the drive holding it fills up, Docker and WSL crash, so the panel
+# watches that drive and warns before anything that builds the server.
+# ---------------------------------------------------------------------------
+$script:MinDockerFreeGB = 20    # warn before a build when Docker's drive has less than this free
+$script:LowDockerFreeGB = 40    # show the disk status in amber below this
+$script:MinSystemFreeGB = 5     # Windows and WSL (its swap file) also need room on the system drive
+$script:DiskInfo = $null
+$script:DiskTick = 0
+
+function Read-JsonFile([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try { return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function Get-DockerDiskDir([string]$AppData = $env:APPDATA, [string]$LocalAppData = $env:LOCALAPPDATA) {
+    # The folder that holds Docker Desktop's disk image: the "Disk image location"
+    # setting if one is set, otherwise Docker's default folder.
+    # Current Docker Desktop keeps it as DataFolder in settings-store.json. Older
+    # versions used customWslDistroDir in settings.json, where dataFolder only
+    # applied to the Hyper-V backend.
+    if ($AppData) {
+        foreach ($name in @('settings-store.json', 'settings.json')) {
+            $j = Read-JsonFile (Join-Path (Join-Path $AppData 'Docker') $name)
+            if ($null -eq $j) { continue }
+            $custom = [string]$j.customWslDistroDir
+            if ($custom -and (Test-Path -LiteralPath $custom)) { return $custom }
+            $data = [string]$j.dataFolder
+            $useData = ($name -eq 'settings-store.json') -or ($j.wslEngineEnabled -eq $false)
+            if ($useData -and $data -and (Test-Path -LiteralPath $data)) { return $data }
+        }
+    }
+    if ($LocalAppData) {
+        $default = Join-Path (Join-Path $LocalAppData 'Docker') 'wsl'
+        if (Test-Path -LiteralPath $default) { return $default }
+    }
+    return $null
+}
+
+function Get-FreeSpace([string]$path) {
+    # The drive a path is on (for example "F:") and how many GB are free on it.
+    try {
+        $root = [System.IO.Path]::GetPathRoot([System.IO.Path]::GetFullPath($path))
+        if (-not $root) { return $null }
+        $d = New-Object System.IO.DriveInfo($root)
+        if (-not $d.IsReady) { return $null }
+        $drive = $root.TrimEnd('\')
+        if (-not $drive) { $drive = $root }
+        return [pscustomobject]@{ Drive = $drive; FreeGB = [math]::Round($d.AvailableFreeSpace / 1GB, 1) }
+    } catch {
+        return $null
+    }
+}
+
+function Get-DiskInfo {
+    $info = [pscustomobject]@{ Dir = ''; Drive = ''; FreeGB = -1; SysDrive = ''; SysFreeGB = -1 }
+    $sys = [string]$env:SystemDrive
+    if ($sys.EndsWith(':')) { $sys = $sys + '\' }
+    $dir = Get-DockerDiskDir
+    $fs = $null
+    if ($dir) {
+        $info.Dir = [string]$dir
+        $fs = Get-FreeSpace $dir
+    } elseif ($sys) {
+        $fs = Get-FreeSpace $sys    # Docker's default location is on the Windows drive
+    }
+    if ($fs) { $info.Drive = $fs.Drive; $info.FreeGB = $fs.FreeGB }
+    if ($sys) {
+        $s = Get-FreeSpace $sys
+        if ($s) { $info.SysDrive = $s.Drive; $info.SysFreeGB = $s.FreeGB }
+    }
+    return $info
+}
+
+function Format-GB([double]$gb) {
+    if ($gb -ge 10) { return ([string][math]::Round($gb, 0)) + ' GB' }
+    return ([string][math]::Round($gb, 1)) + ' GB'
+}
+
+function Test-SystemDriveLow($info) {
+    return ($info.SysDrive -and ($info.SysDrive -ne $info.Drive) -and ($info.SysFreeGB -ge 0) -and ($info.SysFreeGB -lt $script:MinSystemFreeGB))
+}
+
+function Get-SpaceWarning($info) {
+    # A warning to show before anything that builds the server, or '' if there is room.
+    if ($null -eq $info) { return '' }
+    $parts = @()
+    if (($info.FreeGB -ge 0) -and ($info.FreeGB -lt $script:MinDockerFreeGB)) {
+        $parts += ('Only ' + (Format-GB $info.FreeGB) + ' is free on ' + $info.Drive + ', the drive that holds Docker''s disk image. Building the server can use 10 GB or more while it runs.')
+    }
+    if (Test-SystemDriveLow $info) {
+        $parts += ('Only ' + (Format-GB $info.SysFreeGB) + ' is free on ' + $info.SysDrive + '. Windows and WSL need some room there during a build.')
+    }
+    if ($parts.Count -eq 0) { return '' }
+    return ($parts -join "`r`n`r`n") + "`r`n`r`n" + 'If a drive fills up during the build, Docker and WSL crash. Click "Free up space" first, or make room on the drive.'
+}
+
+function Get-FailureHint([string]$log) {
+    # A plain-language next step for the common ways a task fails.
+    if ($log -match 'no space left on device|not enough space on the disk|There is not enough space') {
+        return 'Docker ran out of disk space. Click "Free up space", make room on the drive shown under Disk space, then try again.'
+    }
+    if ($log -match 'is already in use by container') {
+        return 'Your server was set up from a different folder. Open "EVEmu Control Panel.bat" from the folder you normally use, then try again.'
+    }
+    if ($log -match 'error during connect|dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|Internal Server Error') {
+        return 'Docker stopped responding. Restart Docker Desktop, then try again. If Windows says a drive is full, make room on it first.'
+    }
+    return 'If the reason is not clear, copy this text to Claude.'
+}
+
+# ---------------------------------------------------------------------------
+# Long-running tasks (start, rebuild, wipe): run in a hidden PowerShell that
+# writes its progress to a log file the panel shows on the Activity tab.
+# ---------------------------------------------------------------------------
+function Quote-Ps([string]$s) { return "'" + $s.Replace("'", "''") + "'" }
+
+function Build-TaskScript([string]$body) {
+    $header = @'
+$ErrorActionPreference = 'Continue'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+$log = __LOG__
+$docker = __DOCKER__
+Set-Location -LiteralPath __DIR__
+function Say([string]$t) {
+    for ($i = 0; $i -lt 5; $i++) {
+        try { Add-Content -LiteralPath $log -Value $t -Encoding UTF8 -ErrorAction Stop; return } catch { Start-Sleep -Milliseconds 60 }
+    }
+}
+function Dock {
+    & $docker @args 2>&1 | ForEach-Object { Say ([string]$_) }
+    return $LASTEXITCODE
+}
+function Test-Engine {
+    & $docker info 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+function Ensure-Engine {
+    if (Test-Engine) { return $true }
+    Say 'Docker is not running. Starting Docker Desktop...'
+    $dd = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+    if (-not (Test-Path -LiteralPath $dd)) {
+        Say ('Could not find Docker Desktop at ' + $dd + '. Start it yourself, then try again.')
+        return $false
+    }
+    Start-Process -FilePath $dd
+    $deadline = (Get-Date).AddMinutes(3)
+    while (-not (Test-Engine)) {
+        if ((Get-Date) -gt $deadline) {
+            Say 'Docker did not start within 3 minutes. Check Docker Desktop, then try again.'
+            return $false
+        }
+        Say '  waiting for Docker...'
+        Start-Sleep -Seconds 5
+    }
+    Say 'Docker is running.'
+    return $true
+}
+function Test-Image([string]$name) {
+    & $docker image inspect $name 2>&1 | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+function Test-Folder {
+    # The containers are always named server and db, so only one folder can run them. If they
+    # were set up from another folder, Docker would try to make a second, empty universe and stop
+    # with a name clash. Say which folder they belong to instead, before anything is changed.
+    if ($env:COMPOSE_PROJECT_NAME) { return $true }
+    # No double quotes in the template: Windows PowerShell 5.1 mangles them for native programs.
+    $raw = & $docker inspect -f '{{json .Config.Labels}}' db 2>$null
+    if ($LASTEXITCODE -ne 0) { return $true }
+    try { $labels = (@($raw) -join '') | ConvertFrom-Json } catch { return $true }
+    if ($null -eq $labels) { return $true }
+    $project = [string]$labels.'com.docker.compose.project'
+    $dir = [string]$labels.'com.docker.compose.project.working_dir'
+    if (-not $project) { return $true }
+    $here = (Get-Location).Path
+    $mine = (Split-Path -Leaf $here).ToLowerInvariant() -replace '[^a-z0-9_-]', ''
+    if ($project -eq $mine) { return $true }
+    if ($dir -and ($dir.TrimEnd('\', '/') -eq $here.TrimEnd('\', '/'))) { return $true }
+    $where = $dir
+    if (-not $where) { $where = 'another folder' }
+    Say ('Your server and its universe belong to ' + $where + ', not to this folder (' + $here + ').')
+    Say 'Open "EVEmu Control Panel.bat" from that folder and try again. Nothing was changed.'
+    Say 'To run the server from this folder instead, stop it from that folder, then run: docker rm server db'
+    Say '(That removes only the containers. Each folder keeps its own universe in its own volumes.)'
+    return $false
+}
+function Prune([string[]]$cmd) {
+    # Runs a prune command and shows only the summary, not every deleted ID.
+    $lines = & $docker @cmd 2>&1 | ForEach-Object { [string]$_ }
+    $code = $LASTEXITCODE
+    foreach ($line in $lines) {
+        if ($line -match 'reclaimed|rror|denied') { Say ('  ' + $line.Trim()) }
+    }
+    return $code
+}
+function Clean-Docker([bool]$deep) {
+    # Removes untagged old server images and old build files.
+    # Never touches volumes (the universe database) or containers, and keeps the compile cache
+    # (type exec.cachemount), which is what makes rebuilds after small changes take minutes.
+    # After a rebuild, build files used in the last 3 days are kept so the build tools are not
+    # downloaded again; Free up space ($deep) removes those too.
+    Say ''
+    Say 'Removing old server images...'
+    $null = Prune @('image', 'prune', '-f')
+    Say 'Removing leftover build files...'
+    if ($deep) {
+        $null = Prune @('builder', 'prune', '-af', '--filter', 'type!=exec.cachemount')
+    } else {
+        $null = Prune @('builder', 'prune', '-af', '--filter', 'type!=exec.cachemount', '--filter', 'until=72h')
+    }
+}
+
+'@
+    $header = $header.Replace('__LOG__', (Quote-Ps $script:TaskLog))
+    $header = $header.Replace('__DOCKER__', (Quote-Ps $script:Docker))
+    $header = $header.Replace('__DIR__', (Quote-Ps $script:ComposeDir))
+    return $header + $body
+}
+
+$script:TaskBodies = @{
+    Start = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+$fresh = -not (Test-Image 'evemu_server_revised')
+if ($fresh) { Say 'The server has not been built on this computer yet, so it is built first. This takes 15 to 30 minutes...' }
+Say 'Starting the server...'
+$c = Dock compose up -d
+if (($c -ne 0) -and (-not $fresh)) {
+    Say 'Docker may still be warming up. Trying again in 15 seconds...'
+    Start-Sleep -Seconds 15
+    $c = Dock compose up -d
+}
+if ($fresh) { Clean-Docker $false }
+if ($c -ne 0) { exit $c }
+Say ''
+Say 'Containers started. The server takes a minute or two to come online (several minutes on a first start).'
+exit 0
+'@
+    Stop = @'
+if (-not (Test-Folder)) { exit 1 }
+Say 'Stopping the server...'
+$c = Dock compose stop
+exit $c
+'@
+    Restart = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+Say 'Restarting the server...'
+$c = Dock compose restart server
+exit $c
+'@
+    Rebuild = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+Say 'Rebuilding the server from the code in this folder. The first rebuild takes 15 to 30 minutes; later ones usually a few minutes...'
+$c = Dock compose up -d --build
+Clean-Docker $false
+if ($c -ne 0) { exit $c }
+Say ''
+Say 'Rebuilt and started.'
+exit 0
+'@
+    FreeSpace = @'
+if (-not (Ensure-Engine)) { exit 1 }
+Say 'Space Docker is using now:'
+$null = Dock system df
+Clean-Docker $true
+Say ''
+Say 'Space Docker is using after cleaning:'
+$null = Dock system df
+Say ''
+Say 'Your universe (the database) and the server were not touched.'
+Say 'The compile caches are kept so rebuilds stay fast. Docker reuses the freed space; its disk image file on Windows may not shrink straight away.'
+exit 0
+'@
+    Wipe = @'
+if (-not (Ensure-Engine)) { exit 1 }
+if (-not (Test-Folder)) { exit 1 }
+Say 'Deleting the server, its database and caches...'
+$c = Dock compose down -v
+if ($c -ne 0) { exit $c }
+$fresh = -not (Test-Image 'evemu_server_revised')
+if ($fresh) { Say 'The server has not been built on this computer yet, so it is built first. This takes 15 to 30 minutes...' }
+Say 'Creating a fresh universe. The first start installs the database, which takes several minutes. The market fills up during the first minutes the server is online.'
+$c = Dock compose up -d
+if ($fresh) { Clean-Docker $false }
+exit $c
+'@
+}
+
+# ---------------------------------------------------------------------------
+# User interface (everything below needs Windows)
+# ---------------------------------------------------------------------------
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+$script:Colors = @{
+    Green = [System.Drawing.Color]::FromArgb(22, 150, 72)
+    Amber = [System.Drawing.Color]::FromArgb(214, 140, 0)
+    Red   = [System.Drawing.Color]::FromArgb(200, 40, 40)
+    Gray  = [System.Drawing.Color]::FromArgb(140, 140, 140)
+}
+$script:BaseFont   = New-Object System.Drawing.Font('Segoe UI', 9)
+$script:HeaderFont = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$script:MonoFont   = New-Object System.Drawing.Font('Consolas', 9)
+$script:Tips = New-Object System.Windows.Forms.ToolTip
+
+function Show-Message([string]$text, [string]$icon = 'Information') {
+    [void][System.Windows.Forms.MessageBox]::Show($text, $script:AppName, [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]$icon)
+}
+
+function Ask-YesNo([string]$text, [string]$icon = 'Question') {
+    $r = [System.Windows.Forms.MessageBox]::Show($text, $script:AppName, [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]$icon, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    return ($r -eq [System.Windows.Forms.DialogResult]::Yes)
+}
+
+function Invoke-Click([scriptblock]$action) {
+    try { & $action } catch { Show-Message ('Something went wrong: ' + $_.Exception.Message) 'Error' }
+}
+
+function New-Button([string]$text, [string]$tip) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = $text
+    $b.AutoSize = $true
+    $b.MinimumSize = New-Object System.Drawing.Size(118, 32)
+    $b.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+    if ($tip) { $script:Tips.SetToolTip($b, $tip) }
+    return $b
+}
+
+function New-Row {
+    $f = New-Object System.Windows.Forms.FlowLayoutPanel
+    $f.AutoSize = $true
+    $f.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $f.WrapContents = $false
+    $f.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $f.Margin = New-Object System.Windows.Forms.Padding(12, 2, 12, 6)
+    return $f
+}
+
+function New-Header([string]$text) {
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = $text
+    $l.AutoSize = $true
+    $l.Font = $script:HeaderFont
+    $l.Margin = New-Object System.Windows.Forms.Padding(12, 10, 12, 4)
+    return $l
+}
+
+function New-StatusItem([string]$name) {
+    $panel = New-Object System.Windows.Forms.FlowLayoutPanel
+    $panel.AutoSize = $true
+    $panel.WrapContents = $false
+    $panel.Margin = New-Object System.Windows.Forms.Padding(0, 0, 28, 0)
+    $dot = New-Object System.Windows.Forms.Label
+    $dot.Text = [string][char]0x25CF
+    $dot.AutoSize = $true
+    $dot.Font = New-Object System.Drawing.Font('Segoe UI', 12)
+    $dot.ForeColor = $script:Colors.Gray
+    $dot.Margin = New-Object System.Windows.Forms.Padding(0, 0, 2, 0)
+    $nameLabel = New-Object System.Windows.Forms.Label
+    $nameLabel.Text = $name + ':'
+    $nameLabel.AutoSize = $true
+    $nameLabel.Margin = New-Object System.Windows.Forms.Padding(0, 5, 2, 0)
+    $value = New-Object System.Windows.Forms.Label
+    $value.Text = 'Checking...'
+    $value.AutoSize = $true
+    $value.Font = $script:HeaderFont
+    $value.Margin = New-Object System.Windows.Forms.Padding(0, 5, 0, 0)
+    $panel.Controls.AddRange([System.Windows.Forms.Control[]]@($dot, $nameLabel, $value))
+    return @{ Panel = $panel; Dot = $dot; Name = $nameLabel; Value = $value }
+}
+
+function Set-StatusItem($item, [string]$text, [string]$color) {
+    $item.Dot.ForeColor = $script:Colors[$color]
+    $item.Value.Text = $text
+}
+
+function Set-StatusTip($item, [string]$tip) {
+    foreach ($c in @($item.Panel, $item.Dot, $item.Name, $item.Value)) { $script:Tips.SetToolTip($c, $tip) }
+}
+
+function Set-Note([string]$text) { $script:StripLabel.Text = $text }
+
+# ---------------------------------------------------------------------------
+# Find the server folder and Docker
+# ---------------------------------------------------------------------------
+function Resolve-ComposeDir {
+    if ($PSScriptRoot -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'docker-compose.yml'))) { return $PSScriptRoot }
+    $saved = $script:Settings.composeDir
+    if ($saved -and (Test-Path -LiteralPath (Join-Path $saved 'docker-compose.yml'))) { return $saved }
+    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    $dlg.Description = 'Select your EVEmu folder (the one that contains docker-compose.yml).'
+    while ($true) {
+        if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        if (Test-Path -LiteralPath (Join-Path $dlg.SelectedPath 'docker-compose.yml')) {
+            $script:Settings.composeDir = $dlg.SelectedPath
+            Save-Settings
+            return $dlg.SelectedPath
+        }
+        Show-Message 'That folder has no docker-compose.yml in it. Pick the EVEmu folder.' 'Warning'
+    }
+}
+
+$script:Settings = Load-Settings
+$script:ComposeDir = Resolve-ComposeDir
+if (-not $script:ComposeDir) { return }
+$script:Docker = Get-DockerPath
+
+# ---------------------------------------------------------------------------
+# Build the window
+# ---------------------------------------------------------------------------
+$form = New-Object System.Windows.Forms.Form
+$form.Text = $script:AppName
+$form.Font = $script:BaseFont
+$form.Size = New-Object System.Drawing.Size(1010, 700)
+$form.MinimumSize = New-Object System.Drawing.Size(960, 560)
+$form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+
+$main = New-Object System.Windows.Forms.TableLayoutPanel
+$main.Dock = [System.Windows.Forms.DockStyle]::Fill
+$main.ColumnCount = 1
+$main.RowCount = 9
+[void]$main.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+for ($i = 0; $i -lt 8; $i++) {
+    [void]$main.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+}
+[void]$main.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+
+# Status
+$statusRow = New-Row
+$script:StDocker  = New-StatusItem 'Docker'
+$script:StServer  = New-StatusItem 'Server'
+$script:StDb      = New-StatusItem 'Database'
+$script:StPlayers = New-StatusItem 'Players online'
+$script:StDisk    = New-StatusItem 'Disk space'
+$statusRow.Controls.AddRange([System.Windows.Forms.Control[]]@($script:StDocker.Panel, $script:StServer.Panel, $script:StDb.Panel, $script:StPlayers.Panel, $script:StDisk.Panel))
+
+# Server buttons
+$serverRow = New-Row
+$btnStart   = New-Button 'Start server'   'Starts the server (and Docker Desktop if it is not running).'
+$btnStop    = New-Button 'Stop server'    'Stops the server. Your universe is kept.'
+$btnRestart = New-Button 'Restart server' 'Stops and starts the server.'
+$btnRebuild = New-Button 'Rebuild server' 'Rebuilds the server from the code in this folder. Use this after the code has been updated. Cleans up after itself.'
+$btnClean   = New-Button 'Free up space'  'Shows how much room Docker is using, then removes old server images and leftover build files. Your universe is not touched.'
+$btnWipe    = New-Button 'Wipe universe...' 'Deletes the whole database and starts a fresh universe.'
+$btnFolder  = New-Button 'Open folder'    'Opens the EVEmu folder.'
+$serverRow.Controls.AddRange([System.Windows.Forms.Control[]]@($btnStart, $btnStop, $btnRestart, $btnRebuild, $btnClean, $btnWipe, $btnFolder))
+
+# Game buttons
+$gameRow = New-Row
+$btnLaunch   = New-Button 'Launch game'      ('Starts your Crucible client pointed at this server (' + $script:ServerAddress + ').')
+$btnClient   = New-Button 'Change client...' 'Pick a different ExeFile.exe for the game.'
+$btnShortcut = New-Button 'Desktop shortcut' 'Puts a shortcut to this panel on your desktop.'
+$gameRow.Controls.AddRange([System.Windows.Forms.Control[]]@($btnLaunch, $btnClient, $btnShortcut))
+
+# Accounts
+$acctRow = New-Row
+$acctLabel = New-Object System.Windows.Forms.Label
+$acctLabel.Text = 'Account:'
+$acctLabel.AutoSize = $true
+$acctLabel.Margin = New-Object System.Windows.Forms.Padding(0, 8, 6, 0)
+$combo = New-Object System.Windows.Forms.ComboBox
+$combo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$combo.Width = 220
+$combo.Margin = New-Object System.Windows.Forms.Padding(0, 5, 8, 0)
+$btnRefreshAcc = New-Button 'Refresh' 'Reloads the account list.'
+$btnAdmin      = New-Button 'Make admin' 'Gives this account full admin rights (needed for /giveallskills). Log out and back in afterwards.'
+$roleLabel = New-Object System.Windows.Forms.Label
+$roleLabel.Text = ''
+$roleLabel.AutoSize = $true
+$roleLabel.Margin = New-Object System.Windows.Forms.Padding(4, 8, 0, 0)
+$acctRow.Controls.AddRange([System.Windows.Forms.Control[]]@($acctLabel, $combo, $btnRefreshAcc, $btnAdmin, $roleLabel))
+
+# Log tabs
+$tabs = New-Object System.Windows.Forms.TabControl
+$tabs.Dock = [System.Windows.Forms.DockStyle]::Fill
+$tabs.Margin = New-Object System.Windows.Forms.Padding(12, 8, 12, 8)
+
+$tabLog = New-Object System.Windows.Forms.TabPage
+$tabLog.Text = 'Server log'
+$tabLog.Padding = New-Object System.Windows.Forms.Padding(6)
+$logLayout = New-Object System.Windows.Forms.TableLayoutPanel
+$logLayout.Dock = [System.Windows.Forms.DockStyle]::Fill
+$logLayout.ColumnCount = 1
+$logLayout.RowCount = 2
+[void]$logLayout.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+[void]$logLayout.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Percent, 100)))
+$logBar = New-Object System.Windows.Forms.FlowLayoutPanel
+$logBar.AutoSize = $true
+$logBar.WrapContents = $false
+$logBar.Dock = [System.Windows.Forms.DockStyle]::Fill
+$followBox = New-Object System.Windows.Forms.CheckBox
+$followBox.Text = 'Follow live log'
+$followBox.Checked = $true
+$followBox.AutoSize = $true
+$followBox.Margin = New-Object System.Windows.Forms.Padding(0, 7, 16, 0)
+$btnCopyLog = New-Button 'Copy log' 'Copies the log so you can paste it to Claude.'
+$logBar.Controls.AddRange([System.Windows.Forms.Control[]]@($followBox, $btnCopyLog))
+$logBox = New-Object System.Windows.Forms.RichTextBox
+$logBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+$logBox.ReadOnly = $true
+$logBox.BackColor = [System.Drawing.Color]::White
+$logBox.WordWrap = $false
+$logBox.DetectUrls = $false
+$logBox.Font = $script:MonoFont
+$logLayout.Controls.Add($logBar, 0, 0)
+$logLayout.Controls.Add($logBox, 0, 1)
+$tabLog.Controls.Add($logLayout)
+
+$tabAct = New-Object System.Windows.Forms.TabPage
+$tabAct.Text = 'Activity'
+$tabAct.Padding = New-Object System.Windows.Forms.Padding(6)
+$actBox = New-Object System.Windows.Forms.RichTextBox
+$actBox.Dock = [System.Windows.Forms.DockStyle]::Fill
+$actBox.ReadOnly = $true
+$actBox.BackColor = [System.Drawing.Color]::White
+$actBox.WordWrap = $true
+$actBox.DetectUrls = $false
+$actBox.Font = $script:MonoFont
+$actBox.Text = 'Output from Start, Stop, Restart, Rebuild, Free up space and Wipe appears here.'
+$tabAct.Controls.Add($actBox)
+
+[void]$tabs.TabPages.Add($tabLog)
+[void]$tabs.TabPages.Add($tabAct)
+
+$main.Controls.Add((New-Header 'Status'), 0, 0)
+$main.Controls.Add($statusRow, 0, 1)
+$main.Controls.Add((New-Header 'Server'), 0, 2)
+$main.Controls.Add($serverRow, 0, 3)
+$main.Controls.Add((New-Header 'Game'), 0, 4)
+$main.Controls.Add($gameRow, 0, 5)
+$main.Controls.Add((New-Header 'Accounts'), 0, 6)
+$main.Controls.Add($acctRow, 0, 7)
+$main.Controls.Add($tabs, 0, 8)
+
+$strip = New-Object System.Windows.Forms.StatusStrip
+$script:StripLabel = New-Object System.Windows.Forms.ToolStripStatusLabel
+$script:StripLabel.Spring = $true
+$script:StripLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+$script:StripLabel.Text = 'Closing this window does not stop the server.'
+[void]$strip.Items.Add($script:StripLabel)
+
+$form.Controls.Add($main)
+$form.Controls.Add($strip)
+
+# ---------------------------------------------------------------------------
+# Behaviour
+# ---------------------------------------------------------------------------
+function Update-Buttons {
+    $busy = ($null -ne $script:TaskProcess)
+    $st = $script:LastState
+    $engine = ($null -ne $st) -and $st.EngineUp
+    $running = $engine -and (($st.Server -eq 'running') -or ($st.Server -eq 'restarting'))
+    $dbUp = $engine -and ($st.Db -eq 'running')
+    $allUp = $running -and $dbUp
+    $btnStart.Enabled   = (-not $busy) -and (-not $allUp)
+    $btnStop.Enabled    = (-not $busy) -and $running
+    $btnRestart.Enabled = (-not $busy) -and $running
+    $btnRebuild.Enabled = -not $busy
+    $btnClean.Enabled   = -not $busy
+    $btnWipe.Enabled    = -not $busy
+    $btnRefreshAcc.Enabled = $dbUp
+    $btnAdmin.Enabled   = $dbUp -and ($null -ne $combo.SelectedItem)
+}
+
+function Show-Role {
+    $name = [string]$combo.SelectedItem
+    if ($name -and $script:Accounts.ContainsKey($name)) {
+        $roleLabel.Text = 'Role: ' + (Get-RoleName $script:Accounts[$name])
+    } else {
+        $roleLabel.Text = ''
+    }
+    Update-Buttons
+}
+
+function Load-Accounts {
+    $previous = [string]$combo.SelectedItem
+    $combo.Items.Clear()
+    $script:Accounts = @{}
+    $r = Invoke-Sql 'SELECT accountName, role FROM account ORDER BY accountName'
+    if ($r.ExitCode -ne 0) {
+        $roleLabel.Text = 'Could not read accounts. Is the server running?'
+        return
+    }
+    foreach ($line in ([string]$r.Output -split "`r?`n")) {
+        $p = $line.Split("`t")
+        if ($p.Count -ge 2 -and $p[0]) {
+            $script:Accounts[$p[0]] = $p[1].Trim()
+            [void]$combo.Items.Add($p[0])
+        }
+    }
+    $script:AccountsLoaded = $true
+    if ($combo.Items.Count -eq 0) {
+        $roleLabel.Text = 'No accounts yet. Log in once with the game to create one.'
+    } elseif ($previous -and $combo.Items.Contains($previous)) {
+        $combo.SelectedItem = $previous
+    } else {
+        $combo.SelectedIndex = 0
+    }
+    Show-Role
+}
+
+function Update-Status {
+    $st = Get-ServerState
+    $script:LastState = $st
+    $online = $false
+
+    if (-not $st.DockerFound) {
+        Set-StatusItem $script:StDocker 'Not found' 'Red'
+        Set-StatusItem $script:StServer 'Unknown' 'Gray'
+        Set-StatusItem $script:StDb 'Unknown' 'Gray'
+    } elseif (-not $st.EngineUp) {
+        Set-StatusItem $script:StDocker 'Not running' 'Red'
+        Set-StatusItem $script:StServer 'Unknown' 'Gray'
+        Set-StatusItem $script:StDb 'Unknown' 'Gray'
+    } else {
+        Set-StatusItem $script:StDocker 'Running' 'Green'
+        switch ($st.Server) {
+            'running' {
+                $online = Test-ServerOnline $st
+                if ($online) { Set-StatusItem $script:StServer 'Online' 'Green' }
+                else { Set-StatusItem $script:StServer 'Starting...' 'Amber' }
+            }
+            'missing' { Set-StatusItem $script:StServer 'Not set up' 'Gray' }
+            'exited' {
+                if ($st.ServerExit -eq 0) { Set-StatusItem $script:StServer 'Stopped' 'Gray' }
+                else { Set-StatusItem $script:StServer ('Stopped (exit code ' + $st.ServerExit + ')') 'Red' }
+            }
+            'restarting' { Set-StatusItem $script:StServer 'Restarting...' 'Amber' }
+            default { Set-StatusItem $script:StServer $st.Server 'Amber' }
+        }
+        if ($st.Db -eq 'running') { Set-StatusItem $script:StDb 'Running' 'Green' }
+        elseif ($st.Db -eq 'missing') { Set-StatusItem $script:StDb 'Not set up' 'Gray' }
+        else { Set-StatusItem $script:StDb 'Stopped' 'Gray' }
+    }
+
+    if ($online -and $st.Db -eq 'running') {
+        if (($script:PlayerTick % 4) -eq 0) { Set-StatusItem $script:StPlayers (Get-PlayersOnline) 'Green' }
+        $script:PlayerTick++
+        if (-not $script:AccountsLoaded) { Load-Accounts }
+    } else {
+        Set-StatusItem $script:StPlayers '-' 'Gray'
+        $script:PlayerTick = 0
+    }
+    Update-Buttons
+}
+
+function Update-Disk {
+    try { $script:DiskInfo = Get-DiskInfo } catch { $script:DiskInfo = $null }
+    $i = $script:DiskInfo
+    if (($null -eq $i) -or ($i.FreeGB -lt 0)) {
+        Set-StatusItem $script:StDisk 'Unknown' 'Gray'
+        Set-StatusTip $script:StDisk 'Could not tell which drive holds Docker''s disk image.'
+        return
+    }
+    $where = $i.Dir
+    if (-not $where) { $where = 'its default folder on ' + $i.Drive }
+    $tip = 'Free space on ' + $i.Drive + ', the drive that holds Docker''s disk image (' + $where + '). Building the server needs room here.'
+    if ($i.SysDrive -and ($i.SysDrive -ne $i.Drive) -and ($i.SysFreeGB -ge 0)) {
+        $tip = $tip + "`r`n" + (Format-GB $i.SysFreeGB) + ' is free on ' + $i.SysDrive + ' (Windows).'
+    }
+    Set-StatusTip $script:StDisk $tip
+    if (Test-SystemDriveLow $i) {
+        Set-StatusItem $script:StDisk ((Format-GB $i.SysFreeGB) + ' free on ' + $i.SysDrive) 'Red'
+        return
+    }
+    $color = 'Green'
+    if ($i.FreeGB -lt $script:MinDockerFreeGB) { $color = 'Red' }
+    elseif ($i.FreeGB -lt $script:LowDockerFreeGB) { $color = 'Amber' }
+    Set-StatusItem $script:StDisk ((Format-GB $i.FreeGB) + ' free on ' + $i.Drive) $color
+}
+
+function Confirm-Space {
+    # Before anything that builds the server: warn if a drive is nearly full.
+    Update-Disk
+    $warning = Get-SpaceWarning $script:DiskInfo
+    if (-not $warning) { return $true }
+    return (Ask-YesNo ($warning + "`r`n`r`n" + 'Build anyway?') 'Warning')
+}
+
+function Test-ServerImage {
+    # True if the server image exists, false if it is missing (so starting would build it), $null if unknown.
+    $st = $script:LastState
+    if (-not ($st -and $st.EngineUp)) { return $null }
+    $r = Invoke-Cli $script:Docker 'image inspect -f "{{.Id}}" evemu_server_revised' 6000
+    if ($r.ExitCode -eq 0) { return $true }
+    if ([string]$r.Error -match 'No such image') { return $false }
+    return $null
+}
+
+function Update-Log {
+    if (-not $followBox.Checked) { return }
+    if ($tabs.SelectedTab -ne $tabLog) { return }
+    $st = $script:LastState
+    if (-not ($st -and $st.EngineUp -and $st.Server -ne 'missing')) {
+        if (-not $logBox.Text) { $logBox.Text = 'The server log appears here once the server has been started.' }
+        return
+    }
+    $r = Invoke-Cli $script:Docker 'logs --tail 300 server' 6000
+    if ($r.ExitCode -lt 0) { return }
+    $clean = Clean-Log ([string]$r.Output + [string]$r.Error)
+    if ($clean -ne $script:LastLog) {
+        $script:LastLog = $clean
+        $logBox.Text = $clean
+        $logBox.SelectionStart = $logBox.TextLength
+        $logBox.ScrollToCaret()
+    }
+}
+
+function Remove-OldTaskFiles {
+    # Best effort: a file that is still open somewhere is simply left for next time.
+    foreach ($p in @($script:TaskLog, $script:TaskScript)) {
+        try { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction Stop } } catch { }
+    }
+    try {
+        $old = (Get-Date).AddDays(-1)
+        Get-ChildItem -LiteralPath $env:TEMP -Filter 'evemu_panel_task*' -ErrorAction Stop |
+            Where-Object { $_.LastWriteTime -lt $old } |
+            ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { } }
+    } catch { }
+}
+
+function Start-PanelTask([string]$title, [string]$key) {
+    if ($null -ne $script:TaskProcess) { return }
+    if (-not $script:Docker) { $script:Docker = Get-DockerPath }
+    if (-not $script:Docker) {
+        Show-Message 'Docker could not be found. Install Docker Desktop, then reopen this panel.' 'Error'
+        return
+    }
+    Remove-OldTaskFiles
+    $stamp = [string]$PID + '_' + (Get-Date -Format 'yyyyMMddHHmmssfff')
+    $script:TaskLog = Join-Path $env:TEMP ('evemu_panel_task_' + $stamp + '.log')
+    $script:TaskScript = Join-Path $env:TEMP ('evemu_panel_task_' + $stamp + '.ps1')
+    $text = Build-TaskScript $script:TaskBodies[$key]
+    [System.IO.File]::WriteAllText($script:TaskScript, $text, (New-Object System.Text.UTF8Encoding($true)))
+    Add-Content -LiteralPath $script:TaskLog -Value ('== ' + $title + ' (' + (Get-Date -Format 'HH:mm:ss') + ') ==') -Encoding UTF8
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $script:TaskScript + '"'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $script:ComposeDir
+    $script:TaskProcess = [System.Diagnostics.Process]::Start($psi)
+    $script:TaskTitle = $title
+    $tabs.SelectedTab = $tabAct
+    $actBox.Text = ''
+    Set-Note ($title + '...')
+    Update-Buttons
+    $taskTimer.Start()
+}
+
+function Poll-Task {
+    if ($null -eq $script:TaskProcess) { $taskTimer.Stop(); return }
+    $text = Read-SharedText $script:TaskLog
+    if ($text -ne $actBox.Text) {
+        $actBox.Text = $text
+        $actBox.SelectionStart = $actBox.TextLength
+        $actBox.ScrollToCaret()
+    }
+    if ($script:TaskProcess.HasExited) {
+        $taskTimer.Stop()
+        $code = $script:TaskProcess.ExitCode
+        $script:TaskProcess = $null
+        $actBox.Text = (Read-SharedText $script:TaskLog).TrimEnd()
+        if ($code -eq 0) {
+            $actBox.AppendText("`r`n`r`nDone.")
+            Set-Note ($script:TaskTitle + ': done. Closing this window does not stop the server.')
+        } else {
+            $hint = Get-FailureHint $actBox.Text
+            $actBox.AppendText("`r`n`r`nFailed (exit code " + $code + "). " + $hint)
+            Set-Note ($script:TaskTitle + ': failed. See the Activity tab.')
+        }
+        $actBox.SelectionStart = $actBox.TextLength
+        $actBox.ScrollToCaret()
+        $script:AccountsLoaded = $false
+        Update-Status
+        Update-Disk
+    }
+}
+
+function Get-ClientExe([bool]$forcePick) {
+    $exe = $script:Settings.clientExe
+    if ((-not $forcePick) -and $exe -and (Test-Path -LiteralPath $exe)) { return $exe }
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = 'Find your Crucible client: the ExeFile.exe in its bin folder'
+    $dlg.Filter = 'EVE client (ExeFile.exe)|ExeFile.exe|Programs (*.exe)|*.exe'
+    if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+    $script:Settings.clientExe = $dlg.FileName
+    Save-Settings
+    return $dlg.FileName
+}
+
+# Timers
+$statusTimer = New-Object System.Windows.Forms.Timer
+$statusTimer.Interval = 4000
+$statusTimer.Add_Tick({
+    if ($script:InStatusTick) { return }
+    $script:InStatusTick = $true
+    try {
+        Update-Status
+        Update-Log
+        $script:DiskTick++
+        if (($script:DiskTick % 4) -eq 0) { Update-Disk }
+    } catch { Set-Note ('Status check failed: ' + $_.Exception.Message) }
+    finally { $script:InStatusTick = $false }
+})
+
+$taskTimer = New-Object System.Windows.Forms.Timer
+$taskTimer.Interval = 700
+$taskTimer.Add_Tick({ try { Poll-Task } catch { Set-Note ('Task check failed: ' + $_.Exception.Message) } })
+
+# Buttons
+$btnStart.Add_Click({
+    Invoke-Click {
+        if ((Test-ServerImage) -eq $false) {
+            if (-not (Confirm-Space)) { return }
+        }
+        Start-PanelTask 'Start server' 'Start'
+    }
+})
+$btnStop.Add_Click({ Invoke-Click { Start-PanelTask 'Stop server' 'Stop' } })
+$btnRestart.Add_Click({ Invoke-Click { $script:OnlineFor = ''; Start-PanelTask 'Restart server' 'Restart' } })
+$btnRebuild.Add_Click({
+    Invoke-Click {
+        if (-not (Confirm-Space)) { return }
+        if (Ask-YesNo 'Rebuild the server from the code in this folder? It takes a few minutes (the first time 15 to 30), and the server is restarted at the end. Your universe is kept, and old server images and leftover build files are removed afterwards.') {
+            Start-PanelTask 'Rebuild server' 'Rebuild'
+        }
+    }
+})
+$btnWipe.Add_Click({
+    Invoke-Click {
+        $msg = 'This deletes the whole database: every account, character, ship, corporation and market order. A fresh universe is created and the market restocked.' + "`r`n`r`n" + 'It cannot be undone. Wipe the universe?'
+        if (Ask-YesNo $msg 'Warning') {
+            if ((Test-ServerImage) -eq $false) {
+                if (-not (Confirm-Space)) { return }
+            }
+            $script:OnlineFor = ''
+            $script:AccountsLoaded = $false
+            Start-PanelTask 'Wipe universe' 'Wipe'
+        }
+    }
+})
+$btnClean.Add_Click({ Invoke-Click { Start-PanelTask 'Free up space' 'FreeSpace' } })
+$btnFolder.Add_Click({ Invoke-Click { Start-Process -FilePath 'explorer.exe' -ArgumentList ('"' + $script:ComposeDir + '"') } })
+
+$btnLaunch.Add_Click({
+    Invoke-Click {
+        $st = $script:LastState
+        if (-not ($st -and $st.Server -eq 'running' -and $script:OnlineFor -eq $st.ServerStartedAt)) {
+            if (-not (Ask-YesNo 'The server is not online yet. Launch the game anyway?')) { return }
+        }
+        $exe = Get-ClientExe $false
+        if (-not $exe) { return }
+        Start-Process -FilePath $exe -ArgumentList ('/server:' + $script:ServerAddress) -WorkingDirectory (Split-Path -Parent $exe)
+        Set-Note 'Game launched.'
+    }
+})
+$btnClient.Add_Click({ Invoke-Click { $exe = Get-ClientExe $true; if ($exe) { Set-Note ('Game client: ' + $exe) } } })
+
+$btnShortcut.Add_Click({
+    Invoke-Click {
+        $desktop = [Environment]::GetFolderPath('Desktop')
+        $ws = New-Object -ComObject WScript.Shell
+        $lnk = $ws.CreateShortcut((Join-Path $desktop 'EVEmu Control Panel.lnk'))
+        $lnk.TargetPath = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $lnk.Arguments = '-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "' + $PSCommandPath + '"'
+        $lnk.WorkingDirectory = Split-Path -Parent $PSCommandPath
+        $lnk.WindowStyle = 7
+        if ($script:Settings.clientExe -and (Test-Path -LiteralPath $script:Settings.clientExe)) {
+            $lnk.IconLocation = $script:Settings.clientExe + ',0'
+        }
+        $lnk.Save()
+        Set-Note 'Desktop shortcut created.'
+    }
+})
+
+$combo.Add_SelectedIndexChanged({ Show-Role })
+$btnRefreshAcc.Add_Click({ Invoke-Click { Load-Accounts } })
+$btnAdmin.Add_Click({
+    Invoke-Click {
+        $name = [string]$combo.SelectedItem
+        if (-not $name) { return }
+        if ($name -match '["\\]') { Show-Message 'That account name has characters this panel cannot handle.' 'Warning'; return }
+        $safe = $name.Replace("'", "''")
+        $r = Invoke-Sql ('UPDATE account SET role=' + $script:AdminRole + " WHERE accountName='" + $safe + "'")
+        if ($r.ExitCode -ne 0) { Show-Message ('Could not update the account: ' + $r.Error) 'Error'; return }
+        Load-Accounts
+        Show-Message ($name + ' is now an admin. Log out to the login screen and back in for it to take effect.')
+    }
+})
+
+$btnCopyLog.Add_Click({
+    Invoke-Click {
+        if ($logBox.Text) { [System.Windows.Forms.Clipboard]::SetText($logBox.Text); Set-Note 'Log copied. Paste it into your chat with Claude.' }
+    }
+})
+$followBox.Add_CheckedChanged({ if ($followBox.Checked) { Invoke-Click { Update-Log } } })
+$tabs.Add_SelectedIndexChanged({ if ($tabs.SelectedTab -eq $tabLog) { Invoke-Click { Update-Log } } })
+
+$form.Add_Shown({
+    $form.Refresh()
+    try { Update-Status; Update-Log; Update-Disk } catch { Set-Note ('Status check failed: ' + $_.Exception.Message) }
+    $statusTimer.Start()
+})
+$form.Add_FormClosing({
+    $statusTimer.Stop()
+    $taskTimer.Stop()
+})
+
+try {
+    [void]$form.ShowDialog()
+} catch {
+    Show-Message ('The control panel hit an error and has to close: ' + $_.Exception.Message) 'Error'
+}
