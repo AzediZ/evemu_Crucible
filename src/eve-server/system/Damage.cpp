@@ -698,8 +698,10 @@ void ShipSE::Killed(Damage &fatal_blow) {
         uint32 corpseTypeID = 10041; // typeID from 'invTypes' table for "Frozen Corpse"
         ItemData corpseItemData(corpseTypeID, m_ownerID, locationID, flagNone, corpse_name.c_str(), wreckPosition);
         InventoryItemRef corpseItemRef = sItemFactory.SpawnItem( corpseItemData );
+        // the check was inverted:  the corpse was put in space only when it failed to spawn (and that crashed)
         if (corpseItemRef.get() == nullptr) {
             sLog.Error("Ship::Killed()", "Creating Corpse Item Failed for %s of type %u", corpse_name.c_str(), corpseTypeID);
+        } else {
             DBSystemDynamicEntity corpseEntity = DBSystemDynamicEntity();
             corpseEntity.allianceID = m_allyID;
             corpseEntity.categoryID = EVEDB::invCategories::Celestial;
