@@ -13,6 +13,7 @@
 #include "inventory/Inventory.h"
 #include "ship/JumpDrive.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/CrimeWatch.h"
 #include "system/SystemManager.h"
 #include "planet/Moon.h"
 
@@ -86,8 +87,9 @@ void JumpBridgeSE::CheckOnline()
                 .AddFormatValue("structure", new PyString(m_self->itemName()));
 
     // Make sure player is not in high-sec (configurable)
+    //  GetSecValue() is 1.1 minus the security rating, so it can't be compared with 0.5.  use the same check as cynos
     if (!sConfig.world.highSecCyno)
-        if (m_system->GetSecValue() >= 0.5f)
+        if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::High)
             throw CustomError("The %s may not be used in high security space.", m_self->name());
 }
 
