@@ -197,7 +197,8 @@ void ServiceDB::SetServerOnlineStatus(bool online) {
     //this is only called on startup/shutdown.  reset all char online counts/status'
     sDatabase.RunQuery(err, "UPDATE chrCharacters SET online = 0 WHERE 1");
     sDatabase.RunQuery(err, "UPDATE account SET online = 0 WHERE 1");
-    sDatabase.RunQuery( err, "DELETE FROM chrPausedSkillQueue WHERE 1");
+    // paused skill queues are kept.  they were deleted here at every start and stop, so a queue paused before a
+    //  restart was gone when the pilot pressed apply (saving a paused queue already replaces the old one)
 }
 
 void ServiceDB::SetAccountOnlineStatus(uint32 accountID, bool online) {
