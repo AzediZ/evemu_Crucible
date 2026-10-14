@@ -598,6 +598,8 @@ void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
         m_targetID = pMaster->m_targetID;
         m_targetSE = pMaster->m_targetSE;
         m_repeat = pMaster->m_repeat;
+        // a slave's own cycle timer doesn't run (its master cycles for the group), so its effects use the master's
+        m_slaveCycleMS = pMaster->GetRemainingCycleTimeMS();
     }
     m_shipSE = pShip;
     m_sysMgr = pShip->SystemMgr();
@@ -1630,6 +1632,8 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
 
     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
     uint32 timeLeft(GetRemainingCycleTimeMS());
+    if ((timeLeft == 0) and IsLinked() and !IsMaster())
+        timeLeft = m_slaveCycleMS;  // without a duration the client doesn't show this weapon firing
     bool isOffensive(sFxDataMgr.isOffensive(fxID));
     PyRep* graphicInfo(nullptr);
     if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {

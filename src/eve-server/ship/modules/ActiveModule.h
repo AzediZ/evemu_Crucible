@@ -170,6 +170,7 @@ private:
     // a warp scrambler's cycle on a ship ends that ship's running microwarpdrives
     void                BlockTargetMWDs();
 
+    uint32              m_slaveCycleMS = 0;     // cycle time copied from the group's master (see SetSlaveData)
 };
 
 
