@@ -57,6 +57,56 @@ int CrimeWatch::Initialize()
     return 1;
 }
 
+void CrimeWatch::SetEnabled(bool enabled)
+{
+    if (sConfig.crime.Enabled == enabled)
+        return;
+    // first, so nothing the stand down sets off makes new flags
+    sConfig.crime.Enabled = enabled;
+    std::vector<SystemManager*> systems;
+    sEntityList.GetSystems(systems);
+
+    if (enabled) {
+        // the systems booted while it was off have no sentry guns yet (SystemManager::BootSystem())
+        for (auto pSystem : systems)
+            pSystem->GetLaw()->Init();
+        // pilots already in space are seen as if they had just arrived:  the faction police (and navy) come for the wanted ones
+        std::vector<Client*> clients;
+        sEntityList.GetClients(clients);
+        for (auto pClient : clients)
+            if (pClient->IsInSpace() and (pClient->SystemMgr() != nullptr))
+                OnEnterSpace(pClient);
+        sLog.Blue("      CrimeWatch", "CrimeWatch enabled.");
+        return;
+    }
+
+    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave
+    for (auto pSystem : systems)
+        pSystem->GetLaw()->StandDown();
+    // every flag and timer (aggression, criminal, weapons, logoff), the illegal aggressors and the Crimewatch 1 timers
+    std::vector<uint32> flagged;
+    for (auto& cur : m_records)
+        flagged.push_back(cur.first);
+    m_records.clear();
+    m_illegal.clear();
+    m_sentryAggression.clear();
+    m_factionAggression.clear();
+    // an empty dict clears that aggressor's flags in the clients of its system (overview, neocom countdown)
+    PyDict* none(new PyDict());
+    for (auto id : flagged) {
+        if (IsCharacterID(id)) {
+            Notify(id);
+            continue;
+        }
+        // an npc made a criminal (/crime):  the pilots of its system saw it flashing
+        for (auto pSystem : systems)
+            if (pSystem->GetSE(id) != nullptr)
+                SendToSystem(pSystem, id, none);
+    }
+    PyDecRef(none);
+    sLog.Blue("      CrimeWatch", "CrimeWatch disabled:  the flags of %lu pilots and npcs cleared.", flagged.size());
+}
+
 float CrimeWatch::SecurityLevel(float trueSec)
 {
     // the client's cfg.solarsystems pseudoSecurity, then util.FmtSystemSecStatus (python 2 round: halves away from zero)
@@ -537,6 +587,9 @@ void CrimeWatch::NPCAggression(uint32 charID)
 
 bool CrimeWatch::CanTakeFrom(uint32 charID, uint32 ownerID)
 {
+    // with crime off nothing is theft, so the client doesn't warn about it
+    if (!sConfig.crime.Enabled)
+        return true;
     // fleet members in the same system share loot
     Client* pThief(sEntityList.FindClientByCharID(charID));
     Client* pOwner(sEntityList.FindClientByCharID(ownerID));

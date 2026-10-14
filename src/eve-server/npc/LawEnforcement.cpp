@@ -141,6 +141,9 @@ void LawEnforcement::Init()
 {
     if (!sConfig.crime.Enabled or !sConfig.crime.Sentries)
         return;
+    // placed already (/crime on calls this for every loaded system)
+    if (!m_sentries.empty())
+        return;
     if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::Null)
         return;
     SystemData data;
@@ -859,19 +862,25 @@ void LawEnforcement::ProcessLoggedOff(int64 now)
             ++itr;
             continue;
         }
-        ShipSE* pShipSE(l.pShipSE);
-        _log(CRIME__INFO, "%s(%u) of %u leaves space.", pShipSE->GetName(), pShipSE->GetID(), l.charID);
-        ShipItemRef shipRef(pShipSE->GetShipItemRef());
-        if (pShipSE->TargetMgr() != nullptr)
-            pShipSE->TargetMgr()->ClearFromTargets();
-        m_system->RemoveEntity(pShipSE);
-        SafeDelete(pShipSE);
-        // saved where its pilot logged off:  the login warp takes them back there.  what the client did when its pilot
-        //  logged off: save it and unload it
-        shipRef->SetPosition(l.logoffPoint);
-        shipRef->LogOut();
+        // saved where its pilot logged off:  the login warp takes them back there
+        LeaveSpace(l, l.logoffPoint);
         itr = m_loggedOff.erase(itr);
     }
+}
+
+void LawEnforcement::LeaveSpace(LoggedOff& l, const GPoint& savedAt)
+{
+    ShipSE* pShipSE(l.pShipSE);
+    _log(CRIME__INFO, "%s(%u) of %u leaves space.", pShipSE->GetName(), pShipSE->GetID(), l.charID);
+    ShipItemRef shipRef(pShipSE->GetShipItemRef());
+    if (pShipSE->TargetMgr() != nullptr)
+        pShipSE->TargetMgr()->ClearFromTargets();
+    m_system->RemoveEntity(pShipSE);
+    SafeDelete(pShipSE);
+    l.pShipSE = nullptr;
+    // what the client did when its pilot logged off: save it and unload it
+    shipRef->SetPosition(savedAt);
+    shipRef->LogOut();
 }
 
 bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)
@@ -917,6 +926,47 @@ uint32 LawEnforcement::GetLoggedOffOwner(uint32 shipID)
 bool LawEnforcement::IsBusy()
 {
     return (!m_responses.empty() or !m_loggedOff.empty());
+}
+
+void LawEnforcement::StandDown()
+{
+    // CONCORD, the police and the navy leave:  their tackle (scripted and data), the cloak block and their ships go
+    for (auto& cur : m_responses)
+        Despawn(cur.second);
+    m_responses.clear();
+    m_npcResponse.clear();
+    m_jammed.clear();
+    m_pursued.clear();
+
+    /* the gate and station guns:  out of space the way a removed npc goes (SystemManager::OnNPCRemoved:  their ai, their locks
+     *  both ways), their items deleted (never saved).  the objects are ours to free.  one a GM took out of space already is
+     *  the system's to free */
+    uint32 removed(0);
+    for (auto sentryID : m_sentries) {
+        SystemEntity::SetUnkillable(sentryID, false);
+        SystemEntity* pSE(m_system->GetSE(sentryID));
+        if ((pSE == nullptr) or !pSE->IsSentrySE() or pSE->IsDead())
+            continue;
+        pSE->Delete();
+        SafeDelete(pSE);
+        ++removed;
+    }
+    m_sentries.clear();
+
+    /* ships left in space by pilots who logged off:  with crime off a ship leaves space when its pilot logs off
+     *  (Client::WarpOut()), so these go now, saved where their pilots logged off (or where the warp they were finishing ends) */
+    uint32 ships(0);
+    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.begin();
+    while (itr != m_loggedOff.end()) {
+        GPoint savedAt(itr->second.logoffPoint);
+        GetLogoffPoint(itr->first, savedAt);
+        LeaveSpace(itr->second, savedAt);
+        itr = m_loggedOff.erase(itr);
+        ++ships;
+    }
+
+    _log(CRIME__INFO, "%s: law enforcement stood down (%u sentry guns removed, %u logged-off ships left space).",
+            m_system->GetName(), removed, ships);
 }
 
 void LawEnforcement::Close()

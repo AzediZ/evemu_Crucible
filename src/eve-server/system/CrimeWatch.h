@@ -53,6 +53,11 @@ public:
     ~CrimeWatch()   { /* do nothing here */ }
 
     int Initialize();
+    /* switch the crime rules on or off while the server runs (/crime on|off).  <crime><Enabled> sets them at start.
+     *  on:  the loaded systems get their sentry guns, and the faction police (and navy) look at the pilots in space there.
+     *  off:  every flag and timer goes (the clients are told) and law enforcement stands down everywhere.  kill rights are kept
+     *  (30 days, in the db) */
+    void SetEnabled(bool enabled);
 
     /* system security as the client sees it.  true sec rounded to 0.1, with 0 < sec < 0.05 counted as 0.05 (pseudoSecurity) */
     static float SecurityLevel(float trueSec);

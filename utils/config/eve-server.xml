@@ -530,7 +530,7 @@ boolean can use either 0/1 OR true/false.
     </debug>
 
     <crime><!-- Crucible (pre-Retribution) crime rules, CONCORD, faction police, sentries and logoff timers -->
-        <Enabled>true</Enabled><!-- bool -->
+        <Enabled>false</Enabled><!-- bool.  off at server start, so new things can be tested anywhere in peace.  /crime on and /crime off switch it while the server runs -->
         <CrimFlagTime>900</CrimFlagTime> <!-- seconds the global criminal countdown lasts (15m default) -->
         <AggFlagTime>900</AggFlagTime> <!-- seconds an aggression flag lasts (15m default) -->
         <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds after an aggressive act before you may dock or jump (60s default) -->

@@ -49,6 +49,9 @@ public:
     void Init();        // sentry guns at gates and stations
     void Process();     // 1Hz, from SystemManager::ProcessTic()
     void Close();       // system unloading.  it deletes our entities
+    /* crime switched off (/crime off):  every response leaves (its tackle with it), the sentry guns go, and ships left in space
+     *  by pilots who logged off leave space now, saved where their pilots logged off.  Init() brings the guns back */
+    void StandDown();
     bool IsBusy();      // a response is running or a ship is waiting in space.  keeps the system loaded
 
     /* called by CrimeWatch */
@@ -168,6 +171,8 @@ private:
     void StartLogoffExit(LoggedOff& l, int64 now);
     // the ship came to rest:  its time in space starts
     void SetLogoffRest(LoggedOff& l, int64 now);
+    // the ship leaves space, saved at savedAt (its entity is deleted).  the caller drops its entry
+    void LeaveSpace(LoggedOff& l, const GPoint& savedAt);
 };
 
 #endif  // EVEMU_NPC_LAWENFORCEMENT_H

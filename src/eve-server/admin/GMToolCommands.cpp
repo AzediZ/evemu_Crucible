@@ -30,7 +30,7 @@
  *  /nukem              benchmark script
  *  /entity deploy      WM: /Entity deploy this type
  *  /heat               testing: shows or sets rack heat
- *  /crime              testing: commits a crime, to bring CONCORD
+ *  /crime              switches crime on or off;  testing: commits a crime, to bring CONCORD
  *  /missioncomplete    testing: completes a mission's kill objective (MissionObjectives::ForceComplete)
  *  /untrash           restores a trashed item from the junkyard, or lists an owner's trashed items  (F20)
  */
@@ -256,7 +256,11 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
     return new PyString(buf);
 }
 
-/* /crime (me|charID|entityID) [victimID]
+/* /crime on|off
+ *  switches the crime rules on or off while the server runs (CrimeWatch::SetEnabled).  they start off unless <crime><Enabled>
+ *  is set.  off clears every flag and sends CONCORD, the police, the navy and the sentry guns away.  no arguments:  which it is
+ *
+ * /crime (me|charID|entityID) [victimID]
  *  starts CONCORD the way the game does, from the first act:
  *   a pilot: an attack on the victim, the same call a weapon cycle makes (CrimeWatch::OffensiveAct), so the normal rules
  *     decide whether it's a crime.  with no victim the victim is you, or a civilian (nobody, never a legal target) if
@@ -266,11 +270,31 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
  */
 PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
 {
-    const char* usage("Correct Usage: /crime (me|charID|entityID) [victimID]");
-    if (!sConfig.crime.Enabled)
-        throw CustomError ("CrimeWatch is disabled (<crime><Enabled> in the server config).");
+    const char* usage("Correct Usage: /crime on | off | (me|charID|entityID) [victimID]");
     if (args.argCount() < 2)
-        throw CustomError (usage);
+        return new PyString(std::string("Crime is ") + (sConfig.crime.Enabled ? "on" : "off") + ".  " + usage);
+    if ((strcasecmp(args.arg(1).c_str(), "on") == 0) or (strcasecmp(args.arg(1).c_str(), "off") == 0)) {
+        bool on(strcasecmp(args.arg(1).c_str(), "on") == 0);
+        if (on == sConfig.crime.Enabled)
+            return new PyString(std::string("Crime is ") + (on ? "on" : "off") + " already.");
+        sCrimeWatch.SetEnabled(on);
+        if (!on)
+            return new PyString("Crime is off:  flags and timers cleared, and CONCORD, the police, the navy and the sentry guns are gone.");
+        // what the config lets run
+        std::string what("aggression flags");
+        if (sConfig.crime.Concord)
+            what += ", CONCORD in 0.5 and up";
+        if (sConfig.crime.FactionPolice)
+            what += ", faction police";
+        if (sConfig.crime.FactionNavy)
+            what += ", faction navy";
+        if (sConfig.crime.Sentries)
+            what += ", gate and station sentry guns";
+        what += ", security status, kill rights and the logoff timer";
+        return new PyString("Crime is on:  " + what + ".");
+    }
+    if (!sConfig.crime.Enabled)
+        throw CustomError ("Crime is off.  Turn it on with /crime on.");
 
     Client* pAggressor(nullptr);
     SystemEntity* pEntity(nullptr);
