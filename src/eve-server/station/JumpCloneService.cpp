@@ -255,7 +255,10 @@ PyResult JumpCloneBound::InstallCloneInStation(PyCallArgs &call) {
         throw UserError("JumpNoStationCloneWhenDoingShipOne");
     StationData stData = StationData();
     stDataMgr.GetStationData(stationID, stData);
-    if ((stData.serviceMask & Station::JumpCloneFacility) == 0)
+    /* no station has the jump clone facility bit in the Crucible data (staOperationServices), and the client offers the
+     *  install in the medical window, which needs a clone bay (base.py:  medical's serviceIDs).  the station management
+     *  window adds the bit to every station (base_stationmanagement.GetStationServiceMask).  so cloning is what counts */
+    if ((stData.serviceMask & (Station::JumpCloneFacility | Station::Cloning)) == 0)
         throw CustomError("This station has no jump clone facility.");
 
     // Infomorph Psychology: one clone per level
