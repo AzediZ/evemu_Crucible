@@ -44,6 +44,11 @@ func (c *InstallCommand) Run(args []string) int {
 		if tables == 0 {
 			log.Info("Database not initialized, installing...")
 			InstallBase()
+		} else if applied, total, unfinished := BaseInstallUnfinished(); unfinished {
+			// a stop or crash during the first install left part of the base in.  Each base file is recorded in
+			//  base_migrations once it's in, so InstallBase carries on with the files that are missing
+			log.Warn("The base database install stopped part way last time (", applied, " of ", total, " base files in). Finishing it...")
+			InstallBase()
 		} else {
 			log.Info("Base database already installed. Won't overwrite.")
 		}

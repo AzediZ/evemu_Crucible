@@ -62,6 +62,49 @@ func GetNumberOfTables() int {
 	return number
 }
 
+// countRows returns the number of rows in table, or -1 when the table doesn't exist
+func countRows(db *sql.DB, table string) int {
+	var exists int
+	err := db.QueryRow(`SELECT count(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?;`, viper.GetString("db-database"), table).Scan(&exists)
+	if err != nil {
+		log.Fatal("Failed to query db; ", err)
+	}
+	if exists == 0 {
+		return -1
+	}
+	var rows int
+	if err := db.QueryRow("SELECT count(*) FROM `" + table + "`;").Scan(&rows); err != nil {
+		log.Fatal("Failed to query db; ", err)
+	}
+	return rows
+}
+
+// BaseInstallUnfinished says whether an earlier base install stopped part way:  tables exist, but the normal
+//  migrations (which only run after the whole base is in) never started, and base_migrations has fewer rows than
+//  there are base files.  A finished universe always has rows in the migrations table, so it is never touched.
+func BaseInstallUnfinished() (applied int, total int, unfinished bool) {
+	err := filepath.Walk(viper.GetString("base-dir"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total++
+		}
+		return nil
+	})
+	if err != nil {
+		log.Error("ERROR: ", err)
+	}
+
+	db := getDB()
+	defer db.Close()
+	if countRows(db, "migrations") > 0 {
+		return 0, total, false
+	}
+	applied = countRows(db, "base_migrations")
+	if applied < 0 {
+		applied = 0
+	}
+	return applied, total, applied < total
+}
+
 //Read in gzipped file into an in-memory string array
 func ReadGzFile(filename string) ([]string, error) {
 	f, err := os.Open(filename)

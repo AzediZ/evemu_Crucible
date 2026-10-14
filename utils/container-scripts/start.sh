@@ -2,8 +2,19 @@
 
 echo "Initializing EVEmu..."
 
+# A stop that comes in while the database is installed or updated waits for that to finish (docker allows 2
+#  minutes, see docker-compose.yml);  then the server isn't started.  stop_server (below) replaces this trap
+stopping=0
+trap 'stopping=1; echo "=== Stop requested:  finishing the database step first, then stopping ==="' TERM
+
 #Initialize the database
-/src/utils/container-scripts/db_init.sh
+if ! /src/utils/container-scripts/db_init.sh; then
+    exit 1
+fi
+if [ "$stopping" = 1 ]; then
+    echo "=== Stopped before the server started ==="
+    exit 0
+fi
 
 #Initialize configuration files
 if [ ! -f "/app/etc/eve-server.xml" ]; then
@@ -39,7 +50,6 @@ fi
 #  keeps waiting.
 child=""
 gdb_pid=""
-stopping=0
 # the eve-server process:  the child, or under gdb the program gdb runs
 server_pid() {
     if [ -z "$gdb_pid" ]; then

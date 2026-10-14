@@ -48,8 +48,16 @@ migrations-dir: /src/sql/migrations
 dungeons-dir: /src/sql/dungeons
 EOF
 
+# A first install that was stopped part way is finished here (evedbtool picks up the base files that are missing).
+#  If the install or an update fails, the server isn't started:  a server on a half-updated universe saves into it
 echo "Running EVEDBTool..."
-/src/sql/evedbtool install
+if ! /src/sql/evedbtool install; then
+    echo "=== The database install or update failed (see the lines above).  The server was not started. ==="
+    exit 1
+fi
 
 echo "Loading all dungeons using EVEDBTool..."
-/src/sql/evedbtool dungeon apply
+if ! /src/sql/evedbtool dungeon apply; then
+    echo "=== Loading the dungeons failed (see the lines above).  Starting anyway:  sites and missions may be missing rooms. ==="
+fi
+exit 0
