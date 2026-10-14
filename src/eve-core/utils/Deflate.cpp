@@ -34,7 +34,8 @@ const uint8 DeflateHeaderByte = 0x78; //'x'
 
 bool IsDeflated( const Buffer& data )
 {
-    return ( DeflateHeaderByte == data[0] );
+    // an empty buffer has no header byte (indexing it asserts)
+    return ( ( 0 < data.size() ) && ( DeflateHeaderByte == data[0] ) );
 }
 
 bool DeflateData( Buffer& data )
@@ -54,7 +55,10 @@ bool DeflateData( const Buffer& input, Buffer& output )
     size_t outputSize = compressBound( input.size() );
     output.ResizeAt( out, outputSize );
 
-    int res = compress( &*out, (uLongf*)&outputSize, &input[0], input.size() );
+    // an empty input (an empty mail body) is valid for zlib, but indexing an empty Buffer asserts
+    const Bytef empty = 0;
+    const Bytef* in = ( 0 < input.size() ? &input[0] : &empty );
+    int res = compress( &*out, (uLongf*)&outputSize, in, input.size() );
 
     if( Z_OK == res )
     {
@@ -80,6 +84,10 @@ bool InflateData( Buffer& data )
 
 bool InflateData( const Buffer& input, Buffer& output )
 {
+    // nothing to inflate:  an empty buffer isn't zlib data (and indexing it asserts)
+    if( 0 == input.size() )
+        return false;
+
     const Buffer::iterator<uint8> out = output.end<uint8>();
 
     size_t outputSize = 0;
