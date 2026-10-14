@@ -24,6 +24,11 @@ services:
       - RUN_WITH_GDB=${RUN_GDB:-FALSE} #Set to TRUE to run evemu with gdb automatically
     stdin_open: true # Enables stdin for the container. Attach to it with 'docker attach'
     tty: true
+    # docker stop (and compose stop, restart and down) sends SIGTERM, which start.sh passes on to eve-server:  it logs
+    #  everyone out and saves before it exits.  Docker kills it after stop_grace_period (default 10 s), so allow
+    #  time for the save;  the stop ends as soon as the server has exited
+    stop_grace_period: 2m
+    init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
     # cap_add: #This is required for gdb to work
     #   - SYS_PTRACE
 
