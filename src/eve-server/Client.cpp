@@ -671,9 +671,9 @@ bool Client::IsLoginWarpPending() {
     return (!pShipSE->DestinyMgr()->IsAligningForWarp() and !pShipSE->DestinyMgr()->IsWarping());
 }
 
-/* the login warp (EVE_Logoff.h).  called just before the first SetState goes out, so the ship is in that state aligned at
- *  full speed in warp mode, and the WarpTo (and the warp effect) follow it in the same tick:  the client is in warp from
- *  its first tick in space.
+/* the login warp (EVE_Logoff.h).  called right after the first SetState goes out (SetBallPark(), from the Login state timer
+ *  once the client's ballpark is running), so its velocity, WarpTo and warp effect follow the state in the same tick:  the
+ *  ship comes in aligned at full speed and the client is in warp from its first tick in space.
  *  a ball that came in already in warp proper (effectStamp set) would fly on in the client's destiny, but without a WarpTo
  *  the client has no warp destination (spaceMgr.py OnBallparkCall 'WarpTo' -> warpDestinationCache[3]), and its warp
  *  tunnel effect needs one (Warp.py Prepare -> AlignToDirection, Start -> GetWarpCollisions).  a WarpTo sent to a ball in
@@ -989,10 +989,13 @@ void Client::SetBallPark() {
         return;
     }
     if (!m_setStateSent and m_beyonce) {  // MUST have beyonce before sending state data.
-        // login in space:  the warp back to the logoff point is under way in this state
-        if (IsLoginWarpPending())
-            StartLoginWarp();
+        bool loginWarp(IsLoginWarpPending());
         pShipSE->DestinyMgr()->SendSetState();
+        // login in space:  the warp back to the logoff point starts right after the state, in the same tick.  its velocity and
+        //  WarpTo are queued, so they reach the client after the SetState at the same stamp and the ship is in warp on the
+        //  client's first tick.  (the ball isn't put into the state in warp mode:  mid-align, before the server's warp is set up)
+        if (loginWarp)
+            StartLoginWarp();
         m_ballparkTimer.Disable();
         if (IsGateJump()) {
             SetInvulTimer(Player::Timer::JumpInvul);

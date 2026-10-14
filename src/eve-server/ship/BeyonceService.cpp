@@ -130,7 +130,10 @@ BeyonceBound::BeyonceBound(EVEServiceManager& mgr, BeyonceService& parent, Clien
     this->Add("CmdJumpThroughCorporationStructure", &BeyonceBound::CmdJumpThroughCorporationStructure);
 
     client->SetBeyonce(true);
-    if (client->IsLogin() and !client->IsSetStateSent())
+    /* not for a login in space:  the client binds beyonce from michelle.AddBallpark() (GetFormations), before its ballpark
+     *  is started (Start(), bpReady), so a SetState sent from here reaches a park that isn't running.  the Login state timer
+     *  (ProcessClient -> SetBallPark()) sends the one SetState once it is */
+    if (client->IsLogin() and !client->IsSetStateSent() and !sDataMgr.IsSolarSystem(client->GetLocationID()))
         client->SetBallPark();
 
     this->m_bookmark = this->GetServiceManager().Lookup <BookmarkService>("bookmark");
