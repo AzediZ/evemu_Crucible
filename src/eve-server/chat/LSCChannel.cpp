@@ -24,7 +24,7 @@
 */
 
 #include "eve-server.h"
-#include "EVEVersion.h"
+#include "EVE_Motd.h"
 
 #include <boost/algorithm/string.hpp>
 
@@ -239,35 +239,23 @@ void LSCChannel::SendSystemMessage(const char * message) {
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 
-void LSCChannel::SendServerMOTD(Client* pClient) {
-    std::string uptime;
-    sEntityList.GetUpTime(uptime);
-    std::string msg = "<br>Welcome to EVEmu Server";
-    //msg += pClient->GetCharName();
-    msg += ".<br>Server Version: ";
-    msg += EVEMU_REVISION;
-    msg += "<br>Revision Date: ";
-    msg += EVEMU_BUILD_DATE;
-    msg += "<br>Uptime: ";
-    msg += uptime;
-    msg += "<br>Current Population: ";
-    msg += std::to_string(sEntityList.GetClientCount());
-    msg += "<br><br>Character Options:";
-    msg += "<br>Module AutoStop: ";
-    msg += (pClient->AutoStop() ? "On" : "Off");
-    msg += "<br>RAM Event: On";
-    //msg += (pClient->RAMEvent() ? "On" : "Off");
-    // check account roles for this one
-    msg += "<br>ShowAll: Off";
-    //msg += (pClient->ShowAll() ? "On" : "Off");
+void LSCChannel::SendSystemMessageTo(Client* pClient, const std::string& message) {
+    if ((pClient == nullptr) or message.empty())
+        return;
 
     OnLSC_SendMessage sm;
     sm.sender = _FakeSenderInfo();
     sm.channelID = EncodeID();
-    sm.message = msg;
+    sm.message = message;
     sm.member_count = m_chars.size();
 
     PyTuple *answer = sm.Encode();
+    // the client takes a plain string as bytes:  anything past ascii (a motd.txt in utf-8) must be unicode
+    if (!Motd::IsAscii(message)) {
+        PyRep* args(answer->GetItem(4));
+        if ((args != nullptr) and args->IsTuple() and (args->AsTuple()->size() > 0))
+            args->AsTuple()->SetItem(0, new PyWString(message));
+    }
     pClient->SendNotification("OnLSC", GetTypeString(), &answer);
 }
 

@@ -27,6 +27,9 @@
 #ifndef __LSC_SERVICE_H_INCL__
 #define __LSC_SERVICE_H_INCL__
 
+#include <map>
+#include <set>
+#include <string>
 #include <vector>
 
 //#include "utils/Singleton.h"
@@ -48,6 +51,11 @@ public:
     //     [baseChannelID,maxChannelID]  (note the inclusivity in that set)
     static const int32 BASE_CHANNEL_ID;
     static const uint32 MAX_CHANNEL_ID;
+    /* world.globalChat:  the one server-wide channel ("Global") every character is put in at login.
+     *  an int (user-style) channel the server owns, below BASE_CHANNEL_ID and clear of the ids the Crucible client keeps
+     *  for CCP's help channels (lscengine __configvalues__: rookieHelpChannel 1, helpChannelEN 2, DE 40, RU 55, JA 56)
+     */
+    static const int32 GLOBAL_CHANNEL_ID;
 
     LSCService(EVEServiceManager& mgr, CommandDispatcher *cd);
     ~LSCService();
@@ -63,12 +71,22 @@ public:
     // true while the character is gagged.  fills in when it ends (filetime) and why
     static bool IsGagged(uint32 charID, int64& until, std::string& reason);
 
+    // creates the corp/alliance channels and queues the login MOTD and server info (sent once the client joins Global or Local)
     void CharacterLogin(Client *pClient);
     // leaves every channel (and drops the abandoned ones).  called when the client goes away
     void CharacterLogout(Client *pClient);
     // after a session change: leaves the location/corp/alliance/fleet channels the character no longer belongs in
     void EnforceMembership(Client *pClient);
-    void SendServerMOTD(Client* pClient);
+    /* the login MOTD:  etc/motd.txt next to eve-server.xml (see EVE_Motd.h for the format).  read at startup and by /motd reload.
+     *  returns false (and why in err) when the file can't be read;  the MOTD is then empty
+     */
+    static bool LoadMOTD(std::string& err);
+    static const std::string& GetMOTD()                 { return s_motd; }
+    static std::string GetMOTDPath();
+    /* sends the MOTD, then (world.loginInfo, GMs only) the server info, to the client in Global (world.globalChat) or else Local.
+     *  returns the channel it went to, nullptr when the client is in neither
+     */
+    LSCChannel* SendLoginText(Client* pClient, bool motd = true, bool info = true);
 
     // sends a message from "EVE System" to every Local channel with someone in it.  returns the number of channels
     uint32 BroadcastSystemMessage(const std::string& msg);
@@ -105,6 +123,9 @@ protected:
     // stored access entries of channels that are made later (alliance channels)
     std::map<int32, std::vector<LSCChannelMod>> m_storedMods;
     static std::map<uint32, std::pair<int64, std::string>> s_gags;   // charID -> (until, reason)
+    static std::string s_motd;
+    // characters that logged in and haven't had their login text yet -> already asked the client to join Global
+    std::map<uint32, bool> m_loginText;
 
     PyResult GetChannels(PyCallArgs& call);
     PyResult GetRookieHelpChannel(PyCallArgs& call);
@@ -144,6 +165,8 @@ private:
     static int32 DecodeChannelID(PyRep* rep);
 
     void CreateStaticChannels();
+    // sends the queued login text once this JoinChannels call has put the client in its login channel
+    void ProcessLoginText(Client* pClient, const std::set<int32>& requested);
     // player channels and access lists from the db (startup)
     void LoadUserChannels();
     // deletes an empty private channel, or (chat.UserChannelCleanup) an empty user channel nobody is subscribed to.  true if deleted

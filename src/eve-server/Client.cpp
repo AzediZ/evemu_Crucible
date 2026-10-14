@@ -358,7 +358,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
         }
     }
 
-    //create corp and ally chat channels (if not already created)
+    // create corp and ally chat channels (if not already created), and queue the login MOTD and (GMs) server info.
+    //  they are sent once the client joins Global or Local (LSCService::ProcessLoginText)
     this->m_lsc->CharacterLogin(this);
     // tell the characters watching us
     OnlineStatusService::NotifyStatusChange(GetCharacterID(), true);
@@ -382,10 +383,6 @@ bool Client::SelectCharacter(int32 charID/*0*/)
     // set ship cap and shields to full
     m_ship->SetShipShield(1.0);
     m_ship->SetShipCapacitorLevel(1.0);
-
-    // send MOTD and server data to 'local' chat channel
-    if (sConfig.world.loginInfo)
-        this->m_lsc->SendServerMOTD(this);
 
     return (m_loaded = true);
 }

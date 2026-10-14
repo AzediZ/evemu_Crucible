@@ -915,5 +915,7 @@ ENDIF( WIN32 )
 
 INSTALL( TARGETS "${TARGET_NAME}"
          RUNTIME DESTINATION "bin" )
+# motd.txt:  the login message of the day (LSCService::LoadMOTD), read from etc next to eve-server.xml
 INSTALL( FILES "${TARGET_UTILS_DIR}/config/devtools.raw" "${TARGET_UTILS_DIR}/config/gmtools.py"
+               "${TARGET_UTILS_DIR}/config/motd.txt"
          DESTINATION "etc" )

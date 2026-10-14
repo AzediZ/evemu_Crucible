@@ -25,6 +25,11 @@
 */
 
 #include "eve-server.h"
+#include "EVEVersion.h"
+#include "EVE_Motd.h"
+
+#include <fstream>
+#include <sstream>
 
 #include <boost/algorithm/string.hpp>
 
@@ -58,6 +63,8 @@
 // Set the base (minimum) and maximum numbers for any user-created chat channel.
 const int32 LSCService::BASE_CHANNEL_ID = 2100000000;      //trial accts are spam-restricted to 1m input buffer when channelID < 2100000000
 const uint32 LSCService::MAX_CHANNEL_ID = 0xFFFFFFFF;
+const int32 LSCService::GLOBAL_CHANNEL_ID = 3;
+std::string LSCService::s_motd;
 
 LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
     Service("LSC", eAccessLevel_Location),
@@ -97,6 +104,13 @@ LSCService::LSCService(EVEServiceManager &mgr, CommandDispatcher* cd) :
 
     CreateStaticChannels();
     LoadUserChannels();
+
+    std::string err;
+    if (LoadMOTD(err)) {
+        sLog.Green("       ServerInit", "Login MOTD loaded from %s (%u bytes).", GetMOTDPath().c_str(), (uint32)s_motd.size());
+    } else {
+        sLog.Warning("       ServerInit", "No login MOTD: %s", err.c_str());
+    }
 
     // gags outlive restarts
     s_gags.clear();
@@ -422,6 +436,8 @@ PyResult LSCService::JoinChannels(PyCallArgs &call, PyList* channelIDs, PyLong* 
         }
         ml->AddItem(chjr.Encode());
     }
+
+    ProcessLoginText(call.client, toJoin);
 
     if (is_log_enabled(LSC__RSP_DUMP))
         ml->Dump(LSC__RSP_DUMP, "   ");
@@ -1230,6 +1246,11 @@ void LSCService::CharacterLogin(Client* pClient)
 {
     CreateSystemChannel(pClient->GetCorporationID());
     CreateSystemChannel(pClient->GetAllianceID());
+
+    /* the login text goes out once the client has joined Global (or Local):  the client drops (and leaves) OnLSC for a
+     *  channel it isn't in yet (lscengine.OnLSC), but waits for one it is joining.  see ProcessLoginText()
+     */
+    m_loginText[pClient->GetCharacterID()] = false;
 }
 
 /*
@@ -1299,6 +1320,7 @@ bool LSCService::DestroyIfAbandoned(LSCChannel* pChan)
 
 void LSCService::CharacterLogout(Client* pClient)
 {
+    m_loginText.erase(pClient->GetCharacterID());
     // copy, since leaving changes the client's set
     std::set<LSCChannel*> channels = pClient->GetChannels();
     for (auto cur : channels) {
@@ -1488,148 +1510,121 @@ void LSCService::DeleteSystemChannel(int32 channelID)
 }
 
 void LSCService::CreateStaticChannels() {
-    // hardcode creating server static channels during server startup
-    // these are all set to memberless to avoid constant updates
-    std::ostringstream str;
+    /* Crucible's default channels are all made by the client asking for them (lscengine InitChannels/OnSessionChanged):
+     *  Local (('solarsystemid2', id),), constellation (on by default), region (off by default), corp, alliance, fleet,
+     *  militia and the character's own mailing list.  the server makes those on demand (CreateSystemChannel), so the only
+     *  server-wide channel is Global, when world.globalChat is on.  CCP's Rookie Help (1) and Help (2/40/55/56) channels
+     *  are not made:  the client's join of them just finds nothing (no message)
+     */
+    if (!sConfig.world.globalChat)
+        return;
 
-    // world.globalChat = false: no server wide public channels, only the GM command channel
-    if (sConfig.world.globalChat) {
-
-// basic template
-    //CreateChannel(channelID, ownerID, "name", "motd", "password" or nullptr, "*title*", LSC::Type::normal, cspa, 0, 0, true);
-
-//Help
-// Incursion Rookie Help MOTD
-    str.str("");
-    str << "<br><color=0xff007fff><b>Welcome to the EVEmu <u>EVE Online: Crucible</u> Emulator</b></color><br><br>";
-    str << "<color=0xff00ff00><b>Topic:</b></color>  ";
-    str << "<color=0xffffffff>EVE-Online related rookie help.</color><br><br>";
-    str << "<color=0xff00ff00><b>Rules:</b></color>  ";
-    str << "<color=0xffffffff>No WTB, WTS, WTT, PC, advertising, recruiting, scamming, offering private help in any form or begging in this channel.<br>";
-    str << "No CAPS or text-decoration.</color><br><br>";
-    str << "<color=0xff00ff00><b>Language:</b></color>  ";
-    str << "<color=0xffffffff>This channel is ENGLISH ONLY.</color><br><br>";
-    str << "<color=0xff00ff00><b>How to contact a GM:</b> </color>  ";
-    str << "<color=0xffffffff>Right now, our petition service isnt operational, so to contact a GM, post on the forums.</color><br><br>";
-    //str << "<color=0xffffffff>File a petition (F12 - Petitions - New Petition)</color><br><br>";
-    str << "<color=0xff00ff00><b>ISK Advertising:</b></color>  ";
-    str << "<color=0xffff0000>Contrary to what they spam, EVEmu does not authorize any person or site to sell ISK for RL cash.</color><br><br>";
-    str << "<color=0xff00ff00><b>Please Note:</b></color><br>";
-    str << "<color=0xffffffff>There are no third party applications (.exe) that will magically give you any type of ship you wish or hack your wallet. Please report characters advertising these types of links IMMEDIATELY via petition and DO NOT download and try them. <br><br>";
-    // str << "Sister of EVE storyline starts in <url=showinfo:5//30005001><u>Arnon</url></b></u> <b>with <url=showinfo:1378//3019356><u>Sister Alitura</url></b></u>. <br><br></color>";
-    CreateChannel(1, 1, "Rookie Help", str.str().c_str(), nullptr, "help", LSC::Type::normal, cspa, 263238, -1, true);
-// Incursion Help MOTD
-    str.str("");
-    str << "<br><color=0xff007fff><b>Welcome to the EVEmu <u>EVE Online: Crucible</u> Emulator</color><br><br>";
-    str << "<color=0xff00ff00><b>Topic:</b></color>  ";
-    str << "<color=0xffffffff>EVE-Online related help.</color><br><br>";
-    str << "<color=0xff00ff00><b>Rules:</b></color>  ";
-    str << "<color=0xffffffff>No WTB, WTS, WTT, PC, advertising, recruiting, scamming, offering private help in any form or begging in this channel.<br>";
-    str << "No CAPS or text-decoration.</color><br><br>";
-    str << "<color=0xff00ff00><b>Language:</b></color>  ";
-    str << "<color=0xffffffff>This channel is ENGLISH ONLY.</color><br><br>";
-    str << "<color=0xff00ff00><b>How to contact a GM:</b> </color>  ";
-    str << "<color=0xffffffff>Right now, our petition service isnt operational, so to contact a GM, post on the forums.</color><br><br>";
-    //str << "<color=0xffffffff>File a petition (F12 - Petitions - New Petition)</color><br><br>";
-    str << "<color=0xff00ff00><b>ISK Advertising:</b></color>  ";
-    str << "<color=0xffff0000>Contrary to what they spam, EVEmu does not authorize any person or site to sell ISK for RL cash.</color><br><br>";
-    CreateChannel(2, 1, "Help", str.str().c_str(), nullptr, "help", LSC::Type::normal, cspa, 263238, -1/*263262*/, true);
-//Empires/Factions
-    CreateChannel(10, 1, "Caldari", "Caldari Faction", nullptr, "caldari", LSC::Type::normal, cspa, 263329, -1/*263268*/, true);
-    CreateChannel(11, 1, "Amarr", "Amarr Faction", nullptr, "amarr", LSC::Type::normal, cspa, 263329, -1/*263246*/, true);
-    CreateChannel(12, 1, "Minmatar", "Minmatar Faction", nullptr, "minmatar", LSC::Type::normal, cspa, 263329, -1/*263281*/, true);
-    CreateChannel(13, 1, "Gallente", "Gallente Faction", nullptr, "gallente", LSC::Type::normal, cspa, 263329, -1/*263271*/, true);
-    CreateChannel(14, 1, "Jove", "Jove Faction", nullptr, "jove", LSC::Type::normal, cspa, 263329, -1/*263258*/, true);
-// Incursion recruitment MOTD...
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to the recruitment channel.<br><br>";
-    str << "This channel is intended for those players looking to find a new corporation, as well as those looking to enlist new players.<br>";
-    str << "Other activities, such as non-recruitment discussion and scamming, are not permitted in this channel.";
-//Corporate
-    CreateChannel(20, 9, "Recruitment", str.str().c_str(), nullptr, "recruitment", LSC::Type::normal, cspa, 263235, -1/*263286*/, true);
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to this</color> <color=0xff00ffff>Corporate CEO</color><color=0xffffffff> channel.<br><br>";
-    str << "This channel is intended for corp CEOs to discuss business as they see fit.</color>";
-    CreateChannel(21, 9, "CEO", str.str().c_str(), nullptr, "ceo", LSC::Type::normal, cspa, 263235, -1/*263287*/, true);
-//Alliance
-    /*
-    str.str("");
-    str << "<color=0xffffffff>Welcome to this</color> <color=0xff00ffff>Alliance</color><color=0xffffffff>  channel.  This channel is intended for corp CEOs to discuss business as they see fit.</color>";
-    CreateChannel(31, 1, "Smacktalk", str.str().c_str(), nullptr, "smacktalk", LSC::Type::normal, cspa, 263330, -1, true);
-    CreateChannel(32, 1, "Rumour Mill", str.str().c_str(), nullptr, "rumourmill", LSC::Type::normal, cspa, 263330, -1, true);
-    CreateChannel(33, 1, "Freelancer", str.str().c_str(), nullptr, "freelancer", LSC::Type::normal, cspa, 263330, -1, true);
-    */
-//Trade
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to this</color> <color=0xff00ffff>Trade</color><color=0xffffffff> channel.<br><br>";
-    str << "This channel is intended for those players looking to trade the various items as referenced in the channel title.</color>";
-    CreateChannel(40, 1, "Other", str.str().c_str(), nullptr, "other", LSC::Type::normal, cspa, 263240, -1/*263277*/, true);
-    CreateChannel(41, 1, "Ships", str.str().c_str(), nullptr, "ships", LSC::Type::normal, cspa, 263240, -1/*263245*/, true);
-    CreateChannel(42, 1, "Blueprints", str.str().c_str(), nullptr, "blueprints", LSC::Type::normal, cspa, 263240, -1/*263292*/, true);
-    CreateChannel(43, 1, "Modules and Munitions", str.str().c_str(), nullptr, "modulesandmunitions", LSC::Type::normal, cspa, 263240, -1/*263254*/, true);
-    CreateChannel(44, 1, "Minerals and Manufacturing", str.str().c_str(), nullptr, "mineralsandmanufacturing", LSC::Type::normal, cspa, 263240, -1/*263275*/, true);
-//Science and Industry
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to this</color> <color=0xff00ffff>Science and Industry</color><color=0xffffffff> channel.<br><br>";
-    str << "This channel is intended for those players looking to discuss the various items as referenced in the channel title.</color>";
-    CreateChannel(50, 1, "Boosters", str.str().c_str(), nullptr, "boosters", LSC::Type::normal, cspa, 263331, -1/*263365*/, true);
-    CreateChannel(51, 1, "Invention", str.str().c_str(), nullptr, "invention", LSC::Type::normal, cspa, 263331, -1/*263366*/, true);
-    CreateChannel(52, 1, "Manufacturing", str.str().c_str(), nullptr, "manufacturing", LSC::Type::normal, cspa, 263331, -1/*263367*/, true);
-    CreateChannel(53, 1, "Mining", str.str().c_str(), nullptr, "mining", LSC::Type::normal, cspa, 263331, -1/*263368*/, true);
-    CreateChannel(54, 1, "Planetary Interaction", str.str().c_str(), nullptr, "planetaryinteraction", LSC::Type::normal, cspa, 263331, -1/*263369*/, true);
-    CreateChannel(55, 1, "Research", str.str().c_str(), nullptr, "research", LSC::Type::normal, cspa, 263331, -1/*263370*/, true);
-//Groups/Content
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to this</color> <color=0xff00ffff>Content</color><color=0xffffffff> channel.<br><br>";
-    str << "This channel is intended for those players looking to discuss the various items as referenced in the channel title.</color>";
-    CreateChannel(60, 1, "Incursions", str.str().c_str(), nullptr, "incursions", LSC::Type::normal, cspa, 263328, -1/*263289*/, true);
-    CreateChannel(61, 1, "Ratting", str.str().c_str(), nullptr, "ratting", LSC::Type::normal, cspa, 263328, -1/*263338*/, true);
-    CreateChannel(62, 1, "Scanning", str.str().c_str(), nullptr, "scanning", LSC::Type::normal, cspa, 263328, -1/*263339*/, true);
-    CreateChannel(63, 1, "Wormholes", str.str().c_str(), nullptr, "wormholes", LSC::Type::normal, cspa, 263328, -1/*263340*/, true);
-//Misc
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to the <url=https://evemu.dev>Free Wrecks</url> channel.<br>";
-    str << "Here you can offer your abandoned mission wrecks to any willing freelance salvager in New Eden.</color><br><br>";
-    str << "<b><u><color=0xff00ffff>Salvagers</color></u><br><color=0xff00ff00>Alphas</color></b>";
-    str << "<color=0xffffffff> - Basic salvage fits by race: </color><br>";
-    str << "<url=fitting:16236:31083;2:25861;4:8135;1:31370;1:1319;2:4435;1:5973;1:24348;4::>Amarr</url><color=0xffffffff> - </color>";
-    str << "<url=fitting:16238:25861;4:1319;2:31370;1:31083;2:4435;2:5973;1:24348;4::>Caldari</url><color=0xffffffff> - </color>";
-    str << "<url=fitting:16240:31083;2:25861;4:8135;1:31370;1:1319;2:4435;1:5973;1:24348;4::>Gallente</url><color=0xffffffff> - </color>";
-    str << "<url=fitting:16242:25861;4:1319;2:31370;1:31083;2:6001;1:4435;2:24348;4::>Minmatar</url><color=0xffffffff> </color><br><br>";
-    /*  this suggests t2 shit which isnt available yet
-    str << "<b><color=0xff00ff00>Omegas</color></b><color=0xffffffff> - You should be able to use a </color><url=showinfo:2998>Noctis</url>";
-    str << "<color=0xffffffff>, </color><url=showinfo:30836>Salvager II's</url><color=0xffffffff> &amp; </color><url=showinfo:4250>Tractor Beam II's</url><br>";
-    */
-    str << "<b><u><color=0xff00ffff>Mission Runners</color></b></u><br><color=0xffffffff>";
-    str << "Please state where your bookmark will be traded, contracted or if you're hoping to fleet with the salvager looking for work. <br>";
-    str << "If you are contracting or trading bookmarks dont forget to</color> <color=0xff007fff>Abandon all wrecks and containers</color><color=0xffffffff>.</color><br><br>";
-    str << "<b><u><color=0xff00ff00>Useful Links.</color></u><br>";
-    str << "<loc><url=http://evemaps.dotlan.net/>DOTLAN</url></loc></b><color=0xffffffff> - A database of everything you need to know about New Eden; maps, corporations, navigations and much more.</color><color=0xff0000ff>NOTE:</color><color=0xffffffff> While this site is specific for Tranquility, the maps and navigation are the same here on EVEmu.</color><br>";
-    str << "<loc><url=http://o.smium.org>Osmium</url></loc><color=0xffffffff> - A site where pilots post their ship fittings to help players get the most out of their ship class.</color><br>";
-    str << "<loc><url=http://eve-survival.org/wikka.php?wakka=MissionReports>EVE Survival</url></loc><color=0xffffffff> - A database of missions within New Eden. Here you can find information about gaining the upper hand on those sneaky NPCs and how to perfectly run the mission in question.</color><br>";
-    str << "<loc><url=http://www.fuzzwork.co.uk/>Fuzz Work</url></loc><color=0xffffffff> - A brilliant site that has many awesome calculators for LP stores, Blueprints, Invention, Ore and much more!</color><br>";
-    CreateChannel(100, 2, "Free Wrecks", str.str().c_str(), nullptr, "freewrecks", LSC::Type::normal, cspa, 0, 0, true); //256739 <-- this was messageID from error about "channel already joined"
-    //CreateChannel(101, 1, "", "motd", nullptr, "*title*", LSC::Type::normal, cspa, 0, 0, true);
-    }
-
-
-//GM Command channel
-    str.str("");
-    str << "<br><color=0xffffffff>Welcome to the</color> <color=0xff00ffff>GM Command</color><color=0xffffffff> channel.<br><br>";
-    str << "This channel is intended for using dot commands.</color>";
-    CreateChannel(2900000000, 1, "Command", str.str().c_str(), nullptr, "command", LSC::Type::custom, cspa, 0, 0, true);
-
-    // the client checks int channels against their access list: everyone may talk in the public channels
-    for (auto cur : m_channels)
-        if (cur.second->HasIntID() and !cur.second->HasDefaultMod())
-            cur.second->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));
+    // groupMessageID/channelMessageID CHAT_SYSTEM_CHANNEL (-1): the client shows the displayName, under "System Channels"
+    LSCChannel* pChan = CreateChannel(GLOBAL_CHANNEL_ID, 1/*ownerSystem*/, "Global", "", nullptr, "global",
+                                      LSC::Type::normal, cspa, -1, -1, false);
+    // the client checks int channels against their access list: everyone may talk
+    if ((pChan != nullptr) and !pChan->HasDefaultMod())
+        pChan->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));
 }
 
-void LSCService::SendServerMOTD(Client* pClient)
+std::string LSCService::GetMOTDPath()
 {
-    std::map<int32, LSCChannel*>::iterator itr = m_channels.find(pClient->GetSystemID());
-    if (itr != m_channels.end())
-        itr->second->SendServerMOTD(pClient);
+    // next to eve-server.xml (eve-server.cpp SRV_CONFIG_FILE)
+    return std::string(EVEMU_ROOT "/etc/motd.txt");
+}
+
+bool LSCService::LoadMOTD(std::string& err)
+{
+    // a file that can't be read keeps the MOTD there was (none at startup)
+    std::string path(GetMOTDPath());
+    std::ifstream file(path.c_str(), std::ios::in | std::ios::binary);
+    if (!file.is_open()) {
+        err = "unable to open " + path;
+        return false;
+    }
+    std::ostringstream text;
+    text << file.rdbuf();
+    if (file.bad()) {
+        err = "unable to read " + path;
+        return false;
+    }
+    s_motd = Motd::Parse(text.str());
+    return true;
+}
+
+LSCChannel* LSCService::SendLoginText(Client* pClient, bool motd/*true*/, bool info/*true*/)
+{
+    if ((pClient == nullptr) or (pClient->GetChar().get() == nullptr))
+        return nullptr;
+
+    uint32 charID(pClient->GetCharacterID());
+    LSCChannel* pChan(nullptr);
+    if (sConfig.world.globalChat) {
+        pChan = GetChannelByID(GLOBAL_CHANNEL_ID);
+        if ((pChan != nullptr) and !pChan->IsJoined(charID))
+            pChan = nullptr;
+    }
+    // no Global (or kicked from it):  Local
+    if (pChan == nullptr) {
+        pChan = GetChannelByID(pClient->GetSystemID());
+        if ((pChan != nullptr) and !pChan->IsJoined(charID))
+            pChan = nullptr;
+    }
+    if (pChan == nullptr)
+        return nullptr;
+
+    if (motd and !s_motd.empty())
+        pChan->SendSystemMessageTo(pClient, s_motd);
+
+    if (info and sConfig.world.loginInfo and Motd::IsGMRole(pClient->GetAccountRole())) {
+        Motd::ServerInfo sInfo;
+            sInfo.revision = EVEMU_REVISION;
+            sInfo.buildDate = EVEMU_BUILD_DATE;
+            sEntityList.GetUpTime(sInfo.uptime);
+            sInfo.population = sEntityList.GetClientCount();
+            sInfo.autoStop = pClient->AutoStop();
+            sInfo.showAll = pClient->IsShowall();
+        pChan->SendSystemMessageTo(pClient, Motd::BuildServerInfo(sInfo));
+    }
+    return pChan;
+}
+
+void LSCService::ProcessLoginText(Client* pClient, const std::set<int32>& requested)
+{
+    if ((pClient == nullptr) or (pClient->GetChar().get() == nullptr))
+        return;
+    std::map<uint32, bool>::iterator itr = m_loginText.find(pClient->GetCharacterID());
+    if (itr == m_loginText.end())
+        return;
+
+    /* sent while the client is still in its JoinChannels call for the channel:  lscengine.OnLSC waits for channels in
+     *  joiningChannels, so the message shows once the join reply is in.  a channel joined in an earlier call is never
+     *  waited for, so only a call that asked for the login channel sends the text
+     */
+    uint32 charID(pClient->GetCharacterID());
+    LSCChannel* pGlobal(sConfig.world.globalChat ? GetChannelByID(GLOBAL_CHANNEL_ID) : nullptr);
+    bool askedGlobal(requested.find(GLOBAL_CHANNEL_ID) != requested.end());
+    bool askedLocal(requested.find(pClient->GetSystemID()) != requested.end());
+
+    if (pGlobal != nullptr) {
+        if (askedGlobal) {
+            // the Global join can be refused (kicked):  then Local, if the client is in it
+            SendLoginText(pClient);
+            m_loginText.erase(itr);
+        } else if (!itr->second and !pGlobal->IsJoined(charID)) {
+            /* every character is in Global:  ask the client to join it (lscengine.JoinChannel, exported to the server).
+             *  its JoinChannels call for it sends the login text
+             */
+            itr->second = true;
+            pClient->SendServiceCall("LSC", "JoinChannel", new_tuple(new PyInt(GLOBAL_CHANNEL_ID)));
+        }
+        return;
+    }
+
+    if (askedLocal) {
+        SendLoginText(pClient);
+        m_loginText.erase(itr);
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

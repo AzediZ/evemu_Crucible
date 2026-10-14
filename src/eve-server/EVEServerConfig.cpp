@@ -69,10 +69,10 @@ EVEServerConfig::EVEServerConfig()
 
     // world
     world.chatLogs = false;     // append every chat channel message to <logDir>/chat_YYYY-MM-DD.log  (F23)
-    world.globalChat = true;    // create the server-wide static public channels at startup  (F23)
+    world.globalChat = true;    // one server-wide "Global" channel every character joins at login
     world.gridUnload = true;
     world.gridUnloadTime = 300 /*s*/; // 5 mins
-    world.loginInfo = true;     // send the server info MOTD into local on login
+    world.loginInfo = true;     // after the login MOTD, send GMs the server version/uptime/population
     world.loginMsg = true;      // show account.loginMessage after authentication
     world.saveOnMove = false;
     world.saveOnUpdate = false;

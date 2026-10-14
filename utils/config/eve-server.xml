@@ -85,8 +85,11 @@ boolean can use either 0/1 OR true/false.
         <gridUnload>true</gridUnload><!-- bool -->
         <gridUnloadTime>300</gridUnloadTime><!-- in seconds (5 min default)-->
         <chatLogs>false</chatLogs><!-- bool  -append every chat channel message to <logDir>/chat_YYYY-MM-DD.log -->
-        <globalChat>true</globalChat><!-- bool  -create the server-wide public channels (Help, Rookie Help, language channels) at startup.  false = only local/corp/alliance/fleet/private -->
-        <loginInfo>true</loginInfo><!-- bool  -send the server info MOTD into local on login -->
+        <!-- the login message of the day is etc/motd.txt next to this file (format described in it).  empty or missing = none.
+             it goes into Global when globalChat is on, else into Local, once per login.  /motd shows it, /motd reload rereads it. -->
+        <globalChat>true</globalChat><!-- bool  -one server-wide channel, "Global", every character is put in at login.  false = no Global
+                                             (Local, constellation, corp, alliance, fleet and player channels only, as Crucible's client asks for them) -->
+        <loginInfo>true</loginInfo><!-- bool  -after the MOTD, send GMs (GML/GMH/ADMIN) the server version, revision date, uptime and population -->
         <loginMsg>true</loginMsg><!-- bool  -show account/loginMessage after authentication -->
         <mailDelay>5</mailDelay><!-- seconds  -minimum time between eve mails sent by one character (anti-spam).  0 = off -->
         <apWarptoDistance>15000</apWarptoDistance><!-- in meters - sets autopilot warp stop distance from object (15km default)-->
@@ -397,7 +400,7 @@ boolean can use either 0/1 OR true/false.
         <EnableWingChat>false</EnableWingChat><!-- bool -->
         <EnableSquadChat>false</EnableSquadChat><!-- bool -->
         <EnableVoiceChat>false</EnableVoiceChat><!-- bool -->
-        <EnforceRookieInHelp>false</EnforceRookieInHelp><!-- bool -->
+        <EnforceRookieInHelp>false</EnforceRookieInHelp><!-- bool  -only newbies may join channels 1 and 2 (Rookie Help/Help).  the server no longer makes those channels, so this has no effect -->
         <!-- Restrict joining corp/alliance/fleet/local/region channels to members (Crucible behaviour). Disable only on test servers.
              Channel passwords and the send/configure/destroy checks always apply. -->
         <EnforceChannelAccess>true</EnforceChannelAccess><!-- bool -->

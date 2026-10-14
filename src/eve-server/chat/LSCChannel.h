@@ -156,7 +156,8 @@ public:
     void SendMessage(Client * c, const char * message, bool self = false);
     // a message from "EVE System" to every member (server broadcasts and notices)
     void SendSystemMessage(const char * message);
-    void SendServerMOTD(Client* pClient);
+    // a message from "EVE System" to one member only (the login MOTD and server info).  utf-8 text goes as unicode
+    void SendSystemMessageTo(Client* pClient, const std::string& message);
 
     // world.chatLogs: append a line to <logDir>/chat_YYYY-MM-DD.log
     static void LogChat(LSCChannel* pChan, Client* pClient, const std::string& message);

@@ -1,0 +1,21 @@
+# motd.txt - the message of the day every character gets at login.
+#
+# It is sent by "EVE System" into the Global channel when <globalChat> is on in eve-server.xml, otherwise into Local.
+# It is read at server start; a GM can reread it with /motd reload, and /motd shows it to you.
+#
+# Format:
+#  - lines that start with '#' are comments and are not sent.
+#  - every other line break becomes a line break in chat.  blank lines at the start and end are dropped.
+#  - the text can use the chat markup the client renders:
+#      <color=0xAARRGGBB>text</color>   (alpha, red, green, blue in hex, e.g. 0xff00ff00 is green)
+#      <b>bold</b>  <i>italic</i>  <u>underline</u>  <br> (an extra line break)
+#      <url=https://example.com>a link</url>  <url=showinfo:5//30000142>Jita</url>
+#      <fontsize=14>bigger</fontsize>
+#  - write '<' and '>' that should show as text as &lt; and &gt;.
+#  - the file is UTF-8.  an empty file (or only comments) means no MOTD.
+#
+<br><color=0xff007fff><b>Welcome to the EVEmu <u>EVE Online: Crucible</u> Emulator</b></color>
+
+<color=0xff00ff00><b>Rules:</b></color>  <color=0xffffffff>No scamming, spamming, advertising or begging in public channels.</color>
+<color=0xff00ff00><b>How to contact a GM:</b></color>  <color=0xffffffff>File a petition (F12 - Petitions - New Petition).</color>
+<color=0xff00ff00><b>ISK Advertising:</b></color>  <color=0xffff0000>EVEmu does not authorize any person or site to sell ISK for real money.</color>
