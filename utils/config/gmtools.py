@@ -12,7 +12,8 @@ What it adds:
   - form.AttributeInspector, used by the built-in "GM: Inspect Attributes" menu entry.
   - svc.insider: an "EVEmu Insider" window with common GM actions (neocom: Toggle Insider).
   - an "EVEmu GM Tools" submenu next to "GM / WM Extras" on characters, items and objects in space,
-    including CONCORD testing (/crime) and rack heat (/heat).
+    including CONCORD testing (/crime) and rack heat (/heat), and on item types anywhere else (market,
+    Show Info, links, contracts, skills, fittings...) with "Create <type>..." asking how many.
   - insider.HealRemove(groupID), which the client's benchmark script uses to clear wrecks.
   - a stub 'dna' module, so "GM / WM Extras" on ships works (the client imports it for CCP's Copycat tool,
     which EVEmu doesn't have).
@@ -298,16 +299,25 @@ def BuildMenu(kind, *args):
     return m or [('(nothing here)', lambda *x: None, ())]
 
 
-def AddToMenu(menu, kind, *args):
-    """Puts our submenu just after GM / WM Extras."""
-    if not IsGM() or not isinstance(menu, list):
+def HasOurMenu(menu):
+    return isinstance(menu, list) and any(isinstance(e, tuple) and len(e) and e[0] == MENU_LABEL for e in menu)
+
+
+def AddToMenu(menu, kind, *args, **kwargs):
+    """Puts our submenu just after GM / WM Extras (or at the end of a menu without it, when atEnd)."""
+    if not IsGM() or not isinstance(menu, list) or HasOurMenu(menu):
         return menu
     entry = (MENU_LABEL, ('isDynamic', BuildMenu, (kind,) + args))
     for i, e in enumerate(menu):
         if isinstance(e, tuple) and len(e) and e[0] == 'GM / WM Extras':
             menu.insert(i + 1, entry)
             return menu
-    menu.insert(0, entry)
+    if kwargs.get('atEnd'):
+        if menu and menu[-1] is not None:
+            menu.append(None)
+        menu.append(entry)
+    else:
+        menu.insert(0, entry)
     return menu
 
 
@@ -357,11 +367,20 @@ def _CelestialMenu(self, res, data, *args, **kwargs):
     return AddToMenu(res, 'type', typeID, None)
 
 
+def _TypeMenu(self, res, itemID, typeID, *args, **kwargs):
+    # a type with no inventory item behind it:  market, Show Info, chat and info links, contracts, skills,
+    #  fittings, industry...  (inventory items, characters and space objects come through the wrappers above)
+    if not typeID or not isinstance(res, list) or not TypeEntries(typeID):
+        return res
+    return AddToMenu(res, 'type', typeID, None, atEnd=True)
+
+
 def PatchMenus():
     menu = svc.menu
     _Wrap(menu, '_InvItemMenu', _InvItemMenu)
     _Wrap(menu, '_CharacterMenu', _CharacterMenu)
     _Wrap(menu, '_CelestialMenu', _CelestialMenu)
+    _Wrap(menu, 'GetMenuFormItemIDTypeID', _TypeMenu)
 
 
 # ------------------------------------------------------------------------------------------------
