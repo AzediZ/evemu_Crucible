@@ -90,7 +90,8 @@ public:
 
     // station methods here for offices, reprocessing, and docking.
     PyRep* GetOffices()                                 { PyIncRef(m_officePyData); return m_officePyData; }  // cached officeData for client call
-    int8 GetAvalibleOfficeCount()                       { return maxRentableOffices - m_officeMap.size(); }
+    // outposts have their own office slots (base and improvements), npc stations the server's limit
+    int8 GetAvalibleOfficeCount()                       { return (IsOutpost(m_stationID) ? m_data.officeSlots : maxRentableOffices) - m_officeMap.size(); }
     int32 GetOfficeRentalFee()                          { return m_data.officeRentalFee; }
     uint32 GetOwnerID()                                 { return m_data.corporationID; }
     uint32 GetID()                                      { return m_data.stationID; }

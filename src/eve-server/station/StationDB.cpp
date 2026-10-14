@@ -259,7 +259,7 @@ void StationDB::GetStationData(DBQueryResult& res)
         "  s.operationID, s.stationTypeID, s.corporationID, s.stationName,"
         "  s.reprocessingStationsTake, s.reprocessingEfficiency, s.reprocessingHangarFlag, st.conquerable, st.hangarGraphicID,"
         "  m.orbitID, m.radius, m.security, o.description, o.descriptionID, t.graphicID, s.solarSystemID, s.constellationID, s.regionID,"
-        "  st.dockEntryX, st.dockEntryY, st.dockEntryZ"
+        "  st.dockEntryX, st.dockEntryY, st.dockEntryZ, s.upgradeLevel"
         " FROM staStations AS s"
         "  LEFT JOIN staStationTypes AS st USING (stationTypeID)"
         "  LEFT JOIN invTypes AS t ON t.typeID = s.stationTypeID"
@@ -577,6 +577,50 @@ void StationDB::GetOutpostImprovements(uint32 stationID, DBQueryResult& res)
     "improvementTier1aTypeID, improvementTier2bTypeID, improvementTier1cTypeID "
     "FROM staImprovementsInstalled "
     "WHERE stationID=%u", stationID);
+}
+
+void StationDB::GetAllOutpostImprovements(DBQueryResult& res)
+{
+    if (!sDatabase.RunQuery(res,
+        "SELECT stationID, improvementTier1aTypeID, improvementTier2aTypeID, improvementTier3aTypeID,"
+        " improvementTier1bTypeID, improvementTier2bTypeID, improvementTier1cTypeID"
+        " FROM staImprovementsInstalled"))
+        codelog(DATABASE__ERROR, "Error in GetAllOutpostImprovements query: %s", res.error.c_str());
+}
+
+void StationDB::SaveOutpostImprovements(uint32 stationID, const uint16 (&slots)[6])
+{
+    // the table has no key:  one row per outpost
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM staImprovementsInstalled WHERE stationID = %u", stationID))
+        codelog(DATABASE__ERROR, "Error deleting improvements of %u: %s", stationID, err.c_str());
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO staImprovementsInstalled (stationID, improvementTier1aTypeID, improvementTier2aTypeID, improvementTier3aTypeID,"
+        " improvementTier1bTypeID, improvementTier2bTypeID, improvementTier1cTypeID) VALUES (%u, %u, %u, %u, %u, %u, %u)",
+        stationID, slots[0], slots[1], slots[2], slots[3], slots[4], slots[5]))
+        codelog(DATABASE__ERROR, "Error saving improvements of %u: %s", stationID, err.c_str());
+}
+
+float StationDB::GetStationTypeReprocessingEfficiency(uint16 stationTypeID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT reprocessingEfficiency FROM staStationTypes WHERE stationTypeID = %u", stationTypeID)) {
+        codelog(DATABASE__ERROR, "Error in GetStationTypeReprocessingEfficiency query: %s", res.error.c_str());
+        return 0;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return 0;
+    return row.GetFloat(0);
+}
+
+void StationDB::SaveOutpostStats(uint32 stationID, uint8 upgradeLevel, uint8 officeSlots, float reprocessingEfficiency)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "UPDATE staStations SET upgradeLevel = %u, officeSlots = %u, reprocessingEfficiency = %f WHERE stationID = %u",
+        upgradeLevel, officeSlots, reprocessingEfficiency, stationID))
+        codelog(DATABASE__ERROR, "Error saving outpost stats of %u: %s", stationID, err.c_str());
 }
 
 PyRep* StationDB::GetStationsByRegion(uint32 regionID)

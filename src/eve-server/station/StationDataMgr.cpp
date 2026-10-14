@@ -10,6 +10,7 @@
 
 #include "station/StationDataMgr.h"
 #include "database/EVEDBUtils.h"
+#include "../eve-common/EVE_Outpost.h"
 
 
 StationDataMgr::StationDataMgr()
@@ -130,7 +131,22 @@ void StationDataMgr::Populate()
         sData.dockPosition              = GPoint(row.GetDouble(29) + row.GetDouble(1),
                                                  row.GetDouble(30) + row.GetDouble(2),
                                                  row.GetDouble(31) + row.GetDouble(3));
+        sData.upgradeLevel              = (row.IsNull(32) ? 0 : row.GetUInt(32));
         m_stationData.emplace(row.GetInt(0), sData);
+    }
+
+    // outpost improvements, and the services they add to the outpost's operation's (a refinery, labs)
+    StationDB::GetAllOutpostImprovements(*res);
+    while (res->GetRow(row)) {
+        std::map<uint32, StationData>::iterator sItr = m_stationData.find(row.GetUInt(0));
+        if (sItr == m_stationData.end())
+            continue;
+        OutpostRules::Slots slots = {{0, 0, 0, 0, 0, 0}};
+        for (uint8 i = 0; i < OutpostRules::SlotCount; ++i) {
+            slots[i] = (row.IsNull(i + 1) ? 0 : row.GetUInt(i + 1));
+            sItr->second.improvements[i] = slots[i];
+        }
+        sItr->second.serviceMask |= OutpostRules::AddedServices(slots);
     }
 
     LoadStationPyData();
@@ -272,16 +288,12 @@ PyRep* StationDataMgr::GetStationItemBits(uint32 stationID)
     //['hangarGraphicID','ownerID','itemID','serviceMask','stationTypeID']
     std::map<uint32, StationData>::iterator itr = m_stationData.find(stationID);
     if (itr != m_stationData.end()) {
-        std::map<int8, int32>::iterator itr2;
         PyTuple * result = new PyTuple(5);
             result->SetItem(0, new PyInt(itr->second.hangarGraphicID));
             result->SetItem(1, new PyInt(itr->second.corporationID));
             result->SetItem(2, new PyInt(stationID));
-            if ((itr2 = m_serviceMask.find(itr->second.operationID)) != m_serviceMask.end()) {
-                result->SetItem(3, new PyInt(itr2->second));
-            } else {
-                result->SetItem(3, new PyInt(0));
-            }
+            // the operation's services, and for outposts what their improvements add
+            result->SetItem(3, new PyInt(itr->second.serviceMask));
             result->SetItem(4, new PyInt(itr->second.typeID));
         return result;
     }
@@ -320,50 +332,83 @@ uint32 StationDataMgr::GetOfficeRentalFee(uint32 stationID)
 
 void StationDataMgr::LoadStationPyData()
 {
-    for (auto cur : m_stationData) {
-        PyDict* dict = new PyDict();
-            dict->SetItemString("stationID", new PyInt(cur.first));
-            dict->SetItemString("ownerID", new PyInt(cur.second.corporationID));
-            dict->SetItemString("stationTypeID", new PyInt(cur.second.typeID));
-            dict->SetItemString("stationName", new PyString(cur.second.name));
-            dict->SetItemString("operationID", new PyInt(cur.second.operationID));
-            dict->SetItemString("x", new PyFloat(cur.second.position.x));
-            dict->SetItemString("y", new PyFloat(cur.second.position.y));
-            dict->SetItemString("z", new PyFloat(cur.second.position.z));
-            dict->SetItemString("dockEntryX", new PyFloat(cur.second.dockEntry.x));
-            dict->SetItemString("dockEntryY", new PyFloat(cur.second.dockEntry.y));
-            dict->SetItemString("dockEntryZ", new PyFloat(cur.second.dockEntry.z));
-            dict->SetItemString("dockOrientationX", new PyFloat(cur.second.dockOrientation.x));
-            dict->SetItemString("dockOrientationY", new PyFloat(cur.second.dockOrientation.y));
-            dict->SetItemString("dockOrientationZ", new PyFloat(cur.second.dockOrientation.z));
+    for (auto cur : m_stationData)
+        m_stationPyData.emplace(cur.first, MakeStationPyData(cur.first, cur.second));
+}
 
-            dict->SetItemString("serviceMask", new PyInt(cur.second.serviceMask));
-            dict->SetItemString("conquerable", new PyBool(cur.second.conquerable));
-            dict->SetItemString("upgradeLevel", new PyInt(0));  // outposts only. others are 0
-            dict->SetItemString("standingOwnerID", new PyInt(cur.second.corporationID));
-            dict->SetItemString("hangarGraphicID", new PyInt(cur.second.hangarGraphicID));
-            dict->SetItemString("officeRentalCost", new PyInt(cur.second.officeRentalFee));
-            dict->SetItemString("dockingBayGraphicID", PyStatic.NewNone());   // cannot find any data on this; all packets show PyNone
-            dict->SetItemString("dockingCostPerVolume", new PyFloat(cur.second.dockingCostPerVolume));
-            dict->SetItemString("maxShipVolumeDockable", new PyFloat(cur.second.maxShipVolumeDockable));
-            dict->SetItemString("reprocessingEfficiency", new PyFloat(cur.second.reprocessingEfficiency));
-            dict->SetItemString("reprocessingHangarFlag", new PyInt(cur.second.reprocessingHangarFlag));
-            dict->SetItemString("reprocessingStationsTake", new PyFloat(cur.second.reprocessingStationsTake));
+PyObject* StationDataMgr::MakeStationPyData(uint32 stationID, const StationData& data)
+{
+    PyDict* dict = new PyDict();
+        dict->SetItemString("stationID", new PyInt(stationID));
+        dict->SetItemString("ownerID", new PyInt(data.corporationID));
+        dict->SetItemString("stationTypeID", new PyInt(data.typeID));
+        dict->SetItemString("stationName", new PyString(data.name));
+        dict->SetItemString("operationID", new PyInt(data.operationID));
+        dict->SetItemString("x", new PyFloat(data.position.x));
+        dict->SetItemString("y", new PyFloat(data.position.y));
+        dict->SetItemString("z", new PyFloat(data.position.z));
+        dict->SetItemString("dockEntryX", new PyFloat(data.dockEntry.x));
+        dict->SetItemString("dockEntryY", new PyFloat(data.dockEntry.y));
+        dict->SetItemString("dockEntryZ", new PyFloat(data.dockEntry.z));
+        dict->SetItemString("dockOrientationX", new PyFloat(data.dockOrientation.x));
+        dict->SetItemString("dockOrientationY", new PyFloat(data.dockOrientation.y));
+        dict->SetItemString("dockOrientationZ", new PyFloat(data.dockOrientation.z));
 
-            dict->SetItemString("solarSystemID", new PyInt(cur.second.systemID));
-            dict->SetItemString("constellationID", new PyInt(cur.second.constellationID));
-            dict->SetItemString("regionID", new PyInt(cur.second.regionID));
-            dict->SetItemString("security", new PyFloat(cur.second.security));
+        dict->SetItemString("serviceMask", new PyInt(data.serviceMask));
+        dict->SetItemString("conquerable", new PyBool(data.conquerable));
+        dict->SetItemString("upgradeLevel", new PyInt(data.upgradeLevel));  // outposts only. others are 0
+        dict->SetItemString("standingOwnerID", new PyInt(data.corporationID));
+        dict->SetItemString("hangarGraphicID", new PyInt(data.hangarGraphicID));
+        dict->SetItemString("officeRentalCost", new PyInt(data.officeRentalFee));
+        dict->SetItemString("dockingBayGraphicID", PyStatic.NewNone());   // cannot find any data on this; all packets show PyNone
+        dict->SetItemString("dockingCostPerVolume", new PyFloat(data.dockingCostPerVolume));
+        dict->SetItemString("maxShipVolumeDockable", new PyFloat(data.maxShipVolumeDockable));
+        dict->SetItemString("reprocessingEfficiency", new PyFloat(data.reprocessingEfficiency));
+        dict->SetItemString("reprocessingHangarFlag", new PyInt(data.reprocessingHangarFlag));
+        dict->SetItemString("reprocessingStationsTake", new PyFloat(data.reprocessingStationsTake));
 
-            dict->SetItemString("graphicID", new PyInt(cur.second.graphicID));  //invTypes.graphicID
-            dict->SetItemString("description", new PyString(cur.second.description));    //staOperations.description
-            dict->SetItemString("descriptionID", new PyInt(cur.second.descriptionID));    //staOperations.descriptionID
+        dict->SetItemString("solarSystemID", new PyInt(data.systemID));
+        dict->SetItemString("constellationID", new PyInt(data.constellationID));
+        dict->SetItemString("regionID", new PyInt(data.regionID));
+        dict->SetItemString("security", new PyFloat(data.security));
 
-            dict->SetItemString("radius", new PyFloat(cur.second.radius));   //mapDenormalize.radius or invTypes.radius
-            dict->SetItemString("orbitID", new PyInt(cur.second.orbitID));    //mapDenormalize.orbitID
+        dict->SetItemString("graphicID", new PyInt(data.graphicID));  //invTypes.graphicID
+        dict->SetItemString("description", new PyString(data.description));    //staOperations.description
+        dict->SetItemString("descriptionID", new PyInt(data.descriptionID));    //staOperations.descriptionID
 
-        m_stationPyData.emplace(cur.first, new PyObject("util.KeyVal", dict));
+        dict->SetItemString("radius", new PyFloat(data.radius));   //mapDenormalize.radius or invTypes.radius
+        dict->SetItemString("orbitID", new PyInt(data.orbitID));    //mapDenormalize.orbitID
+
+    return new PyObject("util.KeyVal", dict);
+}
+
+void StationDataMgr::UpdateStationData(const StationData& data)
+{
+    std::map<uint32, StationData>::iterator itr = m_stationData.find(data.stationID);
+    if (itr == m_stationData.end())
+        return;
+    itr->second = data;
+    std::map<uint32, PyObject*>::iterator pyItr = m_stationPyData.find(data.stationID);
+    if (pyItr != m_stationPyData.end()) {
+        PySafeDecRef(pyItr->second);
+        pyItr->second = MakeStationPyData(data.stationID, data);
+    } else {
+        m_stationPyData.emplace(data.stationID, MakeStationPyData(data.stationID, data));
     }
+}
+
+uint32 StationDataMgr::GetOperationServiceMask(uint8 operationID)
+{
+    std::map<int8, int32>::iterator itr = m_serviceMask.find(operationID);
+    return (itr == m_serviceMask.end() ? 0 : itr->second);
+}
+
+uint32 StationDataMgr::GetOutpostInSystem(uint32 systemID)
+{
+    for (auto& cur : m_stationData)
+        if (IsOutpost(cur.first) and (cur.second.systemID == systemID))
+            return cur.first;
+    return 0;
 }
 
 // Add an outpost to the datamgr and the db
@@ -373,10 +418,7 @@ void StationDataMgr::AddOutpost(StationData &data) {
 
     //Load the new data into the data manager
     m_stationData.emplace(data.stationID, data);
-
-    //Reload all PyData from memory object
-    m_stationPyData.clear();
-    LoadStationPyData();
+    m_stationPyData.emplace(data.stationID, MakeStationPyData(data.stationID, data));
 }
 
 /** errata

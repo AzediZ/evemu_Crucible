@@ -36,6 +36,7 @@
 #include "pos/JumpBridge.h"
 #include "pos/Array.h"
 #include "pos/Structure.h"
+#include "station/StationDataMgr.h"
 #include "manufacturing/RamMethods.h"
 #include "system/Container.h"
 #include "system/Damage.h"
@@ -277,7 +278,13 @@ void StructureSE::InitData()
         if (m_gateSE != nullptr)
             m_data.anchorpointID = m_gateSE->GetID();
     }
-    if (m_platform)
+    if (m_platform and IsOutpostUpgradePlatform())
+    { //outpost upgrade and improvement platforms are anchored at the system's outpost (one per system)
+        uint32 outpostID(stDataMgr.GetOutpostInSystem(m_system->GetID()));
+        if (outpostID != 0)
+            m_data.anchorpointID = outpostID;
+    }
+    else if (m_platform)
     { //Construction Platforms are anchored near planets
         SystemEntity* pPlanet(m_system->GetClosestPlanetSE(GetPosition()));
         m_planetSE = (pPlanet == nullptr ? nullptr : pPlanet->GetPlanetSE());
@@ -357,7 +364,9 @@ void StructureSE::Init()
         case EVEDB::invGroups::Infrastructure_Hubs: {
             m_ihub = true;
         } break;
-        case EVEDB::invGroups::Construction_Platform: {
+        case EVEDB::invGroups::Construction_Platform:
+        case EVEDB::invGroups::Station_Upgrade_Platform:
+        case EVEDB::invGroups::Station_Improvement_Platform: {
             m_platform = true;
         } break;
         case EVEDB::invGroups::Secure_Cargo_Container:
@@ -426,7 +435,7 @@ void StructureSE::Init()
     }
     if (m_platform)
     {
-        if (m_planetSE == nullptr)
+        if ((m_planetSE == nullptr) and !IsOutpostUpgradePlatform())
         {
             m_planetSE = pSE->GetPlanetSE();
         }
@@ -807,6 +816,22 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
     else if (m_tcu or m_ihub or m_cargo)
     {
         // these are anchored anywhere in system.
+        m_destiny->SetPosition(pos);
+    }
+    else if (m_platform and IsOutpostUpgradePlatform())
+    {
+        /* "deployed within range of the station" (Revelations II, 2007).  no era distance found:  within the outpost's
+         *  radius + 100 km, the anchoring corp's own outpost */
+        uint32 outpostID(stDataMgr.GetOutpostInSystem(m_system->GetID()));
+        SystemEntity* pOutpost(outpostID == 0 ? nullptr : m_system->GetSE(outpostID));
+        if (pOutpost == nullptr)
+            throw CustomError ("The %s can only be anchored at an outpost.", m_self->name());
+        if (stDataMgr.GetOwnerID(outpostID) != (uint32)m_corpID)
+            throw CustomError ("The %s can only be anchored at an outpost of its own corporation.", m_self->name());
+        double anchorMax(pOutpost->GetRadius() + 100000.0);
+        if (pOutpost->GetPosition().distance(pos) > anchorMax)
+            throw CustomError ("You cannot anchor the %s farther than %.0f km from %s.", m_self->name(), anchorMax / 1000.0, pOutpost->GetName());
+        m_data.anchorpointID = outpostID;
         m_destiny->SetPosition(pos);
     }
     else if (m_platform)

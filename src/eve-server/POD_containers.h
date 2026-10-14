@@ -371,6 +371,8 @@ struct StationData {
     bool conquerable :1;
     uint8 officeSlots;
     uint8 operationID;
+    uint8 upgradeLevel;         // outposts:  Foundation/Pedestal/Monument built (staStations.upgradeLevel)
+    uint16 improvements[6];     // outposts:  staImprovementsInstalled, in OutpostRules::Slot order (1a 2a 3a 1b 2b 1c)
     uint16 typeID;
     uint16 graphicID;
     uint16 descriptionID;

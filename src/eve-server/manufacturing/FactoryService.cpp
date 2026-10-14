@@ -53,11 +53,12 @@ FactoryService::FactoryService() :
 }
 
 PyResult FactoryService::GetMaterialCompositionOfItemType(PyCallArgs &call, PyInt* typeID) {
-    // Outpost construction platforms require a different query
-    if ((typeID->value() == EVEDB::invTypes::CaldariResearchOutpost) or
-    (typeID->value() == EVEDB::invTypes::AmarrFactoryOutpost) or
-    (typeID->value() == EVEDB::invTypes::GallenteAdministrativeOutpost) or
-    (typeID->value() == EVEDB::invTypes::MinmatarServiceOutpost)) {
+    /* infosvc.LoadMaterialRequirements asks with the platform's stationTypeID:  an outpost (construction platforms), a
+     *  Rank N Upgrade (upgrade platforms) or an outpost improvement.  their materials are in invTypeMaterials */
+    const ItemType* pType(sItemFactory.GetType(typeID->value()));
+    if ((pType != nullptr) and ((pType->groupID() == EVEDB::invGroups::Station)
+                             or (pType->groupID() == EVEDB::invGroups::Outpost_Improvements)
+                             or (pType->groupID() == EVEDB::invGroups::Outpost_Upgrades))) {
         DBQueryResult res;
         FactoryDB::GetOutpostMaterialCompositionOfItemType(typeID->value(), res);
         return DBResultToRowset(res);

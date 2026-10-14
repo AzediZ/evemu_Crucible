@@ -47,6 +47,8 @@
 #include "station/Station.h"
 #include "station/Outpost.h"
 #include "station/StationDataMgr.h"
+#include "system/sov/SovereigntyDataMgr.h"
+#include "../../eve-common/EVE_Outpost.h"
 #include "manufacturing/FactoryDB.h"
 #include "contract/ContractUtils.h"
 #include "inventory/ContainerSecurity.h"
@@ -1301,84 +1303,128 @@ PyResult InventoryBound::RunRefiningProcess(PyCallArgs &call) {
     return PyStatic.NewNone();
 }
 
-// This function is called when an outpost construction platform is instructed to build
+/* menusvc._BuildConstructionPlatform:  shell.Build() on an outpost construction platform (group 307), an outpost upgrade
+ *  platform (835:  Foundation, Pedestal, Monument) or an outpost improvement platform (836).  all three are anchored,
+ *  filled with the materials of their stationTypeID (invTypeMaterials, the platform's show info 'Materials' tab) and
+ *  used up by the build.
+ *  @todo  in Crucible the build happened at the next downtime ("it will appear at the next downtime", Ten Ton Hammer 2010),
+ *  and an outpost took one upgrade or improvement per day.  here it is immediate
+ */
 PyResult InventoryBound::Build(PyCallArgs &call) {
     _log(POS__MESSAGE, "%s Calling InventoryBound::Build() for %s(%u)", call.client->GetName(), m_self->name(), m_itemID);
     call.Dump(POS__DUMP);
 
-    /*
-    Outpost construction process:
-    1. Ensure all required items are in the egg
-    2. Initiate the destruction of the platform
-    3. Initiate the building and registration of the new station
-    */
+    Client* pClient(call.client);
+    SystemEntity* pSE(pClient->IsInSpace() ? pClient->SystemMgr()->GetEntityByID(m_itemID) : nullptr);
+    if ((pSE == nullptr) or !pSE->IsPlatformSE() or (m_self->GetMyInventory() == nullptr))
+        throw CustomError ("This operation requires an outpost construction platform in space.");
+    StructureSE* pPlatform(pSE->GetPOSSE());
+    if (pPlatform->GetState() != EVEPOS::StructureState::Anchored)
+        throw CustomError ("The %s must be anchored first.", m_self->name());
+    if (m_self->ownerID() != (uint32)pClient->GetCorporationID())
+        throw CustomError ("The %s belongs to another corporation.", m_self->name());
 
-    // Step 1
-    _log(POS__MESSAGE, "Checking construction requirements for %s(%u).", m_self->name(), m_itemID);
-
-    // Retrieve the SE object for the egg itself
-    SystemEntity* egg = call.client->SystemMgr()->GetEntityByID(m_itemID);
-
-    if ((egg == nullptr) or (egg->GetPOSSE() == nullptr) or (m_self->GetMyInventory() == nullptr)) {
-        _log(POS__ERROR, "InventoryBound::Build() - %s(%u) is not a construction platform in space with a cargo hold.", m_self->name(), m_itemID);
-        call.client->SendNotifyMsg("This operation requires an outpost construction platform in space.");
-        return nullptr;
+    // Outpost Construction (requiredSkill1):  I for outposts, Foundations and basic improvements, III and V for the rest
+    if (m_self->HasAttribute(AttrRequiredSkill1)) {
+        uint16 skillID(m_self->GetAttribute(AttrRequiredSkill1).get_uint32());
+        int8 level(m_self->HasAttribute(AttrRequiredSkill1Level) ? m_self->GetAttribute(AttrRequiredSkill1Level).get_int() : 1);
+        if (pClient->GetChar()->GetSkillLevel(skillID) < level) {
+            const ItemType* pSkill(sItemFactory.GetType(skillID));
+            throw CustomError ("You need %s at level %i to build the %s.", (pSkill == nullptr ? "Outpost Construction" : pSkill->name().c_str()), level, m_self->name());
+        }
     }
 
-    // Check if anchored, and if not return nullptr and error
-    if (egg->GetPOSSE()->GetState() != EVEPOS::StructureState::Anchored) {
-        call.client->SendNotifyMsg("This operation requires the construction platform to be anchored.");
-        return nullptr;
+    uint16 typeID(m_self->GetAttribute(AttrStationTypeID).get_uint32());
+    switch (m_self->groupID()) {
+        case EVEDB::invGroups::Construction_Platform:
+            BuildOutpost(pClient, pPlatform, typeID);
+            break;
+        case EVEDB::invGroups::Station_Upgrade_Platform:
+        case EVEDB::invGroups::Station_Improvement_Platform:
+            BuildOutpostUpgrade(pClient, pPlatform, typeID);
+            break;
+        default:
+            throw CustomError ("The %s can't build anything.", m_self->name());
     }
+    return nullptr;
+}
 
-    // Get required materials to construct the outpost
+void InventoryBound::CheckPlatformMaterials(uint16 typeID)
+{
     DBQueryResult res;
     DBResultRow row;
-    uint32 stationType = m_self->GetAttribute(AttrStationTypeID).get_uint32();
-    FactoryDB::GetOutpostMaterialCompositionOfItemType(stationType, res);
-    std::vector<InventoryItemRef> platformItems;
+    FactoryDB::GetOutpostMaterialCompositionOfItemType(typeID, res);
+    if (res.GetRowCount() == 0)
+        throw CustomError ("There are no build materials for %s.", m_self->name());
 
-    m_self->GetMyInventory()->GetItemsByFlag(flagNone, platformItems);
-
+    std::map<uint32, InventoryItemRef> contents;
+    m_self->GetMyInventory()->GetInventoryMap(contents);
     while (res.GetRow(row)) {
-        uint32 requiredType = row.GetUInt(0);
-        uint32 requiredQuantity = row.GetUInt(1);
-        uint32 quantity = 0;
-        for (auto cur : platformItems) {
-            if (cur->type().id() == requiredType) {
-                quantity += cur->quantity();
-                if (quantity >= requiredQuantity) {
-                    break;
-                }
-            }
+        uint16 requiredType(row.GetUInt(0));
+        int64 required(row.GetInt64(1)), loaded(0);
+        for (auto& cur : contents)
+            if (cur.second->typeID() == requiredType)
+                loaded += cur.second->quantity();
+        if (loaded < required)
+            throw CustomError ("This operation requires %lld units of %s in the %s (%lld loaded).",
+                               (long long)required, sItemFactory.GetType(requiredType)->name().c_str(), m_self->name(), (long long)loaded);
+    }
+}
+
+void InventoryBound::UsePlatform(Client* pClient, StructureSE* pPlatform, uint16 typeID, uint32 stationID)
+{
+    DBQueryResult res;
+    DBResultRow row;
+    FactoryDB::GetOutpostMaterialCompositionOfItemType(typeID, res);
+    std::map<uint16, int64> required;
+    while (res.GetRow(row))
+        required[row.GetUInt(0)] += row.GetInt64(1);
+
+    // what the build doesn't use goes to the pilot's hangar at the outpost.  the rest goes with the platform
+    std::map<uint32, InventoryItemRef> contents;
+    m_self->GetMyInventory()->GetInventoryMap(contents);
+    for (auto& cur : contents) {
+        InventoryItemRef iRef(cur.second);
+        int64 used(0);
+        std::map<uint16, int64>::iterator itr = required.find(iRef->typeID());
+        if (itr != required.end()) {
+            used = std::min<int64>(itr->second, iRef->quantity());
+            itr->second -= used;
         }
-        if (quantity < requiredQuantity) {
-            call.client->SendNotifyMsg("This operation requires %u units of %s in the construction platform.", requiredQuantity, sItemFactory.GetType(requiredType)->name().c_str());
-            return nullptr;
-        }
+        if (used >= iRef->quantity())
+            continue;
+        if (used > 0)
+            iRef->SetQuantity((int32)(iRef->quantity() - used), false);
+        iRef->ChangeOwner(pClient->GetCharacterID(), false);
+        iRef->Move(stationID, flagHangar, true);
     }
 
-    // Step 2
-    _log(POS__MESSAGE, "Removing entity %s(%u) from space safely.", m_self->name(), m_itemID);
+    _log(POS__MESSAGE, "InventoryBound::UsePlatform() - %s(%u) is used up.", m_self->name(), m_itemID);
+    pPlatform->DeleteData();
+    pPlatform->Delete();     // out of space, the item and what is left in it deleted
+    SafeDelete(pPlatform);
+}
 
-    // Save the anchor position and planet radius since we'll need it when setting up the new station
-    GPoint anchorPosition = egg->GetPosition();
+void InventoryBound::BuildOutpost(Client* pClient, StructureSE* pPlatform, uint16 stationType)
+{
+    SystemManager* pSystem(pClient->SystemMgr());
+    uint32 systemID(pSystem->GetID());
+    // one outpost or station per system (ShipBound::Drop checked it at launch), in the alliance's own space
+    if (sDataMgr.GetStationCount(systemID) > 0)
+        throw CustomError ("There is already a station in this system.  Only one outpost or station can be in a solar system.");
+    if ((pClient->GetAllianceID() == 0) or (svDataMgr.GetSystemAllianceID(systemID) != (uint32)pClient->GetAllianceID()))
+        throw CustomError ("Your alliance must hold sovereignty in this system to build an outpost.");
+    CheckPlatformMaterials(stationType);
 
-    // Clear egg's data and remove it from space
-    call.client->SystemMgr()->RemoveEntity(egg);
-    m_self->ChangeOwner(0, true);
-    SafeDelete(egg);
+    GPoint anchorPosition(pPlatform->GetPosition());
 
-    // Step 3
     _log(POS__MESSAGE, "Creating new OutpostSE entity...");
-
-    // Create the item data which we use to create the StationItemRef
     StationData stData = StationData();
-
-    // Calculate stationID
     stData.stationID = StationDB::GetNewOutpostID();
 
-    // Get base station data
+    // base station data
+    DBQueryResult res;
+    DBResultRow row;
     StationDB::GetStationBaseData(res, stationType);
     std::string stationBaseName;
     while (res.GetRow(row)) {
@@ -1396,85 +1442,136 @@ PyResult InventoryBound::Build(PyCallArgs &call) {
         stationBaseName = row.GetText(12);
     }
 
-    // Get radius from StationType object
     StationType* stType = StationType::Load(stationType);
     stData.radius = stType->radius();
 
-    // Location data
-    stData.systemID = call.client->GetSystemID();
-    stData.constellationID = call.client->GetConstellationID();
-    stData.regionID = call.client->GetRegionID();
+    // location
+    stData.systemID = systemID;
+    stData.constellationID = pClient->GetConstellationID();
+    stData.regionID = pClient->GetRegionID();
     stData.position = anchorPosition;
-    stData.security = call.client->SystemMgr()->GetSecValue();
+    stData.security = pSystem->GetSecValue();
+    stData.orbitID = pSystem->GetClosestPlanetID(anchorPosition);
 
-    // Other station data
     stData.typeID = stationType;
     stData.reprocessingHangarFlag = flagHangar;
-    stData.corporationID = call.client->GetCorporationID();
+    stData.corporationID = pClient->GetCorporationID();
 
-    // Build station name
-    SystemEntity* pPlanet(call.client->SystemMgr()->GetClosestPlanetSE(anchorPosition));
-    stData.name = (pPlanet == nullptr ? std::string(call.client->SystemMgr()->GetName()) : std::string(pPlanet->GetName()))
+    SystemEntity* pPlanet(pSystem->GetClosestPlanetSE(anchorPosition));
+    stData.name = (pPlanet == nullptr ? std::string(pSystem->GetName()) : std::string(pPlanet->GetName()))
         + std::string(" - ") + stationBaseName;
 
-    // Set default configurable values
+    // owner settings (the station management window changes them)
     stData.officeRentalFee = 10000;
     stData.maxShipVolumeDockable = 50000000;
     stData.dockingCostPerVolume = 0;
-
-    // Set default service values
-    stData.officeSlots = 8;
-    stData.reprocessingEfficiency = 0.5;
     stData.reprocessingStationsTake = 0.05;
 
-    // Set space values
-    stData.orbitID = call.client->SystemMgr()->GetClosestPlanetID(anchorPosition);
+    /* the type's services (staOperationServices of its operation), offices and refinery.  OutpostSE::Refresh works them
+     *  out with the assembly lines once the station exists */
+    OutpostRules::Race race(OutpostRules::OutpostRace(stationType));
+    stData.serviceMask = stDataMgr.GetOperationServiceMask(stData.operationID);
+    stData.officeSlots = OutpostRules::BaseOfficeSlots(race);
+    stData.reprocessingEfficiency = StationDB::GetStationTypeReprocessingEfficiency(stationType);
+    stData.upgradeLevel = 0;
 
-    // Calculate service mask (temporarily, allow everything)
-    stData.serviceMask = Station::ReprocessingPlant                        
-                       | Station::Refinery
-                       | Station::Market
-                       | Station::BlackMarket
-                       | Station::StockExchange
-                       | Station::Cloning
-                       | Station::Surgery
-                       | Station::DNATherapy
-                       | Station::RepairFacilities
-                       | Station::Factory
-                       | Station::Laboratory
-                       | Station::Gambling
-                       | Station::Fitting
-                       | Station::Paintshop
-                       | Station::News
-                       | Station::Storage
-                       | Station::Insurance
-                       | Station::Docking
-                       | Station::OfficeRental
-                       | Station::JumpCloneFacility
-                       | Station::LoyaltyPointStore
-                       | Station::NavyOffices;
-
-    // Add the new outpost to the stationDataMgr and the DB
     stDataMgr.AddOutpost(stData);
-
-    // Update staticDataMgr
     sDataMgr.AddOutpost(stData);
+    OutpostSE::Refresh(stData.stationID);
+    stDataMgr.GetStationData(stData.stationID, stData);
 
-    // Create the StationItem and spawn the OutpostSE entity
+    // the platform makes way for the station.  the materials are used up, the rest goes to the builder's hangar
+    UsePlatform(pClient, pPlatform, stationType, stData.stationID);
+
     StationItemRef itemRef = sItemFactory.GetStationRef(stData.stationID);
-    OutpostSE* oSE = new OutpostSE(itemRef, call.client->services(), call.client->SystemMgr());
+    OutpostSE* oSE = new OutpostSE(itemRef, pClient->services(), pSystem);
     sEntityList.AddStation(stData.stationID, itemRef);
-    call.client->SystemMgr()->AddEntity(oSE);
+    pSystem->AddEntity(oSE);
 
-    // Create and spawn all of the station service entities
     _log(POS__MESSAGE, "Creating new station service entities...");
+    oSE->SpawnStationServices(pClient, stData, 0, stData.serviceMask);
 
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::FittingService);
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::ReprocessingService);
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::FactoryService);
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::CloningService);
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::RepairService);
-    oSE->SpawnStationService(call.client, stData, EVEDB::invTypes::LaboratoryService);
+    pClient->SendNotifyMsg("%s has been built.", stData.name.c_str());
+}
 
-    return nullptr;
+void InventoryBound::BuildOutpostUpgrade(Client* pClient, StructureSE* pPlatform, uint16 typeID)
+{
+    uint32 stationID(stDataMgr.GetOutpostInSystem(pClient->GetSystemID()));
+    StationData stData = StationData();
+    if ((stationID == 0) or !stDataMgr.GetStationData(stationID, stData))
+        throw CustomError ("There is no outpost in this system.");
+    if (stData.corporationID != (uint32)pClient->GetCorporationID())
+        throw CustomError ("Only the corporation that owns %s can upgrade it.", stData.name.c_str());
+    OutpostRules::Race race(OutpostRules::OutpostRace(stData.typeID));
+    if (race == OutpostRules::Race::None)
+        throw CustomError ("%s can't be upgraded.", stData.name.c_str());
+
+    OutpostRules::Slots slots = {{0, 0, 0, 0, 0, 0}};
+    for (uint8 i = 0; i < OutpostRules::SlotCount; ++i)
+        slots[i] = stData.improvements[i];
+
+    const ItemType* pType(sItemFactory.GetType(typeID));
+    std::string typeName(pType == nullptr ? "the upgrade" : pType->name());
+    if (m_self->groupID() == EVEDB::invGroups::Station_Upgrade_Platform) {
+        switch (OutpostRules::CheckUpgrade(stData.upgradeLevel, typeID)) {
+            case OutpostRules::UpgradeResult::Ok:
+                break;
+            case OutpostRules::UpgradeResult::AlreadyInstalled:
+                throw CustomError ("%s already has the %s.", stData.name.c_str(), typeName.c_str());
+            case OutpostRules::UpgradeResult::MissingPrevious:
+                throw CustomError ("%s needs the upgrade below the %s first (it is at upgrade level %u).", stData.name.c_str(), m_self->name(), stData.upgradeLevel);
+            default:
+                throw CustomError ("The %s is no outpost upgrade.", m_self->name());
+        }
+    } else {
+        switch (OutpostRules::CheckInstall(race, stData.upgradeLevel, slots, typeID)) {
+            case OutpostRules::InstallResult::Ok:
+                break;
+            case OutpostRules::InstallResult::WrongRace:
+                throw CustomError ("The %s doesn't fit %s.  Improvements must be of the outpost's race.", m_self->name(), stData.name.c_str());
+            case OutpostRules::InstallResult::AlreadyInstalled:
+                throw CustomError ("%s already has the %s.", stData.name.c_str(), typeName.c_str());
+            case OutpostRules::InstallResult::MissingPrerequisite: {
+                OutpostRules::Improvement imp = OutpostRules::Improvement();
+                OutpostRules::FindImprovement(typeID, imp);
+                const ItemType* pReq(sItemFactory.GetType(imp.requiredTypeID));
+                throw CustomError ("The %s needs the %s installed first.", typeName.c_str(), (pReq == nullptr ? "improvement below it" : pReq->name().c_str()));
+            }
+            case OutpostRules::InstallResult::NoSlot:
+                throw CustomError ("%s has no free slot for the %s.  Upgrade level %u holds %u tier 1, %u tier 2 and %u tier 3 improvements.",
+                                   stData.name.c_str(), typeName.c_str(), stData.upgradeLevel,
+                                   OutpostRules::MaxOfTier(stData.upgradeLevel, 1), OutpostRules::MaxOfTier(stData.upgradeLevel, 2),
+                                   OutpostRules::MaxOfTier(stData.upgradeLevel, 3));
+            default:
+                throw CustomError ("The %s is no outpost improvement.", m_self->name());
+        }
+    }
+    CheckPlatformMaterials(typeID);
+
+    // install, then work out what the outpost gets from it
+    if (m_self->groupID() == EVEDB::invGroups::Station_Upgrade_Platform) {
+        ++stData.upgradeLevel;
+    } else {
+        std::vector<uint16> installed;
+        for (uint16 cur : slots)
+            if (cur != 0)
+                installed.push_back(cur);
+        installed.push_back(typeID);
+        slots = OutpostRules::ArrangeSlots(installed);
+        for (uint8 i = 0; i < OutpostRules::SlotCount; ++i)
+            stData.improvements[i] = slots[i];
+    }
+    uint32 oldMask(stData.serviceMask);
+    stDataMgr.UpdateStationData(stData);
+    OutpostSE::Refresh(stationID);
+    stDataMgr.GetStationData(stationID, stData);
+
+    UsePlatform(pClient, pPlatform, typeID, stationID);
+
+    SystemEntity* pOutpost(pClient->SystemMgr()->GetSE(stationID));
+    if ((pOutpost != nullptr) and (pOutpost->GetOutpostSE() != nullptr))
+        pOutpost->GetOutpostSE()->SpawnStationServices(pClient, stData, oldMask, stData.serviceMask);
+
+    _log(POS__MESSAGE, "%s built %s into %s(%u):  upgrade level %u", pClient->GetName(), typeName.c_str(), stData.name.c_str(), stationID, stData.upgradeLevel);
+    pClient->SendNotifyMsg("The %s has been installed in %s.  Docked pilots see the new services when they next dock.", typeName.c_str(), stData.name.c_str());
 }

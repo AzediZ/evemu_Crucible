@@ -50,6 +50,13 @@ public:
     virtual bool IsInvul()                              { return true; }
 
     virtual void SpawnStationService(Client* pClient, StationData stData, uint32 serviceType);
+    // the destructible service entities (Station_Services types) of the services in newMask that oldMask lacked
+    void SpawnStationServices(Client* pClient, const StationData& stData, uint32 oldMask, uint32 newMask);
+
+    /* works out what the outpost's upgrade level and improvements give (OutpostRules:  services, office slots, refinery,
+     *  assembly lines) from its type's static data, saves it and updates the station data the clients get.
+     *  false when the station is not a player outpost type */
+    static bool Refresh(uint32 stationID);
 };
 
 #endif  // EVEMU_POS_OUTPOST_H_

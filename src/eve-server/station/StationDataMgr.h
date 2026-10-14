@@ -56,11 +56,17 @@ public:
     uint32              GetOfficeIDForCorp(uint32 stationID, uint32 corpID);
 
     void                AddOutpost(StationData& data);
+    // an outpost's data changed (upgrades, improvements):  the copy here and what GetStation sends
+    void                UpdateStationData(const StationData& data);
+    uint32              GetOperationServiceMask(uint8 operationID);
+    // the outpost in a system, 0 for none (one per system)
+    uint32              GetOutpostInSystem(uint32 systemID);
 
 protected:
     void                Populate();
 
     void                LoadStationPyData();
+    PyObject*           MakeStationPyData(uint32 stationID, const StationData& data);
 
 
 private:

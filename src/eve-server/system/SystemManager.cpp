@@ -530,7 +530,14 @@ bool SystemManager::LoadSystemStatics() {
                 /*  types 12242 - 22298 in group 15 are outposts */
                 /*  types 29323 - 29390 in group 15 are wrecked stations */
                 StationItemRef itemRef = sItemFactory.GetStationRef(cur.itemID);
-                StationSE *pSSE = new StationSE(itemRef, GetServiceMgr(), this);
+                StationSE *pSSE(nullptr);
+                if (IsOutpost(cur.itemID)) {
+                    // player outposts:  their services, slots and lines follow their upgrades (also fixes outposts built before)
+                    pSSE = new OutpostSE(itemRef, GetServiceMgr(), this);
+                    OutpostSE::Refresh(cur.itemID);
+                } else {
+                    pSSE = new StationSE(itemRef, GetServiceMgr(), this);
+                }
                 sEntityList.AddStation(cur.itemID, itemRef);
                 pSE = pSSE;
             } break;
@@ -895,9 +902,7 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 case EVEDB::invGroups::Comet:
                 case EVEDB::invGroups::Destructable_Station_Services:
                 /* test these to see if they are POS types */
-                case EVEDB::invGroups::Station_Improvement_Platform:
                 case EVEDB::invGroups::Global_Warp_Disruptor:
-                case EVEDB::invGroups::Station_Upgrade_Platform:
                 case EVEDB::invGroups::Force_Field:  // <<<  this one is POS type but it IS a plain CSE
                 /* these will get their own class eventually */
                 case EVEDB::invGroups::Effect_Beacon:
@@ -925,7 +930,9 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                     _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making AsteroidSE (gas cloud) for %s (%u)", entity.itemName.c_str(), entity.itemID);
                     return aSE;
                 } break;
-                case EVEDB::invGroups::Construction_Platform: {
+                case EVEDB::invGroups::Construction_Platform:
+                case EVEDB::invGroups::Station_Upgrade_Platform:
+                case EVEDB::invGroups::Station_Improvement_Platform: {
                     StructureItemRef structure = sItemFactory.GetStructureRef( entity.itemID );
                     if (structure.get() == nullptr)
                         return nullptr;

@@ -2425,4 +2425,9 @@ void StaticDataMgr::AddOutpost(StationData &stData)
     if (m_stationSystem.find(stData.stationID) == m_stationSystem.end()) {
         m_stationSystem.emplace(stData.stationID, stData.systemID);
     }
+
+    // and the system's station list
+    std::vector<uint32>& list = m_stationList[stData.systemID];
+    if (std::find(list.begin(), list.end(), stData.stationID) == list.end())
+        list.push_back(stData.stationID);
 }

@@ -961,6 +961,81 @@ bool FactoryDB::EnsureStructureAssemblyLines(uint32 structureID, uint16 typeID, 
     return true;
 }
 
+bool FactoryDB::SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID, uint32 ownerID, uint32 systemID, uint32 regionID,
+                                         const std::map<uint8, uint16>& lines)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT assemblyLineID, assemblyLineTypeID FROM ramAssemblyLines WHERE containerID = %u ORDER BY assemblyLineID", stationID)) {
+        _log(DATABASE__ERROR, "Failed to query assembly lines of station %u: %s", stationID, res.error.c_str());
+        return false;
+    }
+
+    // what is still missing per line type, and the lines that are surplus
+    std::map<uint8, uint16> missing(lines);
+    std::vector<std::pair<uint32, uint8>> surplus;
+    DBResultRow row;
+    while (res.GetRow(row)) {
+        uint8 typeID(row.GetUInt(1));
+        std::map<uint8, uint16>::iterator itr = missing.find(typeID);
+        if ((itr != missing.end()) and (itr->second > 0)) {
+            --itr->second;
+        } else {
+            surplus.push_back(std::make_pair(row.GetUInt(0), typeID));
+        }
+    }
+
+    DBerror err;
+    for (auto& cur : surplus) {
+        uint8 activity(sDataMgr.GetAssemblyLineActivity(cur.second));
+        uint8 newType(0);
+        for (auto& want : missing)
+            if ((want.second > 0) and (sDataMgr.GetAssemblyLineActivity(want.first) == activity)) {
+                newType = want.first;
+                --want.second;
+                break;
+            }
+        if (newType > 0) {
+            sDatabase.RunQuery(err, "UPDATE ramAssemblyLines SET assemblyLineTypeID = %u WHERE assemblyLineID = %u", newType, cur.first);
+        } else {
+            sDatabase.RunQuery(err, "DELETE FROM ramAssemblyLines WHERE assemblyLineID = %u", cur.first);
+        }
+    }
+
+    // new lines are free and usable by the owner corp only.  the corp configures them (UpdateAssemblyLineConfigurations)
+    std::ostringstream values;
+    bool first(true);
+    for (auto& cur : missing)
+        for (uint16 i = 0; i < cur.second; ++i) {
+            if (!first)
+                values << ",";
+            first = false;
+            values << "(" << (uint16)cur.first << ", " << stationID << ", 0, 0, 0, 0, " << (uint16)EvERam::RestrictionMask::ByCorp
+                   << ", 0, 0, -10, -10, -10, 10, 10, " << ownerID << ", " << (uint16)sDataMgr.GetAssemblyLineActivity(cur.first) << ")";
+        }
+    if (!first and !sDatabase.RunQuery(err,
+        "INSERT INTO ramAssemblyLines"
+        " (assemblyLineTypeID, containerID, nextFreeTime, UIGroupingID, costInstall, costPerHour, restrictionMask,"
+        " discountPerGoodStandingPoint, surchargePerBadStandingPoint, minimumStanding, minimumCharSecurity, minimumCorpSecurity,"
+        " maximumCharSecurity, maximumCorpSecurity, ownerID, activityID)"
+        " VALUES %s", values.str().c_str()))
+    {
+        _log(DATABASE__ERROR, "Failed to create assembly lines of station %u: %s", stationID, err.c_str());
+        return false;
+    }
+
+    // the summary the industry window's 'corporation' and 'alliance' scopes list
+    sDatabase.RunQuery(err, "DELETE FROM ramAssemblyLineStations WHERE stationID = %u", stationID);
+    for (auto& cur : lines)
+        if (cur.second > 0)
+            sDatabase.RunQuery(err,
+                "INSERT INTO ramAssemblyLineStations (stationID, assemblyLineTypeID, quantity, stationTypeID, ownerID, solarSystemID, regionID)"
+                " VALUES (%u, %u, %u, %u, %u, %u, %u)",
+                stationID, cur.first, cur.second, stationTypeID, ownerID, systemID, regionID);
+
+    _log(MANUF__MESSAGE, "Synced assembly lines of station %u (%lu line types).", stationID, lines.size());
+    return true;
+}
+
 void FactoryDB::PauseJobsInContainer(uint32 containerID)
 {
     DBerror err;

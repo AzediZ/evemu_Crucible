@@ -37,6 +37,8 @@
 #include "pos/Structure.h"
 #include "pos/Tower.h"
 #include "ship/ShipService.h"
+#include "station/StationDataMgr.h"
+#include "StaticDataMgr.h"
 #include "ship/modules/GenericModule.h"
 #include "inventory/ContainerSecurity.h"
 #include "system/Container.h"
@@ -350,7 +352,9 @@ static const char* DropCheck(Client* pClient, InventoryItemRef iRef, bool npcCor
                 or (categoryID == EVEDB::invCategories::SovereigntyStructure)
                 or (categoryID == EVEDB::invCategories::StructureUpgrade)
                 or (categoryID == EVEDB::invCategories::Orbitals)
-                or (iRef->groupID() == EVEDB::invGroups::Construction_Platform));
+                or (iRef->groupID() == EVEDB::invGroups::Construction_Platform)
+                or (iRef->groupID() == EVEDB::invGroups::Station_Upgrade_Platform)
+                or (iRef->groupID() == EVEDB::invGroups::Station_Improvement_Platform));
     // launching for an NPC corp gives the corp nothing; structures always need a player corp
     if (npcCorpLaunch or (structure and IsNPCCorp(pClient->GetCorporationID()))) {
         args->SetItemString("item", new PyInt(iRef->typeID()));
@@ -511,6 +515,10 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
             InventoryItemRef wRef(sItemFactory.GetItemRef((*itr)->AsTuple()->GetItem(0)->AsInt()->value()));
             if ((wRef.get() != nullptr) and (wRef->groupID() == EVEDB::invGroups::Construction_Platform))
                 throw UserError ("LaunchCPWarning");
+            // eveMisc.LaunchFromShip asks the same for outpost upgrade and improvement platforms
+            if ((wRef.get() != nullptr) and ((wRef->groupID() == EVEDB::invGroups::Station_Upgrade_Platform)
+                                          or (wRef->groupID() == EVEDB::invGroups::Station_Improvement_Platform)))
+                throw UserError ("LaunchUpgradePlatformWarning");
         }
 
     PyDict* dict = new PyDict();
@@ -675,7 +683,8 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
             case EVEDB::invCategories::Celestial: {
                 switch (iRef->groupID()) {
                     case EVEDB::invGroups::Construction_Platform: {   // outpost construction platforms
-                        // our alliance must hold sovereignty here, and one platform per planet
+                        /* our alliance must hold sovereignty here, and "there can only be a single outpost or station per
+                         *  conquerable solar system" (Ten Ton Hammer outpost guide, 2010).  InventoryBound::Build checks again */
                         uint32 planetID(pSystem->GetClosestPlanetID(pShipSE->GetPosition()));
                         if (planetID == 0) {
                             addCustomError("There is no planet in this system to build an outpost at.");
@@ -685,12 +694,23 @@ PyResult ShipBound::Drop(PyCallArgs &call, PyList* PyToDropList, std::optional <
                             addCustomError("You cannot launch Construction Platforms in a system which your alliance does not control.");
                             break;
                         }
-                        bool taken(false);
-                        for (auto cur : pSystem->GetOperationalStatics())
-                            if (cur.second->IsPlatformSE() and (cur.second->GetPOSSE()->GetPlanetID() == planetID))
-                                taken = true;
-                        if (taken) {
-                            addCustomError("There is already a platform deployed at this planet.");
+                        if (sDataMgr.GetStationCount(pClient->GetSystemID()) > 0) {
+                            addCustomError("There is already a station in this system.  Only one outpost or station can be in a solar system.");
+                            break;
+                        }
+                        if (LaunchToSpace(pClient, iRef, ownerID, location, list))
+                            shipDrop = true;
+                    } break;
+                    case EVEDB::invGroups::Station_Upgrade_Platform:        // Foundation, Pedestal and Monument
+                    case EVEDB::invGroups::Station_Improvement_Platform: {  // outpost improvements
+                        // they are anchored and built at the system's outpost, which must be the launching corp's
+                        uint32 outpostID(stDataMgr.GetOutpostInSystem(pClient->GetSystemID()));
+                        if (outpostID == 0) {
+                            addCustomError("There is no outpost in this system to upgrade.");
+                            break;
+                        }
+                        if (stDataMgr.GetOwnerID(outpostID) != (uint32)pClient->GetCorporationID()) {
+                            addCustomError("Only the corporation that owns the outpost can upgrade it.");
                             break;
                         }
                         if (LaunchToSpace(pClient, iRef, ownerID, location, list))

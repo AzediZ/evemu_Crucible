@@ -1194,7 +1194,7 @@ namespace {
 
     /* /sov and /pos (anchor|online|offline|unanchor|complete) (itemID)
      *  any structure in your system:  control towers and their modules, sovereignty structures (TCU, SBU, IHub),
-     *  outpost construction platforms, customs offices and gantries.  it happens at once:  the delays, the pilot's
+     *  outpost construction, upgrade and improvement platforms, customs offices and gantries.  it happens at once:  the delays, the pilot's
      *  starbase rules and permissions are skipped, and the client shows the final state without a countdown.
      *  online anchors an unanchored structure first, unanchor offlines an online one.  complete only finishes the
      *  change that is running.  sovereignty rules (claims, hubs, blockades) still apply and their errors come back

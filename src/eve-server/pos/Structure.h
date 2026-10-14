@@ -67,7 +67,9 @@ protected:
         and (type.categoryID() != EVEDB::invCategories::Orbitals)
         and (type.categoryID() != EVEDB::invCategories::SovereigntyStructure)
         and (type.categoryID() != EVEDB::invCategories::StructureUpgrade)
-        and (type.groupID() != EVEDB::invGroups::Construction_Platform)) {
+        and (type.groupID() != EVEDB::invGroups::Construction_Platform)
+        and (type.groupID() != EVEDB::invGroups::Station_Upgrade_Platform)
+        and (type.groupID() != EVEDB::invGroups::Station_Improvement_Platform)) {
             _log(ITEM__ERROR, "Trying to load %s as Structure.", sDataMgr.GetCategoryName(type.categoryID()));
             if (sConfig.debug.StackTrace)
                 EvE::traceStack();
@@ -262,6 +264,11 @@ public:
     void                        UpdateTimeStamp()       { m_db.UpdateTimeStamp(m_data.itemID, m_data); }
     void                        UpdateUsageFlags()      { m_db.UpdateUsageFlags(m_data.itemID, m_data); }
     void                        SaveData()              { m_db.UpdateBaseData(m_data); }
+    // a platform used up by its build (InventoryBound::Build)
+    void                        DeleteData()            { m_db.DeleteData(m_data.itemID); }
+    // outpost upgrade and improvement platforms anchor at the outpost, construction platforms at a planet
+    bool                        IsOutpostUpgradePlatform() { return ((m_self->groupID() == EVEDB::invGroups::Station_Upgrade_Platform)
+                                                                  or (m_self->groupID() == EVEDB::invGroups::Station_Improvement_Platform)); }
 
     // for targetMgr
     bool                        IsReinforced()          { return (m_data.state == EVEPOS::StructureState::Reinforced); }

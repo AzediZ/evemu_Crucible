@@ -73,6 +73,13 @@ public:
     static void GetOwnerIDsOfClonesAtStation(uint32 stationID, uint32 corpID, DBQueryResult& res);
     static void GetOutpostImprovementStaticData(DBQueryResult& res);
     static void GetOutpostImprovements(uint32 stationID, DBQueryResult& res);
+    // outpost upgrades (staImprovementsInstalled) of every outpost:  stationID, tier 1a, 2a, 3a, 1b, 2b, 1c
+    static void GetAllOutpostImprovements(DBQueryResult& res);
+    static void SaveOutpostImprovements(uint32 stationID, const uint16 (&slots)[6]);
+    // the outpost's upgrade level and what it and the improvements give
+    // staStationTypes.reprocessingEfficiency of a station type (0 for none)
+    static float GetStationTypeReprocessingEfficiency(uint16 stationTypeID);
+    static void SaveOutpostStats(uint32 stationID, uint8 upgradeLevel, uint8 officeSlots, float reprocessingEfficiency);
     // stations of a region for the remote buy order station picker (quote.py PickStation)
     static PyRep* GetStationsByRegion(uint32 regionID);
 

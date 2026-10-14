@@ -319,7 +319,10 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const 
                 // outpost construction platforms hold the outpost's materials and are anchored like structures.
                 //  PlatformSE and InventoryBound::Build take them as StructureItems, so load them as one:  as a plain
                 //  CelestialObject (no inventory) the factory's StaticCast to StructureItem crashed the server
-                case EVEDB::invGroups::Construction_Platform: {
+                case EVEDB::invGroups::Construction_Platform:
+                // outpost upgrade and improvement platforms work the same way (anchored at the outpost)
+                case EVEDB::invGroups::Station_Upgrade_Platform:
+                case EVEDB::invGroups::Station_Improvement_Platform: {
                     return StructureItem::_LoadItem<StructureItem>(itemID, type, data);
                 } break;
                 case EVEDB::invGroups::Force_Field:

@@ -82,6 +82,11 @@ public:
     // structure (POS) assembly lines
     // creates the lines of a structure (ramInstallationTypeContents) on first use, or sets the owner of existing ones
     static bool EnsureStructureAssemblyLines(uint32 structureID, uint16 typeID, uint32 ownerID);
+    /* outposts:  makes the station's lines (ramAssemblyLines) and its line summary (ramAssemblyLineStations) the given
+     *  lineTypeID/count.  lines of a type no longer wanted are retyped to a wanted type of the same activity (keeping
+     *  their id, jobs and configuration), missing ones are added free for the owner corp, the rest are removed */
+    static bool SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID, uint32 ownerID, uint32 systemID, uint32 regionID,
+                                         const std::map<uint8, uint16>& lines);
     // offline structures pause their jobs (client shows 'Offline'), onlining resumes them with the lost time added
     static void PauseJobsInContainer(uint32 containerID);
     static void ResumeJobsInContainer(uint32 containerID);

@@ -66,6 +66,13 @@ protected:
     PyResult ListDroneBay(PyCallArgs& call);
     PyResult RunRefiningProcess(PyCallArgs& call);
     PyResult Build(PyCallArgs& call);
+    // the three platforms Build() handles:  outpost construction, outpost upgrade (Foundation...), outpost improvement
+    void BuildOutpost(Client* pClient, StructureSE* pPlatform, uint16 stationTypeID);
+    void BuildOutpostUpgrade(Client* pClient, StructureSE* pPlatform, uint16 upgradeTypeID);
+    // are the materials of typeID (invTypeMaterials) in the platform?  throws the first one missing
+    void CheckPlatformMaterials(uint16 typeID);
+    // uses the materials up, moves what is left to the pilot's hangar at stationID and removes the platform
+    void UsePlatform(Client* pClient, StructureSE* pPlatform, uint16 typeID, uint32 stationID);
 
     bool m_passive;     // still not sure what this is for
     EVEItemFlags m_flag;
