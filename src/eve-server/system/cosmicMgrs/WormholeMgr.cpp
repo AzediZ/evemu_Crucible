@@ -125,9 +125,11 @@ void WormholeMgr::Create(CosmicSignature& sig, uint32 exitSystemID/*=0*/, uint32
     } else {
         // decide which type of wormhole to create here
         const ItemType* whType = GetRandomWormholeType(sig.systemID);
-        if (whType == nullptr)
+        // the missing braces here made every call return, so no wormhole was ever made
+        if (whType == nullptr) {
             _log(WORMHOLE_MGR__DEBUG, "WormholeMgr::Create() - Create Failure, SystemID not in Database %u", sig.systemID);
             return;
+        }
         destSystem = GetRandomDestination(whType);
         // create wormhole here
         sig.sigName = whType->name();
