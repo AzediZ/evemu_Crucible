@@ -287,7 +287,11 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
         Inserts << "(" << cur.itemID << ", " << cur.typeID << ", " << cur.ownerID << ", " << cur.locationID << ", ";
         Inserts << cur.flag << ", " << cur.contraband << ", " << (cur.singleton ? 1 : 0) << ", ";
         Inserts << cur.quantity << ", " << std::to_string(cur.position.x) << ", " << std::to_string(cur.position.y) << ", " << std::to_string(cur.position.z);
-        Inserts << ", '" << cur.customInfo << "')";
+        // customInfo holds the pilot's name on a logged-off ship, so it must be escaped.  one name with an apostrophe
+        //  failed the whole batch (and so the shutdown save)
+        std::string info;
+        sDatabase.DoEscapeString(info, cur.customInfo);
+        Inserts << ", '" << info << "')";
     }
 
     if (!first) {
