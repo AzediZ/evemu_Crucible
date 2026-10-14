@@ -1,0 +1,96 @@
+From 8a4416def82a2874f8a592d724d814f7719ac255 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 20:00:10 +0000
+Subject: [PATCH 62/63] Docker: logs are capped; the panel also sees the server
+ online from the database
+
+- docker-compose.yml: Docker kept everything the server printed in one file that grew for as
+  long as the container existed. The server now keeps the last 100 MB (5 files of 20 MB) and
+  the database the last 30 MB. The containers are recreated at the next Start or Rebuild to
+  pick this up; the universe is in its volume and isn't touched.
+- start.sh keeps the newest 20 of the server's own log files in /app/logs (one per start).
+- Control panel: with the log capped, the "EVEmu Server is Online" line can be gone on a long
+  run, so the panel first checks srvStatus, where the server marks itself online with the time
+  at the same moment, and only reads the log if that doesn't say so.
+---
+ EVEmuControlPanel.ps1            | 17 +++++++++++++++++
+ docker-compose.yml               | 12 ++++++++++++
+ utils/container-scripts/start.sh |  4 ++++
+ 3 files changed, 33 insertions(+)
+
+diff --git a/EVEmuControlPanel.ps1 b/EVEmuControlPanel.ps1
+index 97b881d..9d67ea4 100644
+--- a/EVEmuControlPanel.ps1
++++ b/EVEmuControlPanel.ps1
+@@ -136,6 +136,23 @@ function Test-ServerOnline($st) {
+     # The server prints "EVEmu Server is Online" once it has finished booting.
+     if (-not $st -or $st.Server -ne 'running') { return $false }
+     if ($script:OnlineFor -eq $st.ServerStartedAt) { return $true }
++    # At the same moment it marks itself online in the database, with the time.  Checked first: on a long run
++    #  that line can be gone from Docker's log, which keeps only the last 100 MB (docker-compose.yml)
++    $r = Invoke-Sql 'SELECT Online+0, startTime FROM srvStatus WHERE AI = 1' 6000
++    if ($r.ExitCode -eq 0) {
++        $f = ([string]$r.Output).Trim() -split '\s+'
++        $since = [int64]0
++        if (($f.Count -ge 2) -and ($f[0] -eq '1') -and [int64]::TryParse($f[1], [ref]$since)) {
++            try {
++                $started = [DateTimeOffset]::ParseExact($st.ServerStartedAt.Substring(0, 19), 'yyyy-MM-ddTHH:mm:ss',
++                    [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal)
++                if ($since -ge ($started.ToUnixTimeSeconds() - 5)) {
++                    $script:OnlineFor = $st.ServerStartedAt
++                    return $true
++                }
++            } catch { }
++        }
++    }
+     $r = Invoke-Cli $script:Docker ('logs --since ' + $st.ServerStartedAt + ' server') 8000
+     if (([string]$r.Output + [string]$r.Error) -match 'EVEmu Server is Online') {
+         $script:OnlineFor = $st.ServerStartedAt
+diff --git a/docker-compose.yml b/docker-compose.yml
+index badceaf..86993f7 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -27,6 +27,13 @@ services:
+     #  time for the save;  the stop ends as soon as the server has exited
+     stop_grace_period: 2m
+     init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
++    # Docker keeps everything the server prints (docker logs server) in a file that otherwise grows for as long as
++    #  the container exists.  Keep the last 100 MB, in 5 files of 20 MB
++    logging:
++      driver: json-file
++      options:
++        max-size: "20m"
++        max-file: "5"
+     # cap_add: #This is required for gdb to work
+     #   - SYS_PTRACE
+ 
+@@ -39,6 +46,11 @@ services:
+     # If you want to connect to the Database pick your host port to map it to, (host-port:container-port) below. 
+     #ports:
+     #  - "3306:3306"  
++    logging:
++      driver: json-file
++      options:
++        max-size: "10m"
++        max-file: "3"
+     environment:
+       - MARIADB_RANDOM_ROOT_PASSWORD=true
+       - MARIADB_USER=evemu
+diff --git a/utils/container-scripts/start.sh b/utils/container-scripts/start.sh
+index 8d2b11f..7c8f0c4 100755
+--- a/utils/container-scripts/start.sh
++++ b/utils/container-scripts/start.sh
+@@ -30,6 +30,10 @@ if [ ! -f "/app/etc/motd.txt" ]; then
+     cp /src/utils/config/motd.txt /app/etc/
+ fi
+ 
++# The server writes a new log file into /app/logs at every start (logDir in eve-server.xml), inside the container.
++#  Keep the newest 20
++ls -1t /app/logs/*.log 2>/dev/null | tail -n +21 | xargs -r rm -f --
++
+ echo "Installing devtools and GM tools..."
+ cp /src/utils/config/devtools.raw /app/etc/
+ cp /src/utils/config/gmtools.py /app/etc/
+-- 
+2.56.0.windows.2
+

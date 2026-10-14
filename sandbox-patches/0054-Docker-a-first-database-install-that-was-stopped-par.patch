@@ -1,0 +1,156 @@
+From 7bce17646f3af4d05c27e25a1231003a89ce0fe1 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:39:45 +0000
+Subject: [PATCH 54/63] Docker: a first database install that was stopped part
+ way is finished at the next start
+
+A Stop during the first start killed the database install part way (start.sh only set its stop
+trap once the server started). The next start saw tables and said "Base database already
+installed", and the server ran on a half-installed universe for good.
+
+- evedbtool install: when tables exist but the normal migrations never ran and base_migrations
+  lists fewer base files than there are, it carries on with the missing base files (each base file
+  starts with DROP TABLE IF EXISTS, so one cut off part way is simply loaded again). A finished
+  universe always has rows in the migrations table, so it is never touched.
+- start.sh sets a stop trap before the database step: a stop waits for that step and then exits
+  without starting the server.
+- db_init.sh stops the start when the install or an update fails, instead of starting the server
+  on a half-updated universe. A failed dungeon load only warns.
+---
+ dep/evedbtool/command_install.go   |  5 ++++
+ dep/evedbtool/db.go                | 43 ++++++++++++++++++++++++++++++
+ utils/container-scripts/db_init.sh | 12 +++++++--
+ utils/container-scripts/start.sh   | 14 ++++++++--
+ 4 files changed, 70 insertions(+), 4 deletions(-)
+
+diff --git a/dep/evedbtool/command_install.go b/dep/evedbtool/command_install.go
+index 8e6a989..ce1b057 100644
+--- a/dep/evedbtool/command_install.go
++++ b/dep/evedbtool/command_install.go
+@@ -44,6 +44,11 @@ func (c *InstallCommand) Run(args []string) int {
+ 		if tables == 0 {
+ 			log.Info("Database not initialized, installing...")
+ 			InstallBase()
++		} else if applied, total, unfinished := BaseInstallUnfinished(); unfinished {
++			// a stop or crash during the first install left part of the base in.  Each base file is recorded in
++			//  base_migrations once it's in, so InstallBase carries on with the files that are missing
++			log.Warn("The base database install stopped part way last time (", applied, " of ", total, " base files in). Finishing it...")
++			InstallBase()
+ 		} else {
+ 			log.Info("Base database already installed. Won't overwrite.")
+ 		}
+diff --git a/dep/evedbtool/db.go b/dep/evedbtool/db.go
+index a80fbea..d266de6 100644
+--- a/dep/evedbtool/db.go
++++ b/dep/evedbtool/db.go
+@@ -62,6 +62,49 @@ func GetNumberOfTables() int {
+ 	return number
+ }
+ 
++// countRows returns the number of rows in table, or -1 when the table doesn't exist
++func countRows(db *sql.DB, table string) int {
++	var exists int
++	err := db.QueryRow(`SELECT count(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?;`, viper.GetString("db-database"), table).Scan(&exists)
++	if err != nil {
++		log.Fatal("Failed to query db; ", err)
++	}
++	if exists == 0 {
++		return -1
++	}
++	var rows int
++	if err := db.QueryRow("SELECT count(*) FROM `" + table + "`;").Scan(&rows); err != nil {
++		log.Fatal("Failed to query db; ", err)
++	}
++	return rows
++}
++
++// BaseInstallUnfinished says whether an earlier base install stopped part way:  tables exist, but the normal
++//  migrations (which only run after the whole base is in) never started, and base_migrations has fewer rows than
++//  there are base files.  A finished universe always has rows in the migrations table, so it is never touched.
++func BaseInstallUnfinished() (applied int, total int, unfinished bool) {
++	err := filepath.Walk(viper.GetString("base-dir"), func(path string, info os.FileInfo, err error) error {
++		if err == nil && !info.IsDir() {
++			total++
++		}
++		return nil
++	})
++	if err != nil {
++		log.Error("ERROR: ", err)
++	}
++
++	db := getDB()
++	defer db.Close()
++	if countRows(db, "migrations") > 0 {
++		return 0, total, false
++	}
++	applied = countRows(db, "base_migrations")
++	if applied < 0 {
++		applied = 0
++	}
++	return applied, total, applied < total
++}
++
+ //Read in gzipped file into an in-memory string array
+ func ReadGzFile(filename string) ([]string, error) {
+ 	f, err := os.Open(filename)
+diff --git a/utils/container-scripts/db_init.sh b/utils/container-scripts/db_init.sh
+index 221eb9c..8eaf300 100755
+--- a/utils/container-scripts/db_init.sh
++++ b/utils/container-scripts/db_init.sh
+@@ -48,8 +48,16 @@ migrations-dir: /src/sql/migrations
+ dungeons-dir: /src/sql/dungeons
+ EOF
+ 
++# A first install that was stopped part way is finished here (evedbtool picks up the base files that are missing).
++#  If the install or an update fails, the server isn't started:  a server on a half-updated universe saves into it
+ echo "Running EVEDBTool..."
+-/src/sql/evedbtool install
++if ! /src/sql/evedbtool install; then
++    echo "=== The database install or update failed (see the lines above).  The server was not started. ==="
++    exit 1
++fi
+ 
+ echo "Loading all dungeons using EVEDBTool..."
+-/src/sql/evedbtool dungeon apply
+\ No newline at end of file
++if ! /src/sql/evedbtool dungeon apply; then
++    echo "=== Loading the dungeons failed (see the lines above).  Starting anyway:  sites and missions may be missing rooms. ==="
++fi
++exit 0
+\ No newline at end of file
+diff --git a/utils/container-scripts/start.sh b/utils/container-scripts/start.sh
+index 868ffd8..8d2b11f 100755
+--- a/utils/container-scripts/start.sh
++++ b/utils/container-scripts/start.sh
+@@ -2,8 +2,19 @@
+ 
+ echo "Initializing EVEmu..."
+ 
++# A stop that comes in while the database is installed or updated waits for that to finish (docker allows 2
++#  minutes, see docker-compose.yml);  then the server isn't started.  stop_server (below) replaces this trap
++stopping=0
++trap 'stopping=1; echo "=== Stop requested:  finishing the database step first, then stopping ==="' TERM
++
+ #Initialize the database
+-/src/utils/container-scripts/db_init.sh
++if ! /src/utils/container-scripts/db_init.sh; then
++    exit 1
++fi
++if [ "$stopping" = 1 ]; then
++    echo "=== Stopped before the server started ==="
++    exit 0
++fi
+ 
+ #Initialize configuration files
+ if [ ! -f "/app/etc/eve-server.xml" ]; then
+@@ -39,7 +50,6 @@ fi
+ #  keeps waiting.
+ child=""
+ gdb_pid=""
+-stopping=0
+ # the eve-server process:  the child, or under gdb the program gdb runs
+ server_pid() {
+     if [ -z "$gdb_pid" ]; then
+-- 
+2.56.0.windows.2
+

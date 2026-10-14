@@ -1,0 +1,98 @@
+From d052ebf473cecfc5d4c3fc2f4609222b43486df6 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 20:00:10 +0000
+Subject: [PATCH 61/63] Market: price history older than a year is deleted; the
+ order expiry check reads only player orders
+
+- The daily price history (mktHistory) and the market sim's day rows (mktSimHistory) were never
+  deleted, about 0.5 to 1 GB a year. Rows older than <market><HistoryDays> (365) are deleted
+  at the daily rollup, which is as far back as the client is ever sent. The sim's rows are kept
+  for <InsuranceIndexDays> if that's longer, since the insurance index is made from them.
+- The order expiry check every 5 minutes read every order on the market (about 180,000 with the
+  market sim) to find the player ones. An isCorp index lets it read only player and player corp
+  orders: 0.6 ms instead of 48 ms on a test table of 180,000 orders, same results.
+- New migration 20261021120000-market-history-expiry-indexes: mktHistory historyDate and
+  mktOrders isCorp indexes.
+---
+ .../20261021120000-market-history-expiry-indexes.sql |  9 +++++++++
+ src/eve-server/market/MarketDB.cpp                   | 12 +++++++++++-
+ src/eve-server/market/MarketDB.h                     |  2 ++
+ src/eve-server/market/MarketMgr.cpp                  |  3 +++
+ 4 files changed, 25 insertions(+), 1 deletion(-)
+ create mode 100644 sql/migrations/20261021120000-market-history-expiry-indexes.sql
+
+diff --git a/sql/migrations/20261021120000-market-history-expiry-indexes.sql b/sql/migrations/20261021120000-market-history-expiry-indexes.sql
+new file mode 100644
+index 0000000..085330c
+--- /dev/null
++++ b/sql/migrations/20261021120000-market-history-expiry-indexes.sql
+@@ -0,0 +1,9 @@
++-- The daily price history older than <market><HistoryDays> is deleted each day (by date), and the order expiry
++--  check reads player corporation orders by isCorp (MarketDB::GetExpiredOrders)
++-- +migrate Up
++ALTER TABLE `mktHistory` ADD INDEX IF NOT EXISTS `historyDate` (`historyDate`);
++ALTER TABLE `mktOrders` ADD INDEX IF NOT EXISTS `isCorp` (`isCorp`);
++
++-- +migrate Down
++ALTER TABLE `mktOrders` DROP INDEX IF EXISTS `isCorp`;
++ALTER TABLE `mktHistory` DROP INDEX IF EXISTS `historyDate`;
+diff --git a/src/eve-server/market/MarketDB.cpp b/src/eve-server/market/MarketDB.cpp
+index e4c1b54..5ce43f3 100644
+--- a/src/eve-server/market/MarketDB.cpp
++++ b/src/eve-server/market/MarketDB.cpp
+@@ -255,7 +255,8 @@ void MarketDB::GetMatchingSellOrders(uint32 regionID, uint16 typeID, double maxP
+ 
+ void MarketDB::GetExpiredOrders(int64 now, uint32 limit, std::vector<uint32>& into)
+ {
+-    // seeded npc orders and market bot orders are not owned by characters or player corps and never expire here
++    // seeded npc orders and market bot orders are not owned by characters or player corps and never expire here.
++    //  reads only those orders, by the ownerID and isCorp indexes (without the isCorp index it read every order)
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res,
+         "SELECT orderID FROM mktOrders"
+@@ -536,6 +537,15 @@ void MarketDB::DeleteTransactionsBefore(int64 time)
+     sDatabase.RunQuery(err, "DELETE FROM mktTransactions WHERE transactionDate < %lli", time);
+ }
+ 
++void MarketDB::DeleteHistoryBefore(int64 time, int64 simTime)
++{
++    DBerror err;
++    if (!sDatabase.RunQuery(err, "DELETE FROM mktHistory WHERE historyDate < %lli", time))
++        codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
++    if (!sDatabase.RunQuery(err, "DELETE FROM mktSimHistory WHERE historyDate < %lli", simTime))
++        codelog(MARKET__DB_ERROR, "Error in query: %s", err.c_str());
++}
++
+ PyRep *MarketDB::GetMarketGroups() {
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res, "SELECT parentGroupID, marketGroupID, marketGroupName,"
+diff --git a/src/eve-server/market/MarketDB.h b/src/eve-server/market/MarketDB.h
+index 80acfbc..3e7e5e1 100644
+--- a/src/eve-server/market/MarketDB.h
++++ b/src/eve-server/market/MarketDB.h
+@@ -76,6 +76,8 @@ public:
+     // one row for today (since midnight), or an empty rowset
+     static PyRep* GetHistoryToday(uint32 regionID, uint16 typeID, int64 midnight);
+     static void DeleteTransactionsBefore(int64 time);
++    // daily price history from before 'time' and market sim day rows from before 'simTime'
++    static void DeleteHistoryBefore(int64 time, int64 simTime);
+ 
+ 
+     /* for base price estimator */
+diff --git a/src/eve-server/market/MarketMgr.cpp b/src/eve-server/market/MarketMgr.cpp
+index 09752e2..8bcb2fa 100644
+--- a/src/eve-server/market/MarketMgr.cpp
++++ b/src/eve-server/market/MarketMgr.cpp
+@@ -246,6 +246,9 @@ void MarketMgr::UpdatePriceHistory()
+     // transactions are kept as long as the history is served
+     if (sConfig.market.DeleteOldTransactions)
+         MarketDB::DeleteTransactionsBefore(oldest);
++    /* the history itself isn't read after HistoryDays either (each day adds a row for every region and type traded).
++     *  the market sim's days also make the insurance index, so they're kept for InsuranceIndexDays if that's longer */
++    MarketDB::DeleteHistoryBefore(oldest, std::min<int64>(oldest, midnight - (EvE::Time::Day * sConfig.market.InsuranceIndexDays)));
+ 
+     _log(MARKET__MESSAGE, "UpdatePriceHistory - rolled up %u days in %.3fms.", count, (GetTimeMSeconds() - start));
+ 
+-- 
+2.56.0.windows.2
+

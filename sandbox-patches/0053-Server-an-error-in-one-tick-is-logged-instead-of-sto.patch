@@ -1,0 +1,253 @@
+From 4b60fb0d05e0745acba03612903f35d50b4f4264 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:38:58 +0000
+Subject: [PATCH 53/63] Server: an error in one tick is logged instead of
+ stopping the server
+
+Nothing caught an exception that escaped a system's, client's or manager's tick, so one bad case
+anywhere (a Python tuple written past its end, a missing map entry) stopped the whole server.
+
+- EntityList::Process runs each system, client, target manager, probe and manager tick on its own,
+  catches what escapes, logs it with where it happened and carries on. The log is limited (the first
+  20, then every 100th), so an error that repeats every second can't flood it. A system whose tick
+  throws stays loaded.
+- The main loop catches anything else as a last resort.
+- Client::ProcessNet drops a packet whose handler throws a C++ exception and handles the rest.
+  Its "failed to dispatch" log line no longer reads the character before character select (null),
+  or the type name table past its end for a bad packet type.
+
+A real crash (segfault) still stops the server and writes a crash report.
+---
+ src/eve-server/Client.cpp     | 10 +++-
+ src/eve-server/EntityList.cpp | 98 ++++++++++++++++++++++++-----------
+ src/eve-server/eve-server.cpp | 26 +++++++---
+ 3 files changed, 96 insertions(+), 38 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 4e6352d..3c9e5d5 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -224,12 +224,20 @@ bool Client::ProcessNet()
+     PyPacket *p(nullptr);
+     while ((p = PopPacket())) {
+         try {
++            // before character select there's no character, and a bad packet can carry any type number
+             if (!DispatchPacket(p))
+-                sLog.Error("Client", "%s: Failed to dispatch packet of type %s (%i).", m_char->name(), MACHONETMSG_TYPE_NAMES[ p->type ], (int)p->type);
++                sLog.Error("Client", "%s: Failed to dispatch packet of type %s (%i).",
++                           (m_char.get() != nullptr ? m_char->name() : GetAddress().c_str()),
++                           (((int)p->type >= 0) and ((int)p->type < MACHONETMSG_TYPE_COUNT) ? MACHONETMSG_TYPE_NAMES[ p->type ] : "unknown"), (int)p->type);
+         }
+         catch(PyException& e) {
+             _SendException(p->dest, p->source.callID, p->type, WRAPPEDEXCEPTION, &e.ssException);
+         }
++        catch(std::exception& e) {
++            // one bad call no longer stops the server;  the packet is dropped and the rest are handled
++            sLog.Error("Client", "%s: Caught %s while handling a packet of type %i.  Dropped it.",
++                       (m_char.get() != nullptr ? m_char->name() : GetAddress().c_str()), e.what(), (int)p->type);
++        }
+ 
+         // every packet is freed once it's handled.  this set p to null first, so only the last one ever was
+         //  (upstream fixed the same leak in d74a231)
+diff --git a/src/eve-server/EntityList.cpp b/src/eve-server/EntityList.cpp
+index d32fce3..bd7d68e 100644
+--- a/src/eve-server/EntityList.cpp
++++ b/src/eve-server/EntityList.cpp
+@@ -220,11 +220,44 @@ void EntityList::RemovePlayer(Client* pClient)
+ }
+ 
+ 
++namespace {
++    /* an exception that escaped one system's, client's or manager's tick used to stop the whole server.
++     *  each tick is guarded on its own, so the error is logged and everything else carries on.
++     *  the log is limited, so an error that repeats every second can't flood it */
++    uint32 s_tickErrors = 0;
++
++    void LogTickError(const char* what, uint32 id, const char* error)
++    {
++        ++s_tickErrors;
++        if ((s_tickErrors <= 20) or (s_tickErrors % 100 == 0))
++            sLog.Error("    EntityList::Tick", "Caught %s in %s %u (error %u since start).  Carrying on.", error, what, id, s_tickErrors);
++    }
++
++    // runs fn;  false if it threw (and the error was logged)
++    template <typename Fn>
++    bool GuardTick(const char* what, uint32 id, Fn&& fn)
++    {
++        try {
++            fn();
++            return true;
++        } catch (PyException&) {
++            LogTickError(what, id, "a Python exception");
++        } catch (std::exception& e) {
++            LogTickError(what, id, e.what());
++        } catch (...) {
++            LogTickError(what, id, "an unknown exception");
++        }
++        return false;
++    }
++}
++
+ void EntityList::Process() {
+     Client* pClient(nullptr);
+     std::vector<Client*>::iterator citr = m_clients.begin();
+     while (citr != m_clients.end()) {
+-        if ((*citr)->ProcessNet()) {
++        bool keep(true);
++        GuardTick("the network tick of client", (*citr)->GetCharID(), [&]{ keep = (*citr)->ProcessNet(); });
++        if (keep) {
+             ++citr;
+         } else {
+             pClient = *citr;
+@@ -236,7 +269,9 @@ void EntityList::Process() {
+     if (m_targTimer.Check()) {
+         std::unordered_map<SystemEntity*, TargetManager*>::iterator titr = m_targMgrs.begin();
+         while (titr != m_targMgrs.end()) {
+-            if (titr->second->Process()) {
++            bool keep(true);
++            GuardTick("the target manager of entity", titr->first->GetID(), [&]{ keep = titr->second->Process(); });
++            if (keep) {
+                 ++titr;
+             } else {
+                 titr = m_targMgrs.erase(titr);
+@@ -244,7 +279,9 @@ void EntityList::Process() {
+         }
+         std::map<uint32, ProbeSE*>::iterator pitr = m_probes.begin();
+         while (pitr != m_probes.end()) {
+-            if (pitr->second->ProcessTic()) {
++            bool keep(true);
++            GuardTick("the tick of probe", pitr->first, [&]{ keep = pitr->second->ProcessTic(); });
++            if (keep) {
+                 ++pitr;
+             } else {
+                 pitr = m_probes.erase(pitr);
+@@ -262,11 +299,11 @@ void EntityList::Process() {
+         //  client applies them to its own simulation at this stamp, so our state must already be there
+         for (auto cur : m_systems)
+             if (cur.second != nullptr)
+-                cur.second->ProcessDestiny();
++                GuardTick("the destiny tick of system", cur.first, [&]{ cur.second->ProcessDestiny(); });
+ 
+         for (auto cur : m_players)
+             if (cur.second->IsValidSession())   // verify client is constructed before calling ProcessClient() on it
+-                cur.second->ProcessClient();
++                GuardTick("the tick of character", cur.first, [&]{ cur.second->ProcessClient(); });
+ 
+     /** @todo test for adding OpenMP here to enable MP per system. */
+     // this wont work....possibility of removing systems, therefore invalidating the iterator.
+@@ -278,7 +315,10 @@ void EntityList::Process() {
+                 sLog.Error(" EntityList::Proc", "Deleting System %u", itr->first);
+                 itr = m_systems.erase(itr);
+                 continue;
+-            } else if (!itr->second->ProcessTic()) {    /* Process each loaded system */
++            }
++            bool keep(true);    /* Process each loaded system.  one that throws stays loaded */
++            GuardTick("the tick of system", itr->first, [&]{ keep = itr->second->ProcessTic(); });
++            if (!keep) {
+                 itr->second->UnloadSystem();
+                 SafeDelete(itr->second);
+                 itr = m_systems.erase(itr);
+@@ -287,40 +327,40 @@ void EntityList::Process() {
+             ++itr;
+         }
+ 
+-        // these need 1Hz tics
+-        sCivMgr.Process();
+-        sAmbientMgr.Process();  // ambient npcs:  transits between systems, the market score refresh
+-        sLocatorMgr.Process();
+-        sBubbleMgr.Process();
+-        sExplorationMgr.Process();
+-        sFltSvc.Process();  // fleet invite timeouts
+-        sMktSim.Process();  // market simulation (keeps to its own time budget)
+-        sSimFacilities.Process();   // the sim's station lines:  GM test jobs, and its writes when the sim doesn't make them
++        // these need 1Hz tics.  each is guarded on its own, so one manager's error doesn't stop the others
++        GuardTick("the civilian manager", 0, []{ sCivMgr.Process(); });
++        GuardTick("the ambient npc manager", 0, []{ sAmbientMgr.Process(); });  // ambient npcs:  transits between systems, the market score refresh
++        GuardTick("the locator manager", 0, []{ sLocatorMgr.Process(); });
++        GuardTick("the bubble manager", 0, []{ sBubbleMgr.Process(); });
++        GuardTick("the exploration manager", 0, []{ sExplorationMgr.Process(); });
++        GuardTick("the fleet service", 0, []{ sFltSvc.Process(); });  // fleet invite timeouts
++        GuardTick("the market simulation", 0, []{ sMktSim.Process(); });  // market simulation (keeps to its own time budget)
++        GuardTick("the market sim's station lines", 0, []{ sSimFacilities.Process(); });   // GM test jobs, and its writes when the sim doesn't make them
+ 
+         // these minute tics do not need to be precise
+         if (m_minuteTimer.Check()) {
+             ++m_minutes;
+-            sMissionDataMgr.Process();  // 1m
+-            sWarMgr.Process();  // 1m  war notifications and bills
+-            sAllianceMgr.Process();  // 1m  alliance joins, daily executor count
++            GuardTick("the mission manager", 0, []{ sMissionDataMgr.Process(); });  // 1m
++            GuardTick("the war manager", 0, []{ sWarMgr.Process(); });  // 1m  war notifications and bills
++            GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count
+ 
+             if (m_minutes % 5 == 0) { // ~5m
+-                sWHMgr.Process();
+-                sMktMgr.Process();  // market order expiry, daily price history rollup
+-                ContractUtils::ProcessExpiry();  // optional contract cleanup and courier failure
+-                sCorpMgr.Process();  // vote cases, sanctioned actions, office rent
+-                sBillingMgr.Process();  // auto-pay, overdue bills, alliance maintenance
++                GuardTick("the wormhole manager", 0, []{ sWHMgr.Process(); });
++                GuardTick("the market manager", 0, []{ sMktMgr.Process(); });  // market order expiry, daily price history rollup
++                GuardTick("contract expiry", 0, []{ ContractUtils::ProcessExpiry(); });  // optional contract cleanup and courier failure
++                GuardTick("the corporation manager", 0, []{ sCorpMgr.Process(); });  // vote cases, sanctioned actions, office rent
++                GuardTick("the billing manager", 0, []{ sBillingMgr.Process(); });  // auto-pay, overdue bills, alliance maintenance
+                 for (auto cur : m_systems)
+-                    cur.second->UpdateData();   // update active system timers and dynamic data every 5m
++                    GuardTick("the 5 minute update of system", cur.first, [&]{ cur.second->UpdateData(); });   // update active system timers and dynamic data every 5m
+             }
+             if (m_minutes % 15 == 0) { // ~15m
+-                sConsole.UpdateStatus();
+-                svDataMgr.SaveDevIndices();
++                GuardTick("the console status", 0, []{ sConsole.UpdateStatus(); });
++                GuardTick("the development index save", 0, []{ svDataMgr.SaveDevIndices(); });
+             }
+             if (m_minutes % 60 == 0) { // ~1h
+-                MapDB::ManipulateTimeData();
+-                svDataMgr.Process();    // development index decay
+-                InsuranceService::ProcessExpiry();  // insurance expiry notifications
++                GuardTick("the star map statistics", 0, []{ MapDB::ManipulateTimeData(); });
++                GuardTick("the development index decay", 0, []{ svDataMgr.Process(); });
++                GuardTick("insurance expiry", 0, []{ InsuranceService::ProcessExpiry(); });  // insurance expiry notifications
+             }
+         }
+ 
+diff --git a/src/eve-server/eve-server.cpp b/src/eve-server/eve-server.cpp
+index 3a6d721..98e30fb 100644
+--- a/src/eve-server/eve-server.cpp
++++ b/src/eve-server/eve-server.cpp
+@@ -912,14 +912,24 @@ int main( int argc, char* argv[] )
+         /* Freeze Detector Code */
+         //++m_worldLoopCounter;
+ 
+-        if ((tcpc = tcps.PopConnection()))
+-            sEntityList.Add(new Client(newSvcMgr, &tcpc));
+-
+-        sEntityList.Process();
+-
+-        /*  process console commands, if any, and check for 'exit' command */
+-        if (!sConsole.Process())
+-            m_run = false;
++        // EntityList guards each system, client and manager on its own;  this catches anything else, so an
++        //  exception is logged instead of stopping the server
++        try {
++            if ((tcpc = tcps.PopConnection()))
++                sEntityList.Add(new Client(newSvcMgr, &tcpc));
++
++            sEntityList.Process();
++
++            /*  process console commands, if any, and check for 'exit' command */
++            if (!sConsole.Process())
++                m_run = false;
++        } catch (PyException&) {
++            sLog.Error("        Main Loop", "Caught a Python exception in the main loop.  Carrying on.");
++        } catch (std::exception& e) {
++            sLog.Error("        Main Loop", "Caught %s in the main loop.  Carrying on.", e.what());
++        } catch (...) {
++            sLog.Error("        Main Loop", "Caught an unknown exception in the main loop.  Carrying on.");
++        }
+ 
+         /* do the stuff for thread sleeping */
+         start = GetTickCount() - start;
+-- 
+2.56.0.windows.2
+

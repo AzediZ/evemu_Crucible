@@ -1,0 +1,235 @@
+From 9d6581add95310bd3a43d0ec0c68f3fac4466f72 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:39:45 +0000
+Subject: [PATCH 55/63] Bills: due dates skip the time the server was off
+
+Bills, office rent, alliance and sov billing and war bills run on real time. On a server that is
+only on while it's being played, a week away could make an alliance bill overdue (closing the
+alliance and dropping its sov), drop sov claims and impound offices, without anyone having been
+able to pay.
+
+- The server saves a heartbeat (srvStatus.lastHeartbeat, new migration) every minute and at
+  shutdown.
+- At start, before anything loads them, unpaid bill due dates, office lease expiry, alliance and sov
+  next-bill dates and war next-bill dates move on by the time since the last heartbeat (when that
+  is over 5 minutes). The log says how long the server was off.
+- New setting <corp><PauseBillsWhileOff> (default true). false = due dates run on real time, as
+  before.
+---
+ .../20261021100000-server-heartbeat.sql       |  7 ++++++
+ src/eve-server/EVEServerConfig.cpp            |  4 +++-
+ src/eve-server/EVEServerConfig.h              |  1 +
+ src/eve-server/EntityList.cpp                 |  1 +
+ src/eve-server/ServiceDB.cpp                  | 19 +++++++++++++++
+ src/eve-server/ServiceDB.h                    |  3 +++
+ src/eve-server/corporation/BillingMgr.cpp     | 23 +++++++++++++++++++
+ src/eve-server/corporation/BillingMgr.h       |  4 ++++
+ src/eve-server/eve-server.cpp                 |  7 +++++-
+ utils/config/eve-server.xml                   |  1 +
+ 10 files changed, 68 insertions(+), 2 deletions(-)
+ create mode 100644 sql/migrations/20261021100000-server-heartbeat.sql
+
+diff --git a/sql/migrations/20261021100000-server-heartbeat.sql b/sql/migrations/20261021100000-server-heartbeat.sql
+new file mode 100644
+index 0000000..180f024
+--- /dev/null
++++ b/sql/migrations/20261021100000-server-heartbeat.sql
+@@ -0,0 +1,7 @@
++-- The last time the server was running (FILETIME), written every minute and at shutdown.  At the next start the
++--  bill, office rent and war bill due dates move on by the time the server was off (<corp><PauseBillsWhileOff>)
++-- +migrate Up
++ALTER TABLE `srvStatus` ADD COLUMN IF NOT EXISTS `lastHeartbeat` bigint(20) NOT NULL DEFAULT 0;
++
++-- +migrate Down
++ALTER TABLE `srvStatus` DROP COLUMN IF EXISTS `lastHeartbeat`;
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 65ad9a9..e843d94 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -589,6 +589,7 @@ EVEServerConfig::EVEServerConfig()
+     corp.BillsEnabled = true;
+     corp.CloseAllianceOnUnpaidBill = true;
+     corp.BillGraceDays = 0;
++    corp.PauseBillsWhileOff = true;
+     war.Enabled = true;
+     war.CorpWarCost = 2000000.0;
+     war.AllianceWarCost = 50000000.0;
+@@ -1863,11 +1864,12 @@ bool EVEServerConfig::ProcessCorp( const TiXmlElement* ele )
+     AddValueParser( "BillsEnabled",                 corp.BillsEnabled );
+     AddValueParser( "CloseAllianceOnUnpaidBill",    corp.CloseAllianceOnUnpaidBill );
+     AddValueParser( "BillGraceDays",                corp.BillGraceDays );
++    AddValueParser( "PauseBillsWhileOff",           corp.PauseBillsWhileOff );
+ 
+     const bool result = ParseElementChildren( ele );
+ 
+     for (const char* name : {"StasisHours", "CEOVoteMinSharePercent", "CEOVoteCooldownDays", "SanctionDays", "EnforceRaceLimit",
+-            "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays"})
++            "JunkReleaseFraction", "BillsEnabled", "CloseAllianceOnUnpaidBill", "BillGraceDays", "PauseBillsWhileOff"})
+         RemoveParser( name );
+ 
+     return result;
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index 26fcd8d..4c6c26e 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -699,6 +699,7 @@ public:
+         bool BillsEnabled;                  // office rent and alliance maintenance bills; false = offices never expire
+         bool CloseAllianceOnUnpaidBill;     // an alliance whose maintenance bill goes overdue is closed
+         uint32 BillGraceDays;               // days after a bill's due date before the overdue handling runs
++        bool PauseBillsWhileOff;            // bill, office rent and war bill due dates move on by the time the server was off
+     } corp;
+ 
+     // From <war>  (F22: wars between player corporations and alliances)
+diff --git a/src/eve-server/EntityList.cpp b/src/eve-server/EntityList.cpp
+index bd7d68e..85b8bac 100644
+--- a/src/eve-server/EntityList.cpp
++++ b/src/eve-server/EntityList.cpp
+@@ -340,6 +340,7 @@ void EntityList::Process() {
+         // these minute tics do not need to be precise
+         if (m_minuteTimer.Check()) {
+             ++m_minutes;
++            GuardTick("the heartbeat", 0, []{ ServiceDB::SaveHeartbeat(); });  // 1m  the last time the server ran (bills skip the time it was off)
+             GuardTick("the mission manager", 0, []{ sMissionDataMgr.Process(); });  // 1m
+             GuardTick("the war manager", 0, []{ sWarMgr.Process(); });  // 1m  war notifications and bills
+             GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count
+diff --git a/src/eve-server/ServiceDB.cpp b/src/eve-server/ServiceDB.cpp
+index 909269f..27ede78 100644
+--- a/src/eve-server/ServiceDB.cpp
++++ b/src/eve-server/ServiceDB.cpp
+@@ -201,6 +201,25 @@ void ServiceDB::SetServerOnlineStatus(bool online) {
+     //  restart was gone when the pilot pressed apply (saving a paused queue already replaces the old one)
+ }
+ 
++void ServiceDB::SaveHeartbeat() {
++    DBerror err;
++    // GetFileTimeNow() is a double:  passed to %lli as it is, the number written is garbage
++    if (!sDatabase.RunQuery(err, "UPDATE srvStatus SET lastHeartbeat = %lli WHERE AI = 1", (int64)GetFileTimeNow()))
++        codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
++}
++
++int64 ServiceDB::GetLastHeartbeat() {
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res, "SELECT lastHeartbeat FROM srvStatus WHERE AI = 1")) {
++        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
++        return 0;
++    }
++    DBResultRow row;
++    if (!res.GetRow(row))
++        return 0;
++    return row.GetInt64(0);
++}
++
+ void ServiceDB::SetAccountOnlineStatus(uint32 accountID, bool online) {
+     DBerror err;
+     if (!sDatabase.RunQuery(err, "UPDATE account SET online = %u WHERE accountID= %u ", (online?1:0), accountID)) {
+diff --git a/src/eve-server/ServiceDB.h b/src/eve-server/ServiceDB.h
+index ba0a214..c4ea045 100644
+--- a/src/eve-server/ServiceDB.h
++++ b/src/eve-server/ServiceDB.h
+@@ -54,6 +54,9 @@ public:
+     static bool GetConstant(const char *name, uint32 &into);
+ 
+     static void SetServerOnlineStatus(bool online=false);
++    // the last time the server was running (FILETIME), saved every minute and at shutdown.  0 = never saved
++    static void SaveHeartbeat();
++    static int64 GetLastHeartbeat();
+     static void SetAccountOnlineStatus(uint32 accountID, bool online=false);
+     static void SetAccountBanStatus(uint32 accountID, bool banned=false);
+     static void SaveServerStats(double threads, float rss, float vm, float user, float kernel, uint32 items, uint32 bubbles);
+diff --git a/src/eve-server/corporation/BillingMgr.cpp b/src/eve-server/corporation/BillingMgr.cpp
+index 7e92f91..17620d9 100644
+--- a/src/eve-server/corporation/BillingMgr.cpp
++++ b/src/eve-server/corporation/BillingMgr.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include "Client.h"
+ #include "EntityList.h"
++#include "ServiceDB.h"
+ #include "account/AccountService.h"
+ #include "alliance/AllianceDB.h"
+ #include "corporation/BillingMgr.h"
+@@ -127,6 +128,28 @@ int BillingMgr::Initialize()
+     return 1;
+ }
+ 
++void BillingMgr::PauseForDowntime()
++{
++    int64 now = GetFileTimeNow();
++    int64 last = ServiceDB::GetLastHeartbeat();
++    ServiceDB::SaveHeartbeat();
++    if (!sConfig.corp.PauseBillsWhileOff or (last <= 0) or (last >= now))
++        return;
++    int64 off = now - last;
++    // a quick restart isn't worth it (the heartbeat is saved once a minute)
++    if (off < 5 * EvE::Time::Minute)
++        return;
++
++    DBerror err;
++    sDatabase.RunQuery(err, "UPDATE bills SET dueDateTime = dueDateTime + %lli WHERE paid = 0", off);
++    sDatabase.RunQuery(err, "UPDATE staOffices SET expiryDateTime = expiryDateTime + %lli WHERE expiryDateTime > 0 AND impounded = 0", off);
++    sDatabase.RunQuery(err, "UPDATE alnBilling SET nextBillDateTime = nextBillDateTime + %lli WHERE nextBillDateTime > 0", off);
++    sDatabase.RunQuery(err, "UPDATE sovBilling SET nextBillDateTime = nextBillDateTime + %lli WHERE nextBillDateTime > 0", off);
++    sDatabase.RunQuery(err, "UPDATE crpWars SET nextBillTime = nextBillTime + %lli WHERE nextBillTime > 0 AND timeFinished IS NULL", off);
++    sLog.Blue("       BillingMgr", "The server was off for %.1f hours:  bill and office rent due dates moved on by that much.",
++              (double)off / EvE::Time::Hour);
++}
++
+ void BillingMgr::RegisterHandlers(uint8 billTypeID, BillHandler onPaid, BillHandler onOverdue)
+ {
+     m_handlers[billTypeID] = std::make_pair(onPaid, onOverdue);
+diff --git a/src/eve-server/corporation/BillingMgr.h b/src/eve-server/corporation/BillingMgr.h
+index 9072832..5de125b 100644
+--- a/src/eve-server/corporation/BillingMgr.h
++++ b/src/eve-server/corporation/BillingMgr.h
+@@ -61,6 +61,10 @@ public:
+     BillingMgr();
+ 
+     int Initialize();
++
++    // run once at start, before anything loads bills:  moves unpaid bill, office rent, alliance and sov billing and
++    //  war bill dates on by the time the server was off, so time away doesn't make bills overdue (corp PauseBillsWhileOff)
++    static void PauseForDowntime();
+     // every ~5 minutes:  auto-pay bills due within a day, overdue bills, alliance maintenance bills
+     void Process();
+ 
+diff --git a/src/eve-server/eve-server.cpp b/src/eve-server/eve-server.cpp
+index 98e30fb..d907481 100644
+--- a/src/eve-server/eve-server.cpp
++++ b/src/eve-server/eve-server.cpp
+@@ -598,6 +598,9 @@ int main( int argc, char* argv[] )
+     dbClean.Initialize();
+     std::printf("\n");
+ 
++    // bill and rent dates skip the time the server was off.  before anything loads them
++    BillingMgr::PauseForDowntime();
++
+     // start up the image server
+     sLog.Green("       ServerInit", "Starting Image Server");
+     sImageServer.Run();
+@@ -1011,8 +1014,10 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
+      */
+     sLog.Warning("   ServerShutdown", "Main loop has stopped." );
+     sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
+-    if (!sConsole.IsDbError())
++    if (!sConsole.IsDbError()) {
++        ServiceDB::SaveHeartbeat();
+         ServiceDB::SetServerOnlineStatus(false);
++    }
+     /* stop TCP listener */
+     tcps.Close();
+     sLog.Warning("   ServerShutdown", "TCP listener stopped." );
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 900a0d1..029773c 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -659,6 +659,7 @@ boolean can use either 0/1 OR true/false.
+         <BillsEnabled>true</BillsEnabled><!-- bool - office rent is billed every 30 days and unpaid offices are impounded; alliances get monthly maintenance bills.  false = offices never expire -->
+         <CloseAllianceOnUnpaidBill>true</CloseAllianceOnUnpaidBill><!-- bool - an alliance whose maintenance bill goes overdue is closed -->
+         <BillGraceDays>0</BillGraceDays><!-- days after a bill's due date before it counts as unpaid -->
++        <PauseBillsWhileOff>true</PauseBillsWhileOff><!-- bool - bill, office rent and war bill due dates move on by the time the server was off, so a break from playing doesn't make bills overdue.  false = due dates run on real time -->
+     </corp>
+ 
+     <war><!-- wars between player corporations and alliances (Crucible: declared by corporation vote or by the alliance executor, hostile 24 hours after declaration, weekly bills, 24 hour grace when a war ends) -->
+-- 
+2.56.0.windows.2
+

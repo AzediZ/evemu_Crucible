@@ -4,6 +4,41 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 ---
 
+## 2026-10-14: Crash fixes, safer defaults, backups and database health (branch `revised`)
+
+Patches `0051` to `0063` · Status: **compiles and boot-tested** (14 Oct 2026): the server was started natively against a fresh MariaDB 11.8 universe, came online in 13 s and stopped cleanly; the bill shift, a database outage and the backup and restore scripts were tested. Not yet built in Docker or tested in game.
+
+**Crashes**
+- `0051` A **wormhole** whose exit lands in a system that's already loaded stopped the server (it looked up the wrong system and used a missing one). A wormhole with no destination is no longer created, and its signature isn't saved.
+- `0052` A **pod kill** left no frozen corpse in space (the check after creating it was the wrong way round).
+- `0053` **An error in one part of a server tick** (a system, a client, a manager, a timed task) is logged and the rest carries on, instead of stopping the server. The log shows the first 20, then every 100th. A bad packet from a client is dropped.
+
+**Settings and defaults**
+- `0054` A **first database install** that was stopped part way (for example with Stop during the first start) is finished at the next start. Before, the server ran for good on a half-installed universe. A failed install or update now stops the start rather than starting the server on it.
+- `0055` **Bills, office rent and war bills** don't fall due while the server is off. The server writes a heartbeat every minute and at shutdown; at the next start the due dates move on by the time it was off (only if that was over 5 minutes). New setting `<corp><PauseBillsWhileOff>` (default `true`).
+- `0056` **Test server mode is off** by default (`<debug><IsTestServer>false`). It made sites respawn after 10 seconds instead of 2 minutes and limited each system to 3 signatures, one of them always a wormhole. Taking a rig off a ship destroys it, like Crucible; on a test server it goes to the cargo hold.
+- `0057` **Star map kill counters** count per system again. Every 5 minutes each loaded system wrote its stale numbers over every system. "Last hour" counters reset every hour and "last 24 hours" every 24 hours; a player ship loss no longer also counts as an NPC kill.
+
+**Backups and database health**
+- `0058` **Back up and restore** on the control panel, in a new Universe row: *Back up now* saves the whole universe to `backups\universe-<date>_<time>.sql.gz` in the server folder (a running server is stopped first so its save is in the backup, and started again afterwards). *Restore backup...* puts the universe back to a backup you pick, after backing up the current one first. *Wipe universe* (moved to this row) offers a backup first. `backups/` is ignored by git.
+- `0059` Every **packet sent to a client leaked** a little memory for as long as the server ran.
+- `0060` **Indexes** for item loads by location and owner (every station, ship and container read the whole item table), the wallet journal and a system's best market prices. The **MyISAM tables the server writes to** are InnoDB, so a crash can't leave them needing a repair. **Corporation wallets** keep their cents (they were `float`: wrong above 100,000 ISK). New migration `20261021110000-db-indexes-innodb` (about 6 s on a fresh universe).
+- `0061` **Price history** older than `<market><HistoryDays>` (365) is deleted daily; it was never read and grew by up to 1 GB a year. The order expiry check reads only player orders (0.6 ms instead of 48 ms with 180,000 orders). New migration `20261021120000-market-history-expiry-indexes`.
+- `0062` **Docker logs are capped**: the server keeps the last 100 MB of console output, the database 30 MB, and the newest 20 of the server's own log files. The panel now also sees the server online from the database, since the "Online" line can be rotated away on a long run.
+- `0063` **A lost database** is retried every 5 seconds instead of on every query, and a failed reconnect no longer counts as success. After 10 seconds players are told nothing is saved; if it isn't back within `<database><haltAfterMinutes>` (new, default 5; 0 keeps running), the server stops.
+
+**Before the first start**
+- Your `config/eve-server.xml` is kept, so it doesn't get the new settings. The code defaults apply (`PauseBillsWhileOff` on, `haltAfterMinutes` 5), but **`IsTestServer` stays `true` in your file until you set it to `false`**.
+- Rebuild from the control panel. The next start applies the two migrations (a few seconds on a young universe) and recreates both containers for the log caps. The universe is in its volume and isn't touched.
+
+**How to test.** Rebuild and start. Then:
+- *Back up now*: a file appears in `backups` and the server comes back online. *Restore backup...* with that file: the server comes back with everything as it was.
+- Stop the server for more than 5 minutes, start it, and look for "The server was off for ... hours" in the log.
+- In game: pod someone (or yourself) and look for the frozen corpse; a gate jump into a system with a wormhole; take a rig off (it's destroyed).
+- Optional: `docker stop db` while the server runs. You get the "lost its database" message, and after 5 minutes the server stops. `docker start db` within 5 minutes and it carries on.
+
+---
+
 ## 2026-10-14: Moved onto Renn's EVEMu Revised (branch `revised`)
 
 Patches `0033` to `0050` · Status: **compiles** (full cloud Release build, 14 Oct 2026). Not yet started or tested in game.

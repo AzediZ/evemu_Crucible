@@ -1,0 +1,85 @@
+From cb386c60a90115519dbfa360286740142449c19b Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:40:09 +0000
+Subject: [PATCH 56/63] Config: test server mode off; a rig is destroyed when
+ it's taken off
+
+<debug><IsTestServer> was on in the shipped config and the code default. It gave every system only 3
+signatures (one always a forced wormhole, so wormholes piled up at every boot), respawned sites after
+10 seconds, and kept a rig that was taken off a ship.
+
+- Off by default, in the code and in the shipped config, whose comment now says what it changes.
+- A rig taken off a ship (the client's "this will destroy the rig" fitting action) is destroyed, as
+  in Crucible; on a test server it still goes to the cargo hold. ModuleManager::UninstallRig only
+  takes the rig's effects off now. With test server mode off it took 10 HP off the rig each time
+  and deleted the item part way through a move once the HP ran out, so turning the flag off without
+  this would have risked a crash.
+---
+ src/eve-server/EVEServerConfig.cpp            | 2 +-
+ src/eve-server/ship/Ship.cpp                  | 7 ++++++-
+ src/eve-server/ship/modules/ModuleManager.cpp | 4 ++--
+ utils/config/eve-server.xml                   | 2 +-
+ 4 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index e843d94..023744a 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -607,7 +607,7 @@ EVEServerConfig::EVEServerConfig()
+     debug.BeanCount = false;
+     debug.StackTrace = false;
+     debug.BubbleTrack = false;
+-    debug.IsTestServer = true;
++    debug.IsTestServer = false;
+     debug.UseProfiling = false;
+     debug.PositionHack = false;
+     debug.UseShipTracking = false;
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index ca4a30e..15c5ac2 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -1260,7 +1260,12 @@ void ShipItem::RemoveRig(InventoryItemRef iRef) {
+     if (iRef.get() == nullptr)
+         return;
+     m_ModuleManager->UninstallRig(iRef->itemID());
+-    iRef->Move(itemID(), flagCargoHold, true);
++    // Crucible:  a rig is destroyed when it's taken off (the client warns first).  A test server keeps it, in the cargo hold
++    if (sConfig.debug.IsTestServer) {
++        iRef->Move(itemID(), flagCargoHold, true);
++    } else {
++        iRef->Delete();
++    }
+ }
+ 
+ void ShipItem::ReplaceCharges(EVEItemFlags flag, InventoryItemRef newCharge)
+diff --git a/src/eve-server/ship/modules/ModuleManager.cpp b/src/eve-server/ship/modules/ModuleManager.cpp
+index b372804..a7f4f1c 100644
+--- a/src/eve-server/ship/modules/ModuleManager.cpp
++++ b/src/eve-server/ship/modules/ModuleManager.cpp
+@@ -470,8 +470,8 @@ void ModuleManager::UninstallRig(uint32 itemID)
+         }
+     }
+ 
+-    if (!sConfig.debug.IsTestServer)
+-        pMod->RemoveRig();
++    // this only takes the rig's effects off.  ShipItem::RemoveRig destroys it (a rig wearing down and staying in
++    //  the ship here also deleted the item in the middle of a move when a rig left the ship any other way)
+     deleteModuleRef(pMod->flag(), pMod);
+ }
+ 
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 029773c..1941eeb 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -520,7 +520,7 @@ boolean can use either 0/1 OR true/false.
+     <debug><!-- switches for various server methods -->
+         <BubbleTrack>false</BubbleTrack><!-- bool - create jetcans at center and edges of bubble (7 per bubble) -->
+         <SpawnTest>false</SpawnTest><!-- bool - enables 5s respawn timer -->
+-        <IsTestServer>true</IsTestServer>  <!--  bool   -some functions disabled for live server -->
++        <IsTestServer>false</IsTestServer>  <!--  bool - test server conveniences:  only 3 signatures per system (and one is always a wormhole), sites respawn after 10 s, a rig taken off a ship goes to the cargo hold instead of being destroyed, extra debug logging, /mktsim step.  false = Crucible behaviour -->
+         <UseProfiling>false</UseProfiling><!-- bool  - use internal memobj code profiling system -->
+         <ProfileTraceTime>5000</ProfileTraceTime><!-- msec  profile time above this will print StackTrace  default: 500 -->
+         <UseShipTracking>false</UseShipTracking><!-- bool -->
+-- 
+2.56.0.windows.2
+

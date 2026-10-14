@@ -1,0 +1,311 @@
+From e9a3bd2f75c3af47f403d8710b2fbff67adf1fc0 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 20:14:55 +0000
+Subject: [PATCH 63/63] Database: a lost database is retried every 5 seconds;
+ players are told, and the server stops if it stays away
+
+When the database went away, every query tried to reconnect (twice), each waiting on the
+connect, and the server kept running for good with nothing saved.
+
+- DBcore::Reconnect returned the status itself, so a failed reconnect read as success. It
+  returns true only when it connected.
+- While the database can't be reached, a new connection is tried at most every 5 seconds; the
+  queries in between fail at once with "The database can't be reached." and the
+  "Status != Connected" lines aren't logged again for each one. A connect gives up after 5 s
+  instead of the OS's TCP timeout. A query is retried once after a reconnect, not for ever.
+- The log says when the database went away and when it's back, and for how long.
+- After 10 seconds without it, players get a message that nothing they do is saved. If it
+  isn't back within <database><haltAfterMinutes> (new, default 5; 0 keeps running), the server
+  stops without its shutdown save (which would fail). Players are told when it's back.
+- A failed market sim save is tried again at the next save time (30 s), not every second: an
+  outage wrote about 170 log lines a second.
+
+Tested natively against a MariaDB container: stopped for 25 s, the server carried on and said
+"The database is back after 15 seconds."; stopped for good with haltAfterMinutes 1, the server
+stopped itself after 60 s.
+---
+ src/eve-core/database/dbcore.cpp           | 54 ++++++++++++++++++----
+ src/eve-core/database/dbcore.h             |  8 ++++
+ src/eve-server/EVEServerConfig.cpp         |  3 ++
+ src/eve-server/EVEServerConfig.h           |  1 +
+ src/eve-server/eve-server.cpp              | 39 ++++++++++++++++
+ src/eve-server/market/sim/MarketSimMgr.cpp |  2 +
+ utils/config/eve-server.xml                |  1 +
+ 7 files changed, 100 insertions(+), 8 deletions(-)
+
+diff --git a/src/eve-core/database/dbcore.cpp b/src/eve-core/database/dbcore.cpp
+index 16b882e..095ea32 100644
+--- a/src/eve-core/database/dbcore.cpp
++++ b/src/eve-core/database/dbcore.cpp
+@@ -58,6 +58,8 @@ pPort(3306),
+ pTxDepth(0),
+ pTxFailed(false),
+ pTxRollback(false),
++pDownSince(0),
++pLastAttempt(0),
+ pTxThreadID(0)
+ {
+     mysql_thread_init();    // this is for each thread used for db connections
+@@ -112,6 +114,11 @@ void DBcore::Connect(uint* errnum, char* errbuf)
+ } else
+     sLog.Error(" DataBase Manager", "Connection Timeout Option Failed");
+ */
++    // a database that doesn't answer fails the connect after this long, rather than the OS's TCP timeout
++    unsigned int connTimeout = 5/*s*/;
++    if (mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void*)&connTimeout) != 0)
++        sLog.Error(" DataBase Manager", "Connection Timeout Option Failed");
++
+     if (pReconnect) {
+         my_bool reconnect = true;
+         if (mysql_options(mysql, MYSQL_OPT_RECONNECT, (void*)&reconnect) == 0) // this will enable auto-reconnect...and render my Reconnect() worthless
+@@ -148,6 +155,12 @@ bool DBcore::Reconnect()
+         pTxFailed = true;
+         sLog.Error("         DBCore", "Database connection lost inside transaction '%s'.  It is rolled back and fails.", TxName().c_str());
+     }
++    /* while the database can't be reached, a new connection is tried at most every 5 seconds:  the queries in between
++     *  fail at once instead of each waiting on a connect.  (this returned pStatus, so a failed reconnect read as true) */
++    double now(GetTimeMSeconds());
++    if ((pDownSince.load() > 0) and ((now - pLastAttempt) < 5000))
++        return false;
++    pLastAttempt = now;
+     _log(DATABASE__MESSAGE, "DBCore attempting to recover...");
+     Close();
+     mysql = mysql_init(nullptr);
+@@ -157,10 +170,26 @@ bool DBcore::Reconnect()
+     MutexLock lock(MDatabase);
+     Connect(&errnum, errbuf);
+ 
+-    if (pStatus == Connected)
++    if (pStatus == Connected) {
++        if (pDownSince.load() > 0)
++            sLog.Green("         DBCore", "The database is back after %.0f seconds.", (now - pDownSince.load()) / 1000);
++        pDownSince = 0;
+         _log(DATABASE__MESSAGE, "DBCore recovery successful.  Continuing.");
++        return true;
++    }
++    if (pDownSince.load() == 0) {
++        pDownSince = now;
++        sLog.Error("         DBCore", "The database can't be reached.  Nothing is saved until it's back.");
++    }
++    return false;
++}
+ 
+-    return pStatus;
++double DBcore::DownSeconds() const
++{
++    double since(pDownSince.load());
++    if (since == 0)
++        return 0;
++    return (GetTimeMSeconds() - since) / 1000;
+ }
+ 
+ void DBcore::Initialize(std::string host, std::string user, std::string password, std::string database, bool compress/*false*/,
+@@ -349,15 +378,21 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool
+     if (mysql == nullptr) {
+         pStatus = Error;
+         codelog(DATABASE__ERROR, "DBCore - mysql = null");
+-        if (!Reconnect())
++        if (!Reconnect()) {
++            err.SetError(CR_SERVER_GONE_ERROR, "The database can't be reached.");
+             return false;
++        }
+     }
+ 
+     if (pStatus != Connected) {
+-        codelog(DATABASE__ERROR, "DBCore - Status != Connected");
+-        _log(DATABASE__MESSAGE, "DBCore error detected.  Look for error msgs in logs prior to this point.");
+-        if (!Reconnect())
++        if (pDownSince.load() == 0) {   // not again for every query while the database is away
++            codelog(DATABASE__ERROR, "DBCore - Status != Connected");
++            _log(DATABASE__MESSAGE, "DBCore error detected.  Look for error msgs in logs prior to this point.");
++        }
++        if (!Reconnect()) {
++            err.SetError(CR_SERVER_GONE_ERROR, "The database can't be reached.");
+             return false;
++        }
+     }
+     // a reconnect just now failed the transaction
+     if (TxRefused_locked(err, query))
+@@ -387,12 +422,15 @@ bool DBcore::DoQuery_locked(DBerror &err, const char *query, int querylen, bool
+         // there are many correctable errors to check for
+         if ((num == CR_SERVER_LOST) or (num == CR_SERVER_GONE_ERROR)) {
+             _log(DATABASE__ERROR, "DBCore error - server lost or gone.");
+-            if (!Reconnect())
++            if (!Reconnect()) {
++                err.SetError(num, mysql_error(mysql));
+                 return false;
++            }
+         }
+ 
++        // once:  a connection that's lost again straight away fails the query rather than trying for ever
+         if ((pStatus == Connected) and retry)
+-            return DoQuery_locked(err, query, querylen, retry);
++            return DoQuery_locked(err, query, querylen, false);
+ 
+         err.SetError(num, mysql_error(mysql));
+         codelog(DATABASE__ERROR, "DBCore Query - #%u in '%s': %s", err.GetErrNo(), query, err.c_str());
+diff --git a/src/eve-core/database/dbcore.h b/src/eve-core/database/dbcore.h
+index 06a55f2..f376dfa 100644
+--- a/src/eve-core/database/dbcore.h
++++ b/src/eve-core/database/dbcore.h
+@@ -27,6 +27,7 @@
+ #define __DATABASE__DBCORE_H__INCL__
+ 
+ // MySQL headers
++#include <atomic>
+ #include <mysql.h>
+ #include <mysqld_error.h>
+ #include <errmsg.h>
+@@ -170,6 +171,8 @@ public:
+     void    ping();
+ 
+     eStatus GetStatus() const { return pStatus; }
++    // seconds the database has been unreachable (a reconnect failed and none has worked since), 0 while it's there
++    double  DownSeconds() const;
+ 
+     /* transactions (use DBTransaction below).  they nest:  only the outermost Start/Commit reaches the server.  they make
+      *  a piece of work all-or-nothing for a crash:  the server's objects in memory are not rolled back, so callers commit
+@@ -226,6 +229,11 @@ private:
+     bool    pTxRollback;
+     unsigned long pTxThreadID;
+     std::vector<std::string> pTxNames;
++
++    // while the database can't be reached:  when that started and when a reconnect was last tried (GetTimeMSeconds),
++    //  0 while it's there.  read by the main loop (DownSeconds)
++    std::atomic<double> pDownSince;
++    double  pLastAttempt;
+ };
+ 
+ #define sDatabase \
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 023744a..bcbb751 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -628,6 +628,7 @@ EVEServerConfig::EVEServerConfig()
+     database.autoReconnect = false;
+     database.dbTimeout = 2/*s*/;
+     database.pingTime = 10/*m*/;
++    database.haltAfterMinutes = 5;
+ 
+     // files
+     files.logDir = "../log/";
+@@ -1372,6 +1373,7 @@ bool EVEServerConfig::ProcessDatabase( const TiXmlElement* ele )
+     AddValueParser( "autoReconnect",    database.autoReconnect );
+     AddValueParser( "dbTimeout",        database.dbTimeout );
+     AddValueParser( "pingTime",         database.pingTime );
++    AddValueParser( "haltAfterMinutes", database.haltAfterMinutes );
+ 
+     const bool result = ParseElementChildren( ele );
+ 
+@@ -1386,6 +1388,7 @@ bool EVEServerConfig::ProcessDatabase( const TiXmlElement* ele )
+     RemoveParser( "autoReconnect" );
+     RemoveParser( "dbTimeout" );
+     RemoveParser( "pingTime" );
++    RemoveParser( "haltAfterMinutes" );
+ 
+     return result;
+ }
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index 4c6c26e..a76fbe1 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -407,6 +407,7 @@ public:
+         bool autoReconnect;
+         uint dbTimeout;
+         uint8 pingTime;
++        uint16 haltAfterMinutes;    // minutes the server keeps running while the database can't be reached.  0: never stops
+         /// A port at which the database server listens.
+         uint16 port;
+         /// Hostname of database server.
+diff --git a/src/eve-server/eve-server.cpp b/src/eve-server/eve-server.cpp
+index d907481..3f97e77 100644
+--- a/src/eve-server/eve-server.cpp
++++ b/src/eve-server/eve-server.cpp
+@@ -195,6 +195,7 @@ static const char* const SRV_CONFIG_FILE = EVEMU_ROOT "/etc/eve-server.xml";
+ static void SetupSignals();
+ static void CatchSignal( int sig_num );
+ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher);
++static void CheckDatabase();
+ 
+ static volatile bool m_run = true;
+ 
+@@ -923,6 +924,8 @@ int main( int argc, char* argv[] )
+ 
+             sEntityList.Process();
+ 
++            CheckDatabase();
++
+             /*  process console commands, if any, and check for 'exit' command */
+             if (!sConsole.Process())
+                 m_run = false;
+@@ -1007,6 +1010,42 @@ static void CatchSignal( int sig_num )
+         sConsole.HaltServer();
+ }
+ 
++/* While the database can't be reached nothing players do is saved (DBcore tries to reconnect every 5 seconds).  Tell them,
++ *  and stop the server if it isn't back within <database><haltAfterMinutes>:  the shutdown skips the save, which would
++ *  fail.  Before, the server kept running for good with nothing saved */
++static void CheckDatabase()
++{
++    static bool s_told(false);
++    double down(sDatabase.DownSeconds());
++    std::vector<Client*> list;
++    if (down <= 0) {
++        if (s_told) {
++            s_told = false;
++            sEntityList.GetClients(list);
++            for (auto cur : list)
++                cur->SendNotifyMsg("The server's database is back.  What you do is saved again.");
++        }
++        return;
++    }
++    uint16 limit(sConfig.database.haltAfterMinutes);
++    if (!s_told and (down >= 10)) {
++        s_told = true;
++        sEntityList.GetClients(list);
++        for (auto cur : list) {
++            if (limit > 0)
++                cur->SendInfoModalMsg("The server has lost its database, so nothing you do now is saved.  If it isn't back within %u minute%s, the server stops.",
++                                      limit, (limit == 1 ? "" : "s"));
++            else
++                cur->SendInfoModalMsg("The server has lost its database, so nothing you do now is saved until it's back.");
++        }
++    }
++    if ((limit > 0) and (down >= limit * 60.0) and !sConsole.IsShutdown()) {
++        sLog.Error("        Main Loop", "The database has been unreachable for %u minute%s.  Stopping the server (nothing can be saved).",
++                   limit, (limit == 1 ? "" : "s"));
++        sConsole.HaltServer(true);
++    }
++}
++
+ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispatcher)
+ {
+     /* every shutdown path ends here (console 'x', /shutdown, scheduled shutdown, signals)
+diff --git a/src/eve-server/market/sim/MarketSimMgr.cpp b/src/eve-server/market/sim/MarketSimMgr.cpp
+index 9c4e84e..7656751 100644
+--- a/src/eve-server/market/sim/MarketSimMgr.cpp
++++ b/src/eve-server/market/sim/MarketSimMgr.cpp
+@@ -737,6 +737,8 @@ void MarketSimMgr::Flush()
+         m_unwrittenHistory.assign(history.begin(), history.begin() + finished);
+         m_world->MarkJobsChanged();
+         m_world->MarkTripsChanged();
++        // again at the next flush time:  while the database is away, every second filled the log
++        m_lastFlush = Now();
+         return;
+     }
+     m_pendingAudit.clear();
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 1941eeb..bb4518a 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -697,6 +697,7 @@ boolean can use either 0/1 OR true/false.
+         <autoReconnect>true</autoReconnect><!-- bool  enable auto Reconnect on lost connection -->
+         <dbTimeout>2</dbTimeout><!-- seconds  timeout value for db response, in seconds  default: 2s  **NOT USED** -->
+         <pingTime>10</pingTime><!-- minutes  ping db every x minutes  default: 10m  **NOT USED**  hard-coded to 10m -->
++        <haltAfterMinutes>5</haltAfterMinutes><!-- minutes  if the database can't be reached, nothing players do is saved:  they're told, and the server stops after this long unless it's back.  0: keeps running  default: 5 -->
+     </database>
+ 
+     <files>
+-- 
+2.56.0.windows.2
+

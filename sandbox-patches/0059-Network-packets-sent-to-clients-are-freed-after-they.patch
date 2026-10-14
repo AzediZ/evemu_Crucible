@@ -1,0 +1,59 @@
+From efc7eb27b0f73e88f77951803f2005a7eae9414c Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:53:49 +0000
+Subject: [PATCH 59/63] Network: packets sent to clients are freed after
+ they're sent
+
+EVEClientSession::QueuePacket encoded each outgoing packet and queued the encoded copy, but never
+deleted the packet itself, so every call result, notification, session change and ping sent to
+a client leaked a little memory for as long as the server ran. The encoded copy takes the
+packet's payload, named payload and context key (Encode doesn't clone them) and is freed once
+it's sent, so QueuePacket now lets go of those and deletes the packet, as its header comment
+always said it would. Every caller makes the packet with new and doesn't touch it afterwards.
+---
+ src/eve-common/network/EVESession.cpp | 9 +++++++++
+ src/eve-server/Client.cpp             | 5 +----
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/src/eve-common/network/EVESession.cpp b/src/eve-common/network/EVESession.cpp
+index 1732ff7..c910fdb 100644
+--- a/src/eve-common/network/EVESession.cpp
++++ b/src/eve-common/network/EVESession.cpp
+@@ -120,9 +120,18 @@ void EVEClientSession::QueuePacket(PyPacket* packet) {
+ 
+     if (res == nullptr) {
+         sLog.Error("QueuePacket", "%s: Failed to encode a packet.", GetAddress().c_str());
++        SafeDelete(packet);
+         return;
+     }
+ 
++    // the encoded rep now holds the packet's payload, named payload and context key (Encode doesn't
++    //  clone them), and QueueRep frees it once it's sent.  Let go of them here, then free the packet
++    //  itself:  it was never deleted, so every packet sent to a client leaked.
++    packet->payload = nullptr;
++    packet->named_payload = nullptr;
++    packet->contextKey = nullptr;
++    SafeDelete(packet);
++
+     mNet->QueueRep(res);
+ }
+ 
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 3c9e5d5..5cb27d1 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -2402,10 +2402,7 @@ void Client::SendSessionChange()
+         packet->Dump(CLIENT__SESSION_DUMP, dumper);
+     }
+ 
+-    QueuePacket(packet);
+-
+-    // clean up packet after being created by 'new'
+-    //SafeDelete(packet);
++    QueuePacket(packet);    // frees the packet
+ 
+     if (checkChannels and (m_lsc != nullptr))
+         m_lsc->EnforceMembership(this);
+-- 
+2.56.0.windows.2
+

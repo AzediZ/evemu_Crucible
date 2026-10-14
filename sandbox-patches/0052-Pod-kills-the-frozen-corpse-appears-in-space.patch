@@ -1,0 +1,30 @@
+From d96bc8b990998b678f96c055dd7363bffa8a9e1b Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:38:57 +0000
+Subject: [PATCH 52/63] Pod kills: the frozen corpse appears in space
+
+The check after spawning the corpse was inverted: the corpse was put in space only when it had failed
+to spawn (which then crashed on the null item), and a corpse that spawned fine was left as an item
+nowhere. The logged-off kill path already had it the right way round.
+---
+ src/eve-server/system/Damage.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index 69b597a..1264a36 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -698,8 +698,10 @@ void ShipSE::Killed(Damage &fatal_blow) {
+         uint32 corpseTypeID = 10041; // typeID from 'invTypes' table for "Frozen Corpse"
+         ItemData corpseItemData(corpseTypeID, m_ownerID, locationID, flagNone, corpse_name.c_str(), wreckPosition);
+         InventoryItemRef corpseItemRef = sItemFactory.SpawnItem( corpseItemData );
++        // the check was inverted:  the corpse was put in space only when it failed to spawn (and that crashed)
+         if (corpseItemRef.get() == nullptr) {
+             sLog.Error("Ship::Killed()", "Creating Corpse Item Failed for %s of type %u", corpse_name.c_str(), corpseTypeID);
++        } else {
+             DBSystemDynamicEntity corpseEntity = DBSystemDynamicEntity();
+             corpseEntity.allianceID = m_allyID;
+             corpseEntity.categoryID = EVEDB::invCategories::Celestial;
+-- 
+2.56.0.windows.2
+

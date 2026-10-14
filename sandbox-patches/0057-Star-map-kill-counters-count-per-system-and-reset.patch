@@ -1,0 +1,88 @@
+From 821bb1249c1eb0a5cfc42ca8b689c30bdfc8d463 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 19:40:09 +0000
+Subject: [PATCH 57/63] Star map: kill counters count per system and reset
+
+- Every 5 minutes each loaded system wrote the kill numbers it had read when it loaded back to the
+  table with no WHERE, so one system's stale numbers were written onto every system and the kills
+  counted since were lost. Systems no longer write them back; the counters in the table are the
+  ones that count (MapDB::AddKill and friends). UpdateKillData gets its WHERE and the pod and
+  faction times in the right columns, in case it's used again.
+- The "last hour" counters start again every hour and the "last 24 hours" counters every 24 hours
+  of uptime (MapDB::ManipulateTimeData was empty, so they only ever went up).
+- A player's ship loss counts as a ship kill, not also as a faction (NPC) kill.
+---
+ src/eve-server/map/MapDB.cpp            | 16 +++++++++++++---
+ src/eve-server/system/Damage.cpp        |  3 +--
+ src/eve-server/system/SystemManager.cpp |  5 ++++-
+ 3 files changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/src/eve-server/map/MapDB.cpp b/src/eve-server/map/MapDB.cpp
+index bce15f6..bebeca9 100644
+--- a/src/eve-server/map/MapDB.cpp
++++ b/src/eve-server/map/MapDB.cpp
+@@ -330,9 +330,9 @@ void MapDB::UpdateKillData(uint32 sysID, SystemKillData& data)
+     DBerror err;
+     sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = %u, kills24Hour = %u, factionKills = %u, factionKills24Hour = %u,"
+     "  podKillsHour = %u, podKills24Hour = %u, killsDateTime = %lli, kills24DateTime = %lli, podDateTime = %lli, pod24DateTime = %lli,"
+-    "  factionDateTime = %lli, faction24DateTime = %lli",
++    "  factionDateTime = %lli, faction24DateTime = %lli WHERE solarSystemID = %u",
+     data.killsHour, data.kills24Hour, data.factionKills, data.factionKills24Hour, data.podKillsHour, data.podKills24Hour,
+-    data.killsDateTime, data.kills24DateTime, data.factionDateTime, data.faction24DateTime, data.podDateTime, data.pod24DateTime);
++    data.killsDateTime, data.kills24DateTime, data.podDateTime, data.pod24DateTime, data.factionDateTime, data.faction24DateTime, sysID);
+ }
+ 
+ //  client logs faction kills in total kills.  return is value1(total kills) - value2(faction kills) > 0:
+@@ -358,7 +358,17 @@ void MapDB::AddPodKill(uint32 sysID) {
+ 
+ void MapDB::ManipulateTimeData()
+ {
+-
++    /* called once an hour.  the star map's "last hour" counters start again every hour, and the "last 24 hours"
++     *  counters every 24 hours (a simple stand-in for rolling windows:  before, they only ever went up) */
++    static uint32 hours(0);
++    ++hours;
++    DBerror err;
++    int64 now(GetFileTimeNow());
++    sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = 0, factionKills = 0, podKillsHour = 0,"
++        " killsDateTime = %lli, factionDateTime = %lli, podDateTime = %lli", now, now, now);
++    if (hours % 24 == 0)
++        sDatabase.RunQuery(err, "UPDATE mapDynamicData SET kills24Hour = 0, factionKills24Hour = 0, podKills24Hour = 0,"
++            " kills24DateTime = %lli, faction24DateTime = %lli, pod24DateTime = %lli", now, now, now);
+ }
+ 
+ void MapDB::GetSolarSystemLocations(DBQueryResult& res)
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index 1264a36..68d2f5b 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -516,9 +516,8 @@ void ShipSE::Killed(Damage &fatal_blow) {
+ 
+     // AttrFwLpKill
+ 
+-    //  log faction kill in dynamic data   -allan
++    //  a player's ship is a ship kill on the star map, not a faction (npc) kill
+     MapDB::AddKill(locationID);
+-    MapDB::AddFactionKill(locationID);
+ 
+     // set up basic wreck data
+     GPoint wreckPosition = m_destiny->GetPosition();
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 36acf9b..02ed0af 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -2385,7 +2385,10 @@ void SystemManager::ManipulateTimeData()
+ 
+     //if (m_killData.killsDateTime < timeNow)
+ 
+-    MapDB::UpdateKillData(m_data.systemID, m_killData);
++    /* m_killData is only what was in the table when this system loaded:  kills since then are counted in the table
++     *  itself (MapDB::AddKill and friends).  writing it back every 5 minutes undid those, and (with no WHERE in the
++     *  query) wrote this system's numbers onto every system.  MapDB::ManipulateTimeData resets the counters */
++    //MapDB::UpdateKillData(m_data.systemID, m_killData);
+ }
+ 
+ void SystemManager::GetDockedCount()
+-- 
+2.56.0.windows.2
+
