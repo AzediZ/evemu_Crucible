@@ -121,7 +121,7 @@ protected:
     void                UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRef iRef);
 
     /* for linked weapons */
-    void                SetSlaveData(ShipSE* pShip);
+    void                SetSlaveData(ShipSE* pShip, ActiveModule* pMaster = nullptr);
 
     /* for modules that use charges */
     void                ConsumeCharge();                // common code to reduce ammo by one unit.

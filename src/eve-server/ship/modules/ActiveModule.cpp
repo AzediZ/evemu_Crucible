@@ -506,7 +506,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
     if (m_linkMaster) {
         m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
         for (auto cur : modules) {
-            cur->GetActiveModule()->SetSlaveData(pShip);
+            cur->GetActiveModule()->SetSlaveData(pShip, this);
             cur->GetActiveModule()->ShowEffect(true, false);
         }
     } else {
@@ -591,7 +591,14 @@ void ActiveModule::Deactivate(std::string effect/*""*/)
     m_Stop = true;
 }
 
-void ActiveModule::SetSlaveData(ShipSE* pShip) {
+void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
+    // a slave runs on its master's effect and target, so its own effects name them too (it sent effectID 0 before)
+    if ((pMaster != nullptr) and (pMaster != this)) {
+        m_effectID = pMaster->m_effectID;
+        m_targetID = pMaster->m_targetID;
+        m_targetSE = pMaster->m_targetSE;
+        m_repeat = pMaster->m_repeat;
+    }
     m_shipSE = pShip;
     m_sysMgr = pShip->SystemMgr();
     m_targMgr = pShip->TargetMgr();
@@ -1607,19 +1614,23 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
         }
     }
 
-    // there may be others here like this...this is ONLY for OnSpecialFX data
-    if ((m_effectID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
-        m_effectID = m_chargeRef->type().GetDefaultEffect();
-    std::string guidStr = sFxDataMgr.GetEffectGuid(m_effectID);
+    // there may be others here like this...this is ONLY for OnSpecialFX data.  a launcher's graphic comes from its charge's
+    //  default effect, but OnGodmaShipEffect below must name the launcher's own effect (useMissiles): that is what the
+    //  client's module button tracks.  overwriting m_effectID here left the client thinking launchers never started, so
+    //  they showed no cycle ring, couldn't be switched off, and every click started them again
+    uint16 fxID(m_effectID);
+    if ((fxID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
+        fxID = m_chargeRef->type().GetDefaultEffect();
+    std::string guidStr = sFxDataMgr.GetEffectGuid(fxID);
     // the covert ops cloak's guid isn't in the client's effect repository.  it looks like any other cloak
     if (guidStr.compare("effects.CloakingCovertOps") == 0)
         guidStr = "effects.Cloaking";
     if (guidStr.empty())
-        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), m_effectID);
+        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), fxID);
 
     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
     uint32 timeLeft(GetRemainingCycleTimeMS());
-    bool isOffensive(sFxDataMgr.isOffensive(m_effectID));
+    bool isOffensive(sFxDataMgr.isOffensive(fxID));
     PyRep* graphicInfo(nullptr);
     if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
         if (IsValidTarget(m_targetID) and IsScriptedDisruptor()) {
