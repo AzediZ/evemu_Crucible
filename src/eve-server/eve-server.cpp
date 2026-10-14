@@ -912,14 +912,24 @@ int main( int argc, char* argv[] )
         /* Freeze Detector Code */
         //++m_worldLoopCounter;
 
-        if ((tcpc = tcps.PopConnection()))
-            sEntityList.Add(new Client(newSvcMgr, &tcpc));
+        // EntityList guards each system, client and manager on its own;  this catches anything else, so an
+        //  exception is logged instead of stopping the server
+        try {
+            if ((tcpc = tcps.PopConnection()))
+                sEntityList.Add(new Client(newSvcMgr, &tcpc));
 
-        sEntityList.Process();
+            sEntityList.Process();
 
-        /*  process console commands, if any, and check for 'exit' command */
-        if (!sConsole.Process())
-            m_run = false;
+            /*  process console commands, if any, and check for 'exit' command */
+            if (!sConsole.Process())
+                m_run = false;
+        } catch (PyException&) {
+            sLog.Error("        Main Loop", "Caught a Python exception in the main loop.  Carrying on.");
+        } catch (std::exception& e) {
+            sLog.Error("        Main Loop", "Caught %s in the main loop.  Carrying on.", e.what());
+        } catch (...) {
+            sLog.Error("        Main Loop", "Caught an unknown exception in the main loop.  Carrying on.");
+        }
 
         /* do the stuff for thread sleeping */
         start = GetTickCount() - start;

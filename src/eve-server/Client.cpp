@@ -224,11 +224,19 @@ bool Client::ProcessNet()
     PyPacket *p(nullptr);
     while ((p = PopPacket())) {
         try {
+            // before character select there's no character, and a bad packet can carry any type number
             if (!DispatchPacket(p))
-                sLog.Error("Client", "%s: Failed to dispatch packet of type %s (%i).", m_char->name(), MACHONETMSG_TYPE_NAMES[ p->type ], (int)p->type);
+                sLog.Error("Client", "%s: Failed to dispatch packet of type %s (%i).",
+                           (m_char.get() != nullptr ? m_char->name() : GetAddress().c_str()),
+                           (((int)p->type >= 0) and ((int)p->type < MACHONETMSG_TYPE_COUNT) ? MACHONETMSG_TYPE_NAMES[ p->type ] : "unknown"), (int)p->type);
         }
         catch(PyException& e) {
             _SendException(p->dest, p->source.callID, p->type, WRAPPEDEXCEPTION, &e.ssException);
+        }
+        catch(std::exception& e) {
+            // one bad call no longer stops the server;  the packet is dropped and the rest are handled
+            sLog.Error("Client", "%s: Caught %s while handling a packet of type %i.  Dropped it.",
+                       (m_char.get() != nullptr ? m_char->name() : GetAddress().c_str()), e.what(), (int)p->type);
         }
 
         // every packet is freed once it's handled.  this set p to null first, so only the last one ever was

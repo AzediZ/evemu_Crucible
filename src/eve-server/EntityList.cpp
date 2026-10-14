@@ -220,11 +220,44 @@ void EntityList::RemovePlayer(Client* pClient)
 }
 
 
+namespace {
+    /* an exception that escaped one system's, client's or manager's tick used to stop the whole server.
+     *  each tick is guarded on its own, so the error is logged and everything else carries on.
+     *  the log is limited, so an error that repeats every second can't flood it */
+    uint32 s_tickErrors = 0;
+
+    void LogTickError(const char* what, uint32 id, const char* error)
+    {
+        ++s_tickErrors;
+        if ((s_tickErrors <= 20) or (s_tickErrors % 100 == 0))
+            sLog.Error("    EntityList::Tick", "Caught %s in %s %u (error %u since start).  Carrying on.", error, what, id, s_tickErrors);
+    }
+
+    // runs fn;  false if it threw (and the error was logged)
+    template <typename Fn>
+    bool GuardTick(const char* what, uint32 id, Fn&& fn)
+    {
+        try {
+            fn();
+            return true;
+        } catch (PyException&) {
+            LogTickError(what, id, "a Python exception");
+        } catch (std::exception& e) {
+            LogTickError(what, id, e.what());
+        } catch (...) {
+            LogTickError(what, id, "an unknown exception");
+        }
+        return false;
+    }
+}
+
 void EntityList::Process() {
     Client* pClient(nullptr);
     std::vector<Client*>::iterator citr = m_clients.begin();
     while (citr != m_clients.end()) {
-        if ((*citr)->ProcessNet()) {
+        bool keep(true);
+        GuardTick("the network tick of client", (*citr)->GetCharID(), [&]{ keep = (*citr)->ProcessNet(); });
+        if (keep) {
             ++citr;
         } else {
             pClient = *citr;
@@ -236,7 +269,9 @@ void EntityList::Process() {
     if (m_targTimer.Check()) {
         std::unordered_map<SystemEntity*, TargetManager*>::iterator titr = m_targMgrs.begin();
         while (titr != m_targMgrs.end()) {
-            if (titr->second->Process()) {
+            bool keep(true);
+            GuardTick("the target manager of entity", titr->first->GetID(), [&]{ keep = titr->second->Process(); });
+            if (keep) {
                 ++titr;
             } else {
                 titr = m_targMgrs.erase(titr);
@@ -244,7 +279,9 @@ void EntityList::Process() {
         }
         std::map<uint32, ProbeSE*>::iterator pitr = m_probes.begin();
         while (pitr != m_probes.end()) {
-            if (pitr->second->ProcessTic()) {
+            bool keep(true);
+            GuardTick("the tick of probe", pitr->first, [&]{ keep = pitr->second->ProcessTic(); });
+            if (keep) {
                 ++pitr;
             } else {
                 pitr = m_probes.erase(pitr);
@@ -262,11 +299,11 @@ void EntityList::Process() {
         //  client applies them to its own simulation at this stamp, so our state must already be there
         for (auto cur : m_systems)
             if (cur.second != nullptr)
-                cur.second->ProcessDestiny();
+                GuardTick("the destiny tick of system", cur.first, [&]{ cur.second->ProcessDestiny(); });
 
         for (auto cur : m_players)
             if (cur.second->IsValidSession())   // verify client is constructed before calling ProcessClient() on it
-                cur.second->ProcessClient();
+                GuardTick("the tick of character", cur.first, [&]{ cur.second->ProcessClient(); });
 
     /** @todo test for adding OpenMP here to enable MP per system. */
     // this wont work....possibility of removing systems, therefore invalidating the iterator.
@@ -278,7 +315,10 @@ void EntityList::Process() {
                 sLog.Error(" EntityList::Proc", "Deleting System %u", itr->first);
                 itr = m_systems.erase(itr);
                 continue;
-            } else if (!itr->second->ProcessTic()) {    /* Process each loaded system */
+            }
+            bool keep(true);    /* Process each loaded system.  one that throws stays loaded */
+            GuardTick("the tick of system", itr->first, [&]{ keep = itr->second->ProcessTic(); });
+            if (!keep) {
                 itr->second->UnloadSystem();
                 SafeDelete(itr->second);
                 itr = m_systems.erase(itr);
@@ -287,40 +327,40 @@ void EntityList::Process() {
             ++itr;
         }
 
-        // these need 1Hz tics
-        sCivMgr.Process();
-        sAmbientMgr.Process();  // ambient npcs:  transits between systems, the market score refresh
-        sLocatorMgr.Process();
-        sBubbleMgr.Process();
-        sExplorationMgr.Process();
-        sFltSvc.Process();  // fleet invite timeouts
-        sMktSim.Process();  // market simulation (keeps to its own time budget)
-        sSimFacilities.Process();   // the sim's station lines:  GM test jobs, and its writes when the sim doesn't make them
+        // these need 1Hz tics.  each is guarded on its own, so one manager's error doesn't stop the others
+        GuardTick("the civilian manager", 0, []{ sCivMgr.Process(); });
+        GuardTick("the ambient npc manager", 0, []{ sAmbientMgr.Process(); });  // ambient npcs:  transits between systems, the market score refresh
+        GuardTick("the locator manager", 0, []{ sLocatorMgr.Process(); });
+        GuardTick("the bubble manager", 0, []{ sBubbleMgr.Process(); });
+        GuardTick("the exploration manager", 0, []{ sExplorationMgr.Process(); });
+        GuardTick("the fleet service", 0, []{ sFltSvc.Process(); });  // fleet invite timeouts
+        GuardTick("the market simulation", 0, []{ sMktSim.Process(); });  // market simulation (keeps to its own time budget)
+        GuardTick("the market sim's station lines", 0, []{ sSimFacilities.Process(); });   // GM test jobs, and its writes when the sim doesn't make them
 
         // these minute tics do not need to be precise
         if (m_minuteTimer.Check()) {
             ++m_minutes;
-            sMissionDataMgr.Process();  // 1m
-            sWarMgr.Process();  // 1m  war notifications and bills
-            sAllianceMgr.Process();  // 1m  alliance joins, daily executor count
+            GuardTick("the mission manager", 0, []{ sMissionDataMgr.Process(); });  // 1m
+            GuardTick("the war manager", 0, []{ sWarMgr.Process(); });  // 1m  war notifications and bills
+            GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count
 
             if (m_minutes % 5 == 0) { // ~5m
-                sWHMgr.Process();
-                sMktMgr.Process();  // market order expiry, daily price history rollup
-                ContractUtils::ProcessExpiry();  // optional contract cleanup and courier failure
-                sCorpMgr.Process();  // vote cases, sanctioned actions, office rent
-                sBillingMgr.Process();  // auto-pay, overdue bills, alliance maintenance
+                GuardTick("the wormhole manager", 0, []{ sWHMgr.Process(); });
+                GuardTick("the market manager", 0, []{ sMktMgr.Process(); });  // market order expiry, daily price history rollup
+                GuardTick("contract expiry", 0, []{ ContractUtils::ProcessExpiry(); });  // optional contract cleanup and courier failure
+                GuardTick("the corporation manager", 0, []{ sCorpMgr.Process(); });  // vote cases, sanctioned actions, office rent
+                GuardTick("the billing manager", 0, []{ sBillingMgr.Process(); });  // auto-pay, overdue bills, alliance maintenance
                 for (auto cur : m_systems)
-                    cur.second->UpdateData();   // update active system timers and dynamic data every 5m
+                    GuardTick("the 5 minute update of system", cur.first, [&]{ cur.second->UpdateData(); });   // update active system timers and dynamic data every 5m
             }
             if (m_minutes % 15 == 0) { // ~15m
-                sConsole.UpdateStatus();
-                svDataMgr.SaveDevIndices();
+                GuardTick("the console status", 0, []{ sConsole.UpdateStatus(); });
+                GuardTick("the development index save", 0, []{ svDataMgr.SaveDevIndices(); });
             }
             if (m_minutes % 60 == 0) { // ~1h
-                MapDB::ManipulateTimeData();
-                svDataMgr.Process();    // development index decay
-                InsuranceService::ProcessExpiry();  // insurance expiry notifications
+                GuardTick("the star map statistics", 0, []{ MapDB::ManipulateTimeData(); });
+                GuardTick("the development index decay", 0, []{ svDataMgr.Process(); });
+                GuardTick("insurance expiry", 0, []{ InsuranceService::ProcessExpiry(); });  // insurance expiry notifications
             }
         }
 
