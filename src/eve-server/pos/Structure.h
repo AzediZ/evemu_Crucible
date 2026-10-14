@@ -15,6 +15,7 @@
 
 
 #include "EVEServerConfig.h"
+#include "EVE_StructureTiming.h"
 #include "StaticDataMgr.h"
 #include "inventory/InventoryItem.h"
 #include "pos/PosMgrDB.h"
@@ -240,8 +241,13 @@ public:
 
     inline void                 SetPOSState(int8 state) { m_data.state = state; }
     inline void                 SetTimer(uint32 time)   { m_procTimer.SetTimer(time); }
-    // runs the pending state change (anchoring, onlining, etc) on the next Process().  false if nothing is pending
-    bool                        CompleteStateChange()   { if (!m_procTimer.Enabled()) return false; m_procTimer.Trigger(); return true; }
+    // finishes the running anchoring, onlining, offlining or unanchoring now.  false if none is running
+    bool                        CompleteStateChange();
+    /* GM (/sov, /pos):  anchors, onlines, offlines or unanchors at once, through the steps it takes (online anchors an
+     *  unanchored structure first, unanchor offlines an online one), without the delays and the pilot's starbase rules.
+     *  the client is never shown a countdown.  false if there was nothing to do.  throws when the structure can't
+     */
+    bool                        GMChangeState(StructureTiming::GMAction action);
 
     void                        SetUsageFlags(int8 view=0, int8 take=0, int8 use=0);
     inline int8                 CanUse()                { return m_data.use; }
@@ -311,6 +317,14 @@ protected:
 private:
     // passive shield regeneration of anchored starbase structures (not reinforced towers)
     void                        ProcessShieldRegen();
+    /* starts a timed change:  posState is the state it goes to and posTimestamp now, which the client counts the type's
+     *  delay down from (EVE_StructureTiming.h).  with m_skipDelay the stamp is already settled:  no countdown
+     */
+    void                        StartStateChange(int8 procState, int8 state, uint32 delay);
+    // ends the change m_procState stands for (the timer is up, or a GM finishes it)
+    void                        ProcessStateChange();
+    // after a restart:  the anchoring, onlining or unanchoring that was running carries on (or completes now)
+    void                        ResumeStateChange();
 
     uint32 m_duration;              // module duration in ms
 
@@ -332,6 +346,7 @@ private:
     bool m_reactor :1;
     bool m_platform :1;         // Outpost construction platform
     bool m_cargo :1;            // cargo container
+    bool m_skipDelay :1;        // a GM command is changing the state:  no delays
 };
 
 #endif  // EVEMU_POS_STRUCTURE_H_

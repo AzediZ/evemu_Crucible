@@ -43,7 +43,8 @@ SET( utils_SOURCE
      "utils/CustomsRulesTest.cpp"
      "utils/LogoffRulesTest.cpp"
      "utils/SkillMathTest.cpp"
-     "utils/SovRulesTest.cpp" )
+     "utils/SovRulesTest.cpp"
+     "utils/StructureTimingTest.cpp" )
 
 ########################
 # Setup the executable #
@@ -99,6 +100,8 @@ ADD_TEST( NAME "SkillMathTest"
           COMMAND "${TARGET_NAME}" "utils/SkillMathTest" )
 ADD_TEST( NAME "SovRulesTest"
           COMMAND "${TARGET_NAME}" "utils/SovRulesTest" )
+ADD_TEST( NAME "StructureTimingTest"
+          COMMAND "${TARGET_NAME}" "utils/StructureTimingTest" )
 ADD_TEST( NAME "CustomsRulesTest"
           COMMAND "${TARGET_NAME}" "utils/CustomsRulesTest" )
 ADD_TEST( NAME "LogoffRulesTest"

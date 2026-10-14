@@ -48,9 +48,6 @@
 #include "standing/StandingDB.h"
 
 namespace {
-    // FILETIME ticks per millisecond
-    const int64 FileTimeMs = EvE::Time::Second / 1000;
-
     // the client's error for a pilot the tower's deploy/usage level (EVEPOS::Access) refuses
     [[noreturn]] void ThrowAccessDenied(Client* pClient, uint32 corpID, int8 level)
     {
@@ -240,6 +237,8 @@ StructureSE::StructureSE(StructureItemRef structure, EVEServiceManager&services,
     m_loaded(false),
     m_module(false),
     m_reactor(false),
+    m_cargo(false),
+    m_skipDelay(false),
     m_duration(0),
     m_anchorPointID(0),
     m_delayTime(0),
@@ -381,6 +380,7 @@ void StructureSE::Init()
     m_loaded = true;
 
     if (m_tcu or m_ihub) {
+        ResumeStateChange();
         if (m_data.state > EVEPOS::StructureState::Anchored)
             m_self->SetFlag(flagStructureActive);
         return;
@@ -483,36 +483,39 @@ void StructureSE::Init()
         }
     }
 
-    // an anchoring, onlining or unanchoring that was running when the server stopped carries on (or completes now)
-    if (m_data.timestamp > 0)
-    {
-        int64 delay(0);
-        int8 procState(EVEPOS::ProcState::Invalid);
-        switch (m_data.state) {
-            case EVEPOS::StructureState::Anchored: {
-                delay = m_self->GetAttribute(AttrAnchoringDelay).get_int();
-                procState = EVEPOS::ProcState::Anchoring;
-            } break;
-            case EVEPOS::StructureState::Onlining: {
-                delay = m_self->GetAttribute(AttrOnliningDelay).get_int();
-                procState = EVEPOS::ProcState::Onlining;
-            } break;
-            case EVEPOS::StructureState::Unanchored: {
-                delay = m_self->GetAttribute(AttrUnanchoringDelay).get_int();
-                procState = EVEPOS::ProcState::Unanchoring;
-            } break;
-        }
-        int64 left((m_data.timestamp - GetFileTimeNow()) / FileTimeMs + delay);
-        if ((procState == EVEPOS::ProcState::Onlining) or ((procState != EVEPOS::ProcState::Invalid) and (left > 0)))
-        {
-            m_procState = procState;
-            m_delayTime = delay;
-            m_procTimer.SetTimer(left > 0 ? left : 1);
-        }
-    }
+    ResumeStateChange();
 
     if (m_data.state > EVEPOS::StructureState::Anchored)
         m_self->SetFlag(flagStructureActive);
+}
+
+void StructureSE::ResumeStateChange()
+{
+    // an anchoring, onlining or unanchoring that was running when the server stopped carries on (or completes now)
+    int64 delay(0);
+    int8 procState(EVEPOS::ProcState::Invalid);
+    switch (StructureTiming::ChangeFor(m_data.state)) {
+        case StructureTiming::Change::Anchoring: {
+            delay = m_self->GetAttribute(AttrAnchoringDelay).get_int();
+            procState = EVEPOS::ProcState::Anchoring;
+        } break;
+        case StructureTiming::Change::Onlining: {
+            delay = m_self->GetAttribute(AttrOnliningDelay).get_int();
+            procState = EVEPOS::ProcState::Onlining;
+        } break;
+        case StructureTiming::Change::Unanchoring: {
+            delay = m_self->GetAttribute(AttrUnanchoringDelay).get_int();
+            procState = EVEPOS::ProcState::Unanchoring;
+        } break;
+        default:
+            return;
+    }
+    int64 left(StructureTiming::ResumeTimerMs(m_data.state, m_data.timestamp, delay, GetFileTimeNow()));
+    if (left < 1)
+        return;
+    m_procState = procState;
+    m_delayTime = delay;
+    m_procTimer.SetTimer(left);
 }
 
 void StructureSE::Delete()
@@ -546,120 +549,126 @@ void StructureSE::Process()
         ProcessShieldRegen();
 
     if (m_procTimer.Check(false))
+        ProcessStateChange();
+}
+
+void StructureSE::ProcessStateChange()
+{
+    m_procTimer.Disable();
+    m_delayTime = 0;
+
+    _log(POS__DEBUG, "Module %s(%u) Processing State '%s'", GetName(), m_data.itemID, sDataMgr.GetProcStateName(m_procState));
+
+    using namespace EVEPOS;
+    switch (m_procState)
     {
-        m_procTimer.Disable();
-        m_delayTime = 0;
-
-        _log(POS__DEBUG, "Module %s(%u) Processing State '%s'", GetName(), m_data.itemID, sDataMgr.GetProcStateName(m_procState));
-
-        using namespace EVEPOS;
-        switch (m_procState)
-        {
-        case ProcState::Unanchoring:
-        {
-            // free floating again.  the client shows 'unanchoring' until posTimestamp + unanchoringDelay
-            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrUnanchoringDelay).get_int() * FileTimeMs;
-            m_procState = ProcState::Invalid;
-            SendBallFree(true);
-            if (m_tower) {
-                if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
-                    m_moonSE->SetTower(nullptr);
-            } else if (m_module) {
-                // a module belongs to the tower it is anchored at
-                SetControlTower(nullptr);
-            } else if (m_sbu and (GetSBUSE() != nullptr)) {
-                // the stargate takes another SBU
-                GetSBUSE()->ReleaseGate();
-            }
-            if (IsStarbaseStructure())
-                OnRemovedFromSpace(false);
-            SendSlimUpdate();
-            m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorLift", 0, 0, 0, -1, 0);
-            m_db.UpdateBaseData(m_data);
+    case ProcState::Unanchoring:
+    {
+        // free floating again.  the client shows 'unanchoring' until posTimestamp + unanchoringDelay:  settled now
+        m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), m_self->GetAttribute(AttrUnanchoringDelay).get_int());
+        m_procState = ProcState::Invalid;
+        SendBallFree(true);
+        if (m_tower) {
+            if ((m_moonSE != nullptr) and (m_moonSE->GetMyTower() == this))
+                m_moonSE->SetTower(nullptr);
+        } else if (m_module) {
+            // a module belongs to the tower it is anchored at
+            SetControlTower(nullptr);
+        } else if (m_sbu and (GetSBUSE() != nullptr)) {
+            // the stargate takes another SBU
+            GetSBUSE()->ReleaseGate();
         }
-        break;
-        case ProcState::Anchoring:
-        {
-            // the client shows 'anchoring' until posTimestamp + anchoringDelay
-            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
-            m_procState = ProcState::Invalid;
-            SendBallFree(false);
-            SendSlimUpdate();
-            m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 0, 0, -1, 0);
-            if (m_tower and (m_moonSE != nullptr))
-                m_moonSE->SetTower(this);
-            if (m_sbu and (GetSBUSE() != nullptr))
-                GetSBUSE()->OnAnchored();
-
-            m_db.UpdateBaseData(m_data);
-            if (m_tower)
-                GetTowerSE()->OnAnchored();
-        }
-        break;
-        case ProcState::Offlining:
-        {
-            m_data.state = StructureState::Anchored;
-            m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
-            SetOffline();
-            SendSlimUpdate();
-            m_db.UpdateBaseData(m_data);
-        }
-        break;
-        case ProcState::Onlining:
-        {
-            m_data.state = StructureState::Online;
-            SetOnline();
-            SendSlimUpdate();
-            m_db.UpdateBaseData(m_data);
-        }
-        break;
-        case ProcState::Online:
-        {
-            Online();
-        }
-        break;
-        case ProcState::Operating:
-        {
-            // this is virtual, overridden in specific class' for their needs
-            // take resources or whatever needs to be done
-            Operating();
-        }
-        break;
-        // those below are not coded yet
-        case ProcState::Reinforcing:
-        case ProcState::SheildReinforcing:
-        case ProcState::ArmorReinforcing:
-        {
-            m_self->SetFlag(flagStructureInactive);
-            m_data.state = StructureState::Invulnerable;
-            //m_data.state = StructureState::Reinforced;
-            m_db.UpdateBaseData(m_data);
-            // set timer for time to come out of reinforced
-            /*Reinforcement is an established system in EVE where a structure becomes invulnerable for a period of time.
-                 * The purpose is for the defending corporation to have a chance to react when their structure is attacked.
-                 * The Control Tower enters reinforced mode when it reaches 25% shield and exits reinforcement somewhere
-                 * within the time of day, specified by the owner at least 24 hours after it entered reinforcement.
-                 * So if you set the reinforcement time to “23.00 – 01.00” that means that the Control Tower will, if attacked,
-                 * exit reinforcement at some time between 23.00 and 01.00 the day after the attack was initiated.
-                 * Your corporation will receive notification if your Control Tower enters reinforcement mode and that leaves you
-                 * at least 24 hours to plan the defense.
-                 * In order to reset the reinforcement cycle, the Control Tower Shield must be repaired back above 25%;
-                 * note that it exits reinforcement with 0% shield.
-                 *
-                 */
-        }
-        break;
-        default:
-        case ProcState::Invalid:
-        {
-            // not sure what needs to be done at this point....we're nowhere close to having this coded.
-        }
-        break;
-        }
-
-        if (m_procState < ProcState::Online)
-            m_procState = ProcState::Invalid;
+        if (IsStarbaseStructure())
+            OnRemovedFromSpace(false);
+        SendSlimUpdate();
+        m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorLift", 0, 0, 0, -1, 0);
+        m_db.UpdateBaseData(m_data);
     }
+    break;
+    case ProcState::Anchoring:
+    {
+        // the client shows 'anchoring' until posTimestamp + anchoringDelay:  settled now
+        m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), m_self->GetAttribute(AttrAnchoringDelay).get_int());
+        m_procState = ProcState::Invalid;
+        SendBallFree(false);
+        SendSlimUpdate();
+        m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 0, 0, -1, 0);
+        if (m_tower and (m_moonSE != nullptr))
+            m_moonSE->SetTower(this);
+        if (m_sbu and (GetSBUSE() != nullptr))
+            GetSBUSE()->OnAnchored();
+
+        m_db.UpdateBaseData(m_data);
+        if (m_tower)
+            GetTowerSE()->OnAnchored();
+    }
+    break;
+    case ProcState::Offlining:
+    {
+        // anchored (posState 1) with a settled stamp:  the client shows 'anchored', not 'anchoring'
+        m_procState = ProcState::Invalid;
+        m_data.state = StructureState::Anchored;
+        m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), m_self->GetAttribute(AttrAnchoringDelay).get_int());
+        SetOffline();
+        SendSlimUpdate();
+        m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.StructureOffline", 0, 1, 1, -1, 0);
+        m_db.UpdateBaseData(m_data);
+    }
+    break;
+    case ProcState::Onlining:
+    {
+        m_data.state = StructureState::Online;
+        SetOnline();
+        SendSlimUpdate();
+        m_db.UpdateBaseData(m_data);
+    }
+    break;
+    case ProcState::Online:
+    {
+        Online();
+    }
+    break;
+    case ProcState::Operating:
+    {
+        // this is virtual, overridden in specific class' for their needs
+        // take resources or whatever needs to be done
+        Operating();
+    }
+    break;
+    // those below are not coded yet
+    case ProcState::Reinforcing:
+    case ProcState::SheildReinforcing:
+    case ProcState::ArmorReinforcing:
+    {
+        m_self->SetFlag(flagStructureInactive);
+        m_data.state = StructureState::Invulnerable;
+        //m_data.state = StructureState::Reinforced;
+        m_db.UpdateBaseData(m_data);
+        // set timer for time to come out of reinforced
+        /*Reinforcement is an established system in EVE where a structure becomes invulnerable for a period of time.
+             * The purpose is for the defending corporation to have a chance to react when their structure is attacked.
+             * The Control Tower enters reinforced mode when it reaches 25% shield and exits reinforcement somewhere
+             * within the time of day, specified by the owner at least 24 hours after it entered reinforcement.
+             * So if you set the reinforcement time to “23.00 – 01.00” that means that the Control Tower will, if attacked,
+             * exit reinforcement at some time between 23.00 and 01.00 the day after the attack was initiated.
+             * Your corporation will receive notification if your Control Tower enters reinforcement mode and that leaves you
+             * at least 24 hours to plan the defense.
+             * In order to reset the reinforcement cycle, the Control Tower Shield must be repaired back above 25%;
+             * note that it exits reinforcement with 0% shield.
+             *
+             */
+    }
+    break;
+    default:
+    case ProcState::Invalid:
+    {
+        // not sure what needs to be done at this point....we're nowhere close to having this coded.
+    }
+    break;
+    }
+
+    if (m_procState < ProcState::Online)
+        m_procState = ProcState::Invalid;
 }
 
 void StructureSE::Drop(SystemBubble *pBubble)
@@ -829,11 +838,7 @@ void StructureSE::SetAnchor(Client *pClient, GPoint &pos)
 
     m_self->SaveItem();
 
-    m_procState = EVEPOS::ProcState::Anchoring;
-    m_data.state = EVEPOS::StructureState::Anchored;
-    m_delayTime = m_self->GetAttribute(AttrAnchoringDelay).get_uint32();
-    m_procTimer.SetTimer(m_delayTime);
-    m_data.timestamp = GetFileTimeNow();
+    StartStateChange(EVEPOS::ProcState::Anchoring, EVEPOS::StructureState::Anchored, m_self->GetAttribute(AttrAnchoringDelay).get_uint32());
 
     SendSlimUpdate();
 
@@ -862,11 +867,7 @@ void StructureSE::PullAnchor(Client* pClient)
     if (IsArraySE() and GetArraySE()->IsRamInstallation())
         sRamMthd.TerminateStructureJobs(m_data.itemID, EvERam::Status::Unanchor);
 
-    m_procState = EVEPOS::ProcState::Unanchoring;
-    m_data.state = EVEPOS::StructureState::Unanchored;
-    m_delayTime = m_self->GetAttribute(AttrUnanchoringDelay).get_uint32();
-    m_procTimer.SetTimer(m_delayTime);
-    m_data.timestamp = GetFileTimeNow();
+    StartStateChange(EVEPOS::ProcState::Unanchoring, EVEPOS::StructureState::Unanchored, m_self->GetAttribute(AttrUnanchoringDelay).get_uint32());
 
     SendSlimUpdate();
     m_db.UpdateBaseData(m_data);
@@ -926,11 +927,7 @@ void StructureSE::Activate(Client* pClient, int32 effectID)
     if (m_bridge and (GetJumpBridgeSE() != nullptr))
         GetJumpBridgeSE()->CheckOnline();
 
-    m_data.state = EVEPOS::StructureState::Onlining;
-    m_procState = EVEPOS::ProcState::Onlining;
-    m_delayTime = m_self->GetAttribute(AttrOnliningDelay).get_uint32();
-    m_procTimer.SetTimer(m_delayTime);
-    m_data.timestamp = GetFileTimeNow();
+    StartStateChange(EVEPOS::ProcState::Onlining, EVEPOS::StructureState::Onlining, m_self->GetAttribute(AttrOnliningDelay).get_uint32());
 
     SendSlimUpdate();
     m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.StructureOnline", 0, 1, 1, -1, 0);
@@ -954,15 +951,13 @@ void StructureSE::Deactivate(Client* pClient, int32 effectID)
     if (!IsPowered() and (m_data.state != EVEPOS::StructureState::Onlining))
         return;
 
+    /* Crucible has no offlining delay (no such attribute, and pwn.GetStructureState has no 'offlining'):  the structure
+     *  is anchored on the next tic.  posState and posTimestamp stay as they are until then, else the client would
+     *  restart an onlining countdown from now
+     */
     m_procState = EVEPOS::ProcState::Offlining;
-    m_delayTime = 500 /*m_self->GetAttribute(AttrOnliningDelay).get_uint32()*/;
-    m_procTimer.SetTimer(m_delayTime);
-    m_data.timestamp = GetFileTimeNow();
-
-    m_db.UpdateBaseData(m_data);
-
-    SendSlimUpdate();
-    //m_destiny->SendSpecialEffect(m_data.itemID,m_data.itemID,m_self->typeID(),0,0,"effects.StructureOnline",0,0,0,-1,0);
+    m_delayTime = 0;
+    m_procTimer.SetTimer(500);
 }
 
 void StructureSE::ForceOffline()
@@ -975,10 +970,90 @@ void StructureSE::ForceOffline()
     m_procState = EVEPOS::ProcState::Invalid;
     m_delayTime = 0;
     m_data.state = EVEPOS::StructureState::Anchored;
-    m_data.timestamp = GetFileTimeNow() - m_self->GetAttribute(AttrAnchoringDelay).get_int() * FileTimeMs;
+    m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), m_self->GetAttribute(AttrAnchoringDelay).get_int());
     SetOffline();
     SendSlimUpdate();
+    m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.StructureOffline", 0, 1, 1, -1, 0);
     m_db.UpdateBaseData(m_data);
+}
+
+void StructureSE::StartStateChange(int8 procState, int8 state, uint32 delay)
+{
+    m_procState = procState;
+    m_data.state = state;
+    if (m_skipDelay) {
+        // GM:  done as it starts.  the client shows the final state at once, the change ends right after (GMChangeState)
+        m_delayTime = 0;
+        m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), delay);
+        m_procTimer.SetTimer(1);
+        return;
+    }
+    // the client counts the type's delay down from posTimestamp
+    m_delayTime = delay;
+    m_data.timestamp = GetFileTimeNow();
+    m_procTimer.SetTimer(m_delayTime);
+}
+
+bool StructureSE::CompleteStateChange()
+{
+    if (!m_procTimer.Enabled())
+        return false;
+    switch (m_procState) {
+        case EVEPOS::ProcState::Anchoring:
+        case EVEPOS::ProcState::Onlining:
+        case EVEPOS::ProcState::Offlining:
+        case EVEPOS::ProcState::Unanchoring:
+            break;
+        default:
+            // online and operating cycles aren't a state change
+            return false;
+    }
+    if (m_procState != EVEPOS::ProcState::Offlining) {
+        // the client stops counting:  the change is done as of now
+        int64 delay(m_self->GetAttribute(m_procState == EVEPOS::ProcState::Onlining ? AttrOnliningDelay
+                    : (m_procState == EVEPOS::ProcState::Anchoring ? AttrAnchoringDelay : AttrUnanchoringDelay)).get_int());
+        m_data.timestamp = StructureTiming::SettledStamp(GetFileTimeNow(), delay);
+    }
+    ProcessStateChange();
+    return true;
+}
+
+bool StructureSE::GMChangeState(StructureTiming::GMAction action)
+{
+    using StructureTiming::Step;
+    m_skipDelay = true;
+    bool done(false);
+    try {
+        // the change that is running first
+        done = CompleteStateChange();
+        for (auto step : StructureTiming::GMPlan(m_data.state, action)) {
+            switch (step) {
+                case Step::Anchor: {
+                    GPoint pos(GetPosition());
+                    SetAnchor(nullptr, pos);
+                } break;
+                case Step::Online: {
+                    // construction platforms and containers have no online state (no onlineForStructures effect)
+                    if (m_platform or m_cargo)
+                        throw CustomError ("The %s can't be put online.", m_self->name());
+                    Activate(nullptr, EVEEffectID::onlineForStructures);
+                } break;
+                case Step::Offline: {
+                    Deactivate(nullptr, EVEEffectID::onlineForStructures);
+                } break;
+                case Step::Unanchor: {
+                    PullAnchor(nullptr);
+                } break;
+            }
+            CompleteStateChange();
+            done = true;
+        }
+    } catch (...) {
+        m_skipDelay = false;
+        throw;
+    }
+    m_skipDelay = false;
+    return done;
 }
 
 void StructureSE::SetOnline()
@@ -1820,22 +1895,13 @@ PyDict *StructureSE::MakeSlimItem()
     slim->SetItemString("allianceID", IsAlliance(m_allyID) ? new PyInt(m_allyID) : PyStatic.NewNone());
     slim->SetItemString("warFactionID", IsFaction(m_warID) ? new PyInt(m_warID) : PyStatic.NewNone());
 
-    if (m_module or m_tower)
-    { // for control towers and structures
-        slim->SetItemString("posTimestamp", new PyLong(m_data.timestamp));
-        slim->SetItemString("incapacitated", new PyInt(m_data.state == EVEPOS::StructureState::Incapacitated));
-        slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
-    }
-    else if (m_tcu)
-    {
-        slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
-        slim->SetItemString("posTimestamp", PyStatic.NewNone());
-    }
-    else if (m_cargo)
-    {
-        slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
-        slim->SetItemString("posTimestamp", PyStatic.NewNone());
-    }
+    /* every structure (towers, modules, sovereignty structures, platforms):  the client counts anchoring, onlining and
+     *  unanchoring down from posTimestamp (pwn.GetStructureState), and without one shows the change as done.
+     *  the claim marker (TCU) plays its build and online models over posDelayTime ms (sovereigntyClaimMarker.py)
+     */
+    slim->SetItemString("posTimestamp", (StructureTiming::HasStamp(m_data.timestamp) ? new PyLong(m_data.timestamp) : PyStatic.NewNone()));
+    slim->SetItemString("posDelayTime", new PyInt(m_delayTime));
+    slim->SetItemString("incapacitated", new PyInt(m_data.state == EVEPOS::StructureState::Incapacitated));
 
     if (m_miner)
     {
