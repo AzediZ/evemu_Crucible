@@ -366,11 +366,11 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
             sig.scanAttributeID = AttrScanAllStrength;  // Unknown
             // hand off to WHMgr for creation and exit after return
             sWHMgr.Create(sig);
-            // creation failure will set itemID to 0
-            if (sig.sigItemID) {
-                m_sigBySigID.emplace(sig.sigID, sig);
-                m_sigByItemID.emplace(sig.sigItemID, sig);
-            }
+            // creation failure will set itemID to 0, and then there's nothing to keep
+            if (sig.sigItemID == 0)
+                return;
+            m_sigBySigID.emplace(sig.sigID, sig);
+            m_sigByItemID.emplace(sig.sigItemID, sig);
             // Save wormhole to the database for later loading
             SaveAnomaly(sig);
             return;
