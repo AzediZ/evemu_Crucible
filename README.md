@@ -1,35 +1,139 @@
-# [EVEmu](https://evemu.dev) - An EVE Online Emulator
+# EVEMu Revised - An EVE: Crucible Emulator
 
-<p align="center">
-	<a href="https://github.com/EvEmu-Project/evemu_Crucible/pulse"><img src="https://img.shields.io/tokei/lines/github/EvEmu-Project/evemu_Crucible" /></a>
-	<a href="https://www.codefactor.io/repository/github/evemu-project/evemu_crucible"><img src="https://img.shields.io/codefactor/grade/github/evemu-project/evemu_crucible" /></a>
-	<a href="https://github.com/EvEmu-Project/evemu_Crucible/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/w/EvEmu-Project/evemu_Crucible" /></a>
-	<a href="https://github.com/EvEmu-Project/evemu_Crucible/graphs/contributors"><img src="https://img.shields.io/github/contributors/EvEmu-Project/evemu_Crucible" /></a>
-	<a href="https://discord.gg/fTfAREYxbz"><img src="https://img.shields.io/discord/165291219205881856" /></a>
-	<a href="https://github.com/EvEmu-Project/evemu_Crucible/issues"><img src="https://img.shields.io/github/issues-raw/EvEmu-Project/evemu_Crucible" /></a>
-</p>
 
 ## Introduction
-EVEmu is a work-in-progress server emulator for the space MMO EVE Online. This is an educational project. Please see the disclaimer below for details.
+EVEmu Revised is a work-in-progress server emulator for the space MMO EVE Online. This is an educational project. Please see the disclaimer below for details. Originally forked from [EVEMu](https://github.com/EvEmu-Project/evemu_Crucible).
+The focus of this repo is on creating a small-scale EVE simulation from the Crucible era.
 
-## ChangeLog
-[ChangeLog](doc/ChangeLog.md)
+> [!IMPORTANT]
+> Despite implementing several features, many of these may only have partial implementations or be buggy.
 
-## EVEmu Software Development Kit ##
-The EVEmu project maintains a set of pre-configured tools and environments that help with setting up a new development station. [Check them out](https://github.com/EvEmu-Project/EvEmu_SDK)
+## Features
 
-Additional details on the SDK are [available on the wiki](https://wiki.evemu.dev/wiki/EVEmu-SDK).
+### Living universe
+
+**NPC AI**:
+- **Standard AI:** a state machine with movement, leash, reaction delay, aggro groups and EWAR rolled per spawn.
+- **Level-One AI** for Sleepers, Incursion NPCs and officers: threat tables, target switching, remote repair, group assists and remote ECM.
+- **Law:** CONCORD, police, navy, and gate and station sentries, plus pirate sentries in aggro groups.
+- **Server load:** level of detail and a CPU budget, telemetry, a shot-fairness audit, belt wander, a belt spawn cap and difficulty presets.
+
+**Ambient NPCs**: background life in hi-sec and low-sec, run only where players are.
+- **Traffic:** ships move through gates and stations, coherent across systems. Volume comes from market activity, security level and time of day.
+- **Patrols:** CONCORD and navy squads.
+- **Miners:** belt miners with strip-miner beams, and haulers that visit them.
+- **Criminals:** criminal events handled by sentries and CONCORD. Whether criminals attack players can be set separately for hi-sec and low-sec.
+- **Consequences:** full crimewatch for attacks on ambient ships.
+
+**NPC loot:**
+- Pools for deadspace, mission, officer, hauler and Sleeper NPCs.
+- Faction and officer modules.
+- The correct wreck type per faction and hull size.
+
+**Simulated market**: a self-consistent NPC economy calibrated on Crucible-era history
+- **Participants:** market makers, finite wallets, producers, consumers, miners, reprocessors and manufacturers. Consumers lose ships at killmail rates.
+- **Logistics:** remote miners in low-sec and null-sec, and haulers on the real jump map.
+- **Production chains:** T2 invention, moon reactions, planetary interaction and fuel blocks.
+
+### Combat, ships and modules
+- **Weapons:** ammo use per cycle, crystals that burn out, reload times, bank loading and the offline/online charge state.
+- **Electronic warfare** on a shared EWAR state:
+ - ECM with the client's jam formula; ECM bursts;
+ - neutralizers and nosferatus;
+ - dampeners, tracking disruptors and target painters;
+ - warfare links;
+ - siege and triage modules;
+ - smart bombs.
+- **Cloaking:** cloak modes, the proximity decloak, covert ops warp, and session (gate/login) cloaks that never hide the pilot from themselves.
+- **Interdiction:** warp disruption fields (they stop warps inside them and drag warps that cross them), mobile warp disruptors, interdiction spheres, the HIC field generator and its focused script.
+- **Capitals:** cyno fields, jump drives, titan and black ops bridges, and doomsday.
+- **Damage model:** shield bleed-through, invulnerability, and T3 subsystem skill loss.
+- **Propulsion and warp:**
+ - Afterburner and MWD speed from the Crucible formula, with the MWD's signature and capacitor penalties.
+ - Warp capacitor cost
+ - Warp speed accuracy.
+- **T3 fitting** from subsystems; weapon groups
+- **Ships:** eject and board, ship maintenance bays, self-destruct, jettison rules, onlining
+- **Drones and fighters**
+
+### Exploration, PvE and missions
+- **Scanning:** directional scanner, probe scanning, ship, cargo and survey scanners, and persistent probes.
+- **Sites:** hacking, archaeology and salvaging with Crucible rolls.
+- **Dungeon engine:**
+ - rooms, NPC waves, triggers and events;
+ - acceleration gates;
+ - escalations;
+ - generated combat anomalies and complexes.
+- **Missions:**
+ - pockets on the dungeon engine;
+ - content from eve-survival archives dated before Crucible;
+ - Crucible LP and ISK rewards;
+ - storyline missions;
+ - R&D agents.
+- **Bounties:** a delayed bounty payout with fleet shares.
+
+### Sovereignty, starbases and planets
+- **Sovereignty basics:** claimed systems, warfare, unclaimed/unclaimable systems
+- **Development indices:** military, industrial and strategic; hub upgrades with install rules; sovereignty bills every 14 days.
+- **Starbases:**
+ - permissions and anchoring rules;
+ - power, CPU and fuel, including fuel blocks and charters;
+ - defenses and manual gunnery;
+ - force fields;
+ - reinforcement;
+ - moon mining and reactions;
+ - assembly arrays and labs;
+ - jump bridges;
+ - notifications.
+- **Structure countdowns:** the client shows countdowns for anchoring, onlining and unanchoring
+- **Outposts:**
+ - construction, with one outpost or station per system;
+ - each race's base services, offices, refining and assembly lines;
+ - Foundation, Pedestal and Monument upgrades;
+ - race-specific improvements that change slots, refining and services, kept across restarts.
+- **Planetary interaction:**
+ - the client's own colony simulation and resource harmonics;
+ - customs offices;
+ - player-owned customs offices with corporation, alliance and standing tax levels.
+
+### Economy, industry and corporations
+- **Market:** order validation, escrow, margin trading, the 5-minute modify and cancel timers, and daily price history.
+- **Contracts:** fees and taxes, courier rules and notifications.
+- **Insurance** valued from the materials' market prices.
+- **Trade window.**
+- **Industry:**
+ - job cost paid to the line owner;
+ - invention and reverse engineering with Crucible chances;
+ - POS lines;
+ - outpost lines.
+- **Station services:** repairs, reprocessing (with the 100% cap and implant bonus) and LP store purchases.
+- **Corporations:**
+ - members and roles;
+ - shares and votes;
+ - leaving and kicking (24-hour stasis);
+ - CEO candidacy;
+ - contacts, bookmarks and medals.
+- **Bills:** one engine with manual and automatic payment.
+- **Alliances and wars:** applications, contacts, wars, and faction warfare windows.
+
+### Characters and communication
+- **Clones:** jump clones, medical clone upgrades, implants and boosters (with side effects), and ship clones.
+- **Skills:** training at the client's exact rate, injection, and free skill points that raise levels at once.
+- **Mail and chat:** EVE mail, mailing lists, contacts and watchlist, persistent notifications, chat access lists, and private chat invites.
+- **Chat channels and MOTD.**
+- **Calendar, saved fittings, tutorials and account services**
+- **Logging off in space:** warp-in and warp-out from your last position
+
+## Running EVEMu
 
 ## `docker compose` Quickstart
  EVEmu can be run with Docker Compose:
 ```
-git clone https://github.com/EvEmu-Project/evemu_Crucible.git
-cd evemu_Crucible
+git clone https://github.com/rennr/evemu_Revised.git
+cd evemu_Revised
 docker compose up -d
 ```
 **NOTE:** Add `--build` to the `docker compose up` command to force a rebuild of the source. This is useful when making code changes.
-
-~~By changing `build:` to `image:` in `docker-compose.yml`, you can use the prebuilt images available.~~
 
 Configuration files are stored in `./config/`. These can be modified and will persist across restarts.
 
@@ -38,17 +142,8 @@ To shutdown EVEmu:
 docker compose stop
 ```
 
-## Building with Docker
- EVEmu can now be built with docker to ensure a consistent dependency base. This can be done by executing `docker compose build` in the root directory.
- It is highly suggested to build EVEmu from the latest release available on the releases page.
-
- [Releases](https://github.com/EvEmu-Project/evemu_Crucible/releases)
-
 ## Accounts
  Accounts will be created automatically when logging in with the client if the username is not already taken.
-
-## Communication / Contact
- Check out the new [EVEmu Project website](https://evemu.dev), our [Discord](https://discord.gg/fTfAREYxbz) and [Forums](https://forums.evemu.dev)!
 
 ## Disclaimer
 ***EVEmu is an educational project.***
