@@ -133,7 +133,7 @@ void SovereigntyDB::LogSovChange(uint32 systemID, uint32 stationID, uint32 owner
 void SovereigntyDB::GetRecentSovChanges(DBQueryResult& res, int64 since)
 {
     if (!sDatabase.RunQuery(res,
-            "SELECT solarSystemID, stationID, ownerID, oldOwnerID FROM sovChangeLog WHERE changeTime >= %lli ORDER BY changeTime",
+            "SELECT solarSystemID, stationID, ownerID, oldOwnerID, changeTime FROM sovChangeLog WHERE changeTime >= %lli ORDER BY changeTime",
             since))
     {
         codelog(SOV__ERROR, "Error in GetRecentSovChanges query: %s", res.error.c_str());

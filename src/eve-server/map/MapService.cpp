@@ -234,6 +234,8 @@ PyResult MapService::GetRecentSovActivity(PyCallArgs &call)
             dict->SetItemString("stationID",        (row.IsNull(1) ? PyStatic.NewNone() : new PyInt(row.GetInt(1))));
             dict->SetItemString("ownerID",          (row.IsNull(2) ? PyStatic.NewNone() : new PyInt(row.GetInt(2))));
             dict->SetItemString("oldOwnerID",       (row.IsNull(3) ? PyStatic.NewNone() : new PyInt(row.GetInt(3))));
+            // sovDashboard.ShowChanges:  util.FmtDate(item.activityTime, 'ss')
+            dict->SetItemString("activityTime",     new PyLong(row.GetInt64(4)));
         list->AddItem(new PyObject("util.KeyVal", dict));
     }
     return list;

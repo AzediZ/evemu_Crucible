@@ -52,12 +52,20 @@ PyResult StationSvc::GetStationItemBits(PyCallArgs &call) {
 }
 
 PyResult StationSvc::GetSolarSystem(PyCallArgs &call, PyInt* solarSystemID) {
-    ObjectCachedMethodID method_id(GetName().c_str(), "GetSolarSystem");
+    /* locationInfoSvc.UpdateSOVLocationInfo:  ss = sm.RemoteSvc('stationSvc').GetSolarSystem(solarsystemid2), ss.factionID
+     *  is the sovereign shown for empire and npc null-sec.  the cache is per system, else every system answers with the
+     *  first one asked for
+     */
+    std::string method_name("GetSolarSystem_");
+    method_name += std::to_string(solarSystemID->value());
+    ObjectCachedMethodID method_id(GetName().c_str(), method_name.c_str());
 
     if (!this->m_cache->IsCacheLoaded(method_id)) {
-        PyPackedRow *t = SystemDB::GetSolarSystemPackedRow(solarSystemID->value());
+        PyRep* t = SystemDB::GetSolarSystemPackedRow(solarSystemID->value());
+        if (t == nullptr)
+            t = PyStatic.NewNone();
 
-        this->m_cache->GiveCache(method_id, (PyRep **)&t);
+        this->m_cache->GiveCache(method_id, &t);
     }
 
     return(this->m_cache->MakeObjectCachedMethodCallResult(method_id));
