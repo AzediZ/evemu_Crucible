@@ -330,9 +330,9 @@ void MapDB::UpdateKillData(uint32 sysID, SystemKillData& data)
     DBerror err;
     sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = %u, kills24Hour = %u, factionKills = %u, factionKills24Hour = %u,"
     "  podKillsHour = %u, podKills24Hour = %u, killsDateTime = %lli, kills24DateTime = %lli, podDateTime = %lli, pod24DateTime = %lli,"
-    "  factionDateTime = %lli, faction24DateTime = %lli",
+    "  factionDateTime = %lli, faction24DateTime = %lli WHERE solarSystemID = %u",
     data.killsHour, data.kills24Hour, data.factionKills, data.factionKills24Hour, data.podKillsHour, data.podKills24Hour,
-    data.killsDateTime, data.kills24DateTime, data.factionDateTime, data.faction24DateTime, data.podDateTime, data.pod24DateTime);
+    data.killsDateTime, data.kills24DateTime, data.podDateTime, data.pod24DateTime, data.factionDateTime, data.faction24DateTime, sysID);
 }
 
 //  client logs faction kills in total kills.  return is value1(total kills) - value2(faction kills) > 0:
@@ -358,7 +358,17 @@ void MapDB::AddPodKill(uint32 sysID) {
 
 void MapDB::ManipulateTimeData()
 {
-
+    /* called once an hour.  the star map's "last hour" counters start again every hour, and the "last 24 hours"
+     *  counters every 24 hours (a simple stand-in for rolling windows:  before, they only ever went up) */
+    static uint32 hours(0);
+    ++hours;
+    DBerror err;
+    int64 now(GetFileTimeNow());
+    sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = 0, factionKills = 0, podKillsHour = 0,"
+        " killsDateTime = %lli, factionDateTime = %lli, podDateTime = %lli", now, now, now);
+    if (hours % 24 == 0)
+        sDatabase.RunQuery(err, "UPDATE mapDynamicData SET kills24Hour = 0, factionKills24Hour = 0, podKills24Hour = 0,"
+            " kills24DateTime = %lli, faction24DateTime = %lli, pod24DateTime = %lli", now, now, now);
 }
 
 void MapDB::GetSolarSystemLocations(DBQueryResult& res)

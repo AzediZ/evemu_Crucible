@@ -2385,7 +2385,10 @@ void SystemManager::ManipulateTimeData()
 
     //if (m_killData.killsDateTime < timeNow)
 
-    MapDB::UpdateKillData(m_data.systemID, m_killData);
+    /* m_killData is only what was in the table when this system loaded:  kills since then are counted in the table
+     *  itself (MapDB::AddKill and friends).  writing it back every 5 minutes undid those, and (with no WHERE in the
+     *  query) wrote this system's numbers onto every system.  MapDB::ManipulateTimeData resets the counters */
+    //MapDB::UpdateKillData(m_data.systemID, m_killData);
 }
 
 void SystemManager::GetDockedCount()

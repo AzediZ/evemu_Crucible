@@ -516,9 +516,8 @@ void ShipSE::Killed(Damage &fatal_blow) {
 
     // AttrFwLpKill
 
-    //  log faction kill in dynamic data   -allan
+    //  a player's ship is a ship kill on the star map, not a faction (npc) kill
     MapDB::AddKill(locationID);
-    MapDB::AddFactionKill(locationID);
 
     // set up basic wreck data
     GPoint wreckPosition = m_destiny->GetPosition();
