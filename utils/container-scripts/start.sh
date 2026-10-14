@@ -18,14 +18,10 @@ if [ ! -f "/app/etc/MarketBot.xml" ]; then
     echo "MarketBot.xml not found, installing..."
     cp /src/utils/config/MarketBot.xml /app/etc/
 fi
-if [ ! -f "/app/etc/devtools.raw" ]; then
-    echo "devtools.raw not found, installing..."
-    cp /src/utils/config/devtools.raw /app/etc/
-fi
-if [ ! -f "/app/etc/gmtools.py" ]; then
-    echo "gmtools.py not found, installing..."
-    cp /src/utils/config/gmtools.py /app/etc/
-fi
+
+echo "Installing devtools and GM tools..."
+cp /src/utils/config/devtools.raw /app/etc/
+cp /src/utils/config/gmtools.py /app/etc/
 
 #Start eve-server
 echo "Starting eve-server..."
