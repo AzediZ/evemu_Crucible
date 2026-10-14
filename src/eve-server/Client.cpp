@@ -2419,8 +2419,15 @@ void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool
             //   a single PackagedAction packet, which is then inserted into the DoDestinyAction packet.
             PyList* paList = new PyList();
                 paList->AddItem(*update);
-            if (!m_destinyUpdateQueue->empty())
-                paList->AddItem(m_destinyUpdateQueue);
+            // the queued updates go in as items of the package, after this one.  adding the queue list itself
+            //  nested a list where the client expects (stamp, call) - michelle's DoDestinyUpdate failed with
+            //  "unhashable type: 'list'" and the new ball (e.g. a just-built outpost) never got its model - and
+            //  left the queue shared with the package (freed with it) and sent a second time on the next flush
+            for (PyList::const_iterator itr = m_destinyUpdateQueue->begin(); itr != m_destinyUpdateQueue->end(); ++itr) {
+                PyIncRef(*itr);
+                paList->AddItem(*itr);
+            }
+            m_destinyUpdateQueue->clear();
             PackagedAction pa;
                 pa.substream = new PySubStream(paList);
             act.update = pa.Encode();
