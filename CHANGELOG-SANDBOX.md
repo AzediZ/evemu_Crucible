@@ -8,7 +8,7 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 Patches `0033` to `0050` · Status: **compiles** (full cloud Release build, 14 Oct 2026). Not yet started or tested in game.
 
-**Why.** Renn moved his work to a new repository, [EVEMu Revised](https://github.com/rennr/evemu_Revised) (branch `revised`, `db8e5b16`, 14 Oct 2026): about 400 commits after the CONCORD commit we took as `0031`. It reworks most of the server and covers most of our gameplay gaps audit. It rewrites the same files as most of our patches, so picking parts of it into our code wasn't practical. Azedi chose to move onto it. The new code is the branch `revised` in both repos; `master` here (and `movement` in the private repo) stay as they were, so there's a way back if this goes wrong.
+**Why.** Renn moved his work to a new repository, [EVEMu Revised](https://github.com/rennr/evemu_Revised) (branch `revised`, `db8e5b16`, 14 Oct 2026): about 400 commits after the CONCORD commit we took as `0031`. It reworks most of the server and covers most of what was still missing here. It rewrites the same files as most of our patches, so picking parts of it into our code wasn't practical. This moves onto it instead. The new code is the branch `revised` in both repos; `master` here (and `movement` in the private repo) stay as they were, so there's a way back if this goes wrong.
 
 **What Renn's base brings** (his work, not ours; see his README)
 - **NPCs:** rats, Sleepers, incursion NPCs, officers, CONCORD and sentries fight much more like Crucible (reaction delays, group aggro, leashing, rat EWAR, target switching, remote repair).
@@ -42,7 +42,7 @@ Patches `0033` to `0050` · Status: **compiles** (full cloud Release build, 14 O
 
 **Before the first start**
 - Rename `config/eve-server.xml` and `config/log.ini` (for example to `.movement`). The server only copies its new config files when they're missing, and the old ones lack Renn's settings: with the old `eve-server.xml` the market sim stays off, so there's no NPC market.
-- The first Start builds the new image from scratch: 15 to 30 minutes (an estimate).
+- The first Start builds the new image from scratch: roughly 15 to 30 minutes.
 - The new universe starts empty: new account, new characters. The market fills over about 2 hours, or straight away with `/mktsim seed`.
 
 **How to test.** Start from the control panel and wait for the build. Log in with a new character and check: undock and dock, a warp and a gate jump, the market (buy something at a hub), a belt rat fight, loot. `/crime` should say crime is off. Then `/crime on`, `/crime me` in high-sec (CONCORD should come), and `/crime off`. Stop from the panel: the server log should end with the shutdown save, not a kill.
@@ -51,7 +51,7 @@ Patches `0033` to `0050` · Status: **compiles** (full cloud Release build, 14 O
 
 ## 2026-10-13: Notes from testing
 
-Azedi's notes from testing in game:
+Notes from testing in game:
 
 - **Titan and Black Ops bridges:** the bridge effect now works, so bridging should be fully working (`0026`).
 - **Incursion sites:** site spawn positions and timers need adjusting later.
@@ -65,7 +65,7 @@ Azedi's notes from testing in game:
 
 Patches `0031` (Renn's) and `0032` · Status: **Built**. First in-game look (13 Oct 2026): CONCORD ships spawn at 0 m on the player's ship and get bounced out to long range (see [Known issues](#known-issues)).
 
-**Why.** Renn added Crucible's crime rules and CONCORD on a new branch of his repo, [`enhanced`](https://github.com/rennr/evemu_Crucible/tree/enhanced) (commit `b3b5d1a`, 11 Oct 2026). EVEmu had none of this: `CrimeWatch` was an empty shell and CONCORD wasn't even built. Azedi wanted it in, but switched off when the server starts, so new things can still be tested anywhere in peace.
+**Why.** Renn added Crucible's crime rules and CONCORD on a new branch of his repo, [`enhanced`](https://github.com/rennr/evemu_Crucible/tree/enhanced) (commit `b3b5d1a`, 11 Oct 2026). EVEmu had none of this: `CrimeWatch` was an empty shell and CONCORD wasn't even built. It's in, but switched off when the server starts, so new things can still be tested anywhere in peace.
 
 **What changed**
 - `0031`, Renn's commit, unchanged:
@@ -94,7 +94,7 @@ Patches `0031` (Renn's) and `0032` · Status: **Built**. First in-game look (13 
 
 Patch `0030` · Status: **Built**. In a local test with the test bot, warping into a True Creations Research Center pocket now brings the CONCORD MTAC Factory and the Shield Transfer Control Tower with their own item IDs; before, both arrived as object 0. Not tested in game yet.
 
-**Why.** Azedi couldn't find the MTAC Factory in a True Creations Research Center. The server did create it, but the client never showed it.
+**Why.** The MTAC Factory in a True Creations Research Center was nowhere to be found. The server did create it, but the client never showed it.
 
 **What changed**
 - **Containers in space** (an EVEmu bug, also in upstream `master`). A container's position and details went to the client with item ID 0 unless it was a can a player jettisoned. The client can't show an object with no ID, so these containers were invisible. They now carry their real ID.
@@ -110,7 +110,7 @@ Patch `0030` · Status: **Built**. In a local test with the test bot, warping in
 
 Patch `0029` (fixes `0028` and `0024`) · Status: **Built** (compiles). Checked outside the game: the name lookup the hangar asks for now reaches the database whole, with its closing bracket; before, it was cut off and rejected. Not tested in game yet.
 
-**Why.** After the rebuild with `0026` to `0028`, Azedi's Ship Hangar and Journal windows each showed once and then stayed empty. Two client errors were behind it.
+**Why.** After the rebuild with `0026` to `0028`, the Ship Hangar and Journal windows each showed once and then stayed empty. Two client errors were behind it.
 
 **What changed**
 - **Ship Hangar.** `0028` changed how the server looks up the names of ships, locations and other objects. The list of item IDs it put in the query still had some invisible padding (NUL characters) left over by an old EVEmu helper, and the padding cut every lookup off before its closing bracket, so the database rejected all of them. The client got nothing back, raised an error and stopped drawing the hangar (the cargo hold too). The helper now trims the padding.
@@ -127,7 +127,7 @@ Patch `0029` (fixes `0028` and `0024`) · Status: **Built** (compiles). Checked 
 
 Patch `0028` (on top of `0024`) · Status: **Built**. In a local test with the test bot, the site beacons arrived named after their sites ("Override Transfer Array", "Nation Mining Colony", "Nation Commander Outpost"), and all three acceleration gates were still on their beacon's grid 90 seconds after spawning; before the fix they were gone after a minute. The Journal fix matches the rejected call in the server console. Not tested in game yet. In game (13 Oct 2026) it broke the Ship Hangar, and the Journal tab still failed on the incursion state; `0029` fixes both.
 
-**Why.** Azedi's first in-game look at `0024` (12 Oct 2026) found three problems: the Journal's Incursions tab didn't show the incursions, the site beacons had no acceleration gate, and every beacon was named "Celestial Beacon".
+**Why.** The first in-game look at `0024` (12 Oct 2026) found three problems: the Journal's Incursions tab didn't show the incursions, the site beacons had no acceleration gate, and every beacon was named "Celestial Beacon".
 
 **What changed**
 - **Journal tab.** The server console showed it rejecting the client's `rewardMgr.GetDelayedRewardsByGroupIDs` call. The Crucible client sends the incursion IDs as a tuple, and the server only accepted a list, so the tab got an error back and showed nothing. It now accepts a tuple, a list or a single ID. This also confirms the `0024` guess that the client asks a service named `rewardMgr`.
@@ -150,7 +150,7 @@ Patch `0028` (on top of `0024`) · Status: **Built**. In a local test with the t
 
 Patch `0027` · Status: **Built** (compiles). Not tested in game yet.
 
-**Why.** Azedi found that leaving a fleet didn't take the character out of it: they were left stuck in "fleet limbo". This is an EVEmu bug, also in upstream `master`. The fleet change in `0025` wasn't involved.
+**Why.** Leaving a fleet didn't take the character out of it: they were left stuck in "fleet limbo". This is an EVEmu bug, also in upstream `master`. The fleet change in `0025` wasn't involved.
 
 **What changed**
 - **Leaving.** On leaving, the server set your fleet, wing, squad and fleet role to 0. Out of a fleet the client expects "none", the value it has at login, and it checks for "none" to decide whether you are in a fleet, so a fleet of 0 still counted as one. Leaving, being kicked and logging off now set them back to "none".
@@ -169,7 +169,7 @@ Patch `0027` · Status: **Built** (compiles). Not tested in game yet.
 
 Patch `0026` · Status: **Tested** (13 Oct 2026): the bridge effect works, and bridging should be fully working.
 
-**Why.** Bridging worked, but no portal appeared in space. Azedi's client log showed the server announcing the portal as effect number 0 with no effect name, so the client had nothing to play ("FxSequencer::OnSpecialFx: No guid in trigger") and threw a `RecordNotFound 0` error in its module code.
+**Why.** Bridging worked, but no portal appeared in space. The client log showed the server announcing the portal as effect number 0 with no effect name, so the client had nothing to play ("FxSequencer::OnSpecialFx: No guid in trigger") and threw a `RecordNotFound 0` error in its module code.
 
 **What changed**
 - **Portal effect.** The server started the jump portal generator with the module's default effect. In the game data the portal effect isn't marked as the default, because the module button doesn't open a portal, so that came out as 0. The generator now always runs its portal effect: `jumpPortalGeneration` on a titan, `jumpPortalGenerationBO` on a Black Ops. The client then plays its own portal (`effects.JumpPortal`, a 60 second animation in `res:/Model/Effect3/jumpportal.red`), and the module shows as active for that minute.
@@ -185,7 +185,7 @@ Patch `0026` · Status: **Tested** (13 Oct 2026): the bridge effect works, and b
 
 Patch `0025` · Status: **Tested** (12 Oct 2026): undocked several times as fleet commander with two alts in the fleet, and the server stayed up.
 
-**Why.** The server crashed (segfault) the moment Azedi undocked while he was fleet commander of a three-pilot fleet. This is an EVEmu bug, not one of our patches: the same code is in upstream `master`.
+**Why.** The server crashed (segfault) the moment the fleet commander of a three-pilot fleet undocked. This is an EVEmu bug, not one of our patches: the same code is in upstream `master`.
 
 **What changed**
 - **Undocking.** When a fleet booster undocks, the server works out the fleet's boosts again. It counted the undocking pilot as already in space, but their ship isn't made until a moment later in the undock, so applying the boost to it read a null pointer. The boost update now skips a pilot with no ship yet; their own fleet timer applies the boost 1.5 seconds after undock, as it already did for pilots who aren't boosters.
@@ -202,7 +202,7 @@ Patch `0025` · Status: **Tested** (12 Oct 2026): undocked several times as flee
 
 Patch `0024` (on top of `0021`) · Status: **Built**. In a local test without a game client, every one of the eleven sites spawned with its overview beacon, gate and pockets, and ran from its first wave to completion through its own mechanic: Lyavite into the refinery, civilians into the freighter, MTACs into the control tower, the Citizen kill, the Consolidation Network's gate locks, the Provisional Headquarters' hidden gates and Mobile Headquarters, and the mothership's transmitter and relay. Killing the mothership ended the incursion. Not tested in game: flying through the gates, hacking, mining spawns, how the rats fly and use EWAR, the Journal tab and payouts. First in-game look (12 Oct 2026): the beacons appear but have no acceleration gate, the Journal tab doesn't update, and the beacon names are still wrong (see [Known issues](#known-issues)). Fixes for all three built in `0028` (13 Oct 2026).
 
-**Why.** Azedi found that the rats fought but flew wrong, that the sites worked nothing like their wiki pages, that they were scanner anomalies instead of overview beacons, and that the Journal's Incursions tab was empty. Sources: the EVE University wiki's [Incursion sites](https://wiki.eveuniversity.org/Incursion_sites) and each site's own page, [Sansha's Manual](https://wiki.eveuniversity.org/Sansha%27s_Manual), [Incursions](https://wiki.eveuniversity.org/Incursions) and [Anatomy of Incursions](https://wiki.eveuniversity.org/Anatomy_of_Incursions). Where the wiki says nothing (gate distances, structure hit points, timers, ship counts), the values are our picks.
+**Why.** The rats fought but flew wrong, the sites worked nothing like their wiki pages, they were scanner anomalies instead of overview beacons, and the Journal's Incursions tab was empty. Sources: the EVE University wiki's [Incursion sites](https://wiki.eveuniversity.org/Incursion_sites) and each site's own page, [Sansha's Manual](https://wiki.eveuniversity.org/Sansha%27s_Manual), [Incursions](https://wiki.eveuniversity.org/Incursions) and [Anatomy of Incursions](https://wiki.eveuniversity.org/Anatomy_of_Incursions). Where the wiki says nothing (gate distances, structure hit points, timers, ship counts), the values are our picks.
 
 **What changed**
 - **Sites are beacons on the overview**, visible to everyone in the system without scanning; they are no longer scanner anomalies. Warp to one and you land next to its acceleration gate (the Consolidation Network has two). A gate works within 2,500 m of its surface, but not while you are warp disrupted. It puts you in the site's pocket, about a million km away, next to the pocket's own beacon. The pocket's ships spawn when the first pilot arrives. A completed site's beacon disappears at once. Its gate and pockets go a minute after the last pilot has left, or 30 minutes after completion at the latest.
@@ -294,7 +294,7 @@ Patch `0023` · Status: **Compiles** (the changed file builds; the server wasn't
 
 Patch `0022` · Status: **Tested** (12 Oct 2026): drive jumps to a fleet cyno, Bridge to and Jump through all work; the portal visual effect is missing, shelved. (`0020` and `0021` are the incursion patches.)
 
-**Why.** In Azedi's test the titan jumped to the cyno fine, but "Bridge to" did nothing: no message, no effect, and the other ship had no "Jump through" option on the titan.
+**Why.** In testing, the titan jumped to the cyno fine, but "Bridge to" did nothing: no message, no effect, and the other ship had no "Jump through" option on the titan.
 
 **What changed**
 - **Bridges.** The server started the jump portal generator, then wrongly read "this runs for one cycle" as "it didn't start", and quietly gave up. It now opens the portal and tells the fleet, so members get "Jump through" on the titan or Black Ops. If the generator really doesn't start, the pilot now gets a message saying so.
@@ -312,7 +312,7 @@ Patch `0022` · Status: **Tested** (12 Oct 2026): drive jumps to a fleet cyno, B
 
 Patch `0021` (on top of `0020`) · Status: **Built**. In a local test without a game client, an incursion fills its Vanguard, Assault and Headquarters systems with sites, runs through every wave including the objective structures, brings out the Mothership after a Headquarters site at zero influence, and ends when the Mothership dies. Low-sec gets the Uroborus instead of the Kundalini. Everything is cleaned up when a system unloads or the incursion ends. Not tested in game: combat, payouts and the scanner view.
 
-**Why.** Azedi asked for the Assault and Headquarters sites, using the EVE University wiki ([Incursion sites](https://wiki.eveuniversity.org/Incursion_sites), its pages for each site, and [Sansha's Manual](https://wiki.eveuniversity.org/Sansha%27s_Manual) for the ships) for the data.
+**Why.** The first cut only had Vanguard sites. The Assault and Headquarters sites are built from the EVE University wiki ([Incursion sites](https://wiki.eveuniversity.org/Incursion_sites), its pages for each site, and [Sansha's Manual](https://wiki.eveuniversity.org/Sansha%27s_Manual) for the ships).
 
 **What changed**
 - **All nine sites from the wiki.** Each system type now has its own three sites, three live at a time per system:
@@ -343,7 +343,7 @@ Patch `0021` (on top of `0020`) · Status: **Built**. In a local test without a 
 
 Patch `0020` · Status: **Built**. Patch `0021` replaces the stand-in ship stats, the site list and `FleetSize` described here. The server boots and, in a local test without a game client, starts an incursion, spawns sites, moves through all three waves, respawns sites and cleans everything up when the incursion ends. Not tested in game: payouts, combat and the scanner view.
 
-**Why.** EVEmu had almost nothing for incursions (see `reports/incursions-audit.md` in the project files). This is the first playable part: Vanguard sites you can find, fight and get paid for.
+**Why.** EVEmu had almost nothing for incursions. This is the first playable part: Vanguard sites you can find, fight and get paid for.
 
 **What changed**
 - **Incursions.** Sansha's Nation takes over a high-sec constellation. One system with a station is the staging system and also a Vanguard system, the two nearest systems are Vanguard systems too, the farthest is the Headquarters system and the rest are Assault systems. Only Vanguard systems have sites so far.
@@ -368,9 +368,9 @@ Patch `0020` · Status: **Built**. Patch `0021` replaces the stand-in ship stats
 
 ## 2026-10-11: Cynos refused in low-sec as "high security space"
 
-Patch `0019` · Status: **Tested** (11 Oct 2026): Azedi lit a cyno in a 0.4 system.
+Patch `0019` · Status: **Tested** (11 Oct 2026): a cyno lights in a 0.4 system.
 
-**Why.** After `0018`, Azedi's cyno in a 0.4 system said the module can't be used in high security space.
+**Why.** After `0018`, a cyno in a 0.4 system said the module can't be used in high security space.
 
 **What changed**
 - The high-sec check read the server's "security value", which is 1.1 minus the system's security (0.1 in a 1.0 system, 0.7 in a 0.4 system), so it was upside down: cynos were refused in low-sec and null-sec and allowed in high-sec. It now reads the system's security itself. Anything that shows as 0.5 or above in the client (0.45 and up) counts as high-sec.
@@ -384,9 +384,9 @@ Patch `0019` · Status: **Tested** (11 Oct 2026): Azedi lit a cyno in a 0.4 syst
 
 ## 2026-10-11: Cynos no longer "jammed" outside claimed null-sec
 
-Patch `0018` · Status: **Tested** (11 Oct 2026): no more "jammed" message; Azedi lit a cyno in low-sec.
+Patch `0018` · Status: **Tested** (11 Oct 2026): no more "jammed" message, and a cyno lights in low-sec.
 
-**Why.** Azedi's first cyno test (11 Oct 2026) got "This system is currently being jammed" in a system with no jammer.
+**Why.** The first cyno test (11 Oct 2026) got "This system is currently being jammed" in a system with no jammer.
 
 **What changed**
 - When a system had no sovereignty data (all of empire space, including low-sec), the server handed back uninitialised data, so its "jammer" was random garbage. It now comes back empty, so cynos only see a jammer that is really there.
@@ -402,7 +402,7 @@ Patch `0018` · Status: **Tested** (11 Oct 2026): no more "jammed" message; Azed
 
 Patch `0017` · Status: **Tested** (12 Oct 2026): drive jumps to a fleet cyno, Bridge to and Jump through all work; the portal visual effect is missing, shelved. On 11 Oct "Bridge to" did nothing; that was fixed in `0022`.
 
-**Why.** Cynos and capital jumps half-worked: no range limit, no capacitor cost, a likely server crash when the cyno went out just before a jump, and too much fuel taken when isotopes were split across stacks. Covert cynos couldn't be fitted and titan or Black Ops bridges weren't there at all. Audit: `reports/cyno-jump-doomsday-audit.md` in the project files.
+**Why.** Cynos and capital jumps half-worked: no range limit, no capacitor cost, a likely server crash when the cyno went out just before a jump, and too much fuel taken when isotopes were split across stacks. Covert cynos couldn't be fitted and titan or Black Ops bridges weren't there at all.
 
 **What changed**
 - **Jump to a fleet member's cyno:** the server checks the cyno is still lit and its pilot is still in your fleet, so a cyno going out mid-click is just "no longer has a cynosural field lit" instead of a crash.
@@ -415,7 +415,7 @@ Patch `0017` · Status: **Tested** (12 Oct 2026): drive jumps to a fleet cyno, B
 - **Titan and Black Ops bridges:** "Bridge to" on a fleet member with a cyno (or an alliance beacon) opens a jump portal for one cycle of the Jump Portal Generator. The bridging ship is held in place while the portal is open, and the jump must be within its jump drive range. Fleet members within 2,500 m of it get "Jump through", which takes fuel from the bridging ship's fuel bay by the jumper's mass and the distance.
   - A titan portal won't take capitals, Black Ops or freighters, and can't open to a covert cyno.
   - A Black Ops covert portal only takes covert ops, stealth bombers and force recons.
-- **Not done:** jumping through an alliance member's portal when not in their fleet (replies "not supported yet"); strategic cruisers with the covert subsystem can't use covert portals; the 2,500 m portal range is my best memory of Crucible and easy to change; the cyno's speed hack (restores the top speed recorded when it lit) is unchanged, since I couldn't confirm the cyno's speed effect without a test.
+- **Not done:** jumping through an alliance member's portal when not in their fleet (replies "not supported yet"); strategic cruisers with the covert subsystem can't use covert portals; the 2,500 m portal range is from memory of Crucible and easy to change; the cyno's speed hack (restores the top speed recorded when it lit) is unchanged until the cyno's speed effect can be checked in a test.
 
 **Files.** New: `ship/JumpDrive.cpp/.h` (shared checks), `ship/modules/JumpPortalModule.cpp/.h`. Changed: `ship/BeyonceService.cpp/.h`, `ship/modules/CynoModule.cpp/.h`, `ship/modules/ModuleFactory.h`, `ship/modules/GenericModule.h`, `fleet/FleetService.cpp`, `fleet/FleetBound.cpp`, `CMakeLists.txt` (all under `src/eve-server/`).
 
