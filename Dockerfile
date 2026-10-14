@@ -1,10 +1,30 @@
-# Base image for building EVEmu using Debian 12
-FROM debian:12 AS base
+# EVEmu server image (Debian 12, GCC 12).  Needs BuildKit (the default builder for docker and docker compose).
+#
+# Stages:
+#   build-env   the toolchain and libraries.  Cached as a layer, and a usable build container on its own:
+#                 docker build --target build-env -t evemu-build-env .
+#                 docker run --rm -v "$PWD":/src:ro -v evemu-build-env-cache:/build evemu-build-env \
+#                     sh -c 'cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Debug && make -C /build -j"$(nproc)"'
+#   evedbtool   the EVEDBTool binary, fetched once per EVEDBTOOL_VERSION instead of on every sql/ change
+#   app-build   compiles the server.  The build tree and ccache live in cache mounts (ids evemu-build and
+#               evemu-ccache), so a rebuild only recompiles what changed.  To start clean (e.g. a stale CMake
+#               cache) rename the ids, or `docker builder prune --filter type=exec.cachemount` (clears every
+#               project's cache mounts)
+#   app         the runtime image
 
-# Install build dependencies
-RUN apt-get update && \
+ARG EVEDBTOOL_VERSION=0.0.6
+
+# Toolchain and libraries
+FROM debian:12 AS build-env
+
+# keep downloaded .debs in a cache mount, so a change to this list doesn't download everything again
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential \
+    ccache \
     cmake \
     git \
     curl \
@@ -18,11 +38,18 @@ RUN apt-get update && \
     gdb \
     libutfcpp-dev \
     mariadb-client \
-    passwd \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    passwd
+
+# EVEDBTool, pinned so the download is cached with this layer
+FROM debian:12 AS evedbtool
+ARG EVEDBTOOL_VERSION
+ARG TARGETARCH
+ADD --chmod=755 https://github.com/EvEmu-Project/EVEDBTool/releases/download/${EVEDBTOOL_VERSION}/evedbtool /out/evedbtool-amd64
+ADD --chmod=755 https://github.com/EvEmu-Project/EVEDBTool/releases/download/${EVEDBTOOL_VERSION}/evedb_aarch64 /out/evedbtool-arm64
+RUN mv /out/evedbtool-${TARGETARCH:-amd64} /out/evedbtool && rm -f /out/evedbtool-*
 
 # Build stage
-FROM base AS app-build
+FROM build-env AS app-build
 
 # Add project files
 ADD CMakeLists.txt /src/
@@ -34,18 +61,23 @@ ADD /utils/ /src/utils
 ADD /.git/ /src/.git
 
 # Create necessary directories
-RUN mkdir -p /src/build /app /app/logs /app/server_cache /app/image_cache
+RUN mkdir -p /app /app/logs /app/server_cache /app/image_cache
 
 # Set working directory
 WORKDIR /src/build
 
-# Configure and build the project
-RUN cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Debug .. 
-RUN make -j$(nproc)
-RUN make install
+# Configure, build and install.  /src/build and the ccache persist between builds (cache mounts), so only
+#  changed files recompile;  ccache also covers anything make thinks is stale
+ENV CCACHE_DIR=/ccache
+RUN --mount=type=cache,id=evemu-build,target=/src/build \
+    --mount=type=cache,id=evemu-ccache,target=/ccache \
+    cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache .. && \
+    make -j$(nproc) && \
+    make install
 
 # Final runtime image
-FROM base AS app
+FROM build-env AS app
 
 LABEL description="EVEmu Server"
 
@@ -53,11 +85,9 @@ LABEL description="EVEmu Server"
 COPY --from=app-build /src/utils/ /src/utils
 COPY --from=app-build /app/ /app
 
-# Add SQL loading tools
+# SQL loading tools (EVEDBTool comes from its own cached stage, not a download per build)
 ADD /sql/ /src/sql
-
-# Run SQL tool script
-RUN cd /src/sql && ./get_evedbtool.sh
+COPY --from=evedbtool /out/evedbtool /src/sql/evedbtool
 
 # Expose server ports
 EXPOSE 26000
