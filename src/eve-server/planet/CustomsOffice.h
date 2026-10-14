@@ -13,6 +13,7 @@
 
 #include "../eve-server.h"
 
+#include "EVE_StructureTiming.h"
 #include "inventory/InventoryItem.h"
 #include "pos/PosMgrDB.h"
 #include "system/SystemEntity.h"
@@ -74,6 +75,10 @@ public:
     void                        ProcessState();
     // GM:  ends the running state now
     void                        CompleteStateChange();
+    /* GM (/sov, /pos):  a gantry anchors, is upgraded ("online", without its materials) or unanchors at once;  any timed
+     *  state ends first.  false if there was nothing to do.  after an upgrade this entity is gone.  throws
+     */
+    bool                        GMChangeState(StructureTiming::GMAction action);
     // the gantry becomes the customs office it builds.  deletes this entity
     void                        Upgrade();
     bool                        CanBeAttacked();

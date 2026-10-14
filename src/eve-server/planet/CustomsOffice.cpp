@@ -162,6 +162,9 @@ void CustomsSE::Process() {
 void CustomsSE::CheckCorpAccess(Client* pClient, int64 role)
 {
     // the client offers these to the owning corporation (menusvc checkIsMyCorps).  the starbase equipment role, as for starbases
+    //  pClient nullptr is a GM command (GMChangeState)
+    if (pClient == nullptr)
+        return;
     if (pClient->GetCorporationID() != m_ownerID)
         throw CustomError ("Your corporation does not own this %s.", m_self->name());
     if (role and ((pClient->GetCorpRole() & role) == 0))
@@ -204,7 +207,7 @@ void CustomsSE::AnchorOrbital(Client* pClient)
     SaveState();
     SendSlimUpdate();
     m_destiny->SendSpecialEffect(m_self->itemID(), m_self->itemID(), m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 1, 1, -1, 0);
-    _log(POS__MESSAGE, "CustomsSE::AnchorOrbital() - %s anchoring %s(%u) at %s", pClient->GetName(), GetName(), GetID(), pPlanet->GetName());
+    _log(POS__MESSAGE, "CustomsSE::AnchorOrbital() - %s anchoring %s(%u) at %s", (pClient == nullptr ? "GM" : pClient->GetName()), GetName(), GetID(), pPlanet->GetName());
 }
 
 void CustomsSE::UnanchorOrbital(Client* pClient)
@@ -302,6 +305,48 @@ void CustomsSE::CompleteStateChange()
     m_cData.timestamp = 0;
     SaveState();
     SendSlimUpdate();
+}
+
+bool CustomsSE::GMChangeState(StructureTiming::GMAction action)
+{
+    using namespace EVEPOS::EntityState;
+    using StructureTiming::GMAction;
+    // the upgrade that is running ends with the customs office:  this entity is gone after that
+    if (m_cData.state == Onlining) {
+        CompleteStateChange();
+        return true;
+    }
+    bool done(false);
+    if (IsInTimedState()) {
+        CompleteStateChange();
+        done = true;
+    }
+    switch (action) {
+        case GMAction::Anchor:
+        case GMAction::Online: {
+            if (IsGantry() and (m_cData.state == Unanchored)) {
+                AnchorOrbital(nullptr);
+                CompleteStateChange();
+                done = true;
+            }
+            // a gantry comes online as the customs office it builds (no upgrade materials).  this entity is gone after that
+            if ((action == GMAction::Online) and IsGantry() and (m_cData.state == Anchored)) {
+                Upgrade();
+                return true;
+            }
+        } break;
+        case GMAction::Unanchor: {
+            if (IsGantry() and (m_cData.state == Anchored)) {
+                UnanchorOrbital(nullptr);
+                CompleteStateChange();
+                done = true;
+            }
+        } break;
+        default:
+            // orbitals have no offline state
+            break;
+    }
+    return done;
 }
 
 void CustomsSE::Upgrade()

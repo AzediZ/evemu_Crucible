@@ -31,6 +31,7 @@
 #include "fleet/FleetService.h"
 #include "station/StationDataMgr.h"
 #include "inventory/Inventory.h"
+#include "planet/CustomsOffice.h"
 #include "pos/PosMgrDB.h"
 #include "pos/Tower.h"
 #include "pos/Structure.h"
@@ -1171,17 +1172,74 @@ namespace {
     }
 }
 
+namespace {
+    const char* PosStateName(int8 state)
+    {
+        switch (state) {
+            case EVEPOS::StructureState::Incapacitated:     return "incapacitated";
+            case EVEPOS::StructureState::Unanchored:        return "unanchored";
+            case EVEPOS::StructureState::Anchored:          return "anchored (offline)";
+            case EVEPOS::StructureState::Onlining:          return "onlining";
+            case EVEPOS::StructureState::Reinforced:        return "reinforced";
+            case EVEPOS::StructureState::Online:            return "online";
+            case EVEPOS::StructureState::Operating:         return "operating";
+            case EVEPOS::StructureState::Vulnerable:        return "vulnerable";
+            case EVEPOS::StructureState::SheildReinforced:  return "shield reinforced";
+            case EVEPOS::StructureState::ArmorReinforced:   return "armor reinforced";
+            case EVEPOS::StructureState::Invulnerable:      return "invulnerable";
+        }
+        return "unknown";
+    }
+
+    /* /sov and /pos (anchor|online|offline|unanchor|complete) (itemID)
+     *  any structure in your system:  control towers and their modules, sovereignty structures (TCU, SBU, IHub),
+     *  outpost construction platforms, customs offices and gantries.  it happens at once:  the delays, the pilot's
+     *  starbase rules and permissions are skipped, and the client shows the final state without a countdown.
+     *  online anchors an unanchored structure first, unanchor offlines an online one.  complete only finishes the
+     *  change that is running.  sovereignty rules (claims, hubs, blockades) still apply and their errors come back
+     */
+    PyResult StructureStateCommand(Client* pClient, const Seperator& args, const char* cmd)
+    {
+        StructureTiming::GMAction action((args.argCount() > 1) ? StructureTiming::ParseGMAction(args.arg(1).c_str())
+                                                                : StructureTiming::GMAction::Invalid);
+        if ((action == StructureTiming::GMAction::Invalid) or (args.argCount() < 3) or !args.isNumber(2))
+            throw CustomError ("Correct Usage: /%s (anchor|online|offline|unanchor|complete) (itemID)", cmd);
+        if (!pClient->IsInSpace())
+            throw CustomError ("You must be in space.");
+        uint32 itemID(atoi(args.arg(2).c_str()));
+        SystemEntity* pSE(pClient->SystemMgr()->GetSE(itemID));
+        if (pSE == nullptr)
+            throw CustomError ("%u is not a structure in this system", itemID);
+        std::string name(pSE->GetName());
+
+        // customs offices and gantries
+        if (pSE->GetCOSE() != nullptr) {
+            CustomsSE* pCO(pSE->GetCOSE());
+            if (!pCO->GMChangeState(action))
+                return new PyString("Nothing to do for " + name + ".");
+            // an upgraded gantry is gone (it is a customs office now)
+            SystemEntity* pNow(pClient->SystemMgr()->GetSE(itemID));
+            if ((pNow == nullptr) or (pNow->GetCOSE() == nullptr))
+                return new PyString("Done:  " + name + " is now a customs office.");
+            return new PyString("Done:  " + name + ".");
+        }
+        if (pSE->GetPOSSE() == nullptr)
+            throw CustomError ("%u is not a structure in this system", itemID);
+
+        StructureSE* pStruct(pSE->GetPOSSE());
+        if (!pStruct->GMChangeState(action))
+            return new PyString("Nothing to do:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");
+        return new PyString("Done:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");
+    }
+}
+
 PyResult Command_sov(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args) {
     /*
-     *  ' /sov complete ' + str(itemID)
-     *  finishes whatever the sov structure is doing (anchoring, onlining, etc) now
+     *  ' /sov complete ' + str(itemID)     (the client's GM menu, 'Complete State')
+     *  /sov (anchor|online|offline|unanchor|complete) (itemID)
+     *  sovereignty structures, platforms, customs offices or any other structure.  at once, without the delays
      */
-    if ((args.argCount() < 3) or (strcasecmp(args.arg(1).c_str(), "complete") != 0))
-        throw CustomError ("Correct Usage: /sov complete (itemID)");
-    StructureSE* pSE(GetStructure(pClient, args, 2));
-    if (!pSE->CompleteStateChange())
-        return new PyString("Nothing to complete.");
-    return new PyString("Completed.");
+    return StructureStateCommand(pClient, args, "sov");
 }
 
 namespace {
@@ -1296,28 +1354,12 @@ PyResult Command_pos(Client* pClient, CommandDB* db, EVEServiceManager &services
      * ' /pos anchor ' + str(itemID)
      * ' /pos offline ' + str(itemID)
      * ' /pos fuel [itemID] [hours]
-     *  these skip the anchoring/onlining delays
+     *  (the client's GM menu, 'Structure State').  these skip the anchoring/onlining delays, see StructureStateCommand
      */
     if ((args.argCount() > 1) and (strcasecmp(args.arg(1).c_str(), "fuel") == 0))
         return PosFuel(pClient, args);
-    if (args.argCount() < 3)
-        throw CustomError ("Correct Usage: /pos (online|offline|anchor|unanchor) (itemID) | /pos fuel [towerID] [hours]");
-    std::string cmd(args.arg(1));
-    StructureSE* pSE(GetStructure(pClient, args, 2));
-
-    // no client:  the starbase rules and permissions are skipped
-    if (strcasecmp(cmd.c_str(), "online") == 0) {
-        pSE->Activate(EVEEffectID::onlineForStructures);
-    } else if (strcasecmp(cmd.c_str(), "offline") == 0) {
-        pSE->Deactivate(EVEEffectID::onlineForStructures);
-    } else if (strcasecmp(cmd.c_str(), "anchor") == 0) {
-        GPoint pos(pSE->GetPosition());
-        pSE->SetAnchor(nullptr, pos);
-    } else if (strcasecmp(cmd.c_str(), "unanchor") == 0) {
-        pSE->PullAnchor();
-    } else {
-        throw CustomError ("/pos %s is not supported", cmd.c_str());
-    }
-    pSE->CompleteStateChange();
-    return new PyString("Done.");
+    if ((args.argCount() < 2) or (StructureTiming::ParseGMAction(args.arg(1).c_str()) == StructureTiming::GMAction::Invalid))
+        throw CustomError ("Correct Usage: /pos (anchor|online|offline|unanchor|complete) (itemID) | /pos fuel [towerID] [hours]");
+    // the same as /sov:  any structure, at once
+    return StructureStateCommand(pClient, args, "pos");
 }

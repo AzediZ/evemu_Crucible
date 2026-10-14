@@ -37,8 +37,8 @@ COMMAND( killallnpcs, Acct::Role::ADMIN,
 COMMAND( cloak, Acct::Role::VIP,
          " - instantly and unconditionally toggles cloak state of your vessel")
 COMMAND( sov, Acct::Role::CONTENT,
-         "complete (itemID) - finishes the sov structure's current anchoring/onlining now")
+         "(anchor|online|offline|unanchor|complete) (itemID) - anchors, onlines, offlines or unanchors a structure at once, without the delays (sovereignty structures, starbases, platforms, customs offices).  online anchors first, unanchor offlines first.  complete finishes the running anchoring/onlining/unanchoring now")
 COMMAND( pos, Acct::Role::PROGRAMMER,
-         "(online|offline|anchor|unanchor) (itemID) | fuel [towerID] [hours] - changes a structure's state immediately, or fills a control tower's fuel and strontium bays")
+         "(anchor|online|offline|unanchor|complete) (itemID) | fuel [towerID] [hours] - the same as /sov (any structure, at once), or fills a control tower's fuel and strontium bays")
 COMMAND( hop, Acct::Role::CONTENT,
          "(distance)[m|km|au] - moves your ship that far along its heading")
