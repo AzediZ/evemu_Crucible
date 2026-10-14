@@ -36,6 +36,7 @@ SET( INCLUDE
      "${TARGET_INCLUDE_DIR}/EVE_Roles.h"
      "${TARGET_INCLUDE_DIR}/EVE_Scanning.h"
      "${TARGET_INCLUDE_DIR}/EVE_Skills.h"
+     "${TARGET_INCLUDE_DIR}/EVE_Sov.h"
      "${TARGET_INCLUDE_DIR}/EVE_Spawn.h"
      "${TARGET_INCLUDE_DIR}/EVE_Typedefs.h"
      "${TARGET_INCLUDE_DIR}/EVE_Wallet.h"

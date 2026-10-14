@@ -40,7 +40,8 @@ SET( npcai_SOURCE
 SET( utils_SOURCE
      "utils/DogmaOrderTest.cpp"
      "utils/EvilNumberTest.cpp"
-     "utils/SkillMathTest.cpp" )
+     "utils/SkillMathTest.cpp"
+     "utils/SovRulesTest.cpp" )
 
 ########################
 # Setup the executable #
@@ -94,6 +95,8 @@ ADD_TEST( NAME "EvilNumberTest"
           COMMAND "${TARGET_NAME}" "utils/EvilNumberTest" )
 ADD_TEST( NAME "SkillMathTest"
           COMMAND "${TARGET_NAME}" "utils/SkillMathTest" )
+ADD_TEST( NAME "SovRulesTest"
+          COMMAND "${TARGET_NAME}" "utils/SovRulesTest" )
 ADD_TEST( NAME "ChargeRulesTest"
           COMMAND "${TARGET_NAME}" "ship/ChargeRulesTest" )
 ADD_TEST( NAME "PropulsionTest"

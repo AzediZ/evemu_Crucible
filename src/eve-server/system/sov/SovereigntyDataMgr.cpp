@@ -10,6 +10,7 @@
 
 #include <boost/range/iterator_range.hpp>
 #include "system/sov/SovereigntyDataMgr.h"
+#include "EVE_Sov.h"
 #include "database/EVEDBUtils.h"
 #include "packets/Sovereignty.h"
 #include "EVE_Mail.h"
@@ -192,16 +193,19 @@ SovereigntyData SovereigntyDataMgr::GetSovereigntyData(uint32 systemID)
 
 PyRep *SovereigntyDataMgr::GetSystemSovereignty(uint32 systemID)
 {
+    /* the client shows the system's own factionID (empire, factional warfare and npc null-sec) and only asks this for
+     *  the alliance of a claim.  None is 'Unclaimed' (or 'Unclaimable' in w-space).  a KeyVal must carry a real
+     *  allianceID:  the sov dashboard names it and PI/POS treat it as the sovereign.  see EVE_Sov.h
+     */
     SystemData sysData = SystemData();
     PyDict *args = new PyDict();
 
-    //Figure out if this system is in empire space
     sDataMgr.GetSystemData(systemID, sysData);
+    SovRules::SpaceKind kind(SovRules::Classify(systemID, sysData.factionID, sysData.securityRating));
 
-    if (sysData.factionID)
-    {   // If we have a factionID, the system is not claimable.
-        // We dont need to worry about FacWar Sov here, that is handled separately by Handle_GetSystemOccupier
-        _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): Faction system %u found, Sending no SovData.", systemID);
+    if (!SovRules::ReportsClaim(kind, GetSystemAllianceID(systemID)))
+    {   // faction systems (factional warfare occupancy is facWarMgr's), w-space and unclaimed systems have no claim
+        _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): No alliance claim in %u (kind %u), Sending no SovData.", systemID, (uint32)kind);
         PyDecRef(args);
         return new PyNone();
     }
@@ -556,7 +560,7 @@ bool SovereigntyDataMgr::IsClaimable(uint32 systemID)
     SystemData sysData = SystemData();
     if (!sDataMgr.GetSystemData(systemID, sysData))
         return false;
-    return (sysData.factionID == 0);
+    return SovRules::IsClaimable(SovRules::Classify(systemID, sysData.factionID, sysData.securityRating));
 }
 
 DevIndexData& SovereigntyDataMgr::GetDevIndex(uint32 systemID)

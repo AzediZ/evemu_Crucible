@@ -29,6 +29,7 @@
 
 
 #include "EVEServerConfig.h"
+#include "EVE_Sov.h"
 #include "npc/Drone.h"
 #include "npc/LawEnforcement.h"
 #include "planet/CustomsOffice.h"
@@ -374,10 +375,12 @@ static const char* DropCheck(Client* pClient, InventoryItemRef iRef, bool npcCor
 /* sovereignty structure placement rules.  "" if it may be launched here */
 static std::string SovLaunchError(Client* pClient, SystemManager* pSystem, InventoryItemRef iRef)
 {
-    SystemData sysData;
+    // empire, npc null-sec and w-space can't be claimed
+    SystemData sysData = SystemData();
     sDataMgr.GetSystemData(pClient->GetSystemID(), sysData);
-    if (sysData.factionID)
-        return "Launching sovereignty structures is forbidden in empire space.";
+    std::string refusal(SovRules::LaunchRefusal(SovRules::Classify(pClient->GetSystemID(), sysData.factionID, sysData.securityRating)));
+    if (!refusal.empty())
+        return refusal;
     if (pClient->GetAllianceID() == 0)
         return "You must be part of an alliance to launch a sovereignty structure.";
     ShipSE* pShipSE(pClient->GetShipSE());
