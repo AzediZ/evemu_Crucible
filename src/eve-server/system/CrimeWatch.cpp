@@ -23,6 +23,7 @@
 #include "npc/NPC.h"
 #include "npc/Sentry.h"
 #include "npc/ambient/AmbientNPC.h"
+#include "npc/ambient/AmbientSystem.h"
 #include "npc/ai/LawRules.h"
 #include "ship/Ship.h"
 #include "standing/StandingDB.h"
@@ -80,9 +81,12 @@ void CrimeWatch::SetEnabled(bool enabled)
         return;
     }
 
-    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave
-    for (auto pSystem : systems)
+    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave, ambient ships let players go
+    for (auto pSystem : systems) {
         pSystem->GetLaw()->StandDown();
+        if (pSystem->GetAmbient() != nullptr)
+            pSystem->GetAmbient()->OnCrimeOff();
+    }
     // every flag and timer (aggression, criminal, weapons, logoff), the illegal aggressors and the Crimewatch 1 timers
     std::vector<uint32> flagged;
     for (auto& cur : m_records)

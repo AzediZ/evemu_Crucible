@@ -1684,8 +1684,8 @@ void AmbientSystem::CriminalEvent(int64 now)
 {
     /* where they go (6.7):  a watched belt with miners, a watched gate with traffic, and in low sec (when they attack players)
      *  any watched belt or gate with a player.  nowhere:  skipped */
-    bool low(m_profile.band == AmbientRules::Band::Low);
-    bool players(low ? sConfig.ambient.LowSecCriminalsAttackPlayers : sConfig.ambient.HighSecCriminalsAttackPlayers);
+    bool players(AmbientRules::CriminalsAttackPlayers(sConfig.crime.Enabled, (m_profile.band == AmbientRules::Band::High),
+                 sConfig.ambient.HighSecCriminalsAttackPlayers, sConfig.ambient.LowSecCriminalsAttackPlayers));
     std::vector<std::pair<const Node*, uint32>> targets;    // node, bubbleID
     for (auto& grid : m_observed) {
         SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(grid.id));
@@ -2084,6 +2084,34 @@ void AmbientSystem::OnLawDispatched(uint32 targetID, uint8 kind)
     Note(std::string(RoleName(role)) + " patrol answers a crime");
     _log(AMBIENT__INFO, "%s(%u): %s squad %u answers the crime of %s(%u).", m_system->GetName(), m_system->GetID(), RoleName(role),
          s.id, pTarget->GetName(), pTarget->GetID());
+}
+
+void AmbientSystem::OnCrimeOff()
+{
+    for (auto& s : m_squads) {
+        s.respondTo = 0;
+        s.respondUntil = 0;
+    }
+    uint32 count(0);
+    for (auto& cur : m_npcs) {
+        AmbientNPC* pNPC(cur.second);
+        if ((pNPC == nullptr) or pNPC->IsDead() or Ambient::IsCivilian(pNPC->GetRole()) or (pNPC->TargetMgr() == nullptr))
+            continue;
+        std::vector<SystemEntity*> players;
+        pNPC->TargetMgr()->ForEachTarget([&](SystemEntity* pSE, bool) {
+            if (pSE->IsShipSE() or pSE->IsDroneSE())
+                players.push_back(pSE);
+        });
+        NPCAIMgr* pAI(pNPC->GetAIMgr());
+        for (auto pSE : players) {
+            // its threat goes too, so a lock alone doesn't bring the fight back (Answers());  damage does
+            pAI->GetThreatTable().Remove(pSE->GetID());
+            pAI->DropLock(pSE);
+            ++count;
+        }
+    }
+    if (count > 0)
+        _log(AMBIENT__INFO, "%s(%u): crime off:  %u locks on players dropped.", m_system->GetName(), m_system->GetID(), count);
 }
 
 

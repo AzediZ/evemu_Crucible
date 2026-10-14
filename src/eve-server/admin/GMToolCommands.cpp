@@ -279,7 +279,8 @@ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &servic
             return new PyString(std::string("Crime is ") + (on ? "on" : "off") + " already.");
         sCrimeWatch.SetEnabled(on);
         if (!on)
-            return new PyString("Crime is off:  flags and timers cleared, and CONCORD, the police, the navy and the sentry guns are gone.");
+            return new PyString("Crime is off:  flags and timers cleared, CONCORD, the police, the navy and the sentry guns are gone,"
+                                " and ambient pirates only fight players who shoot them.");
         // what the config lets run
         std::string what("aggression flags");
         if (sConfig.crime.Concord)
@@ -291,6 +292,9 @@ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &servic
         if (sConfig.crime.Sentries)
             what += ", gate and station sentry guns";
         what += ", security status, kill rights and the logoff timer";
+        bool low(sConfig.ambient.LowSecCriminalsAttackPlayers), high(sConfig.ambient.HighSecCriminalsAttackPlayers);
+        if (sConfig.ambient.Enabled and sConfig.ambient.Criminals and (low or high))
+            what += std::string(", and ambient pirates attack players in ") + (low ? (high ? "high and low sec" : "low sec") : "high sec");
         return new PyString("Crime is on:  " + what + ".");
     }
     if (!sConfig.crime.Enabled)

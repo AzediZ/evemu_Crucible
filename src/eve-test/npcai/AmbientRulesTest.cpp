@@ -292,6 +292,13 @@ int npcai_AmbientRulesTest( int argc, char* argv[] )
         Near("low sec uses its base", CriminalRatePerHour(Band::Low, 0.3f, 0.5, 1.0, 3.0, 1.0), 3.0, 1e-6);
         Near("density scales", CriminalRatePerHour(Band::High, 0.5f, 0.5, 1.0, 3.0, 2.0), 2.2, 1e-6);
         Near("none in null", CriminalRatePerHour(Band::None, 0.0f, 0.5, 1.0, 3.0, 1.0), 0.0, 1e-12);
+        // players only while crime is on, then the band's toggle (8.5)
+        True("crime off:  never players", !CriminalsAttackPlayers(false, false, true, true)
+                                          and !CriminalsAttackPlayers(false, true, true, true));
+        True("crime on, low sec:  the low sec toggle", CriminalsAttackPlayers(true, false, false, true)
+                                                     and !CriminalsAttackPlayers(true, false, true, false));
+        True("crime on, high sec:  the high sec toggle", CriminalsAttackPlayers(true, true, true, false)
+                                                       and !CriminalsAttackPlayers(true, true, false, true));
     }
 
     ::printf("\n U18 landing distances (8)\n");

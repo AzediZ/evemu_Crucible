@@ -86,6 +86,9 @@ public:
 
     /* law (8.4):  LawEnforcement::Report() sent kind (Law::) after targetID */
     void OnLawDispatched(uint32 targetID, uint8 kind);
+    /* crime switched off (CrimeWatch::SetEnabled):  patrols stop answering crimes, and our patrols and criminals let go of the
+     *  players (ships and drones) they are fighting.  one that is shot at again answers as usual */
+    void OnCrimeOff();
 
     /* /ambient */
     std::string Describe();

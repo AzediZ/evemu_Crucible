@@ -412,6 +412,15 @@ inline double CriminalRatePerHour(uint8_t band, float level, double A, double hi
     }
     return ((std::isfinite(r) and (r > 0.0)) ? r : 0.0);
 }
+/* do criminals go after players unprovoked (8.5)?  only while the crime rules are on (crime.Enabled, /crime on|off:  with them
+ *  off pilots test in peace), and then as the toggle of the system's band says (ambient.HighSecCriminalsAttackPlayers,
+ *  LowSecCriminalsAttackPlayers).  either way they hunt the ambient civilians and shoot back at whoever hurts them */
+inline bool CriminalsAttackPlayers(bool crimeOn, bool highSec, bool highToggle, bool lowToggle)
+{
+    if (!crimeOn)
+        return false;
+    return (highSec ? highToggle : lowToggle);
+}
 // a criminal group's size:  1 (70%), 2 (25%), 3 (5%)
 inline uint32_t CriminalGroupSize(NpcRng& rng)
 {

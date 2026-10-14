@@ -105,10 +105,7 @@ SystemEntity* AmbientBrain::Acquire(NpcContext& ctx)
             SystemEntity* pPrey(Nearest(ctx, false, false));
             if (pPrey != nullptr)
                 return pPrey;
-            float level(CrimeWatch::SecurityLevel(ctx.npc->SystemMgr()->GetSystemSecurityRating()));
-            bool high(level >= 0.45f);
-            bool players(high ? sConfig.ambient.HighSecCriminalsAttackPlayers : sConfig.ambient.LowSecCriminalsAttackPlayers);
-            if (!players)
+            if (!AttacksPlayers(ctx))
                 return nullptr;
             return Nearest(ctx, true, false);
         }
@@ -133,8 +130,14 @@ bool AmbientBrain::Answers(NpcContext& ctx, SystemEntity* pBy)
     if (m_mode == Military)
         return ((pClient != nullptr) and sCrimeWatch.IsCriminal(pClient->GetCharacterID()));
     // criminals:  a lock is enough where they go after players anyway
+    return AttacksPlayers(ctx);
+}
+
+bool AmbientBrain::AttacksPlayers(NpcContext& ctx)
+{
     float level(CrimeWatch::SecurityLevel(ctx.npc->SystemMgr()->GetSystemSecurityRating()));
-    return ((level >= 0.45f) ? sConfig.ambient.HighSecCriminalsAttackPlayers : sConfig.ambient.LowSecCriminalsAttackPlayers);
+    return AmbientRules::CriminalsAttackPlayers(sConfig.crime.Enabled, (level >= 0.45f), sConfig.ambient.HighSecCriminalsAttackPlayers,
+                                                sConfig.ambient.LowSecCriminalsAttackPlayers);
 }
 
 SystemEntity* AmbientBrain::OnAggressed(NpcContext& ctx, SystemEntity* pBy)

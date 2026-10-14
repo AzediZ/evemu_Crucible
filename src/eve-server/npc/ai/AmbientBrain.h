@@ -5,8 +5,9 @@
   *    Civilian  haulers, couriers, freighters, miners:  never acquire or retaliate (the pilot flees), never sleep
   *    Military  navy and CONCORD:  fight back, the squad joins in, and (ambient.PatrolsEngageCriminals) go after criminals on
   *              their grid:  flagged players (never pods), ambient criminals and npcs with a criminal flag
-  *    Criminal  pirates:  prey on the ambient civilians of their grid first, players only when the toggles say so
-  *              (ambient.HighSecCriminalsAttackPlayers, LowSecCriminalsAttackPlayers), and shoot back at whoever shoots them
+  *    Criminal  pirates:  prey on the ambient civilians of their grid first, players only while crime is on (crime.Enabled,
+  *              /crime on|off) and the toggles say so (ambient.HighSecCriminalsAttackPlayers, LowSecCriminalsAttackPlayers),
+  *              and shoot back at whoever shoots them
   */
 
 #ifndef _EVE_NPC_AI_AMBIENTBRAIN_H_
@@ -45,6 +46,8 @@ private:
      *  flagged npc), or for criminals any pilot when the toggle of their band lets them attack players.  a lock alone is no
      *  reason for navies and CONCORD (an innocent pilot may look at them) */
     bool Answers(NpcContext& ctx, SystemEntity* pBy);
+    // criminals:  do we go after players unprovoked here (AmbientRules::CriminalsAttackPlayers:  crime on, and the band's toggle)
+    bool AttacksPlayers(NpcContext& ctx);
     // the nearest acceptable target in our bubble (players only when players is set)
     SystemEntity* Nearest(NpcContext& ctx, bool players, bool criminalsOnly);
 

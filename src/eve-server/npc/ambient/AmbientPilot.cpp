@@ -590,8 +590,10 @@ void AmbientPilot::Flee(int64 now)
 void AmbientPilot::CriminalTick(int64 now)
 {
     NPCAIMgr* pAI(m_npc->GetAIMgr());
-    // the first offensive act puts our crime on record:  a global criminal flag (sentries shoot), CONCORD in high sec (8.5)
-    if (!m_flagged and !pAI->IsIdle() and (pAI->GetPrimaryID() != 0)) {
+    /* the first offensive act puts our crime on record:  a global criminal flag (sentries shoot), CONCORD in high sec (8.5).
+     *  only while crime is on, and again once the flag is gone (it ran out, or /crime off cleared it and crime is on again) */
+    if (sConfig.crime.Enabled and !pAI->IsIdle() and (pAI->GetPrimaryID() != 0)
+    and (!m_flagged or !sCrimeWatch.IsCriminal(m_npc->GetID()))) {
         m_flagged = true;
         sCrimeWatch.EntityCrime(m_npc, GetSE(pAI->GetPrimaryID()));
     }
