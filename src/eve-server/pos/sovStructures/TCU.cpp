@@ -76,41 +76,16 @@ void TCUSE::SetOnline()
         sovData.claimStructureID = m_data.itemID;
         sovData.claimTime = GetFileTimeNow();
     svDataMgr.AddSovClaim(sovData);
+    // SBUs left at a minority of the gates count against the new claim (a majority can't let the TCU online)
+    svDataMgr.UpdateBlockade(m_system, 0, false);
     // AddSovClaim re-reads the claim from the db (claimID and hub)
     sovData = svDataMgr.GetSovereigntyData(sovData.solarSystemID);
 
     // recent sov activity (map.GetRecentSovActivity)
     SovereigntyDB::LogSovChange(sovData.solarSystemID, 0, m_allyID, 0);
 
-    //Send ProcessSovStatusChanged Notification
-    PyDict *args = new PyDict;
     _log(SOV__DEBUG, "Sending ProcessSovStatusChanged for %u:%u", sovData.solarSystemID, sovData.allianceID);
-
-    args->SetItemString("contested", new PyInt(sovData.contested));
-    args->SetItemString("corporationID", new PyInt(sovData.corporationID));
-    args->SetItemString("claimTime", new PyLong(sovData.claimTime));
-    args->SetItemString("claimStructureID", new PyInt(sovData.claimStructureID));
-    args->SetItemString("hubID", new PyInt(sovData.hubID));
-    args->SetItemString("allianceID", new PyInt(sovData.allianceID));
-    args->SetItemString("solarSystemID", new PyInt(sovData.solarSystemID));
-
-    PyTuple* data = new PyTuple(2);
-        data->SetItem(0, new PyInt(sovData.solarSystemID));
-        data->SetItem(1, new PyObject("util.KeyVal", args));
-
-    std::vector<Client*> list;
-    sEntityList.GetClients(list);
-    for (auto cur : list)
-    {
-        if (cur != nullptr)
-        {
-            // the notification consumes its payload
-            PyTuple* copy = data->Clone()->AsTuple();
-            cur->SendNotification("ProcessSovStatusChanged", "clientID", &copy);
-            _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s (%u)", cur->GetName(), cur->GetCharID());
-        }
-    }
-    PyDecRef(data);
+    svDataMgr.BroadcastSovStatus(sovData.solarSystemID);
 
     // '{owner} has claimed sovereignty in {system} on behalf of {alliance}'
     PyDict* params = new PyDict();
@@ -159,9 +134,12 @@ void TCUSE::OnRemovedFromSpace(bool killed)
 
 bool TCUSE::IsInvul()
 {
+    /* the claiming TCU only while SBUs are online at more than half the stargates and the holder has neither an online
+     *  hub nor an outpost in the system.  others can always be shot
+     */
     SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
     if ((sovData.claimID > 0) and (sovData.claimStructureID == m_data.itemID))
-        return (sovData.contested == 0);
+        return !svDataMgr.IsTCUVulnerable(m_system);
     return StructureSE::IsInvul();
 }
 

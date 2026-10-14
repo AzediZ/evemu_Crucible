@@ -29,6 +29,10 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "StaticDataMgr.h"
+
+#include <set>
+#include <string>
 
 SBUSE::SBUSE(StructureItemRef structure, EVEServiceManager &services, SystemManager *system, const FactionData &fData)
     : StructureSE(structure, services, system, fData)
@@ -47,59 +51,62 @@ void SBUSE::Init()
 
     // set global attribute
     m_self->SetAttribute(AttrIsGlobal, EvilOne, false);
+
+    // an anchored SBU holds its stargate (the gate forgets it over a restart)
+    if (IsAnchored() and (m_gateSE != nullptr) and !m_gateSE->HasSBU())
+        m_gateSE->SetSBU(this);
 }
 
 void SBUSE::SetOnline()
 {
-    _log(SOV__DEBUG, "Onlining SBU...");
-
-    // Ensure the SBU is online before we check the ratio
+    _log(SOV__DEBUG, "Onlining SBU %s(%u)...", GetName(), m_data.itemID);
     StructureSE::SetOnline();
 
-    // If more than 50 percent of gates have an SBU, the TCU should be vulnerable
-    if ((GetSBUs() / GetGates()) > 0.5)
-    {
-        _log(SOV__DEBUG, "- STATE CHANGE - This system has %u SBUs installed in the total of %u stargates. The TCU is now vulnerable to attack.", (int)GetSBUs(), (int)GetGates());
-        // Make the TCU vulnerable
-        for (auto cur : m_system->GetOperationalStatics())
-        {
-            if (cur.second->IsTCUSE())
-            {
-                cur.second->GetTCUSE()->SetVulnerable();
-            }
-        }
-        // Mark the system as contested
-        MarkContested(m_system->GetID(), true);
-    }
-    else
-    {
-        _log(SOV__DEBUG, "This system has %u SBUs installed in the total of %u stargates. The TCU is invulnerable.", (int)GetSBUs(), (int)GetGates());
-    }
+    // '{owner} has onlined a Sovereignty Blockade Unit'
+    SendAudioEvent(Sov::AudioEvent::StopOnline);
+    // the claim is vulnerable once more than half the stargates have an online SBU
+    svDataMgr.UpdateBlockade(m_system);
 }
 
 void SBUSE::SetOffline()
 {
-    // Ensure that the SBU is offline before we check ratio
+    _log(SOV__DEBUG, "Offlining SBU %s(%u)...", GetName(), m_data.itemID);
+    // the SBU is no longer online here (Process and ForceOffline set it anchored first)
     StructureSE::SetOffline();
+    svDataMgr.UpdateBlockade(m_system);
+}
 
-    if ((GetSBUs() / GetGates()) <= 0.5)
-    {
-        _log(SOV__DEBUG, "- STATE CHANGE - This system has %u SBUs installed in the total of %u stargates. The TCU is no longer vulnerable to attack.", (int)GetSBUs(), (int)GetGates());
-        // Make the TCU invulnerable
-        for (auto cur : m_system->GetOperationalStatics())
-        {
-            if (cur.second->IsTCUSE())
-            {
-                cur.second->GetTCUSE()->SetOnline();
-            }
-        }
-        // Unmark the system as contested
-        MarkContested(m_system->GetID(), false);
-    }
-    else
-    {
-        _log(SOV__DEBUG, "This system has %u SBUs installed in the total of %u stargates. The TCU is vulnerable.", (int)GetSBUs(), (int)GetGates());
-    }
+void SBUSE::OnRemovedFromSpace(bool killed)
+{
+    StructureSE::OnRemovedFromSpace(killed);
+    ReleaseGate();
+
+    // "One of {owner}'s Sovereignty Blockade Units has been destroyed"
+    if (killed)
+        SendAudioEvent(Sov::AudioEvent::StopDestroyed);
+    // still listed in the system:  counted out by itemID
+    svDataMgr.UpdateBlockade(m_system, m_data.itemID);
+}
+
+void SBUSE::Delete()
+{
+    ReleaseGate();
+    svDataMgr.UpdateBlockade(m_system, m_data.itemID);
+    StructureSE::Delete();
+}
+
+void SBUSE::OnAnchored()
+{
+    if (m_gateSE != nullptr)
+        m_gateSE->SetSBU(this);
+    // 'Sovereignty Blockade Unit activity detected in {solarSystemID}' (API:  'Sovereignty disruptor anchored')
+    svDataMgr.NotifySbuAnchored(m_system->GetID());
+}
+
+void SBUSE::ReleaseGate()
+{
+    if ((m_gateSE != nullptr) and (m_gateSE->GetMySBU() == this))
+        m_gateSE->SetSBU(nullptr);
 }
 
 void SBUSE::Process()
@@ -107,66 +114,21 @@ void SBUSE::Process()
     StructureSE::Process();
 }
 
-void SBUSE::MarkContested(uint32 systemID, bool contested)
+void SBUSE::SendAudioEvent(uint8 eventID)
 {
-    //Send ProcessSovStatusChanged Notification
-    PyDict *args = new PyDict;
-    _log(SOV__DEBUG, "SBUSE::MarkContested(): Sending ProcessSovStatusChanged for %u", systemID);
+    if (m_system == nullptr)
+        return;
+    std::set<uint32> alliances;
+    uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(m_system->GetID()));
+    if (sovAllianceID > 0)
+        alliances.insert(sovAllianceID);
+    if (IsAlliance(m_allyID))
+        alliances.insert((uint32)m_allyID);
 
-    //Update datamgr records with new contested state
-    svDataMgr.MarkContested(systemID, contested);
-
-    //Get the new sov data so we can send it to the client in a notification
-    SovereigntyData sovData = svDataMgr.GetSovereigntyData(systemID);
-
-    args->SetItemString("corporationID", new PyInt(sovData.corporationID));
-    args->SetItemString("claimTime", new PyLong(sovData.claimTime));
-    args->SetItemString("claimStructureID", new PyInt(sovData.claimStructureID));
-    args->SetItemString("hubID", new PyInt(sovData.hubID));
-    args->SetItemString("allianceID", new PyInt(sovData.allianceID));
-    args->SetItemString("contested", new PyInt(int(contested)));
-    args->SetItemString("solarSystemID", new PyInt(systemID));
-
-    PyTuple *data = new PyTuple(2);
-    data->SetItem(0, new PyInt(systemID));
-    data->SetItem(1, new PyObject("util.KeyVal", args));
-
-    std::vector<Client *> list;
-    sEntityList.GetClients(list);
-    for (auto cur : list)
-    {
-        if (cur->GetChar().get() != nullptr)
-        {
-            PyIncRef(data);
-            cur->SendNotification("ProcessSovStatusChanged", "clientID", &data);
-            _log(SOV__DEBUG, "ProcessSovStatusChanged sent to %s(%u)", cur->GetName(), cur->GetCharID());
-        }
+    std::string owner(sDataMgr.GetOwnerName(IsAlliance(m_allyID) ? (uint32)m_allyID : m_corpID));
+    for (auto cur : alliances) {
+        PyDict* params = new PyDict();
+            params->SetItemString("owner", new PyString(owner));
+        svDataMgr.SendAudioEvent(cur, eventID, params);
     }
-
-    // cleanup
-    PyDecRef(data);
-}
-
-// Calculate number of gates in the system
-float SBUSE::GetGates()
-{
-    return (float)m_system->GetGates().size();
-}
-
-// Calculate number of SBUs in the system
-float SBUSE::GetSBUs()
-{
-    int numberOfSBUs = 0;
-    for (auto cur : m_system->GetOperationalStatics())
-    {
-        if (cur.second->IsSBUSE())
-        {
-            //Only increment the number of SBUs if they are online
-            if (cur.second->GetSBUSE()->GetState() == EVEPOS::StructureState::Online)
-            {
-                numberOfSBUs++;
-            }
-        }
-    }
-    return (float)numberOfSBUs;
 }

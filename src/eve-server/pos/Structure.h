@@ -158,6 +158,10 @@ public:
     virtual void                SetOffline();
     virtual void                SetInvulnerable();
     virtual void                SetVulnerable();
+    /* sovereignty blockade:  the claiming TCU and the claim's hub are online (invulnerable) or vulnerable while SBUs are
+     *  online at more than half the stargates (SovereigntyDataMgr::UpdateBlockade).  other states are left alone
+     */
+    void                        SetSovVulnerable(bool vulnerable);
     virtual void                Online();
     virtual void                SetOperating();
     virtual void                Operating();

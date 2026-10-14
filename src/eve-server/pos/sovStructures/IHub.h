@@ -32,7 +32,7 @@ public:
     virtual void                SetOnline();
     virtual void                SetOffline();
     virtual void                OnRemovedFromSpace(bool killed);
-    // only shootable while the system is contested
+    // the claim's hub is only shootable while SBUs are online at more than half the stargates
     virtual bool                IsInvul();
 
     /* virtual functions default to base class and overridden as needed */

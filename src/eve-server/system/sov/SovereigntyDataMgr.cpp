@@ -8,6 +8,10 @@
   *
   */
 
+#include <algorithm>
+#include <set>
+#include <vector>
+
 #include <boost/range/iterator_range.hpp>
 #include "system/sov/SovereigntyDataMgr.h"
 #include "EVE_Sov.h"
@@ -22,6 +26,10 @@
 #include "inventory/Inventory.h"
 #include "inventory/ItemFactory.h"
 #include "mail/NotificationMgr.h"
+#include "pos/PosMgrDB.h"
+#include "pos/Structure.h"
+#include "station/StationDataMgr.h"
+#include "system/SystemEntity.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 
@@ -198,49 +206,71 @@ PyRep *SovereigntyDataMgr::GetSystemSovereignty(uint32 systemID)
      *  allianceID:  the sov dashboard names it and PI/POS treat it as the sovereign.  see EVE_Sov.h
      */
     SystemData sysData = SystemData();
-    PyDict *args = new PyDict();
-
     sDataMgr.GetSystemData(systemID, sysData);
     SovRules::SpaceKind kind(SovRules::Classify(systemID, sysData.factionID, sysData.securityRating));
 
     if (!SovRules::ReportsClaim(kind, GetSystemAllianceID(systemID)))
     {   // faction systems (factional warfare occupancy is facWarMgr's), w-space and unclaimed systems have no claim
         _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): No alliance claim in %u (kind %u), Sending no SovData.", systemID, (uint32)kind);
-        PyDecRef(args);
         return new PyNone();
     }
-    else
+
+    auto it = m_sovData.get<SovDataBySolarSystem>().find(systemID);
+    if (it == m_sovData.get<SovDataBySolarSystem>().end())
     {
-        auto it = m_sovData.get<SovDataBySolarSystem>().find(systemID);
-        if (it != m_sovData.get<SovDataBySolarSystem>().end())
-        {
-            SovereigntyData sData = *it;
-            _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): Found sov data for solarSystemID %u.", systemID);
-            _log(SOV__DEBUG, "== data (GetSystemSovereignty()) ==");
-            _log(SOV__DEBUG, "claimID: %u", sData.claimID);
-            _log(SOV__DEBUG, "solarSystemID: %u", sData.solarSystemID);
-            _log(SOV__DEBUG, "constellationID: %u", sData.constellationID);
-            _log(SOV__DEBUG, "corporationID: %u", sData.corporationID);
-            _log(SOV__DEBUG, "allianceID: %u", sData.allianceID);
-            _log(SOV__DEBUG, "claimStructureID: %u", sData.claimStructureID);
-            _log(SOV__DEBUG, "==========");
-            args->SetItemString("contested", new PyInt(sData.contested));
-            args->SetItemString("corporationID", new PyInt(sData.corporationID));
-            args->SetItemString("claimTime", new PyLong(sData.claimTime));
-            args->SetItemString("claimStructureID", new PyInt(sData.claimStructureID));
-            args->SetItemString("hubID", new PyInt(sData.hubID));
-            args->SetItemString("allianceID", new PyInt(sData.allianceID));
-            args->SetItemString("solarSystemID", new PyInt(sData.solarSystemID));
-        }
-        else
-        {
-            // No data means no claim, so we give 'None'
-            _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): No data for solarSystemID %u. Sending blank SovereigntyData object.", systemID);
-            PyDecRef(args);
-            return new PyNone();
-        }
+        // No data means no claim, so we give 'None'
+        _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): No data for solarSystemID %u. Sending blank SovereigntyData object.", systemID);
+        return new PyNone();
     }
+
+    const SovereigntyData& sData = *it;
+    _log(SOV__INFO, "SovereigntyDataMgr::GetSystemSovereignty(): Found sov data for solarSystemID %u.", systemID);
+    _log(SOV__DEBUG, "== data (GetSystemSovereignty()) ==");
+    _log(SOV__DEBUG, "claimID: %u", sData.claimID);
+    _log(SOV__DEBUG, "solarSystemID: %u", sData.solarSystemID);
+    _log(SOV__DEBUG, "constellationID: %u", sData.constellationID);
+    _log(SOV__DEBUG, "corporationID: %u", sData.corporationID);
+    _log(SOV__DEBUG, "allianceID: %u", sData.allianceID);
+    _log(SOV__DEBUG, "claimStructureID: %u", sData.claimStructureID);
+    _log(SOV__DEBUG, "contested: %u", sData.contested);
+    _log(SOV__DEBUG, "==========");
+    return MakeSovInfo(sData);
+}
+
+PyRep* SovereigntyDataMgr::MakeSovInfo(const SovereigntyData& data)
+{
+    /* sovSvc.GetContestedState():  'contested' is the number of stargates with an online SBU.
+     *  contested * 2 > map.GetNumberOfStargates() is 'Vulnerable', any other count above 0 'Contested'
+     */
+    PyDict* args = new PyDict();
+        args->SetItemString("contested", new PyInt(data.contested));
+        args->SetItemString("corporationID", new PyInt(data.corporationID));
+        args->SetItemString("claimTime", new PyLong(data.claimTime));
+        args->SetItemString("claimStructureID", new PyInt(data.claimStructureID));
+        args->SetItemString("hubID", new PyInt(data.hubID));
+        args->SetItemString("allianceID", new PyInt(data.allianceID));
+        args->SetItemString("solarSystemID", new PyInt(data.solarSystemID));
     return new PyObject("util.KeyVal", args);
+}
+
+void SovereigntyDataMgr::BroadcastSovStatus(uint32 systemID)
+{
+    // sovSvc.ProcessSovStatusChanged(solarSystemID, newStatus):  None forgets the claim, else it replaces the cached info
+    PyTuple* data = new PyTuple(2);
+        data->SetItem(0, new PyInt(systemID));
+        data->SetItem(1, GetSystemSovereignty(systemID));
+
+    _log(SOV__DEBUG, "BroadcastSovStatus() - ProcessSovStatusChanged for %u", systemID);
+    std::vector<Client*> list;
+    sEntityList.GetClients(list);
+    for (auto cur : list) {
+        if (cur == nullptr)
+            continue;
+        // the notification consumes its payload
+        PyTuple* copy = data->Clone()->AsTuple();
+        cur->SendNotification("ProcessSovStatusChanged", "clientID", &copy);
+    }
+    PyDecRef(data);
 }
 
 PyRep *SovereigntyDataMgr::GetAllianceSystems() //Get all systems associated with all alliances?
@@ -409,15 +439,145 @@ void SovereigntyDataMgr::AddSovClaim(SovereigntyData data)
         RefreshUpgrades(data.solarSystemID, data.hubID);
 }
 
-void SovereigntyDataMgr::MarkContested(uint32 systemID, bool contested)
+void SovereigntyDataMgr::MarkContested(uint32 systemID, uint8 sbuGates)
 {
-    _log(SOV__INFO, "MarkContested() - Marking system %u as state %u", systemID, int(contested));
+    _log(SOV__INFO, "MarkContested() - system %u has an online SBU at %u stargates", systemID, sbuGates);
 
     //Update state in DB
-    SovereigntyDB::SetContested(systemID, contested);
+    SovereigntyDB::SetContested(systemID, sbuGates);
 
     //Re-sync the claim data
     UpdateClaim(systemID);
+}
+
+uint8 SovereigntyDataMgr::CountBlockadedGates(SystemManager* pSystem, uint32 goneID/*0*/)
+{
+    if (pSystem == nullptr)
+        return 0;
+    // one SBU per stargate (CantAnchorDisruptorTooClose), but count gates in case there are leftovers from before
+    std::set<uint32> gates;
+    for (auto cur : pSystem->GetOperationalStatics()) {
+        if ((cur.first == goneID) or (cur.second == nullptr) or !cur.second->IsSBUSE())
+            continue;
+        StructureSE* pSBU(cur.second->GetPOSSE());
+        if (!pSBU->IsOnline() or (pSBU->GetGateSE() == nullptr))
+            continue;
+        gates.insert(pSBU->GetGateSE()->GetID());
+    }
+    return SovRules::ContestedValue((uint32)gates.size());
+}
+
+bool SovereigntyDataMgr::IsBlockaded(SystemManager* pSystem)
+{
+    if (pSystem == nullptr)
+        return false;
+    return SovRules::SbuThresholdMet(CountBlockadedGates(pSystem), pSystem->GetGateCount());
+}
+
+bool SovereigntyDataMgr::IsClaimVulnerable(SystemManager* pSystem)
+{
+    if (pSystem == nullptr)
+        return false;
+    auto it = m_sovData.get<SovDataBySolarSystem>().find(pSystem->GetID());
+    if (it == m_sovData.get<SovDataBySolarSystem>().end())
+        return false;
+    return SovRules::SbuThresholdMet(it->contested, pSystem->GetGateCount());
+}
+
+bool SovereigntyDataMgr::HolderHoldsStation(uint32 systemID, uint32 allianceID)
+{
+    // outposts and conquerable stations owned by a corp of the holding alliance (only claimable space has these)
+    if (allianceID == 0)
+        return false;
+    std::vector<uint32> stations;
+    if (!sDataMgr.GetStationList(systemID, stations))
+        return false;
+    StationData data = StationData();
+    for (auto cur : stations)
+        if (stDataMgr.GetStationData(cur, data) and IsPlayerCorp(data.corporationID)
+        and (PosMgrDB::GetCorpAllianceID(data.corporationID) == allianceID))
+            return true;
+    return false;
+}
+
+bool SovereigntyDataMgr::IsTCUVulnerable(SystemManager* pSystem)
+{
+    if (pSystem == nullptr)
+        return false;
+    SovereigntyData sovData = GetSovereigntyData(pSystem->GetID());
+    if ((sovData.claimID == 0) or !SovRules::SbuThresholdMet(sovData.contested, pSystem->GetGateCount()))
+        return false;
+    // hubID is the claim's online hub (cleared when it goes offline or leaves space)
+    return SovRules::TcuVulnerable(sovData.contested, pSystem->GetGateCount(), (sovData.hubID != 0),
+                                   HolderHoldsStation(sovData.solarSystemID, sovData.allianceID));
+}
+
+void SovereigntyDataMgr::NotifySbuAnchored(uint32 systemID)
+{
+    // 'A new Sovereignty Blockade Unit has been detected in {solarSystemID}.  If a Sovereignty Blockade Unit is online
+    //  at more than half the stargates then your sovereignty claim in this system could be jeopardized.'
+    uint32 allianceID(GetSystemAllianceID(systemID));
+    if (allianceID == 0)
+        return;
+    PyDict* args = new PyDict();
+        args->SetItemString("solarSystemID", new PyInt(systemID));
+    NotificationMgr::SendToAlliance(allianceID, 0, Notify::Types::SovDisruptor, corpCONCORD, args);
+}
+
+void SovereigntyDataMgr::UpdateBlockade(SystemManager* pSystem, uint32 goneID/*0*/, bool notify/*true*/)
+{
+    if (pSystem == nullptr)
+        return;
+    uint32 systemID(pSystem->GetID());
+    // the count lives with the claim.  SBUs need a claim to anchor and online; a claim made later counts the ones left
+    SovereigntyData sovData = GetSovereigntyData(systemID);
+    if (sovData.claimID == 0)
+        return;
+
+    uint32 gates(pSystem->GetGateCount());
+    uint8 count(CountBlockadedGates(pSystem, goneID));
+    bool vulnerable(SovRules::SbuThresholdMet(count, gates));
+
+    /* the claim's hub can be attacked while the threshold is met, the claiming TCU once the hub and the holder's
+     *  outposts are gone too (also resyncs them at boot)
+     */
+    bool tcuVulnerable(SovRules::TcuVulnerable(count, gates, (sovData.hubID != 0),
+                                               (vulnerable and HolderHoldsStation(systemID, sovData.allianceID))));
+    for (auto cur : pSystem->GetOperationalStatics()) {
+        if ((cur.second == nullptr) or (cur.first == goneID))
+            continue;
+        if (cur.second->IsTCUSE() and (cur.first == sovData.claimStructureID))
+            cur.second->GetPOSSE()->SetSovVulnerable(tcuVulnerable);
+        else if (cur.second->IsIHubSE() and (cur.first == sovData.hubID))
+            cur.second->GetPOSSE()->SetSovVulnerable(vulnerable);
+    }
+
+    if (count == sovData.contested)
+        return;
+
+    _log(SOV__INFO, "UpdateBlockade() - %s(%u):  SBUs online at %u of %u stargates (was %u)%s", pSystem->GetName(), systemID,
+         count, gates, sovData.contested, (vulnerable ? ", the claim is vulnerable" : ""));
+    MarkContested(systemID, count);
+    BroadcastSovStatus(systemID);
+
+    if (!notify or (sovData.allianceID == 0))
+        return;
+
+    SovRules::BlockadeChange change(SovRules::CompareBlockade(sovData.contested, count, gates));
+    // 'Your infrastructure hub and outposts in {solarSystemID} are vulnerable to attack...'
+    if (change.vulnerable) {
+        PyDict* args = new PyDict();
+            args->SetItemString("solarSystemID", new PyInt(systemID));
+        NotificationMgr::SendToAlliance(sovData.allianceID, 0, Notify::Types::AllStructVulnerable, corpCONCORD, args);
+        // 'The Territorial Claim Unit is now vulnerable to attack'
+        SendAudioEvent(sovData.allianceID, Sov::AudioEvent::FlagVulnerable, new PyDict());
+    }
+    // 'The link to the majority of stargates in system {solarSystemID} has been restored.'
+    if (change.stable) {
+        PyDict* args = new PyDict();
+            args->SetItemString("solarSystemID", new PyInt(systemID));
+        NotificationMgr::SendToAlliance(sovData.allianceID, 0, Notify::Types::AllStrucInvulnerable, corpCONCORD, args);
+    }
 }
 
 void SovereigntyDataMgr::RemoveSovClaim(uint32 systemID)
@@ -449,20 +609,8 @@ bool SovereigntyDataMgr::DropClaim(uint32 systemID, uint32 allianceID/*0*/)
     RemoveSovClaim(systemID);
     // recent sov activity (map.GetRecentSovActivity)
     SovereigntyDB::LogSovChange(systemID, 0, 0, sovData.allianceID);
-
-    PyTuple* data = new PyTuple(2);
-        data->SetItem(0, new PyInt(systemID));
-        data->SetItem(1, PyStatic.NewNone());
-    std::vector<Client*> list;
-    sEntityList.GetClients(list);
-    for (auto cur : list) {
-        if (cur == nullptr)
-            continue;
-        // the notification consumes its payload
-        PyTuple* copy = data->Clone()->AsTuple();
-        cur->SendNotification("ProcessSovStatusChanged", "clientID", &copy);
-    }
-    PyDecRef(data);
+    // the claim is gone:  None
+    BroadcastSovStatus(systemID);
 
     // 'DED acknowledges that you have lost your claim to sovereignty in the system {solarSystemID}'
     if (sovData.allianceID > 0) {

@@ -20,6 +20,13 @@
 #include <boost/multi_index/hashed_index.hpp>
 #include <boost/multi_index/member.hpp>
 
+#include <map>
+#include <set>
+#include <unordered_map>
+#include <vector>
+
+class SystemManager;
+
 /* development indices  (client devIndexUtil.py)
  *  military and industrial indices run in bands of devIndexDecayRate * devIndexDecayTime points (levels 0..5)
  *  the strategic index is the time since the system was claimed
@@ -120,8 +127,31 @@ public:
     bool DropClaim(uint32 systemID, uint32 allianceID = 0);
     // every claim of allianceID, or only those claimed by corpID (0 = all)
     void DropAllianceClaims(uint32 allianceID, uint32 corpID = 0);
-    void MarkContested(uint32 systemID, bool contested);
     SovereigntyData GetSovereigntyData(uint32 systemID);
+    // ProcessSovStatusChanged(systemID, the claim's sovMgr.GetSystemSovereigntyInfo or None) to every client (they cache it)
+    void BroadcastSovStatus(uint32 systemID);
+
+    /* sovereignty blockade (EVE_Sov.h):  the claim's 'contested' is the number of stargates with an online SBU */
+    // keeps sbuGates as the claim's 'contested'
+    void MarkContested(uint32 systemID, uint8 sbuGates);
+    // the stargates of pSystem with an online SBU, whoever owns it.  goneID:  an SBU leaving space (still listed)
+    static uint8 CountBlockadedGates(SystemManager* pSystem, uint32 goneID = 0);
+    // more than half of pSystem's stargates have an online SBU (live count, also without a claim)
+    static bool IsBlockaded(SystemManager* pSystem);
+    // pSystem's claim is vulnerable:  its count is over the threshold.  the claim's hub can be attacked
+    bool IsClaimVulnerable(SystemManager* pSystem);
+    // ...and the holder has no online hub and no outpost there:  the claiming TCU can be attacked
+    bool IsTCUVulnerable(SystemManager* pSystem);
+    // a corp of allianceID owns an outpost or conquerable station in systemID
+    static bool HolderHoldsStation(uint32 systemID, uint32 allianceID);
+    // an SBU finished anchoring:  'Sovereignty Blockade Unit activity detected' to the holding alliance
+    void NotifySbuAnchored(uint32 systemID);
+    /* recounts pSystem's blockade into its claim and switches the claiming TCU and the claim's hub between online
+     *  (invulnerable) and vulnerable.  a changed count goes to every client (ProcessSovStatusChanged) and, with notify,
+     *  to the holding alliance (claim vulnerable, claim stable).
+     *  SBU online, offline, destroyed or removed (goneID), TCU online, hub online/offline/removed, and system boot (notify false)
+     */
+    void UpdateBlockade(SystemManager* pSystem, uint32 goneID = 0, bool notify = true);
     // every claim (sovereignty bills, F21)
     void GetClaims(std::vector<SovereigntyData>& into);
     void UpdateSystemHubID(uint32 systemID, uint32 hubID);
@@ -185,6 +215,8 @@ protected:
 
 private:
     static void ReadRow(DBResultRow& row, SovereigntyData& data);
+    // the claim as sovMgr.GetSystemSovereigntyInfo sends it (util.KeyVal)
+    static PyRep* MakeSovInfo(const SovereigntyData& data);
     DevIndexData& GetDevIndex(uint32 systemID);
     // decay one index entry up to 'now'.  hourly also closes the gain period ('increasing' flags)
     void Decay(DevIndexData& data, int64 now, bool hourly);

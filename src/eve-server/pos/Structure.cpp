@@ -567,6 +567,9 @@ void StructureSE::Process()
             } else if (m_module) {
                 // a module belongs to the tower it is anchored at
                 SetControlTower(nullptr);
+            } else if (m_sbu and (GetSBUSE() != nullptr)) {
+                // the stargate takes another SBU
+                GetSBUSE()->ReleaseGate();
             }
             if (IsStarbaseStructure())
                 OnRemovedFromSpace(false);
@@ -585,8 +588,8 @@ void StructureSE::Process()
             m_destiny->SendSpecialEffect(m_data.itemID, m_data.itemID, m_self->typeID(), 0, 0, "effects.AnchorDrop", 0, 0, 0, -1, 0);
             if (m_tower and (m_moonSE != nullptr))
                 m_moonSE->SetTower(this);
-            if (m_sbu and (m_gateSE != nullptr))
-                m_gateSE->SetSBU(this);
+            if (m_sbu and (GetSBUSE() != nullptr))
+                GetSBUSE()->OnAnchored();
 
             m_db.UpdateBaseData(m_data);
             if (m_tower)
@@ -1544,6 +1547,24 @@ void StructureSE::SetVulnerable()
     m_procState = EVEPOS::ProcState::Online;
     m_data.state = EVEPOS::StructureState::Vulnerable;
     SetTimer(m_duration);
+    SendSlimUpdate();
+    m_db.UpdateBaseData(m_data);
+}
+
+void StructureSE::SetSovVulnerable(bool vulnerable)
+{
+    /* the claim marker shows posState online (4) and vulnerable (6) only (sovereigntyClaimMarker.stateModels), so an
+     *  invulnerable claim is 'online'.  onlining, offline and reinforced structures keep their state
+     */
+    if ((m_data.state != EVEPOS::StructureState::Online) and (m_data.state != EVEPOS::StructureState::Vulnerable))
+        return;
+    int8 state(vulnerable ? EVEPOS::StructureState::Vulnerable : EVEPOS::StructureState::Online);
+    if (m_data.state == state)
+        return;
+
+    _log(SOV__INFO, "StructureSE::SetSovVulnerable() - %s(%u) in %s is now %s", GetName(), m_data.itemID,
+         m_system->GetName(), (vulnerable ? "vulnerable" : "invulnerable"));
+    m_data.state = state;
     SendSlimUpdate();
     m_db.UpdateBaseData(m_data);
 }

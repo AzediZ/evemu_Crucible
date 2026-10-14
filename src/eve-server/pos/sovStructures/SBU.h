@@ -29,21 +29,25 @@ public:
 
     /* SystemEntity interface */
     virtual void                Process();
+    // the system's blockade is recounted (SovereigntyDataMgr::UpdateBlockade) whenever an SBU goes online or offline,
+    //  is destroyed or leaves space
     virtual void                SetOnline();
     virtual void                SetOffline();
+    virtual void                OnRemovedFromSpace(bool killed);
+    // removed outright (gm /unspawn)
+    virtual void                Delete();
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
 
-protected:
+    // anchoring done:  it holds its stargate, and the holding alliance hears of it
+    void                        OnAnchored();
+    // the stargate no longer has this SBU (destroyed, scooped, unanchored).  one SBU per gate (CantAnchorDisruptorTooClose)
+    void                        ReleaseGate();
 
 private:
-
-    /* Class-specific functions */
-    float GetGates();
-    float GetSBUs();
-    void MarkContested(uint32 systemID, bool contested);
-
+    // OnSovereigntyAudioEvent to the holding alliance and this SBU's alliance.  {owner} is this SBU's owner
+    void                        SendAudioEvent(uint8 eventID);
 };
 
 #endif  // EVEMU_POS_SBU_H_

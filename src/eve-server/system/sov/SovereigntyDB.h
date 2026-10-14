@@ -39,7 +39,8 @@ public:
     static void GetSovereigntyDataForSystem(DBQueryResult& res, uint32 systemID);
     static void AddSovereigntyData(SovereigntyData data, uint32& claimID);
     static void RemoveSovereigntyData(uint32 systemID);
-    static void SetContested(uint32 systemID, bool contested);
+    // the number of stargates with an online sovereignty blockade unit (EVE_Sov.h)
+    static void SetContested(uint32 systemID, uint8 sbuGates);
     static void SetHubID(uint32 systemID, uint32 hubID);
     static void SetJammerID(uint32 systemID, uint32 jammerID);
     static void SetBeaconID(uint32 systemID, uint32 beaconID);

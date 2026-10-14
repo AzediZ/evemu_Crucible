@@ -33,7 +33,7 @@ public:
     virtual void                SetOnline();
     virtual void                SetOffline();
     virtual void                OnRemovedFromSpace(bool killed);
-    // the claiming TCU can only be attacked once sovereignty blockade units have the system contested
+    // the claiming TCU can only be attacked while SBUs are online at more than half the stargates and the hub is gone
     virtual bool                IsInvul();
 
     /* virtual functions default to base class and overridden as needed */

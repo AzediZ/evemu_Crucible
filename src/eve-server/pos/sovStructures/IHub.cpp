@@ -65,6 +65,8 @@ void IHubSE::SetOnline()
     StructureSE::SetOnline();
     svDataMgr.UpdateSystemHubID(m_self->locationID(), m_self->itemID());
     svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
+    // the claim's hub shares its vulnerability
+    svDataMgr.UpdateBlockade(m_system, 0, false);
 }
 
 void IHubSE::SetOffline()
@@ -74,6 +76,8 @@ void IHubSE::SetOffline()
         svDataMgr.UpdateSystemHubID(m_self->locationID(), 0);
     svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
     StructureSE::SetOffline();
+    // without its hub the claiming TCU is exposed to a blockade
+    svDataMgr.UpdateBlockade(m_system, 0, false);
 }
 
 void IHubSE::OnRemovedFromSpace(bool killed)
@@ -83,6 +87,8 @@ void IHubSE::OnRemovedFromSpace(bool killed)
     uint32 allianceID(svDataMgr.GetSystemAllianceID(m_system->GetID()));
     // upgrades are destroyed with the hub
     svDataMgr.RemoveHub(m_system->GetID(), m_data.itemID);
+    // without its hub the claiming TCU is exposed to a blockade
+    svDataMgr.UpdateBlockade(m_system, m_data.itemID, false);
 
     if (killed and (allianceID > 0)) {
         // 'The Infrastructure Hub belonging to {owner} has been destroyed'
@@ -94,9 +100,9 @@ void IHubSE::OnRemovedFromSpace(bool killed)
 
 bool IHubSE::IsInvul()
 {
-    // an online hub can only be attacked once sovereignty blockade units have the system contested
+    // the claim's hub can only be attacked while SBUs are online at more than half the stargates
     SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
     if ((sovData.claimID > 0) and (sovData.hubID == m_data.itemID))
-        return (sovData.contested == 0);
+        return !svDataMgr.IsClaimVulnerable(m_system);
     return StructureSE::IsInvul();
 }

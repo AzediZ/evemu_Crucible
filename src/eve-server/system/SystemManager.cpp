@@ -68,6 +68,7 @@
 #include "system/WarpInPoint.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
+#include "system/sov/SovereigntyDataMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "npc/LawEnforcement.h"
@@ -190,6 +191,8 @@ bool SystemManager::BootSystem() {
     for (auto cur: m_opStaticEntities)
         if (cur.second ->IsOperSE())
             cur.second->GetPOSSE()->Init();
+    // sovereignty blockade:  the claim's count and its TCU/hub vulnerability from the SBUs actually here
+    svDataMgr.UpdateBlockade(this, 0, false);
 
     // gate and station guns
     m_law->Init();

@@ -76,11 +76,11 @@ void SovereigntyDB::RemoveSovereigntyData(uint32 systemID)
     }
 }
 
-void SovereigntyDB::SetContested(uint32 systemID, bool contested) 
+void SovereigntyDB::SetContested(uint32 systemID, uint8 sbuGates)
 {
     DBerror err;
     if (!sDatabase.RunQuery(err,
-                            "UPDATE mapSystemSovInfo SET contested=%u WHERE solarSystemID=%u", int(contested), systemID))
+                            "UPDATE mapSystemSovInfo SET contested=%u WHERE solarSystemID=%u", (uint32)sbuGates, systemID))
     {
         codelog(SOV__ERROR, "Error in changing contested state: %s", err.c_str());
     }

@@ -230,6 +230,8 @@ public:
 
     std::map<uint32, SystemEntity*> GetOperationalStatics() { return m_opStaticEntities; }
     std::map<uint32, SystemEntity*> GetGates() { return m_gateMap; }
+    // stargates in the system (the client's map.GetNumberOfStargates:  one per jump)
+    uint32 GetGateCount() const                         { return (uint32)m_gateMap.size(); }
 
     SystemEntity* GetEntityByID(uint32 itemID) { return m_entities.find(itemID)->second; }
 
