@@ -5,14 +5,11 @@
 #                 docker build --target build-env -t evemu-build-env .
 #                 docker run --rm -v "$PWD":/src:ro -v evemu-build-env-cache:/build evemu-build-env \
 #                     sh -c 'cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Debug && make -C /build -j"$(nproc)"'
-#   evedbtool   the EVEDBTool binary, fetched once per EVEDBTOOL_VERSION instead of on every sql/ change
-#   app-build   compiles the server.  The build tree and ccache live in cache mounts (ids evemu-build and
-#               evemu-ccache), so a rebuild only recompiles what changed.  To start clean (e.g. a stale CMake
-#               cache) rename the ids, or `docker builder prune --filter type=exec.cachemount` (clears every
-#               project's cache mounts)
+#   app-build   compiles the server and EVEDBTool (Go, vendored in dep/evedbtool, built offline).  The
+#               build tree and ccache live in cache mounts (ids evemu-build and evemu-ccache), so a rebuild
+#               only recompiles what changed.  To start clean (e.g. a stale CMake cache) rename the ids, or
+#               `docker builder prune --filter type=exec.cachemount` (clears every project's cache mounts)
 #   app         the runtime image
-
-ARG EVEDBTOOL_VERSION=0.0.6
 
 # Toolchain and libraries
 FROM debian:12 AS build-env
@@ -36,17 +33,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ca-certificates \
     g++ \
     gdb \
+    golang-go \
     libutfcpp-dev \
     mariadb-client \
     passwd
-
-# EVEDBTool, pinned so the download is cached with this layer
-FROM debian:12 AS evedbtool
-ARG EVEDBTOOL_VERSION
-ARG TARGETARCH
-ADD --chmod=755 https://github.com/EvEmu-Project/EVEDBTool/releases/download/${EVEDBTOOL_VERSION}/evedbtool /out/evedbtool-amd64
-ADD --chmod=755 https://github.com/EvEmu-Project/EVEDBTool/releases/download/${EVEDBTOOL_VERSION}/evedb_aarch64 /out/evedbtool-arm64
-RUN mv /out/evedbtool-${TARGETARCH:-amd64} /out/evedbtool && rm -f /out/evedbtool-*
 
 # Build stage
 FROM build-env AS app-build
@@ -85,9 +75,10 @@ LABEL description="EVEmu Server"
 COPY --from=app-build /src/utils/ /src/utils
 COPY --from=app-build /app/ /app
 
-# SQL loading tools (EVEDBTool comes from its own cached stage, not a download per build)
+# SQL loading tools.  EVEDBTool is built from dep/evedbtool with the server (installed to /app/bin) and
+#  goes where the container scripts expect it
 ADD /sql/ /src/sql
-COPY --from=evedbtool /out/evedbtool /src/sql/evedbtool
+RUN cp /app/bin/evedbtool /src/sql/evedbtool
 
 # Expose server ports
 EXPOSE 26000

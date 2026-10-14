@@ -5,7 +5,11 @@ EVEDBTool manages the EVEmu database including installing, updating and revertin
 
 ## Obtaining EVEDBTool
 
-To download the latest release of EVEDBTool, simply run ./get_evedbtool.sh (Linux x64)
+EVEDBTool's source is in `dep/evedbtool` and CMake builds it with the server (target `evedbtool`, needs Go >= 1.19):
+the binary lands in `<build>/dep/evedbtool/bin/evedbtool` and is installed to `<prefix>/bin`. The Docker image builds it the
+same way and puts it at `/src/sql/evedbtool`.
+
+Without Go, ./get_evedbtool.sh downloads the upstream release binary instead (Linux x64/aarch64)
 
 ## Installing the DB
 

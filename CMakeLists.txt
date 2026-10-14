@@ -192,6 +192,7 @@ FIND_PACKAGE( "Threads" REQUIRED )
 
 ADD_SUBDIRECTORY( "dep/gangsta" )
 ADD_SUBDIRECTORY( "dep/utils" )
+ADD_SUBDIRECTORY( "dep/evedbtool" )
 
 SET( CMAKE_NET_LIBS
   "${CMAKE_NET_LIBS_INIT}" )
