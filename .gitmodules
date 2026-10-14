@@ -1,0 +1,3 @@
+[submodule "doc/code_and_design_notes/planning"]
+	path = doc/code_and_design_notes/planning
+	url = git@github.com:/rennr/evemu_planning
