@@ -1,0 +1,46 @@
+From 261301512433bb97d779f7f31f18ef2436b1bae0 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 20:44:43 +0000
+Subject: [PATCH] Cyno and jump bridge: fix the inverted high-sec check
+
+CynoModule::CanActivate() and JumpBridgeSE::SetOnline() compared SystemManager::GetSecValue()
+against 0.5, but GetSecValue() is 1.1 minus the security rating (0.1 in a 1.0 system, 0.7 in a
+0.4 system). Cynos and jump bridges were refused in low-sec and null-sec and allowed in high-sec.
+Use GetSystemSecurityRating() >= 0.45 instead (shown as 0.5 or above in the client).
+---
+ src/eve-server/pos/JumpBridge.cpp          | 3 ++-
+ src/eve-server/ship/modules/CynoModule.cpp | 4 +++-
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/src/eve-server/pos/JumpBridge.cpp b/src/eve-server/pos/JumpBridge.cpp
+index 4ba8c7b..c2929aa 100644
+--- a/src/eve-server/pos/JumpBridge.cpp
++++ b/src/eve-server/pos/JumpBridge.cpp
+@@ -64,7 +64,8 @@ void JumpBridgeSE::SetOnline()
+ 
+     // Make sure player is not in high-sec (configurable)
+     if (!sConfig.world.highSecCyno) {
+-        if (m_system->GetSecValue() >= 0.5f) {
++        // use the security rating, not GetSecValue() (1.1 minus the rating).  0.45 and up shows as 0.5 in the client, which is high-sec
++        if (m_system->GetSystemSecurityRating() >= 0.45f) {
+             throw CustomError("This module may not be used in high security space.");
+         }
+     }
+diff --git a/src/eve-server/ship/modules/CynoModule.cpp b/src/eve-server/ship/modules/CynoModule.cpp
+index 4947ebb..6104128 100644
+--- a/src/eve-server/ship/modules/CynoModule.cpp
++++ b/src/eve-server/ship/modules/CynoModule.cpp
+@@ -94,7 +94,9 @@ bool CynoModule::CanActivate()
+ 
+     //Make sure player is not in high-sec (configurable)
+     if (!sConfig.world.highSecCyno) {
+-        if (pClient->SystemMgr()->GetSecValue() >= 0.5f) {
++        // GetSecValue() is 1.1 minus the security rating (0.1 in a 1.0 system, 0.7 in a 0.4), so it refused low-sec and allowed
++        //  high-sec.  use the security rating itself.  0.45 and up shows as 0.5 in the client, which is high-sec
++        if (pClient->SystemMgr()->GetSystemSecurityRating() >= 0.45f) {
+             pClient->SendNotifyMsg("This module may not be used in high security space.");
+             return false;
+         }
+-- 
+2.43.0
+

@@ -1,0 +1,29 @@
+From 9710b8867e59221a3808b1967dd5485687760f27 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:51:15 +0000
+Subject: [PATCH 44/50] Skills: a paused skill queue survives a server restart
+
+SetServerOnlineStatus() deleted every paused skill queue at each start and stop, so a queue paused
+before a restart was gone when the pilot resumed training.  Saving a paused queue already replaces
+the pilot's old one, and resuming deletes it.
+---
+ src/eve-server/ServiceDB.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/ServiceDB.cpp b/src/eve-server/ServiceDB.cpp
+index f80b9fe5..909269f6 100644
+--- a/src/eve-server/ServiceDB.cpp
++++ b/src/eve-server/ServiceDB.cpp
+@@ -197,7 +197,8 @@ void ServiceDB::SetServerOnlineStatus(bool online) {
+     //this is only called on startup/shutdown.  reset all char online counts/status'
+     sDatabase.RunQuery(err, "UPDATE chrCharacters SET online = 0 WHERE 1");
+     sDatabase.RunQuery(err, "UPDATE account SET online = 0 WHERE 1");
+-    sDatabase.RunQuery( err, "DELETE FROM chrPausedSkillQueue WHERE 1");
++    // paused skill queues are kept.  they were deleted here at every start and stop, so a queue paused before a
++    //  restart was gone when the pilot pressed apply (saving a paused queue already replaces the old one)
+ }
+ 
+ void ServiceDB::SetAccountOnlineStatus(uint32 accountID, bool online) {
+-- 
+2.43.0
+

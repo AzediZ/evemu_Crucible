@@ -1,0 +1,151 @@
+From 5c6ec7f42f020e300d39f038d78447ddc4de2991 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 15:05:42 +0000
+Subject: [PATCH 48/50] Docker: a stop reaches eve-server, so its shutdown save
+ runs
+
+docker stop's SIGTERM never reached the server.  runuser (entry.sh) passed
+it to bash and killed bash two seconds later with SIGKILL, and bash died at
+once, taking eve-server down unsaved.
+
+entry.sh switches to the evemu user with setpriv, which leaves no process
+in between (runuser is the fallback).  start.sh runs the server in the
+background with the console's input, passes SIGTERM on to it and waits for
+it to finish: the server's own SIGTERM handling logs everyone out and saves.
+Under gdb the signal goes through gdb to the server, and gdb is closed when
+the server has exited.  Ctrl+C in docker attach still reaches the server
+through the terminal.
+
+docker-compose.yml gives the server 2 minutes to stop (Docker's default is
+10 seconds) and runs a small init as PID 1.
+---
+ docker-compose.yml               |  5 +++
+ utils/container-scripts/entry.sh |  7 +++
+ utils/container-scripts/start.sh | 76 ++++++++++++++++++++++++++++++--
+ 3 files changed, 85 insertions(+), 3 deletions(-)
+
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 55acc936..a3ee1934 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -24,6 +24,11 @@ services:
+       - RUN_WITH_GDB=${RUN_GDB:-FALSE} #Set to TRUE to run evemu with gdb automatically
+     stdin_open: true # Enables stdin for the container. Attach to it with 'docker attach'
+     tty: true
++    # docker stop (and compose stop, restart and down) sends SIGTERM, which start.sh passes on to eve-server:  it logs
++    #  everyone out and saves before it exits.  Docker kills it after stop_grace_period (default 10 s), so allow
++    #  time for the save;  the stop ends as soon as the server has exited
++    stop_grace_period: 2m
++    init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
+     # cap_add: #This is required for gdb to work
+     #   - SYS_PTRACE
+ 
+diff --git a/utils/container-scripts/entry.sh b/utils/container-scripts/entry.sh
+index c2111b78..a9940de8 100644
+--- a/utils/container-scripts/entry.sh
++++ b/utils/container-scripts/entry.sh
+@@ -1,4 +1,11 @@
+ #!/bin/sh
+ 
+ chown -R evemu:evemu /app
++# Switch to the evemu user without a process in between, so a docker stop's SIGTERM reaches start.sh (which passes
++#  it on to eve-server).  runuser stays as a parent and kills its child with SIGKILL two seconds after a SIGTERM,
++#  which cut the server's shutdown save short.
++if command -v setpriv >/dev/null 2>&1; then
++    export HOME="$(getent passwd evemu | cut -d: -f6)" USER=evemu LOGNAME=evemu
++    exec setpriv --reuid=evemu --regid=evemu --init-groups "$@"
++fi
+ exec runuser -u evemu "$@"
+diff --git a/utils/container-scripts/start.sh b/utils/container-scripts/start.sh
+index f9696b7d..868ffd8d 100755
+--- a/utils/container-scripts/start.sh
++++ b/utils/container-scripts/start.sh
+@@ -30,10 +30,80 @@ if [ "$RUN_WITH_GDB" == "TRUE" ] && ! command -v gdb >/dev/null 2>&1; then
+     echo "=== RUN_GDB is TRUE, but this image was built without gdb.  Rebuild it with RUN_GDB=TRUE set to add gdb ==="
+     RUN_WITH_GDB=FALSE
+ fi
++# docker stop sends SIGTERM to this script, not to eve-server.  Pass it on:  on SIGTERM the server logs everyone
++#  out, saves and exits (ServerShutdown in eve-server.cpp).  Before, bash died at once and took the server down
++#  unsaved.  The server runs in the background so this script can take the signal, and keeps the console's input
++#  (<&0) for docker attach.  This script stays the server's parent, rather than exec'ing it, so under gdb it can
++#  close gdb once the server has gone.
++#  Ctrl+C in docker attach reaches eve-server itself (it shares the terminal), so for SIGINT this script just
++#  keeps waiting.
++child=""
++gdb_pid=""
++stopping=0
++# the eve-server process:  the child, or under gdb the program gdb runs
++server_pid() {
++    if [ -z "$gdb_pid" ]; then
++        echo "$child"
++        return
++    fi
++    local p comm
++    for p in /proc/[0-9]*; do
++        comm=""
++        read -r comm < "$p/comm" 2>/dev/null
++        if [ "$comm" = "eve-server" ]; then
++            echo "${p#/proc/}"
++            return
++        fi
++    done
++}
++stop_server() {
++    stopping=1
++    local pid
++    pid=$(server_pid)
++    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
++        echo "=== Stop requested:  eve-server is saving and shutting down ==="
++        kill -TERM "$pid" 2>/dev/null
++    elif [ -n "$gdb_pid" ]; then
++        kill -TERM "$gdb_pid" 2>/dev/null
++    fi
++}
++trap stop_server TERM
++trap : INT
++
+ if [ "$RUN_WITH_GDB" == "TRUE" ]; then
+     echo "=== Running EVEmu with gdb ==="
+-    gdb -ex run ./eve-server
++    # SIGTERM (a stop, passed on above) goes through to the server instead of stopping it in gdb
++    gdb -ex 'handle SIGTERM nostop noprint pass' -ex run ./eve-server <&0 &
++    child=$!
++    gdb_pid=$child
+ else
+     echo "=== Running EVEmu normally ==="
+-    ./eve-server
+-fi
+\ No newline at end of file
++    ./eve-server <&0 &
++    child=$!
++fi
++# a stop that came in while the server was being started
++if [ "$stopping" = 1 ]; then
++    stop_server
++fi
++
++# wait returns early whenever a signal comes in, so wait until the program has really ended
++while kill -0 "$child" 2>/dev/null; do
++    wait "$child"
++    if [ "$stopping" = 1 ] && [ -n "$gdb_pid" ]; then
++        # gdb stays at its prompt after the server exits:  close it once the server has gone
++        while [ -n "$(server_pid)" ]; do
++            sleep 1
++        done
++        kill -TERM "$gdb_pid" 2>/dev/null
++    fi
++done
++wait "$child"
++status=$?
++
++if [ -n "$gdb_pid" ]; then
++    # gdb's own exit status says nothing about the server
++    if [ "$stopping" = 1 ]; then
++        status=0
++    fi
++fi
++exit $status
+\ No newline at end of file
+-- 
+2.43.0
+

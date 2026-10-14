@@ -1,0 +1,232 @@
+From 2aaf60fb74796de8afdbb74cfb6c662350cd251b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 18:50:20 +0100
+Subject: [PATCH] Drones: electronic warfare drones change their target's
+ attributes
+
+Painters, sensor dampeners and tracking disruptors apply their own attributes to the target while
+working (signatureRadiusBonus; maxTargetRange/scanResolution multipliers; tracking/maxRange/falloff
+multipliers on an NPC or on a ship's turrets), recorded per drone and undone in StopEwar(), which
+StopWeb() now calls, so every existing stop path (new order, target change, recall, release, death)
+removes them.  Neutralizers drain energyDestabilizationAmount from the target's capacitor each cycle.
+NPCAIMgr::RefreshWeaponStats() re-reads the NPC's cached signature radius, optimal, falloff and tracking
+after a change.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/npc/DroneAI.cpp | 105 ++++++++++++++++++++++++++++++++-
+ src/eve-server/npc/DroneAI.h   |  14 ++++-
+ src/eve-server/npc/NPCAI.cpp   |   7 +++
+ src/eve-server/npc/NPCAI.h     |   2 +
+ 4 files changed, 125 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index f73cbab4..b2b9f048 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -35,7 +35,11 @@
+ #include "inventory/Inventory.h"
+ #include "npc/Drone.h"
+ #include "npc/DroneAI.h"
++#include "npc/NPC.h"
++#include "npc/NPCAI.h"
+ #include "ship/Ship.h"
++#include "ship/modules/GenericModule.h"
++#include "ship/modules/ModuleManager.h"
+ #include "system/Damage.h"
+ #include "system/DestinyManager.h"
+ #include "system/SystemBubble.h"
+@@ -598,12 +602,110 @@ void DroneAIMgr::Fire(SystemEntity* pTarget) {
+         case DroneAI::Action::Web: {
+             StartWeb(pTarget);
+         } break;
++        case DroneAI::Action::Ewar: {
++            StartEwar(pTarget);
++            // neutralizers drain the target's capacitor every cycle
++            const ItemType& type(m_pDrone->GetSelf()->type());
++            if (type.HasAttribute(AttrEnergyDestabilizationAmount)) {
++                InventoryItemRef tRef(pTarget->GetSelf());
++                if (tRef->HasAttribute(AttrCapacitorCharge)) {
++                    double charge(tRef->GetAttribute(AttrCapacitorCharge).get_double()
++                                - type.GetAttribute(AttrEnergyDestabilizationAmount).get_double());
++                    tRef->SetAttribute(AttrCapacitorCharge, (charge < 0.0 ? 0.0 : charge));
++                    _log(DRONE__AI_TRACE, "Drone %s(%u): neutralized %s(%u) capacitor to %.1f", m_pDrone->GetName(), m_pDrone->GetID(),
++                         pTarget->GetName(), pTarget->GetID(), (charge < 0.0 ? 0.0 : charge));
++                }
++            }
++        } break;
+         default:
+-            // electronic warfare and neutralizing drones show their effect, but have none yet
+             break;
+     }
+ }
+ 
++/* electronic warfare drones change their target's attributes while they work on it.  how much comes from the drone's
++ *  own attributes, as shown in its info window:
++ *   target painters    signatureRadiusBonus (%)       -> the target's signature radius
++ *   sensor dampeners   maxTargetRangeMultiplier,
++ *                      scanResolutionMultiplier       -> the target's lock range and scan resolution
++ *   tracking disruptors trackingSpeedMultiplier, maxRangeMultiplier,
++ *                      fallofMultiplier               -> an NPC's guns, or a ship's turrets
++ *  each change is undone when the drone stops (StopWeb), changes target, is recalled or dies.  several drones on one
++ *  target multiply together; there are no stacking penalties.  jammers are separate (not done yet)
++ */
++void DroneAIMgr::StartEwar(SystemEntity* pTarget) {
++    if (pTarget->GetID() == m_ewarTargetID)
++        return;
++    StopEwar();
++    m_ewarTargetID = pTarget->GetID();
++
++    const ItemType& type(m_pDrone->GetSelf()->type());
++    auto factor = [&](uint16 attrID) -> double {
++        return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_double() : 1.0);
++    };
++    auto apply = [&](InventoryItemRef iRef, uint16 attrID, double f) {
++        if ((iRef.get() == nullptr) or (f <= 0.0) or (f == 1.0) or !iRef->HasAttribute(attrID))
++            return;
++        double before(iRef->GetAttribute(attrID).get_double());
++        iRef->SetAttribute(attrID, before * f);
++        m_ewarMods.push_back({iRef->itemID(), attrID, f});
++        _log(DRONE__AI_TRACE, "Drone %s(%u): ewar on %s(%u) attribute %u: %.3f -> %.3f", m_pDrone->GetName(), m_pDrone->GetID(),
++             iRef->name(), iRef->itemID(), attrID, before, before * f);
++    };
++
++    InventoryItemRef tRef(pTarget->GetSelf());
++    if (type.HasAttribute(AttrSignatureRadiusBonus))
++        apply(tRef, AttrSignatureRadius, 1.0 + type.GetAttribute(AttrSignatureRadiusBonus).get_double() / 100.0);
++    apply(tRef, AttrMaxTargetRange, factor(AttrMaxTargetRangeMultiplier));
++    apply(tRef, AttrScanResolution, factor(AttrScanResolutionMultiplier));
++
++    double tracking(factor(AttrTrackingSpeedMultiplier)), optimal(factor(AttrMaxRangeMultiplier)), falloff(factor(AttrFallofMultiplier));
++    if ((tracking != 1.0) or (optimal != 1.0) or (falloff != 1.0)) {
++        std::vector<InventoryItemRef> guns;
++        if (pTarget->IsShipSE()) {
++            std::list<GenericModule*> weapons;
++            pTarget->GetShipSE()->GetShipItemRef()->GetModuleManager()->GetWeapons(weapons);
++            for (auto cur : weapons)
++                switch (cur->GetSelf()->groupID()) {
++                    case EVEDB::invGroups::Projectile_Weapon:
++                    case EVEDB::invGroups::Hybrid_Weapon:
++                    case EVEDB::invGroups::Energy_Weapon:
++                        guns.push_back(cur->GetSelf());
++                        break;
++                }
++        } else {
++            guns.push_back(tRef);   // an NPC's guns are part of the NPC
++        }
++        for (auto gun : guns) {
++            apply(gun, AttrTrackingSpeed, tracking);
++            apply(gun, AttrMaxRange, optimal);
++            apply(gun, AttrFalloff, falloff);
++        }
++    }
++    // NPCs keep copies of their weapon stats
++    if (!m_ewarMods.empty() and pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr))
++        pTarget->GetNPCSE()->GetAIMgr()->RefreshWeaponStats();
++}
++
++void DroneAIMgr::StopEwar() {
++    for (auto& cur : m_ewarMods) {
++        InventoryItemRef iRef(sItemFactory.GetItemRef(cur.itemID));
++        if ((iRef.get() == nullptr) or !iRef->HasAttribute(cur.attrID))
++            continue;   // the target is gone
++        double before(iRef->GetAttribute(cur.attrID).get_double());
++        iRef->SetAttribute(cur.attrID, before / cur.factor);
++        _log(DRONE__AI_TRACE, "Drone %s(%u): ewar removed from %s(%u) attribute %u: %.3f -> %.3f", m_pDrone->GetName(), m_pDrone->GetID(),
++             iRef->name(), iRef->itemID(), cur.attrID, before, before / cur.factor);
++    }
++    bool changed(!m_ewarMods.empty());
++    m_ewarMods.clear();
++    if (changed) {
++        SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_ewarTargetID));
++        if ((pTarget != nullptr) and pTarget->IsNPCSE() and (pTarget->GetNPCSE()->GetAIMgr() != nullptr))
++            pTarget->GetNPCSE()->GetAIMgr()->RefreshWeaponStats();
++    }
++    m_ewarTargetID = 0;
++}
++
+ void DroneAIMgr::StartWeb(SystemEntity* pTarget) {
+     if (pTarget->GetID() == m_webbedID)
+         return;
+@@ -615,6 +717,7 @@ void DroneAIMgr::StartWeb(SystemEntity* pTarget) {
+ }
+ 
+ void DroneAIMgr::StopWeb() {
++    StopEwar();
+     if (m_webbedID == 0)
+         return;
+     SystemEntity* pTarget(m_pDrone->SystemMgr()->GetSE(m_webbedID));
+diff --git a/src/eve-server/npc/DroneAI.h b/src/eve-server/npc/DroneAI.h
+index 75c7c5fc..6a727c53 100644
+--- a/src/eve-server/npc/DroneAI.h
++++ b/src/eve-server/npc/DroneAI.h
+@@ -50,7 +50,7 @@ namespace DroneAI {
+             RepairShield    = 3,
+             RepairArmor     = 4,
+             Web             = 5,
+-            Ewar            = 6     // jammers, painters, dampeners, disruptors, neutralizers.  effects only, for now
++            Ewar            = 6     // jammers, painters, dampeners, disruptors, neutralizers (see DroneAIMgr::StartEwar)
+         };
+     }
+ }
+@@ -109,7 +109,9 @@ private:
+     void FinishMiningCycle(ShipSE* pController, SystemEntity* pRoid);
+     void SendEffect(SystemEntity* pTarget, bool start);
+     void StartWeb(SystemEntity* pTarget);
+-    void StopWeb();
++    void StopWeb();             // also undoes electronic warfare (see StartEwar)
++    void StartEwar(SystemEntity* pTarget);
++    void StopEwar();
+ 
+     // target lock with the drone's own sensors
+     bool LockTarget(SystemEntity* pTarget);
+@@ -129,6 +131,14 @@ private:
+     uint32 m_moveTargetID;
+     uint32 m_aggressorID;       // most recent attacker, for aggressive mode and guarding
+     uint32 m_webbedID;          // target we are currently webbing
++    // attribute changes our electronic warfare made, to undo when we stop
++    struct EwarMod {
++        uint32 itemID;
++        uint16 attrID;
++        double factor;
++    };
++    std::vector<EwarMod> m_ewarMods;
++    uint32 m_ewarTargetID = 0;
+     double m_moveRange;
+     double m_moveSpeed;
+ 
+diff --git a/src/eve-server/npc/NPCAI.cpp b/src/eve-server/npc/NPCAI.cpp
+index 00e1f34d..19f612aa 100644
+--- a/src/eve-server/npc/NPCAI.cpp
++++ b/src/eve-server/npc/NPCAI.cpp
+@@ -265,6 +265,13 @@ NPCAIMgr::NPCAIMgr(NPC* who)
+     //    AttrEntityGroupRespawnChance = 640,
+ }
+ 
++void NPCAIMgr::RefreshWeaponStats() {
++    m_sigRadius = m_self->GetAttribute(AttrSignatureRadius).get_uint32();
++    m_optimalRange = m_self->GetAttribute(AttrMaxRange).get_uint32();
++    m_falloff = m_self->GetAttribute(AttrFalloff).get_uint32();
++    m_trackingSpeed = m_self->GetAttribute(AttrTrackingSpeed).get_double();
++}
++
+ void NPCAIMgr::Process() {
+     if (m_destiny->IsWarping())
+         return;
+diff --git a/src/eve-server/npc/NPCAI.h b/src/eve-server/npc/NPCAI.h
+index 450ffaa2..cdde74a5 100644
+--- a/src/eve-server/npc/NPCAI.h
++++ b/src/eve-server/npc/NPCAI.h
+@@ -54,6 +54,8 @@ class EvilNumber;
+ class NPCAIMgr {
+ protected:
+ public:
++    // re-read the weapon stats cached below, after electronic warfare changed them (see DroneAIMgr::StartEwar)
++    void RefreshWeaponStats();
+     NPCAIMgr(NPC *who);
+     ~NPCAIMgr()                                         { /* do nothing here */ }
+ 
+-- 
+2.43.0
+

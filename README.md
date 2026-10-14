@@ -1,5 +1,7 @@
 # EVEMu Revised - An EVE: Crucible Emulator
 
+> **Crucible Sandbox:** what this repository changes on top of Renn's EVEMu Revised is in the **[changelog](CHANGELOG-SANDBOX.md)**, newest first and dated.
+
 
 ## Introduction
 EVEmu Revised is a work-in-progress server emulator for the space MMO EVE Online. This is an educational project. Please see the disclaimer below for details. Originally forked from [EVEMu](https://github.com/EvEmu-Project/evemu_Crucible).

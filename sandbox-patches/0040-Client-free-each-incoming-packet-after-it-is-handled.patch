@@ -1,0 +1,34 @@
+From 5abbc992ccbf51d0167cb675a10f77e96b87719f Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:50:02 +0000
+Subject: [PATCH 40/50] Client: free each incoming packet after it is handled
+
+ProcessNet() set the packet pointer to null before SafeDelete(), so every incoming packet leaked
+(roughly 1 to 5 MB an hour per client).  The decoders take the payload, so the packet is free to go
+once it's dispatched.  Upstream fixed the same leak in d74a231 (#311).
+---
+ src/eve-server/Client.cpp | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index f3f9b01f..4e6352d5 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -231,11 +231,11 @@ bool Client::ProcessNet()
+             _SendException(p->dest, p->source.callID, p->type, WRAPPEDEXCEPTION, &e.ssException);
+         }
+ 
+-        p = nullptr;
++        // every packet is freed once it's handled.  this set p to null first, so only the last one ever was
++        //  (upstream fixed the same leak in d74a231)
++        SafeDelete(p);
+     }
+ 
+-    // cleanup
+-    SafeDelete(p);
+     // send queue
+     _SendQueuedUpdates();
+ 
+-- 
+2.43.0
+

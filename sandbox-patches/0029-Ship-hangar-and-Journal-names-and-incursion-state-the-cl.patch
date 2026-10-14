@@ -1,0 +1,144 @@
+From ab9fbc17b06d9f7bd80ed281df39b550c7e249ae Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 16:05:00 +0000
+Subject: [PATCH] Ship hangar and Journal: names and incursion state the client
+ can read
+
+Ship hangar: patch 0030 built GetMultiLocationsEx's query with
+"... IN (" + ids + ")".  ListToINString() reserves 11 characters per ID
+and left the unused room as NULs; c_str() hid them, but concatenating
+the std::string carried them into the query, and RunQuery's "%s" cut
+it off at the first NUL, before the closing bracket.  Every location
+name lookup (ship names in hangars and cargo, locations) failed with a
+syntax error and returned an empty tuple, and the client's
+cfg.evelocations.Prime raised "need more than 0 values to unpack",
+leaving the hangar window empty.  ListToINString() now trims the
+string to what it wrote.
+
+RunQuery(DBQueryResult&) formatted into a 4096 byte stack buffer but
+passed vsnprintf's untruncated length to mysql, so a longer query was
+sent with whatever followed the buffer.  0030's single UNION ALL query
+makes long location requests more likely, so it now uses vasprintf
+like the other RunQuery()s.
+
+Journal: map.GetIncursionGlobalReport sent our incursion state plus
+one.  The client's Incursions tab indexes [Withdrawing, Mobilizing,
+Established] with it, so a withdrawing incursion (3) raised IndexError
+and the Journal stayed blank while that tab was selected.  The state
+is now sent as Withdrawing 0, Mobilizing 1, Established 2.
+---
+ src/eve-core/database/dbcore.cpp               | 18 +++++++++++++++---
+ src/eve-core/utils/utils_string.cpp            |  5 +++++
+ .../system/cosmicMgrs/IncursionMgr.cpp         |  5 +++--
+ .../system/cosmicMgrs/IncursionMgr.h           |  8 +++++++-
+ 4 files changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/src/eve-core/database/dbcore.cpp b/src/eve-core/database/dbcore.cpp
+index 3e5352a..15f0e18 100644
+--- a/src/eve-core/database/dbcore.cpp
++++ b/src/eve-core/database/dbcore.cpp
+@@ -225,22 +225,34 @@ void DBcore::ping()
+ bool DBcore::RunQuery(DBQueryResult &into, const char *query_fmt, ...) {
+     MutexLock lock(MDatabase);
+ 
+-    char query[4096];
++    // vasprintf, like the other RunQuery()s.  this used a 4096 byte buffer but passed vsnprintf's untruncated
++    //  length to mysql, so a longer query (a long IN list) was sent with whatever followed the buffer on the stack
+     va_list vlist;
+     va_start(vlist, query_fmt);
+-    int querylen = std::vsnprintf(query, 4096, query_fmt, vlist);
++    char* query(nullptr);
++    int querylen = vasprintf(&query, query_fmt, vlist);
+     va_end(vlist);
+ 
+-    if (!DoQuery_locked(into.error, query, querylen))
++    if (querylen < 0) {
++        into.error.SetError(0xFFFF, "DBcore::RunQuery: query formatting failed");
++        codelog(DATABASE__ERROR, "DBCore::RunQuery: formatting '%s' failed", query_fmt);
++        return false;
++    }
++
++    if (!DoQuery_locked(into.error, query, querylen)) {
++        free(query);
+         return false;
++    }
+ 
+     uint col_count = mysql_field_count(mysql);
+     if (col_count == 0) {
+         into.error.SetError(0xFFFF, "DBcore::RunQuery: No Result");
+         codelog(DATABASE__ERROR, "DBCore::RunQuery: %s failed because it did not return a result", query);
+         EvE::traceStack();
++        free(query);
+         return false;
+     }
++    free(query);
+ 
+     into.SetResult(mysql_store_result(mysql), col_count);
+ 
+diff --git a/src/eve-core/utils/utils_string.cpp b/src/eve-core/utils/utils_string.cpp
+index 63d1d26..ce4f7e4 100644
+--- a/src/eve-core/utils/utils_string.cpp
++++ b/src/eve-core/utils/utils_string.cpp
+@@ -196,6 +196,11 @@ void ListToINString( const std::vector<int32>& ints, std::string& into, const ch
+             // last value to be printed
+             format_index += snprintf( &into[ format_index ], 11, "%i", *cur );
+     }
++
++    // drop the unused room reserved above.  it was left as NULs, so c_str() read fine, but anything that
++    //  used the string itself ("... IN (" + ids + ")") carried the NULs along and cut the query short
++    if( format_index < into.size() )
++        into.resize( format_index );
+ }
+ 
+ void MakeUpperString( const char* source, char* target )
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+index 9f7322d..f74f4f2 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+@@ -962,7 +962,8 @@ std::string IncursionMgr::Info()
+  *   stagingSolarSystemID, rewardGroupID, taleID
+  *  the client works out the current value as influence - decayRate * (minutes since lastUpdated - graceTime), so
+  *  influence here is the pilots' progress (1 - Sansha influence) and decayRate its loss per minute once the grace
+- *  time is over.  state is our state plus one (inferred).  rewardGroupID is the incursion; rewardMgr answers for it
++ *  time is over.  state is the client's numbering, the reverse of ours (see ClientState()).  rewardGroupID is the
++ *  incursion; rewardMgr answers for it
+  */
+ PyRep* IncursionMgr::GetGlobalReport()
+ {
+@@ -985,7 +986,7 @@ PyRep* IncursionMgr::GetGlobalReport()
+             dict->SetItemString("decayRate", new PyFloat(decay));
+             dict->SetItemString("influence", new PyFloat(1.0 - inc.influence));
+             dict->SetItemString("lastUpdated", new PyLong(fileNow));
+-            dict->SetItemString("state", new PyInt(inc.state + 1));
++            dict->SetItemString("state", new PyInt(Incursion::State::ClientState(inc.state)));
+             dict->SetItemString("hasBoss", new PyInt(inc.hasBoss ? 1 : 0));
+             dict->SetItemString("stagingSolarSystemID", new PyInt(inc.stagingSystemID));
+             dict->SetItemString("rewardGroupID", new PyInt(inc.incursionID));
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index 8875ab5..0a885c4 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -29,13 +29,19 @@ class PyRep;
+ class SystemManager;
+ 
+ namespace Incursion {
+-    // internal state numbering.  the client gets these plus one (journal)
++    // internal state numbering.  the client numbers them the other way round, see ClientState()
+     namespace State {
+         enum {
+             Established = 0,
+             Mobilizing  = 1,
+             Withdrawing = 2
+         };
++
++        // the Journal's Incursions tab looks its status text up as [Withdrawing, Mobilizing, Established][state]
++        //  (incursionjournal.py, seen in a client traceback), so the client's numbers are Withdrawing 0,
++        //  Mobilizing 1, Established 2.  sending ours plus one gave 3 for Withdrawing, and the IndexError
++        //  left the whole Journal window blank
++        inline int ClientState(int state) { return Withdrawing - state; }
+     }
+ 
+     // incSiteObjects.role
+-- 
+2.43.0
+

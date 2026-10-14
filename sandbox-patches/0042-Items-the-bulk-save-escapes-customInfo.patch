@@ -1,0 +1,31 @@
+From 15271863872fff8814d131879c811316612f3e96 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:50:30 +0000
+Subject: [PATCH 42/50] Items: the bulk save escapes customInfo
+
+A logged-off ship stores its pilot's name in customInfo, and the bulk item save put it in the query
+unescaped, so one name with an apostrophe failed the whole batch, including the shutdown save.
+---
+ src/eve-server/inventory/ItemDB.cpp | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/inventory/ItemDB.cpp b/src/eve-server/inventory/ItemDB.cpp
+index 0de309af..406361d3 100644
+--- a/src/eve-server/inventory/ItemDB.cpp
++++ b/src/eve-server/inventory/ItemDB.cpp
+@@ -287,7 +287,11 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
+         Inserts << "(" << cur.itemID << ", " << cur.typeID << ", " << cur.ownerID << ", " << cur.locationID << ", ";
+         Inserts << cur.flag << ", " << cur.contraband << ", " << (cur.singleton ? 1 : 0) << ", ";
+         Inserts << cur.quantity << ", " << std::to_string(cur.position.x) << ", " << std::to_string(cur.position.y) << ", " << std::to_string(cur.position.z);
+-        Inserts << ", '" << cur.customInfo << "')";
++        // customInfo holds the pilot's name on a logged-off ship, so it must be escaped.  one name with an apostrophe
++        //  failed the whole batch (and so the shutdown save)
++        std::string info;
++        sDatabase.DoEscapeString(info, cur.customInfo);
++        Inserts << ", '" << info << "')";
+     }
+ 
+     if (!first) {
+-- 
+2.43.0
+

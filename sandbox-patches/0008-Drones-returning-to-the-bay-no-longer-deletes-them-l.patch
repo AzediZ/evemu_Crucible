@@ -1,0 +1,87 @@
+From e9291c70a466b3f9dc37d36ef82023f4a0ee69a0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 16:57:30 +0100
+Subject: [PATCH] Drones: returning to the bay no longer deletes them; light
+ drones reach their orbit and the bay
+
+- InventoryItem::MergeTypesInCargo() looked up the stack to merge with by type and flag.  DroneSE::ScoopTo()
+  moves the drone into the bay first, so when no other stack of that type was there the lookup found the
+  drone itself, and Merge() into itself deleted it (Return to Drone Bay and Scoop to Drone Bay).  It now
+  skips the item itself and prefers an unassembled stack.
+- DroneAIMgr::ApproachTarget(): the client's GotoThrust brakes hard inside one second's travel of the goal
+  (thrust x (d/h)^4), so a Warrior at 5250 m/s crawled the last km or two and never reached orbit range or
+  the bay.  Approach speed is halved (not below cruise speed) until the goal is outside that range.
+- ProcessEngage(): drones break orbit to chase only beyond orbitRange + max(1000, 2 x orbit velocity), so fast
+  drones swinging wide don't flip between orbit and approach.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/inventory/InventoryItem.cpp | 14 ++++++++++++--
+ src/eve-server/npc/DroneAI.cpp             | 17 ++++++++++++++++-
+ 2 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/inventory/InventoryItem.cpp b/src/eve-server/inventory/InventoryItem.cpp
+index 20a7e5b3..63d65cc9 100644
+--- a/src/eve-server/inventory/InventoryItem.cpp
++++ b/src/eve-server/inventory/InventoryItem.cpp
+@@ -898,8 +898,18 @@ bool InventoryItem::Merge(InventoryItemRef to_merge, int32 qty/*0*/, bool notify
+ 
+ void InventoryItem::MergeTypesInCargo(ShipItem* pShip, EVEItemFlags flag/*flagNone*/)
+ {
+-    // get existing type in cargo
+-    InventoryItemRef iRef = pShip->GetMyInventory()->GetByTypeFlag(m_type.id(), flag);
++    // get an existing stack of this type in cargo.  skip this item itself: callers may have moved it into the hold
++    //  already (a drone scooped to its bay is), and merging an item into itself deletes it
++    InventoryItemRef iRef;
++    std::vector<InventoryItemRef> items;
++    pShip->GetMyInventory()->GetItemsByFlag(flag, items);
++    for (auto cur : items) {
++        if ((cur.get() == this) or (cur->typeID() != m_type.id()))
++            continue;
++        iRef = cur;
++        if (!cur->isSingleton())
++            break;  // prefer a stack we can merge with
++    }
+     if (iRef.get() == nullptr) {
+         Move(pShip->itemID(), flag, true);
+         return;
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index f6cfdcd6..f73cbab4 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -309,7 +309,9 @@ void DroneAIMgr::ProcessEngage(ShipSE* pController) {
+     double gap(Gap(m_pDrone, pTarget));
+     // close in at full speed, then settle into orbit at orbit velocity.  the effect is used whenever in range
+     bool approaching(m_pDrone->DestinyMgr()->IsFollowing());
+-    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : DRONE_APPROACH_MARGIN * 2.0));
++    // fast drones swing wide of their orbit, so they only break orbit to chase once well outside it
++    double leaveOrbit(std::max(DRONE_APPROACH_MARGIN * 2.0, stats.orbitVelocity * 2.0));
++    double approachUntil(stats.orbitRange + (approaching ? DRONE_APPROACH_MARGIN : leaveOrbit));
+     if (gap > approachUntil) {
+         ApproachTarget(pTarget, stats.orbitRange, stats.maxVelocity);
+     } else {
+@@ -477,7 +479,20 @@ void DroneAIMgr::OrbitTarget(SystemEntity* pTarget, double range, double speed)
+     pDestiny->Orbit(pTarget, static_cast<uint32>(range));
+ }
+ 
++/* the client slows a ball down once its goal is within one second's travel (the 'homing' range in GotoThrust), and
++ *  slows it hard: at half that range it has 1/16 of its thrust.  a light drone at 5 km/s therefore crawls the last
++ *  few km at a few m/s, so it never reaches its orbit or the drone bay.  approach at full speed while far away, then
++ *  halve the speed (not below cruise speed) until the goal is outside the homing range.  the steps keep the client
++ *  from being sent a new speed every second.
++ */
+ void DroneAIMgr::ApproachTarget(SystemEntity* pTarget, double range, double speed) {
++    double toGo(Gap(m_pDrone, pTarget) - range);
++    double cruise(m_pDrone->Stats().orbitVelocity);
++    while ((speed > cruise) and (toGo < speed))
++        speed *= 0.5;
++    if (speed < cruise)
++        speed = cruise;
++
+     DestinyManager* pDestiny(m_pDrone->DestinyMgr());
+     pDestiny->SetMaxVelocity(static_cast<float>(speed));
+     pDestiny->SetSpeedFraction(1.0f);
+-- 
+2.43.0
+

@@ -1,0 +1,117 @@
+From 9421565a1d7100aac3a70044f46e96f39cfc40b6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sat, 10 Oct 2026 20:06:23 +0100
+Subject: [PATCH] Stop sending unrequested Stop commands that cancel the
+ client's autopilot
+
+- ProcessState STOP: call Stop() only if the object is not already stopped.
+  Stop() broadcasts CmdStop; doing it every tic stopped ships at the end of
+  warp while the client was still landing ('bounce') and disabled the client's
+  autopilot, and spammed every parked ship in the bubble.
+- MoveToLocation: Halt() on jump arrival instead of Stop() (no CmdStop).
+- Follow(): player ships that reach their follow range against a static target
+  are not sent a Stop (the client holds range; Stop cancelled its autopilot).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ CHANGELOG-SANDBOX.md                     | 22 +++++++++++++++++++++-
+ src/eve-server/Client.cpp                |  4 +++-
+ src/eve-server/system/DestinyManager.cpp | 11 ++++++++++-
+ 3 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/CHANGELOG-SANDBOX.md b/CHANGELOG-SANDBOX.md
+index 888a32cd..53c32fb6 100644
+--- a/CHANGELOG-SANDBOX.md
++++ b/CHANGELOG-SANDBOX.md
+@@ -16,6 +16,7 @@ Some changes here fix bugs that exist in EVEmu itself; others only make sense fo
+ | Autopilot and remote Jump/Dock while the server still thinks the ship is warping (upstream issue #263) | `0001` | Yes |
+ | Player drone and fighter control (EntityService, DroneAI rewrite) | `0002` | Yes, together with `0003` |
+ | Orbit overflow, agile turning, current turn target, stack launch limit, orbit-target crash | `0003` | Yes. The orbit overflow and turn fixes in `DestinyManager.cpp` also help NPCs and could go on their own. |
++| Stop sent once instead of every tic; no Stop on jump arrival or on reaching an approach target | `0005` | Yes |
+ | eve-bot headless test client | `0004` | Possibly, as an optional developer tool (off by default) |
+ | Windows control panel, changelog, patch files | none (tooling) | No, sandbox-only |
+ 
+@@ -23,6 +24,25 @@ Each patch's commit message describes the change in developer terms; the entries
+ 
+ ---
+ 
++## 2026-10-10: Autopilot keeps running through jumps; no more warp "bounce"
++
++Patch `0005` · Status: **Tested with the test bot**, awaiting in-game test
++
++**Why.** Three things went wrong with the autopilot and warping. The autopilot switched itself off after every jump. It approached a nearby gate and then never jumped. Warps landed, then the ship turned round and bounced a few km away.
++
++**Cause.** All three came from the server sending your ship a "Stop" command you didn't ask for. The client's autopilot treats that as you taking manual control and switches itself off. The server sent Stop:
++- every second to any ship that had already stopped, including straight after a warp while your client was still landing (the bounce), and to every parked ship in the area;
++- when your ship arrived in a new system through a gate;
++- when the server thought your ship had reached the thing it was approaching, such as a gate the autopilot was flying to.
++
++**What changed.** Stop is now sent once, when a ship actually stops. Arriving through a gate stops the ship without sending a command. Approaching something no longer sends a Stop to player ships, because your client holds its own position at the approach range. Server traffic in busy areas drops too.
++
++**Files.** `Client.cpp`, `system/DestinyManager.cpp` (under `src/eve-server/`). Test bot: new `beyonce` and `rebind` commands for movement and gate tests.
++
++**Tested.** With the test bot against a local server: undock, warp to a gate, jump, approach the arrival gate, jump back. One Stop is sent on undock, as before, and none at warp ends, jump arrivals or gate approaches. The drone and fighter tests still all pass.
++
++---
++
+ ## 2026-10-10: Drone and fighter fixes after the first in-game test
+ 
+ Patch `0003` · Status: **Tested** (test bot, then in game on 10 Oct 2026)
+@@ -108,7 +128,7 @@ Patch `0002` · Status: **Tested** together with `0003` (the first in-game test
+ 
+ ## 2026-10-10: Autopilot and remote Jump and Dock
+ 
+-Patch `0001` · Status: **Built**, awaiting in-game test
++Patch `0001` · Status: **Tested** in game. Jumps work; the autopilot switching off afterwards is fixed in `0005`.
+ 
+ **Why.** The client and server time warps slightly differently, so the client often lands a few seconds before the server's own warp has finished. The autopilot (and Jump or Dock clicked from a distance) asks to jump the moment the client lands. The server refused with "You can't do this while warping", and the autopilot never asked again. This is upstream issue [#263](https://github.com/EvEmu-Project/evemu_Crucible/issues/263).
+ 
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index c9ba6e81..e01cd70d 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -840,8 +840,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+ 
+         SetDestiny(pt);
+ 
++        // the ship arrives from a jump already stopped.  Halt() quietly; Stop() would also send the
++        //  client a Stop command, which switches its autopilot off in every new system.
+         if (IsJump() and !m_autoPilot)
+-            pShipSE->DestinyMgr()->Stop();
++            pShipSE->DestinyMgr()->Halt();
+     }
+ 
+     if (!m_login)
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index 4aeb9abe..5800b564 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -157,7 +157,12 @@ void DestinyManager::ProcessState() {
+                 MoveObject();
+                 return;
+             }
+-            Stop();
++            // already stopped: Stop() sends a Stop command to every client in the bubble, so only call it
++            //  if this object has not been stopped yet.  Sending it every tic stopped the player's ship at the
++            //  end of warp while the client was still landing (the warp 'bounce'), and the client's autopilot
++            //  treats a Stop it did not ask for as manual control and switches itself off (after every jump).
++            if (!m_stop)
++                Stop();
+         } break;
+         case Ball::Mode::GOTO: {
+             MoveObject();
+@@ -1140,6 +1145,10 @@ void DestinyManager::Follow() {
+                 // this will mimic real movement, where ship will decel instead of a sudden halt
+                 //  still need to call MoveObject() here
+                 SetSpeedFraction(0.2);
++            } else if (mySE->HasPilot()) {
++                // a player's client holds its own ship at the follow range.  Sending it a Stop here cancels the
++                //  client's autopilot, which approaches nearby gates this way and then jumps.
++                return;
+             } else {
+                 Stop();
+             }
+-- 
+2.43.0
+

@@ -1,0 +1,64 @@
+From 5f567961f5234ac952246796ad2b35021f2da7b3 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Mon, 12 Oct 2026 21:15:25 +0100
+Subject: [PATCH 35/50] Fleet: squad boosts skip members with no ship and
+ squads with no booster
+
+The squad loops in FleetService::UpdateBoost() compared each member's system with
+sData.booster->GetSystemID(), but SetSquadBoostData() can turn the squad boost on with no
+booster (null pointer), and docked members have no ShipSE but the same system ID.
+Renn's branch already guards the fleet and wing commanders; this guards the squad loops.
+---
+ src/eve-server/fleet/FleetService.cpp | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/fleet/FleetService.cpp b/src/eve-server/fleet/FleetService.cpp
+index 00cf21b5..3bc0d2ce 100644
+--- a/src/eve-server/fleet/FleetService.cpp
++++ b/src/eve-server/fleet/FleetService.cpp
+@@ -572,6 +572,15 @@ bool FleetService::UpdateMember(uint32 charID, uint32 fleetID, int32 newWingID,
+     return true;
+ }
+ 
++// a squad member gets the squad's boost when they have a ship in space in the booster's system.
++//  docked members have no ship, and neither does a member who is undocking until their ship is made.
++static bool CanTakeBoost(Client* pMember, Client* pBooster)
++{
++    if ((pMember == nullptr) or (pBooster == nullptr) or (pMember->GetShipSE() == nullptr))
++        return false;
++    return (pMember->GetSystemID() == pBooster->GetSystemID());
++}
++
+ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& wing, std::list<int32>& squad)
+ {
+     double start = GetTimeUSeconds();
+@@ -648,7 +657,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
+                 SquadData sData = SquadData();
+                 GetSquadData(squadID, sData);
+                 for (auto cur : sData.members)  // SC is a member
+-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
++                    if (sboost and CanTakeBoost(cur.second, sData.booster))
+                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
+             }
+         }
+@@ -678,7 +687,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
+                 SquadData sData = SquadData();
+                 GetSquadData(squadID, sData);
+                 for (auto cur : sData.members)
+-                    if ((sboost) and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
++                    if (sboost and CanTakeBoost(cur.second, sData.booster))
+                         memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
+             }
+         }
+@@ -702,7 +711,7 @@ void FleetService::UpdateBoost(uint32 fleetID, bool fleet, std::list<int32>& win
+             bool sboost(false);
+             SetSquadBoostData(squadID, bData, sboost);
+             for (auto cur : sData.members)
+-                if (sboost and (cur.second->GetSystemID() == sData.booster->GetSystemID()))
++                if (sboost and CanTakeBoost(cur.second, sData.booster))
+                     memberUpdateMap.emplace(cur.second->GetShipSE(), sData.boost);
+         }
+     }
+-- 
+2.43.0
+

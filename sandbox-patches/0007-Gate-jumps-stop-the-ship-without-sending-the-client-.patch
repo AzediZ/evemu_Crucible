@@ -1,0 +1,96 @@
+From 699e32d4fa738e64208ebc543188d34a8aca7c0b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 16:11:09 +0100
+Subject: [PATCH] Gate jumps stop the ship without sending the client a Stop
+
+DestinyManager::Jump() called Halt(), which in the new movement code sends CmdStop and
+SetBallVelocity to the bubble when the ship was moving.  The jumping client is still in the old
+system and takes a Stop for its own ship as the pilot taking over, which switches the
+autopilot off.  Halt() gets a notify flag; Jump() and the jump paths in
+Client::MoveToLocation() halt quietly (the old system removes the ball anyway, and the new
+system's SetState carries the stopped ship).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/Client.cpp                | 6 ++++--
+ src/eve-server/system/DestinyManager.cpp | 8 +++++---
+ src/eve-server/system/DestinyManager.h   | 4 +++-
+ 3 files changed, 12 insertions(+), 6 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index e3a81dc1..56781fda 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -701,7 +701,7 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+         }
+         if (pShipSE != nullptr)
+             if ((IsJump()) and !m_autoPilot)
+-                pShipSE->DestinyMgr()->Halt();
++                pShipSE->DestinyMgr()->Halt(false);
+ 
+         // remove from current system before resetting system vars
+         m_system->RemoveEntity(pShipSE);
+@@ -819,8 +819,10 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+ 
+         SetDestiny(pt);
+ 
++        // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
++        //  client's autopilot off in every new system
+         if (IsJump() and !m_autoPilot)
+-            pShipSE->DestinyMgr()->Stop();
++            pShipSE->DestinyMgr()->Halt(false);
+     }
+ 
+     if (!m_login)
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index 1b5b10bd..21f44dfb 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -853,7 +853,7 @@ void DestinyManager::Stop() {
+     SendSingleDestinyUpdate(&up);   // consumed
+ }
+ 
+-void DestinyManager::Halt() {
++void DestinyManager::Halt(bool notify/*true*/) {
+     //  reset ALL movement variables and states.  calling this will set object to a COMPLETE and IMMEDIATE stop.
+     bool wasMoving(IsMoving());
+ 
+@@ -875,7 +875,7 @@ void DestinyManager::Halt() {
+     m_targetLost = false;
+ 
+     // let the client know, so it stops where we do
+-    if (wasMoving and (mySE->SysBubble() != nullptr)) {
++    if (notify and wasMoving and (mySE->SysBubble() != nullptr)) {
+         std::vector<PyTuple*> updates;
+         CmdStop du;
+             du.entityID = mySE->GetID();
+@@ -1651,7 +1651,9 @@ void DestinyManager::UpdateOldShip(ShipSE* pShipSE)
+ 
+ void DestinyManager::Jump(bool showCloak)
+ {
+-    Halt();
++    // the ship is leaving this system, so there is no one to tell.  a Stop here would switch off the jumping
++    //  pilot's autopilot (the client is still in the old system when it arrives)
++    Halt(false);
+     if (showCloak) {
+         m_cloaked = true;
+     }
+diff --git a/src/eve-server/system/DestinyManager.h b/src/eve-server/system/DestinyManager.h
+index ac1b4ab8..eae5405f 100644
+--- a/src/eve-server/system/DestinyManager.h
++++ b/src/eve-server/system/DestinyManager.h
+@@ -98,7 +98,9 @@ public:
+ 
+     /* Global Actions */
+     void Stop();
+-    void Halt();     // puts entity at 0 velocity
++    // puts entity at 0 velocity.  notify=false stops it without sending a Stop to the client: the client's
++    //  autopilot takes a Stop for its own ship as the pilot taking over, and switches itself off
++    void Halt(bool notify = true);
+     void Eject();   // avoid numerous other redirect calls
+     void SetCloak(bool set=false)                       { m_cloaked = set; }
+ 
+-- 
+2.43.0
+

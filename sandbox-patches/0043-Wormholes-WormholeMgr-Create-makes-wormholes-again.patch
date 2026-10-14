@@ -1,0 +1,31 @@
+From ffb884e2b2620a2e2a59f13d717f4aa941e74c51 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:50:58 +0000
+Subject: [PATCH 43/50] Wormholes: WormholeMgr::Create() makes wormholes again
+
+A missing pair of braces after the null check on the wormhole type made every call return before a
+wormhole was made, so wormhole signatures never had a wormhole.
+---
+ src/eve-server/system/cosmicMgrs/WormholeMgr.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp b/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
+index ed160674..85438094 100644
+--- a/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
+@@ -125,9 +125,11 @@ void WormholeMgr::Create(CosmicSignature& sig, uint32 exitSystemID/*=0*/, uint32
+     } else {
+         // decide which type of wormhole to create here
+         const ItemType* whType = GetRandomWormholeType(sig.systemID);
+-        if (whType == nullptr)
++        // the missing braces here made every call return, so no wormhole was ever made
++        if (whType == nullptr) {
+             _log(WORMHOLE_MGR__DEBUG, "WormholeMgr::Create() - Create Failure, SystemID not in Database %u", sig.systemID);
+             return;
++        }
+         destSystem = GetRandomDestination(whType);
+         // create wormhole here
+         sig.sigName = whType->name();
+-- 
+2.43.0
+

@@ -1,0 +1,34 @@
+From 4d5c571c85a29e478ed2e2716b5e72c19b7d7486 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 11 Oct 2026 20:30:59 +0000
+Subject: [PATCH] Sovereignty: zero the empty result for systems with no sov
+ data
+
+SovereigntyDataMgr::GetSovereigntyData() returned an uninitialised SovereigntyData when the
+system had no sov entry (all of empire space), so jammerID, beaconID and the rest were
+garbage. Cynos then refused to light anywhere outside claimed null-sec with "This system is
+currently being jammed", and the same garbage reached jump bridge onlining and structure
+anchoring checks.
+---
+ src/eve-server/system/sov/SovereigntyDataMgr.cpp | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/eve-server/system/sov/SovereigntyDataMgr.cpp b/src/eve-server/system/sov/SovereigntyDataMgr.cpp
+index a6908eb..2f99f73 100644
+--- a/src/eve-server/system/sov/SovereigntyDataMgr.cpp
++++ b/src/eve-server/system/sov/SovereigntyDataMgr.cpp
+@@ -118,8 +118,9 @@ SovereigntyData SovereigntyDataMgr::GetSovereigntyData(uint32 systemID)
+         return sData;
+     } else
+     {
+-        //Return empty object in case we don't find anything
+-        SovereigntyData sData;
++        //Return empty object in case we don't find anything.  zeroed: a plain 'SovereigntyData sData;' left jammerID, beaconID
++        // and the rest as garbage, so every system without sov data (all of empire space) looked jammed to cynos
++        SovereigntyData sData = SovereigntyData();
+         return sData;
+     }
+ }
+-- 
+2.43.0
+

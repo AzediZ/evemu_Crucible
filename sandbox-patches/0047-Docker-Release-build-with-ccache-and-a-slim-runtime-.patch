@@ -1,0 +1,198 @@
+From 5eaae21bc6c632f824dac0ee1ff055523ef36286 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 15:02:03 +0000
+Subject: [PATCH 47/50] Docker: Release build with ccache and a slim runtime
+ image
+
+The runtime image is now debian:12-slim with only the server, EVEDBTool,
+the libraries eve-server links against (copied to /app/lib) and the tools
+the container scripts use, instead of the whole build environment.
+
+The build stage keeps the cached build-env, the build-tree and ccache cache
+mounts and EVEDBTool built from the vendored source in dep/evedbtool.  It
+builds Release and only the eve-server and evedbtool targets (no eve-test
+or eve-market-sim, which the image doesn't use).  .git stays out of the
+build context again, so a new commit doesn't recompile every file.
+
+gdb is only installed in the runtime image when it is built with
+RUN_GDB=TRUE (passed as the WITH_GDB build argument); start.sh runs the
+server normally, with a note, when RUN_GDB is TRUE but gdb is missing.
+---
+ .dockerignore                    |  4 +-
+ Dockerfile                       | 78 +++++++++++++++++++++-----------
+ docker-compose.yml               |  5 +-
+ utils/container-scripts/start.sh |  4 ++
+ 4 files changed, 60 insertions(+), 31 deletions(-)
+
+diff --git a/.dockerignore b/.dockerignore
+index 71fcf6a8..2bd65aa9 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,10 +1,8 @@
+ *
+-!.git
+-.git/objects/*
+ !src
+ !utils
+ !sql
+ !CMakeLists.txt
+ !cmake
+ !dep
+-!config.h.in
+\ No newline at end of file
++!config.h.in
+diff --git a/Dockerfile b/Dockerfile
+index 58a6fb0e..90356f08 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -5,11 +5,12 @@
+ #                 docker build --target build-env -t evemu-build-env .
+ #                 docker run --rm -v "$PWD":/src:ro -v evemu-build-env-cache:/build evemu-build-env \
+ #                     sh -c 'cmake -S /src -B /build -DCMAKE_BUILD_TYPE=Debug && make -C /build -j"$(nproc)"'
+-#   app-build   compiles the server and EVEDBTool (Go, vendored in dep/evedbtool, built offline).  The
++#   app-build   compiles the server (Release) and EVEDBTool (Go, vendored in dep/evedbtool, built offline).  The
+ #               build tree and ccache live in cache mounts (ids evemu-build and evemu-ccache), so a rebuild
+ #               only recompiles what changed.  To start clean (e.g. a stale CMake cache) rename the ids, or
+ #               `docker builder prune --filter type=exec.cachemount` (clears every project's cache mounts)
+-#   app         the runtime image
++#   app         the runtime image:  a slim Debian with just the server, EVEDBTool, the libraries the server
++#               links against and the tools the container scripts use
+ 
+ # Toolchain and libraries
+ FROM debian:12 AS build-env
+@@ -41,14 +42,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+ # Build stage
+ FROM build-env AS app-build
+ 
+-# Add project files
+-ADD CMakeLists.txt /src/
+-ADD config.h.in /src/
+-ADD /cmake/ /src/cmake
+-ADD /dep/ /src/dep
+-ADD /src/ /src/src
+-ADD /utils/ /src/utils
+-ADD /.git/ /src/.git
++# Project files.  .git is left out on purpose (.dockerignore): the commit hash would be compiled into every
++#  file and make each new commit a full rebuild.  The server's revision shows as "invalid" because of it
++COPY CMakeLists.txt config.h.in /src/
++COPY cmake /src/cmake
++COPY dep /src/dep
++COPY src /src/src
++COPY utils /src/utils
+ 
+ # Create necessary directories
+ RUN mkdir -p /app /app/logs /app/server_cache /app/image_cache
+@@ -57,38 +57,62 @@ RUN mkdir -p /app /app/logs /app/server_cache /app/image_cache
+ WORKDIR /src/build
+ 
+ # Configure, build and install.  /src/build and the ccache persist between builds (cache mounts), so only
+-#  changed files recompile;  ccache also covers anything make thinks is stale
+-ENV CCACHE_DIR=/ccache
++#  changed files recompile;  ccache also covers anything make thinks is stale.
++#  Release: optimised, and much faster to build than Debug.  Only the server and EVEDBTool are built:  the unit
++#  tests (eve-test) and the market simulation harness (eve-market-sim) aren't needed in the image
++ENV CCACHE_DIR=/ccache \
++    CCACHE_MAXSIZE=3G \
++    CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime
+ RUN --mount=type=cache,id=evemu-build,target=/src/build \
+     --mount=type=cache,id=evemu-ccache,target=/ccache \
+-    cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+-          -DCMAKE_C_COMPILER_LAUNCHER=ccache .. && \
+-    make -j$(nproc) && \
+-    make install
++    cmake -DCMAKE_INSTALL_PREFIX=/app -DCMAKE_BUILD_TYPE=Release \
++          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
++          -DCMAKE_CXX_FLAGS="-fpch-preprocess" -DEVEMU_BUILD_TESTS=OFF .. && \
++    make -j$(nproc) eve-server evedbtool && \
++    cmake --install . && \
++    test -x /app/bin/evedbtool && \
++    ccache --show-stats | head -20
++
++# Gather the shared libraries the server needs (except the C/C++ runtime, which every image has)
++RUN mkdir -p /app/lib && \
++    ldd /app/bin/eve-server | awk '/=> \// {print $3}' | \
++    grep -v -E '/(libc|libm|libpthread|libdl|librt|libgcc_s|libstdc\+\+|ld-linux[^/]*)\.so' | \
++    xargs -r -I{} cp -L {} /app/lib/ && \
++    ls /app/lib
+ 
+ # Final runtime image
+-FROM build-env AS app
++FROM debian:12-slim AS app
+ 
+ LABEL description="EVEmu Server"
+ 
+-# Copy built assets
+-COPY --from=app-build /src/utils/ /src/utils
+-COPY --from=app-build /app/ /app
++# mariadb-client is used by the database setup script (db_init.sh); passwd provides useradd.
++#  gdb (for RUN_GDB=TRUE) brings Python and tens of MB with it, so it's only installed when the image is built
++#  with WITH_GDB=TRUE (docker-compose.yml passes RUN_GDB as WITH_GDB:  `RUN_GDB=TRUE docker compose up -d --build`)
++ARG WITH_GDB=FALSE
++RUN apt-get update && \
++    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
++    ca-certificates \
++    mariadb-client \
++    passwd \
++    $(if [ "$WITH_GDB" = "TRUE" ]; then echo gdb; fi) \
++    && apt-get clean && rm -rf /var/lib/apt/lists/* \
++    && useradd evemu
++
++# The server, EVEDBTool and the libraries, owned by the evemu user as they are copied in
++#  (a separate chown step would store a second copy of every file in the image)
++COPY --from=app-build --chown=evemu:evemu /app/ /app
++COPY --chown=evemu:evemu utils/ /src/utils
++RUN echo "/app/lib" > /etc/ld.so.conf.d/evemu.conf && ldconfig
+ 
+ # SQL loading tools.  EVEDBTool is built from dep/evedbtool with the server (installed to /app/bin) and
+ #  goes where the container scripts expect it
+-ADD /sql/ /src/sql
+-RUN cp /app/bin/evedbtool /src/sql/evedbtool
++COPY --chown=evemu:evemu sql/ /src/sql
++RUN cp /app/bin/evedbtool /src/sql/evedbtool && chown evemu:evemu /src/sql/evedbtool
+ 
+ # Expose server ports
+ EXPOSE 26000
+ EXPOSE 26001
+ 
+-# Change ownership of the application to evemu
+-RUN useradd evemu
+-RUN chown -R evemu:evemu /app
+-RUN chown -R evemu:evemu /src
+-
+ ENTRYPOINT ["/bin/sh", "/src/utils/container-scripts/entry.sh"]
+ 
+ # Default command
+diff --git a/docker-compose.yml b/docker-compose.yml
+index bd184e37..55acc936 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -1,7 +1,10 @@
+ services:
+   server:
+     image: "evemu_server"
+-    build: . #Build image from source repository
++    build: #Build image from source repository
++      context: .
++      args:
++        - WITH_GDB=${RUN_GDB:-FALSE} # gdb is only in the image when it's built with RUN_GDB=TRUE (see Dockerfile)
+     container_name: server
+     volumes:
+       - ./config:/app/etc
+diff --git a/utils/container-scripts/start.sh b/utils/container-scripts/start.sh
+index 604c7d2a..f9696b7d 100755
+--- a/utils/container-scripts/start.sh
++++ b/utils/container-scripts/start.sh
+@@ -26,6 +26,10 @@ cp /src/utils/config/gmtools.py /app/etc/
+ #Start eve-server
+ echo "Starting eve-server..."
+ cd /app/bin/
++if [ "$RUN_WITH_GDB" == "TRUE" ] && ! command -v gdb >/dev/null 2>&1; then
++    echo "=== RUN_GDB is TRUE, but this image was built without gdb.  Rebuild it with RUN_GDB=TRUE set to add gdb ==="
++    RUN_WITH_GDB=FALSE
++fi
+ if [ "$RUN_WITH_GDB" == "TRUE" ]; then
+     echo "=== Running EVEmu with gdb ==="
+     gdb -ex run ./eve-server
+-- 
+2.43.0
+

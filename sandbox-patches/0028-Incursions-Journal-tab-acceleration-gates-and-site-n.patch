@@ -1,0 +1,228 @@
+From 18f4d4d37a027a16c28a623c3fb29ec066a89ef6 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 15:30:06 +0000
+Subject: [PATCH] Incursions: Journal tab, acceleration gates and site names
+
+Journal: the Crucible client calls rewardMgr.GetDelayedRewardsByGroupIDs
+with a tuple of reward group IDs, and the handler only accepted a list,
+so the call was rejected and the Journal's Incursions tab stayed empty.
+It now takes a tuple, a list or a single ID.
+
+Acceleration gates: SystemBubble::ProcessWander() erased every entry in
+a bubble's dynamic list that wasn't a DynamicSystemEntity.  Gates, site
+beacons, deployables and other ItemSystemEntities that can't move were
+dropped from their bubble a minute after spawning while still pointing
+at it, so later arrivals never got them in AddBalls.  They now stay put.
+Same bug in upstream master; mission acceleration gates are affected
+too.
+
+Site names: ItemSystemEntity's slim item had no "name", so the overview
+fell back to the type name ("Celestial Beacon").  It now sends the
+item's name.  ConfigDB::GetMultiLocationsEx() ran its static, dynamic
+and asteroid queries into the same result one after another, so a
+mixed request only returned the last group's rows; it now runs them as
+one UNION ALL query.
+---
+ src/eve-server/config/ConfigDB.cpp            | 59 +++++++------------
+ src/eve-server/map/RewardMgrService.cpp       |  2 +-
+ src/eve-server/map/RewardMgrService.h         |  5 +-
+ src/eve-server/system/SystemBubble.cpp        |  5 +-
+ src/eve-server/system/SystemEntity.cpp        |  3 +
+ .../system/cosmicMgrs/IncursionMgr.cpp        | 18 ++++--
+ .../system/cosmicMgrs/IncursionMgr.h          |  2 +-
+ 7 files changed, 48 insertions(+), 46 deletions(-)
+
+diff --git a/src/eve-server/config/ConfigDB.cpp b/src/eve-server/config/ConfigDB.cpp
+index a0e7063..17a4fd9 100644
+--- a/src/eve-server/config/ConfigDB.cpp
++++ b/src/eve-server/config/ConfigDB.cpp
+@@ -222,57 +222,42 @@ PyRep *ConfigDB::GetMultiLocationsEx(const std::vector<int32> &entityIDs) {
+         }
+     }
+ 
+-    DBQueryResult res;
+-    std::string ids = "";
+-
++    // one query for all three kinds.  separate queries into the same result kept only the last one's rows,
++    //  so a request mixing kinds (planets and site beacons, say) lost every name but the last kind's
++    std::vector<std::string> parts;
++    std::string ids;
+     if (staticItems.size()) {
+         ListToINString(staticItems, ids);
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z,"
+             " itemNameID AS locationNameID"   //locationName = localization.GetByMessageID(self.locationNameID)
+-            " FROM mapDenormalize"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++            " FROM mapDenormalize WHERE itemID in (" + ids + ")");
+         ids = "";
+     }
+-
+     if (dynamicItems.size()) {
+         ListToINString(dynamicItems, ids);
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
+-            " NULL AS locationNameID"
+-            " FROM entity"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
++            " FROM entity WHERE itemID in (" + ids + ")");
+         ids = "";
+     }
+-
+     if (asteroidItems.size()) {
+         ListToINString(asteroidItems, ids);
+         sLog.Warning("GetMultiLocationsEx", "Asteroid Items (%s) requested.", ids.c_str());
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
+-            " NULL AS locationNameID"
+-            " FROM sysAsteroids"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
++            " FROM sysAsteroids WHERE itemID in (" + ids + ")");
+     }
+ 
++    std::string query;
++    for (auto& cur : parts) {
++        if (!query.empty())
++            query += " UNION ALL ";
++        query += cur;
++    }
++    DBQueryResult res;
++    if (query.empty())
++        query = "SELECT itemID AS locationID, itemName AS locationName, x, y, z, itemNameID AS locationNameID FROM mapDenormalize WHERE 0";
++    if (!sDatabase.RunQuery(res, "%s", query.c_str()))
++        codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
++
+     return DBResultToTupleSet(res);
+ }
+ 
+diff --git a/src/eve-server/map/RewardMgrService.cpp b/src/eve-server/map/RewardMgrService.cpp
+index 1a72b5f..cfd02b3 100644
+--- a/src/eve-server/map/RewardMgrService.cpp
++++ b/src/eve-server/map/RewardMgrService.cpp
+@@ -21,7 +21,7 @@ RewardMgrService::RewardMgrService() :
+     this->Add("GetDelayedRewardsByGroupIDs", &RewardMgrService::GetDelayedRewardsByGroupIDs);
+ }
+ 
+-PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyList* groupIDs)
++PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs)
+ {
+     return sIncursionMgr.GetDelayedRewards(call.client->GetCharacterID(), groupIDs);
+ }
+diff --git a/src/eve-server/map/RewardMgrService.h b/src/eve-server/map/RewardMgrService.h
+index 06ea153..e63c3f6 100644
+--- a/src/eve-server/map/RewardMgrService.h
++++ b/src/eve-server/map/RewardMgrService.h
+@@ -17,8 +17,9 @@ public:
+     RewardMgrService();
+ 
+ protected:
+-    // the Journal's Incursions tab: {rewardGroupID: [util.KeyVal(rewardQuantity)]}
+-    PyResult GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyList* groupIDs);
++    // the Journal's Incursions tab: {rewardGroupID: [util.KeyVal(rewardQuantity)]}.  groupIDs is a tuple from the
++    //  Crucible client (seen in a server log), so take any sequence
++    PyResult GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs);   // the client sends a tuple
+ };
+ 
+ #endif  // EVEMU_MAP_REWARDMGRSERVICE_H_
+diff --git a/src/eve-server/system/SystemBubble.cpp b/src/eve-server/system/SystemBubble.cpp
+index 5bdb664..6180495 100644
+--- a/src/eve-server/system/SystemBubble.cpp
++++ b/src/eve-server/system/SystemBubble.cpp
+@@ -174,8 +174,11 @@ void SystemBubble::ProcessWander(std::vector<SystemEntity *> &wanderers) {
+         _log(DESTINY__TRACE, "SystemBubble::ProcessWander() getting dynamicSE");
+         pDSE = itr->second->GetDynamicSE();
+         if (pDSE == nullptr) {
++            // items that can't move (acceleration gates, site beacons and structures, cyno fields...) can't wander off.
++            //  erasing them here dropped them from the bubble while they still pointed at it, so a minute after
++            //  spawning they were missing from every later arrival's AddBalls (an incursion beacon with no gate)
+             _log(DESTINY__TRACE, "SystemBubble::ProcessWander() pDSE is nullptr");
+-            itr = m_dynamicEntities.erase(itr);
++            ++itr;
+             continue;
+         }
+ 
+diff --git a/src/eve-server/system/SystemEntity.cpp b/src/eve-server/system/SystemEntity.cpp
+index 0d7b81e..0bb5355 100644
+--- a/src/eve-server/system/SystemEntity.cpp
++++ b/src/eve-server/system/SystemEntity.cpp
+@@ -413,6 +413,9 @@ PyDict* ItemSystemEntity::MakeSlimItem() {
+         slim->SetItemString("itemID",       new PyLong(m_self->itemID()));
+         slim->SetItemString("typeID",       new PyInt(m_self->typeID()));
+         slim->SetItemString("ownerID",      new PyInt(m_ownerID));
++        // the name the overview shows.  without it the client fell back to the type name ("Celestial Beacon")
++        slim->SetItemString("name",         new PyString(m_self->itemName()));
++        slim->SetItemString("nameID",       PyStatic.NewNone());
+         if (m_self->groupID() == EVEDB::invGroups::Warp_Gate) {
+             // this is incomplete........
+             slim->SetItemString("dunSkillLevel", PyStatic.NewNone());   //?
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+index 2a0bf5f..9f7322d 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+@@ -1012,15 +1012,25 @@ PyRep* IncursionMgr::GetSystems()
+ }
+ 
+ // rewardMgr.GetDelayedRewardsByGroupIDs(): {rewardGroupID: [util.KeyVal(rewardQuantity = LP in the pool)]}
+-PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyList* groupIDs)
++PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyRep* groupIDs)
+ {
+     PyDict* dict = new PyDict();
++    std::vector<PyRep*> ids;
+     if (groupIDs == nullptr)
+         return dict;
+-    for (PyList::const_iterator itr = groupIDs->begin(); itr != groupIDs->end(); ++itr) {
+-        if (!(*itr)->IsInt())
++    if (groupIDs->IsTuple()) {
++        for (PyTuple::const_iterator itr = groupIDs->AsTuple()->begin(); itr != groupIDs->AsTuple()->end(); ++itr)
++            ids.push_back(*itr);
++    } else if (groupIDs->IsList()) {
++        for (PyList::const_iterator itr = groupIDs->AsList()->begin(); itr != groupIDs->AsList()->end(); ++itr)
++            ids.push_back(*itr);
++    } else if (groupIDs->IsInt()) {
++        ids.push_back(groupIDs);
++    }
++    for (auto cur : ids) {
++        if ((cur == nullptr) or !cur->IsInt())
+             continue;
+-        uint32 incursionID = (*itr)->AsInt()->value();
++        uint32 incursionID = cur->AsInt()->value();
+         uint32 lp = (sConfig.incursion.DelayedLP ? IncursionDB::GetPoolLP(incursionID, charID) : 0);
+         PyDict* reward = new PyDict();
+             reward->SetItemString("rewardQuantity", new PyInt(lp));
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index abc792d..8875ab5 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -215,7 +215,7 @@ public:
+     PyRep* GetGlobalReport();
+     PyRep* GetSystems();
+     // rewardMgr: the character's LP in each incursion's pool
+-    PyRep* GetDelayedRewards(uint32 charID, PyList* groupIDs);
++    PyRep* GetDelayedRewards(uint32 charID, PyRep* groupIDs);
+ 
+     // GM commands.  each returns a message for the caller
+     std::string Start(uint32 constellationID = 0);
+-- 
+2.43.0
+

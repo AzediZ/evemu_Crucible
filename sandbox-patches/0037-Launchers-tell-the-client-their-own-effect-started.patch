@@ -1,0 +1,91 @@
+From eeed9f05570d42928d2c177f211bce17acb12757 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:47:36 +0000
+Subject: [PATCH 37/50] Launchers: tell the client their own effect started
+
+ShowEffect() replaced m_effectID with the charge's default effect for useMissiles, for the OnSpecialFX
+graphic.  OnGodmaShipEffect then named the charge's effect, so the client's module button (which tracks
+useMissiles) never saw the launcher start: no cycle ring, and no way to switch it off.  The charge's
+effect is now local to the OnSpecialFX call.
+
+SetSlaveData() copies the master's effect, target and repeat to grouped slaves, which sent effect 0.
+---
+ src/eve-server/ship/modules/ActiveModule.cpp | 27 ++++++++++++++------
+ src/eve-server/ship/modules/ActiveModule.h   |  2 +-
+ 2 files changed, 20 insertions(+), 9 deletions(-)
+
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index a3656051..6e4def00 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -506,7 +506,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+     if (m_linkMaster) {
+         m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
+         for (auto cur : modules) {
+-            cur->GetActiveModule()->SetSlaveData(pShip);
++            cur->GetActiveModule()->SetSlaveData(pShip, this);
+             cur->GetActiveModule()->ShowEffect(true, false);
+         }
+     } else {
+@@ -591,7 +591,14 @@ void ActiveModule::Deactivate(std::string effect/*""*/)
+     m_Stop = true;
+ }
+ 
+-void ActiveModule::SetSlaveData(ShipSE* pShip) {
++void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
++    // a slave runs on its master's effect and target, so its own effects name them too (it sent effectID 0 before)
++    if ((pMaster != nullptr) and (pMaster != this)) {
++        m_effectID = pMaster->m_effectID;
++        m_targetID = pMaster->m_targetID;
++        m_targetSE = pMaster->m_targetSE;
++        m_repeat = pMaster->m_repeat;
++    }
+     m_shipSE = pShip;
+     m_sysMgr = pShip->SystemMgr();
+     m_targMgr = pShip->TargetMgr();
+@@ -1607,19 +1614,23 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
+         }
+     }
+ 
+-    // there may be others here like this...this is ONLY for OnSpecialFX data
+-    if ((m_effectID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
+-        m_effectID = m_chargeRef->type().GetDefaultEffect();
+-    std::string guidStr = sFxDataMgr.GetEffectGuid(m_effectID);
++    // there may be others here like this...this is ONLY for OnSpecialFX data.  a launcher's graphic comes from its charge's
++    //  default effect, but OnGodmaShipEffect below must name the launcher's own effect (useMissiles): that is what the
++    //  client's module button tracks.  overwriting m_effectID here left the client thinking launchers never started, so
++    //  they showed no cycle ring, couldn't be switched off, and every click started them again
++    uint16 fxID(m_effectID);
++    if ((fxID == EVEEffectID::useMissiles) and (m_chargeRef.get() != nullptr))   //operation defined by charge (use charge's default effectID)
++        fxID = m_chargeRef->type().GetDefaultEffect();
++    std::string guidStr = sFxDataMgr.GetEffectGuid(fxID);
+     // the covert ops cloak's guid isn't in the client's effect repository.  it looks like any other cloak
+     if (guidStr.compare("effects.CloakingCovertOps") == 0)
+         guidStr = "effects.Cloaking";
+     if (guidStr.empty())
+-        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), m_effectID);
++        _log(EFFECTS__ERROR, "guid empty for %s using effectID %u", m_modRef->name(), fxID);
+ 
+     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
+     uint32 timeLeft(GetRemainingCycleTimeMS());
+-    bool isOffensive(sFxDataMgr.isOffensive(m_effectID));
++    bool isOffensive(sFxDataMgr.isOffensive(fxID));
+     PyRep* graphicInfo(nullptr);
+     if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
+         if (IsValidTarget(m_targetID) and IsScriptedDisruptor()) {
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index 280d3599..ea3c1c18 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -121,7 +121,7 @@ protected:
+     void                UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRef iRef);
+ 
+     /* for linked weapons */
+-    void                SetSlaveData(ShipSE* pShip);
++    void                SetSlaveData(ShipSE* pShip, ActiveModule* pMaster = nullptr);
+ 
+     /* for modules that use charges */
+     void                ConsumeCharge();                // common code to reduce ammo by one unit.
+-- 
+2.43.0
+

@@ -1,0 +1,192 @@
+From c7807abe7f6674b66890af00157253452555d881 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:49:05 +0000
+Subject: [PATCH 39/50] Inventory, names and queries: fixes from the incursion
+ work
+
+- Containers in space list everything in them, whoever owns it (site containers, jetcans with mixed loot).
+- Mission containers in the entity category load and spawn as cargo containers.
+- IsWreckTypeID includes 3260, the Sansha supercarrier wreck (Renn's loot data already maps it).
+- Item system entities (site beacons and the like) send their name, so the overview stops showing the
+  type name.
+- GetMultiLocationsEx runs one UNION query.  Separate queries into one result kept only the last kind's
+  rows, so a request mixing planets and site beacons lost the other names.
+- ListToINString trims the unused room it reserved.  It was left as NULs, which cut a query short when
+  the string was joined with +.
+---
+ src/eve-common/EVE_Defines.h               |  3 +-
+ src/eve-core/utils/utils_string.cpp        |  5 ++
+ src/eve-server/config/ConfigDB.cpp         | 59 ++++++++--------------
+ src/eve-server/inventory/Inventory.cpp     |  4 ++
+ src/eve-server/inventory/InventoryItem.cpp |  3 ++
+ src/eve-server/system/SystemEntity.cpp     |  3 ++
+ 6 files changed, 39 insertions(+), 38 deletions(-)
+
+diff --git a/src/eve-common/EVE_Defines.h b/src/eve-common/EVE_Defines.h
+index 3b7da495..2f7891b9 100644
+--- a/src/eve-common/EVE_Defines.h
++++ b/src/eve-common/EVE_Defines.h
+@@ -195,8 +195,9 @@
+ #define IsCharType(typeID) \
+  ((typeID >= minCharType) && (typeID <= maxCharType))
+ 
++// 3260 is the Sansha supercarrier wreck (incursion motherships), the one wreck type outside the range
+ #define IsWreckTypeID(typeID) \
+- ((typeID > 26467) && (typeID < 30826))
++ ((((typeID) > 26467) && ((typeID) < 30826)) || ((typeID) == 3260))
+ 
+ #define IsCharacterID(itemID) \
+  ((itemID >= minCharacter) && (itemID <= maxCharacter))
+diff --git a/src/eve-core/utils/utils_string.cpp b/src/eve-core/utils/utils_string.cpp
+index 63d1d267..ce4f7e46 100644
+--- a/src/eve-core/utils/utils_string.cpp
++++ b/src/eve-core/utils/utils_string.cpp
+@@ -196,6 +196,11 @@ void ListToINString( const std::vector<int32>& ints, std::string& into, const ch
+             // last value to be printed
+             format_index += snprintf( &into[ format_index ], 11, "%i", *cur );
+     }
++
++    // drop the unused room reserved above.  it was left as NULs, so c_str() read fine, but anything that
++    //  used the string itself ("... IN (" + ids + ")") carried the NULs along and cut the query short
++    if( format_index < into.size() )
++        into.resize( format_index );
+ }
+ 
+ void MakeUpperString( const char* source, char* target )
+diff --git a/src/eve-server/config/ConfigDB.cpp b/src/eve-server/config/ConfigDB.cpp
+index 51350e39..e335bb0e 100644
+--- a/src/eve-server/config/ConfigDB.cpp
++++ b/src/eve-server/config/ConfigDB.cpp
+@@ -204,57 +204,42 @@ PyRep *ConfigDB::GetMultiLocationsEx(const std::vector<int32> &entityIDs) {
+         }
+     }
+ 
+-    DBQueryResult res;
+-    std::string ids = "";
+-
++    // one query for all three kinds.  separate queries into the same result kept only the last one's rows,
++    //  so a request mixing kinds (planets and site beacons, say) lost every name but the last kind's
++    std::vector<std::string> parts;
++    std::string ids;
+     if (staticItems.size()) {
+         ListToINString(staticItems, ids);
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z,"
+             " itemNameID AS locationNameID"   //locationName = localization.GetByMessageID(self.locationNameID)
+-            " FROM mapDenormalize"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++            " FROM mapDenormalize WHERE itemID in (" + ids + ")");
+         ids = "";
+     }
+-
+     if (dynamicItems.size()) {
+         ListToINString(dynamicItems, ids);
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
+-            " NULL AS locationNameID"
+-            " FROM entity"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
++            " FROM entity WHERE itemID in (" + ids + ")");
+         ids = "";
+     }
+-
+     if (asteroidItems.size()) {
+         ListToINString(asteroidItems, ids);
+         sLog.Warning("GetMultiLocationsEx", "Asteroid Items (%s) requested.", ids.c_str());
+-        if (!sDatabase.RunQuery(res,
+-            "SELECT "
+-            " itemID AS locationID,"
+-            " itemName AS locationName,"
+-            " x, y, z,"
+-            " NULL AS locationNameID"
+-            " FROM sysAsteroids"
+-            " WHERE itemID in (%s)", ids.c_str()))
+-        {
+-            codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
+-        }
++        parts.push_back("SELECT itemID AS locationID, itemName AS locationName, x, y, z, NULL AS locationNameID"
++            " FROM sysAsteroids WHERE itemID in (" + ids + ")");
+     }
+ 
++    std::string query;
++    for (auto& cur : parts) {
++        if (!query.empty())
++            query += " UNION ALL ";
++        query += cur;
++    }
++    DBQueryResult res;
++    if (query.empty())
++        query = "SELECT itemID AS locationID, itemName AS locationName, x, y, z, itemNameID AS locationNameID FROM mapDenormalize WHERE 0";
++    if (!sDatabase.RunQuery(res, "%s", query.c_str()))
++        codelog(DATABASE__ERROR, "Error in GetMultiLocationsEx query: %s", res.error.c_str());
++
+     return DBResultToTupleSet(res);
+ }
+ 
+diff --git a/src/eve-server/inventory/Inventory.cpp b/src/eve-server/inventory/Inventory.cpp
+index 68a8fe7d..ce3ecc31 100644
+--- a/src/eve-server/inventory/Inventory.cpp
++++ b/src/eve-server/inventory/Inventory.cpp
+@@ -357,6 +357,10 @@ void Inventory::List(CRowSet* into, EVEItemFlags flag, uint32 ownerID) const {
+             cur.second->GetItemRow(row);
+         }
+     } else {
++        // containers in space show everything in them, whoever owns it (site containers, jetcans with mixed loot)
++        if (sDataMgr.IsSolarSystem(m_self->locationID())
++        and ((m_self->categoryID() == EVEDB::invCategories::Celestial) or (m_self->categoryID() == EVEDB::invCategories::Entity)))
++            ownerID = 0;
+         for (auto cur : mContents) {
+             if (((ownerID == 0)        or (cur.second->ownerID() == ownerID))
+             and ((flag == flagNone) or (cur.second->flag() == flag))) {
+diff --git a/src/eve-server/inventory/InventoryItem.cpp b/src/eve-server/inventory/InventoryItem.cpp
+index 63bd364c..0898dfef 100644
+--- a/src/eve-server/inventory/InventoryItem.cpp
++++ b/src/eve-server/inventory/InventoryItem.cpp
+@@ -335,6 +335,8 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const
+         // there are 216 groups in the entity category.  im not testing all of them.
+         case EVEDB::invCategories::Entity: {
+             switch (type.groupID()) {
++                // mission containers in the entity category are site containers (incursions)
++                case EVEDB::invGroups::Mission_Container:
+                 case EVEDB::invGroups::Spawn_Container: {
+                     return CargoContainer::_LoadItem<CargoContainer>(itemID, type, data);
+                 } break;
+@@ -464,6 +466,7 @@ InventoryItemRef InventoryItem::Spawn(ItemData &data)
+         } break;
+         case EVEDB::invCategories::Entity: {
+             switch (iType->groupID()) {
++                case EVEDB::invGroups::Mission_Container:
+                 case EVEDB::invGroups::Spawn_Container: {
+                     return CargoContainer::Spawn(data);
+                 } break;
+diff --git a/src/eve-server/system/SystemEntity.cpp b/src/eve-server/system/SystemEntity.cpp
+index db87cdee..a71cadb9 100644
+--- a/src/eve-server/system/SystemEntity.cpp
++++ b/src/eve-server/system/SystemEntity.cpp
+@@ -502,6 +502,9 @@ PyDict* ItemSystemEntity::MakeSlimItem() {
+         slim->SetItemString("itemID",       new PyLong(m_self->itemID()));
+         slim->SetItemString("typeID",       new PyInt(m_self->typeID()));
+         slim->SetItemString("ownerID",      new PyInt(m_ownerID));
++        // the name the overview shows.  without it the client fell back to the type name ("Celestial Beacon")
++        slim->SetItemString("name",         new PyString(m_self->itemName()));
++        slim->SetItemString("nameID",       PyStatic.NewNone());
+         // acceleration gates add their dungeon data (AccelGateSE)
+     /** @todo  finish rotation data
+     Large_Collidable_Structure
+-- 
+2.43.0
+

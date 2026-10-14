@@ -1,0 +1,341 @@
+From 50e2af8ef27e78b492644e345ad2b3aa03c4bb15 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 17:30:56 +0100
+Subject: [PATCH] Weapon groups: load every weapon, keep charges when grouping,
+ every launcher fires
+
+- LoadLinkedWeapons(): load every module in the bank from the offered stacks, shared evenly when there
+  aren't enough to fill them all (it loaded the master, then usually nothing, and could read past the
+  end of chargeIDs).
+- LinkWeapon(): loaded weapons can be grouped.  MatchLinkedCharges() gives the group one charge type
+  (the master's; an empty master takes the slave's): a slave with another type is unloaded to cargo and
+  reloaded from cargo.  The master is always flagged as linked master; Group All created its entry first
+  and never set the flags, so the group fired as a single weapon.
+- LinkWeaponLoop(): skip only loading/active weapons, not loaded ones.  UnloadOnLinkAll defaults to false.
+- LaunchMissile(): every loaded, online launcher in a group launches its own missile (LaunchMissileFrom);
+  Missile no longer multiplies damage, flight time and hit points by the group size.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/ship/Missile.cpp              |  10 +-
+ src/eve-server/ship/Ship.cpp                 | 125 ++++++++++++++-----
+ src/eve-server/ship/Ship.h                   |   1 +
+ src/eve-server/ship/modules/ActiveModule.cpp |  53 ++++++--
+ src/eve-server/ship/modules/ActiveModule.h   |   1 +
+ utils/config/eve-server.xml                  |   2 +-
+ 6 files changed, 140 insertions(+), 52 deletions(-)
+
+diff --git a/src/eve-server/ship/Missile.cpp b/src/eve-server/ship/Missile.cpp
+index d922bff0..cf364527 100644
+--- a/src/eve-server/ship/Missile.cpp
++++ b/src/eve-server/ship/Missile.cpp
+@@ -129,14 +129,8 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
+ 
+     flightTime *= sConfig.rates.missileTime;
+ 
+-    // if linked, update appropriate attributes
+-    if (pMod != nullptr)
+-        if (pMod->IsLinked()) {
+-            uint8 mod = m_fromSE->GetShipSE()->GetShipItemRef()->GetLinkedCount(pMod);
+-            m_damageMod *= mod;
+-            flightTime *= mod;
+-            m_hullHP *= mod;
+-        }
++    // grouped launchers each launch their own missile (ActiveModule::LaunchMissile), so a missile's damage
++    //  doesn't depend on its launcher being grouped
+ 
+     m_lifeTimer.Start(flightTime);
+ 
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index 004a7bd9..89ab0133 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -689,37 +689,99 @@ void ShipItem::LoadChargesToBank(EVEItemFlags flag, std::vector< int32 >& charge
+ }
+ 
+ // only called from dogma call.  can throw
++// loads every module in the group, sharing the charges evenly when there aren't enough to fill them all
+ void ShipItem::LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs)
+ {
+-    std::map<GenericModule*, std::list<GenericModule*>>::iterator itr = m_linkedWeapons.find(pMod);
+-    if (itr == m_linkedWeapons.end())
+-        return;
++    std::vector<GenericModule*> modules;
++    GetLinkedWeaponMods(pMod->flag(), modules);
++    if (modules.empty())
++        modules.push_back(pMod);
+ 
+-    int8 pos = 0;
+-    InventoryItemRef cRef(sItemFactory.GetItemRef(chargeIDs[pos]));
+-    if (cRef.get() == nullptr)
+-        throw UserError ("CantFindChargeToAdd");
++    // stacks the client offered that are still in a hold or hangar
++    auto available = [&]() {
++        std::vector<InventoryItemRef> stacks;
++        for (auto id : chargeIDs) {
++            InventoryItemRef cRef(sItemFactory.GetItemRef(id));
++            if ((cRef.get() != nullptr) and (cRef->quantity() > 0)
++            and (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())))
++                stacks.push_back(cRef);
++        }
++        return stacks;
++    };
+ 
+-    int8 size(chargeIDs.size());
+-    //load charge in master
+-    VerifyHoldType(pMod->flag(), cRef, m_pilot);
+-    m_ModuleManager->LoadCharge(cRef, pMod->flag());
+-    // loop thru slaves and load charge(s)
+-    std::list<GenericModule*>::iterator itr2 = itr->second.begin();
+-    while ((itr2 != itr->second.end()) and (pos <= size)) {
+-        cRef = sItemFactory.GetItemRef(chargeIDs[pos]);
+-        if (cRef.get() == nullptr){
+-            ++pos;
+-        } else if (IsCargoHoldFlag(cRef->flag()) or IsHangarFlag(cRef->flag())) {
+-            VerifyHoldType((*itr2)->flag(), cRef, m_pilot);
+-            m_ModuleManager->LoadCharge(cRef, (*itr2)->flag());
+-            ++itr2;
+-        } else {
+-            ++pos;
++    std::vector<InventoryItemRef> stacks(available());
++    if (stacks.empty())
++        throw UserError ("CantFindChargeToAdd");
++    uint16 chargeType(stacks.front()->typeID());
++    double chargeVolume(stacks.front()->GetAttribute(AttrVolume).get_double());
++    if (chargeVolume <= 0.0)
++        chargeVolume = 1.0;
++
++    int32 total(0);
++    for (auto cur : stacks)
++        if (cur->typeID() == chargeType)
++            total += cur->quantity();
++
++    uint8 left(static_cast<uint8>(modules.size()));
++    for (auto cur : modules) {
++        // how many more charges this module holds
++        int32 room(static_cast<int32>(cur->GetAttribute(AttrCapacity).get_double() / chargeVolume));
++        if (cur->IsLoaded() and (cur->GetLoadedChargeRef()->typeID() == chargeType))
++            room -= cur->GetLoadedChargeRef()->quantity();
++        int32 share((total + left - 1) / left);     // round up, so an odd charge isn't left behind
++        --left;
++        int32 want(std::min(room, share));
++        if ((want < 1) or cur->IsActive() or cur->IsLoading())
++            continue;
++        VerifyHoldType(cur->flag(), stacks.front(), m_pilot);
++        for (auto cRef : available()) {
++            if (want < 1)
++                break;
++            if (cRef->typeID() != chargeType)
++                continue;
++            int32 take(std::min(want, cRef->quantity()));
++            InventoryItemRef loadRef(cRef);
++            if (take < cRef->quantity()) {
++                loadRef = cRef->Split(take, false, true);
++                if (loadRef.get() == nullptr)
++                    break;
++            }
++            m_ModuleManager->LoadCharge(loadRef, cur->flag());
++            want -= take;
++            total -= take;
+         }
+     }
+ }
+ 
++// the modules in a group share one charge type, the master's.  a slave loaded with another type is unloaded to
++//  cargo and loaded with the master's type, if there is any in cargo.  an empty master takes the slave's type.
++void ShipItem::MatchLinkedCharges(GenericModule* pMaster, GenericModule* pSlave)
++{
++    GenericModule* pFrom(pMaster);
++    GenericModule* pTo(pSlave);
++    if (!pMaster->IsLoaded()) {
++        if (!pSlave->IsLoaded())
++            return;
++        pFrom = pSlave;
++        pTo = pMaster;
++    }
++    uint16 chargeType(pFrom->GetLoadedChargeRef()->typeID());
++    if (pTo->IsLoaded()) {
++        if (pTo->GetLoadedChargeRef()->typeID() == chargeType)
++            return;
++        m_ModuleManager->UnloadCharge(pTo);
++    }
++    InventoryItemRef cRef(pInventory->GetByTypeFlag(chargeType, flagCargoHold));
++    if (cRef.get() == nullptr)
++        return;
++    try {
++        VerifyHoldType(pTo->flag(), cRef, m_pilot);
++        m_ModuleManager->LoadCharge(cRef, pTo->flag());
++    } catch (...) {
++        // can't load it; the module stays empty
++    }
++}
++
+ //{'FullPath': u'UI/Messages', 'messageID': 257270, 'label': u'NotEnoughCargoSpaceToUnloadBankBody'}(u'There is not enough cargo space left to unload the charges in the weapon bank. Try freeing up some space and try again.', None, None)
+ 
+ // only called from client call.  can throw
+@@ -1434,8 +1496,6 @@ void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
+         return; // make error here?
+     if (pMaster == pSlave)
+         return; // make error here?
+-    if ((pMaster->IsLoaded()) or (pSlave->IsLoaded()))
+-        throw UserError ("CantLinkAmmoInWeapon");
+     if ((pMaster->IsActive()) or (pSlave->IsActive()))
+         throw UserError ("CantLinkModuleActive");
+     if ((pMaster->IsDamaged()) or (pSlave->IsDamaged()))
+@@ -1450,12 +1510,16 @@ void ShipItem::LinkWeapon(GenericModule* pMaster, GenericModule* pSlave)
+         std::list<GenericModule*> slaves;
+         slaves.push_back(pSlave);
+         m_linkedWeapons[pMaster] = slaves;
+-        pMaster->SetLinked(true);
+-        pMaster->SetLinkMaster(true);
+     } else {
+         itr->second.push_back(pSlave);
+     }
++    // Group All makes the master's (empty) entry first, so set these here in either case
++    pMaster->SetLinked(true);
++    pMaster->SetLinkMaster(true);
+     pSlave->SetLinked(true);
++
++    // loaded weapons keep their charges when grouped
++    MatchLinkedCharges(pMaster, pSlave);
+ }
+ 
+ void ShipItem::MergeModuleGroups(uint32 masterID, uint32 slaveID)
+@@ -1506,11 +1570,12 @@ void ShipItem::LinkWeaponLoop(std::list<GenericModule*>& weaponList)
+     GenericModule* master(nullptr);
+     std::list< GenericModule*>::iterator itr = weaponList.begin();
+     while (itr != weaponList.end()) {
+-        if ((*itr)->IsLoaded() or (*itr)->IsLoading()) {
++        if ((*itr)->IsLoading() or (*itr)->IsActive()) {
++            // loaded weapons can be grouped (they keep their charges), but not while loading or active
+             if (is_log_enabled(MODULE__INFO))
+-                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) IsLoaded.  Skipping.", \
++                _log(MODULE__INFO, "ShipItem::LinkWeaponLoop() - %s(%s-%u) is loading or active.  Skipping.", \
+                     (*itr)->GetSelf()->name(), sDataMgr.GetFlagName((*itr)->flag()), (*itr)->itemID());
+-            m_pilot->SendErrorMsg("You cannot group the %s while loaded with %s", (*itr)->GetSelf()->name(), (*itr)->GetLoadedChargeRef()->name());
++            m_pilot->SendErrorMsg("You cannot group the %s while it is loading or active.", (*itr)->GetSelf()->name());
+             itr = weaponList.erase(itr);
+         } else if (master == nullptr) {
+             // lets check if this module will match a master already in list before making new master...
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index f44bdd26..7c35c558 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -266,6 +266,7 @@ public:
+     void DamageGroup(GenericModule* pMod);
+     // to load with ammo
+     void LoadLinkedWeapons(GenericModule* pMod, std::vector<int32>& chargeIDs);
++    void MatchLinkedCharges(GenericModule* pMaster, GenericModule* pSlave);
+     void GetLinkedWeaponMods(EVEItemFlags flag, std::vector<GenericModule*> &modules);
+ 
+ protected:
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 408cf4cb..ba075b9e 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -1428,36 +1428,63 @@ void ActiveModule::LaunchMissile()
+     Client* pClient = m_shipRef->GetPilot();
+     if (pClient == nullptr)
+         return;
+-    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position() );
++
++    // every loaded launcher in a group launches its own missile, as in Crucible
++    std::vector<GenericModule*> modules;
++    if (m_linkMaster)
++        m_shipRef->GetLinkedWeaponMods(m_modRef->flag(), modules);
++    if (modules.empty())
++        modules.push_back(this);
++
++    bool launched(false);
++    for (auto cur : modules) {
++        if (!cur->isOnline() or !cur->IsLoaded())
++            continue;
++        if (LaunchMissileFrom(pClient, cur))
++            launched = true;
++        else if (cur == this) {
++            AbortCycle();
++            return;
++        }
++    }
++    if (!launched)
++        return;
++
++    // Reduce ammo charge by 1 unit (from every loaded launcher in a group):
++    ConsumeCharge();
++}
++
++bool ActiveModule::LaunchMissileFrom(Client* pClient, GenericModule* pLauncher)
++{
++    InventoryItemRef chargeRef(pLauncher->GetLoadedChargeRef());
++    if (chargeRef.get() == nullptr)
++        return false;
++    ItemData idata(chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, chargeRef->name(), m_shipRef->position() );
+     InventoryItemRef missileRef = sItemFactory.SpawnItem(idata);
+     if (missileRef.get() == nullptr) {
+-        _log(ITEM__ERROR ,"Unable to spawn item #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
+-        pClient->SendErrorMsg("Your %s in %s experienced a loading error and was disabled.", m_chargeRef->name(), m_modRef->name());
+-        AbortCycle();
+-        return;
++        _log(ITEM__ERROR ,"Unable to spawn item #%u:'%s' of type %u.", chargeRef->itemID(), chargeRef->name(), chargeRef->typeID());
++        pClient->SendErrorMsg("Your %s in %s experienced a loading error and was disabled.", chargeRef->name(), pLauncher->GetSelf()->name());
++        return false;
+     }
+ 
+     SystemManager* pSystem = pClient->SystemMgr();
+-    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, m_modRef, m_targetSE, m_shipRef->GetPilot()->GetShipSE(), this);
++    Missile* pMissile = new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, pLauncher->GetSelf(), m_targetSE, m_shipRef->GetPilot()->GetShipSE(), pLauncher);
+     if (pMissile == nullptr) {
+-        _log(ITEM__ERROR ,"Unable to create SE #%u:'%s' of type %u.", m_chargeRef->itemID(), m_chargeRef->name(), m_chargeRef->typeID());
+-        pClient->SendErrorMsg("Your %s in %s experienced a launching error and was disabled.", m_chargeRef->name(), m_modRef->name());
+-        AbortCycle();
+-        return;
++        _log(ITEM__ERROR ,"Unable to create SE #%u:'%s' of type %u.", chargeRef->itemID(), chargeRef->name(), chargeRef->typeID());
++        pClient->SendErrorMsg("Your %s in %s experienced a launching error and was disabled.", chargeRef->name(), pLauncher->GetSelf()->name());
++        return false;
+     }
+ 
+     // the missile flies itself (see DestinyManager).  it hits when its path reaches the target
+     pMissile->SetSpeed(pMissile->GetSelf()->GetAttribute(AttrMaxVelocity).get_float());
+     pMissile->DestinyMgr()->MakeMissile(pMissile);
+ 
+-    // Reduce ammo charge by 1 unit:
+-    ConsumeCharge();
+-
+     // tell target a missile has been launched at them.. (defender missile trigger for ship, tower, pos, npc, others?)
+     m_targetSE->MissileLaunched(pMissile);
+ 
+     // add data to StatisticMgr
+     sStatMgr.Increment(Stat::pcMissiles);
++    return true;
+ }
+ 
+ void ActiveModule::LaunchProbe()
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index 8bb1272a..245e1f0e 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -63,6 +63,7 @@ public:
+ 
+     void                LaunchProbe();
+     void                LaunchMissile();
++    bool                LaunchMissileFrom(Client* pClient, GenericModule* pLauncher);
+     void                LaunchSnowBall();
+ 
+     /* new effects processing code and updates */
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 45c6701a..940f102f 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -52,7 +52,7 @@ boolean can use either 0/1 OR true/false.
+         <BulkDataOD>true</BulkDataOD>  <!-- bool  -OD = OnDemand.  false loads data on server startup.  true loads data on first call -->
+         <ModuleAutoOff>true</ModuleAutoOff><!-- bool  - automatically deactivate rr-type module when target is full -->
+         <ModuleDamageChance>0.1</ModuleDamageChance>  <!-- chance to apply damage to random modules when shields are depleted -->
+-        <UnloadOnLinkAll>true</UnloadOnLinkAll>  <!-- bool - unload weapons and link when LinkAll button pressed -->
++        <UnloadOnLinkAll>false</UnloadOnLinkAll>  <!-- bool - unload weapons when Group All is pressed (grouped weapons keep their charges otherwise) -->
+         <AllowNonPublished>true</AllowNonPublished>
+         <BountyPayoutDelayed>false</BountyPayoutDelayed><!-- bool - (en/dis)able system bounty payouts on timer (vs immediate) -->
+         <FleetShareDelayed>true</FleetShareDelayed><!-- bool - switch to put fleet bounty shares in system bounty timer (vs immediate), if enabled -->
+-- 
+2.43.0
+

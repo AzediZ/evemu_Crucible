@@ -1,0 +1,38 @@
+From 4a9fd5cb1abbd40f57eca409674b706a71031b8d Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:42:50 +0000
+Subject: [PATCH 34/50] Jump bridges: fix the inverted high-sec check
+
+JumpBridgeSE::SetOnline() compared SystemManager::GetSecValue() with 0.5, but GetSecValue() is 1.1
+minus the security rating, so bridges were refused in low-sec and null-sec and allowed in high-sec.
+Use the same security class check as cynos.
+---
+ src/eve-server/pos/JumpBridge.cpp | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/pos/JumpBridge.cpp b/src/eve-server/pos/JumpBridge.cpp
+index 06615148..b0c405da 100644
+--- a/src/eve-server/pos/JumpBridge.cpp
++++ b/src/eve-server/pos/JumpBridge.cpp
+@@ -13,6 +13,7 @@
+ #include "inventory/Inventory.h"
+ #include "ship/JumpDrive.h"
+ #include "system/sov/SovereigntyDataMgr.h"
++#include "system/CrimeWatch.h"
+ #include "system/SystemManager.h"
+ #include "planet/Moon.h"
+ 
+@@ -86,8 +87,9 @@ void JumpBridgeSE::CheckOnline()
+                 .AddFormatValue("structure", new PyString(m_self->itemName()));
+ 
+     // Make sure player is not in high-sec (configurable)
++    //  GetSecValue() is 1.1 minus the security rating, so it can't be compared with 0.5.  use the same check as cynos
+     if (!sConfig.world.highSecCyno)
+-        if (m_system->GetSecValue() >= 0.5f)
++        if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::High)
+             throw CustomError("The %s may not be used in high security space.", m_self->name());
+ }
+ 
+-- 
+2.43.0
+

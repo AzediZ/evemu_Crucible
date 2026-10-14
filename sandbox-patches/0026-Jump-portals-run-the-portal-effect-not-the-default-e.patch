@@ -1,0 +1,73 @@
+From 2eadf317c71c15ebf139a47e8531c2e2b312bcc3 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 15:18:17 +0000
+Subject: [PATCH] Jump portals: run the portal effect, not the default effect
+
+The jump portal generator's portal effect (jumpPortalGeneration, or
+jumpPortalGenerationBO on the Black Ops generator) isn't flagged as the
+type's default effect in dgmTypeEffects, so GetDefaultEffect() returned
+0. OpenPortal() activated the module with effect 0, which sent
+OnSpecialFX with an empty guid (the client logged "No guid in trigger"
+and showed no portal) and OnGodmaShipEffect with effectID 0 (the client
+threw KeyError RecordNotFound 0 in godma).
+
+IsCovert() compared the same default effect, so a Black Ops portal was
+never covert: it couldn't open to a covert cyno and didn't limit who
+could jump through it.
+
+Add PortalEffect(), which picks the effect the type has, and use it for
+the activation and for IsCovert().
+---
+ src/eve-server/ship/modules/JumpPortalModule.cpp | 13 +++++++++++--
+ src/eve-server/ship/modules/JumpPortalModule.h   |  2 ++
+ 2 files changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/src/eve-server/ship/modules/JumpPortalModule.cpp b/src/eve-server/ship/modules/JumpPortalModule.cpp
+index f7c73fe..607713f 100644
+--- a/src/eve-server/ship/modules/JumpPortalModule.cpp
++++ b/src/eve-server/ship/modules/JumpPortalModule.cpp
+@@ -16,9 +16,18 @@ m_open(false)
+ {
+ }
+ 
++uint16 JumpPortalModule::PortalEffect()
++{
++    // the portal effect isn't the module's default effect in the data (the module button doesn't open a portal), so
++    //  GetDefaultEffect() is 0 here.  that sent the effect as 0, so the client showed no portal and threw on it
++    if (m_modRef->type().HasEffect(EVEEffectID::jumpPortalGenerationBO))
++        return EVEEffectID::jumpPortalGenerationBO;
++    return EVEEffectID::jumpPortalGeneration;
++}
++
+ bool JumpPortalModule::IsCovert()
+ {
+-    return (m_modRef->type().GetDefaultEffect() == EVEEffectID::jumpPortalGenerationBO);
++    return (PortalEffect() == EVEEffectID::jumpPortalGenerationBO);
+ }
+ 
+ void JumpPortalModule::Activate(uint16 effectID, uint32 targetID, int16 repeat)
+@@ -34,7 +43,7 @@ bool JumpPortalModule::OpenPortal(const JumpDrive::Beacon& beacon)
+         return false;
+ 
+     // one cycle.  this throws the usual activation errors (capacitor, fuel, offline...)
+-    ActiveModule::Activate(m_modRef->type().GetDefaultEffect(), 0, 1);
++    ActiveModule::Activate(PortalEffect(), 0, 1);
+     // check the state only.  a one-cycle activation always sets m_Stop (stop when this cycle ends), so checking it
+     //  here refused every portal
+     if (GetModuleState() != Module::State::Activated)
+diff --git a/src/eve-server/ship/modules/JumpPortalModule.h b/src/eve-server/ship/modules/JumpPortalModule.h
+index 22d6e3d..a789df6 100644
+--- a/src/eve-server/ship/modules/JumpPortalModule.h
++++ b/src/eve-server/ship/modules/JumpPortalModule.h
+@@ -33,6 +33,8 @@ public:
+     bool                IsOpen() const                  { return m_open; }
+     // black ops covert jump portal generator.  only covert ships can use these portals
+     bool                IsCovert();
++    // jumpPortalGeneration, or jumpPortalGenerationBO for the covert one
++    uint16              PortalEffect();
+     const JumpDrive::Beacon& GetBeacon() const          { return m_beacon; }
+ 
+ private:
+-- 
+2.43.0
+

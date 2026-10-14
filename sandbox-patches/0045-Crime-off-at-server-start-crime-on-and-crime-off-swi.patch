@@ -1,0 +1,400 @@
+From 2ee1955cf4f5dc45d90377dee01a64a93c16c2ae Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 15:04:01 +0000
+Subject: [PATCH 45/50] Crime: off at server start; /crime on and /crime off
+ switch it
+
+Renn's crime rules, CONCORD, faction police and navy, sentry guns and
+logoff timers start switched on.  They now start off
+(<crime><Enabled>false</Enabled> and the code default), so new things
+can be tested anywhere in peace.
+
+/crime on turns them on while the server runs: systems already loaded
+get their gate and station sentry guns, as a system booted with crime
+on does, and pilots already in space are checked for the faction
+police and navy as if they had just arrived.
+
+/crime off clears every flag and timer (aggression, criminal, weapons
+and logoff timers, illegal aggressors, sentry and NPC aggression) and
+tells the clients, so the overview and the neocom countdown clear.
+Every CONCORD, police and navy response leaves with its tackle, jams
+and cloak block; the sentry guns are taken out of space and their
+items deleted; and ships left in space by pilots who logged off leave
+space at once, saved where their pilots logged off.  Kill rights are
+kept.
+
+/crime with no arguments says which it is.  The test crime,
+/crime (me|charID|entityID) [victimID], says to turn crime on first
+while it is off.  With crime off, taking from another pilot's can or
+wreck no longer brings up the client's theft warning.
+---
+ doc/GM_Commands.md                      |  2 +-
+ src/eve-server/EVEServerConfig.cpp      |  2 +-
+ src/eve-server/EntityList.cpp           |  6 +++
+ src/eve-server/EntityList.h             |  2 +
+ src/eve-server/admin/GMToolCommands.cpp | 36 ++++++++++---
+ src/eve-server/admin/GMToolCommands.h   |  1 +
+ src/eve-server/npc/LawEnforcement.cpp   | 72 +++++++++++++++++++++----
+ src/eve-server/npc/LawEnforcement.h     |  5 ++
+ src/eve-server/system/CrimeWatch.cpp    | 53 ++++++++++++++++++
+ src/eve-server/system/CrimeWatch.h      |  5 ++
+ utils/config/eve-server.xml             |  2 +-
+ 11 files changed, 166 insertions(+), 20 deletions(-)
+
+diff --git a/doc/GM_Commands.md b/doc/GM_Commands.md
+index 5b87ba20..7373c917 100644
+--- a/doc/GM_Commands.md
++++ b/doc/GM_Commands.md
+@@ -58,7 +58,7 @@ while you are warping. `/tr` and `/halt` stay allowed so you can get out of a br
+ | `/commandlist` | Lists all slash commands with their required role and description. | none | - | `PLAYER` |
+ | `/create` | Creates an item in your cargo hold (in space) or station hangar (docked). | `(typeID\|"Type Name") [qty]` | typeID / "Type Name": the type; a name must match one type exactly if several match.<br>qty: how many (default 1).<br>A trailing [where] shown in the usage text is ignored. | `VIP` |
+ | `/createitem` | Same as /create. | `(typeID\|"Type Name") [qty]` | typeID / "Type Name": the type to create.<br>qty: how many (default 1). | `ADMIN` |
+-| `/crime` | Commits a crime for testing CONCORD. A pilot attacks the victim through the normal crime rules; an NPC or other entity is simply made a criminal. Needs CrimeWatch enabled and a non-null-sec system. | `(me\|charID\|entityID) [victimID]` | me / charID: the pilot who commits the crime (online, in space).<br>entityID: an NPC or other entity in your system to flag as criminal.<br>victimID: the victim, in the aggressor's system (default: you, or a civilian when the aggressor is you). | `GML` |
++| `/crime` | Switches crime on or off while the server runs (it starts off unless `<crime><Enabled>` is set), or commits a crime for testing CONCORD. On places the gate and station sentry guns in loaded systems; off clears every flag and timer and sends CONCORD, the police, the navy and the sentry guns away. With no arguments it says whether crime is on. A test crime: a pilot attacks the victim through the normal crime rules; an NPC or other entity is simply made a criminal. Needs crime on and a non-null-sec system. | `on \| off \| (me\|charID\|entityID) [victimID]` | on / off: switches crime.<br>me / charID: the pilot who commits the crime (online, in space).<br>entityID: an NPC or other entity in your system to flag as criminal.<br>victimID: the victim, in the aggressor's system (default: you, or a civilian when the aggressor is you). | `GML` |
+ | `/destinyvars` | Shows some of your ship's current destiny variables. | none | - | `GMH` |
+ | `/dogma` | Sets a live attribute value until the next refit or undock (like /setattr, with an '='). | `(itemID\|me) (attributeName\|attributeID) = (value)` | itemID / me: the item, or your ship.<br>attributeName / attributeID: the attribute.<br>=: a literal equals sign.<br>value: the new number. | `ADMIN` |
+ | `/dropLoot` | Makes every NPC in a bubble jettison its loot. | `(bubbleID)` | bubbleID: a bubble in your current system. | `PROGRAMMER` |
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 37a5f838..65ad9a90 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -467,7 +467,7 @@ EVEServerConfig::EVEServerConfig()
+     chat.UserChannelCleanup = true;     // delete player channels nobody is subscribed to any more  (F23)
+ 
+     // crime
+-    crime.Enabled = true;
++    crime.Enabled = false;     // off at server start.  /crime on turns it on while the server runs
+     crime.AggFlagTime = 900 /*s*/;
+     crime.CrimFlagTime = 900 /*s*/;
+     crime.WeaponFlagTime = 60 /*s*/;
+diff --git a/src/eve-server/EntityList.cpp b/src/eve-server/EntityList.cpp
+index 80c5b4db..d32fce37 100644
+--- a/src/eve-server/EntityList.cpp
++++ b/src/eve-server/EntityList.cpp
+@@ -379,6 +379,12 @@ void EntityList::GetClients(std::vector<Client*> &result) const {
+         result.push_back(cur.second);
+ }
+ 
++void EntityList::GetSystems(std::vector<SystemManager*> &result) const {
++    for (auto cur : m_systems)
++        if ((cur.second != nullptr) and cur.second->IsLoaded())
++            result.push_back(cur.second);
++}
++
+ void EntityList::GetCorpClients(std::vector<Client*> &result, uint32 corpID) const {
+     std::map<uint32, corpRole>::const_iterator cItr = m_corpMembers.find(corpID);
+     if (cItr == m_corpMembers.end())
+diff --git a/src/eve-server/EntityList.h b/src/eve-server/EntityList.h
+index 21ee9401..b2b4a55a 100644
+--- a/src/eve-server/EntityList.h
++++ b/src/eve-server/EntityList.h
+@@ -126,6 +126,8 @@ public:
+ 
+     // gets Client* for all ingame players
+     void GetClients(std::vector<Client* > &result) const;
++    // every solar system that is loaded now
++    void GetSystems(std::vector<SystemManager*> &result) const;
+     void GetCorpClients(std::vector<Client*> &result, uint32 corpID) const;
+ 
+     bool IsSystemLoaded(uint32 sysID) { return (m_systems.find(sysID) != m_systems.end()); }
+diff --git a/src/eve-server/admin/GMToolCommands.cpp b/src/eve-server/admin/GMToolCommands.cpp
+index b86385a7..71df2432 100644
+--- a/src/eve-server/admin/GMToolCommands.cpp
++++ b/src/eve-server/admin/GMToolCommands.cpp
+@@ -30,7 +30,7 @@
+  *  /nukem              benchmark script
+  *  /entity deploy      WM: /Entity deploy this type
+  *  /heat               testing: shows or sets rack heat
+- *  /crime              testing: commits a crime, to bring CONCORD
++ *  /crime              switches crime on or off;  testing: commits a crime, to bring CONCORD
+  *  /missioncomplete    testing: completes a mission's kill objective (MissionObjectives::ForceComplete)
+  *  /untrash           restores a trashed item from the junkyard, or lists an owner's trashed items  (F20)
+  */
+@@ -256,7 +256,11 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
+     return new PyString(buf);
+ }
+ 
+-/* /crime (me|charID|entityID) [victimID]
++/* /crime on|off
++ *  switches the crime rules on or off while the server runs (CrimeWatch::SetEnabled).  they start off unless <crime><Enabled>
++ *  is set.  off clears every flag and sends CONCORD, the police, the navy and the sentry guns away.  no arguments:  which it is
++ *
++ * /crime (me|charID|entityID) [victimID]
+  *  starts CONCORD the way the game does, from the first act:
+  *   a pilot: an attack on the victim, the same call a weapon cycle makes (CrimeWatch::OffensiveAct), so the normal rules
+  *     decide whether it's a crime.  with no victim the victim is you, or a civilian (nobody, never a legal target) if
+@@ -266,11 +270,31 @@ PyResult Command_heat(Client* pClient, CommandDB* db, EVEServiceManager &service
+  */
+ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+ {
+-    const char* usage("Correct Usage: /crime (me|charID|entityID) [victimID]");
+-    if (!sConfig.crime.Enabled)
+-        throw CustomError ("CrimeWatch is disabled (<crime><Enabled> in the server config).");
++    const char* usage("Correct Usage: /crime on | off | (me|charID|entityID) [victimID]");
+     if (args.argCount() < 2)
+-        throw CustomError (usage);
++        return new PyString(std::string("Crime is ") + (sConfig.crime.Enabled ? "on" : "off") + ".  " + usage);
++    if ((strcasecmp(args.arg(1).c_str(), "on") == 0) or (strcasecmp(args.arg(1).c_str(), "off") == 0)) {
++        bool on(strcasecmp(args.arg(1).c_str(), "on") == 0);
++        if (on == sConfig.crime.Enabled)
++            return new PyString(std::string("Crime is ") + (on ? "on" : "off") + " already.");
++        sCrimeWatch.SetEnabled(on);
++        if (!on)
++            return new PyString("Crime is off:  flags and timers cleared, and CONCORD, the police, the navy and the sentry guns are gone.");
++        // what the config lets run
++        std::string what("aggression flags");
++        if (sConfig.crime.Concord)
++            what += ", CONCORD in 0.5 and up";
++        if (sConfig.crime.FactionPolice)
++            what += ", faction police";
++        if (sConfig.crime.FactionNavy)
++            what += ", faction navy";
++        if (sConfig.crime.Sentries)
++            what += ", gate and station sentry guns";
++        what += ", security status, kill rights and the logoff timer";
++        return new PyString("Crime is on:  " + what + ".");
++    }
++    if (!sConfig.crime.Enabled)
++        throw CustomError ("Crime is off.  Turn it on with /crime on.");
+ 
+     Client* pAggressor(nullptr);
+     SystemEntity* pEntity(nullptr);
+diff --git a/src/eve-server/admin/GMToolCommands.h b/src/eve-server/admin/GMToolCommands.h
+index 2961addf..2c8e6a47 100644
+--- a/src/eve-server/admin/GMToolCommands.h
++++ b/src/eve-server/admin/GMToolCommands.h
+@@ -15,6 +15,7 @@ COMMAND( nukem, Acct::Role::ADMIN,
+ COMMAND( entity, Acct::Role::SPAWN,
+          "deploy (count) (typeID|\"type name\") - spawns NPCs next to you" )
+ COMMAND( crime, Acct::Role::GML,
++         "on|off - switches crime on or off (it starts off).  no arguments:  which it is.  "
+          "(me|charID|entityID) [victimID] - commits a crime for testing CONCORD.  a pilot attacks the victim (default: you,"
+          " or a civilian when it's you) through the normal crime rules.  an NPC or other entity is made a criminal" )
+ COMMAND( missioncomplete, Acct::Role::GML,
+diff --git a/src/eve-server/npc/LawEnforcement.cpp b/src/eve-server/npc/LawEnforcement.cpp
+index 12460fd7..57efe7e5 100644
+--- a/src/eve-server/npc/LawEnforcement.cpp
++++ b/src/eve-server/npc/LawEnforcement.cpp
+@@ -141,6 +141,9 @@ void LawEnforcement::Init()
+ {
+     if (!sConfig.crime.Enabled or !sConfig.crime.Sentries)
+         return;
++    // placed already (/crime on calls this for every loaded system)
++    if (!m_sentries.empty())
++        return;
+     if (CrimeWatch::SecurityClass(m_system->GetSystemSecurityRating()) == Crime::SecClass::Null)
+         return;
+     SystemData data;
+@@ -859,21 +862,27 @@ void LawEnforcement::ProcessLoggedOff(int64 now)
+             ++itr;
+             continue;
+         }
+-        ShipSE* pShipSE(l.pShipSE);
+-        _log(CRIME__INFO, "%s(%u) of %u leaves space.", pShipSE->GetName(), pShipSE->GetID(), l.charID);
+-        ShipItemRef shipRef(pShipSE->GetShipItemRef());
+-        if (pShipSE->TargetMgr() != nullptr)
+-            pShipSE->TargetMgr()->ClearFromTargets();
+-        m_system->RemoveEntity(pShipSE);
+-        SafeDelete(pShipSE);
+-        // saved where its pilot logged off:  the login warp takes them back there.  what the client did when its pilot
+-        //  logged off: save it and unload it
+-        shipRef->SetPosition(l.logoffPoint);
+-        shipRef->LogOut();
++        // saved where its pilot logged off:  the login warp takes them back there
++        LeaveSpace(l, l.logoffPoint);
+         itr = m_loggedOff.erase(itr);
+     }
+ }
+ 
++void LawEnforcement::LeaveSpace(LoggedOff& l, const GPoint& savedAt)
++{
++    ShipSE* pShipSE(l.pShipSE);
++    _log(CRIME__INFO, "%s(%u) of %u leaves space.", pShipSE->GetName(), pShipSE->GetID(), l.charID);
++    ShipItemRef shipRef(pShipSE->GetShipItemRef());
++    if (pShipSE->TargetMgr() != nullptr)
++        pShipSE->TargetMgr()->ClearFromTargets();
++    m_system->RemoveEntity(pShipSE);
++    SafeDelete(pShipSE);
++    l.pShipSE = nullptr;
++    // what the client did when its pilot logged off: save it and unload it
++    shipRef->SetPosition(savedAt);
++    shipRef->LogOut();
++}
++
+ bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)
+ {
+     std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.find(shipID);
+@@ -919,6 +928,47 @@ bool LawEnforcement::IsBusy()
+     return (!m_responses.empty() or !m_loggedOff.empty());
+ }
+ 
++void LawEnforcement::StandDown()
++{
++    // CONCORD, the police and the navy leave:  their tackle (scripted and data), the cloak block and their ships go
++    for (auto& cur : m_responses)
++        Despawn(cur.second);
++    m_responses.clear();
++    m_npcResponse.clear();
++    m_jammed.clear();
++    m_pursued.clear();
++
++    /* the gate and station guns:  out of space the way a removed npc goes (SystemManager::OnNPCRemoved:  their ai, their locks
++     *  both ways), their items deleted (never saved).  the objects are ours to free.  one a GM took out of space already is
++     *  the system's to free */
++    uint32 removed(0);
++    for (auto sentryID : m_sentries) {
++        SystemEntity::SetUnkillable(sentryID, false);
++        SystemEntity* pSE(m_system->GetSE(sentryID));
++        if ((pSE == nullptr) or !pSE->IsSentrySE() or pSE->IsDead())
++            continue;
++        pSE->Delete();
++        SafeDelete(pSE);
++        ++removed;
++    }
++    m_sentries.clear();
++
++    /* ships left in space by pilots who logged off:  with crime off a ship leaves space when its pilot logs off
++     *  (Client::WarpOut()), so these go now, saved where their pilots logged off (or where the warp they were finishing ends) */
++    uint32 ships(0);
++    std::map<uint32, LoggedOff>::iterator itr = m_loggedOff.begin();
++    while (itr != m_loggedOff.end()) {
++        GPoint savedAt(itr->second.logoffPoint);
++        GetLogoffPoint(itr->first, savedAt);
++        LeaveSpace(itr->second, savedAt);
++        itr = m_loggedOff.erase(itr);
++        ++ships;
++    }
++
++    _log(CRIME__INFO, "%s: law enforcement stood down (%u sentry guns removed, %u logged-off ships left space).",
++            m_system->GetName(), removed, ships);
++}
++
+ void LawEnforcement::Close()
+ {
+     // the system deletes every entity, ours included
+diff --git a/src/eve-server/npc/LawEnforcement.h b/src/eve-server/npc/LawEnforcement.h
+index c25bedf5..35803900 100644
+--- a/src/eve-server/npc/LawEnforcement.h
++++ b/src/eve-server/npc/LawEnforcement.h
+@@ -49,6 +49,9 @@ public:
+     void Init();        // sentry guns at gates and stations
+     void Process();     // 1Hz, from SystemManager::ProcessTic()
+     void Close();       // system unloading.  it deletes our entities
++    /* crime switched off (/crime off):  every response leaves (its tackle with it), the sentry guns go, and ships left in space
++     *  by pilots who logged off leave space now, saved where their pilots logged off.  Init() brings the guns back */
++    void StandDown();
+     bool IsBusy();      // a response is running or a ship is waiting in space.  keeps the system loaded
+ 
+     /* called by CrimeWatch */
+@@ -168,6 +171,8 @@ private:
+     void StartLogoffExit(LoggedOff& l, int64 now);
+     // the ship came to rest:  its time in space starts
+     void SetLogoffRest(LoggedOff& l, int64 now);
++    // the ship leaves space, saved at savedAt (its entity is deleted).  the caller drops its entry
++    void LeaveSpace(LoggedOff& l, const GPoint& savedAt);
+ };
+ 
+ #endif  // EVEMU_NPC_LAWENFORCEMENT_H
+diff --git a/src/eve-server/system/CrimeWatch.cpp b/src/eve-server/system/CrimeWatch.cpp
+index a6415d03..6c921045 100644
+--- a/src/eve-server/system/CrimeWatch.cpp
++++ b/src/eve-server/system/CrimeWatch.cpp
+@@ -57,6 +57,56 @@ int CrimeWatch::Initialize()
+     return 1;
+ }
+ 
++void CrimeWatch::SetEnabled(bool enabled)
++{
++    if (sConfig.crime.Enabled == enabled)
++        return;
++    // first, so nothing the stand down sets off makes new flags
++    sConfig.crime.Enabled = enabled;
++    std::vector<SystemManager*> systems;
++    sEntityList.GetSystems(systems);
++
++    if (enabled) {
++        // the systems booted while it was off have no sentry guns yet (SystemManager::BootSystem())
++        for (auto pSystem : systems)
++            pSystem->GetLaw()->Init();
++        // pilots already in space are seen as if they had just arrived:  the faction police (and navy) come for the wanted ones
++        std::vector<Client*> clients;
++        sEntityList.GetClients(clients);
++        for (auto pClient : clients)
++            if (pClient->IsInSpace() and (pClient->SystemMgr() != nullptr))
++                OnEnterSpace(pClient);
++        sLog.Blue("      CrimeWatch", "CrimeWatch enabled.");
++        return;
++    }
++
++    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave
++    for (auto pSystem : systems)
++        pSystem->GetLaw()->StandDown();
++    // every flag and timer (aggression, criminal, weapons, logoff), the illegal aggressors and the Crimewatch 1 timers
++    std::vector<uint32> flagged;
++    for (auto& cur : m_records)
++        flagged.push_back(cur.first);
++    m_records.clear();
++    m_illegal.clear();
++    m_sentryAggression.clear();
++    m_factionAggression.clear();
++    // an empty dict clears that aggressor's flags in the clients of its system (overview, neocom countdown)
++    PyDict* none(new PyDict());
++    for (auto id : flagged) {
++        if (IsCharacterID(id)) {
++            Notify(id);
++            continue;
++        }
++        // an npc made a criminal (/crime):  the pilots of its system saw it flashing
++        for (auto pSystem : systems)
++            if (pSystem->GetSE(id) != nullptr)
++                SendToSystem(pSystem, id, none);
++    }
++    PyDecRef(none);
++    sLog.Blue("      CrimeWatch", "CrimeWatch disabled:  the flags of %lu pilots and npcs cleared.", flagged.size());
++}
++
+ float CrimeWatch::SecurityLevel(float trueSec)
+ {
+     // the client's cfg.solarsystems pseudoSecurity, then util.FmtSystemSecStatus (python 2 round: halves away from zero)
+@@ -537,6 +587,9 @@ void CrimeWatch::NPCAggression(uint32 charID)
+ 
+ bool CrimeWatch::CanTakeFrom(uint32 charID, uint32 ownerID)
+ {
++    // with crime off nothing is theft, so the client doesn't warn about it
++    if (!sConfig.crime.Enabled)
++        return true;
+     // fleet members in the same system share loot
+     Client* pThief(sEntityList.FindClientByCharID(charID));
+     Client* pOwner(sEntityList.FindClientByCharID(ownerID));
+diff --git a/src/eve-server/system/CrimeWatch.h b/src/eve-server/system/CrimeWatch.h
+index 65e67c93..593c413e 100644
+--- a/src/eve-server/system/CrimeWatch.h
++++ b/src/eve-server/system/CrimeWatch.h
+@@ -53,6 +53,11 @@ public:
+     ~CrimeWatch()   { /* do nothing here */ }
+ 
+     int Initialize();
++    /* switch the crime rules on or off while the server runs (/crime on|off).  <crime><Enabled> sets them at start.
++     *  on:  the loaded systems get their sentry guns, and the faction police (and navy) look at the pilots in space there.
++     *  off:  every flag and timer goes (the clients are told) and law enforcement stands down everywhere.  kill rights are kept
++     *  (30 days, in the db) */
++    void SetEnabled(bool enabled);
+ 
+     /* system security as the client sees it.  true sec rounded to 0.1, with 0 < sec < 0.05 counted as 0.05 (pseudoSecurity) */
+     static float SecurityLevel(float trueSec);
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index d838d64c..900a0d1f 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -530,7 +530,7 @@ boolean can use either 0/1 OR true/false.
+     </debug>
+ 
+     <crime><!-- Crucible (pre-Retribution) crime rules, CONCORD, faction police, sentries and logoff timers -->
+-        <Enabled>true</Enabled><!-- bool -->
++        <Enabled>false</Enabled><!-- bool.  off at server start, so new things can be tested anywhere in peace.  /crime on and /crime off switch it while the server runs -->
+         <CrimFlagTime>900</CrimFlagTime> <!-- seconds the global criminal countdown lasts (15m default) -->
+         <AggFlagTime>900</AggFlagTime> <!-- seconds an aggression flag lasts (15m default) -->
+         <WeaponFlagTime>60</WeaponFlagTime> <!-- seconds after an aggressive act before you may dock or jump (60s default) -->
+-- 
+2.43.0
+

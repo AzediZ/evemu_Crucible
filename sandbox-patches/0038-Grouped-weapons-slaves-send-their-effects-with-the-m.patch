@@ -1,0 +1,51 @@
+From 2b3cd2a5e9d31e480d1b098d981ebd7c8297e7c1 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 14:47:37 +0000
+Subject: [PATCH 38/50] Grouped weapons: slaves send their effects with the
+ master's cycle time
+
+A slave's own m_timer doesn't run (the master cycles for the group), so its OnSpecialFX went out with
+no duration and the client didn't show that weapon firing.  SetSlaveData() copies the master's remaining
+cycle time and ShowEffect() uses it for linked slaves.
+---
+ src/eve-server/ship/modules/ActiveModule.cpp | 4 ++++
+ src/eve-server/ship/modules/ActiveModule.h   | 1 +
+ 2 files changed, 5 insertions(+)
+
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 6e4def00..5653ce1c 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -598,6 +598,8 @@ void ActiveModule::SetSlaveData(ShipSE* pShip, ActiveModule* pMaster) {
+         m_targetID = pMaster->m_targetID;
+         m_targetSE = pMaster->m_targetSE;
+         m_repeat = pMaster->m_repeat;
++        // a slave's own cycle timer doesn't run (its master cycles for the group), so its effects use the master's
++        m_slaveCycleMS = pMaster->GetRemainingCycleTimeMS();
+     }
+     m_shipSE = pShip;
+     m_sysMgr = pShip->SystemMgr();
+@@ -1630,6 +1632,8 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
+ 
+     uint16 chgTypeID(((m_chargeRef.get() != nullptr) ? m_chargeRef->typeID() : 0));
+     uint32 timeLeft(GetRemainingCycleTimeMS());
++    if ((timeLeft == 0) and IsLinked() and !IsMaster())
++        timeLeft = m_slaveCycleMS;  // without a duration the client doesn't show this weapon firing
+     bool isOffensive(sFxDataMgr.isOffensive(fxID));
+     PyRep* graphicInfo(nullptr);
+     if (groupID() == EVEDB::invGroups::Warp_Disrupt_Field_Generator) {
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index ea3c1c18..cc284af6 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -170,6 +170,7 @@ private:
+     // a warp scrambler's cycle on a ship ends that ship's running microwarpdrives
+     void                BlockTargetMWDs();
+ 
++    uint32              m_slaveCycleMS = 0;     // cycle time copied from the group's master (see SetSlaveData)
+ };
+ 
+ 
+-- 
+2.43.0
+

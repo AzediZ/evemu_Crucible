@@ -1,0 +1,109 @@
+From c5942cf55909a329a78cfcedae82553223b4e48a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 11 Oct 2026 18:23:55 +0100
+Subject: [PATCH] Launcher groups: merge a volley's hit messages into one, like
+ a turret group's
+
+Each launcher in a group fires its own missile, so a volley produced one banked OnDamageMessage per
+missile, and the client's top-of-screen notice showed only one of them.  Damage messages for linked
+weapons go through Client::QueueMergedDamageMessage(), which adds the damage to an identical message
+(key, weapon, target) still waiting in the destiny event queue.  Damage itself is still applied per
+missile.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01GZgkReFMTa8JWavQEivVUA
+---
+ src/eve-server/Client.cpp        | 44 ++++++++++++++++++++++++++++++++
+ src/eve-server/Client.h          |  2 ++
+ src/eve-server/system/Damage.cpp |  7 ++++-
+ 3 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 56781fda..ca5f3afb 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -2178,6 +2178,50 @@ void Client::QueueDestinyEvent(PyTuple** event) {
+     //PyDecRef(*event);
+ }
+ 
++/* grouped launchers fire one missile each, and their missiles hit together.  a turret group fires one shot for the
++ *  group, so it gives one damage message.  to match it, a launcher group's hits on a target in the same tick are
++ *  shown as one message with the total damage.  only the message is merged; each missile still does its own damage.
++ */
++void Client::QueueMergedDamageMessage(PyTuple** event) {
++    if ((event == nullptr) or ((*event) == nullptr))
++        return;
++    PyTuple* ev(*event);
++    PyDict* evDict((ev->size() == 3) and ev->GetItem(1)->IsString() and ev->GetItem(2)->IsDict() ? ev->GetItem(2)->AsDict() : nullptr);
++    if (evDict != nullptr) {
++        const std::string& key(ev->GetItem(1)->AsString()->content());
++        PyRep* weapon(evDict->GetItemString("weapon"));
++        PyRep* target(evDict->GetItemString("target"));
++        PyRep* damage(evDict->GetItemString("damage"));
++        if ((weapon != nullptr) and weapon->IsInt() and (target != nullptr) and target->IsInt()
++        and (damage != nullptr) and damage->IsFloat()) {
++            for (auto cur : *m_destinyEventQueue) {
++                if ((cur == nullptr) or !cur->IsTuple())
++                    continue;
++                PyTuple* queued(cur->AsTuple());
++                if ((queued->size() != 3) or !queued->GetItem(0)->IsString() or !queued->GetItem(1)->IsString()
++                or  !queued->GetItem(2)->IsDict())
++                    continue;
++                if ((queued->GetItem(0)->AsString()->content() != "OnDamageMessage")
++                or  (queued->GetItem(1)->AsString()->content() != key))
++                    continue;
++                PyDict* qDict(queued->GetItem(2)->AsDict());
++                PyRep* qWeapon(qDict->GetItemString("weapon"));
++                PyRep* qTarget(qDict->GetItemString("target"));
++                PyRep* qDamage(qDict->GetItemString("damage"));
++                if ((qWeapon == nullptr) or !qWeapon->IsInt() or (qWeapon->AsInt()->value() != weapon->AsInt()->value())
++                or  (qTarget == nullptr) or !qTarget->IsInt() or (qTarget->AsInt()->value() != target->AsInt()->value())
++                or  (qDamage == nullptr) or !qDamage->IsFloat())
++                    continue;
++                qDict->SetItemString("damage", new PyFloat(qDamage->AsFloat()->value() + damage->AsFloat()->value()));
++                PyDecRef(ev);
++                *event = nullptr;
++                return;
++            }
++        }
++    }
++    QueueDestinyEvent(event);
++}
++
+ void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool IsSetState /*false*/) {
+     if ((update == nullptr) or ((*update) == nullptr))
+         return;
+diff --git a/src/eve-server/Client.h b/src/eve-server/Client.h
+index fbe73283..1ea4260b 100644
+--- a/src/eve-server/Client.h
++++ b/src/eve-server/Client.h
+@@ -300,6 +300,8 @@ public:
+     PyRep *GetAggressors() const;
+     void QueueDestinyUpdate(PyTuple** update, bool DoPackage=false, bool IsSetState=false);
+     void QueueDestinyEvent(PyTuple** multiEvent);
++    // a damage message that adds its damage to the same message (key, weapon and target) already waiting to be sent
++    void QueueMergedDamageMessage(PyTuple** event);
+     void FlushQueue();
+ 
+     //  mission
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index d4a2be3f..258e797d 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -363,7 +363,12 @@ bool SystemEntity::ApplyDamage(Damage &d) {
+                 tuple->SetItem(1, new PyString(Dmg::Msg::Given[damageID]));
+             }
+             tuple->SetItem(2, dict);
+-            d.srcSE->GetPilot()->QueueDestinyEvent(&tuple);
++            if (banked) {
++                // a launcher group's missiles hit together; show them as one message, like a turret group's shot
++                d.srcSE->GetPilot()->QueueMergedDamageMessage(&tuple);
++            } else {
++                d.srcSE->GetPilot()->QueueDestinyEvent(&tuple);
++            }
+         } else if (d.srcSE->IsDroneSE()) {
+             // verify drone has owner set
+             Client* pController(d.srcSE->GetDroneSE()->GetControllerClient());
+-- 
+2.43.0
+

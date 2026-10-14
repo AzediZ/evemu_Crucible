@@ -1,0 +1,279 @@
+From da2c327973daffd1af9d7ecde5e810b338c9201c Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Wed, 14 Oct 2026 15:04:37 +0000
+Subject: [PATCH 46/50] Ambient pirates: attack players only while crime is on
+
+Renn's ambient criminal events went after players while crime was off
+(LowSecCriminalsAttackPlayers is on by default).  Now they only go
+after players unprovoked while crime is on, and then as the high-sec
+and low-sec settings say.  With crime off they still arrive at belts
+with ambient miners and gates with ambient traffic, hunt those ships,
+and shoot back at a player who shoots them, but they no longer come to
+a grid just because a player is there, and a lock alone doesn't start
+a fight.
+
+/crime off also stops ambient CONCORD and navy patrols answering a
+crime, and every ambient patrol or pirate lets go of the players and
+drones it is fighting.
+
+An ambient pirate's first attack only puts it on the criminal record
+while crime is on, and again once that record is gone, so one already
+fighting when crime is switched on is flagged too.
+---
+ src/eve-server/admin/GMToolCommands.cpp      |  6 +++-
+ src/eve-server/npc/ai/AmbientBrain.cpp       | 13 +++++---
+ src/eve-server/npc/ai/AmbientBrain.h         |  7 +++--
+ src/eve-server/npc/ai/AmbientRules.h         |  9 ++++++
+ src/eve-server/npc/ambient/AmbientPilot.cpp  |  6 ++--
+ src/eve-server/npc/ambient/AmbientSystem.cpp | 32 ++++++++++++++++++--
+ src/eve-server/npc/ambient/AmbientSystem.h   |  3 ++
+ src/eve-server/system/CrimeWatch.cpp         |  8 +++--
+ src/eve-server/system/CrimeWatch.h           |  4 +--
+ src/eve-test/npcai/AmbientRulesTest.cpp      |  7 +++++
+ 10 files changed, 79 insertions(+), 16 deletions(-)
+
+diff --git a/src/eve-server/admin/GMToolCommands.cpp b/src/eve-server/admin/GMToolCommands.cpp
+index 71df2432..ff4931d8 100644
+--- a/src/eve-server/admin/GMToolCommands.cpp
++++ b/src/eve-server/admin/GMToolCommands.cpp
+@@ -279,7 +279,8 @@ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &servic
+             return new PyString(std::string("Crime is ") + (on ? "on" : "off") + " already.");
+         sCrimeWatch.SetEnabled(on);
+         if (!on)
+-            return new PyString("Crime is off:  flags and timers cleared, and CONCORD, the police, the navy and the sentry guns are gone.");
++            return new PyString("Crime is off:  flags and timers cleared, CONCORD, the police, the navy and the sentry guns are gone,"
++                                " and ambient pirates only fight players who shoot them.");
+         // what the config lets run
+         std::string what("aggression flags");
+         if (sConfig.crime.Concord)
+@@ -291,6 +292,9 @@ PyResult Command_crime(Client* pClient, CommandDB* db, EVEServiceManager &servic
+         if (sConfig.crime.Sentries)
+             what += ", gate and station sentry guns";
+         what += ", security status, kill rights and the logoff timer";
++        bool low(sConfig.ambient.LowSecCriminalsAttackPlayers), high(sConfig.ambient.HighSecCriminalsAttackPlayers);
++        if (sConfig.ambient.Enabled and sConfig.ambient.Criminals and (low or high))
++            what += std::string(", and ambient pirates attack players in ") + (low ? (high ? "high and low sec" : "low sec") : "high sec");
+         return new PyString("Crime is on:  " + what + ".");
+     }
+     if (!sConfig.crime.Enabled)
+diff --git a/src/eve-server/npc/ai/AmbientBrain.cpp b/src/eve-server/npc/ai/AmbientBrain.cpp
+index e0b58104..7b6c85de 100644
+--- a/src/eve-server/npc/ai/AmbientBrain.cpp
++++ b/src/eve-server/npc/ai/AmbientBrain.cpp
+@@ -105,10 +105,7 @@ SystemEntity* AmbientBrain::Acquire(NpcContext& ctx)
+             SystemEntity* pPrey(Nearest(ctx, false, false));
+             if (pPrey != nullptr)
+                 return pPrey;
+-            float level(CrimeWatch::SecurityLevel(ctx.npc->SystemMgr()->GetSystemSecurityRating()));
+-            bool high(level >= 0.45f);
+-            bool players(high ? sConfig.ambient.HighSecCriminalsAttackPlayers : sConfig.ambient.LowSecCriminalsAttackPlayers);
+-            if (!players)
++            if (!AttacksPlayers(ctx))
+                 return nullptr;
+             return Nearest(ctx, true, false);
+         }
+@@ -133,8 +130,14 @@ bool AmbientBrain::Answers(NpcContext& ctx, SystemEntity* pBy)
+     if (m_mode == Military)
+         return ((pClient != nullptr) and sCrimeWatch.IsCriminal(pClient->GetCharacterID()));
+     // criminals:  a lock is enough where they go after players anyway
++    return AttacksPlayers(ctx);
++}
++
++bool AmbientBrain::AttacksPlayers(NpcContext& ctx)
++{
+     float level(CrimeWatch::SecurityLevel(ctx.npc->SystemMgr()->GetSystemSecurityRating()));
+-    return ((level >= 0.45f) ? sConfig.ambient.HighSecCriminalsAttackPlayers : sConfig.ambient.LowSecCriminalsAttackPlayers);
++    return AmbientRules::CriminalsAttackPlayers(sConfig.crime.Enabled, (level >= 0.45f), sConfig.ambient.HighSecCriminalsAttackPlayers,
++                                                sConfig.ambient.LowSecCriminalsAttackPlayers);
+ }
+ 
+ SystemEntity* AmbientBrain::OnAggressed(NpcContext& ctx, SystemEntity* pBy)
+diff --git a/src/eve-server/npc/ai/AmbientBrain.h b/src/eve-server/npc/ai/AmbientBrain.h
+index 5a8f65bf..0fe31edf 100644
+--- a/src/eve-server/npc/ai/AmbientBrain.h
++++ b/src/eve-server/npc/ai/AmbientBrain.h
+@@ -5,8 +5,9 @@
+   *    Civilian  haulers, couriers, freighters, miners:  never acquire or retaliate (the pilot flees), never sleep
+   *    Military  navy and CONCORD:  fight back, the squad joins in, and (ambient.PatrolsEngageCriminals) go after criminals on
+   *              their grid:  flagged players (never pods), ambient criminals and npcs with a criminal flag
+-  *    Criminal  pirates:  prey on the ambient civilians of their grid first, players only when the toggles say so
+-  *              (ambient.HighSecCriminalsAttackPlayers, LowSecCriminalsAttackPlayers), and shoot back at whoever shoots them
++  *    Criminal  pirates:  prey on the ambient civilians of their grid first, players only while crime is on (crime.Enabled,
++  *              /crime on|off) and the toggles say so (ambient.HighSecCriminalsAttackPlayers, LowSecCriminalsAttackPlayers),
++  *              and shoot back at whoever shoots them
+   */
+ 
+ #ifndef _EVE_NPC_AI_AMBIENTBRAIN_H_
+@@ -45,6 +46,8 @@ private:
+      *  flagged npc), or for criminals any pilot when the toggle of their band lets them attack players.  a lock alone is no
+      *  reason for navies and CONCORD (an innocent pilot may look at them) */
+     bool Answers(NpcContext& ctx, SystemEntity* pBy);
++    // criminals:  do we go after players unprovoked here (AmbientRules::CriminalsAttackPlayers:  crime on, and the band's toggle)
++    bool AttacksPlayers(NpcContext& ctx);
+     // the nearest acceptable target in our bubble (players only when players is set)
+     SystemEntity* Nearest(NpcContext& ctx, bool players, bool criminalsOnly);
+ 
+diff --git a/src/eve-server/npc/ai/AmbientRules.h b/src/eve-server/npc/ai/AmbientRules.h
+index 304bbf59..6231f4f9 100644
+--- a/src/eve-server/npc/ai/AmbientRules.h
++++ b/src/eve-server/npc/ai/AmbientRules.h
+@@ -412,6 +412,15 @@ inline double CriminalRatePerHour(uint8_t band, float level, double A, double hi
+     }
+     return ((std::isfinite(r) and (r > 0.0)) ? r : 0.0);
+ }
++/* do criminals go after players unprovoked (8.5)?  only while the crime rules are on (crime.Enabled, /crime on|off:  with them
++ *  off pilots test in peace), and then as the toggle of the system's band says (ambient.HighSecCriminalsAttackPlayers,
++ *  LowSecCriminalsAttackPlayers).  either way they hunt the ambient civilians and shoot back at whoever hurts them */
++inline bool CriminalsAttackPlayers(bool crimeOn, bool highSec, bool highToggle, bool lowToggle)
++{
++    if (!crimeOn)
++        return false;
++    return (highSec ? highToggle : lowToggle);
++}
+ // a criminal group's size:  1 (70%), 2 (25%), 3 (5%)
+ inline uint32_t CriminalGroupSize(NpcRng& rng)
+ {
+diff --git a/src/eve-server/npc/ambient/AmbientPilot.cpp b/src/eve-server/npc/ambient/AmbientPilot.cpp
+index aa2af7d6..25166164 100644
+--- a/src/eve-server/npc/ambient/AmbientPilot.cpp
++++ b/src/eve-server/npc/ambient/AmbientPilot.cpp
+@@ -590,8 +590,10 @@ void AmbientPilot::Flee(int64 now)
+ void AmbientPilot::CriminalTick(int64 now)
+ {
+     NPCAIMgr* pAI(m_npc->GetAIMgr());
+-    // the first offensive act puts our crime on record:  a global criminal flag (sentries shoot), CONCORD in high sec (8.5)
+-    if (!m_flagged and !pAI->IsIdle() and (pAI->GetPrimaryID() != 0)) {
++    /* the first offensive act puts our crime on record:  a global criminal flag (sentries shoot), CONCORD in high sec (8.5).
++     *  only while crime is on, and again once the flag is gone (it ran out, or /crime off cleared it and crime is on again) */
++    if (sConfig.crime.Enabled and !pAI->IsIdle() and (pAI->GetPrimaryID() != 0)
++    and (!m_flagged or !sCrimeWatch.IsCriminal(m_npc->GetID()))) {
+         m_flagged = true;
+         sCrimeWatch.EntityCrime(m_npc, GetSE(pAI->GetPrimaryID()));
+     }
+diff --git a/src/eve-server/npc/ambient/AmbientSystem.cpp b/src/eve-server/npc/ambient/AmbientSystem.cpp
+index ab7b2409..e5920104 100644
+--- a/src/eve-server/npc/ambient/AmbientSystem.cpp
++++ b/src/eve-server/npc/ambient/AmbientSystem.cpp
+@@ -1684,8 +1684,8 @@ void AmbientSystem::CriminalEvent(int64 now)
+ {
+     /* where they go (6.7):  a watched belt with miners, a watched gate with traffic, and in low sec (when they attack players)
+      *  any watched belt or gate with a player.  nowhere:  skipped */
+-    bool low(m_profile.band == AmbientRules::Band::Low);
+-    bool players(low ? sConfig.ambient.LowSecCriminalsAttackPlayers : sConfig.ambient.HighSecCriminalsAttackPlayers);
++    bool players(AmbientRules::CriminalsAttackPlayers(sConfig.crime.Enabled, (m_profile.band == AmbientRules::Band::High),
++                 sConfig.ambient.HighSecCriminalsAttackPlayers, sConfig.ambient.LowSecCriminalsAttackPlayers));
+     std::vector<std::pair<const Node*, uint32>> targets;    // node, bubbleID
+     for (auto& grid : m_observed) {
+         SystemBubble* pBubble(sBubbleMgr.FindBubbleByID(grid.id));
+@@ -2086,6 +2086,34 @@ void AmbientSystem::OnLawDispatched(uint32 targetID, uint8 kind)
+          s.id, pTarget->GetName(), pTarget->GetID());
+ }
+ 
++void AmbientSystem::OnCrimeOff()
++{
++    for (auto& s : m_squads) {
++        s.respondTo = 0;
++        s.respondUntil = 0;
++    }
++    uint32 count(0);
++    for (auto& cur : m_npcs) {
++        AmbientNPC* pNPC(cur.second);
++        if ((pNPC == nullptr) or pNPC->IsDead() or Ambient::IsCivilian(pNPC->GetRole()) or (pNPC->TargetMgr() == nullptr))
++            continue;
++        std::vector<SystemEntity*> players;
++        pNPC->TargetMgr()->ForEachTarget([&](SystemEntity* pSE, bool) {
++            if (pSE->IsShipSE() or pSE->IsDroneSE())
++                players.push_back(pSE);
++        });
++        NPCAIMgr* pAI(pNPC->GetAIMgr());
++        for (auto pSE : players) {
++            // its threat goes too, so a lock alone doesn't bring the fight back (Answers());  damage does
++            pAI->GetThreatTable().Remove(pSE->GetID());
++            pAI->DropLock(pSE);
++            ++count;
++        }
++    }
++    if (count > 0)
++        _log(AMBIENT__INFO, "%s(%u): crime off:  %u locks on players dropped.", m_system->GetName(), m_system->GetID(), count);
++}
++
+ 
+ /* ------------------------------------------------------------------------------------------------------------------
+  *  /ambient (4.5)
+diff --git a/src/eve-server/npc/ambient/AmbientSystem.h b/src/eve-server/npc/ambient/AmbientSystem.h
+index c3148732..21a2246c 100644
+--- a/src/eve-server/npc/ambient/AmbientSystem.h
++++ b/src/eve-server/npc/ambient/AmbientSystem.h
+@@ -86,6 +86,9 @@ public:
+ 
+     /* law (8.4):  LawEnforcement::Report() sent kind (Law::) after targetID */
+     void OnLawDispatched(uint32 targetID, uint8 kind);
++    /* crime switched off (CrimeWatch::SetEnabled):  patrols stop answering crimes, and our patrols and criminals let go of the
++     *  players (ships and drones) they are fighting.  one that is shot at again answers as usual */
++    void OnCrimeOff();
+ 
+     /* /ambient */
+     std::string Describe();
+diff --git a/src/eve-server/system/CrimeWatch.cpp b/src/eve-server/system/CrimeWatch.cpp
+index 6c921045..9adf45fd 100644
+--- a/src/eve-server/system/CrimeWatch.cpp
++++ b/src/eve-server/system/CrimeWatch.cpp
+@@ -23,6 +23,7 @@
+ #include "npc/NPC.h"
+ #include "npc/Sentry.h"
+ #include "npc/ambient/AmbientNPC.h"
++#include "npc/ambient/AmbientSystem.h"
+ #include "npc/ai/LawRules.h"
+ #include "ship/Ship.h"
+ #include "standing/StandingDB.h"
+@@ -80,9 +81,12 @@ void CrimeWatch::SetEnabled(bool enabled)
+         return;
+     }
+ 
+-    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave
+-    for (auto pSystem : systems)
++    // nobody is a criminal any more:  CONCORD, the police, the navy and the sentry guns leave, ambient ships let players go
++    for (auto pSystem : systems) {
+         pSystem->GetLaw()->StandDown();
++        if (pSystem->GetAmbient() != nullptr)
++            pSystem->GetAmbient()->OnCrimeOff();
++    }
+     // every flag and timer (aggression, criminal, weapons, logoff), the illegal aggressors and the Crimewatch 1 timers
+     std::vector<uint32> flagged;
+     for (auto& cur : m_records)
+diff --git a/src/eve-server/system/CrimeWatch.h b/src/eve-server/system/CrimeWatch.h
+index 593c413e..46239ba2 100644
+--- a/src/eve-server/system/CrimeWatch.h
++++ b/src/eve-server/system/CrimeWatch.h
+@@ -55,8 +55,8 @@ public:
+     int Initialize();
+     /* switch the crime rules on or off while the server runs (/crime on|off).  <crime><Enabled> sets them at start.
+      *  on:  the loaded systems get their sentry guns, and the faction police (and navy) look at the pilots in space there.
+-     *  off:  every flag and timer goes (the clients are told) and law enforcement stands down everywhere.  kill rights are kept
+-     *  (30 days, in the db) */
++     *  off:  every flag and timer goes (the clients are told), law enforcement stands down everywhere, and ambient ships stop
++     *  fighting players.  kill rights are kept (30 days, in the db) */
+     void SetEnabled(bool enabled);
+ 
+     /* system security as the client sees it.  true sec rounded to 0.1, with 0 < sec < 0.05 counted as 0.05 (pseudoSecurity) */
+diff --git a/src/eve-test/npcai/AmbientRulesTest.cpp b/src/eve-test/npcai/AmbientRulesTest.cpp
+index 8ac23835..1d7f2fbd 100644
+--- a/src/eve-test/npcai/AmbientRulesTest.cpp
++++ b/src/eve-test/npcai/AmbientRulesTest.cpp
+@@ -292,6 +292,13 @@ int npcai_AmbientRulesTest( int argc, char* argv[] )
+         Near("low sec uses its base", CriminalRatePerHour(Band::Low, 0.3f, 0.5, 1.0, 3.0, 1.0), 3.0, 1e-6);
+         Near("density scales", CriminalRatePerHour(Band::High, 0.5f, 0.5, 1.0, 3.0, 2.0), 2.2, 1e-6);
+         Near("none in null", CriminalRatePerHour(Band::None, 0.0f, 0.5, 1.0, 3.0, 1.0), 0.0, 1e-12);
++        // players only while crime is on, then the band's toggle (8.5)
++        True("crime off:  never players", !CriminalsAttackPlayers(false, false, true, true)
++                                          and !CriminalsAttackPlayers(false, true, true, true));
++        True("crime on, low sec:  the low sec toggle", CriminalsAttackPlayers(true, false, false, true)
++                                                     and !CriminalsAttackPlayers(true, false, true, false));
++        True("crime on, high sec:  the high sec toggle", CriminalsAttackPlayers(true, true, true, false)
++                                                       and !CriminalsAttackPlayers(true, true, false, true));
+     }
+ 
+     ::printf("\n U18 landing distances (8)\n");
+-- 
+2.43.0
+

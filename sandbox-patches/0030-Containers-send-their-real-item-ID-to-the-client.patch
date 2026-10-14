@@ -1,0 +1,36 @@
+From 77bec38310168e44fdabe8fdfe32384b9be15f2c Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Tue, 13 Oct 2026 16:44:26 +0000
+Subject: [PATCH] Containers: send their real item ID to the client
+
+StructureSE::EncodeDestiny() and MakeSlimItem() use m_data.itemID, which
+only StructureSE::Init() fills in.  Only the player jettison paths in
+ShipService call ContainerSE::Init(); every other ContainerSE (incursion
+site containers such as the TCRC's CONCORD MTAC Factory and Shield
+Transfer Control Tower, NPC and mining jetcans, containers loaded with
+their system, bubble markers) went out as ball 0 with slim itemID 0, so
+the client never showed them.  The ContainerSE constructor now sets
+m_data.itemID.  Same bug in upstream master.
+---
+ src/eve-server/system/Container.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/eve-server/system/Container.cpp b/src/eve-server/system/Container.cpp
+index 3448256..af183ad 100644
+--- a/src/eve-server/system/Container.cpp
++++ b/src/eve-server/system/Container.cpp
+@@ -263,6 +263,11 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
+     m_corpID = data.corporationID;
+     m_ownerID = data.ownerID;
+ 
++    // StructureSE's ball and slim item use m_data.itemID, which only Init() set.  containers made without Init()
++    //  (npc and mining jetcans, containers loaded with their system, site containers) went out as ball 0,
++    //  so the client never showed them
++    m_data.itemID = m_self->itemID();
++
+     if (!sDataMgr.IsStation(m_self->locationID())) { // should NEVER be true (SE object in station???)
+         if (m_self->typeID() == EVEDB::invTypes::PlanetaryLaunchContainer) {
+             m_deleteTimer.Start(5 *24 *60 *60 *1000);  //5d timer for PI launch.  should probably get this saved value from planet launches
+-- 
+2.43.0
+
