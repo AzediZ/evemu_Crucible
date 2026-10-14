@@ -1239,20 +1239,22 @@ PyResult Command_sov(Client* pClient, CommandDB* db, EVEServiceManager &services
      *  ' /sov complete ' + str(itemID)     (the client's GM menu, 'Complete State')
      *  /sov (anchor|online|offline|unanchor|complete) (itemID)
      *  sovereignty structures, platforms, customs offices or any other structure.  at once, without the delays
-     *  /sov tenure (level) [solarSystemID]
-     *  sets the claim's strategic ("Sovereignty") index, 0-5, by backdating its claim time
+     *  /sov tenure (days) [solarSystemID]
+     *  backdates the claim to this many days held;  the strategic ("Sovereignty") index follows from the days
      */
     if ((args.argCount() > 1) and (args.arg(1) == "tenure")) {
-        if ((args.argCount() < 3) or !args.isNumber(2) or (atoi(args.arg(2).c_str()) < 0) or (atoi(args.arg(2).c_str()) > 5)
+        if ((args.argCount() < 3) or !args.isNumber(2) or (atoi(args.arg(2).c_str()) < 0) or (atoi(args.arg(2).c_str()) > 36500)
         or ((args.argCount() > 3) and !args.isNumber(3)))
-            throw CustomError ("Correct Usage: /sov tenure (level 0-5) [solarSystemID]");
-        uint8 level(static_cast<uint8>(atoi(args.arg(2).c_str())));
+            throw CustomError ("Correct Usage: /sov tenure (days 0-36500) [solarSystemID]");
+        uint32 days(static_cast<uint32>(atoi(args.arg(2).c_str())));
         uint32 systemID((args.argCount() > 3) ? static_cast<uint32>(atoi(args.arg(3).c_str())) : pClient->GetSystemID());
-        uint8 was(svDataMgr.GetStrategicLevel(systemID));
-        if (!svDataMgr.SetStrategicLevel(systemID, level))
+        uint32 wasDays(svDataMgr.GetClaimDays(systemID));
+        uint8 wasLevel(svDataMgr.GetStrategicLevel(systemID));
+        if (!svDataMgr.SetClaimDays(systemID, days))
             throw CustomError ("System %u has no sovereignty claim.", systemID);
-        return new PyString("Strategic index of system " + std::to_string(systemID) + " set from level " + std::to_string(was)
-                            + " to " + std::to_string(level) + " (held " + std::to_string(svDataMgr.GetClaimDays(systemID)) + " days).");
+        return new PyString("Sovereignty of system " + std::to_string(systemID) + " now held for " + std::to_string(svDataMgr.GetClaimDays(systemID))
+                            + " days (was " + std::to_string(wasDays) + "):  strategic index level " + std::to_string(svDataMgr.GetStrategicLevel(systemID))
+                            + " (was " + std::to_string(wasLevel) + ").");
     }
     return StructureStateCommand(pClient, args, "sov");
 }

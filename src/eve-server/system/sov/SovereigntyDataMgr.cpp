@@ -700,19 +700,20 @@ void SovereigntyDataMgr::UpdateClaim(uint32 systemID)
     SafeDelete(res);
 }
 
-bool SovereigntyDataMgr::SetStrategicLevel(uint32 systemID, uint8 level)
+bool SovereigntyDataMgr::SetClaimDays(uint32 systemID, uint32 days)
 {
     auto it = m_sovData.get<SovDataBySolarSystem>().find(systemID);
-    if ((it == m_sovData.get<SovDataBySolarSystem>().end()) or (level > 5))
+    if (it == m_sovData.get<SovDataBySolarSystem>().end())
         return false;
-    // the level's days held, plus an hour so it doesn't sit on the boundary (the client counts whole days)
+    // plus an hour, so the whole days the client and GetClaimDays count come out exactly as asked
     int64 claimTime((int64)GetFileTimeNow());
-    if (level > 0)
-        claimTime -= (int64)DevIndex::TimeLevelDays[level] * Win32Time_Day + Win32Time_Hour;
+    if (days > 0)
+        claimTime -= (int64)days * Win32Time_Day + Win32Time_Hour;
     SovereigntyDB::SetClaimTime(systemID, claimTime);
     UpdateClaim(systemID);
     BroadcastSovStatus(systemID);
-    _log(SOV__INFO, "SetStrategicLevel() - %u now at strategic level %u (claimTime %lli)", systemID, level, (long long)claimTime);
+    _log(SOV__INFO, "SetClaimDays() - %u now claimed for %u days, strategic level %u (claimTime %lli)", systemID, days,
+         GetStrategicLevel(systemID), (long long)claimTime);
     return true;
 }
 
