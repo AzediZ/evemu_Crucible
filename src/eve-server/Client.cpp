@@ -231,11 +231,11 @@ bool Client::ProcessNet()
             _SendException(p->dest, p->source.callID, p->type, WRAPPEDEXCEPTION, &e.ssException);
         }
 
-        p = nullptr;
+        // every packet is freed once it's handled.  this set p to null first, so only the last one ever was
+        //  (upstream fixed the same leak in d74a231)
+        SafeDelete(p);
     }
 
-    // cleanup
-    SafeDelete(p);
     // send queue
     _SendQueuedUpdates();
 
