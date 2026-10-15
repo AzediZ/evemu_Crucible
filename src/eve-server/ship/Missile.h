@@ -91,6 +91,26 @@ protected:
 
 };
 
+/* a stealth bomber's bomb (Crucible):  launched without a target, it flies along the bomber's velocity and goes off when its
+ *  flight time is up, whether or not the bomber is still there.  everything within its explosion range takes the blast, friend
+ *  or foe, reduced only by signature radius.  Lockbreaker bombs also break locks (an ecm burst) and Void bombs drain capacitor.
+ *  a bomb caught in another's blast takes it on its armour:  bombs of a different kind destroy it, its own kind hardly touch it */
+class Bomb
+: public Missile {
+public:
+    Bomb(InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* pLauncher, GenericModule* pMod);
+    virtual ~Bomb()                                     { /* do nothing here */ }
+
+    virtual void Process();
+
+    static bool IsBombGroup(uint16 groupID);
+
+protected:
+    void Detonate();
+    // this bomb's blast on another bomb in its range
+    void BlastBomb(Missile* pOther, Damage& d);
+};
+
 #endif  //EVE_SHIP_MISSILE_H
 
 

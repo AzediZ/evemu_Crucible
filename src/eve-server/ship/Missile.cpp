@@ -37,6 +37,8 @@
 #include "ship/Ship.h"
 #include "ship/modules/GenericModule.h"
 #include "system/Damage.h"
+#include "system/SystemBubble.h"
+#include "ship/modules/EwarModule.h"
 
 Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* tSE, SystemEntity* pSE, GenericModule* pMod)
 : DynamicSystemEntity(self, services, pSystem),
@@ -256,4 +258,133 @@ void Missile::Delete() {
         return;
     // do we need to do anything else here?
     SystemEntity::Delete();
+}
+
+
+/* bombs (Missile.h).  the launcher is the bomb's 'target' too:  destiny's LaunchMissile can't follow a ball that is its own
+ *  launcher, so it sends the bomb along the launcher's velocity (DestinyManager::ApplyLaunchMissile) */
+namespace {
+    const uint16 BombECMGroup = 863;        // Lockbreaker Bomb
+    const uint16 BombEnergyGroup = 864;     // Void Bomb
+}
+
+bool Bomb::IsBombGroup(uint16 groupID)
+{
+    return ((groupID == EVEDB::invGroups::Bomb) or (groupID == BombECMGroup) or (groupID == BombEnergyGroup));
+}
+
+Bomb::Bomb(InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* pLauncher, GenericModule* pMod)
+: Missile(self, services, pSystem, modRef, pLauncher, pLauncher, pMod)
+{
+    // ballistic control systems are for missiles.  the bomb's own (skill-modified) damage is all it does
+    m_damageMod = 1.0f;
+}
+
+void Bomb::Process()
+{
+    // destroyed by another bomb:  it goes without a blast
+    if (IsDead())
+        m_alive = false;
+    if (!m_alive) {
+        Delete();
+        return;
+    }
+    if (m_lifeTimer.Check(false)) {
+        Detonate();
+        return;
+    }
+    SystemEntity::Process();
+}
+
+void Bomb::Detonate()
+{
+    m_alive = false;
+    SystemBubble* pBubble(SysBubble());
+    SystemManager* pSys(SystemMgr());
+    if ((pBubble != nullptr) and (pSys != nullptr)) {
+        // the bomber, if it's still in the system.  otherwise the bomb is the source
+        SystemEntity* pFrom(pSys->GetSE(m_fromID));
+        if ((pFrom == nullptr) or pFrom->IsDead())
+            pFrom = this;
+
+        const GPoint at(GetPosition());
+        double range(m_self->GetAttribute(AttrExplosionRange).get_double());
+        if (range <= 0.0)
+            range = m_self->GetAttribute(AttrEmpFieldRange).get_double();
+        double cloud(m_self->GetAttribute(AttrAoeCloudSize).get_double());
+        uint16 group(m_self->groupID());
+        float drain(m_self->GetAttribute(AttrEnergyDestabilizationAmount).get_float());
+
+        std::map<uint32, SystemEntity*> entities;
+        pBubble->GetEntities(entities);
+        std::vector<uint32> ids;
+        for (auto cur : entities) {
+            SystemEntity* pSE(cur.second);
+            if ((pSE == this) or pSE->IsDead())
+                continue;
+            if ((at.distance(pSE->GetPosition()) - pSE->GetRadius()) > range)
+                continue;
+            ids.push_back(cur.first);
+        }
+
+        uint16 hit(0);
+        for (auto id : ids) {
+            SystemEntity* pSE(pSys->GetSE(id));
+            if ((pSE == nullptr) or pSE->IsDead())
+                continue;
+            Damage d(pFrom, m_modRef, m_self, EVEEffectID::missileLaunching);
+            d *= m_damageMod;
+            if (pSE->IsMissileSE()) {
+                if (IsBombGroup(pSE->GetSelf()->groupID()))
+                    BlastBomb(pSE->GetMissileSE(), d);
+                continue;
+            }
+            if (!pSE->IsShipSE() and !pSE->IsNPCSE() and !pSE->IsDroneSE() and !pSE->IsSentrySE())
+                continue;
+            ++hit;
+            // Lockbreaker:  an ecm burst against the target's sensor strength
+            if ((group == BombECMGroup) and (pSE->TargetMgr() != nullptr)
+            and !pSE->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool()
+            and Ewar::RollJam(m_self, at, pSE, AttrExplosionRange, AttrFalloff))
+                Ewar::BreakLocks(pSE);
+            // Void:  a flat capacitor drain
+            if ((group == BombEnergyGroup) and (drain > 0.0f))
+                Ewar::DrainCapacitor(pSE, drain);
+            // the blast, reduced only by the target's signature radius
+            if (cloud > 0.0) {
+                double sig(pSE->GetSignatureRadius());
+                if (sig < cloud)
+                    d *= (float)(sig / cloud);
+            }
+            if (pSE->IsDead())
+                continue;
+            pSE->ApplyDamage(d);
+        }
+        _log(DAMAGE__MESSAGE, "Bomb::Detonate() - %s(%u) from %u went off with %u in its %.0fm range", GetName(), GetID(), m_fromID, hit, range);
+
+        // the client shows the blast
+        if (m_destiny != nullptr)
+            m_destiny->SendTerminalExplosion(GetID(), pBubble->GetID(), isGlobal());
+    }
+    Delete();
+}
+
+void Bomb::BlastBomb(Missile* pOther, Damage& d)
+{
+    if ((pOther == nullptr) or !pOther->IsAlive())
+        return;
+    // bombs have only armour (and a little structure).  a missing resonance is no resistance
+    InventoryItemRef oRef(pOther->GetSelf());
+    auto res = [&oRef](uint16 attrID) { return (oRef->HasAttribute(attrID) ? oRef->GetAttribute(attrID).get_float() : 1.0f); };
+    float damage(d.GetEM() * res(AttrArmorEmDamageResonance) + d.GetThermal() * res(AttrArmorThermalDamageResonance)
+               + d.GetKinetic() * res(AttrArmorKineticDamageResonance) + d.GetExplosive() * res(AttrArmorExplosiveDamageResonance));
+    double cloud(m_self->GetAttribute(AttrAoeCloudSize).get_double());
+    double sig(oRef->GetAttribute(AttrSignatureRadius).get_double());
+    if ((cloud > 0.0) and (sig < cloud))
+        damage *= (float)(sig / cloud);
+    float hp(oRef->GetAttribute(AttrArmorHP).get_float() + oRef->GetAttribute(AttrHP).get_float());
+    if (damage >= hp) {
+        _log(DAMAGE__MESSAGE, "Bomb::BlastBomb() - %s(%u) destroyed %s(%u) with %.0f damage (%.0f hp)", GetName(), GetID(), pOther->GetName(), pOther->GetID(), damage, hp);
+        pOther->Intercepted();
+    }
 }

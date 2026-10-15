@@ -407,8 +407,10 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
             m_shipRef->ClearTargetRef();
         }
     }
-    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender)
+    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender).  nor do bombs (LaunchBomb)
     if (m_launcher and (m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile))
+        targetID = 0;
+    if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb)
         targetID = 0;
     if (IsValidTarget(targetID)) {
         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
@@ -1889,6 +1891,10 @@ void ActiveModule::LaunchMissile()
         LaunchDefender();
         return;
     }
+    if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb) {
+        LaunchBomb();
+        return;
+    }
     // the launcher ran out (or was unloaded) since it was activated.  it stops at the end of this cycle
     if ((m_chargeRef.get() == nullptr) or (m_targetSE == nullptr)) {
         m_Stop = true;
@@ -1934,6 +1940,42 @@ void ActiveModule::LaunchMissile()
     m_targetSE->MissileLaunched(pMissile);
 
     // add data to StatisticMgr
+    sStatMgr.Increment(Stat::pcMissiles);
+}
+
+void ActiveModule::LaunchBomb()
+{
+    Client* pClient(m_shipRef->GetPilot());
+    if (pClient == nullptr)
+        return;
+    ShipSE* pShip(pClient->GetShipSE());
+    if ((m_chargeRef.get() == nullptr) or (pShip == nullptr) or (pShip->SysBubble() == nullptr) or !Bomb::IsBombGroup(m_chargeRef->groupID())) {
+        m_Stop = true;
+        return;
+    }
+    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position());
+    InventoryItemRef bombRef(sItemFactory.SpawnItem(idata));
+    if (bombRef.get() == nullptr) {
+        _log(ITEM__ERROR, "Unable to spawn bomb of type %u.", m_chargeRef->typeID());
+        AbortCycle();
+        return;
+    }
+    // the loaded bomb's attributes, with the pilot's skill bonuses (Bomb Deployment)
+    static const uint16 bombAttrs[] = {
+        AttrEmDamage, AttrExplosiveDamage, AttrKineticDamage, AttrThermalDamage, AttrExplosionDelay, AttrMaxVelocity,
+        AttrAoeCloudSize, AttrExplosionRange, AttrEmpFieldRange, AttrHP, AttrArmorHP, AttrSignatureRadius,
+        AttrArmorEmDamageResonance, AttrArmorExplosiveDamageResonance, AttrArmorKineticDamageResonance, AttrArmorThermalDamageResonance,
+        AttrScanGravimetricStrengthBonus, AttrScanLadarStrengthBonus, AttrScanMagnetometricStrengthBonus, AttrScanRadarStrengthBonus,
+        AttrEnergyDestabilizationAmount };
+    for (auto attrID : bombAttrs)
+        if (m_chargeRef->HasAttribute(attrID))
+            bombRef->SetAttribute(attrID, m_chargeRef->GetAttribute(attrID), false);
+
+    SystemManager* pSystem(pClient->SystemMgr());
+    Bomb* pBomb(new Bomb(bombRef, pSystem->GetServiceMgr(), pSystem, m_modRef, pShip, this));
+    pBomb->SetSpeed(bombRef->GetAttribute(AttrMaxVelocity).get_float());
+    pBomb->DestinyMgr()->MakeMissile(pBomb);
+    ConsumeCharge();
     sStatMgr.Increment(Stat::pcMissiles);
 }
 
