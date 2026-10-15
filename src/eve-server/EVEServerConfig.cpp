@@ -456,6 +456,7 @@ EVEServerConfig::EVEServerConfig()
     standings.ACorp2PCorpMissionMultiplier = 0.025;
     standings.AFaction2CharMissionMultiplier = 0.125;
     standings.AFaction2PCorpMissionMultiplier = 0.0125;
+    standings.DerivedStandings = true;
     //  - PVP
     //  - ratting/exploring
 
@@ -1676,6 +1677,7 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
     AddValueParser( "ACorp2PCorpMissionMultiplier",     standings.ACorp2PCorpMissionMultiplier );
     AddValueParser( "AFaction2CharMissionMultiplier",   standings.AFaction2CharMissionMultiplier );
     AddValueParser( "AFaction2PCorpMissionMultiplier",  standings.AFaction2PCorpMissionMultiplier );
+    AddValueParser( "DerivedStandings",                 standings.DerivedStandings );
 
     const bool result = ParseElementChildren( ele );
 
@@ -1694,6 +1696,7 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
     RemoveParser( "ACorp2PCorpMissionMultiplier" );
     RemoveParser( "AFaction2CharMissionMultiplier" );
     RemoveParser( "AFaction2PCorpMissionMultiplier" );
+    RemoveParser( "DerivedStandings" );
 
     return result;
 }

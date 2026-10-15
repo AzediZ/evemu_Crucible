@@ -186,12 +186,52 @@ void StandingDB::SetStanding(uint32 fromID, uint32 toID, float standing)
 
 void StandingDB::UpdateStanding(uint32 fromID, uint32 toID, float standing)
 {
+    // a raw add, kept between -10 and +10
     DBerror err;
     sDatabase.RunQuery(err,
                        "INSERT INTO repStandings (fromID, toID, standing)"
                        " VALUES (%u,%u,%f)"
-                       " ON DUPLICATE KEY UPDATE standing = standing + %f",
-                       fromID, toID, standing, standing);
+                       " ON DUPLICATE KEY UPDATE standing = LEAST(10, GREATEST(-10, standing + %f))",
+                       fromID, toID, EvE::max(-10.0f, EvE::min(10.0f, standing)), standing);
+}
+
+void StandingDB::ModifyStanding(uint32 fromID, uint32 toID, double change, float minAbs/*-10*/, float maxAbs/*10*/)
+{
+    if (change == 0.0)
+        return;
+    // the client's standingsvc.OnStandingsModified does the same with the change we send it
+    double first(10.0 * change);    // from no standing (0)
+    if (change > 0.0) {
+        first = (0.0 < maxAbs) ? std::min<double>(first, maxAbs) : 0.0;
+    } else {
+        first = (0.0 > minAbs) ? std::max<double>(first, minAbs) : 0.0;
+    }
+    DBerror err;
+    if (change > 0.0) {
+        sDatabase.RunQuery(err,
+                       "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u, %u, %.10f)"
+                       " ON DUPLICATE KEY UPDATE standing ="
+                       " IF(standing < %.10f, LEAST(%.10f, standing + (10 - standing) * %.12f), standing)",
+                       fromID, toID, first, maxAbs, maxAbs, change);
+    } else {
+        sDatabase.RunQuery(err,
+                       "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u, %u, %.10f)"
+                       " ON DUPLICATE KEY UPDATE standing ="
+                       " IF(standing > %.10f, GREATEST(%.10f, standing + (10 + standing) * %.12f), standing)",
+                       fromID, toID, first, minAbs, minAbs, change);
+    }
+}
+
+void StandingDB::GetFactionRelations(std::multimap<uint32, std::pair<uint32, float>>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repFactions")) {
+        codelog(DATABASE__ERROR, "Error in GetFactionRelations query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.emplace(row.GetUInt(1), std::make_pair(row.GetUInt(0), row.GetFloat(2)));
 }
 
 /** @todo  implement repStandingChanges after standing system is working  */

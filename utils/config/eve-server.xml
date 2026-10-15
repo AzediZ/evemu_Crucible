@@ -380,7 +380,10 @@ boolean can use either 0/1 OR true/false.
         <DifficultyReactionTime>0</DifficultyReactionTime><!-- npc reaction delay multiplier.  0 = from Difficulty.  0 default -->
     </npc>
 
-    <standings><!-- these are in percent. do not modify.  not fully debugged -->
+    <standings><!-- a mission's change moves a standing that fraction of the way to +10 (or -10 for a loss):  new = s + (10 - s) x change.
+                     the change is (8 x level + quality / 10 - 4) / 800, +5% per Social level, times these multipliers.
+                     with the multipliers below, about 85 missions for a quality 0 level 1 agent raise its corporation from 0 to 1.0 (level 2
+                     agents).  Social, Negotiation and Connections cut that:  Connections 3 alone counts as 1.2 -->
         <!--  base mission modifiers  -->
         <MissionBonus>1.0</MissionBonus><!-- 1.0 default -->
         <MissionFailure>-0.5</MissionFailure><!-- -0.5 default -->
@@ -391,7 +394,7 @@ boolean can use either 0/1 OR true/false.
         <MissionFailedRollback>-0.5</MissionFailedRollback><!-- -0.5 default -->
         <FleetMissionMultiplier>0.5</FleetMissionMultiplier><!-- unused since F12:  fleets share mission rewards and standings as <missions> FleetShare says -->
         <!-- agent to char modifiers -->
-        <BaseMissionMultiplier>1.0</BaseMissionMultiplier><!-- 1.0 default  -->
+        <BaseMissionMultiplier>1.0</BaseMissionMultiplier><!-- 1.0 default.  scales every mission change:  2.0 roughly halves the missions per agent level  -->
         <Agent2CharMissionMultiplier>1.0</Agent2CharMissionMultiplier><!-- 1.0 default  -->
         <ACorp2CharMissionMultiplier>0.25</ACorp2CharMissionMultiplier><!-- 0.25 default  -->
         <AFaction2CharMissionMultiplier>0.125</AFaction2CharMissionMultiplier><!-- 0.125 default  -->
@@ -399,6 +402,9 @@ boolean can use either 0/1 OR true/false.
         <Agent2PCorpMissionMultiplier>0.1</Agent2PCorpMissionMultiplier><!-- 0.1 default  -->
         <ACorp2PCorpMissionMultiplier>0.025</ACorp2PCorpMissionMultiplier><!-- 0.025 default  -->
         <AFaction2PCorpMissionMultiplier>0.0125</AFaction2PCorpMissionMultiplier><!-- 0.0125 default  -->
+        <!-- a mission's faction change also moves the faction's friends (up) and enemies (down), by change x their standing towards it / 10,
+             no further than that standing.  a loss only lowers its friends.  true default -->
+        <DerivedStandings>true</DerivedStandings>
     </standings>
 
     <chat>

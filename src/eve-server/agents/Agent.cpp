@@ -604,13 +604,15 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
     float bonus = EvEMath::Agent::GetStandingBonus(charStanding, m_agentData.factionID, pChar->GetSkillLevel(EvESkill::Connections), pChar->GetSkillLevel(EvESkill::Diplomacy), pChar->GetSkillLevel(EvESkill::CriminalConnections));
     float standing = EvEMath::Agent::EffectiveStanding(charStanding, bonus);
     float quality = EvEMath::Agent::EffectiveQuality(m_agentData.quality, pChar->GetSkillLevel(EvESkill::Negotiation), standing);
-    float newStanding = EvEMath::Agent::Efficiency(m_agentData.level, quality);    // 0.018 to 0.38
-    SystemManager* pSysMgr = sEntityList.FindOrBootSystem(m_agentData.solarSystemID);
-    if (pSysMgr != nullptr)
-        newStanding *= pSysMgr->GetSecValue(); // 0.0018 to .76
+    float newStanding = EvEMath::Agent::Efficiency(m_agentData.level, quality);    // 0.04 (level 1, quality 0) to 0.38
+    /* this was also multiplied by 1.1 - security, so an agent in a 1.0 system gave a sixth of what one in a 0.5 system gave.
+     *  Crucible doesn't scale standings by security (rewards and LP are scaled elsewhere) */
 
-    //newStanding = EvEMath::Agent::AgentStandingIncrease(standing, (newStanding /10));     -- this isnt used.
+    // +5% per Social level
     newStanding = EvEMath::Agent::MissionStandingIncrease(newStanding, pChar->GetSkillLevel(EvESkill::Social));
+    /* the fraction of the way to 10 a mission moves the standing:  0.5% for level 1 to 4.75% for level 5 (quality 20).  it was
+     *  added as it is (+0.005), which is (10 - s) times too little:  the client, told the same change, applied it properly
+     *  (StandingMgr::ModifyStanding()) and showed a standing the server didn't have until the next login */
     newStanding /= 8;
 
     newStanding *= sConfig.standings.BaseMissionMultiplier;
@@ -658,41 +660,18 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
     } else {
         payees.push_back(pClient);
     }
-    double agentDelta(newStanding / payees.size());
+    double agentDelta(newStanding * sConfig.standings.Agent2CharMissionMultiplier / payees.size());
     double corpDelta(newStanding * sConfig.standings.ACorp2CharMissionMultiplier / payees.size());
     double factionDelta(newStanding * sConfig.standings.AFaction2CharMissionMultiplier);
 
     for (auto cur : payees) {
         uint32 curID(cur->GetCharacterID());
-        sStandingMgr.UpdateStandings(m_agentID, curID, eventID, agentDelta, msg);
-        sStandingMgr.UpdateStandings(m_agentData.corporationID, curID, eventID, corpDelta, msg);
-        if (cur == pClient)
-            sStandingMgr.UpdateStandings(m_agentData.factionID, curID, eventID, factionDelta, msg);
-
-        PyTuple* agent = new PyTuple(5);
-            agent->SetItem(0, new PyInt(m_agentID));
-            agent->SetItem(1, new PyInt(curID));
-            agent->SetItem(2, new PyFloat(agentDelta));
-            agent->SetItem(3, new PyInt(-1));
-            agent->SetItem(4, PyStatic.NewOne());
-        PyTuple* corp = new PyTuple(5);
-            corp->SetItem(0, new PyInt(m_agentData.corporationID));
-            corp->SetItem(1, new PyInt(curID));
-            corp->SetItem(2, new PyFloat(corpDelta));
-            corp->SetItem(3, new PyInt(-1));
-            corp->SetItem(4, PyStatic.NewOne());
+        // each change goes into the client's list too (the faction's derived changes with it)
         PyList* list = new PyList();
-            list->AddItem(agent);
-            list->AddItem(corp);
-        if (cur == pClient) {
-            PyTuple* faction = new PyTuple(5);
-                faction->SetItem(0, new PyInt(m_agentData.factionID));
-                faction->SetItem(1, new PyInt(curID));
-                faction->SetItem(2, new PyFloat(factionDelta));
-                faction->SetItem(3, new PyInt(-1));
-                faction->SetItem(4, PyStatic.NewOne());
-            list->AddItem(faction);
-        }
+        sStandingMgr.ModifyStanding(m_agentID, curID, eventID, agentDelta, msg, list);
+        sStandingMgr.ModifyStanding(m_agentData.corporationID, curID, eventID, corpDelta, msg, list);
+        if (cur == pClient)
+            sStandingMgr.ModifyFactionStanding(m_agentData.factionID, curID, eventID, factionDelta, msg, list);
         PyTuple* payload = new PyTuple(1);
             payload->SetItem(0, list);
 
@@ -705,9 +684,9 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
     }
 
     if (IsPlayerCorp(pClient->GetCorporationID())) {
-        sStandingMgr.UpdateStandings(m_agentID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.Agent2PCorpMissionMultiplier, msg);
-        sStandingMgr.UpdateStandings(m_agentData.corporationID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.ACorp2PCorpMissionMultiplier, msg);
-        sStandingMgr.UpdateStandings(m_agentData.factionID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.AFaction2PCorpMissionMultiplier, msg);
+        sStandingMgr.ModifyStanding(m_agentID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.Agent2PCorpMissionMultiplier, msg);
+        sStandingMgr.ModifyStanding(m_agentData.corporationID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.ACorp2PCorpMissionMultiplier, msg);
+        sStandingMgr.ModifyStanding(m_agentData.factionID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.AFaction2PCorpMissionMultiplier, msg);
     }
 }
 

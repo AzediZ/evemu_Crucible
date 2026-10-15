@@ -63,6 +63,11 @@ public:
 
     static void SetStanding(uint32 fromID, uint32 toID, float standing);
     static void UpdateStanding(uint32 fromID, uint32 toID, float standing);
+    /* a change as the client applies it (OnStandingsModified):  a fraction of the way to +10 (change > 0) or to -10.
+     *  a gain doesn't go past maxAbs (nor apply above it), a loss doesn't go below minAbs */
+    static void ModifyStanding(uint32 fromID, uint32 toID, double change, float minAbs = -10.0f, float maxAbs = 10.0f);
+    // repFactions:  how each npc faction stands towards each other one (fromID -> toID)
+    static void GetFactionRelations(std::multimap<uint32, std::pair<uint32, float>>& into);
     static void SaveStandingChanges(uint32 fromID, uint32 toID, uint16 eventType, float amount, std::string msg);
 
     static PyRep* GetMyStandings(uint32 charID);

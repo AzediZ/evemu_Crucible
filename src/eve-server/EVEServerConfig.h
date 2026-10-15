@@ -558,6 +558,7 @@ public:
         float ACorp2PCorpMissionMultiplier;
         float AFaction2CharMissionMultiplier;
         float AFaction2PCorpMissionMultiplier;
+        bool DerivedStandings;              // a faction's friends and enemies follow a mission's change to that faction
     } standings;
 
     // From <chat>
