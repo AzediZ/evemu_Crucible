@@ -1,0 +1,41 @@
+From e518939d76ca6c2709f2fda23ac77d6101e6824b Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 12:32:38 +0000
+Subject: [PATCH 67/67] Agents: LP shown as 0 instead of -1, polite greeting
+
+The agent window showed -1 LP with a corporation you had no LP with yet.  An
+agent you had no mission with greeted you with "Why the fuck am I looking at
+you again"; it now says hello.
+---
+ src/eve-server/agents/AgentBound.cpp | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/agents/AgentBound.cpp b/src/eve-server/agents/AgentBound.cpp
+index 24264397..2bd2e59a 100644
+--- a/src/eve-server/agents/AgentBound.cpp
++++ b/src/eve-server/agents/AgentBound.cpp
+@@ -204,9 +204,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
+                 } else {
+                     // dialogue data.  if RequestMission is only option, client auto-responds with DoAction(RequestMission optionID)
+                     AddButton(dialog, RequestMission);
+-                    std::string response = "Why the fuck am I looking at you again, ";
++                    std::string response = "Hello, ";
+                     response += call.client->GetName();
+-                    response += "?";
++                    response += ".  What can I do for you?";
+                     agentSays->SetItem(0, new PyString(response));  //msgInfo  -- if tuple[0].string then return msgInfo
+                     agentSays->SetItem(1, PyStatic.NewNone());      // ContentID  -- PyNone used when msgInfo is string (mostly for initial greetings)
+                 }
+@@ -360,7 +360,8 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
+ 
+     // extraInfo data....
+     PyDict* xtraInfo = new PyDict();
+-        xtraInfo->SetItemString("loyaltyPoints",    new PyInt(LPService::GetLPBalanceForCorp(charID, m_agent->GetCorpID())));  // this is char current LP
++        // this is char current LP.  (no balance with this corp yet is -1, which the window showed)
++        xtraInfo->SetItemString("loyaltyPoints",    new PyInt(std::max(0, LPService::GetLPBalanceForCorp(charID, m_agent->GetCorpID()))));
+         xtraInfo->SetItemString("missionCompleted", new PyBool(missionCompleted));
+         xtraInfo->SetItemString("missionQuit",      new PyBool(missionQuit));
+         xtraInfo->SetItemString("missionDeclined",  new PyBool(missionDeclined));
+-- 
+2.34.1
+

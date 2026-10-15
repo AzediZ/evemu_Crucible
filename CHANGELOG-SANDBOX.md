@@ -4,6 +4,37 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 ---
 
+## 2026-10-15: Belt rats, standings and agents (branch `revised`)
+
+Patches `0064` to `0067` · Status: **compiles and boot-tested** (15 Oct 2026): the server was started natively against MariaDB 11.8 and stopped cleanly. Not yet tested in game.
+
+**Belt rats**
+- `0064` **Belt rats follow the system's security.** Spawns used 1.1 minus the security where they expected the security itself, so high-sec belts got the hardest rats and null-sec the easiest. Now high-sec spawns are easy to average, low-sec medium and null-sec hard to insane, with the odd extra-hard spawn in null-sec.
+- **Officers, faction commanders and hauler groups spawn.** Their roll needed a system above 0.9, where belts don't spawn, so none ever appeared. Officers now spawn in null-sec belts (1 spawn in 100), commanders in low-sec and null-sec (1 in 20, the battleship ones in null-sec only) and hauler groups anywhere (8 in 100). Rogue drones have no officers or haulers. New settings `<npc><OfficerChance>`, `<CommanderChance>` and `<HaulerChance>`.
+- Officer and commander groups vary; they always used their first, smallest group.
+- **Rats warp in straight away.** Belt rats, and site and mission waves that warp in, start off grid and now go straight into warp, so a battleship no longer spends 15-20 seconds aligning first. With `<npc><SleepEmptyBubbles>` off, a rat could be stopped mid-align and never arrive (found by the EVEmu project, PR #327).
+
+**Standings**
+- `0065` **Mission standings work the Crucible way.** Gains were added as a flat number and also scaled down by the system's security, so a level 1 mission gave about +0.003 and level 2 agents took hundreds of missions. A mission now moves a standing part of the way to 10 (or to -10 for a loss), so a standing can't pass ±10. The client already worked this way, so the standings window showed more than the server had until you logged in again.
+- From 0, a level 1 mission for a quality 0 agent gives about +0.05 with the agent, +0.0125 with its corporation and +0.006 with its faction. That's about 85 missions to raise a corporation from 0 to 1.0 for its level 2 agents. Social, Negotiation and Connections cut that (Connections 3 alone counts as 1.2). If it's too slow, `<standings><BaseMissionMultiplier>` scales every mission's change.
+- **Derived standings.** A mission's change with a faction also moves that faction's friends up and its enemies down, so Caldari missions lower your Gallente standing. The change is the faction's change × how they stand towards that faction ÷ 10, and stops at that standing. A loss only lowers the faction's friends. New setting `<standings><DerivedStandings>` (default `true`).
+- `0066` **`/setstanding`** (GM): `/setstanding (npc corporation, faction or agent ID) (-10 to 10) [me|character]` sets a standing directly. An online pilot's standings window updates at once.
+
+**Agents**
+- `0067` The agent window showed **-1 LP** with a corporation you had no LP with yet; it shows 0. An agent you had no mission with greeted you with an insult; it now says hello.
+
+**Before the first start**
+- Your `config/eve-server.xml` keeps its settings; the new ones use their defaults (above). There's nothing to change unless you want different rates.
+- Rebuild from the control panel. There are no database changes.
+
+**How to test.** Rebuild and start. Then:
+- Rat in a high-sec belt and a null-sec belt: null-sec spawns should be much bigger. Over a longer session in low-sec or null-sec you should meet a commander or a hauler group.
+- Run a level 1 mission: the standings window should show about +0.05 with the agent, and still show it after logging out and back in.
+- `/setstanding 500001 5`: your Caldari State standing is 5.0, and Caldari level 4 agents offer missions.
+- Open an agent of a corporation you have no LP with: it shows 0 LP and greets you politely.
+
+---
+
 ## 2026-10-14: Crash fixes, safer defaults, backups and database health (branch `revised`)
 
 Patches `0051` to `0063` · Status: **compiles and boot-tested** (14 Oct 2026): the server was started natively against a fresh MariaDB 11.8 universe, came online in 13 s and stopped cleanly; the bill shift, a database outage and the backup and restore scripts were tested. Not yet built in Docker or tested in game.
@@ -879,6 +910,9 @@ Some changes here fix bugs that exist in EVEmu itself; others only make sense fo
 | Incoming packet leak; fleet broadcast crash; apostrophe in the item save; wormholes never created; paused skill queue wiped (on Renn's `revised`) | `0040` to `0044` | Yes, to Renn's branch. All are bugs in his code; the packet leak is already fixed upstream. |
 | Crime off at server start, `/crime on` and `/crime off`; ambient pirates leave players alone while crime is off (on Renn's `revised`) | `0045`, `0046` | Possibly, to Renn's branch, as a server option |
 | Release Docker image, Stop that lets the server save, fresh universe volume, control panel | `0047` to `0050` | The Stop fix (`0048`) suits Renn's branch; the rest is sandbox tooling |
+| Belt rat spawns used 1.1 − security, so officers, commanders and haulers never spawned; off-grid warp-ins start at once (on Renn's `revised`) | `0064` | Yes, to Renn's branch. Upstream EVEmu has the same bug (its open PR #327 fixes part of it). |
+| Mission standings added flat and scaled by security; no ±10 limit; no derived standings (on Renn's `revised`) | `0065` | Yes. An EVEmu bug. |
+| `/setstanding`; agent window LP −1 and rude greeting (on Renn's `revised`) | `0066`, `0067` | Yes |
 | Windows control panel, changelog, patch files | none (tooling) | No, sandbox-only |
 
 Each patch's commit message describes the change in developer terms; the dated entries above describe it in player terms.

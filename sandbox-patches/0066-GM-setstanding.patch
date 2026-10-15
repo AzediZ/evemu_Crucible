@@ -1,0 +1,83 @@
+From e5c1f9875d85dd78e6584bd4af8843a67ce8906b Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 12:32:03 +0000
+Subject: [PATCH 66/67] GM: /setstanding
+
+/setstanding (npc corporationID|factionID|agentID) (-10 to 10) [me|charID|"name"]
+sets a character's standing from an npc corporation, faction or agent (you by
+default).  An online pilot's client is told at once.  Logged in the standings
+history as a GM change.
+---
+ src/eve-server/admin/GMCommands.cpp | 35 +++++++++++++++++++++++++++++
+ src/eve-server/admin/GMCommands.h   |  2 ++
+ 2 files changed, 37 insertions(+)
+
+diff --git a/src/eve-server/admin/GMCommands.cpp b/src/eve-server/admin/GMCommands.cpp
+index bc3db92c..69145196 100644
+--- a/src/eve-server/admin/GMCommands.cpp
++++ b/src/eve-server/admin/GMCommands.cpp
+@@ -57,6 +57,8 @@
+ #include "system/cosmicMgrs/BeltMgr.h"
+ #include "corporation/LPService.h"
+ #include "corporation/CorporationDB.h"
++#include "../../eve-common/EVE_Standings.h"
++#include "standing/StandingDB.h"
+ #include "admin/CommandHelper.h"
+ #include "chat/LSCService.h"
+ #include "services/ServiceManager.h"
+@@ -1106,6 +1108,39 @@ PyResult Command_unban(Client* who, CommandDB* db, EVEServiceManager &services,
+     return new PyString("Unbanned.");
+ }
+ 
++PyResult Command_setstanding(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
++{
++    // /setstanding (npc corporationID|factionID|agentID) (-10 to 10) [me|charID|"name"]
++    if ((args.argCount() < 3) or !args.isNumber(1) or !args.isNumber(2))
++        throw CustomError ("Correct Usage: /setstanding (npc corporationID|factionID|agentID) (-10 to 10) [me|charID|\"name\"]");
++    uint32 fromID(strtoul(args.arg(1).c_str(), nullptr, 10));
++    if (!IsNPCCorp(fromID) and !IsFaction(fromID) and !IsAgent(fromID))
++        throw CustomError ("%u is not an npc corporation, faction or agent", fromID);
++    float standing(strtof(args.arg(2).c_str(), nullptr));
++    if ((standing < -10.0f) or (standing > 10.0f))
++        throw CustomError ("The standing has to be between -10 and 10");
++    uint32 charID(who->GetCharacterID());
++    if (args.argCount() > 3) {
++        charID = cmd_find_char_id(db, args, 3, who);
++        if (charID == 0)
++            throw CustomError ("Cannot find character %s", args.arg(3).c_str());
++    }
++
++    float old(StandingDB::GetStanding(fromID, charID));
++    Client* pTarget(sEntityList.FindClientByCharID(charID));
++    if ((pTarget != nullptr) and (pTarget->GetChar().get() != nullptr)) {
++        // their client is told (OnStandingSet)
++        pTarget->GetChar()->SetStanding(fromID, charID, standing);
++    } else {
++        StandingDB::SetStanding(fromID, charID, standing);
++    }
++    StandingDB::SaveStandingChanges(fromID, charID, Standings::GMInterventionDirect, standing - old, "Set by a GM");
++
++    char buf[160];
++    snprintf(buf, sizeof(buf), "Standing of %u towards %u set to %.2f (it was %.2f).", fromID, charID, standing, old);
++    return new PyString(buf);
++}
++
+ PyResult Command_whois(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+ {
+     // /whois (charID|"name")  online or not
+diff --git a/src/eve-server/admin/GMCommands.h b/src/eve-server/admin/GMCommands.h
+index 132826e1..60de450a 100644
+--- a/src/eve-server/admin/GMCommands.h
++++ b/src/eve-server/admin/GMCommands.h
+@@ -49,6 +49,8 @@ COMMAND( unban, Acct::Role::ADMIN,
+         "(charName) - removes ban on player's account")
+ COMMAND( givelp, Acct::Role::ADMIN,
+         "('me'|<characterID>) (corporationID) (amount) - adds LP to a character for a specific corporation")
++COMMAND( setstanding, Acct::Role::ADMIN,
++        "(npc corporationID|factionID|agentID) (-10 to 10) [me|charID|\"name\"] - sets a character's standing from an npc corporation, faction or agent (you by default)")
+ 
+ COMMAND( whois, Acct::Role::GMH,
+         "(charID|\"name\") - shows account, corp, location and status of a character (online or not)")
+-- 
+2.34.1
+

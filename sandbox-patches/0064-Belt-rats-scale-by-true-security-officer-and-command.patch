@@ -1,0 +1,278 @@
+From aa339f957500574e96cff73c976877cb43dc34f6 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 12:19:45 +0000
+Subject: [PATCH 64/67] Belt rats: scale by true security, officer and
+ commander spawns
+
+Belt spawns compared 1.1 - security with numbers meant for true security, so
+high-sec got the hardest spawns and null-sec the easiest. The officer,
+commander and hauler roll needed a system above 0.9, where belts don't spawn,
+so those never appeared.
+
+- spawn class, Hell spawns and hauler size now follow true security
+- officers in null-sec belts, commanders in low and null (battleship
+  commanders in null only), haulers anywhere.  New settings OfficerChance
+  (0.01), CommanderChance (0.05) and HaulerChance (0.08) in the npc block
+- officer and commander groups now pick from all their rows, not the first
+- belt rats and site warp-ins start their warp at once from off grid, so a
+  battleship no longer spends 20s aligning (and with SleepEmptyBubbles off,
+  the idle ai no longer stops the align)
+---
+ src/eve-server/EVEServerConfig.cpp            |  9 +++
+ src/eve-server/EVEServerConfig.h              |  3 +
+ src/eve-server/system/DestinyManager.cpp      | 10 ++-
+ src/eve-server/system/DestinyManager.h        |  2 +
+ src/eve-server/system/cosmicMgrs/SpawnMgr.cpp | 79 ++++++++++---------
+ utils/config/eve-server.xml                   |  3 +
+ 6 files changed, 68 insertions(+), 38 deletions(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index bcbb7510..cea4f34a 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -290,6 +290,9 @@ EVEServerConfig::EVEServerConfig()
+     npc.StaticTimer = 600 /*s*/;
+     npc.RespawnTimer = 1200 /*s*/;  // Crucible belt rats "reliably reappear in 20 to 25 minutes" (with RespawnJitter)
+     npc.RatFaction = 0;
++    npc.OfficerChance = 0.01;      // of a null-sec belt spawn
++    npc.CommanderChance = 0.05;    // of a low or null-sec belt spawn
++    npc.HaulerChance = 0.08;       // of any belt spawn
+     npc.TargetPodSec = 0;
+     npc.TargetPod = false;
+     npc.UseDamageMultiplier = true;
+@@ -1213,6 +1216,9 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
+     AddValueParser( "StaticTimer",              npc.StaticTimer );
+     AddValueParser( "RespawnTimer",             npc.RespawnTimer );
+     AddValueParser( "RatFaction",               npc.RatFaction );
++    AddValueParser( "OfficerChance",            npc.OfficerChance );
++    AddValueParser( "CommanderChance",          npc.CommanderChance );
++    AddValueParser( "HaulerChance",             npc.HaulerChance );
+     AddValueParser( "TargetPod",                npc.TargetPod );
+     AddValueParser( "TargetPodSec",             npc.TargetPodSec );
+     AddValueParser( "UseDamageMultiplier",      npc.UseDamageMultiplier );
+@@ -1293,6 +1299,9 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
+     RemoveParser( "StaticTimer" );
+     RemoveParser( "RespawnTimer" );
+     RemoveParser( "RatFaction" );
++    RemoveParser( "OfficerChance" );
++    RemoveParser( "CommanderChance" );
++    RemoveParser( "HaulerChance" );
+     RemoveParser( "TargetPod" );
+     RemoveParser( "TargetPodSec" );
+     RemoveParser( "UseDamageMultiplier" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index a76fbe13..19aa02ce 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -334,6 +334,9 @@ public:
+         uint16 StaticTimer;
+         uint16 RespawnTimer;        // s.  a killed belt rat respawns this long (+ RespawnJitter) after it died
+         uint32 RatFaction;
++        float OfficerChance;        // chance a null-sec belt spawn is an officer and its escort (not rogue drones)
++        float CommanderChance;      // chance a low or null-sec belt spawn is led by a faction commander
++        float HaulerChance;         // chance a belt spawn is a hauler group (not rogue drones)
+         float ThreatRadius;         // deprecated (npc ai phase 3) and ignored:  level-one npcs consider everything within R_acq
+         float WarpFollowChance;
+         float TargetPodSec;
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index aa43fa90..081beafe 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -1295,6 +1295,14 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
+  *  ball (the login cloak comes off first)
+  */
+ void DestinyManager::LoginWarpTo(const GPoint& where) {
++    AlignedWarpTo(where);
++}
++
++/* a warp that starts on the next tick:  the ball is put at full speed, pointed at the destination, first.  for the login
++ *  warp above, and for belt rats coming in from off grid:  no one sees them align there, a battleship took 15-20s to get
++ *  going, and with npc.SleepEmptyBubbles off the npc ai's first idle think stopped the align (there is nothing to wander
++ *  around off grid), so the rat never arrived (upstream PR #327 found this) */
++void DestinyManager::AlignedWarpTo(const GPoint& where, int32 distance/*0*/) {
+     Logoff::Vec vel(Logoff::LoginVelocity(Logoff::Vec{m_position.x, m_position.y, m_position.z},
+             Logoff::Vec{where.x, where.y, where.z}, static_cast<double>(m_maxShipSpeed)));
+     GVector dir(vel.x, vel.y, vel.z);
+@@ -1310,7 +1318,7 @@ void DestinyManager::LoginWarpTo(const GPoint& where) {
+         PyTuple* up = bv.Encode();
+         SendSingleDestinyUpdate(&up);   // consumed
+     }
+-    WarpTo(where, 0, false, nullptr, 0, false, true);
++    WarpTo(where, distance, false, nullptr, 0, false, true);
+ }
+ 
+ void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {
+diff --git a/src/eve-server/system/DestinyManager.h b/src/eve-server/system/DestinyManager.h
+index 79efd185..1e0e4453 100644
+--- a/src/eve-server/system/DestinyManager.h
++++ b/src/eve-server/system/DestinyManager.h
+@@ -144,6 +144,8 @@ public:
+     // the warp back to the logoff point at login (EVE_Logoff.h):  the ship is already aligned at full speed, so it enters warp at once.
+     //  call it before the pilot's SetState goes out (Client::StartLoginWarp()), so the client gets the warp in its first state
+     void LoginWarpTo(const GPoint& where);
++    // warp that starts on the next tick:  the ball goes to full speed pointed at the destination first (LoginWarpTo, belt rats warping in)
++    void AlignedWarpTo(const GPoint& where, int32 distance = 0);
+ 
+     /* Ship State Query functions */
+     bool IsMoving()                                     { return ((m_ballMode != Destiny::Ball::Mode::STOP) or (m_velocity.lengthSquared() > 1.0)); }
+diff --git a/src/eve-server/system/cosmicMgrs/SpawnMgr.cpp b/src/eve-server/system/cosmicMgrs/SpawnMgr.cpp
+index 3e8bdd22..918cb0cc 100644
+--- a/src/eve-server/system/cosmicMgrs/SpawnMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/SpawnMgr.cpp
+@@ -17,6 +17,7 @@
+ #include "system/DestinyManager.h"
+ #include "system/SystemManager.h"
+ #include "system/SystemBubble.h"
++#include "system/CrimeWatch.h"
+ #include "system/TargetManager.h"
+ #include "system/cosmicMgrs/SpawnMgr.h"
+ #include "system/cosmicMgrs/DungeonMgr.h"
+@@ -475,7 +476,7 @@ NPC* SpawnMgr::SpawnDungeonNPC(SystemBubble* pBubble, uint16 typeID, uint32 fact
+     if (warpIn) {
+         // its home is where it is going
+         pNPC->GetAIMgr()->SetHome(pos);
+-        pNPC->DestinyMgr()->WarpTo(pos, 0);
++        pNPC->DestinyMgr()->AlignedWarpTo(pos);
+     }
+ 
+     return pNPC;
+@@ -624,7 +625,11 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
+ {
+     if (pBubble == nullptr)
+         return false;
+-    float secRating = m_system->GetSecValue();
++    /* true security, -1.0 to 1.0.  this used GetSecValue() (1.1 - true security, 0.1 to 2.0) against the numbers below,
++     *  so high-sec belts got the hardest spawns and null-sec the easiest, and the officer, commander and hauler roll
++     *  needed a system above 0.9, where belts don't spawn */
++    float secRating = m_system->GetSystemSecurityRating();
++    uint8 secClass = CrimeWatch::SecurityClass(secRating);
+     bool anomaly = false;
+     // get faction for this region
+     uint32 factionID = factionRogueDrones;  // default to rogue drones.  this is my internal rogue drone factionID.
+@@ -640,20 +645,15 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
+ 
+     // if rat, get possible spawn groups for this secRating.
+     if (sClass == Spawn::Class::None) {
+-        if ((secRating < 0.2) and pBubble->IsBelt()) {   // check for hauler, commander, officer spawn, but ONLY in a belt
+-            //NOTE  random checks here are for TESTING only....all rates are high.  make config option later?
+-            double rand = MakeRandomFloat();
+-            if (rand < 0.1) { // officer spawn
+-                if (factionID != factionRogueDrones) {  //but not for drones.  they dont have officers..make this the rare drone hauler spawn (which isnt written yet)
+-                    sClass = Spawn::Class::Officer;
+-                } else {
+-                    sClass = Spawn::Class::Hauler;
+-                }
+-            } else if (rand < 0.15) { // commander spawn
++        if (pBubble->IsBelt()) {   // hauler, commander and officer spawns are only in belts
++            // rogue drones have no officers, and no hauler ships in the data
++            bool drones(factionID == factionRogueDrones);
++            if (!drones and (secClass == Crime::SecClass::Null) and (MakeRandomFloat() < sConfig.npc.OfficerChance)) {
++                sClass = Spawn::Class::Officer;
++            } else if ((secClass != Crime::SecClass::High) and (MakeRandomFloat() < sConfig.npc.CommanderChance)) {
+                 sClass = Spawn::Class::Commander;
+-            } else if (rand < 0.25) { // hauler spawn
+-                if (factionID != factionRogueDrones)
+-                    sClass = Spawn::Class::Hauler;
++            } else if (!drones and (MakeRandomFloat() < sConfig.npc.HaulerChance)) {
++                sClass = Spawn::Class::Hauler;
+             }
+         }
+     } else {
+@@ -663,24 +663,21 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
+ 
+     if (sClass == Spawn::Class::None) {
+         if (pBubble->IsBelt()) {
+-            if ((factionID != factionRogueDrones) and (MakeRandomFloat() < 0.08)) { // second chance for hauler spawn, but include ALL secRating in this one
+-                sClass = Spawn::Class::Hauler;
+-            } else { // gonna be a 'regular' trusec-based spawn in a belt.
+-                if (secRating < -0.7) {
+-                    sClass = Spawn::Class::Insane;
+-                } else if (secRating < -0.4) {
+-                    sClass = Spawn::Class::Crazy;
+-                } else if (secRating < -0.1) {
+-                    sClass = Spawn::Class::Hard;
+-                } else if (secRating < 0.3) {
+-                    sClass = Spawn::Class::Medium;
+-                } else if (secRating < 0.6) {
+-                    sClass = Spawn::Class::Average;
+-                } else if (secRating < 0.85) {
+-                    sClass = Spawn::Class::Fair;
+-                } else {
+-                    sClass = Spawn::Class::Easy;
+-                }
++            // a 'regular' trusec-based spawn in a belt
++            if (secRating < -0.7) {
++                sClass = Spawn::Class::Insane;
++            } else if (secRating < -0.4) {
++                sClass = Spawn::Class::Crazy;
++            } else if (secRating < -0.1) {
++                sClass = Spawn::Class::Hard;
++            } else if (secRating < 0.3) {
++                sClass = Spawn::Class::Medium;
++            } else if (secRating < 0.6) {
++                sClass = Spawn::Class::Average;
++            } else if (secRating < 0.85) {
++                sClass = Spawn::Class::Fair;
++            } else {
++                sClass = Spawn::Class::Easy;
+             }
+             if ((secRating < 0) and  (sClass < Spawn::Class::Hauler))
+                 if (MakeRandomFloat() < 0.1)
+@@ -730,6 +727,15 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
+         else                        { level = 1; }
+     } else if (sClass <= Spawn::Class::Hell) {
+         level = MakeRandomInt(0, spawnEntry.size());  // random belt/gate spawn type.
++    } else if (sClass == Spawn::Class::Commander) {
++        /* the first half of the commander groups lead frigates, destroyers, cruisers and battlecruisers;  most of the second
++         *  half bring battleships.  those are null-sec only */
++        int64 rows(spawnEntry.size());
++        if (secClass != Crime::SecClass::Null)
++            rows = std::max<int64>(rows /2, 1);
++        level = MakeRandomInt(0, rows -1);
++    } else if (sClass == Spawn::Class::Officer) {
++        level = MakeRandomInt(0, static_cast<int64>(spawnEntry.size()) -1);
+     } else {
+         // do we need anything else here?
+     }
+@@ -839,13 +845,12 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass,
+             pNPC->GetAIMgr()->SetRole(cur.role);
+ 
+             pNPC->DestinyMgr()->SetPosition(startPos);
+-            //  begin warp.  this may have to be looked into later for timing of large spawns (>6)
+-            //  actually looks kinda cool when larger ships come in later...
++            //  begin warp at once (DestinyManager::AlignedWarpTo())
+             if (sClass <= Spawn::Class::Officer) {   // ratspawn will warp in, others will not.
+                 // adjust warpIn point so show some variation instead of a straight line.
+                 GPoint warpTo(warpToPoint);
+                 warpTo.MakeRandomPointOnSphere(sClass *1000);  // random point <class (1-12)> x 1k from center
+-                pNPC->DestinyMgr()->WarpTo(warpTo, (MakeRandomInt(-5, 10) *1000));
++                pNPC->DestinyMgr()->AlignedWarpTo(warpTo, (MakeRandomInt(-5, 10) *1000));
+             }
+ 
+             SpawnEntry se = SpawnEntry();
+@@ -932,7 +937,7 @@ bool SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
+     pNPC->GetAIMgr()->SetGroup(m_aggroGroups.Get(NpcAI::GroupKind::Belt, spawnEntry.spawnID));
+     // it starts off grid and warps in, like the first spawn
+     pNPC->DestinyMgr()->SetPosition(startPos);
+-    pNPC->DestinyMgr()->WarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));
++    pNPC->DestinyMgr()->AlignedWarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));
+ 
+     // the entry follows the new npc (bug B4c:  it kept the dead one's itemID, so the new one wasn't tracked)
+     spawnEntry.itemID = iRef->itemID();
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index bb4518a3..729497b4 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -308,6 +308,9 @@ boolean can use either 0/1 OR true/false.
+         <RespawnTimer>1200</RespawnTimer><!-- sec.  a killed belt rat (not commanders, haulers or officers) respawns into its group this long after it died, plus RespawnJitter, while one of the group lives (chain ratting).  Crucible: 20-25 min.  1200 default -->
+         <RespawnJitter>300</RespawnJitter><!-- sec.  random extra 0..RespawnJitter on each respawn.  300 default (20 min + U(0, 5) min) -->
+         <RatFaction>0</RatFaction><!-- force spawn to this faction if !=0 -->
++        <OfficerChance>0.01</OfficerChance><!-- chance a null-sec belt spawn is an officer with its escort (not rogue drones).  0.01 default -->
++        <CommanderChance>0.05</CommanderChance><!-- chance a low or null-sec belt spawn is led by a faction commander.  0.05 default -->
++        <HaulerChance>0.08</HaulerChance><!-- chance a belt spawn is a hauler group, in any security (not rogue drones).  0.08 default -->
+         <LootDropChance>1.0</LootDropChance><!-- chance an npc wreck gets its loot rolls at all.  the npc's data already makes empty wrecks (entityEquipmentMin/Max rolls, loot table chances).  1.0 default -->
+         <LootOwnMissileChance>0.25</LootOwnMissileChance><!-- chance a loot roll on the npc's own missiles (entityMissileTypeID) drops them.  0 = never.  0.25 default (the loot tables' T1 ammo) -->
+         <LootOwnMissileQty>100</LootOwnMissileQty><!-- stack of own missiles such a roll drops.  100 default (the loot tables' T1 ammo) -->
+-- 
+2.34.1
+

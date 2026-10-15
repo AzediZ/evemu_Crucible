@@ -1,0 +1,380 @@
+From ed6c041d8bc18f065dc66a935da8678b0881dbe3 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 12:31:57 +0000
+Subject: [PATCH 65/67] Standings: change by the (10 - standing) formula, with
+ derived standings
+
+Mission standing changes were added as they are, so +0.005 for a level 1
+mission instead of 0.5% of the way to 10, and they were also multiplied by
+1.1 - security, so an agent in a 1.0 system gave a sixth of what one in a 0.5
+system gave.  The client already applied the change properly to what it was
+told, so it showed standings the server didn't have until the next login.
+
+- a mission moves a standing that fraction of the way to +10 (or -10 for a
+  loss), the way the client does it, so it can't pass +-10
+- no security scaling
+- the faction change also moves the faction's friends up and its enemies
+  down, by change x their standing towards it / 10 and no further than that
+  standing.  A loss only lowers its friends.  New setting DerivedStandings
+  (true) in the standings block; the client is told about each one
+- Agent2CharMissionMultiplier is used now (1.0)
+- the raw add used for killing pirates stays as it was, but stops at +-10
+---
+ src/eve-server/EVEServerConfig.cpp      |  3 ++
+ src/eve-server/EVEServerConfig.h        |  1 +
+ src/eve-server/agents/Agent.cpp         | 53 +++++++-----------------
+ src/eve-server/standing/StandingDB.cpp  | 44 +++++++++++++++++++-
+ src/eve-server/standing/StandingDB.h    |  5 +++
+ src/eve-server/standing/StandingMgr.cpp | 55 +++++++++++++++++++++++++
+ src/eve-server/standing/StandingMgr.h   | 14 +++++++
+ utils/config/eve-server.xml             | 10 ++++-
+ 8 files changed, 144 insertions(+), 41 deletions(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index cea4f34a..81d8d248 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -456,6 +456,7 @@ EVEServerConfig::EVEServerConfig()
+     standings.ACorp2PCorpMissionMultiplier = 0.025;
+     standings.AFaction2CharMissionMultiplier = 0.125;
+     standings.AFaction2PCorpMissionMultiplier = 0.0125;
++    standings.DerivedStandings = true;
+     //  - PVP
+     //  - ratting/exploring
+ 
+@@ -1676,6 +1677,7 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
+     AddValueParser( "ACorp2PCorpMissionMultiplier",     standings.ACorp2PCorpMissionMultiplier );
+     AddValueParser( "AFaction2CharMissionMultiplier",   standings.AFaction2CharMissionMultiplier );
+     AddValueParser( "AFaction2PCorpMissionMultiplier",  standings.AFaction2PCorpMissionMultiplier );
++    AddValueParser( "DerivedStandings",                 standings.DerivedStandings );
+ 
+     const bool result = ParseElementChildren( ele );
+ 
+@@ -1694,6 +1696,7 @@ bool EVEServerConfig::ProcessStandings(const TiXmlElement* ele)
+     RemoveParser( "ACorp2PCorpMissionMultiplier" );
+     RemoveParser( "AFaction2CharMissionMultiplier" );
+     RemoveParser( "AFaction2PCorpMissionMultiplier" );
++    RemoveParser( "DerivedStandings" );
+ 
+     return result;
+ }
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index 19aa02ce..e8d45b63 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -558,6 +558,7 @@ public:
+         float ACorp2PCorpMissionMultiplier;
+         float AFaction2CharMissionMultiplier;
+         float AFaction2PCorpMissionMultiplier;
++        bool DerivedStandings;              // a faction's friends and enemies follow a mission's change to that faction
+     } standings;
+ 
+     // From <chat>
+diff --git a/src/eve-server/agents/Agent.cpp b/src/eve-server/agents/Agent.cpp
+index 0c896a2e..a7a5cd32 100644
+--- a/src/eve-server/agents/Agent.cpp
++++ b/src/eve-server/agents/Agent.cpp
+@@ -604,13 +604,15 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
+     float bonus = EvEMath::Agent::GetStandingBonus(charStanding, m_agentData.factionID, pChar->GetSkillLevel(EvESkill::Connections), pChar->GetSkillLevel(EvESkill::Diplomacy), pChar->GetSkillLevel(EvESkill::CriminalConnections));
+     float standing = EvEMath::Agent::EffectiveStanding(charStanding, bonus);
+     float quality = EvEMath::Agent::EffectiveQuality(m_agentData.quality, pChar->GetSkillLevel(EvESkill::Negotiation), standing);
+-    float newStanding = EvEMath::Agent::Efficiency(m_agentData.level, quality);    // 0.018 to 0.38
+-    SystemManager* pSysMgr = sEntityList.FindOrBootSystem(m_agentData.solarSystemID);
+-    if (pSysMgr != nullptr)
+-        newStanding *= pSysMgr->GetSecValue(); // 0.0018 to .76
++    float newStanding = EvEMath::Agent::Efficiency(m_agentData.level, quality);    // 0.04 (level 1, quality 0) to 0.38
++    /* this was also multiplied by 1.1 - security, so an agent in a 1.0 system gave a sixth of what one in a 0.5 system gave.
++     *  Crucible doesn't scale standings by security (rewards and LP are scaled elsewhere) */
+ 
+-    //newStanding = EvEMath::Agent::AgentStandingIncrease(standing, (newStanding /10));     -- this isnt used.
++    // +5% per Social level
+     newStanding = EvEMath::Agent::MissionStandingIncrease(newStanding, pChar->GetSkillLevel(EvESkill::Social));
++    /* the fraction of the way to 10 a mission moves the standing:  0.5% for level 1 to 4.75% for level 5 (quality 20).  it was
++     *  added as it is (+0.005), which is (10 - s) times too little:  the client, told the same change, applied it properly
++     *  (StandingMgr::ModifyStanding()) and showed a standing the server didn't have until the next login */
+     newStanding /= 8;
+ 
+     newStanding *= sConfig.standings.BaseMissionMultiplier;
+@@ -658,41 +660,18 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
+     } else {
+         payees.push_back(pClient);
+     }
+-    double agentDelta(newStanding / payees.size());
++    double agentDelta(newStanding * sConfig.standings.Agent2CharMissionMultiplier / payees.size());
+     double corpDelta(newStanding * sConfig.standings.ACorp2CharMissionMultiplier / payees.size());
+     double factionDelta(newStanding * sConfig.standings.AFaction2CharMissionMultiplier);
+ 
+     for (auto cur : payees) {
+         uint32 curID(cur->GetCharacterID());
+-        sStandingMgr.UpdateStandings(m_agentID, curID, eventID, agentDelta, msg);
+-        sStandingMgr.UpdateStandings(m_agentData.corporationID, curID, eventID, corpDelta, msg);
+-        if (cur == pClient)
+-            sStandingMgr.UpdateStandings(m_agentData.factionID, curID, eventID, factionDelta, msg);
+-
+-        PyTuple* agent = new PyTuple(5);
+-            agent->SetItem(0, new PyInt(m_agentID));
+-            agent->SetItem(1, new PyInt(curID));
+-            agent->SetItem(2, new PyFloat(agentDelta));
+-            agent->SetItem(3, new PyInt(-1));
+-            agent->SetItem(4, PyStatic.NewOne());
+-        PyTuple* corp = new PyTuple(5);
+-            corp->SetItem(0, new PyInt(m_agentData.corporationID));
+-            corp->SetItem(1, new PyInt(curID));
+-            corp->SetItem(2, new PyFloat(corpDelta));
+-            corp->SetItem(3, new PyInt(-1));
+-            corp->SetItem(4, PyStatic.NewOne());
++        // each change goes into the client's list too (the faction's derived changes with it)
+         PyList* list = new PyList();
+-            list->AddItem(agent);
+-            list->AddItem(corp);
+-        if (cur == pClient) {
+-            PyTuple* faction = new PyTuple(5);
+-                faction->SetItem(0, new PyInt(m_agentData.factionID));
+-                faction->SetItem(1, new PyInt(curID));
+-                faction->SetItem(2, new PyFloat(factionDelta));
+-                faction->SetItem(3, new PyInt(-1));
+-                faction->SetItem(4, PyStatic.NewOne());
+-            list->AddItem(faction);
+-        }
++        sStandingMgr.ModifyStanding(m_agentID, curID, eventID, agentDelta, msg, list);
++        sStandingMgr.ModifyStanding(m_agentData.corporationID, curID, eventID, corpDelta, msg, list);
++        if (cur == pClient)
++            sStandingMgr.ModifyFactionStanding(m_agentData.factionID, curID, eventID, factionDelta, msg, list);
+         PyTuple* payload = new PyTuple(1);
+             payload->SetItem(0, list);
+ 
+@@ -705,9 +684,9 @@ void Agent::UpdateStandings(Client* pClient, uint8 eventID, bool important/*fals
+     }
+ 
+     if (IsPlayerCorp(pClient->GetCorporationID())) {
+-        sStandingMgr.UpdateStandings(m_agentID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.Agent2PCorpMissionMultiplier, msg);
+-        sStandingMgr.UpdateStandings(m_agentData.corporationID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.ACorp2PCorpMissionMultiplier, msg);
+-        sStandingMgr.UpdateStandings(m_agentData.factionID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.AFaction2PCorpMissionMultiplier, msg);
++        sStandingMgr.ModifyStanding(m_agentID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.Agent2PCorpMissionMultiplier, msg);
++        sStandingMgr.ModifyStanding(m_agentData.corporationID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.ACorp2PCorpMissionMultiplier, msg);
++        sStandingMgr.ModifyStanding(m_agentData.factionID, pClient->GetCorporationID(), eventID, newStanding * sConfig.standings.AFaction2PCorpMissionMultiplier, msg);
+     }
+ }
+ 
+diff --git a/src/eve-server/standing/StandingDB.cpp b/src/eve-server/standing/StandingDB.cpp
+index d0097887..e06d066e 100644
+--- a/src/eve-server/standing/StandingDB.cpp
++++ b/src/eve-server/standing/StandingDB.cpp
+@@ -186,12 +186,52 @@ void StandingDB::SetStanding(uint32 fromID, uint32 toID, float standing)
+ 
+ void StandingDB::UpdateStanding(uint32 fromID, uint32 toID, float standing)
+ {
++    // a raw add, kept between -10 and +10
+     DBerror err;
+     sDatabase.RunQuery(err,
+                        "INSERT INTO repStandings (fromID, toID, standing)"
+                        " VALUES (%u,%u,%f)"
+-                       " ON DUPLICATE KEY UPDATE standing = standing + %f",
+-                       fromID, toID, standing, standing);
++                       " ON DUPLICATE KEY UPDATE standing = LEAST(10, GREATEST(-10, standing + %f))",
++                       fromID, toID, EvE::max(-10.0f, EvE::min(10.0f, standing)), standing);
++}
++
++void StandingDB::ModifyStanding(uint32 fromID, uint32 toID, double change, float minAbs/*-10*/, float maxAbs/*10*/)
++{
++    if (change == 0.0)
++        return;
++    // the client's standingsvc.OnStandingsModified does the same with the change we send it
++    double first(10.0 * change);    // from no standing (0)
++    if (change > 0.0) {
++        first = (0.0 < maxAbs) ? std::min<double>(first, maxAbs) : 0.0;
++    } else {
++        first = (0.0 > minAbs) ? std::max<double>(first, minAbs) : 0.0;
++    }
++    DBerror err;
++    if (change > 0.0) {
++        sDatabase.RunQuery(err,
++                       "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u, %u, %.10f)"
++                       " ON DUPLICATE KEY UPDATE standing ="
++                       " IF(standing < %.10f, LEAST(%.10f, standing + (10 - standing) * %.12f), standing)",
++                       fromID, toID, first, maxAbs, maxAbs, change);
++    } else {
++        sDatabase.RunQuery(err,
++                       "INSERT INTO repStandings (fromID, toID, standing) VALUES (%u, %u, %.10f)"
++                       " ON DUPLICATE KEY UPDATE standing ="
++                       " IF(standing > %.10f, GREATEST(%.10f, standing + (10 + standing) * %.12f), standing)",
++                       fromID, toID, first, minAbs, minAbs, change);
++    }
++}
++
++void StandingDB::GetFactionRelations(std::multimap<uint32, std::pair<uint32, float>>& into)
++{
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res, "SELECT fromID, toID, standing FROM repFactions")) {
++        codelog(DATABASE__ERROR, "Error in GetFactionRelations query: %s", res.error.c_str());
++        return;
++    }
++    DBResultRow row;
++    while (res.GetRow(row))
++        into.emplace(row.GetUInt(1), std::make_pair(row.GetUInt(0), row.GetFloat(2)));
+ }
+ 
+ /** @todo  implement repStandingChanges after standing system is working  */
+diff --git a/src/eve-server/standing/StandingDB.h b/src/eve-server/standing/StandingDB.h
+index 5210e07c..3fb45a67 100644
+--- a/src/eve-server/standing/StandingDB.h
++++ b/src/eve-server/standing/StandingDB.h
+@@ -63,6 +63,11 @@ public:
+ 
+     static void SetStanding(uint32 fromID, uint32 toID, float standing);
+     static void UpdateStanding(uint32 fromID, uint32 toID, float standing);
++    /* a change as the client applies it (OnStandingsModified):  a fraction of the way to +10 (change > 0) or to -10.
++     *  a gain doesn't go past maxAbs (nor apply above it), a loss doesn't go below minAbs */
++    static void ModifyStanding(uint32 fromID, uint32 toID, double change, float minAbs = -10.0f, float maxAbs = 10.0f);
++    // repFactions:  how each npc faction stands towards each other one (fromID -> toID)
++    static void GetFactionRelations(std::multimap<uint32, std::pair<uint32, float>>& into);
+     static void SaveStandingChanges(uint32 fromID, uint32 toID, uint16 eventType, float amount, std::string msg);
+ 
+     static PyRep* GetMyStandings(uint32 charID);
+diff --git a/src/eve-server/standing/StandingMgr.cpp b/src/eve-server/standing/StandingMgr.cpp
+index f48fab45..e2e3ff81 100644
+--- a/src/eve-server/standing/StandingMgr.cpp
++++ b/src/eve-server/standing/StandingMgr.cpp
+@@ -10,6 +10,7 @@
+   */
+ 
+ 
++#include "EVEServerConfig.h"
+ #include "StandingMgr.h"
+ 
+ /*
+@@ -58,6 +59,8 @@ void StandingMgr::Populate()
+     if (m_factionStandings == nullptr)
+         sLog.Error("      StandingMgr", "m_factionStandings is null");
+ 
++    m_factionRelations.clear();
++    StandingDB::GetFactionRelations(m_factionRelations);
+ }
+ 
+ void StandingMgr::UpdateStandings(uint32 fromID, uint32 toID, uint16 eventType, double amount, std::string msg)
+@@ -66,3 +69,55 @@ void StandingMgr::UpdateStandings(uint32 fromID, uint32 toID, uint16 eventType,
+     StandingDB::SaveStandingChanges(fromID, toID, eventType, amount, msg);
+ }
+ 
++void StandingMgr::ModifyStanding(uint32 fromID, uint32 toID, uint16 eventType, double change, const std::string& msg,
++                                 PyList* notify/*nullptr*/, float minAbs/*-10*/, float maxAbs/*10*/)
++{
++    if (change == 0.0)
++        return;
++    StandingDB::ModifyStanding(fromID, toID, change, minAbs, maxAbs);
++    StandingDB::SaveStandingChanges(fromID, toID, eventType, change, msg);
++    if (notify == nullptr)
++        return;
++    PyTuple* row = new PyTuple(5);
++        row->SetItem(0, new PyInt(fromID));
++        row->SetItem(1, new PyInt(toID));
++        row->SetItem(2, new PyFloat(change));
++        row->SetItem(3, new PyFloat(minAbs / 10.0));
++        row->SetItem(4, new PyFloat(maxAbs / 10.0));
++    notify->AddItem(row);
++}
++
++void StandingMgr::ModifyFactionStanding(uint32 factionID, uint32 toID, uint16 eventType, double change, const std::string& msg,
++                                        PyList* notify/*nullptr*/)
++{
++    if (change == 0.0)
++        return;
++    ModifyStanding(factionID, toID, eventType, change, msg, notify);
++    if (!sConfig.standings.DerivedStandings)
++        return;
++
++    auto range = m_factionRelations.equal_range(factionID);
++    for (auto itr = range.first; itr != range.second; ++itr) {
++        uint32 otherID(itr->second.first);
++        float relation(itr->second.second);
++        if ((otherID == factionID) or (relation == 0.0f))
++            continue;
++        // a loss with this faction doesn't please its enemies
++        if ((change < 0.0) and (relation < 0.0f))
++            continue;
++        double derived(change * relation / 10.0);
++        std::string dMsg("Derived from ");
++        dMsg += msg;
++        if (derived > 0.0) {
++            // no higher than how they stand towards this faction
++            ModifyStanding(otherID, toID, Standings::DerivedModificationPleased, derived, dMsg, notify, -10.0f, relation);
++        } else if (change > 0.0) {
++            // an enemy:  no lower than how it stands towards this faction
++            ModifyStanding(otherID, toID, Standings::DerivedModificationDispleased, derived, dMsg, notify, relation, 10.0f);
++        } else {
++            // a friend of a faction we lost standing with:  as far down as it stands up
++            ModifyStanding(otherID, toID, Standings::DerivedModificationDispleased, derived, dMsg, notify, -relation, 10.0f);
++        }
++    }
++}
++
+diff --git a/src/eve-server/standing/StandingMgr.h b/src/eve-server/standing/StandingMgr.h
+index 8a47279b..ef24552c 100644
+--- a/src/eve-server/standing/StandingMgr.h
++++ b/src/eve-server/standing/StandingMgr.h
+@@ -37,13 +37,27 @@ public:
+ 
+ 
+ 
++    // a raw add (kept between -10 and +10), logged in repStandingChanges
+     void                UpdateStandings(uint32 fromID, uint32 toID, uint16 eventType, double amount, std::string msg);
+ 
++    /* a change as the client applies it (its standingsvc.OnStandingsModified):  change is the fraction of the way to +10, or
++     *  to -10 for a loss.  new = s + (10 - s) x change, or s + (10 + s) x change, and a gain stops at maxAbs (a loss at
++     *  minAbs).  saved, logged, and the client's row (fromID, toID, change, minAbs/10, maxAbs/10) added to notify if given */
++    void                ModifyStanding(uint32 fromID, uint32 toID, uint16 eventType, double change, const std::string& msg,
++                                       PyList* notify = nullptr, float minAbs = -10.0f, float maxAbs = 10.0f);
++    /* the same for an npc faction, and the derived changes (standings.DerivedStandings):  each faction that stands r towards
++     *  this one changes by change x r / 10, no further than r.  a gain lifts its friends and lowers its enemies;  a loss only
++     *  lowers its friends */
++    void                ModifyFactionStanding(uint32 factionID, uint32 toID, uint16 eventType, double change, const std::string& msg,
++                                              PyList* notify = nullptr);
++
+ protected:
+     void                Populate();
+ 
+ private:
+     PyObjectEx*         m_factionStandings;
++    // repFactions by toID:  (fromID, how fromID stands towards toID)
++    std::multimap<uint32, std::pair<uint32, float>> m_factionRelations;
+ 
+ };
+ 
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 729497b4..aaef6ee9 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -380,7 +380,10 @@ boolean can use either 0/1 OR true/false.
+         <DifficultyReactionTime>0</DifficultyReactionTime><!-- npc reaction delay multiplier.  0 = from Difficulty.  0 default -->
+     </npc>
+ 
+-    <standings><!-- these are in percent. do not modify.  not fully debugged -->
++    <standings><!-- a mission's change moves a standing that fraction of the way to +10 (or -10 for a loss):  new = s + (10 - s) x change.
++                     the change is (8 x level + quality / 10 - 4) / 800, +5% per Social level, times these multipliers.
++                     with the multipliers below, about 85 missions for a quality 0 level 1 agent raise its corporation from 0 to 1.0 (level 2
++                     agents).  Social, Negotiation and Connections cut that:  Connections 3 alone counts as 1.2 -->
+         <!--  base mission modifiers  -->
+         <MissionBonus>1.0</MissionBonus><!-- 1.0 default -->
+         <MissionFailure>-0.5</MissionFailure><!-- -0.5 default -->
+@@ -391,7 +394,7 @@ boolean can use either 0/1 OR true/false.
+         <MissionFailedRollback>-0.5</MissionFailedRollback><!-- -0.5 default -->
+         <FleetMissionMultiplier>0.5</FleetMissionMultiplier><!-- unused since F12:  fleets share mission rewards and standings as <missions> FleetShare says -->
+         <!-- agent to char modifiers -->
+-        <BaseMissionMultiplier>1.0</BaseMissionMultiplier><!-- 1.0 default  -->
++        <BaseMissionMultiplier>1.0</BaseMissionMultiplier><!-- 1.0 default.  scales every mission change:  2.0 roughly halves the missions per agent level  -->
+         <Agent2CharMissionMultiplier>1.0</Agent2CharMissionMultiplier><!-- 1.0 default  -->
+         <ACorp2CharMissionMultiplier>0.25</ACorp2CharMissionMultiplier><!-- 0.25 default  -->
+         <AFaction2CharMissionMultiplier>0.125</AFaction2CharMissionMultiplier><!-- 0.125 default  -->
+@@ -399,6 +402,9 @@ boolean can use either 0/1 OR true/false.
+         <Agent2PCorpMissionMultiplier>0.1</Agent2PCorpMissionMultiplier><!-- 0.1 default  -->
+         <ACorp2PCorpMissionMultiplier>0.025</ACorp2PCorpMissionMultiplier><!-- 0.025 default  -->
+         <AFaction2PCorpMissionMultiplier>0.0125</AFaction2PCorpMissionMultiplier><!-- 0.0125 default  -->
++        <!-- a mission's faction change also moves the faction's friends (up) and enemies (down), by change x their standing towards it / 10,
++             no further than that standing.  a loss only lowers its friends.  true default -->
++        <DerivedStandings>true</DerivedStandings>
+     </standings>
+ 
+     <chat>
+-- 
+2.34.1
+
