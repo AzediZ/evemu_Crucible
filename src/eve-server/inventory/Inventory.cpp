@@ -677,6 +677,43 @@ uint32 Inventory::GetTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ow
     return count;
 }
 
+bool Inventory::ConsumeTypeQtyByFlag(uint16 typeID, EVEItemFlags flag, uint32 qty)
+{
+    if (qty < 1)
+        return true;
+
+    std::vector<InventoryItemRef> stacks;
+    uint32 count(0);
+    std::set<uint32> seen;
+    auto range = m_contentsByFlag.equal_range(flag);
+    for (auto itr = range.first; itr != range.second; ++itr) {
+        if ((itr->second->typeID() != typeID) or itr->second->isSingleton() or (itr->second->quantity() < 1))
+            continue;
+        if (!seen.insert(itr->second->itemID()).second)
+            continue;
+        stacks.push_back(itr->second);
+        count += itr->second->quantity();
+    }
+    if (count < qty)
+        return false;
+
+    std::sort(stacks.begin(), stacks.end(),
+              [](const InventoryItemRef& a, const InventoryItemRef& b) { return a->quantity() < b->quantity(); });
+    uint32 remaining(qty);
+    for (auto cur : stacks) {
+        if (remaining < 1)
+            break;
+        if ((uint32)cur->quantity() <= remaining) {
+            remaining -= cur->quantity();
+            cur->SetQuantity(0, true, true);
+        } else {
+            cur->AlterQuantity(-(int32)remaining, true);
+            remaining = 0;
+        }
+    }
+    return true;
+}
+
 bool Inventory::TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out)
 {
     if (qty < 1)

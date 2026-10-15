@@ -12,6 +12,9 @@
 
 #include "eve-server.h"
 
+#include <algorithm>
+#include <cmath>
+
 #include "EVEServerConfig.h"
 #include "EVE_Charges.h"
 #include "Client.h"
@@ -269,6 +272,9 @@ void ModuleManager::LoadOnline() {
 void ModuleManager::Process()
 {
     double profileStartTime(GetTimeUSeconds());
+
+    if (!m_naniteRepairs.empty())
+        ProcessRepairs();
 
     // proc modules in order of (low -> mid -> high) for proper fx application
     // NOTE: rigs and subsystems dont need proc tic.
@@ -1083,21 +1089,133 @@ PyRep* ModuleManager::ModuleRepair(uint32 modID)
 
     GenericModule* pMod = GetModule(modID);
     if (pMod == nullptr) {
-        _log(MODULE__ERROR, "MM::ModuleRepair() - module %s not found.", modID);
+        _log(MODULE__ERROR, "MM::ModuleRepair() - module %u not found.", modID);
+        return PyStatic.NewFalse();
+    }
+    Client* pClient(pShipItem->GetPilot());
+    if ((pClient == nullptr) or pClient->IsDocked())
+        return PyStatic.NewFalse();
+    if (IsBeingRepaired(modID))
+        return PyStatic.NewTrue();
+
+    double damage(pMod->GetAttribute(AttrDamage).get_double());
+    if (damage <= 0.0)
+        throw UserError("RepairModuleNotDamaged");
+    if (damage >= pMod->GetAttribute(AttrHP).get_double())
+        throw UserError("ModuleTooDamagedToRepairGoToStation");
+    if (pMod->IsActive()) {
+        pClient->SendNotifyMsg("You can't repair the %s while it is active.", pMod->GetSelf()->name());
+        return PyStatic.NewFalse();
+    }
+    if (AnyOverloaded()) {
+        pClient->SendNotifyMsg("You can't repair modules while any of them are overloaded.");
+        return PyStatic.NewFalse();
+    }
+    if (!pShipItem->GetMyInventory()->ContainsTypeQtyByFlag(EVEDB::invTypes::NaniteRepairPaste, flagCargoHold, 1)) {
+        pClient->SendNotifyMsg("You need Nanite Repair Paste in your cargo hold to repair modules.");
         return PyStatic.NewFalse();
     }
 
-    //return PyStatic.NewTrue();  // can repair
-    return PyStatic.NewFalse(); // cannot repair (for whatever reason)  do they/we send msgs based on why here?
+    NaniteRepair r;
+        r.lastTick = GetFileTimeNow();
+        r.systemID = pClient->GetSystemID();
+        r.startDamage = damage;
+        r.progress = 0.0;
+        r.applied = 0.0;
+        r.pasteUsed = 0;
+    m_naniteRepairs[modID] = r;
+    _log(MODULE__DAMAGE, "MM::ModuleRepair() - %s started repairing %s(%u), %.1f damage.", pClient->GetName(), pMod->GetSelf()->name(), modID, damage);
+    return PyStatic.NewTrue();
 }
 
 void ModuleManager::StopModuleRepair(uint32 modID)
 {
-    GenericModule* pMod = GetModule(modID);
-    if (pMod == nullptr) {
-        _log(MODULE__ERROR, "MM::ModuleRepair() - module %s not found.", modID);
-        return;
+    // what was paid for is already on the module
+    m_naniteRepairs.erase(modID);
+}
+
+bool ModuleManager::AnyOverloaded()
+{
+    for (auto cur : m_fittings)
+        if ((cur.second != nullptr) and cur.second->IsOverloaded())
+            return true;
+    return false;
+}
+
+void ModuleManager::ProcessRepairs()
+{
+    Client* pClient(pShipItem->GetPilot());
+    int64 now(GetFileTimeNow());
+    std::vector<uint32> done;
+    for (auto& cur : m_naniteRepairs) {
+        NaniteRepair& r(cur.second);
+        GenericModule* pMod(GetModule(cur.first));
+        // docked, jumped (no module ticks) or out of the ship:  the repair ends with what it has paid for
+        if ((pMod == nullptr) or (pClient == nullptr) or pClient->IsDocked() or (pClient->GetSystemID() != r.systemID)
+        or ((now - r.lastTick) > (3 * EvE::Time::Second))) {
+            done.push_back(cur.first);
+            continue;
+        }
+        if (pMod->IsActive() or AnyOverloaded()) {
+            done.push_back(cur.first);
+            continue;
+        }
+        double damage(pMod->GetAttribute(AttrDamage).get_double());
+        if (damage > (r.startDamage - r.applied + 0.01)) {
+            pClient->SendRemoteMessage("ModuleGotDamagedWhileBeingRepaired");
+            done.push_back(cur.first);
+            continue;
+        }
+
+        // hp per minute, with Nanite Interfacing
+        double rate(10.0);
+        double costMult(0.5);
+        CharacterRef cRef(pClient->GetChar());
+        if (cRef.get() != nullptr) {
+            if (cRef->GetAttribute(AttrModuleRepairRate) > EvilZero)
+                rate = cRef->GetAttribute(AttrModuleRepairRate).get_double();
+            // Nanite Operation
+            if (cRef->GetAttribute(AttrShipBrokenModuleRepairCostMultiplier) > EvilZero)
+                costMult = cRef->GetAttribute(AttrShipBrokenModuleRepairCostMultiplier).get_double();
+        }
+        r.progress += rate / 60.0 * ((double)(now - r.lastTick) / EvE::Time::Second);
+        r.lastTick = now;
+
+        double target(std::min(r.progress, r.startDamage));
+        bool complete(target >= r.startDamage);
+        double hp(pMod->GetAttribute(AttrHP).get_double());
+        double pastePrice(sItemFactory.GetType(EVEDB::invTypes::NaniteRepairPaste)->basePrice());
+        double pastePerHP(0.0);
+        if ((hp > 0.0) and (pastePrice > 0.0))
+            pastePerHP = pMod->GetSelf()->type().basePrice() * costMult / pastePrice / hp;
+
+        // whole units only.  a finished repair costs at least one
+        uint32 units((uint32)std::floor((target * pastePerHP) + 1e-9));
+        if (complete)
+            units = std::max<uint32>(1, (uint32)std::ceil((target * pastePerHP) - 1e-9));
+        if (units > r.pasteUsed) {
+            if (!pShipItem->GetMyInventory()->ConsumeTypeQtyByFlag(EVEDB::invTypes::NaniteRepairPaste, flagCargoHold, units - r.pasteUsed)) {
+                pClient->SendNotifyMsg("You have run out of Nanite Repair Paste.");
+                done.push_back(cur.first);
+                continue;
+            }
+            r.pasteUsed = units;
+        }
+
+        double paid(target);
+        if (!complete and (pastePerHP > 0.0))
+            paid = std::min(target, r.pasteUsed / pastePerHP);
+        if (paid > r.applied) {
+            pMod->Repair(EvilNumber(paid - r.applied));
+            r.applied = paid;
+        }
+        if (complete) {
+            _log(MODULE__DAMAGE, "MM::ProcessRepairs() - %s repaired %s(%u) with %u paste.", pClient->GetName(), pMod->GetSelf()->name(), cur.first, r.pasteUsed);
+            done.push_back(cur.first);
+        }
     }
+    for (auto id : done)
+        m_naniteRepairs.erase(id);
 }
 
 InventoryItemRef ModuleManager::GetChargeInSlot(EVEItemFlags flag)

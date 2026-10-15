@@ -84,9 +84,14 @@ public:
     void RepairModule(uint32 itemID, EvilNumber amount);
     void RepairModule(GenericModule* pMod, EvilNumber amount);
     void RepairModules();
-    // this is for repairing modules with nanite paste
+    /* nanite paste repairs in space (dogmaLM InitiateModuleRepair / StopModuleRepair).  the repair runs at the pilot's
+     *  moduleRepairRate (hp per minute) and uses paste from the cargo hold as it goes:  a whole module's worth of damage costs
+     *  the module's base price times shipBrokenModuleRepairCostMultiplier, in paste at its base price.  only repairs paid for
+     *  with whole units of paste land, so a cancelled repair keeps what it paid for.  it stops when the module is activated
+     *  or damaged, a module is overloaded, the paste runs out, or the pilot docks, jumps or leaves the ship */
     PyRep* ModuleRepair(uint32 modID);
     void StopModuleRepair(uint32 modID);
+    bool IsBeingRepaired(uint32 modID) const            { return (m_naniteRepairs.find(modID) != m_naniteRepairs.end()); }
     /* this will move charge item to module and split stack if needed.  more of the loaded type tops it up, another type
      *  swaps it out.  maxQty > 0 loads no more than that.  returns how many went in
      * must NOT throw
@@ -199,8 +204,19 @@ private:
     std::map<uint8, GenericModule*> m_systems;          // slot, module (for rigs and subsystems)
     std::map<uint8, GenericModule*> m_fittings;         // slot, module (for hi,mid,lo slots)
     std::map<EVEItemFlags, InventoryItemRef> m_charges; // slot, chargeItem
-};
 
+    struct NaniteRepair {
+        int64 lastTick;         // filetime of the last step
+        uint32 systemID;        // a jump ends the repair
+        double startDamage;     // module damage when the repair started
+        double progress;        // hp the repair time has covered
+        double applied;         // hp taken off the module so far
+        uint32 pasteUsed;
+    };
+    std::map<uint32, NaniteRepair> m_naniteRepairs;     // moduleID, repair
+    void ProcessRepairs();
+    bool AnyOverloaded();
+};
 
 #endif  // EVE_SHIP_MODULES_MODULEMANAGER_H
 

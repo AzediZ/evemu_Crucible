@@ -75,6 +75,9 @@ public:
      * fills 'out' with the taken stacks (still at this location with the same owner; caller Deletes or Donates them)
      * returns false and changes nothing if there is not enough */
     bool TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out);
+    /* uses up qty units of unassembled typeID under flag (fuel, nanite paste), across stacks:  smallest stacks first, the
+     *  last one is reduced.  returns false and changes nothing if there is not enough */
+    bool ConsumeTypeQtyByFlag(uint16 typeID, EVEItemFlags flag, uint32 qty);
 
     float GetCapacity(EVEItemFlags flag) const;
     // true when every flag of this flag's pool shares one capacity (the client's IsFlagCapacityLocationWide)

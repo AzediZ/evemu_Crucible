@@ -679,21 +679,10 @@ uint32 ActiveModule::DoCycle() {
                     qtyNeed, sItemFactory.GetType(typeID)->name().c_str());
             AbortCycle();  // CHECK THIS  for initial activate
             return 0;
-        } else {
-            /** @todo this may need more work later in the case of multiple stacks */
-            InventoryItemRef iRef(m_shipRef->GetMyInventory()->GetByTypeFlag(typeID, EVEItemFlags::flagCargoHold));
-            if (iRef.get() != nullptr) {
-                if (iRef->quantity() > qtyNeed) {
-                    //If we have all the quantity we need in the current stack, decrement the amount we need and break
-                    iRef->AlterQuantity(-qtyNeed, true);
-                } else {
-                    // Delete item
-                    iRef->SetQuantity(0, true, true);
-                }
-            } else {
-                AbortCycle();  // CHECK THIS  for initial activate
-                return 0;
-            }
+        } else if (!m_shipRef->GetMyInventory()->ConsumeTypeQtyByFlag(typeID, EVEItemFlags::flagCargoHold, qtyNeed)) {
+            // the fuel can come from several stacks
+            AbortCycle();  // CHECK THIS  for initial activate
+            return 0;
         }
     }
 
