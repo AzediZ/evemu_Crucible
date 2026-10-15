@@ -500,6 +500,31 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
     for (uint8 i = 0; i <= type.rooms; ++i)
         SpawnRoomObjects(live, pSys, i);
 
+    /* the beacon grid's gates have to share the beacon's bubble, or pilots at the beacon never see them (one Nation Mining
+     *  Colony in game had no gate, with nothing in the log).  a gate that landed in another bubble is moved into the
+     *  beacon's, and every gate the layout has must be there */
+    SystemBubble* pBeaconBubble(pBeacon->SysBubble());
+    uint8 wanted(0), found(0);
+    for (auto& obj : type.objects)
+        if ((obj.room == 0) and (obj.role == Incursion::Role::Gate))
+            ++wanted;
+    for (auto& cur : live.gates) {
+        if (cur.second.room != 0)
+            continue;
+        SystemEntity* pGate = pSys->GetSE(cur.first);
+        if (pGate == nullptr)
+            continue;
+        ++found;
+        if ((pBeaconBubble != nullptr) and (pGate->SysBubble() != pBeaconBubble)) {
+            _log(COSMIC_MGR__ERROR, "IncursionMgr::SpawnSite() - %s in %s:  gate %u was in bubble %u, not the beacon's %u.  moved it",                     type.name.c_str(), pSys->GetName(), cur.first, (pGate->SysBubble() != nullptr ? pGate->SysBubble()->GetID() : 0), pBeaconBubble->GetID());
+            if (pGate->SysBubble() != nullptr)
+                pGate->SysBubble()->Remove(pGate);
+            pBeaconBubble->Add(pGate);
+        }
+    }
+    if (found < wanted)
+        _log(COSMIC_MGR__ERROR, "IncursionMgr::SpawnSite() - %s in %s has %u of its %u beacon gates", type.name.c_str(), pSys->GetName(), found, wanted);
+
     _log(COSMIC_MGR__MESSAGE, "IncursionMgr::SpawnSite() - spawned %s with %u pockets in %s(%u)", type.name.c_str(), type.rooms, pSys->GetName(), live.systemID);
     return true;
 }
