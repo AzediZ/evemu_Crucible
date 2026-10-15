@@ -1,0 +1,139 @@
+From a3193425b532987a598053242dd4661bd91d5285 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 17:32:38 +0000
+Subject: [PATCH 86/91] Client titles for 47 more missions
+
+Pages that cover a whole chain, or don't say which part they are, now get
+the client title of the chain's first part, or of the part the page
+names. A few take the client's spelling (Fathers and Sons, Location,
+Location, Mordu's Folly, Eliminate a Pirate Nuisance).
+
+Seven still have no client title that clearly matches and keep their
+plain name: Angel Strike, Intaki and Mordus Legion, Khanid Nobleman, Labor
+of Love, Smash The Shipyard, The Kidnapping and Troop Build Up.
+---
+ .../20261022130000-mission-titles.sql         | 47 ++++++++++++++++++
+ utils/missiondata/overrides.json              | 49 ++++++++++++++++++-
+ 2 files changed, 95 insertions(+), 1 deletion(-)
+
+diff --git a/sql/migrations/20261022130000-mission-titles.sql b/sql/migrations/20261022130000-mission-titles.sql
+index db51d4949..a392366be 100644
+--- a/sql/migrations/20261022130000-mission-titles.sql
++++ b/sql/migrations/20261022130000-mission-titles.sql
+@@ -16,8 +16,55 @@ UPDATE msnMissions SET nameID = 58035 WHERE pageKey = 'LambAmongstLions4';
+ UPDATE msnMissions SET nameID = 55442 WHERE pageKey IN ('StrikingDownTwoFliesWithOneSwing1br', 'StrikingDownTwoFliesWithOneSwing1gu', 'StrikingDownTwoFliesWithOneSwing1se');
+ UPDATE msnMissions SET nameID = 56877 WHERE pageKey = 'UnderstandingAugmene2';
+ 
++-- the rest:  pages that cover a whole chain, or don't say which part they are, get the chain's first part (or the part
++--  the page names).  a few take the client's spelling.  Angel Strike, Intaki and Mordus Legion, Khanid Nobleman, Labor of Love,
++--  Smash The Shipyard, The Kidnapping and Troop Build Up have no client title that clearly matches and keep their plain name.
++UPDATE msnMissions SET nameID = 57176 WHERE pageKey = 'AreYouReceiving4am';
++UPDATE msnMissions SET nameID = 57557 WHERE pageKey = 'AugumeneAllergen1am';
++UPDATE msnMissions SET nameID = 57180 WHERE pageKey IN ('BigSting5am', 'BigSting5ca');
++UPDATE msnMissions SET nameID = 57131 WHERE pageKey = 'DelvingIntoThePast2am';
++UPDATE msnMissions SET nameID = 57692 WHERE pageKey = 'FatherAndSon3ga';
++UPDATE msnMissions SET nameID = 56760 WHERE pageKey = 'FlameofPeace1';
++UPDATE msnMissions SET nameID = 56894 WHERE pageKey = 'GreaterGood1';
++UPDATE msnMissions SET nameID = 57192 WHERE pageKey = 'GuristasStrike3';
++UPDATE msnMissions SET nameID = 57977 WHERE pageKey = 'HumanCattle2';
++UPDATE msnMissions SET nameID = 54867 WHERE pageKey = 'IllegalActivity2ga';
++UPDATE msnMissions SET nameID = 54885 WHERE pageKey = 'IllegalActivity4';
++UPDATE msnMissions SET nameID = 56792 WHERE pageKey = 'InTheShadowOfWar1';
++UPDATE msnMissions SET nameID = 56982 WHERE pageKey = 'InterstellarRailroad1mi';
++UPDATE msnMissions SET nameID = 57193 WHERE pageKey = 'KidnappersStrike3';
++UPDATE msnMissions SET nameID = 57195 WHERE pageKey = 'LaborOfWar1to3';
++UPDATE msnMissions SET nameID = 57134 WHERE pageKey IN ('LocationLocation5am', 'LocationLocation5ca');
++UPDATE msnMissions SET nameID = 57099 WHERE pageKey = 'MinmatarPlot2mi';
++UPDATE msnMissions SET nameID = 54739 WHERE pageKey = 'MissingReporters3';
++UPDATE msnMissions SET nameID = 56958 WHERE pageKey = 'MordusFolly4Mordus';
++UPDATE msnMissions SET nameID = 56979 WHERE pageKey = 'MysteriousSightings1se';
++UPDATE msnMissions SET nameID = 57004 WHERE pageKey = 'NewVenture1';
++UPDATE msnMissions SET nameID = 54283 WHERE pageKey = 'PirateNuisance1sa';
++UPDATE msnMissions SET nameID = 57784 WHERE pageKey = 'PortaltoWar3';
++UPDATE msnMissions SET nameID = 58043 WHERE pageKey = 'PrisonBreak5cc';
++UPDATE msnMissions SET nameID = 55369 WHERE pageKey IN ('Recon2an', 'Recon2br', 'Recon2gu', 'Recon2sa', 'Recon2se', 'Recon4an', 'Recon4br', 'Recon4gu', 'Recon4sa', 'Recon4se');
++UPDATE msnMissions SET nameID = 55424 WHERE pageKey = 'Recon4';
++UPDATE msnMissions SET nameID = 55513 WHERE pageKey = 'RogueSpy5';
++UPDATE msnMissions SET nameID = 54396 WHERE pageKey = 'SecretProjectX3';
++UPDATE msnMissions SET nameID = 54864 WHERE pageKey = 'TechnologicalSecrets2';
++UPDATE msnMissions SET nameID = 54405 WHERE pageKey = 'Trespassers3mi';
++UPDATE msnMissions SET nameID = 56806 WHERE pageKey = 'UndueAttention1ga';
++UPDATE msnMissions SET nameID = 57221 WHERE pageKey IN ('Uprising2mo', 'Uprising3mo');
++UPDATE msnMissions SET nameID = 58605 WHERE pageKey = 'WarSituation4am';
++UPDATE msnMissions SET nameID = 57049 WHERE pageKey = 'WhatsInAName1';
++UPDATE msnMissions SET nameID = 57119 WHERE pageKey = 'WhispersIntheDark2';
++
+ -- +migrate Down
+ UPDATE msnMissions SET nameID = 0 WHERE pageKey IN ('IntheMidstofDeadspace4p1', 'IntheMidstofDeadspace4p3', 'IntheMidstofDeadspace4p4',
+     'IntheMidstofDeadspace4p5', 'RogueSlaveTrader3', 'RogueSlaveTrader4', 'BountifulBandine', 'CleartheTraderoute1', 'FallingNationComesCost3',
+     'ForgottenOutposts4CaldariStateStoryline', 'IdEgonicsInc3amca', 'LambAmongstLions4', 'StrikingDownTwoFliesWithOneSwing1br',
+     'StrikingDownTwoFliesWithOneSwing1gu', 'StrikingDownTwoFliesWithOneSwing1se', 'UnderstandingAugmene2');
++UPDATE msnMissions SET nameID = 0 WHERE pageKey IN (
++    'AreYouReceiving4am', 'AugumeneAllergen1am', 'BigSting5am', 'BigSting5ca', 'DelvingIntoThePast2am', 'FatherAndSon3ga',
++    'FlameofPeace1', 'GreaterGood1', 'GuristasStrike3', 'HumanCattle2', 'IllegalActivity2ga', 'IllegalActivity4',
++    'InTheShadowOfWar1', 'InterstellarRailroad1mi', 'KidnappersStrike3', 'LaborOfWar1to3', 'LocationLocation5am',
++    'LocationLocation5ca', 'MinmatarPlot2mi', 'MissingReporters3', 'MordusFolly4Mordus', 'MysteriousSightings1se', 'NewVenture1',
++    'PirateNuisance1sa', 'PortaltoWar3', 'PrisonBreak5cc', 'Recon2an', 'Recon2br', 'Recon2gu', 'Recon2sa', 'Recon2se', 'Recon4',
++    'Recon4an', 'Recon4br', 'Recon4gu', 'Recon4sa', 'Recon4se', 'RogueSpy5', 'SecretProjectX3', 'TechnologicalSecrets2',
++    'Trespassers3mi', 'UndueAttention1ga', 'Uprising2mo', 'Uprising3mo', 'WarSituation4am', 'WhatsInAName1', 'WhispersIntheDark2');
+diff --git a/utils/missiondata/overrides.json b/utils/missiondata/overrides.json
+index aa75b6644..b0ea9a66e 100644
+--- a/utils/missiondata/overrides.json
++++ b/utils/missiondata/overrides.json
+@@ -9,5 +9,52 @@
+  "StrikingDownTwoFliesWithOneSwing1br": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+  "StrikingDownTwoFliesWithOneSwing1gu": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+  "StrikingDownTwoFliesWithOneSwing1se": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+- "UnderstandingAugmene2": {"nameID": 56877, "_why": "the client's title, spelled differently on eve-survival"}
++ "UnderstandingAugmene2": {"nameID": 56877, "_why": "the client's title, spelled differently on eve-survival"},
++ "AreYouReceiving4am": {"nameID": 57176, "_why": "client title: first part of the chain the page covers"},
++ "AugumeneAllergen1am": {"nameID": 57557, "_why": "client title: first part of the chain"},
++ "BigSting5am": {"nameID": 57180, "_why": "client title: first part of the chain"},
++ "BigSting5ca": {"nameID": 57180, "_why": "client title: first part of the chain"},
++ "DelvingIntoThePast2am": {"nameID": 57131, "_why": "client title: first part of the chain"},
++ "FatherAndSon3ga": {"nameID": 57692, "_why": "client title: the client's title is 'Fathers and Sons'"},
++ "FlameofPeace1": {"nameID": 56760, "_why": "client title: first part of the chain the page covers"},
++ "GreaterGood1": {"nameID": 56894, "_why": "client title: first part of the chain the page covers"},
++ "GuristasStrike3": {"nameID": 57192, "_why": "client title: first part of the chain the page covers"},
++ "HumanCattle2": {"nameID": 57977, "_why": "client title: first part of the chain"},
++ "IllegalActivity2ga": {"nameID": 54867, "_why": "client title: first part of the chain"},
++ "IllegalActivity4": {"nameID": 54885, "_why": "client title: first part of the chain"},
++ "InTheShadowOfWar1": {"nameID": 56792, "_why": "client title: first part of the chain"},
++ "InterstellarRailroad1mi": {"nameID": 56982, "_why": "client title: first part of the chain"},
++ "KidnappersStrike3": {"nameID": 57193, "_why": "client title: first part of the chain the page covers"},
++ "LaborOfWar1to3": {"nameID": 57195, "_why": "client title: first part of the chain the page covers"},
++ "LocationLocation5am": {"nameID": 57134, "_why": "client title: the client's title is 'Location, Location'"},
++ "LocationLocation5ca": {"nameID": 57134, "_why": "client title: the client's title is 'Location, Location'"},
++ "MinmatarPlot2mi": {"nameID": 57099, "_why": "client title: first part of the chain"},
++ "MissingReporters3": {"nameID": 54739, "_why": "client title: the Caldari branch of the chain (Caldari enemies)"},
++ "MordusFolly4Mordus": {"nameID": 56958, "_why": "client title: the client's title is 'Mordu's Folly'"},
++ "MysteriousSightings1se": {"nameID": 56979, "_why": "client title: first part of the chain"},
++ "NewVenture1": {"nameID": 57004, "_why": "client title: first part of the chain"},
++ "PirateNuisance1sa": {"nameID": 54283, "_why": "client title: the client's title is 'Eliminate a Pirate Nuisance'"},
++ "PortaltoWar3": {"nameID": 57784, "_why": "client title: first part of the chain"},
++ "PrisonBreak5cc": {"nameID": 58043, "_why": "client title: first part of the chain the page covers"},
++ "Recon2an": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon2br": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon2gu": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon2sa": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon2se": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon4": {"nameID": 55424, "_why": "client title: first part the page covers (2-3 of 3)"},
++ "Recon4an": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon4br": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon4gu": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon4sa": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "Recon4se": {"nameID": 55369, "_why": "client title: the page's own part"},
++ "RogueSpy5": {"nameID": 55513, "_why": "client title: first part of the chain"},
++ "SecretProjectX3": {"nameID": 54396, "_why": "client title: first part of the chain"},
++ "TechnologicalSecrets2": {"nameID": 54864, "_why": "client title: first part of the chain"},
++ "Trespassers3mi": {"nameID": 54405, "_why": "client title: first part of the chain"},
++ "UndueAttention1ga": {"nameID": 56806, "_why": "client title: first part of the chain"},
++ "Uprising2mo": {"nameID": 57221, "_why": "client title: first part of the chain"},
++ "Uprising3mo": {"nameID": 57221, "_why": "client title: first part of the chain"},
++ "WarSituation4am": {"nameID": 58605, "_why": "client title: first part of the chain"},
++ "WhatsInAName1": {"nameID": 57049, "_why": "client title: first part of the chain"},
++ "WhispersIntheDark2": {"nameID": 57119, "_why": "client title: first part of the chain"}
+ }
+-- 
+2.34.1
+

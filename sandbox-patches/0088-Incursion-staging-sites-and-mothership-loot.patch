@@ -1,0 +1,647 @@
+From 8e854ebb584c5c7ccea20daf566ccec52d274ed0 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 19:53:42 +0000
+Subject: [PATCH 88/91] Incursion staging sites and mothership loot
+
+The staging system now gets the four scout sites from the 2011 wiki:
+Distress Beacon, Forward Reconnaissance Outpost, Propaganda Cluster and
+Nation Industrial Proxy. Each pays 50,000 ISK and 50 CONCORD LP and
+leaves influence alone. They have no gates, so the waves come in on the
+beacon's grid. The Industrial Proxy sits at an asteroid belt with a
+beacon that only shows on grid, and greets you with a transmission.
+Up to five run at once (StagingSites in the incursion section).
+
+The motherships now drop one to three True Sansha modules and a
+blueprint copy of a Shadow, Succubus, Phantasm or Nightmare. Uroborus
+in low-sec can drop the Revenant instead. CCP never published the
+chances, so the counts, the 1 in 10 Revenant and the runs are picks.
+
+Mothership checks now name the two motherships instead of testing for
+site IDs of 10 and up, which the new sites would have tripped.
+---
+ sql/migrations/20261022100000-incursions.sql  | 79 +++++++++++++++++--
+ src/eve-server/EVEServerConfig.cpp            |  3 +
+ src/eve-server/EVEServerConfig.h              |  1 +
+ src/eve-server/npc/NPC.cpp                    |  3 +
+ .../system/cosmicMgrs/IncursionDB.cpp         | 14 ++++
+ .../system/cosmicMgrs/IncursionDB.h           |  2 +
+ .../system/cosmicMgrs/IncursionMgr.cpp        | 26 ++++--
+ .../system/cosmicMgrs/IncursionMgr.h          | 18 ++++-
+ .../system/cosmicMgrs/IncursionSites.cpp      | 68 ++++++++++++++--
+ utils/config/eve-server.xml                   |  1 +
+ utils/incursions/gen_incursion_sql.py         | 67 ++++++++++++++--
+ 11 files changed, 256 insertions(+), 26 deletions(-)
+
+diff --git a/sql/migrations/20261022100000-incursions.sql b/sql/migrations/20261022100000-incursions.sql
+index 0df6293e4..981ee2a3f 100644
+--- a/sql/migrations/20261022100000-incursions.sql
++++ b/sql/migrations/20261022100000-incursions.sql
+@@ -1,5 +1,5 @@
+--- Incursions:  the incursion state tables and the eleven sites (vanguard, assault, headquarters and the two
+---  motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this
++-- Incursions:  the incursion state tables and the fifteen sites (staging, vanguard, assault, headquarters and the
++--  two motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this
+ --  - incSiteTypes, incSiteObjects:  site data.  each object has a room (0 the beacon grid, 1+ the pockets behind
+ --    acceleration gates), a wave and a role (IncursionMgr.h)
+ --  - incIncursions, incSystems, incLPPool:  running incursions, their systems and the LP paid when the mothership dies
+@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS incSiteTypes;
+ CREATE TABLE incSiteTypes (
+   siteTypeID SMALLINT UNSIGNED NOT NULL,
+   siteName VARCHAR(100) NOT NULL,
+-  sceneType INT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
++  sceneType INT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
+   designFleet TINYINT UNSIGNED NOT NULL COMMENT 'fleet size the site is built for',
+   iskReward INT UNSIGNED NOT NULL COMMENT 'per pilot, full fleet, high-sec',
+   lpReward INT UNSIGNED NOT NULL COMMENT 'CONCORD LP per pilot, full fleet, high-sec',
+@@ -55,7 +55,7 @@ ALTER TABLE incIncursions
+ CREATE TABLE IF NOT EXISTS incSystems (
+   incursionID INT UNSIGNED NOT NULL,
+   systemID INT UNSIGNED NOT NULL,
+-  sceneType TINYINT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters',
++  sceneType TINYINT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters',
+   PRIMARY KEY (incursionID, systemID)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
+ CREATE TABLE IF NOT EXISTS incLPPool (
+@@ -76,7 +76,11 @@ INSERT INTO incSiteTypes (siteTypeID, siteName, sceneType, designFleet, iskRewar
+ (8, 'True Creations Research Center', 1, 40, 31500000, 7000, 10.0, 0, 0),
+ (9, 'True Power Provisional Headquarters', 1, 40, 31500000, 7000, 10.0, 0, 0),
+ (10, 'The Kundalini Manifest', 1000001, 80, 63000000, 14000, 0.0, 3, 2192),
+-(11, 'Uroborus', 1000001, 80, 63000000, 14000, 0.0, 4, 3071);
++(11, 'Uroborus', 1000001, 80, 63000000, 14000, 0.0, 4, 3071),
++(12, 'Distress Beacon', 4, 5, 50000, 50, 0.0, 0, 0),
++(13, 'Forward Reconnaissance Outpost', 4, 5, 50000, 50, 0.0, 0, 0),
++(14, 'Propaganda Cluster', 4, 5, 50000, 50, 0.0, 0, 0),
++(15, 'Nation Industrial Proxy', 4, 5, 50000, 50, 0.0, 0, 0);
+ INSERT INTO incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z) VALUES
+ (1, 0, 0, 6, 17831, 1, 1, '', 0, 0, 14500),
+ (1, 1, 0, 5, 3056, 1, 0, '', -8000, 0, 12000),
+@@ -403,7 +407,70 @@ INSERT INTO incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, para
+ (11, 1, 5, 1, 2859, 3, 0, '', 0, -5000, 35000),
+ (11, 1, 5, 1, 2190, 2, 0, '', 0, -5000, 35000),
+ (11, 1, 5, 1, 2966, 2, 0, '', 0, -5000, 35000),
+-(11, 1, 6, 1, 2950, 10, 0, '', 0, 3000, 30000);
++(11, 1, 6, 1, 2950, 10, 0, '', 0, 3000, 30000),
++(12, 1, 0, 5, 32420, 1, 0, 'Civilian Orca', 0, 0, 12000),
++(12, 1, 0, 9, 17470, 1, 4000, '', 18000, -2000, 12000),
++(12, 1, 0, 9, 17470, 1, 4000, '', 17654, 0, 15512),
++(12, 1, 0, 9, 17470, 1, 4000, '', 16630, 2000, 18888),
++(12, 1, 0, 9, 17470, 1, 4000, '', 14966, -2000, 22000),
++(12, 1, 0, 9, 17470, 1, 4000, '', 12728, 0, 24728),
++(12, 1, 0, 9, 17470, 1, 4000, '', 10000, 2000, 26966),
++(12, 1, 0, 9, 17470, 1, 4000, '', 6888, -2000, 28630),
++(12, 1, 0, 9, 17470, 1, 4000, '', 3512, 0, 29654),
++(12, 1, 0, 9, 1230, 1, 4000, '', 0, 2000, 30000),
++(12, 1, 0, 9, 1230, 1, 4000, '', -3512, -2000, 29654),
++(12, 1, 0, 9, 1230, 1, 4000, '', -6888, 0, 28630),
++(12, 1, 0, 9, 1230, 1, 4000, '', -10000, 2000, 26966),
++(12, 1, 0, 9, 1230, 1, 4000, '', -12728, -2000, 24728),
++(12, 1, 0, 9, 1230, 1, 4000, '', -14966, 0, 22000),
++(12, 1, 0, 9, 1230, 1, 4000, '', -16630, 2000, 18888),
++(12, 1, 0, 9, 1230, 1, 4000, '', -17654, -2000, 15512),
++(12, 1, 0, 9, 17464, 1, 4000, '', -18000, 0, 12000),
++(12, 1, 0, 9, 17464, 1, 4000, '', -17654, 2000, 8488),
++(12, 1, 0, 9, 17464, 1, 4000, '', -16630, -2000, 5112),
++(12, 1, 0, 9, 17464, 1, 4000, '', -14966, 0, 2000),
++(12, 1, 0, 9, 17464, 1, 4000, '', -12728, 2000, -728),
++(12, 1, 0, 9, 17464, 1, 4000, '', -10000, -2000, -2966),
++(12, 1, 0, 9, 17464, 1, 4000, '', -6888, 0, -4630),
++(12, 1, 0, 9, 17464, 1, 4000, '', -3512, 2000, -5654),
++(12, 1, 0, 9, 1228, 1, 4000, '', 0, -2000, -6000),
++(12, 1, 0, 9, 1228, 1, 4000, '', 3512, 0, -5654),
++(12, 1, 0, 9, 1228, 1, 4000, '', 6888, 2000, -4630),
++(12, 1, 0, 9, 1228, 1, 4000, '', 10000, -2000, -2966),
++(12, 1, 0, 9, 1228, 1, 4000, '', 12728, 0, -728),
++(12, 1, 0, 9, 1228, 1, 4000, '', 14966, 2000, 2000),
++(12, 1, 0, 9, 1228, 1, 4000, '', 16630, -2000, 5112),
++(12, 1, 0, 9, 1228, 1, 4000, '', 17654, 0, 8488),
++(12, 1, 1, 0, 3524, 2, 0, '', 0, 2000, 18000),
++(12, 1, 1, 0, 3525, 1, 0, '', 0, 2000, 18000),
++(12, 1, 2, 0, 3526, 1, 0, '', 12000, 0, 20000),
++(12, 1, 2, 0, 3524, 2, 0, '', 12000, 0, 20000),
++(12, 1, 3, 0, 3526, 1, 0, '', -12000, 0, 20000),
++(12, 1, 3, 0, 3525, 2, 0, '', -12000, 0, 20000),
++(13, 1, 0, 5, 22064, 1, 0, 'Orbiting Radio Telescope', 0, 0, 25000),
++(13, 1, 0, 5, 29602, 1, 0, 'Transmitter Array', -8000, 0, 15000),
++(13, 1, 0, 5, 29602, 1, 0, 'Transmitter Array', 8000, 0, 15000),
++(13, 1, 1, 0, 3524, 3, 0, '', 0, 0, 15000),
++(13, 1, 2, 0, 3524, 2, 0, '', 10000, 2000, 18000),
++(13, 1, 2, 0, 3526, 1, 0, '', 10000, 2000, 18000),
++(13, 1, 3, 0, 3524, 3, 0, '', -10000, -2000, 18000),
++(13, 1, 4, 0, 3524, 2, 0, '', 0, 4000, 20000),
++(13, 1, 4, 0, 3526, 1, 0, '', 0, 4000, 20000),
++(13, 1, 5, 0, 3524, 2, 0, '', 0, 0, 22000),
++(13, 1, 5, 0, 3526, 2, 0, '', 0, 0, 22000),
++(14, 1, 0, 5, 29599, 1, 0, 'Media Control Facility', 0, 0, 20000),
++(14, 1, 0, 5, 29208, 1, 0, 'Nation Broadcast Array', -10000, 3000, 18000),
++(14, 1, 0, 5, 29208, 1, 0, 'Nation Broadcast Array', 10000, 3000, 18000),
++(14, 1, 1, 0, 3524, 3, 0, '', 0, 0, 16000),
++(14, 1, 2, 0, 3524, 2, 0, '', 12000, 0, 18000),
++(14, 1, 2, 0, 3525, 2, 0, '', 12000, 0, 18000),
++(14, 1, 3, 0, 3525, 2, 0, '', -12000, 0, 18000),
++(14, 1, 3, 0, 3524, 1, 0, '', -12000, 0, 18000),
++(14, 1, 4, 0, 3527, 1, 0, '', 0, 2000, 22000),
++(15, 1, 0, 5, 29603, 1, 0, 'Nation Industrial Proxy', 5000, 0, 10000),
++(15, 1, 1, 0, 3524, 3, 0, '', 0, 0, 12000),
++(15, 1, 2, 0, 3524, 1, 0, '', 8000, 2000, 14000),
++(15, 1, 2, 0, 3525, 2, 0, '', 8000, 2000, 14000);
+ 
+ DELETE FROM invTypesToWrecks WHERE typeID IN (3805,19955);
+ INSERT INTO invTypesToWrecks (typeID, typeName, wreckTypeID, wreckName) VALUES
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 02cc87d1f..d0a559ea5 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -397,6 +397,7 @@ EVEServerConfig::EVEServerConfig()
+     incursion.VanguardSites = 7;
+     incursion.AssaultSites = 5;
+     incursion.HQSites = 5;
++    incursion.StagingSites = 5;
+     incursion.Penalties = true;
+     incursion.DelayedLP = true;
+     incursion.GateRestrictions = false;
+@@ -1654,6 +1655,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+     AddValueParser( "VanguardSites",         incursion.VanguardSites );
+     AddValueParser( "AssaultSites",          incursion.AssaultSites );
+     AddValueParser( "HQSites",               incursion.HQSites );
++    AddValueParser( "StagingSites",          incursion.StagingSites );
+     AddValueParser( "Penalties",             incursion.Penalties );
+     AddValueParser( "DelayedLP",             incursion.DelayedLP );
+     AddValueParser( "GateRestrictions",      incursion.GateRestrictions );
+@@ -1678,6 +1680,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+     RemoveParser( "VanguardSites" );
+     RemoveParser( "AssaultSites" );
+     RemoveParser( "HQSites" );
++    RemoveParser( "StagingSites" );
+     RemoveParser( "Penalties" );
+     RemoveParser( "DelayedLP" );
+     RemoveParser( "GateRestrictions" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index d61a6680b..4a0bb0c15 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -500,6 +500,7 @@ public:
+         uint8 VanguardSites;    // live sites per vanguard system (wiki: up to 7)
+         uint8 AssaultSites;     // live sites per assault system (wiki: up to 5)
+         uint8 HQSites;          // live sites per headquarters system, not counting the mothership (wiki: up to 5)
++        uint8 StagingSites;     // live scout sites in the staging system (wiki: up to 5)
+         bool Penalties;         // the constellation's system penalties: resists and damage by role and influence, cyno jamming, half bounties
+         bool DelayedLP;         // site LP goes into the incursion's pool, paid when the mothership dies (wiki); false pays it per site
+         bool GateRestrictions;  // the Consolidation Network's cruiser and battleship gates check ship class (wiki); off by default
+diff --git a/src/eve-server/npc/NPC.cpp b/src/eve-server/npc/NPC.cpp
+index 358dffc55..cec41c511 100644
+--- a/src/eve-server/npc/NPC.cpp
++++ b/src/eve-server/npc/NPC.cpp
+@@ -37,6 +37,7 @@
+ #include "system/SystemBubble.h"
+ #include "system/Damage.h"
+ #include "system/SystemManager.h"
++#include "system/cosmicMgrs/IncursionMgr.h"
+ #include "system/sov/SovereigntyDataMgr.h"
+ 
+ 
+@@ -349,6 +350,8 @@ void NPC::Killed(Damage &damage) {
+     // what drops (and how often nothing does) is the npc's data;  LootDropChance can only thin it out
+     if ((sConfig.npc.LootDropChance >= 1.0f) or (MakeRandomFloat() < sConfig.npc.LootDropChance) or (m_allyID == factionRogueDrones))
+         DropLoot(wreckItemRef, m_self->groupID(), killerID);
++    // an incursion mothership's own loot
++    sIncursionMgr.MothershipLoot(m_self->typeID(), wreckItemRef, killerID);
+ 
+     DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();
+         wreckEntity.allianceID = (killer->GetAllianceID() == 0 ? m_allyID : killer->GetAllianceID());
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionDB.cpp b/src/eve-server/system/cosmicMgrs/IncursionDB.cpp
+index 43cd7d88a..fbe77fbb4 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionDB.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionDB.cpp
+@@ -17,6 +17,20 @@ void IncursionDB::GetSiteTypes(DBQueryResult& res)
+         _log(DATABASE__ERROR, "Error in GetSiteTypes query: %s", res.error.c_str());
+ }
+ 
++void IncursionDB::GetTrueSanshaModules(std::vector<uint16>& into)
++{
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res,
++        "SELECT t.typeID FROM invTypes AS t JOIN invGroups AS g ON g.groupID = t.groupID"
++        " WHERE t.typeName LIKE 'True Sansha %%' AND g.categoryID = 7 AND t.published = 1")) {
++        _log(DATABASE__ERROR, "Error in GetTrueSanshaModules query: %s", res.error.c_str());
++        return;
++    }
++    DBResultRow row;
++    while (res.GetRow(row))
++        into.push_back(row.GetUInt(0));
++}
++
+ void IncursionDB::GetSiteObjects(DBQueryResult& res)
+ {
+     if (!sDatabase.RunQuery(res,
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionDB.h b/src/eve-server/system/cosmicMgrs/IncursionDB.h
+index f97dca289..a644c8c0b 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionDB.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionDB.h
+@@ -18,6 +18,8 @@ public:
+     static void GetSiteTypes(DBQueryResult& res);
+     // incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z)
+     static void GetSiteObjects(DBQueryResult& res);
++    // the published True Sansha modules
++    static void GetTrueSanshaModules(std::vector<uint16>& into);
+ 
+     static void GetIncursions(DBQueryResult& res);
+     static void GetIncursionSystems(DBQueryResult& res);
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+index 4cce2b161..a8b324708 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+@@ -94,6 +94,7 @@ void IncursionMgr::Initialize()
+     }
+ 
+     LoadSiteTypes();
++    IncursionDB::GetTrueSanshaModules(m_trueSansha);
+     if (m_siteTypes.empty()) {
+         sLog.Error("Incursion Manager", "No incursion site data found (incSiteTypes).  Have the incursions database updates been applied?  Incursions Disabled.");
+         return;
+@@ -275,8 +276,6 @@ void IncursionMgr::Process()
+         if (inc.endPending)
+             continue;
+         for (auto sys : inc.systems) {
+-            if (sys.second == Incursion::scenesType::staging)
+-                continue;
+             TopUpSites(inc, sys.first, sys.second, now);
+             if (inc.hasBoss and (sys.second == Incursion::scenesType::headquarters))
+                 TopUpSites(inc, sys.first, Incursion::scenesType::boss, now);
+@@ -371,6 +370,7 @@ void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 sceneType, u
+         case Incursion::scenesType::vanguard:       limit = sConfig.incursion.VanguardSites; break;
+         case Incursion::scenesType::assault:        limit = sConfig.incursion.AssaultSites; break;
+         case Incursion::scenesType::headquarters:   limit = sConfig.incursion.HQSites; break;
++        case Incursion::scenesType::staging:        limit = sConfig.incursion.StagingSites; break;
+         case Incursion::scenesType::boss:           limit = 1; break;
+     }
+ 
+@@ -456,12 +456,26 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
+         site.systemID = pSys->GetID();
+         site.siteTypeID = siteTypeID;
+         site.position = GetSitePoint(pSys);
++    // the Nation Industrial Proxy waits at an asteroid belt
++    bool atBelt(false);
++    if (siteTypeID == Incursion::Site::IndustrialProxy) {
++        std::vector<DBGPointEntity> belts;
++        uint8 total(0);
++        MapDB::GetBelts(pSys->GetID(), belts, total);
++        if (!belts.empty()) {
++            site.position = belts[RandomIndex(belts.size())].position;
++            site.position.MakeRandomPointOnSphere(MakeRandomInt(15, 30) * 1000);
++            atBelt = true;
++        }
++    }
+ 
+-    // the beacon grid is room 0.  each pocket is about a million km out in its own direction, with its own beacon
++    /* the beacon grid is room 0.  each pocket is about a million km out in its own direction, with its own beacon.  the
++     *  staging system's sites have no gates:  their one room is the beacon grid */
++    bool ungated(type.sceneType == Incursion::scenesType::staging);
+     for (uint8 i = 0; i <= type.rooms; ++i) {
+         IncLiveRoom room = IncLiveRoom();
+             room.center = site.position;
+-        if (i > 0) {
++        if ((i > 0) and !ungated) {
+             GVector dir(MakeRandomFloat(-1.0, 1.0), MakeRandomFloat(-0.3, 0.3), MakeRandomFloat(-1.0, 1.0));
+             if (dir.length() < 0.01)
+                 dir = GVector(1, 0, 0);
+@@ -473,8 +487,8 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
+ 
+     IncLiveSite& live = m_sites.emplace(site.siteID, site).first->second;
+ 
+-    // the overview beacon.  global, so the whole system sees it and can warp to it
+-    SystemEntity* pBeacon = SpawnItem(live, pSys, 0, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, live.position, true);
++    // the overview beacon.  global, so the whole system sees it and can warp to it.  a belt site's is only seen on grid
++    SystemEntity* pBeacon = SpawnItem(live, pSys, 0, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, live.position, !atBelt);
+     if (pBeacon == nullptr) {
+         _log(COSMIC_MGR__ERROR, "IncursionMgr::SpawnSite() - unable to spawn beacon for %s in %s", type.name.c_str(), pSys->GetName());
+         m_sites.erase(live.siteID);
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index e9cd8449c..2216aee5f 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -15,7 +15,10 @@
+   *   - influence recovers slowly when no sites are completed.  a new incursion starts automatically after a delay
+   *   - the constellation's system penalties (UpdatePenalties):  resists and damage by system role and influence, cynos jammed and
+  *       bounties halved everywhere in it
+- *  not done: staging sites, True Sansha loot, the most-damage payout rule
++ *   - the staging system has small scout sites (50,000 ISK and 50 LP, no influence).  the Nation Industrial Proxy has no
++ *       overview beacon:  it waits at one of the system's asteroid belts
++ *   - the mothership drops one to three True Sansha modules and a Sansha blueprint copy (MothershipLoot)
++ *  not done: gate camps and belt rats (no Crucible rosters), the most-damage payout rule
+   */
+ 
+ #ifndef EVEMU_SYSTEM_INCURSIONMGR_H_
+@@ -25,6 +28,7 @@
+ 
+ #include "utils/Singleton.h"
+ #include "POD_containers.h"
++#include "inventory/ItemRef.h"
+ 
+ class PyList;
+ class PyRep;
+@@ -83,8 +87,15 @@ namespace Incursion {
+             ResearchCenter          = 8,
+             ProvisionalHQ           = 9,
+             KundaliniManifest       = 10,
+-            Uroborus                = 11
++            Uroborus                = 11,
++            // the staging system's scout sites
++            DistressBeacon          = 12,
++            ReconOutpost            = 13,
++            PropagandaCluster       = 14,
++            IndustrialProxy         = 15
+         };
++
++        inline bool IsMothership(uint16 siteTypeID) { return ((siteTypeID == KundaliniManifest) or (siteTypeID == Uroborus)); }
+     }
+ }
+ 
+@@ -223,6 +234,8 @@ public:
+     /* an incursion gate's slim item (AccelGateSE, DungeonMgr::MakeGateSlim):  dir is where it sends you (its pocket), open whether
+      *  it's unlocked.  false when gateID isn't one of ours */
+     bool GateSlim(uint32 gateID, GVector& dir, bool& open);
++    // a mothership's own loot, added to its wreck (NPC::Killed).  nothing for other types
++    void MothershipLoot(uint16 typeID, WreckContainerRef wreckRef, uint32 ownerID);
+ 
+     // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
+     uint32 PenaltyRole(uint32 systemID);
+@@ -249,6 +262,7 @@ private:
+     Timer m_procTimer;
+ 
+     std::map<uint16, IncSiteType> m_siteTypes;
++    std::vector<uint16> m_trueSansha;              // True Sansha modules, for the mothership's wreck
+     std::map<uint32, IncData> m_incursions;         // incursionID
+     std::map<uint32, IncLiveSite> m_sites;          // siteID
+     std::map<uint32, uint32> m_siteCooldown;        // systemID, unix time a new site may spawn
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionSites.cpp b/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
+index 4a540bd24..63dfeec85 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
+@@ -41,6 +41,7 @@
+ #include "EVE_Incursion.h"
+ #include "StaticDataMgr.h"
+ #include "inventory/ItemFactory.h"
++#include "manufacturing/Blueprint.h"
+ #include "npc/NPC.h"
+ #include "npc/NPCAI.h"
+ #include "npc/ai/AggroGroup.h"
+@@ -96,7 +97,15 @@ namespace IncType {
+         Ostingele               = 2932,
+         Renyn                   = 2190,
+         Romi                    = 2859,
+-        Vylade                  = 2207
++        Vylade                  = 2207,
++        // the motherships and their blueprint copies
++        Kundalini               = 2192,
++        Uroborus                = 3071,
++        ShadowBlueprint         = 2949,
++        SuccubusBlueprint       = 17925,
++        PhantasmBlueprint       = 17719,
++        NightmareBlueprint      = 17737,
++        RevenantBlueprint       = 3515
+     };
+ }
+ 
+@@ -416,8 +425,8 @@ void IncursionMgr::SpawnRoomObjects(IncLiveSite& site, SystemManager* pSys, uint
+         return;
+     IncSiteType& type = itr->second;
+ 
+-    // each pocket has its own beacon, seen only there
+-    if (room > 0) {
++    // each pocket has its own beacon, seen only there.  an ungated site's room is the beacon grid
++    if ((room > 0) and (site.rooms[room].center.distance(site.position) > BUBBLE_RADIUS_METERS)) {
+         SystemEntity* pSE = SpawnItem(site, pSys, room, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, site.rooms[room].center);
+         if (pSE != nullptr)
+             site.rooms[room].beaconID = pSE->GetID();
+@@ -489,7 +498,7 @@ NPC* IncursionMgr::SpawnShip(IncLiveSite& site, SystemManager* pSys, uint8 room,
+         pNPC->GetAIMgr()->SetGroup(pSys->GetSpawnMgr()->GetAggroGroups().Get(NpcAI::GroupKind::Incursion, roomKey,
+                 NpcAI::AggroMode::Proactive, 0, 0, roomKey));
+         // a hacked logistics control array:  the mothership's logistics repair the pilots for now (RepairPilots)
+-        if (site.repairsOff and (site.siteTypeID >= Incursion::Site::KundaliniManifest))
++        if (site.repairsOff and Incursion::Site::IsMothership(site.siteTypeID))
+             pNPC->GetAIMgr()->SetRemoteRepairsOff(true);
+     }
+     return pNPC;
+@@ -616,6 +625,9 @@ void IncursionMgr::StartRoom(IncLiveSite& site, SystemManager* pSys, uint8 room,
+         case Incursion::Site::OverrideTransferArray: {
+             site.nextRefill = now + 5;      // the station's next repair
+         } break;
++        case Incursion::Site::IndustrialProxy: {
++            TellRoom(site, pSys, room, "Incoming transmission: Sansha's Nation forces have claimed this belt for the Nation's industry. Hostiles are moving to engage.");
++        } break;
+     }
+ }
+ 
+@@ -677,7 +689,11 @@ void IncursionMgr::RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 roo
+     switch (site.siteTypeID) {
+         case Incursion::Site::CommanderOutpost:
+         case Incursion::Site::RebirthFacility:
+-        case Incursion::Site::ConsolidationNetwork: {
++        case Incursion::Site::ConsolidationNetwork:
++        case Incursion::Site::DistressBeacon:
++        case Incursion::Site::ReconOutpost:
++        case Incursion::Site::PropagandaCluster:
++        case Incursion::Site::IndustrialProxy: {
+             if (room == type.rooms)
+                 CompleteSite(site, pSys, room);
+         } break;
+@@ -880,7 +896,7 @@ bool IncursionMgr::ProcessSite(uint32 siteID, IncLiveSite& site, SystemManager*
+         if ((r == 0) or !room.started or room.cleared)
+             continue;
+         // these run on timers and their own triggers
+-        if ((r == 1) and ((site.siteTypeID == Incursion::Site::ResearchCenter) or (site.siteTypeID >= Incursion::Site::KundaliniManifest)))
++        if ((r == 1) and ((site.siteTypeID == Incursion::Site::ResearchCenter) or Incursion::Site::IsMothership(site.siteTypeID)))
+             continue;
+         if (!room.npcs.empty())
+             continue;
+@@ -1326,6 +1342,43 @@ bool IncursionMgr::GateSlim(uint32 gateID, GVector& dir, bool& open)
+     return true;
+ }
+ 
++/* the mothership's wreck (Crucible-era EVE University wiki, March 2013, and CCP's 2010 Incursion blog):  "up to three True
++ *  Sansha faction modules" and one blueprint copy of a Sansha ship:  the Shadow fighter-bomber, Succubus, Phantasm or Nightmare,
++ *  or in low-sec only the Revenant supercarrier.  CCP never published the chances.  picks:  1-3 modules evenly, the Revenant
++ *  one time in ten in low-sec, one run for a ship copy and ten for the Shadow */
++void IncursionMgr::MothershipLoot(uint16 typeID, WreckContainerRef wreckRef, uint32 ownerID)
++{
++    if ((typeID != IncType::Kundalini) and (typeID != IncType::Uroborus))
++        return;
++    if (wreckRef.get() == nullptr)
++        return;
++
++    if (!m_trueSansha.empty()) {
++        int count(MakeRandomInt(1, 3));
++        for (int i = 0; i < count; ++i) {
++            ItemData idata(m_trueSansha[RandomIndex(m_trueSansha.size())], ownerID, wreckRef->itemID(), flagNone, 1);
++            InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
++            if (iRef.get() != nullptr)
++                wreckRef->AddItem(iRef);
++        }
++    }
++
++    const uint16 bpcs[] = { IncType::ShadowBlueprint, IncType::SuccubusBlueprint, IncType::PhantasmBlueprint, IncType::NightmareBlueprint };
++    uint16 bpTypeID(bpcs[RandomIndex(4)]);
++    if ((typeID == IncType::Uroborus) and (MakeRandomFloat() < 0.1))
++        bpTypeID = IncType::RevenantBlueprint;
++    ItemData bdata(bpTypeID, ownerID, wreckRef->itemID(), flagNone);
++    EvERam::bpData bp = EvERam::bpData();
++        bp.copy = true;
++        bp.runs = (bpTypeID == IncType::ShadowBlueprint ? 10 : 1);
++        bp.mLevel = 0;
++        bp.pLevel = 0;
++    BlueprintRef bRef(Blueprint::Spawn(bdata, bp));
++    if (bRef.get() != nullptr)
++        wreckRef->AddItem(bRef);
++    _log(COSMIC_MGR__MESSAGE, "IncursionMgr::MothershipLoot() - %u's wreck %u holds a copy of %u", typeID, wreckRef->itemID(), bpTypeID);
++}
++
+ /* pockets are deadspace:  bookmarks and fleet warps into one land at the site's beacon, and the gates are the way in */
+ bool IncursionMgr::RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into)
+ {
+@@ -1336,6 +1389,9 @@ bool IncursionMgr::RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& int
+         for (auto& room : site.rooms) {
+             if ((room.first == 0) or (room.second.center.distance(dest) >= BUBBLE_RADIUS_METERS))
+                 continue;
++            // an ungated site's room is its beacon grid:  nothing to redirect
++            if (room.second.center.distance(site.position) <= BUBBLE_RADIUS_METERS)
++                continue;
+             into = site.position;
+             into.MakeRandomPointOnSphere(2500);
+             return true;
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index fda560e16..1c33a6f11 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -472,6 +472,7 @@ boolean can use either 0/1 OR true/false.
+         <VanguardSites>7</VanguardSites><!-- live sites per vanguard system (wiki: up to 7) -->
+         <AssaultSites>5</AssaultSites><!-- live sites per assault system (wiki: up to 5) -->
+         <HQSites>5</HQSites><!-- live sites per headquarters system, plus the mothership (wiki: up to 5) -->
++        <StagingSites>5</StagingSites><!-- live scout sites in the staging system (wiki: up to 5) -->
+         <SiteRespawn>180</SiteRespawn><!-- seconds before a completed site is replaced -->
+         <Penalties>true</Penalties><!-- bool  the system penalties across the constellation:  shield and armour resists and weapon and drone damage down 10% in vanguard, 25% in assault and 50% in headquarters systems at full Sansha influence (less as it drops), cynos jammed and CONCORD bounties halved -->
+         <DelayedLP>true</DelayedLP><!-- bool  site LP goes into the incursion's pool and is paid to everyone who ran sites when the mothership dies (wiki).  false pays it with each site -->
+diff --git a/utils/incursions/gen_incursion_sql.py b/utils/incursions/gen_incursion_sql.py
+index 1af5bf398..025e90b31 100644
+--- a/utils/incursions/gen_incursion_sql.py
++++ b/utils/incursions/gen_incursion_sql.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Generates sql/migrations/20261022100000-incursions.sql:  the incursion tables and the eleven sites.
++"""Generates sql/migrations/20261022100000-incursions.sql:  the incursion tables and the fifteen sites.
+ 
+ Layouts follow each site's EVE University wiki page.  The wiki gives rosters, wave identifiers, spawn distances and
+ bearings, but never per-wave counts or gate distances; those are picks.  Positions are km from the room's centre (its
+@@ -13,11 +13,12 @@ import sys
+ # ---- roles and special waves (Incursion::Role, Incursion::Wave in IncursionMgr.h) ----
+ SHIP, FREE, OBJ, PICK, RESPAWN, STRUCT, GATE, HGATE, CONT, ROID = range(10)
+ MINING, SCRIPTED = 254, 255
+-VAN, ASSAULT, HQ, BOSS = 3, 2, 1, 1000001
++VAN, ASSAULT, HQ, STAGING, BOSS = 3, 2, 1, 4, 1000001
+ 
+ # ---- types ----
+ GATE_T = 17831
+ EYSTUR, RENYN, SCHMAEEL, TAMA, NIARJA, ORKASHU, YOUL, COMMANDER = 2966, 2190, 2907, 2939, 2909, 3526, 3525, 3492
++JEL = 3524
+ AUGA, ANTEM, ARNON, MARA, ROMI, RAA, UITRA, VYLADE, LIRSAUTTON = 2936, 2191, 2209, 2931, 2859, 3527, 2208, 2207, 2950
+ DELTOLE, INTAKI, OSTINGELE, OUTUNI, YULAI = 2933, 2855, 2932, 2845, 2935
+ CITIZENS = (3484, 3485, 3486, 3487, 3490)
+@@ -27,6 +28,8 @@ BASTION, TPHQ = 3805, 19955                      # objective NPCs: the Battletow
+ BATTLETOWER, COLONY, OUTPOST, CONTROL_LCO, RUINS, SNAKE, OBELISK = 2234, 2928, 3056, 3059, 3626, 10787, 32137
+ LOGI_STATION, ARRAY_LCO = 3510, 3509
+ LYAVITE = 28620
++LCO_ORCA, RADIO_TELESCOPE, BILLBOARD, BUNKER, JUNCTION, LOOKOUT = 32420, 22064, 29208, 29599, 29602, 29603
++VELDSPAR, CONC_VELDSPAR, SCORDITE, MASSIVE_SCORDITE = 1230, 17470, 1228, 17464
+ # containers
+ LCA, MTAC_FACTORY, CONTROL_TOWER, REFINERY, EVAC, NEXUS, RELAY, COMMS = 3261, 3498, 3495, 3502, 3503, 3506, 3508, 3491
+ CONTAINERS = (LCA, MTAC_FACTORY, CONTROL_TOWER, REFINERY, EVAC, NEXUS, RELAY, COMMS)
+@@ -207,6 +210,58 @@ def boss(mothership):
+ SITES[10] = ('The Kundalini Manifest', BOSS, 80, 63000000, 14000, 0.0, 3, KUNDALINI, boss(KUNDALINI))
+ SITES[11] = ('Uroborus', BOSS, 80, 63000000, 14000, 0.0, 4, UROBORUS, boss(UROBORUS))
+ 
++# --- the staging system's scout sites (wiki, June 2011 revisions):  50,000 ISK and 50 LP each, no influence.  small
++#     ungated sites:  everything is on the beacon's grid (room 1 sits on the beacon, IncursionMgr::SpawnSite).  the
++#     wiki lists the npc types but not the counts or positions, which are picks ---
++def ring(typeIDs, per, radius, at, units):
++    """per rocks of each type on a ring around at"""
++    import math
++    rows, n, total = [], 0, per * len(typeIDs)
++    for t in typeIDs:
++        for i in range(per):
++            a = 2 * math.pi * n / total
++            rows.append(o(1, 0, ROID, t, (at[0] + radius * math.cos(a), at[1] + (n % 3 - 1) * 2, at[2] + radius * math.sin(a)), param=units))
++            n += 1
++    return rows
++
++# --- Distress Beacon: an Orca under attack.  Orkashu Myelen, Jel Rhomben and Youl Meten.  8 rocks each of Concentrated
++#     Veldspar, Veldspar, Massive Scordite and Scordite ---
++SITES[12] = ('Distress Beacon', STAGING, 5, 50000, 50, 0.0, 0, 0, [
++    o(1, 0, STRUCT, LCO_ORCA, (0, 0, 12), name='Civilian Orca'),
++    *ring((CONC_VELDSPAR, VELDSPAR, MASSIVE_SCORDITE, SCORDITE), 8, 18, (0, 0, 12), 4000),
++    *wave(1, 1, (0, 2, 18), (JEL, 2), (YOUL, 1)),
++    *wave(1, 2, (12, 0, 20), (ORKASHU, 1), (JEL, 2)),
++    *wave(1, 3, (-12, 0, 20), (ORKASHU, 1), (YOUL, 2))])
++
++# --- Forward Reconnaissance Outpost: transmitter arrays and an Orbiting Radio Telescope.  five waves of Jel Rhomben
++#     and Orkashu Myelen ---
++SITES[13] = ('Forward Reconnaissance Outpost', STAGING, 5, 50000, 50, 0.0, 0, 0, [
++    o(1, 0, STRUCT, RADIO_TELESCOPE, (0, 0, 25), name='Orbiting Radio Telescope'),
++    o(1, 0, STRUCT, JUNCTION, (-8, 0, 15), name='Transmitter Array'),
++    o(1, 0, STRUCT, JUNCTION, (8, 0, 15), name='Transmitter Array'),
++    *wave(1, 1, (0, 0, 15), (JEL, 3)),
++    *wave(1, 2, (10, 2, 18), (JEL, 2), (ORKASHU, 1)),
++    *wave(1, 3, (-10, -2, 18), (JEL, 3)),
++    *wave(1, 4, (0, 4, 20), (JEL, 2), (ORKASHU, 1)),
++    *wave(1, 5, (0, 0, 22), (JEL, 2), (ORKASHU, 2))])
++
++# --- Propaganda Cluster: a media control facility.  waves of Jel Rhomben and Youl Meten, then a Raa Thalamus ---
++SITES[14] = ('Propaganda Cluster', STAGING, 5, 50000, 50, 0.0, 0, 0, [
++    o(1, 0, STRUCT, BUNKER, (0, 0, 20), name='Media Control Facility'),
++    o(1, 0, STRUCT, BILLBOARD, (-10, 3, 18), name='Nation Broadcast Array'),
++    o(1, 0, STRUCT, BILLBOARD, (10, 3, 18), name='Nation Broadcast Array'),
++    *wave(1, 1, (0, 0, 16), (JEL, 3)),
++    *wave(1, 2, (12, 0, 18), (JEL, 2), (YOUL, 2)),
++    *wave(1, 3, (-12, 0, 18), (YOUL, 2), (JEL, 1)),
++    *wave(1, 4, (0, 2, 22), (RAA, 1))])
++
++# --- Nation Industrial Proxy: no overview beacon.  it sits at one of the staging system's asteroid belts and pilots
++#     who warp there get an incoming transmission.  3 Jel Rhomben, then 1 Jel Rhomben and 2 Youl Meten ---
++SITES[15] = ('Nation Industrial Proxy', STAGING, 5, 50000, 50, 0.0, 0, 0, [
++    o(1, 0, STRUCT, LOOKOUT, (5, 0, 10), name='Nation Industrial Proxy'),
++    *wave(1, 1, (0, 0, 12), (JEL, 3)),
++    *wave(1, 2, (8, 2, 14), (JEL, 1), (YOUL, 2))])
++
+ # the objective npcs have no wreck in the shipped data
+ WRECKS = {BASTION: "Sansha's Nation Central Bastion", TPHQ: "'True Power' Assembly Security HQ"}
+ LARGE_WRECK, LARGE_WRECK_NAME = 26581, 'Sanshas Large Wreck'
+@@ -220,8 +275,8 @@ def km(v):
+ def main(path):
+     out = []
+     w = out.append
+-    w('-- Incursions:  the incursion state tables and the eleven sites (vanguard, assault, headquarters and the two')
+-    w('--  motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this')
++    w('-- Incursions:  the incursion state tables and the fifteen sites (staging, vanguard, assault, headquarters and the')
++    w('--  two motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this')
+     w('--  - incSiteTypes, incSiteObjects:  site data.  each object has a room (0 the beacon grid, 1+ the pockets behind')
+     w('--    acceleration gates), a wave and a role (IncursionMgr.h)')
+     w('--  - incIncursions, incSystems, incLPPool:  running incursions, their systems and the LP paid when the mothership dies')
+@@ -232,7 +287,7 @@ def main(path):
+ CREATE TABLE incSiteTypes (
+   siteTypeID SMALLINT UNSIGNED NOT NULL,
+   siteName VARCHAR(100) NOT NULL,
+-  sceneType INT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
++  sceneType INT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
+   designFleet TINYINT UNSIGNED NOT NULL COMMENT 'fleet size the site is built for',
+   iskReward INT UNSIGNED NOT NULL COMMENT 'per pilot, full fleet, high-sec',
+   lpReward INT UNSIGNED NOT NULL COMMENT 'CONCORD LP per pilot, full fleet, high-sec',
+@@ -277,7 +332,7 @@ ALTER TABLE incIncursions
+ CREATE TABLE IF NOT EXISTS incSystems (
+   incursionID INT UNSIGNED NOT NULL,
+   systemID INT UNSIGNED NOT NULL,
+-  sceneType TINYINT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters',
++  sceneType TINYINT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters',
+   PRIMARY KEY (incursionID, systemID)
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
+ CREATE TABLE IF NOT EXISTS incLPPool (
+-- 
+2.34.1
+

@@ -1,0 +1,288 @@
+From abe708324bb02adcba1a195a71830d38033080b1 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 20:05:36 +0000
+Subject: [PATCH 90/91] Bombs fire and explode
+
+Bomb launchers took no target, so the launcher found nothing to shoot
+at and stopped. They now launch the bomb along the ship's velocity, the
+way destiny sends a missile whose target is its own launcher. The bomb
+flies for its flight time and goes off whether or not the bomber is
+still there.
+
+Everything within the explosion range takes the blast, friend or foe,
+reduced only by signature radius. Lockbreaker bombs also break locks
+against the target's sensor strength, and Void bombs drain 1800 GJ.
+A bomb caught in another bomb's blast takes it on its armour, so bombs
+of a different kind destroy each other and the same kind barely touch.
+Ballistic control systems don't add to bomb damage.
+---
+ src/eve-server/ship/Missile.cpp              | 131 +++++++++++++++++++
+ src/eve-server/ship/Missile.h                |  20 +++
+ src/eve-server/ship/modules/ActiveModule.cpp |  44 ++++++-
+ src/eve-server/ship/modules/ActiveModule.h   |   2 +
+ 4 files changed, 196 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/ship/Missile.cpp b/src/eve-server/ship/Missile.cpp
+index 7bacbafb4..c30681696 100644
+--- a/src/eve-server/ship/Missile.cpp
++++ b/src/eve-server/ship/Missile.cpp
+@@ -37,6 +37,8 @@
+ #include "ship/Ship.h"
+ #include "ship/modules/GenericModule.h"
+ #include "system/Damage.h"
++#include "system/SystemBubble.h"
++#include "ship/modules/EwarModule.h"
+ 
+ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* tSE, SystemEntity* pSE, GenericModule* pMod)
+ : DynamicSystemEntity(self, services, pSystem),
+@@ -257,3 +259,132 @@ void Missile::Delete() {
+     // do we need to do anything else here?
+     SystemEntity::Delete();
+ }
++
++
++/* bombs (Missile.h).  the launcher is the bomb's 'target' too:  destiny's LaunchMissile can't follow a ball that is its own
++ *  launcher, so it sends the bomb along the launcher's velocity (DestinyManager::ApplyLaunchMissile) */
++namespace {
++    const uint16 BombECMGroup = 863;        // Lockbreaker Bomb
++    const uint16 BombEnergyGroup = 864;     // Void Bomb
++}
++
++bool Bomb::IsBombGroup(uint16 groupID)
++{
++    return ((groupID == EVEDB::invGroups::Bomb) or (groupID == BombECMGroup) or (groupID == BombEnergyGroup));
++}
++
++Bomb::Bomb(InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* pLauncher, GenericModule* pMod)
++: Missile(self, services, pSystem, modRef, pLauncher, pLauncher, pMod)
++{
++    // ballistic control systems are for missiles.  the bomb's own (skill-modified) damage is all it does
++    m_damageMod = 1.0f;
++}
++
++void Bomb::Process()
++{
++    // destroyed by another bomb:  it goes without a blast
++    if (IsDead())
++        m_alive = false;
++    if (!m_alive) {
++        Delete();
++        return;
++    }
++    if (m_lifeTimer.Check(false)) {
++        Detonate();
++        return;
++    }
++    SystemEntity::Process();
++}
++
++void Bomb::Detonate()
++{
++    m_alive = false;
++    SystemBubble* pBubble(SysBubble());
++    SystemManager* pSys(SystemMgr());
++    if ((pBubble != nullptr) and (pSys != nullptr)) {
++        // the bomber, if it's still in the system.  otherwise the bomb is the source
++        SystemEntity* pFrom(pSys->GetSE(m_fromID));
++        if ((pFrom == nullptr) or pFrom->IsDead())
++            pFrom = this;
++
++        const GPoint at(GetPosition());
++        double range(m_self->GetAttribute(AttrExplosionRange).get_double());
++        if (range <= 0.0)
++            range = m_self->GetAttribute(AttrEmpFieldRange).get_double();
++        double cloud(m_self->GetAttribute(AttrAoeCloudSize).get_double());
++        uint16 group(m_self->groupID());
++        float drain(m_self->GetAttribute(AttrEnergyDestabilizationAmount).get_float());
++
++        std::map<uint32, SystemEntity*> entities;
++        pBubble->GetEntities(entities);
++        std::vector<uint32> ids;
++        for (auto cur : entities) {
++            SystemEntity* pSE(cur.second);
++            if ((pSE == this) or pSE->IsDead())
++                continue;
++            if ((at.distance(pSE->GetPosition()) - pSE->GetRadius()) > range)
++                continue;
++            ids.push_back(cur.first);
++        }
++
++        uint16 hit(0);
++        for (auto id : ids) {
++            SystemEntity* pSE(pSys->GetSE(id));
++            if ((pSE == nullptr) or pSE->IsDead())
++                continue;
++            Damage d(pFrom, m_modRef, m_self, EVEEffectID::missileLaunching);
++            d *= m_damageMod;
++            if (pSE->IsMissileSE()) {
++                if (IsBombGroup(pSE->GetSelf()->groupID()))
++                    BlastBomb(pSE->GetMissileSE(), d);
++                continue;
++            }
++            if (!pSE->IsShipSE() and !pSE->IsNPCSE() and !pSE->IsDroneSE() and !pSE->IsSentrySE())
++                continue;
++            ++hit;
++            // Lockbreaker:  an ecm burst against the target's sensor strength
++            if ((group == BombECMGroup) and (pSE->TargetMgr() != nullptr)
++            and !pSE->GetSelf()->GetAttribute(AttrDisallowOffensiveModifiers).get_bool()
++            and Ewar::RollJam(m_self, at, pSE, AttrExplosionRange, AttrFalloff))
++                Ewar::BreakLocks(pSE);
++            // Void:  a flat capacitor drain
++            if ((group == BombEnergyGroup) and (drain > 0.0f))
++                Ewar::DrainCapacitor(pSE, drain);
++            // the blast, reduced only by the target's signature radius
++            if (cloud > 0.0) {
++                double sig(pSE->GetSignatureRadius());
++                if (sig < cloud)
++                    d *= (float)(sig / cloud);
++            }
++            if (pSE->IsDead())
++                continue;
++            pSE->ApplyDamage(d);
++        }
++        _log(DAMAGE__MESSAGE, "Bomb::Detonate() - %s(%u) from %u went off with %u in its %.0fm range", GetName(), GetID(), m_fromID, hit, range);
++
++        // the client shows the blast
++        if (m_destiny != nullptr)
++            m_destiny->SendTerminalExplosion(GetID(), pBubble->GetID(), isGlobal());
++    }
++    Delete();
++}
++
++void Bomb::BlastBomb(Missile* pOther, Damage& d)
++{
++    if ((pOther == nullptr) or !pOther->IsAlive())
++        return;
++    // bombs have only armour (and a little structure).  a missing resonance is no resistance
++    InventoryItemRef oRef(pOther->GetSelf());
++    auto res = [&oRef](uint16 attrID) { return (oRef->HasAttribute(attrID) ? oRef->GetAttribute(attrID).get_float() : 1.0f); };
++    float damage(d.GetEM() * res(AttrArmorEmDamageResonance) + d.GetThermal() * res(AttrArmorThermalDamageResonance)
++               + d.GetKinetic() * res(AttrArmorKineticDamageResonance) + d.GetExplosive() * res(AttrArmorExplosiveDamageResonance));
++    double cloud(m_self->GetAttribute(AttrAoeCloudSize).get_double());
++    double sig(oRef->GetAttribute(AttrSignatureRadius).get_double());
++    if ((cloud > 0.0) and (sig < cloud))
++        damage *= (float)(sig / cloud);
++    float hp(oRef->GetAttribute(AttrArmorHP).get_float() + oRef->GetAttribute(AttrHP).get_float());
++    if (damage >= hp) {
++        _log(DAMAGE__MESSAGE, "Bomb::BlastBomb() - %s(%u) destroyed %s(%u) with %.0f damage (%.0f hp)", GetName(), GetID(), pOther->GetName(), pOther->GetID(), damage, hp);
++        pOther->Intercepted();
++    }
++}
+diff --git a/src/eve-server/ship/Missile.h b/src/eve-server/ship/Missile.h
+index 98b9b1246..e1b4f5754 100644
+--- a/src/eve-server/ship/Missile.h
++++ b/src/eve-server/ship/Missile.h
+@@ -91,6 +91,26 @@ protected:
+ 
+ };
+ 
++/* a stealth bomber's bomb (Crucible):  launched without a target, it flies along the bomber's velocity and goes off when its
++ *  flight time is up, whether or not the bomber is still there.  everything within its explosion range takes the blast, friend
++ *  or foe, reduced only by signature radius.  Lockbreaker bombs also break locks (an ecm burst) and Void bombs drain capacitor.
++ *  a bomb caught in another's blast takes it on its armour:  bombs of a different kind destroy it, its own kind hardly touch it */
++class Bomb
++: public Missile {
++public:
++    Bomb(InventoryItemRef self, EVEServiceManager& services, SystemManager* pSystem, InventoryItemRef modRef, SystemEntity* pLauncher, GenericModule* pMod);
++    virtual ~Bomb()                                     { /* do nothing here */ }
++
++    virtual void Process();
++
++    static bool IsBombGroup(uint16 groupID);
++
++protected:
++    void Detonate();
++    // this bomb's blast on another bomb in its range
++    void BlastBomb(Missile* pOther, Damage& d);
++};
++
+ #endif  //EVE_SHIP_MISSILE_H
+ 
+ 
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 6f0ce66b9..d05561aac 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -407,9 +407,11 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+             m_shipRef->ClearTargetRef();
+         }
+     }
+-    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender)
++    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender).  nor do bombs (LaunchBomb)
+     if (m_launcher and (m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile))
+         targetID = 0;
++    if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb)
++        targetID = 0;
+     if (IsValidTarget(targetID)) {
+         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
+         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
+@@ -1889,6 +1891,10 @@ void ActiveModule::LaunchMissile()
+         LaunchDefender();
+         return;
+     }
++    if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb) {
++        LaunchBomb();
++        return;
++    }
+     // the launcher ran out (or was unloaded) since it was activated.  it stops at the end of this cycle
+     if ((m_chargeRef.get() == nullptr) or (m_targetSE == nullptr)) {
+         m_Stop = true;
+@@ -1937,6 +1943,42 @@ void ActiveModule::LaunchMissile()
+     sStatMgr.Increment(Stat::pcMissiles);
+ }
+ 
++void ActiveModule::LaunchBomb()
++{
++    Client* pClient(m_shipRef->GetPilot());
++    if (pClient == nullptr)
++        return;
++    ShipSE* pShip(pClient->GetShipSE());
++    if ((m_chargeRef.get() == nullptr) or (pShip == nullptr) or (pShip->SysBubble() == nullptr) or !Bomb::IsBombGroup(m_chargeRef->groupID())) {
++        m_Stop = true;
++        return;
++    }
++    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position());
++    InventoryItemRef bombRef(sItemFactory.SpawnItem(idata));
++    if (bombRef.get() == nullptr) {
++        _log(ITEM__ERROR, "Unable to spawn bomb of type %u.", m_chargeRef->typeID());
++        AbortCycle();
++        return;
++    }
++    // the loaded bomb's attributes, with the pilot's skill bonuses (Bomb Deployment)
++    static const uint16 bombAttrs[] = {
++        AttrEmDamage, AttrExplosiveDamage, AttrKineticDamage, AttrThermalDamage, AttrExplosionDelay, AttrMaxVelocity,
++        AttrAoeCloudSize, AttrExplosionRange, AttrEmpFieldRange, AttrHP, AttrArmorHP, AttrSignatureRadius,
++        AttrArmorEmDamageResonance, AttrArmorExplosiveDamageResonance, AttrArmorKineticDamageResonance, AttrArmorThermalDamageResonance,
++        AttrScanGravimetricStrengthBonus, AttrScanLadarStrengthBonus, AttrScanMagnetometricStrengthBonus, AttrScanRadarStrengthBonus,
++        AttrEnergyDestabilizationAmount };
++    for (auto attrID : bombAttrs)
++        if (m_chargeRef->HasAttribute(attrID))
++            bombRef->SetAttribute(attrID, m_chargeRef->GetAttribute(attrID), false);
++
++    SystemManager* pSystem(pClient->SystemMgr());
++    Bomb* pBomb(new Bomb(bombRef, pSystem->GetServiceMgr(), pSystem, m_modRef, pShip, this));
++    pBomb->SetSpeed(bombRef->GetAttribute(AttrMaxVelocity).get_float());
++    pBomb->DestinyMgr()->MakeMissile(pBomb);
++    ConsumeCharge();
++    sStatMgr.Increment(Stat::pcMissiles);
++}
++
+ void ActiveModule::LaunchDefender()
+ {
+     Client* pClient(m_shipRef->GetPilot());
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index 08c2a5c40..7204d4666 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -78,6 +78,8 @@ public:
+     /* defender missiles (Crucible):  loaded in a launcher that runs without a target.  each cycle fires one at a missile
+      *  on its way to our ship that none of our defenders is chasing yet.  no missile coming, no shot (and no charge used) */
+     void                LaunchDefender();
++    // a bomb, along the ship's velocity (Bomb in Missile.h)
++    void                LaunchBomb();
+     void                LaunchSnowBall();
+     void                LaunchInterdictionSphere();
+ 
+-- 
+2.34.1
+

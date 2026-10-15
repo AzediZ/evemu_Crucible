@@ -1,0 +1,220 @@
+From accc1f1b343f7389b2a6b8247a2284fb5ded1069 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 17:00:29 +0000
+Subject: [PATCH 83/91] Option to freeze the universe while the server is off
+
+New world options FreezeWhileOff (off by default) and FreezeSkillTraining (on).
+With FreezeWhileOff on, every game timer moves on at startup by the time the
+server was off (from the heartbeat, restarts under 5 minutes are ignored), so
+nothing happens while it's off:
+
+- industry jobs, research agents, boosters, clone jump and respec timers
+- kill rights, escalations, saved dungeons, mission offers and deadlines
+- contracts, market orders, and the market sim's cells, jobs, shipments and
+  income clock
+- tower fuel cycles and reinforcement, structure timers, customs offices
+- planet pins, launches and resource depletion
+- wormhole lifetimes, incursions, sov indices, wars, corp votes, recruitment
+  ads and insurance
+- skill training too, unless FreezeSkillTraining is off
+- bills, office rent and war bills, as PauseBillsWhileOff already did
+
+Tested with a faked 2 hour downtime: orders, sim cells and jobs, wormholes,
+incursions and the sim's income clock all moved by 2 hours.
+---
+ src/eve-server/EVEServerConfig.cpp        |  6 ++
+ src/eve-server/EVEServerConfig.h          |  2 +
+ src/eve-server/ServiceDB.cpp              | 77 +++++++++++++++++++++++
+ src/eve-server/ServiceDB.h                |  3 +
+ src/eve-server/corporation/BillingMgr.cpp |  7 ++-
+ utils/config/eve-server.xml               |  6 ++
+ 6 files changed, 100 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 8ab2c96a9..829a0faa8 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -72,6 +72,8 @@ EVEServerConfig::EVEServerConfig()
+     world.globalChat = true;    // one server-wide "Global" channel every character joins at login
+     world.gridUnload = true;
+     world.gridUnloadTime = 300 /*s*/; // 5 mins
++    world.FreezeWhileOff = false;
++    world.FreezeSkillTraining = true;
+     world.loginInfo = true;     // after the login MOTD, send GMs the server version/uptime/population
+     world.loginMsg = true;      // show account.loginMessage after authentication
+     world.saveOnMove = false;
+@@ -826,12 +828,16 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
+     AddValueParser( "StoreShipWithCargo", world.StoreShipWithCargo );
+     AddValueParser( "TrashRetentionDays", world.TrashRetentionDays );
+     AddValueParser( "SecureContainerOwnerBypass", world.SecureContainerOwnerBypass );
++    AddValueParser( "FreezeWhileOff",    world.FreezeWhileOff );
++    AddValueParser( "FreezeSkillTraining", world.FreezeSkillTraining );
+ 
+     const bool result = ParseElementChildren( ele );
+ 
+     RemoveParser( "chatLogs" );
+     RemoveParser( "globalChat" );
+     RemoveParser( "gridUnload" );
++    RemoveParser( "FreezeWhileOff" );
++    RemoveParser( "FreezeSkillTraining" );
+     RemoveParser( "gridUnloadTime" );
+     RemoveParser( "loginInfo" );
+     RemoveParser( "loginMsg" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index b52f64ff6..53ffa5d08 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -97,6 +97,8 @@ public:
+         uint16 apWarptoDistance;
+         uint16 fleetInviteTimeout;      // s an unanswered fleet invite (and the position it holds) lasts.  0 = never times out
+         uint16 TrashRetentionDays;      // days a trashed item is kept for GM restore before it's purged at startup.  0 = deleted at once  (F20)
++        bool FreezeWhileOff;            // at startup, game timers move on by the time the server was off (ServiceDB::FreezeForDowntime)
++        bool FreezeSkillTraining;       // with FreezeWhileOff:  skill training stands still too
+     } world;
+ 
+     // From <rates>
+diff --git a/src/eve-server/ServiceDB.cpp b/src/eve-server/ServiceDB.cpp
+index 27ede7802..98e6ec65e 100644
+--- a/src/eve-server/ServiceDB.cpp
++++ b/src/eve-server/ServiceDB.cpp
+@@ -208,6 +208,83 @@ void ServiceDB::SaveHeartbeat() {
+         codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
+ }
+ 
++void ServiceDB::FreezeForDowntime(int64 off)
++{
++    /* filetime columns move by 'off', the market sim's and incursions' unix second columns by 'sec'.  timers that only
++     *  matter while they're still running (an expiry, a deadline) move when they're past the last heartbeat or still open;
++     *  progress anchors (a last cycle, a start time) move on every live row */
++    int64 last((int64)GetFileTimeNow() - off);
++    int64 sec(off / EvE::Time::Second);
++    const char* queries[] = {
++        // industry jobs that aren't delivered, research agents, boosters, clone jump and respec timers
++        "UPDATE ramJobs SET installTime = installTime + {off}, beginProductionTime = beginProductionTime + {off},"
++            " endProductionTime = endProductionTime + {off},"
++            " pauseProductionTime = IF(pauseProductionTime IS NULL OR pauseProductionTime = 0, pauseProductionTime, pauseProductionTime + {off})"
++            " WHERE completedStatusID = 0",
++        "UPDATE chrAgentResearch SET lastUpdate = lastUpdate + {off} WHERE lastUpdate > 0",
++        "UPDATE chrBoosters SET expiryTime = expiryTime + {off} WHERE expiryTime > 0",
++        "UPDATE chrCharacters SET lastCloneJumpTime = lastCloneJumpTime + {off} WHERE lastCloneJumpTime > 0",
++        "UPDATE chrCharacters SET nextRespecDateTime = nextRespecDateTime + {off} WHERE nextRespecDateTime > {last}",
++        // kill rights, escalations, saved dungeons, mission offers and missions in progress
++        "UPDATE crimeKillRights SET expiresAt = expiresAt + {off} WHERE expiresAt > {last}",
++        "UPDATE chrEscalations SET expiryTime = expiryTime + {off} WHERE expiryTime > 0",
++        "UPDATE dunActive SET dunExpiryTime = dunExpiryTime + {off} WHERE dunExpiryTime > 0",
++        "UPDATE agtOffers SET expiryTime = IF(expiryTime > 0, expiryTime + {off}, 0), dateIssued = IF(dateIssued > 0, dateIssued + {off}, 0),"
++            " dateAccepted = IF(dateAccepted > 0, dateAccepted + {off}, 0) WHERE dateCompleted = 0",
++        // contracts (outstanding, in progress) and market orders
++        "UPDATE ctrContracts SET dateExpired = dateExpired + {off} WHERE status IN (0, 1) AND dateExpired > 0",
++        "UPDATE ctrContracts SET dateAccepted = dateAccepted + {off} WHERE status = 1 AND dateAccepted > 0",
++        "UPDATE mktOrders SET issued = issued + {off}",
++        // towers, structures (sov, outposts) and customs offices
++        "UPDATE posTowerData SET lastCycle = IF(lastCycle > 0, lastCycle + {off}, 0), reinforceUntil = IF(reinforceUntil > 0, reinforceUntil + {off}, 0),"
++            " fuelExpiry = IF(fuelExpiry > 0, fuelExpiry + {off}, 0)",
++        "UPDATE posStructureData SET timestamp = timestamp + {off} WHERE timestamp > 0",
++        "UPDATE posCustomsOfficeData SET timestamp = timestamp + {off} WHERE timestamp > 0",
++        // planets
++        "UPDATE piPins SET lastRunTime = IF(lastRunTime > 0, lastRunTime + {off}, 0), expiryTime = IF(expiryTime > 0, expiryTime + {off}, 0),"
++            " installTime = IF(installTime > 0, installTime + {off}, 0), launchTime = IF(launchTime > 0, launchTime + {off}, 0)",
++        "UPDATE piCCPin SET lastSimTime = lastSimTime + {off} WHERE lastSimTime > 0",
++        "UPDATE piLaunches SET launchTime = launchTime + {off} WHERE launchTime > 0",
++        "UPDATE piResourceDepletion SET startTime = startTime + {off} WHERE startTime > 0",
++        // wormholes, sov indices, wars, votes, recruitment ads, insurance
++        "UPDATE sysWormholes SET expiryTime = expiryTime + {off}, createTime = createTime + {off}",
++        "UPDATE sovDevIndices SET lastDecayTime = lastDecayTime + {off} WHERE lastDecayTime > 0",
++        "UPDATE crpWars SET timeDeclared = timeDeclared + {off} WHERE timeFinished IS NULL OR timeFinished > {last}",
++        "UPDATE crpWars SET timeFinished = timeFinished + {off} WHERE timeFinished > {last}",
++        "UPDATE crpVoteItems SET endDateTime = endDateTime + {off}, expires = expires + {off} WHERE endDateTime > {last}",
++        "UPDATE crpAdRegistry SET expiryDateTime = expiryDateTime + {off} WHERE expiryDateTime > {last}",
++        "UPDATE shipInsurance SET endDate = endDate + {off} WHERE endDate > {last}",
++        // the market sim and incursions keep unix seconds
++        "UPDATE mktSimCell SET lastTime = IF(lastTime > 0, lastTime + {sec}, 0), nextDue = IF(nextDue > 0, nextDue + {sec}, 0)",
++        "UPDATE mktSimJob SET startTime = startTime + {sec}, endTime = endTime + {sec}",
++        "UPDATE mktSimShipment SET depart = depart + {sec}, arrive = arrive + {sec}",
++        "UPDATE mktSimState SET value = CAST(CAST(value AS SIGNED) + {sec} AS CHAR) WHERE name = 'lastIncome' AND CAST(value AS SIGNED) > 0",
++        "UPDATE incIncursions SET startTime = startTime + {sec}, stateTime = stateTime + {sec}, lastProgress = lastProgress + {sec}",
++    };
++    auto fill = [&](std::string q) {
++        const std::pair<const char*, int64> values[] = { {"{off}", off}, {"{last}", last}, {"{sec}", sec} };
++        for (auto& v : values)
++            boost::replace_all(q, v.first, std::to_string(v.second));
++        return q;
++    };
++    DBerror err;
++    uint8 failed(0);
++    for (auto q : queries)
++        if (!sDatabase.RunQuery(err, "%s", fill(q).c_str())) {
++            ++failed;
++            codelog(DATABASE__ERROR, "FreezeForDowntime: %s", err.c_str());
++        }
++    if (sConfig.world.FreezeSkillTraining) {
++        if (!sDatabase.RunQuery(err, "UPDATE chrSkillQueue SET startTime = startTime + %lli, endTime = endTime + %lli WHERE endTime > 0", off, off))
++            ++failed;
++        if (!sDatabase.RunQuery(err, "UPDATE chrCharacters SET skillQueueEndTime = skillQueueEndTime + %lli WHERE skillQueueEndTime > 0", off))
++            ++failed;
++    }
++    sLog.Blue("     ServerFreeze", "The server was off for %.1f hours:  game timers moved on by that much (skill training %s).%s",
++              (double)off / EvE::Time::Hour, (sConfig.world.FreezeSkillTraining ? "too" : "kept running"),
++              (failed > 0 ? "  Some updates failed, see the log." : ""));
++}
++
+ int64 ServiceDB::GetLastHeartbeat() {
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res, "SELECT lastHeartbeat FROM srvStatus WHERE AI = 1")) {
+diff --git a/src/eve-server/ServiceDB.h b/src/eve-server/ServiceDB.h
+index c4ea04501..52b3c0e20 100644
+--- a/src/eve-server/ServiceDB.h
++++ b/src/eve-server/ServiceDB.h
+@@ -57,6 +57,9 @@ public:
+     // the last time the server was running (FILETIME), saved every minute and at shutdown.  0 = never saved
+     static void SaveHeartbeat();
+     static int64 GetLastHeartbeat();
++    /* world FreezeWhileOff:  every game timer moves on by 'off' (filetime) so the time the server was off never happened.
++     *  skill training too, unless FreezeSkillTraining is off.  bills are moved by BillingMgr */
++    static void FreezeForDowntime(int64 off);
+     static void SetAccountOnlineStatus(uint32 accountID, bool online=false);
+     static void SetAccountBanStatus(uint32 accountID, bool banned=false);
+     static void SaveServerStats(double threads, float rss, float vm, float user, float kernel, uint32 items, uint32 bubbles);
+diff --git a/src/eve-server/corporation/BillingMgr.cpp b/src/eve-server/corporation/BillingMgr.cpp
+index 17620d9f9..3b1a0b590 100644
+--- a/src/eve-server/corporation/BillingMgr.cpp
++++ b/src/eve-server/corporation/BillingMgr.cpp
+@@ -133,12 +133,17 @@ void BillingMgr::PauseForDowntime()
+     int64 now = GetFileTimeNow();
+     int64 last = ServiceDB::GetLastHeartbeat();
+     ServiceDB::SaveHeartbeat();
+-    if (!sConfig.corp.PauseBillsWhileOff or (last <= 0) or (last >= now))
++    if ((last <= 0) or (last >= now))
+         return;
+     int64 off = now - last;
+     // a quick restart isn't worth it (the heartbeat is saved once a minute)
+     if (off < 5 * EvE::Time::Minute)
+         return;
++    // world FreezeWhileOff:  everything else stands still too (bills always do then)
++    if (sConfig.world.FreezeWhileOff)
++        ServiceDB::FreezeForDowntime(off);
++    else if (!sConfig.corp.PauseBillsWhileOff)
++        return;
+ 
+     DBerror err;
+     sDatabase.RunQuery(err, "UPDATE bills SET dueDateTime = dueDateTime + %lli WHERE paid = 0", off);
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index b636b48ad..3d572fc3b 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -84,6 +84,12 @@ boolean can use either 0/1 OR true/false.
+         <!-- no longer used -->
+         <gridUnload>true</gridUnload><!-- bool -->
+         <gridUnloadTime>300</gridUnloadTime><!-- in seconds (5 min default)-->
++        <FreezeWhileOff>false</FreezeWhileOff><!-- bool  -at startup, move every game timer on by the time the server was off, so nothing
++                                                       happens while it's off:  industry jobs, research agents, boosters, kill rights,
++                                                       escalations, mission offers and deadlines, contracts, market orders and the market
++                                                       sim, tower fuel and reinforcement, structures, planets, wormholes, incursions, sov
++                                                       indices, wars, votes, insurance and bills.  quick restarts (under 5 min) are ignored -->
++        <FreezeSkillTraining>true</FreezeSkillTraining><!-- bool  -with FreezeWhileOff, skill training stands still too.  false keeps it running -->
+         <chatLogs>false</chatLogs><!-- bool  -append every chat channel message to <logDir>/chat_YYYY-MM-DD.log -->
+         <!-- the login message of the day is etc/motd.txt next to this file (format described in it).  empty or missing = none.
+              it goes into Global when globalChat is on, else into Local, once per login.  /motd shows it, /motd reload rereads it. -->
+-- 
+2.34.1
+

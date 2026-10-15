@@ -1,0 +1,115 @@
+From fcc18c7b0511b321290ea70be49ae492791567ed Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:38:51 +0000
+Subject: [PATCH 80/91] Remote reps update the target's HP bars, armour and
+ hull reps land at cycle end
+
+- A remote shield, armour or hull rep now sends the target's damage state to
+  everyone locking it. Before, it sent the repairer's own, so the target's bars
+  didn't move until something else updated them.
+- Armour repairers, hull repairers and their remote versions repair at the end
+  of the cycle, as in Crucible. Shield boosters and transporters still boost at
+  the start. A cycle cut short (target lost, burnt out) repairs nothing.
+- The npc AI's remote assist threat for armour and hull reps is worked out when
+  the repair lands.
+---
+ src/eve-server/ship/modules/ActiveModule.cpp | 54 ++++++++++++++------
+ 1 file changed, 37 insertions(+), 17 deletions(-)
+
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index e6b18855c..3b2d1e0fe 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -720,8 +720,9 @@ uint32 ActiveModule::DoCycle() {
+     // ...and sentries:  it's aggression, their group hears about it (npc ai phase 5)
+     if ((m_targetSE != nullptr) and m_targetSE->IsSentrySE() and (Ewar::GetEwarType(groupID()) != nullptr) and m_shipRef->HasPilot())
+         m_targetSE->GetSentrySE()->GetAIMgr()->OnEwarBy(m_shipRef->GetPilot()->GetShipSE());
+-    // remote repair of someone a level-one npc fights is threat (npc ai plan 5.7)
+-    double assistBefore(RemoteAssistHP(groupID(), m_targetSE));
++    // remote repair of someone a level-one npc fights is threat (npc ai plan 5.7).  armour and hull reps land at the end of
++    //  the cycle and are reported from CycleComplete()
++    double assistBefore((groupID() == EVEDB::invGroups::Shield_Transporter) ? RemoteAssistHP(groupID(), m_targetSE) : -1.0);
+ 
+     // not sure if this is entirely accurate...wip
+     switch (m_modRef->groupID()) {
+@@ -780,19 +781,12 @@ uint32 ActiveModule::DoCycle() {
+         case EVEDB::invGroups::Shield_Booster: {
+             UpdateCharge(AttrShieldCharge, AttrShieldCapacity, AttrShieldBonus, m_shipRef);
+         } break;
+-        case EVEDB::invGroups::Remote_Hull_Repairer: {
+-            if (m_targetSE != nullptr)
+-                UpdateDamage(AttrDamage, AttrStructureDamageAmount, m_targetSE->GetSelf());
+-        } break;
+-        case EVEDB::invGroups::Hull_Repair_Unit: {
+-            UpdateDamage(AttrDamage, AttrStructureDamageAmount, m_shipRef);
+-        } break;
+-        case EVEDB::invGroups::Armor_Repair_Projector: {
+-            if (m_targetSE != nullptr)
+-                UpdateDamage(AttrArmorDamage, AttrArmorDamageAmount, m_targetSE->GetSelf());
+-        } break;
++        // armour and hull repairers, local and remote, repair at the end of the cycle (CycleComplete).  shield boosters
++        //  and transporters at the start
++        case EVEDB::invGroups::Remote_Hull_Repairer:
++        case EVEDB::invGroups::Hull_Repair_Unit:
++        case EVEDB::invGroups::Armor_Repair_Projector:
+         case EVEDB::invGroups::Armor_Repair_Unit: {
+-            UpdateDamage(AttrArmorDamage, AttrArmorDamageAmount, m_shipRef);
+         } break;
+         case EVEDB::invGroups::Missile_Launcher_Snowball: {
+             LaunchSnowBall();
+@@ -1044,6 +1038,25 @@ void ActiveModule::CycleComplete()
+         case EVEDB::invGroups::Automated_Targeting_System: {
+             TargetHostiles();
+         } break;
++        case EVEDB::invGroups::Hull_Repair_Unit: {
++            UpdateDamage(AttrDamage, AttrStructureDamageAmount, m_shipRef);
++        } break;
++        case EVEDB::invGroups::Armor_Repair_Unit: {
++            UpdateDamage(AttrArmorDamage, AttrArmorDamageAmount, m_shipRef);
++        } break;
++        case EVEDB::invGroups::Remote_Hull_Repairer:
++        case EVEDB::invGroups::Armor_Repair_Projector: {
++            if ((m_targetSE == nullptr) or !m_shipRef->HasPilot())
++                break;
++            double before(RemoteAssistHP(groupID(), m_targetSE));
++            if (groupID() == EVEDB::invGroups::Remote_Hull_Repairer)
++                UpdateDamage(AttrDamage, AttrStructureDamageAmount, m_targetSE->GetSelf());
++            else
++                UpdateDamage(AttrArmorDamage, AttrArmorDamageAmount, m_targetSE->GetSelf());
++            if ((before >= 0.0) and (m_targetSE != nullptr))
++                NotifyRemoteAssist(m_shipRef->GetPilot()->GetShipSE(), m_targetSE,
++                                   static_cast<float>(RemoteAssistHP(groupID(), m_targetSE) - before));
++        } break;
+     }
+ }
+ 
+@@ -1412,8 +1425,12 @@ void ActiveModule::UpdateCharge(uint16 attrID, uint16 testAttrID, uint16 srcAttr
+     }
+     iRef->SetAttribute(attrID, newValue);
+ 
+-    if (attrID == AttrShieldCharge)
+-        m_shipRef->GetPilot()->GetShipSE()->SendDamageStateChanged();
++    // the hp bars of whoever was boosted (us, or a remote target)
++    if (attrID == AttrShieldCharge) {
++        SystemEntity* pSE(iRef->itemID() == m_shipRef->itemID() ? m_shipRef->GetPilot()->GetShipSE() : m_targetSE);
++        if (pSE != nullptr)
++            pSE->SendDamageStateChanged();
++    }
+ }
+ 
+ void ActiveModule::UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRef iRef)
+@@ -1426,7 +1443,10 @@ void ActiveModule::UpdateDamage(uint16 attrID, uint16 srcAttrID, InventoryItemRe
+             Deactivate();
+     }
+     iRef->SetAttribute(attrID, newValue);
+-    m_shipRef->GetPilot()->GetShipSE()->SendDamageStateChanged();
++    // the hp bars of whoever was repaired (us, or a remote target)
++    SystemEntity* pSE(iRef->itemID() == m_shipRef->itemID() ? m_shipRef->GetPilot()->GetShipSE() : m_targetSE);
++    if (pSE != nullptr)
++        pSE->SendDamageStateChanged();
+ }
+ 
+ // not used
+-- 
+2.34.1
+

@@ -1,0 +1,45 @@
+From 7182ccd070d5480251e21e1a942e9c93e23ca805 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:58:40 +0000
+Subject: [PATCH 75/91] Database: read tinyint flags properly
+
+DBResultRow::GetBool() only checked that the first byte wasn't 0. That works
+for bit columns, which come back as a raw byte, but a tinyint comes back as
+the text "0" or "1", so every tinyint flag read as true. Among them:
+
+- all 440 mission contents counted as storyline and important, so normal
+  agents had no encounter or mining content to offer
+- every dungeon trigger was repeatable and every spawn group warped in
+- every wormhole loaded after a restart counted as a static
+- every station type counted as conquerable, every solar system as a border,
+  hub and so on
+- every chat channel was memberless and a mailing list
+
+Bit columns read the same as before.
+---
+ src/eve-core/database/dbcore.cpp | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/eve-core/database/dbcore.cpp b/src/eve-core/database/dbcore.cpp
+index 095ea3216..962a8de37 100644
+--- a/src/eve-core/database/dbcore.cpp
++++ b/src/eve-core/database/dbcore.cpp
+@@ -840,7 +840,14 @@ bool DBResultRow::GetBool( uint32 index ) const
+         return false;
+     }
+ 
+-    return (mRow[index][0] != 0);
++    const char* value(mRow[index]);
++    if (value == nullptr)
++        return false;
++    /* a bit column comes as its raw byte (0x00 or 0x01), any other as text ("0", "1").  only reading the first byte
++     *  made every tinyint flag true (dungeon gates and triggers, mission flags, wormhole statics, station conquerability) */
++    if (((mLengths == nullptr) or (mLengths[index] == 1)) and ((value[0] == '\0') or (value[0] == '\x01')))
++        return (value[0] != '\0');
++    return (strtol(value, nullptr, 0) != 0);
+ }
+ 
+ uint32 DBResultRow::GetUInt( uint32 index ) const
+-- 
+2.34.1
+

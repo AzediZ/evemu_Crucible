@@ -1,0 +1,125 @@
+From e68b3299d9326224f409c5d9a7739e3962419999 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:50:22 +0000
+Subject: [PATCH 82/91] Repackaging: rigs are destroyed, modules come off
+ properly, full containers refused
+
+- Repackaging a ship destroys its rigs, as in Crucible. Before, the cargo pass
+  moved everything in the ship to the hangar first, rigs included, so they came
+  back intact.
+- Modules, subsystems and loaded charges are taken off through the module
+  manager when the ship was boarded this session, before its holds are emptied.
+  Weapon banks and insurance go as before.
+- The pilot is told what happened: modules and cargo moved to the hangar, rigs
+  destroyed.
+- A container (or anything else with contents that isn't a ship) has to be
+  empty before it can be repackaged. Before, its contents were lost inside
+  the package.
+---
+ src/eve-server/ship/Ship.cpp             | 26 ++++++++++++++++++++++
+ src/eve-server/ship/Ship.h               |  3 +++
+ src/eve-server/station/RepairService.cpp | 28 +++++++++++++++++++-----
+ 3 files changed, 52 insertions(+), 5 deletions(-)
+
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index db564fb88..9c83af815 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -1624,6 +1624,32 @@ void ShipItem::EvictExcessModules()
+     }
+ }
+ 
++uint8 ShipItem::PrepareRepackage()
++{
++    UnlinkAllWeapons(true);
++
++    std::vector<InventoryItemRef> items;
++    // a ship boarded this session has module objects:  take them off first (charges are unloaded into the cargo hold)
++    pInventory->GetInventoryVec(items);
++    for (auto cur : items)
++        if ((IsModuleSlot(cur->flag()) or IsRigSlot(cur->flag()) or IsSubSystem(cur->flag()))
++        and (m_ModuleManager->GetModule(cur->itemID()) != nullptr))
++            m_ModuleManager->UnfitModule(cur->itemID());
++
++    uint8 rigs(0);
++    items.clear();
++    pInventory->GetInventoryVec(items);
++    for (auto cur : items) {
++        if (IsRigSlot(cur->flag())) {
++            ++rigs;
++            cur->Delete();
++            continue;
++        }
++        cur->Move(locationID(), flagHangar, true);
++    }
++    return rigs;
++}
++
+ void ShipItem::EmptyCargo()
+ {
+     std::map<uint32, InventoryItemRef> invMap;
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index 2baae30de..4a5da27e9 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -141,6 +141,9 @@ public:
+     void StripFitting(bool all=false);
+     // this will remove all items from all ship cargo holds
+     void EmptyCargo();
++    /* repackaging (RepairService::UnasembleItems):  fitted modules and subsystems come off, rigs are destroyed, and charges,
++     *  drones and every hold's contents go to the hangar.  returns how many rigs were destroyed */
++    uint8 PrepareRepackage();
+     // after a subsystem change: modules past the ship's slots or hardpoints go to the hangar (cargo in space)
+     void EvictExcessModules();
+     // after a pilot change: shield/capacitor charge and armor/structure damage are cut to the new capacities
+diff --git a/src/eve-server/station/RepairService.cpp b/src/eve-server/station/RepairService.cpp
+index 5e0eac703..66bcf3626 100644
+--- a/src/eve-server/station/RepairService.cpp
++++ b/src/eve-server/station/RepairService.cpp
+@@ -223,6 +223,12 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
+             // an audit log container with a log entry less than three weeks old
+             if (ContainerSecurity::IsAuditLog(iRef) and sContSec.HasRecentLog(itemID, GetFileTimeNow() - (Win32Time_Day * 21)))
+                 throw UserError("CanNotRepackageALSC");
++            // a container's contents would be lost inside the package
++            if (!iRef->IsShipItem() and (iRef->GetMyInventory() != nullptr)) {
++                iRef->GetMyInventory()->LoadContents();
++                if (!iRef->GetMyInventory()->IsEmpty())
++                    throw CustomError("Empty %s before repackaging it.", iRef->name());
++            }
+             if (iRef->IsShipItem()) {
+                 // fitted modules lose their damage when the ship is repackaged
+                 std::vector<InventoryItemRef> modules;
+@@ -257,13 +263,25 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
+                             // Item cannot be repackaged once used!
+                             continue;
+                         }
+-                        // if this is a ship, remove all modules and empty cargo holds before repacking
+-                        //  maybe we should instruct player that ship is fitted/has cargo, and let them do this
++                        /* a ship's modules, subsystems, charges, drones and cargo go to the hangar and its rigs are destroyed.
++                         *  its insurance ends.  the pilot is told what happened */
+                         if (iRef->IsShipItem()) {
+-                            iRef->GetShipItem()->EmptyCargo();
+-                            iRef->GetShipItem()->StripFitting(true);
+-                            // check insurance and delete if applicable
++                            bool fitted(false), cargo(false);
++                            std::vector<InventoryItemRef> contents;
++                            iRef->GetMyInventory()->GetInventoryVec(contents);
++                            for (auto cur : contents) {
++                                if (IsModuleSlot(cur->flag()) or IsSubSystem(cur->flag()))
++                                    fitted = true;
++                                else if (!IsRigSlot(cur->flag()))
++                                    cargo = true;
++                            }
++                            uint8 rigs(iRef->GetShipItem()->PrepareRepackage());
+                             ShipDB::DeleteInsuranceByShipID(itemID);
++                            if (fitted or cargo or (rigs > 0))
++                                call.client->SendNotifyMsg("%s was repackaged.%s%s%s", iRef->name(),
++                                        (fitted ? " Its modules were moved to your hangar." : ""),
++                                        (cargo ? " Its cargo was moved to your hangar." : ""),
++                                        (rigs > 0 ? " Its rigs were destroyed." : ""));
+                         }
+                         // a repackaged secure container loses its passwords
+                         if (ContainerSecurity::IsSecure(iRef)) {
+-- 
+2.34.1
+

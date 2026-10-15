@@ -1,0 +1,303 @@
+From ddd14b8ffe13ccb68d8cc49a51fe1bd199ecd8c8 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 15:58:40 +0000
+Subject: [PATCH 76/91] Stacking penalties through dogma
+
+A module's or rig's multiplier on an attribute that isn't stackable
+(dgmAttributeTypes.stackable = 0: resists, speed, damage, tracking, range,
+scan resolution, signature and so on) is now stacking penalised, as the
+client shows it. The n-th strongest one counts 0.5 ^ ((n / 2.2229)^2):
+100%, 87%, 57%, 28%, 11%...
+
+- PreMul, PreDiv, PostMul, PostDiv and PostPercent each have their own chain
+  per item and attribute, as in dogma. So a Damage Control (PreMul) doesn't
+  stack with hardeners and EANMs (PostPercent).
+- Bonuses and penalties are ranked apart.
+- Skills, implants, boosters, the hull, subsystems, charges and scripts, and
+  system effects aren't penalised.
+- Removing a module takes its exact multiplier back out of the chain, even if
+  its own value changed meanwhile (overheat).
+
+Webs, damps, TDs and painters were already penalised through their own code.
+---
+ src/eve-server/StaticDataMgr.cpp              | 14 +++-
+ src/eve-server/StaticDataMgr.h                |  3 +
+ src/eve-server/effects/EffectsProcessor.cpp   | 76 ++++++++++++++++++-
+ src/eve-server/effects/EffectsProcessor.h     | 11 +++
+ src/eve-server/inventory/InventoryItem.cpp    |  8 ++
+ src/eve-server/inventory/InventoryItem.h      |  3 +
+ .../system/cosmicMgrs/ManagerDB.cpp           |  2 +-
+ 7 files changed, 113 insertions(+), 4 deletions(-)
+
+diff --git a/src/eve-server/StaticDataMgr.cpp b/src/eve-server/StaticDataMgr.cpp
+index 13b9196c2..f38bb6af9 100644
+--- a/src/eve-server/StaticDataMgr.cpp
++++ b/src/eve-server/StaticDataMgr.cpp
+@@ -49,6 +49,7 @@ m_npcDivisions(nullptr)
+     m_regions.clear();
+     m_attrTypeData.clear();
+     m_attrDefaults.clear();
++    m_attrStackable.clear();
+     m_minerals.clear();
+     m_compounds.clear();
+     m_bpMatlData.clear();
+@@ -108,6 +109,7 @@ void StaticDataMgr::Clear()
+     m_regions.clear();
+     m_attrTypeData.clear();
+     m_attrDefaults.clear();
++    m_attrStackable.clear();
+     m_minerals.clear();
+     m_compounds.clear();
+     m_bpMatlData.clear();
+@@ -271,7 +273,7 @@ void StaticDataMgr::Populate()
+     startTime = GetTimeMSeconds();
+     ManagerDB::GetAttributeTypes(*res);
+     while (res->GetRow(row)) {
+-        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue FROM dgmAttribute
++        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue, stackable FROM dgmAttributeTypes
+         AttrTypeData typeData               = AttrTypeData();
+         typeData.attributeID            = row.GetInt(0);
+         typeData.attributeName          = (row.IsNull(1) ? "*none*" : row.GetText(1));
+@@ -284,6 +286,9 @@ void StaticDataMgr::Populate()
+         if (m_attrDefaults.size() <= attrID)
+             m_attrDefaults.resize(attrID + 1, 0.0);
+         m_attrDefaults[attrID] = (row.IsNull(5) ? 0.0 : row.GetDouble(5));
++        if (m_attrStackable.size() <= attrID)
++            m_attrStackable.resize(attrID + 1, true);
++        m_attrStackable[attrID] = (row.IsNull(6) or row.GetBool(6));
+     }
+     sLog.Cyan("    StaticDataMgr", "%lu Attribute data sets loaded in %.3fms.", m_attrTypeData.size(), (GetTimeMSeconds() - startTime));
+ 
+@@ -823,6 +828,13 @@ const char* StaticDataMgr::GetAttrName(uint16 attrID)
+     return "None";
+ }
+ 
++bool StaticDataMgr::IsAttributeStackable(uint16 attrID) const
++{
++    if (attrID < m_attrStackable.size())
++        return m_attrStackable[attrID];
++    return true;
++}
++
+ double StaticDataMgr::GetAttributeDefault(uint16 attrID) const
+ {
+     if (attrID < m_attrDefaults.size())
+diff --git a/src/eve-server/StaticDataMgr.h b/src/eve-server/StaticDataMgr.h
+index 543626f3d..7aa086e91 100644
+--- a/src/eve-server/StaticDataMgr.h
++++ b/src/eve-server/StaticDataMgr.h
+@@ -58,6 +58,8 @@ public:
+     const char*         GetAttrName(uint16 attrID);
+     // dgmAttributeTypes.defaultValue:  what dogma uses when a type doesn't have the attribute (0 for unknown attributes)
+     double              GetAttributeDefault(uint16 attrID) const;
++    // dgmAttributeTypes.stackable:  false for the attributes whose module modifiers are stacking penalised
++    bool                IsAttributeStackable(uint16 attrID) const;
+     const char*         GetTypeName(uint16 typeID);     // not sure if this will be needed
+     const char*         GetGroupName(uint16 grpID);
+     const char*         GetCategoryName(uint8 catID);
+@@ -227,6 +229,7 @@ private:
+     std::map<uint32, StaticData>                        m_staticData;       // itemID/data
+     std::map<uint16, AttrTypeData>                      m_attrTypeData;     // attrID/data
+     std::vector<double>                                 m_attrDefaults;     // attrID/defaultValue
++    std::vector<bool>                                   m_attrStackable;    // attrID/stackable
+ 
+     std::multimap<uint16, EvERam::RamMaterials>         m_ramMatl;          // itemTypeID/data
+     std::multimap<uint16, EvERam::RamRequirements>      m_ramReq;           // bpTypeID/data
+diff --git a/src/eve-server/effects/EffectsProcessor.cpp b/src/eve-server/effects/EffectsProcessor.cpp
+index c2c86dfd5..c63bd907c 100644
+--- a/src/eve-server/effects/EffectsProcessor.cpp
++++ b/src/eve-server/effects/EffectsProcessor.cpp
+@@ -18,11 +18,13 @@
+ #include "ship/Ship.h"
+ #include "ship/modules/GenericModule.h"
+ 
++#include <cmath>
+ #include <cstddef>
+ #include <utility>
+ #include <vector>
+ 
+ #include "EVE_DogmaOrder.h"
++#include "npc/ai/NpcMath.h"
+ 
+ /*
+  * # Effects Logging:
+@@ -702,7 +704,8 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+             }
+ 
+             // send data to calculator
+-            newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
++            if (!ApplyPenalized(item.get(), cur.second, cur.first, srcValue.get_double(), targValue, newValue))
++                newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
+ 
+             if (is_log_enabled(EFFECTS__MESSAGE))
+                 _log(EFFECTS__MESSAGE, "FxProc::ApplyEffects(%i): %s(%u) - src(%s:%s[%u])=%.3f <%s> targ(%s:%s[%u]) set %s from %.3f to %.3f.", \
+@@ -800,7 +803,9 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
+             continue;
+         EvilNumber srcValue(cur.second.srcRef->GetAttribute(cur.second.srcAttr));
+         EvilNumber targValue(target->GetAttribute(cur.second.targAttr));
+-        EvilNumber newValue(CalculateAttributeValue(targValue, srcValue, cur.first));
++        EvilNumber newValue(EvilZero);
++        if (!ApplyPenalized(target.get(), cur.second, cur.first, srcValue.get_double(), targValue, newValue))
++            newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
+         if (is_log_enabled(EFFECTS__MESSAGE))
+             _log(EFFECTS__MESSAGE, "FxProc::ApplyOwnerModifiers(%i): %s(%u) - src %s=%.3f <%s> set %s on %s from %.3f to %.3f.", \
+                 cur.first, cur.second.srcRef->name(), cur.second.srcRef->itemID(), sDataMgr.GetAttrName(cur.second.srcAttr), \
+@@ -814,6 +819,73 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
+         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);
+ }
+ 
++namespace {
++    // the penalised product of a chain:  bonuses and penalties are ranked apart
++    double PenalizedProduct(const std::map<int64, double>& chain)
++    {
++        std::vector<double> up, down;
++        for (auto& cur : chain)
++            (cur.second > 1.0 ? up : down).push_back(cur.second);
++        return NpcMath::StackedProduct(up.data(), up.size()) * NpcMath::StackedProduct(down.data(), down.size());
++    }
++}
++
++bool FxProc::ApplyPenalized(InventoryItem* pItem, const fxData& data, int8 math, double srcValue, EvilNumber targValue,
++                            EvilNumber& newValue)
++{
++    if ((pItem == nullptr) or (data.srcRef.get() == nullptr))
++        return false;
++    // the modifier's own math method (a remove's is inverted)
++    int8 base(math);
++    if (data.remove) {
++        switch (math) {
++            case FX::Math::PreDiv:          base = FX::Math::PreMul;        break;
++            case FX::Math::PreMul:          base = FX::Math::PreDiv;        break;
++            case FX::Math::PostDiv:         base = FX::Math::PostMul;       break;
++            case FX::Math::PostMul:         base = FX::Math::PostDiv;       break;
++            case FX::Math::RevPostPercent:  base = FX::Math::PostPercent;   break;
++            default:                        return false;
++        }
++    }
++    double multiplier(0.0);
++    switch (base) {
++        case FX::Math::PreMul:
++        case FX::Math::PostMul:     multiplier = srcValue;                                      break;
++        case FX::Math::PreDiv:
++        case FX::Math::PostDiv:     multiplier = ((srcValue == 0.0) ? 0.0 : (1.0 / srcValue));  break;
++        case FX::Math::PostPercent: multiplier = 1.0 + (srcValue / 100.0);                      break;
++        default:                    return false;
++    }
++    // modules and rigs only, on attributes that aren't stackable
++    if ((data.srcRef->categoryID() != EVEDB::invCategories::Module) or sDataMgr.IsAttributeStackable(data.targAttr))
++        return false;
++
++    std::map<int64, double>& chain(pItem->GetPenalizedChain(data.targAttr, base));
++    int64 key(((int64)data.srcRef->itemID() << 16) | data.srcAttr);
++    std::map<int64, double>::iterator itr(chain.find(key));
++    if (data.remove) {
++        // one that wasn't applied through the chain (x0, -100%:  undone from its snapshot) is removed as it was applied
++        if (itr == chain.end())
++            return false;
++    } else if (!(multiplier > 0.0) or !std::isfinite(multiplier)) {
++        return false;
++    }
++
++    double before(PenalizedProduct(chain));
++    if (data.remove) {
++        chain.erase(itr);
++    } else {
++        chain[key] = multiplier;
++    }
++    double after(PenalizedProduct(chain));
++    newValue = targValue * EvilNumber(after / before);
++    if (is_log_enabled(EFFECTS__DEBUG))
++        _log(EFFECTS__DEBUG, "FxProc::ApplyPenalized(): %s(%u) %s x%.4f on %s %s(%u):  chain of %u, penalised product %.4f -> %.4f, %.4f -> %.4f", \
++                data.srcRef->name(), data.srcRef->itemID(), data.remove ? "removes" : "adds", multiplier, sDataMgr.GetAttrName(data.targAttr), \
++                pItem->name(), pItem->itemID(), (uint32)chain.size(), before, after, targValue.get_double(), newValue.get_double());
++    return true;
++}
++
+ EvilNumber FxProc::CalculateAttributeValue(EvilNumber val1/*targ*/, EvilNumber val2/*src*/, int8 method)
+ {
+     switch (method) {
+diff --git a/src/eve-server/effects/EffectsProcessor.h b/src/eve-server/effects/EffectsProcessor.h
+index d6ccdbe6b..d71cb3e87 100644
+--- a/src/eve-server/effects/EffectsProcessor.h
++++ b/src/eve-server/effects/EffectsProcessor.h
+@@ -53,6 +53,17 @@ public:
+ 
+     EvilNumber      CalculateAttributeValue(EvilNumber val1, EvilNumber val2, /*FX::Math*/int8 method);
+ 
++    /* stacking penalties (dogma).  a module's (and rig's) multiplier on an attribute that isn't stackable is penalised:
++     *  PreMul, PreDiv, PostMul, PostDiv and PostPercent each have their own chain per item and attribute (a damage control's
++     *  PreMul resists don't stack with the hardeners' PostPercent ones), bonuses and penalties are ranked apart, strongest
++     *  first, and the n-th one counts 0.5 ^ ((n / 2.22292081)^2).  skills, implants, boosters, the hull, subsystems, charges
++     *  and system effects aren't penalised.
++     *  the modifier joins the item's chain for its attribute and math method, or leaves it on a remove (math is the map key,
++     *  inverted by InventoryItem::RemoveModifier), and the value moves by the change of the chain's penalised product.
++     *  false when the modifier isn't penalised:  it is applied as it is */
++    bool            ApplyPenalized(InventoryItem* pItem, const fxData& data, int8 math, double srcValue, EvilNumber targValue,
++                                   EvilNumber& newValue);
++
+     void DecodeEffects(const uint16 fxID);
+ protected:
+     void EvaluateExpression(const uint16 expID, const char* type);
+diff --git a/src/eve-server/inventory/InventoryItem.cpp b/src/eve-server/inventory/InventoryItem.cpp
+index 0898dfef0..87874349e 100644
+--- a/src/eve-server/inventory/InventoryItem.cpp
++++ b/src/eve-server/inventory/InventoryItem.cpp
+@@ -52,6 +52,7 @@ struct ModifierContainer : public ModifierContainerBase
+ {
+     std::multimap<int8, fxData> modifiers;     // k,v of math, data<math, src, targLoc, targAttr, srcAttr, grpID, typeID>, ordered by key (mathMethod)
+     std::map<int64, EvilNumber> snapshots;    // (attrID << 32 | srcID), value before an irreversible modifier from srcID
++    std::map<uint32, std::map<int64, double>> penalized;   // (attrID << 8 | math) -> stacking-penalised multipliers
+ };
+ 
+ /*
+@@ -1587,6 +1588,7 @@ void InventoryItem::ResetAttributes() {
+     _log(EFFECTS__TRACE, "Resetting attrib map for %s", m_data.name.c_str());
+     pAttributeMap->Load(true);
+     static_cast<ModifierContainer*>(m_modifierContainer)->snapshots.clear();
++    static_cast<ModifierContainer*>(m_modifierContainer)->penalized.clear();
+ }
+ 
+ void InventoryItem::SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value)
+@@ -1607,6 +1609,12 @@ bool InventoryItem::TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& valu
+     return true;
+ }
+ 
++std::map<int64, double>& InventoryItem::GetPenalizedChain(uint16 attrID, int8 math)
++{
++    ModifierContainer* modifierContainer = static_cast<ModifierContainer*>(m_modifierContainer);
++    return modifierContainer->penalized[((uint32)attrID << 8) | (uint8)math];
++}
++
+ std::multimap<int8, fxData>& InventoryItem::GetModifiers()
+ {
+     ModifierContainer* modifierContainer = static_cast<ModifierContainer*>(m_modifierContainer);
+diff --git a/src/eve-server/inventory/InventoryItem.h b/src/eve-server/inventory/InventoryItem.h
+index 299baa167..1b66f97b9 100644
+--- a/src/eve-server/inventory/InventoryItem.h
++++ b/src/eve-server/inventory/InventoryItem.h
+@@ -302,6 +302,9 @@ public:
+      *  srcID's modifier was applied is kept, and put back when that modifier is removed.  ResetAttributes() clears them */
+     void SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value);     // keeps the first value saved
+     bool TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& value);    // false if none.  removes it
++    /* the stacking-penalised modifiers applied to an attribute with one math method (FxProc::ApplyPenalized):
++     *  (source itemID << 16 | source attrID) -> multiplier.  ResetAttributes() clears them */
++    std::map<int64, double>& GetPenalizedChain(uint16 attrID, int8 math);
+ 
+     //  if itemType requires skill(skillID) return true else return false
+     bool HasReqSkill(const uint16 skillID)              { return m_type.HasReqSkill(skillID); }
+diff --git a/src/eve-server/system/cosmicMgrs/ManagerDB.cpp b/src/eve-server/system/cosmicMgrs/ManagerDB.cpp
+index 6d50ee649..b7ec15ddc 100644
+--- a/src/eve-server/system/cosmicMgrs/ManagerDB.cpp
++++ b/src/eve-server/system/cosmicMgrs/ManagerDB.cpp
+@@ -77,7 +77,7 @@ void ManagerDB::GetSkillList(DBQueryResult& res)
+ 
+ void ManagerDB::GetAttributeTypes(DBQueryResult& res)
+ {
+-    if (!sDatabase.RunQuery(res, "SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue FROM dgmAttributeTypes"))
++    if (!sDatabase.RunQuery(res, "SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue, stackable FROM dgmAttributeTypes"))
+         codelog(DATABASE__ERROR, "Error in GetAttributeTypes query: %s", res.error.c_str());
+ 
+     _log(DATABASE__RESULTS, "GetAttributeTypes returned %lu items", res.GetRowCount());
+-- 
+2.34.1
+

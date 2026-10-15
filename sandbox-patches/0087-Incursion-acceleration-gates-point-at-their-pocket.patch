@@ -1,0 +1,194 @@
+From d4af68ab978516ee6d4212181bac4ebce8d99899 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 19:16:07 +0000
+Subject: [PATCH 87/91] Incursion acceleration gates point at their pocket
+
+Incursion gates were plain celestials, so the client drew them facing a
+default direction and never showed them as active. They're now
+acceleration gate entities with dunDirection set to the line towards the
+pocket they lead to, and dunOpenUntil set once the gate is unlocked.
+Unlocking a gate sends the slim item update so it lights up in place.
+---
+ .../system/cosmicMgrs/DungeonMgr.cpp          |  8 +++-
+ src/eve-server/system/cosmicMgrs/DungeonMgr.h |  3 +-
+ .../system/cosmicMgrs/IncursionMgr.h          |  6 ++-
+ .../system/cosmicMgrs/IncursionSites.cpp      | 46 ++++++++++++++++---
+ 4 files changed, 54 insertions(+), 9 deletions(-)
+
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+index 5ea6778af..4a97909e5 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+@@ -2338,6 +2338,10 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
+     auto itr = m_gates.find(gateItemID);
+     const LiveGate* pGate((itr == m_gates.end()) ? nullptr : &itr->second);
+     const Dungeon::GateDef* pDef((pGate == nullptr) ? nullptr : pGate->def);
++    // an incursion site's gate has no dungeon record:  IncursionMgr knows where it goes and whether it's locked
++    GVector incDir(0, 0, 1);
++    bool incOpen(false);
++    bool incursion((pGate == nullptr) and sIncursionMgr.GateSlim(gateItemID, incDir, incOpen));
+ 
+     slim->SetItemString("dunObjectID", ((pGate != nullptr) and (pGate->objectID != 0)) ? new PyInt(pGate->objectID) : PyStatic.NewNone());
+     slim->SetItemString("dunToGateID", PyStatic.NewNone());
+@@ -2370,6 +2374,8 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
+     // None shows the gate's 'off' state
+     if ((pGate != nullptr) and IsGateOpen(*pGate)) {
+         slim->SetItemString("dunOpenUntil", new PyLong(pGate->openUntil != 0 ? pGate->openUntil : Win32TimeNow()));
++    } else if (incursion and incOpen) {
++        slim->SetItemString("dunOpenUntil", new PyLong(Win32TimeNow()));
+     } else {
+         slim->SetItemString("dunOpenUntil", PyStatic.NewNone());
+     }
+@@ -2379,7 +2385,7 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
+         slim->SetItemString("dunMusicUrl", PyStatic.NewNone());
+     }
+     // the gate points at the room it leads to
+-    GVector dir(0, 0, 1);
++    GVector dir(incursion ? incDir : GVector(0, 0, 1));
+     if (pGate != nullptr) {
+         auto iItr = m_instances.find(pGate->instanceID);
+         if (iItr != m_instances.end()) {
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.h b/src/eve-server/system/cosmicMgrs/DungeonMgr.h
+index a410e1d69..38c160a30 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.h
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.h
+@@ -222,6 +222,8 @@ public:
+     void ActivateGate(Client* pClient, uint32 gateItemID);
+     // the dun* entries of an acceleration gate's slim item
+     void MakeGateSlim(uint32 gateItemID, PyDict* slim);
++    // OnSlimItemChange for a gate whose state changed (dungeon and incursion gates)
++    void SendGateSlimUpdate(uint32 gateItemID);
+ 
+     /* escalations */
+     // spawns the escalation site of this chrEscalations row (its system must be this one)
+@@ -366,7 +368,6 @@ private:
+     uint32 CountLiveNPCs(const LiveRoom& room);
+ 
+     // gates
+-    void SendGateSlimUpdate(uint32 gateItemID);
+     void OpenGate(uint32 gateItemID, LiveGate& gate, bool open);
+     void ProcessGateState(uint32 gateItemID, LiveGate& gate);
+     bool IsGateOpen(const LiveGate& gate);
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index 7df62e054..e9cd8449c 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -220,6 +220,9 @@ public:
+     void OreMined(SystemEntity* pRoid);
+     // a warp to dest inside a site's pocket ends at the site's beacon instead (into).  false = no change (DungeonMgr::RedirectWarp)
+     bool RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into);
++    /* an incursion gate's slim item (AccelGateSE, DungeonMgr::MakeGateSlim):  dir is where it sends you (its pocket), open whether
++     *  it's unlocked.  false when gateID isn't one of ours */
++    bool GateSlim(uint32 gateID, GVector& dir, bool& open);
+ 
+     // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
+     uint32 PenaltyRole(uint32 systemID);
+@@ -276,7 +279,8 @@ private:
+     void SpawnWave(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 wave, bool count = true);
+     NPC* SpawnShip(IncLiveSite& site, SystemManager* pSys, uint8 room, uint16 typeID, const GPoint& pos, const std::string& name = "");
+     void SpawnObject(IncLiveSite& site, SystemManager* pSys, const IncSiteObject& obj);
+-    SystemEntity* SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos, bool global = false);
++    SystemEntity* SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos,
++                            bool global = false, const IncGate* gate = nullptr);
+     void WaveCleared(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 wave);
+     void RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 room, uint32 now);
+     void ScriptTick(IncLiveSite& site, SystemManager* pSys, uint32 now);
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionSites.cpp b/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
+index 970335038..4a540bd24 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionSites.cpp
+@@ -55,6 +55,7 @@
+ #include "system/SystemManager.h"
+ #include "system/TargetManager.h"
+ #include "system/cosmicMgrs/BeltMgr.h"
++#include "system/cosmicMgrs/DungeonMgr.h"
+ #include "system/cosmicMgrs/SpawnMgr.h"
+ #include "system/cosmicMgrs/IncursionMgr.h"
+ 
+@@ -290,7 +291,8 @@ SystemEntity* IncursionMgr::FindItem(IncLiveSite& site, SystemManager* pSys, uin
+     return nullptr;
+ }
+ 
+-SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos, bool global/*false*/)
++SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos,
++                                      bool global/*false*/, const IncGate* gate/*nullptr*/)
+ {
+     const ItemType* pType = sItemFactory.GetType(typeID);
+     if (pType == nullptr) {
+@@ -329,7 +331,15 @@ SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, ui
+         // beacons are global when spawned.  only the overview beacon stays that way
+         if (!global and iRef->HasAttribute(AttrIsGlobal))
+             iRef->SetAttribute(AttrIsGlobal, EvilZero, false);
+-        pSE = new CelestialSE(iRef, pSys->GetServiceMgr(), pSys);
++        if (gate != nullptr) {
++            /* an acceleration gate, with the dungeon data the client wants (GateSlim):  it points at its pocket and shows as active
++             *  once unlocked.  its record goes in first, as the slim item is made when it enters its bubble */
++            site.gates[iRef->itemID()] = *gate;
++            m_index[iRef->itemID()] = site.siteID;
++            pSE = new AccelGateSE(iRef, pSys->GetServiceMgr(), pSys);
++        } else {
++            pSE = new CelestialSE(iRef, pSys->GetServiceMgr(), pSys);
++        }
+         pSys->AddEntity(pSE, false);
+     }
+ 
+@@ -356,14 +366,11 @@ void IncursionMgr::SpawnObject(IncLiveSite& site, SystemManager* pSys, const Inc
+         } break;
+         case Incursion::Role::Gate:
+         case Incursion::Role::HiddenGate: {
+-            SystemEntity* pSE = SpawnItem(site, pSys, obj.room, obj.role, obj.typeID, obj.name, pos);
+-            if (pSE == nullptr)
+-                break;
+             IncGate gate = IncGate();
+                 gate.room = obj.room;
+                 gate.destRoom = (uint8)obj.param;
+                 gate.lockRoom = (obj.role == Incursion::Role::Gate ? obj.wave : 0);
+-            site.gates[pSE->GetID()] = gate;
++            SpawnItem(site, pSys, obj.room, obj.role, obj.typeID, obj.name, pos, false, &gate);
+         } break;
+         case Incursion::Role::Asteroid: {
+             // a temp asteroid on the system's belt manager, like anomaly belts
+@@ -658,6 +665,7 @@ void IncursionMgr::RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 roo
+     for (auto& cur : site.gates)
+         if (cur.second.lockRoom == room) {
+             cur.second.lockRoom = 0;
++            pSys->GetDungMgr()->SendGateSlimUpdate(cur.first);     // shows it active
+             TellRoom(site, pSys, cur.second.room, "The way is clear: the acceleration gate to the Fleet Staging Area is now active.");
+         }
+     for (auto& obj : type.objects)
+@@ -1292,6 +1300,32 @@ void IncursionMgr::OreMined(SystemEntity* pRoid)
+     TellRoom(site, pSys, room, "Your mining has drawn the attention of the colony's guards.");
+ }
+ 
++bool IncursionMgr::GateSlim(uint32 gateID, GVector& dir, bool& open)
++{
++    std::map<uint32, uint32>::iterator iItr = m_index.find(gateID);
++    if (iItr == m_index.end())
++        return false;
++    std::map<uint32, IncLiveSite>::iterator sItr = m_sites.find(iItr->second);
++    if (sItr == m_sites.end())
++        return false;
++    IncLiveSite& site = sItr->second;
++    std::map<uint32, IncGate>::iterator gItr = site.gates.find(gateID);
++    if (gItr == site.gates.end())
++        return false;
++    open = (gItr->second.lockRoom == 0);
++    // the pocket is a million km out, so the line between the two pockets' centres is the gate's own to within a hair
++    dir = GVector(0, 0, 1);
++    std::map<uint8, IncLiveRoom>::iterator from = site.rooms.find(gItr->second.room), to = site.rooms.find(gItr->second.destRoom);
++    if ((from != site.rooms.end()) and (to != site.rooms.end())) {
++        GVector d(from->second.center, to->second.center);
++        if (d.length() > 0) {
++            d.normalize();
++            dir = d;
++        }
++    }
++    return true;
++}
++
+ /* pockets are deadspace:  bookmarks and fleet warps into one land at the site's beacon, and the gates are the way in */
+ bool IncursionMgr::RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into)
+ {
+-- 
+2.34.1
+

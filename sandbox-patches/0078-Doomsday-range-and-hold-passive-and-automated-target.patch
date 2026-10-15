@@ -1,0 +1,503 @@
+From ecc3e4ed7e7b28f33f0e28c9533916c12b37302e Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:27:02 +0000
+Subject: [PATCH 78/91] Doomsday range and hold, passive and automated
+ targeting
+
+- Doomsdays have no range limit; the target only has to stay locked.
+- A titan that fires its doomsday is held in place for effectDeactivationDelay
+  (30s). The destiny manager lets it go when the time runs out.
+- Passive targeters start a silent lock on activation (TargetSilently). The
+  target isn't told, doesn't see it in its targeter list, and npc AI doesn't
+  react to it.
+- Automated targeting systems are fitted as active modules again. At the end of
+  each cycle they lock the nearest hostiles within targetHostileRange (rats, and
+  pilots you can shoot without a crime), up to your free target slots.
+---
+ src/eve-server/ship/modules/ActiveModule.cpp |  72 ++++++++++++-
+ src/eve-server/ship/modules/ActiveModule.h   |   3 +
+ src/eve-server/ship/modules/ModuleFactory.h  |   2 +-
+ src/eve-server/ship/modules/SuperWeapon.cpp  |  10 +-
+ src/eve-server/system/CrimeWatch.cpp         |   8 ++
+ src/eve-server/system/CrimeWatch.h           |   2 +
+ src/eve-server/system/DestinyManager.cpp     |  15 ++-
+ src/eve-server/system/DestinyManager.h       |   5 +-
+ src/eve-server/system/TargetManager.cpp      | 101 +++++++++++++++----
+ src/eve-server/system/TargetManager.h        |  15 ++-
+ 10 files changed, 201 insertions(+), 32 deletions(-)
+
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 5653ce1c3..3e2b7b651 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -19,6 +19,7 @@
+ #include "inventory/AttributeEnum.h"
+ #include "npc/NPC.h"
+ #include "npc/NPCAI.h"
++#include "npc/ambient/AmbientNPC.h"
+ #include "npc/Sentry.h"
+ #include "npc/SentryAI.h"
+ #include "ship/Missile.h"
+@@ -839,10 +840,14 @@ uint32 ActiveModule::DoCycle() {
+         } break;
+         case EVEDB::invGroups::Artifacts_and_Prototypes: {
+         } break;
++        case EVEDB::invGroups::Passive_Targeting_System: {
++            // TargetSilently:  the lock starts with the cycle.  a target we already have is left alone
++            if ((m_targetSE != nullptr) and (m_targMgr != nullptr))
++                m_targMgr->StartPassiveTargeting(m_targetSE, m_shipRef);
++        } break;
+         // these passive modules will need specific code
+         case EVEDB::invGroups::Missile_Launcher_Defender:
+-        case EVEDB::invGroups::Countermeasure_Launcher:
+-        case EVEDB::invGroups::Passive_Targeting_System: {
++        case EVEDB::invGroups::Countermeasure_Launcher: {
+         } break;
+         // these active modules will need specific code
+         case EVEDB::invGroups::Cynosural_Field_Generator:
+@@ -1047,6 +1052,61 @@ void ActiveModule::CycleComplete()
+         case EVEDB::invGroups::Cargo_Scanner: {
+             CargoScanResult();
+         } break;
++        case EVEDB::invGroups::Automated_Targeting_System: {
++            TargetHostiles();
++        } break;
++    }
++}
++
++void ActiveModule::TargetHostiles()
++{
++    /* "Targets any hostile ship within range on activation."  hostile:  rats (any npc that isn't police, a navy, CONCORD or a
++     *  protected ambient npc) and pilots we can shoot without a crime (war, outlaw, criminal or suspect to us, kill right,
++     *  enemy militia).  nearest first, up to our free target slots and within our own targeting range */
++    if ((m_shipSE == nullptr) or (m_targMgr == nullptr) or !m_shipRef->HasPilot() or (m_shipSE->SysBubble() == nullptr))
++        return;
++    if (m_targMgr->IsJammed())
++        return;
++    uint8 maxTargets(m_targMgr->GetMaxLockedTargets(m_shipRef));
++    if (m_targMgr->TargetCount() >= maxTargets)
++        return;
++    double range(GetAttribute(AttrTargetHostileRange).get_double());
++    double maxRange(m_targMgr->GetMaxTargetRange(m_shipRef));
++    if (range > maxRange)
++        range = maxRange;
++
++    Client* pClient(m_shipRef->GetPilot());
++    std::vector<std::pair<double, SystemEntity*>> found;
++    m_shipSE->SysBubble()->ForEachDynamic([&](SystemEntity* pSE) {
++        if ((pSE == m_shipSE) or (pSE->TargetMgr() == nullptr) or pSE->IsDead())
++            return;
++        if (m_targMgr->GetTarget(pSE->GetID(), false) != nullptr)
++            return;
++        if (pSE->IsNPCSE()) {
++            NPC* pNPC(pSE->GetNPCSE());
++            if (pNPC->IsLawEnforcer() or (pSE->GetCorporationID() == corpCONCORD))
++                return;
++            if ((pNPC->GetAmbientNPC() != nullptr) and pNPC->GetAmbientNPC()->IsProtected())
++                return;
++        } else if (pSE->IsShipSE()) {
++            if (!pSE->HasPilot() or (pSE->GetPilot() == pClient) or pSE->GetPilot()->InPod())
++                return;
++            if (!sCrimeWatch.IsFreeTarget(pClient, pSE))
++                return;
++        } else {
++            return;
++        }
++        double dist(m_shipSE->GetPosition().distance(pSE->GetPosition()) - pSE->GetRadius());
++        if (dist <= range)
++            found.push_back(std::make_pair(dist, pSE));
++    });
++    std::sort(found.begin(), found.end(), [](const std::pair<double, SystemEntity*>& a, const std::pair<double, SystemEntity*>& b) {
++        return a.first < b.first;
++    });
++    for (auto& cur : found) {
++        if (m_targMgr->TargetCount() >= maxTargets)
++            break;
++        m_targMgr->StartTargeting(cur.second, m_shipRef);
+     }
+ }
+ 
+@@ -1537,6 +1597,14 @@ bool ActiveModule::CanActivate() {
+             case Cargo_Scanner: {
+                 range = GetAttribute(AttrCargoScanRange).get_float();
+             } break;
++            case Super_Weapon: {
++                // no range attribute:  the target only has to stay locked (checked in SuperWeapon::CanActivate)
++                return true;
++            }
++            case Passive_Targeting_System: {
++                // the ship's own targeting range
++                range = m_shipRef->GetPilot()->GetShipSE()->TargetMgr()->GetMaxTargetRange(m_shipRef);
++            } break;
+             case Ship_Scanner: {
+                 // results thin out over the falloff (ShipScanResult)
+                 range = GetAttribute(AttrShipScanRange).get_float() + GetAttribute(AttrShipScanFalloff).get_float();
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index cc284af6e..1ddef7d51 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -156,6 +156,9 @@ private:
+     // the target resists this scanner (shipScanResistance / cargoScanResistance, % chance)
+     bool                ScanResisted(uint16 resistAttr);
+ 
++    // automated targeting system (TargetHostiles, at the end of each cycle):  locks hostile ships within targetHostileRange
++    void                TargetHostiles();
++
+     /* warp disruption field generator, sphere mode */
+     void                StartDisruptField();
+     void                StopDisruptField();
+diff --git a/src/eve-server/ship/modules/ModuleFactory.h b/src/eve-server/ship/modules/ModuleFactory.h
+index 1a8cb98a1..3f2352d93 100644
+--- a/src/eve-server/ship/modules/ModuleFactory.h
++++ b/src/eve-server/ship/modules/ModuleFactory.h
+@@ -139,7 +139,7 @@ static GenericModule* ModuleFactory(ModuleItemRef mRef, ShipItemRef sRef)
+             case EVEDB::invGroups::Stasis_Web:                              return (new ActiveModule(mRef, sRef));    // Active - external
+             case EVEDB::invGroups::ECM_Burst:                               return (new EcmModule(mRef, sRef));       // Active - external
+             case EVEDB::invGroups::Passive_Targeting_System:                return (new ActiveModule(mRef, sRef));    // Active - external
+-            //case EVEDB::invGroups::Automated_Targeting_System:              return (new ActiveModule(mRef, sRef));    // Active - external
++            case EVEDB::invGroups::Automated_Targeting_System:               return (new ActiveModule(mRef, sRef));    // Active - external
+             case EVEDB::invGroups::ECM:                                     return (new EcmModule(mRef, sRef));       // Active - external
+             case EVEDB::invGroups::ECCM:                                    return (new ActiveModule(mRef, sRef));    // Active  -  SELF
+             case EVEDB::invGroups::Sensor_Backup_Array:                     return (new PassiveModule(mRef, sRef));
+diff --git a/src/eve-server/ship/modules/SuperWeapon.cpp b/src/eve-server/ship/modules/SuperWeapon.cpp
+index c2eec6903..d1b33016a 100644
+--- a/src/eve-server/ship/modules/SuperWeapon.cpp
++++ b/src/eve-server/ship/modules/SuperWeapon.cpp
+@@ -30,6 +30,7 @@
+ #include "ship/Ship.h"
+ #include "ship/modules/SuperWeapon.h"
+ #include "system/Damage.h"
++#include "system/DestinyManager.h"
+ #include "system/TargetManager.h"
+ 
+ SuperWeapon::SuperWeapon(ModuleItemRef mRef, ShipItemRef sRef)
+@@ -81,11 +82,16 @@ void SuperWeapon::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/*
+     if ((m_ModuleState != Module::State::Activated) or !m_shipRef->HasPilot() or (m_targetSE == nullptr))
+         return;
+ 
+-    // no warp for effectDeactivationDelay (ms), no jump drive, portal or cloak for jumpDelayDuration (s)
++    /* no warp for effectDeactivationDelay (ms), no jump drive, portal or cloak for jumpDelayDuration (s).
++     *  speedFactor -100: the titan is held in place for effectDeactivationDelay too.  the effect has no expression, so the
++     *  hold is done here and the destiny manager lets go when it runs out */
+     ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
+     int64 now(GetFileTimeNow());
+-    pShip->SetWarpLockout(now + (GetAttribute(AttreffectDeactivationDelay).get_int() * (EvE::Time::Second / 1000)));
++    int64 holdUntil(now + (GetAttribute(AttreffectDeactivationDelay).get_int() * (EvE::Time::Second / 1000)));
++    pShip->SetWarpLockout(holdUntil);
+     pShip->SetJumpLockout(now + (GetAttribute(AttrJumpDelayDuration).get_int() * EvE::Time::Second));
++    if ((holdUntil > now) and (GetAttribute(AttrSpeedFactor) <= -100) and (pShip->DestinyMgr() != nullptr))
++        pShip->DestinyMgr()->HoldUntil(holdUntil);
+ 
+     // the damage lands at once (no build-up delay).  the cycle that follows is the rate of fire
+     ApplySuperWeaponDamage();
+diff --git a/src/eve-server/system/CrimeWatch.cpp b/src/eve-server/system/CrimeWatch.cpp
+index 9adf45fd6..5077d4e20 100644
+--- a/src/eve-server/system/CrimeWatch.cpp
++++ b/src/eve-server/system/CrimeWatch.cpp
+@@ -379,6 +379,14 @@ bool CrimeWatch::CanAttackFreely(Client* pAggressor, const Owner& target)
+     return false;
+ }
+ 
++bool CrimeWatch::IsFreeTarget(Client* pAggressor, SystemEntity* pTarget)
++{
++    Owner target;
++    if ((pAggressor == nullptr) or !GetOwner(pTarget, target) or (target.charID == 0))
++        return false;
++    return CanAttackFreely(pAggressor, target);
++}
++
+ /* ------------------------------------------------------------------------------------------------------------------
+  *  aggressive acts
+  * ------------------------------------------------------------------------------------------------------------------ */
+diff --git a/src/eve-server/system/CrimeWatch.h b/src/eve-server/system/CrimeWatch.h
+index 46239ba2e..b2dba58f5 100644
+--- a/src/eve-server/system/CrimeWatch.h
++++ b/src/eve-server/system/CrimeWatch.h
+@@ -84,6 +84,8 @@ public:
+     bool IsFlaggedTo(uint32 aggressorID, uint32 victimID);       // aggressor has a live flag towards victim (char or corp)
+     bool HasLiveFlags(uint32 charID);                            // live aggressor towards anyone, or a live criminal
+     bool IsOutlaw(float secStatus)                               { return (roundf(secStatus * 10.0f) / 10.0f) <= -5.0f; }
++    // a pilot's ship (or one they left in space) the aggressor can shoot without a crime (automated targeting)
++    bool IsFreeTarget(Client* pAggressor, SystemEntity* pTarget);
+ 
+     /* Crimewatch 1 sentries (npc ai plan 4.10, phase 4) */
+     // charID attacked a gate/station gun (objectID = the gate or station it guards), or a gun picked them:  (re)starts the timer
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index 081beafef..649b0d1ab 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -107,7 +107,8 @@ namespace {
+ DestinyManager::DestinyManager(SystemEntity *self)
+ : mySE(self),
+ m_targBubbleID(0),
+-m_frozen(false)
++m_frozen(false),
++m_holdUntil(0)
+ {
+     m_hasSentShipUpdates = false;
+ 
+@@ -166,6 +167,18 @@ DestinyManager::~DestinyManager() {
+ void DestinyManager::Process() {
+     if (mySE->IsFrozen())
+         Halt();
++    if ((m_holdUntil > 0) and (GetFileTimeNow() >= m_holdUntil)) {
++        m_holdUntil = 0;
++        m_frozen = false;
++        SpeedBoost();
++    }
++}
++
++void DestinyManager::HoldUntil(int64 until)
++{
++    Halt();
++    m_frozen = true;
++    m_holdUntil = until;
+ }
+ 
+ /* ======================================================================================
+diff --git a/src/eve-server/system/DestinyManager.h b/src/eve-server/system/DestinyManager.h
+index 1e0e44530..3ac294120 100644
+--- a/src/eve-server/system/DestinyManager.h
++++ b/src/eve-server/system/DestinyManager.h
+@@ -229,7 +229,9 @@ public:
+     bool HasMissileHit() const                          { return m_missileHit; }
+ 
+     bool IsFrozen()                                     { return m_frozen; }
+-    void SetFrozen(bool set=false)                      { m_frozen = set; }
++    void SetFrozen(bool set=false)                      { m_frozen = set; m_holdUntil = 0; }
++    // stops the ship and keeps it frozen until 'until' (filetime).  Process() lets it go
++    void HoldUntil(int64 until);
+ 
+     // Prevents actions if the player is performing the login warp
+     bool AbortIfLoginWarping(bool showMsg);
+@@ -296,6 +298,7 @@ protected:
+ 
+ private:
+     bool m_frozen;                      // hack to keep ship from moving when using modules that prevent movement
++    int64 m_holdUntil;                  // filetime a timed hold ends (HoldUntil), 0 for none
+ 
+     // client-semantics state changes.  these do not send anything
+     void ApplyStop();
+diff --git a/src/eve-server/system/TargetManager.cpp b/src/eve-server/system/TargetManager.cpp
+index e0057dae4..2833a641a 100644
+--- a/src/eve-server/system/TargetManager.cpp
++++ b/src/eve-server/system/TargetManager.cpp
+@@ -79,7 +79,7 @@ bool TargetManager::Process() {
+             case TargMgr::State::Idle:
+             case TargMgr::State::Locked:{          //do nothing
+             } break;
+-            case TargMgr::State::Passive:   // this will be used with stealth modules (which, ofc, are not written yet)
++            case TargMgr::State::Passive:   // passive targeter (the target wasn't told)
+             case TargMgr::State::Locking: {
+                 if (itr->second->timer.Check(false)) {
+                     itr->second->timer.Disable();
+@@ -129,19 +129,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+         mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
+         return false;
+     }
+-    // get lower of ship and char target skills, with minimum of 1
+-    uint8 maxLockedTargets = 1;
+-    uint8 maxCharTargets = mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Targeting);
+-    maxCharTargets += mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Multitasking);
+-    if (maxCharTargets > 0)
+-        if (maxLockedTargets < maxCharTargets)
+-            maxLockedTargets = maxCharTargets;
+-
+-    uint8 maxShipTargets = (uint8)sRef->GetAttribute(AttrMaxLockedTargets).get_uint32();
+-    if (maxShipTargets > 0)
+-        if (maxLockedTargets > maxShipTargets)
+-            maxLockedTargets = maxShipTargets;
+-
++    uint8 maxLockedTargets(GetMaxLockedTargets(sRef));
+     if (m_targets.size() >= maxLockedTargets) {
+         mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only handle %u targets at a time.", maxLockedTargets);
+         _log(TARGET__DEBUG, " %s(%u): Told to target %s(%u), but we already have max targets of %u.  Ignoring request.", \
+@@ -168,10 +156,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+     }
+ 
+     // Check against max target range
+-    double maxTargetRange = sRef->GetAttribute(AttrMaxTargetRange).get_double();
+-    // sensor dampeners on us
+-    if (mySE->GetEwar() != nullptr)
+-        maxTargetRange *= mySE->GetEwar()->GetTargetRangeMult();
++    double maxTargetRange(GetMaxTargetRange(sRef));
+     GVector rangeToTarget( mySE->GetPosition(), tSE->GetPosition() );
+     // adjust for target radius, in case of ice or other large objects..
+     double targetDistance = rangeToTarget.length();
+@@ -205,6 +190,63 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+     return true;
+ }
+ 
++uint8 TargetManager::GetMaxLockedTargets(ShipItemRef sRef) const
++{
++    // get lower of ship and char target skills, with minimum of 1
++    uint8 maxLockedTargets = 1;
++    if (mySE->HasPilot()) {
++        uint8 maxCharTargets = mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Targeting);
++        maxCharTargets += mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Multitasking);
++        if (maxCharTargets > 0)
++            if (maxLockedTargets < maxCharTargets)
++                maxLockedTargets = maxCharTargets;
++    }
++
++    uint8 maxShipTargets = (uint8)sRef->GetAttribute(AttrMaxLockedTargets).get_uint32();
++    if (maxShipTargets > 0)
++        if (maxLockedTargets > maxShipTargets)
++            maxLockedTargets = maxShipTargets;
++    return maxLockedTargets;
++}
++
++double TargetManager::GetMaxTargetRange(ShipItemRef sRef) const
++{
++    double maxTargetRange = sRef->GetAttribute(AttrMaxTargetRange).get_double();
++    // sensor dampeners on us
++    if (mySE->GetEwar() != nullptr)
++        maxTargetRange *= mySE->GetEwar()->GetTargetRangeMult();
++    return maxTargetRange;
++}
++
++bool TargetManager::StartPassiveTargeting(SystemEntity* tSE, ShipItemRef sRef)
++{
++    if (!mySE->HasPilot() or (tSE == nullptr) or (tSE->TargetMgr() == nullptr))
++        return false;
++    if (m_targets.find(tSE) != m_targets.end())
++        return false;
++    if (IsJammed())
++        return false;
++    uint8 maxLockedTargets(GetMaxLockedTargets(sRef));
++    if (m_targets.size() >= maxLockedTargets) {
++        mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only handle %u targets at a time.", maxLockedTargets);
++        return false;
++    }
++
++    uint32 lockTime((uint32)(TimeToLock(sRef, tSE) * 1000));
++
++    TargetEntry *te = new TargetEntry();
++        te->state = TargMgr::State::Passive;
++        te->timer.Start(lockTime);
++    m_targets[tSE] = te;
++    tSE->TargetMgr()->TargetedAdd(mySE, true);
++
++    _log(TARGET__INFO, "Pilot %s in %s(%u) started passive targeting %s(%u) with %ums lock time.", \
++            mySE->GetPilot()->GetName(), mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID(), lockTime);
++
++    sEntityList.AddTargMgr(mySE, this);
++    return true;
++}
++
+ bool TargetManager::StartTargeting(SystemEntity *tSE, float lockTime, uint8 maxLockedTargets, double maxTargetLockRange, bool &chase)
+ {       // NOTE  this is for npcs
+     // jammed entities can't lock anything (this isn't a range problem, so no chase)
+@@ -398,9 +440,11 @@ void TargetManager::TargetedByLost(SystemEntity* pSE) {
+     _log(TARGET__TRACE, "%s(%u) is no longer locked by %s(%u)", \
+             mySE->GetName(), mySE->GetID(), pSE->GetName(), pSE->GetID());
+ 
++    bool passive(itr->second->passive);
+     SafeDelete(itr->second);
+     m_targetedBy.erase(itr);
+-    TargetedLost(pSE);
++    if (!passive)
++        TargetedLost(pSE);
+ }
+ 
+ /*
+@@ -434,7 +478,7 @@ void TargetManager::TargetAdded(SystemEntity* tSE) {
+     mySE->GetPilot()->QueueDestinyUpdate(&up);
+ }
+ 
+-void TargetManager::TargetedAdd(SystemEntity *tSE) {
++void TargetManager::TargetedAdd(SystemEntity *tSE, bool passive/*false*/) {
+     //first make sure they are not already in the list
+     if (m_targetedBy.find(tSE) != m_targetedBy.end()) {
+         _log(TARGET__INFO, "Cannot add %s(%u) to %s(%u)'s locked list: they're already in there.", \
+@@ -446,8 +490,11 @@ void TargetManager::TargetedAdd(SystemEntity *tSE) {
+                 mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
+         TargetedByEntry *te = new TargetedByEntry();
+         te->state = TargMgr::State::Locking;
++        te->passive = passive;
+         m_targetedBy[tSE] = te;
+     }
++    if (passive)
++        return;
+     if (mySE->IsNPCSE())
+         mySE->GetNPCSE()->TargetedAdd(tSE);
+     // sentries answer a lock on their next think (npc ai plan phase 4:  pirate guns lock back, law guns only eligible targets)
+@@ -540,7 +587,16 @@ void TargetManager::GetTargetModules(std::vector<ActiveModule*>& into) const
+ 
+ bool TargetManager::IsTargetedBy(SystemEntity* pSE)
+ {
+-    return (m_targetedBy.find(pSE) != m_targetedBy.end());
++    std::map<SystemEntity*, TargetedByEntry*>::const_iterator itr(m_targetedBy.find(pSE));
++    return ((itr != m_targetedBy.end()) and !itr->second->passive);
++}
++
++bool TargetManager::IsTargeted() const
++{
++    for (auto& cur : m_targetedBy)
++        if (!cur.second->passive)
++            return true;
++    return false;
+ }
+ 
+ SystemEntity* TargetManager::GetFirstTarget(bool need_locked/*false*/) {
+@@ -584,7 +640,8 @@ PyList* TargetManager::GetTargeters() const {
+ 
+     std::map<SystemEntity*, TargetedByEntry*>::const_iterator itr = m_targetedBy.begin();
+     for(; itr != m_targetedBy.end(); ++itr)
+-        result->AddItemInt( itr->first->GetID() );
++        if (!itr->second->passive)
++            result->AddItemInt( itr->first->GetID() );
+ 
+     return result;
+ }
+diff --git a/src/eve-server/system/TargetManager.h b/src/eve-server/system/TargetManager.h
+index 1e979902c..adee1a8a2 100644
+--- a/src/eve-server/system/TargetManager.h
++++ b/src/eve-server/system/TargetManager.h
+@@ -92,7 +92,8 @@ public:
+     void                TargetLost(SystemEntity *tSE);
+     void                ClearTarget(SystemEntity *tSE);
+     void                TargetAdded(SystemEntity *tSE);
+-    void                TargetedAdd(SystemEntity *tSE);
++    // passive: a passive targeter's lock.  the target isn't told and its npc ai doesn't see it
++    void                TargetedAdd(SystemEntity *tSE, bool passive=false);
+     void                TargetedLost(SystemEntity *tSE);
+     void                ClearTargets(bool notify=true);
+     void                ClearAllTargets(bool notify=true);
+@@ -134,11 +135,18 @@ public:
+ 
+     // called by player ships
+     bool                StartTargeting(SystemEntity* tSE, ShipItemRef sRef);
++    /* passive targeter (TargetSilently, on activation):  a lock the target isn't told about, with the ship's lock time.
++     *  range is checked by the module */
++    bool                StartPassiveTargeting(SystemEntity* tSE, ShipItemRef sRef);
++    // the lower of the pilot's targeting skills and the ship's maxLockedTargets, at least 1
++    uint8               GetMaxLockedTargets(ShipItemRef sRef) const;
++    // the ship's targeting range with sensor dampeners on us
++    double              GetMaxTargetRange(ShipItemRef sRef) const;
+ 
+     /* NPC AI Methods */
+     bool                IsTargetedBy(SystemEntity *pSE);
+     // somebody has (or is getting) a lock on us
+-    bool                IsTargeted() const              { return !m_targetedBy.empty(); }
++    bool                IsTargeted() const;
+     SystemEntity*       GetFirstTarget(bool need_locked=false);
+     // everything we target (locking or locked), or only completed locks
+     void                GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked=false) const;
+@@ -209,11 +217,12 @@ protected:
+     class TargetedByEntry {
+     public:
+         TargetedByEntry()
+-        : state(TargMgr::State::Idle) {}
++        : state(TargMgr::State::Idle), passive(false) {}
+ 
+         void Dump(SystemEntity* pSE) const;
+ 
+         uint8 state;
++        bool passive;   // passive targeter:  nobody is told
+     };
+ 
+ private:
+-- 
+2.34.1
+

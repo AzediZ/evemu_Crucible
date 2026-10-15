@@ -4,6 +4,70 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 ---
 
+## 2026-10-15: Industry, wormholes, incursions, combat fixes and outposts (branch `revised`)
+
+Patches `0068` to `0091` · Status: **compiles and boot-tested** (15 Oct 2026): the server was started natively against MariaDB 11.8 with the new migrations and stopped cleanly. Wormholes, incursion penalties and outpost sieges were also run through on the server with GM commands. Not yet tested in game.
+
+**Industry**
+- `0068` **Reprocessing** a T2 item no longer gives back its T1 item as well as the T1 item's minerals. Scrapmetal Processing is 5% a level (was 4%).
+- `0069` **Bills of materials** are Crucible's: base materials (the product's minerals less the recycled T1 item's) take the blueprint's waste and your Production Efficiency waste, everything else is an extra material with no waste. Advanced and rapid assembly arrays apply their multiplier to everything. Show info and insurance values use the same numbers.
+- ME and PE research take the blueprint's base time a level, with no cap at 10. Copy time scales with the copy's runs and no longer wraps at 65535 seconds. Metallurgy, Research, Science, Industry and the Beancounter implants all count (Metallurgy used to make ME research slower).
+- Jobs in another station need Supply Chain Management or Scientific Networking: same system at 1, 5 jumps at 2, 10 at 3, 20 at 4, the region at 5. Any reverse engineering line takes relics. The install fee is refunded if the job can't be saved.
+
+**Incursions**
+- `0070` The incursion manager, the 11 site layouts, `/incursion` and the reward service are ported from the old tree. Sansha logistics rep each other through the normal NPC code, a hacked Logistics Control Array turns the mothership's reps onto the pilots, and warping to a site room lands at its beacon. Spawning a Nation Ore Refinery, Shield Transfer Control Tower or Sansha Control Relay crashed the server; it doesn't now.
+- `0084` **System penalties** across the constellation: shield and armour resists and turret, missile, drone and smartbomb damage drop 10% in vanguard, 25% in assault and 50% in headquarters systems at full influence, less as it drops. The staging system has none. Cynos are jammed (covert cynos still work) and CONCORD bounties are halved. New option `<incursion><Penalties>`.
+- `0087` **Acceleration gates** face the pocket they lead to and light up when unlocked.
+- `0088` **Staging sites**: the staging system gets up to 5 scout sites (Distress Beacon, Forward Reconnaissance Outpost, Propaganda Cluster, Nation Industrial Proxy). Each pays 50,000 ISK and 50 LP and leaves influence alone. New option `<incursion><StagingSites>`.
+- **Mothership loot**: 1-3 True Sansha modules and a blueprint copy of a Shadow, Succubus, Phantasm or Nightmare. The low-sec Uroborus sometimes drops the Revenant. CCP never published the chances, so they're picks.
+- Gate camps and incursion belt rats are still missing; I couldn't find anything listing their ships.
+
+**Wormholes**
+- `0071` **Statics**: every w-space system always has its Crucible statics (C2 has two, C4 one). A static that collapses comes back straight away. Wandering wormholes spawn as signatures and come back 30-120 minutes after one collapses.
+- Both ends share one **mass and lifetime**. Each jump uses the ship's mass, prop module included. The K162 and destination are picked when the first ship warps to it. You can jump twice in 4 minutes, from within 5 km, and land within 5 km of the far end. The show info has the right size, age and far-side class.
+- Wormholes only spawn with `<cosmic><WormHoleEnabled>` on. `/wormhole` lists, spawns and collapses them.
+- `0072` **System effects**: each phenomenon system gets its effect beacon (Black Hole, Magnetar, Pulsar, Red Giant, Wolf-Rayet, Cataclysmic Variable). The effects go on your ship, charges, drones and fighters when you log in, board, jump or undock there and come off when you leave.
+- The effects processor now lets ship modifiers reach fitted modules and charges, so **Thermodynamics, the T3 subsystem bonuses and the heat bonuses work** for the first time. A multiplier on an attribute an item doesn't have starts from the attribute's default instead of 1.
+- `0073` **Sleeper sites** in w-space for the system's class: 3-5 combat anomalies, 0-2 radar, 0-2 magnetometric, 1-2 gas and 0-1 ore. Waves are from the 2010-2012 eve-survival pages, and the next wave comes when the trigger ships die. C4-C6 radar and mag sites get the Sleepless battleship and Talocan wreck escalation. Databanks need a Codebreaker (datacores, decryptors), artifacts an Analyzer (ancient salvage, relics). Pirate sites no longer spawn in w-space, nor Sleeper sites in known space.
+- `0085` **Capital escalation**: the first capital the Sleepers see brings 6 Sleepless battleships, the second 8. C5 sends Guardians, C6 Wardens (Guardians in its mag sites). `<npc><SleeperCapitalReinforcements>` now defaults to 6; new `SleeperCapitalSecondWave` (8) and `SleeperCapitalWaves` (2).
+- Site counts per system, which classes get which gas and ore sites, ore amounts and the scenery are picks. The Ruins of Enclave Cohort 27 is missing; there's no data on it anywhere.
+
+**Sites and missions**
+- `0074` Signature slots no longer go to site types the system has no dungeon for. A system keeps at most one wandering wormhole of its own (two in w-space).
+- Systems unload `gridUnloadTime` seconds after the last pilot leaves, as the config says (it was about a minute after the 5 minute check). A system with a mission pocket stays loaded until the mission is over.
+- NPCs and structures in a dungeon room keep their object IDs, so their triggers fire: Caldari Beacons, Hidden Enemy Base, Sansha Acquisition and Terrorism! can be completed.
+- `0074`, `0086` 63 more missions get their client title. Seven still don't match any: Angel Strike, Intaki and Mordus Legion, Khanid Nobleman, Labor of Love, Smash The Shipyard, The Kidnapping and Troop Build Up.
+- `0075` **Every tinyint flag in the database read as true.** Among other things, every mission counted as a storyline so normal agents had no encounter or mining missions, every dungeon trigger repeated, every station type counted as conquerable and every chat channel as a mailing list.
+
+**Combat and fitting**
+- `0076` **Stacking penalties** for modules and rigs on attributes that stack (resists, speed, damage, tracking, range, scan resolution, signature): 100%, 87%, 57%, 28%, 11%. Damage Control and hardeners are in separate chains, as in dogma. Skills, implants, boosters, hulls, subsystems, charges and system effects aren't penalised.
+- `0077` Tracking disruptors reduce falloff as well as optimal.
+- `0078` Doomsdays have no range limit and hold the titan in place for 30 seconds. Passive targeters lock silently. Automated targeting systems lock the nearest hostiles at the end of each cycle.
+- `0079` **Nanite paste** repairs work, at 10 HP a minute (+20% a level of Nanite Interfacing), using paste as it goes. Modules that use fuel (cynos, siege, triage, jump portals, doomsdays) take it from every stack in the hold.
+- `0080` Remote reps update the target's HP bars for everyone locking it (it sent the repairer's). Armour and hull reps land at the end of the cycle, as in Crucible.
+- `0081` **Defender missiles** fire at the nearest missile coming at your ship. A missile shot down in flight no longer still hits.
+- `0089` **Killmails** list every pilot and NPC that damaged you in the last 15 minutes, with ship, weapon, damage and security status. Drones count for their pilot.
+- `0090` **Bombs** launch without a target, fly along your velocity and go off at the end of their flight, hitting everything within range, you included. Lockbreaker bombs break locks and Void bombs drain 1800 GJ.
+
+**Other**
+- `0082` **Repackaging** a ship destroys its rigs and takes the modules off properly. A container has to be empty first (its contents were lost).
+- `0083` **Freeze while off**: new `<world><FreezeWhileOff>` (off by default). At startup every game timer moves on by the time the server was off: industry, research agents, boosters, contracts, market orders and the market sim, towers, planets, wormholes, incursions, sov, wars, insurance and bills. `<world><FreezeSkillTraining>` (on) freezes skill training with it.
+- `0091` **Outposts can be besieged and taken.** If the owner's alliance holds sov, the station can only be shot while SBUs are up at more than half the gates; it reinforces at 25% shield and at 50% armor, each timer ending at the owner's exit time (station management, noon by default) plus 48 hours, give or take 3. Any other outpost can be shot at any time with no timers. At 0% structure it goes to the corporation of the last pilot to hit it. Station services can't be shot down yet. GM: `/sov siege [info|next|repair]`.
+
+**Before the first start**
+- Rebuild from the control panel. The next start applies five migrations: `20261022100000-incursions`, `20261022110000-wormholes`, `20261022120000-sleeper-sites`, `20261022130000-mission-titles` and `20261022140000-outpost-sieges`.
+- Your `config/eve-server.xml` is kept. For wormholes set `<cosmic><WormHoleEnabled>` to `true`. If it sets `<npc><SleeperCapitalReinforcements>` to 2, change it to 6. The new `<incursion>` section uses its defaults; for solo testing add it and set `FleetScale` to about 10.
+- `gridUnloadTime` now does what it says; 1800 keeps sites and wrecks around for half an hour after you leave.
+
+**How to test.** Rebuild and start. Then:
+- Undock in k-space, `/wormhole spawn 30583` (a C2), jump through. `/wormhole` lists the system's wormholes, the scanner shows Sleeper anomalies and probes find the rest.
+- Fit two of the same hardener and check the second one's bonus in the fitting window.
+- `/incursion start here` in a high-sec system, then undock and check your resists in the fitting window.
+- In a conquerable station's system: `/sov siege` shows its state, then shoot it.
+- Get killed by two ships and use "Copy kill information" on the loss.
+
+---
+
 ## 2026-10-15: Belt rats, standings and agents (branch `revised`)
 
 Patches `0064` to `0067` · Status: **compiles and boot-tested** (15 Oct 2026): the server was started natively against MariaDB 11.8 and stopped cleanly. Not yet tested in game.

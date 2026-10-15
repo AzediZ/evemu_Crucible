@@ -1,0 +1,332 @@
+From 4191ff7282d0e3c1cdfe4096eaa1440166863403 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:37:01 +0000
+Subject: [PATCH 79/91] Nanite paste repairs, and fuel from more than one stack
+
+Nanite paste:
+- InitiateModuleRepair works now. The repair runs at the pilot's
+  moduleRepairRate (10 hp a minute, +20% a level of Nanite Interfacing).
+- Paste is used as the repair goes. A full repair costs the module's base price
+  times shipBrokenModuleRepairCostMultiplier (0.5, -5% a level of Nanite
+  Operation), paid in paste at its base price (6500). A 100k ISK module takes
+  7-8 paste at level 0.
+- Only repairs paid for with whole units of paste land, so stopping early keeps
+  what was paid for.
+- Refused for undamaged, burnt out or active modules, while anything is
+  overloaded, and without paste in the cargo hold.
+- Stops when the module is activated or damaged, something is overloaded, the
+  paste runs out, or the pilot docks, jumps or leaves the ship.
+
+Fuel:
+- Modules that use fuel (cynos, siege, triage, jump portals, doomsdays) take it
+  from every stack in the cargo hold, smallest first. Before, only one stack was
+  used, and a short stack was deleted without the rest being taken.
+---
+ src/eve-server/inventory/Inventory.cpp        |  37 +++++
+ src/eve-server/inventory/Inventory.h          |   3 +
+ src/eve-server/ship/modules/ActiveModule.cpp  |  19 +--
+ src/eve-server/ship/modules/ModuleManager.cpp | 132 +++++++++++++++++-
+ src/eve-server/ship/modules/ModuleManager.h   |  20 ++-
+ 5 files changed, 187 insertions(+), 24 deletions(-)
+
+diff --git a/src/eve-server/inventory/Inventory.cpp b/src/eve-server/inventory/Inventory.cpp
+index ce3ecc31e..3ffb86174 100644
+--- a/src/eve-server/inventory/Inventory.cpp
++++ b/src/eve-server/inventory/Inventory.cpp
+@@ -677,6 +677,43 @@ uint32 Inventory::GetTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ow
+     return count;
+ }
+ 
++bool Inventory::ConsumeTypeQtyByFlag(uint16 typeID, EVEItemFlags flag, uint32 qty)
++{
++    if (qty < 1)
++        return true;
++
++    std::vector<InventoryItemRef> stacks;
++    uint32 count(0);
++    std::set<uint32> seen;
++    auto range = m_contentsByFlag.equal_range(flag);
++    for (auto itr = range.first; itr != range.second; ++itr) {
++        if ((itr->second->typeID() != typeID) or itr->second->isSingleton() or (itr->second->quantity() < 1))
++            continue;
++        if (!seen.insert(itr->second->itemID()).second)
++            continue;
++        stacks.push_back(itr->second);
++        count += itr->second->quantity();
++    }
++    if (count < qty)
++        return false;
++
++    std::sort(stacks.begin(), stacks.end(),
++              [](const InventoryItemRef& a, const InventoryItemRef& b) { return a->quantity() < b->quantity(); });
++    uint32 remaining(qty);
++    for (auto cur : stacks) {
++        if (remaining < 1)
++            break;
++        if ((uint32)cur->quantity() <= remaining) {
++            remaining -= cur->quantity();
++            cur->SetQuantity(0, true, true);
++        } else {
++            cur->AlterQuantity(-(int32)remaining, true);
++            remaining = 0;
++        }
++    }
++    return true;
++}
++
+ bool Inventory::TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out)
+ {
+     if (qty < 1)
+diff --git a/src/eve-server/inventory/Inventory.h b/src/eve-server/inventory/Inventory.h
+index 7651b598a..0f60fada4 100644
+--- a/src/eve-server/inventory/Inventory.h
++++ b/src/eve-server/inventory/Inventory.h
+@@ -75,6 +75,9 @@ public:
+      * fills 'out' with the taken stacks (still at this location with the same owner; caller Deletes or Donates them)
+      * returns false and changes nothing if there is not enough */
+     bool TakeTypeQtyForOwner(uint16 typeID, EVEItemFlags flag, uint32 ownerID, uint32 qty, std::vector<InventoryItemRef>& out);
++    /* uses up qty units of unassembled typeID under flag (fuel, nanite paste), across stacks:  smallest stacks first, the
++     *  last one is reduced.  returns false and changes nothing if there is not enough */
++    bool ConsumeTypeQtyByFlag(uint16 typeID, EVEItemFlags flag, uint32 qty);
+ 
+     float GetCapacity(EVEItemFlags flag) const;
+     // true when every flag of this flag's pool shares one capacity (the client's IsFlagCapacityLocationWide)
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 3e2b7b651..e6b18855c 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -679,21 +679,10 @@ uint32 ActiveModule::DoCycle() {
+                     qtyNeed, sItemFactory.GetType(typeID)->name().c_str());
+             AbortCycle();  // CHECK THIS  for initial activate
+             return 0;
+-        } else {
+-            /** @todo this may need more work later in the case of multiple stacks */
+-            InventoryItemRef iRef(m_shipRef->GetMyInventory()->GetByTypeFlag(typeID, EVEItemFlags::flagCargoHold));
+-            if (iRef.get() != nullptr) {
+-                if (iRef->quantity() > qtyNeed) {
+-                    //If we have all the quantity we need in the current stack, decrement the amount we need and break
+-                    iRef->AlterQuantity(-qtyNeed, true);
+-                } else {
+-                    // Delete item
+-                    iRef->SetQuantity(0, true, true);
+-                }
+-            } else {
+-                AbortCycle();  // CHECK THIS  for initial activate
+-                return 0;
+-            }
++        } else if (!m_shipRef->GetMyInventory()->ConsumeTypeQtyByFlag(typeID, EVEItemFlags::flagCargoHold, qtyNeed)) {
++            // the fuel can come from several stacks
++            AbortCycle();  // CHECK THIS  for initial activate
++            return 0;
+         }
+     }
+ 
+diff --git a/src/eve-server/ship/modules/ModuleManager.cpp b/src/eve-server/ship/modules/ModuleManager.cpp
+index a7f4f1ca8..ca0bbfce1 100644
+--- a/src/eve-server/ship/modules/ModuleManager.cpp
++++ b/src/eve-server/ship/modules/ModuleManager.cpp
+@@ -12,6 +12,9 @@
+ 
+ #include "eve-server.h"
+ 
++#include <algorithm>
++#include <cmath>
++
+ #include "EVEServerConfig.h"
+ #include "EVE_Charges.h"
+ #include "Client.h"
+@@ -270,6 +273,9 @@ void ModuleManager::Process()
+ {
+     double profileStartTime(GetTimeUSeconds());
+ 
++    if (!m_naniteRepairs.empty())
++        ProcessRepairs();
++
+     // proc modules in order of (low -> mid -> high) for proper fx application
+     // NOTE: rigs and subsystems dont need proc tic.
+     std::map<uint8, GenericModule*>::iterator itr = m_fittings.begin(), end = m_fittings.end();
+@@ -1083,21 +1089,133 @@ PyRep* ModuleManager::ModuleRepair(uint32 modID)
+ 
+     GenericModule* pMod = GetModule(modID);
+     if (pMod == nullptr) {
+-        _log(MODULE__ERROR, "MM::ModuleRepair() - module %s not found.", modID);
++        _log(MODULE__ERROR, "MM::ModuleRepair() - module %u not found.", modID);
++        return PyStatic.NewFalse();
++    }
++    Client* pClient(pShipItem->GetPilot());
++    if ((pClient == nullptr) or pClient->IsDocked())
++        return PyStatic.NewFalse();
++    if (IsBeingRepaired(modID))
++        return PyStatic.NewTrue();
++
++    double damage(pMod->GetAttribute(AttrDamage).get_double());
++    if (damage <= 0.0)
++        throw UserError("RepairModuleNotDamaged");
++    if (damage >= pMod->GetAttribute(AttrHP).get_double())
++        throw UserError("ModuleTooDamagedToRepairGoToStation");
++    if (pMod->IsActive()) {
++        pClient->SendNotifyMsg("You can't repair the %s while it is active.", pMod->GetSelf()->name());
++        return PyStatic.NewFalse();
++    }
++    if (AnyOverloaded()) {
++        pClient->SendNotifyMsg("You can't repair modules while any of them are overloaded.");
++        return PyStatic.NewFalse();
++    }
++    if (!pShipItem->GetMyInventory()->ContainsTypeQtyByFlag(EVEDB::invTypes::NaniteRepairPaste, flagCargoHold, 1)) {
++        pClient->SendNotifyMsg("You need Nanite Repair Paste in your cargo hold to repair modules.");
+         return PyStatic.NewFalse();
+     }
+ 
+-    //return PyStatic.NewTrue();  // can repair
+-    return PyStatic.NewFalse(); // cannot repair (for whatever reason)  do they/we send msgs based on why here?
++    NaniteRepair r;
++        r.lastTick = GetFileTimeNow();
++        r.systemID = pClient->GetSystemID();
++        r.startDamage = damage;
++        r.progress = 0.0;
++        r.applied = 0.0;
++        r.pasteUsed = 0;
++    m_naniteRepairs[modID] = r;
++    _log(MODULE__DAMAGE, "MM::ModuleRepair() - %s started repairing %s(%u), %.1f damage.", pClient->GetName(), pMod->GetSelf()->name(), modID, damage);
++    return PyStatic.NewTrue();
+ }
+ 
+ void ModuleManager::StopModuleRepair(uint32 modID)
+ {
+-    GenericModule* pMod = GetModule(modID);
+-    if (pMod == nullptr) {
+-        _log(MODULE__ERROR, "MM::ModuleRepair() - module %s not found.", modID);
+-        return;
++    // what was paid for is already on the module
++    m_naniteRepairs.erase(modID);
++}
++
++bool ModuleManager::AnyOverloaded()
++{
++    for (auto cur : m_fittings)
++        if ((cur.second != nullptr) and cur.second->IsOverloaded())
++            return true;
++    return false;
++}
++
++void ModuleManager::ProcessRepairs()
++{
++    Client* pClient(pShipItem->GetPilot());
++    int64 now(GetFileTimeNow());
++    std::vector<uint32> done;
++    for (auto& cur : m_naniteRepairs) {
++        NaniteRepair& r(cur.second);
++        GenericModule* pMod(GetModule(cur.first));
++        // docked, jumped (no module ticks) or out of the ship:  the repair ends with what it has paid for
++        if ((pMod == nullptr) or (pClient == nullptr) or pClient->IsDocked() or (pClient->GetSystemID() != r.systemID)
++        or ((now - r.lastTick) > (3 * EvE::Time::Second))) {
++            done.push_back(cur.first);
++            continue;
++        }
++        if (pMod->IsActive() or AnyOverloaded()) {
++            done.push_back(cur.first);
++            continue;
++        }
++        double damage(pMod->GetAttribute(AttrDamage).get_double());
++        if (damage > (r.startDamage - r.applied + 0.01)) {
++            pClient->SendRemoteMessage("ModuleGotDamagedWhileBeingRepaired");
++            done.push_back(cur.first);
++            continue;
++        }
++
++        // hp per minute, with Nanite Interfacing
++        double rate(10.0);
++        double costMult(0.5);
++        CharacterRef cRef(pClient->GetChar());
++        if (cRef.get() != nullptr) {
++            if (cRef->GetAttribute(AttrModuleRepairRate) > EvilZero)
++                rate = cRef->GetAttribute(AttrModuleRepairRate).get_double();
++            // Nanite Operation
++            if (cRef->GetAttribute(AttrShipBrokenModuleRepairCostMultiplier) > EvilZero)
++                costMult = cRef->GetAttribute(AttrShipBrokenModuleRepairCostMultiplier).get_double();
++        }
++        r.progress += rate / 60.0 * ((double)(now - r.lastTick) / EvE::Time::Second);
++        r.lastTick = now;
++
++        double target(std::min(r.progress, r.startDamage));
++        bool complete(target >= r.startDamage);
++        double hp(pMod->GetAttribute(AttrHP).get_double());
++        double pastePrice(sItemFactory.GetType(EVEDB::invTypes::NaniteRepairPaste)->basePrice());
++        double pastePerHP(0.0);
++        if ((hp > 0.0) and (pastePrice > 0.0))
++            pastePerHP = pMod->GetSelf()->type().basePrice() * costMult / pastePrice / hp;
++
++        // whole units only.  a finished repair costs at least one
++        uint32 units((uint32)std::floor((target * pastePerHP) + 1e-9));
++        if (complete)
++            units = std::max<uint32>(1, (uint32)std::ceil((target * pastePerHP) - 1e-9));
++        if (units > r.pasteUsed) {
++            if (!pShipItem->GetMyInventory()->ConsumeTypeQtyByFlag(EVEDB::invTypes::NaniteRepairPaste, flagCargoHold, units - r.pasteUsed)) {
++                pClient->SendNotifyMsg("You have run out of Nanite Repair Paste.");
++                done.push_back(cur.first);
++                continue;
++            }
++            r.pasteUsed = units;
++        }
++
++        double paid(target);
++        if (!complete and (pastePerHP > 0.0))
++            paid = std::min(target, r.pasteUsed / pastePerHP);
++        if (paid > r.applied) {
++            pMod->Repair(EvilNumber(paid - r.applied));
++            r.applied = paid;
++        }
++        if (complete) {
++            _log(MODULE__DAMAGE, "MM::ProcessRepairs() - %s repaired %s(%u) with %u paste.", pClient->GetName(), pMod->GetSelf()->name(), cur.first, r.pasteUsed);
++            done.push_back(cur.first);
++        }
+     }
++    for (auto id : done)
++        m_naniteRepairs.erase(id);
+ }
+ 
+ InventoryItemRef ModuleManager::GetChargeInSlot(EVEItemFlags flag)
+diff --git a/src/eve-server/ship/modules/ModuleManager.h b/src/eve-server/ship/modules/ModuleManager.h
+index bc812f369..8fc633e26 100644
+--- a/src/eve-server/ship/modules/ModuleManager.h
++++ b/src/eve-server/ship/modules/ModuleManager.h
+@@ -84,9 +84,14 @@ public:
+     void RepairModule(uint32 itemID, EvilNumber amount);
+     void RepairModule(GenericModule* pMod, EvilNumber amount);
+     void RepairModules();
+-    // this is for repairing modules with nanite paste
++    /* nanite paste repairs in space (dogmaLM InitiateModuleRepair / StopModuleRepair).  the repair runs at the pilot's
++     *  moduleRepairRate (hp per minute) and uses paste from the cargo hold as it goes:  a whole module's worth of damage costs
++     *  the module's base price times shipBrokenModuleRepairCostMultiplier, in paste at its base price.  only repairs paid for
++     *  with whole units of paste land, so a cancelled repair keeps what it paid for.  it stops when the module is activated
++     *  or damaged, a module is overloaded, the paste runs out, or the pilot docks, jumps or leaves the ship */
+     PyRep* ModuleRepair(uint32 modID);
+     void StopModuleRepair(uint32 modID);
++    bool IsBeingRepaired(uint32 modID) const            { return (m_naniteRepairs.find(modID) != m_naniteRepairs.end()); }
+     /* this will move charge item to module and split stack if needed.  more of the loaded type tops it up, another type
+      *  swaps it out.  maxQty > 0 loads no more than that.  returns how many went in
+      * must NOT throw
+@@ -199,8 +204,19 @@ private:
+     std::map<uint8, GenericModule*> m_systems;          // slot, module (for rigs and subsystems)
+     std::map<uint8, GenericModule*> m_fittings;         // slot, module (for hi,mid,lo slots)
+     std::map<EVEItemFlags, InventoryItemRef> m_charges; // slot, chargeItem
+-};
+ 
++    struct NaniteRepair {
++        int64 lastTick;         // filetime of the last step
++        uint32 systemID;        // a jump ends the repair
++        double startDamage;     // module damage when the repair started
++        double progress;        // hp the repair time has covered
++        double applied;         // hp taken off the module so far
++        uint32 pasteUsed;
++    };
++    std::map<uint32, NaniteRepair> m_naniteRepairs;     // moduleID, repair
++    void ProcessRepairs();
++    bool AnyOverloaded();
++};
+ 
+ #endif  // EVE_SHIP_MODULES_MODULEMANAGER_H
+ 
+-- 
+2.34.1
+

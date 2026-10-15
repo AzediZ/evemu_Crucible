@@ -1,0 +1,170 @@
+From f9d83ee9cb216c7c2936d0257f0b045b2b15437e Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 17:29:21 +0000
+Subject: [PATCH 85/91] Sleeper capital escalation: 6 then 8 battleships
+
+The first capital a site's Sleepers see brings 6 Sleepless battleships and
+the second brings 8, as on the Crucible-era eve-survival C5 and C6 pages.
+Later capitals bring nothing, since no page lists a third escalation.
+
+Class 5 sites send Sleepless Guardians. Class 6 sites send Sleepless
+Wardens, except the magnetometric ("Forgotten") sites, which send
+Guardians. Other classes keep using the room's own Sleepless battleships.
+
+npc.SleeperCapitalReinforcements now defaults to 6. New options
+SleeperCapitalSecondWave (8) and SleeperCapitalWaves (2).
+---
+ src/eve-server/EVEServerConfig.cpp            |  8 +++++++-
+ src/eve-server/EVEServerConfig.h              |  4 +++-
+ .../system/cosmicMgrs/DungeonMgr.cpp          | 20 +++++++++++++++----
+ src/eve-server/system/cosmicMgrs/DungeonMgr.h |  8 +++++---
+ utils/config/eve-server.xml                   |  6 ++++--
+ 5 files changed, 35 insertions(+), 11 deletions(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index a829d86cf..02cc87d1f 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -342,7 +342,9 @@ EVEServerConfig::EVEServerConfig()
+     // npc ai phase 5:  polish (npc ai plan phase 5, 6.7).  [DD] unless noted
+     npc.SoftLeashCooldown = 20 /*s*/;   // [DD] phase 2's constant:  without it a soft-leashed npc could never resume the chase
+     npc.LinkAlertInterval = 5 /*s*/;    // [DD] phase 2's constant
+-    npc.SleeperCapitalReinforcements = 2;   // era (high):  "several battleships for each capital will spawn" (plan 4.6, phase 5)
++    npc.SleeperCapitalReinforcements = 6;   // Crucible (eve-survival C5/C6 pages):  1st capital escalation 6 Sleepless battleships,
++    npc.SleeperCapitalSecondWave = 8;       //  2nd capital escalation 8.  no page lists a third
++    npc.SleeperCapitalWaves = 2;
+     npc.SleeperReinforcementTypes = "";
+     npc.TelegraphJoin = true;           // plan phase 5 readability:  npcs turn toward their target before the lock completes
+     npc.WarpOutVanishChance = 0.04f;    // era (med):  "run-away spawns", "1 in 25 vanish"
+@@ -1304,6 +1306,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
+     AddValueParser( "SoftLeashCooldown",        npc.SoftLeashCooldown );
+     AddValueParser( "LinkAlertInterval",        npc.LinkAlertInterval );
+     AddValueParser( "SleeperCapitalReinforcements", npc.SleeperCapitalReinforcements );
++    AddValueParser( "SleeperCapitalSecondWave", npc.SleeperCapitalSecondWave );
++    AddValueParser( "SleeperCapitalWaves", npc.SleeperCapitalWaves );
+     AddValueParser( "SleeperReinforcementTypes",    npc.SleeperReinforcementTypes );
+     AddValueParser( "TelegraphJoin",            npc.TelegraphJoin );
+     AddValueParser( "WarpOutVanishChance",      npc.WarpOutVanishChance );
+@@ -1383,6 +1387,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
+     RemoveParser( "SoftLeashCooldown" );
+     RemoveParser( "LinkAlertInterval" );
+     RemoveParser( "SleeperCapitalReinforcements" );
++    RemoveParser( "SleeperCapitalSecondWave" );
++    RemoveParser( "SleeperCapitalWaves" );
+     RemoveParser( "SleeperReinforcementTypes" );
+     RemoveParser( "TelegraphJoin" );
+     RemoveParser( "WarpOutVanishChance" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index cc9be561b..d61a6680b 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -387,7 +387,9 @@ public:
+         // npc ai phase 5:  polish (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7;  OPERATING.md)
+         uint32 SoftLeashCooldown;   // s.  after a soft leash an npc chases at least this long before it turns back again
+         uint32 LinkAlertInterval;   // s.  linked groups (dunSpawnGroups.aggroLink) are told at most this often per member
+-        uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for each capital a sleeper sees.  0 = off
++        uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for the first capital a site's sleepers see.  0 = off
++        uint32 SleeperCapitalSecondWave;        // and for each later one
++        uint32 SleeperCapitalWaves;             // capitals per site that bring battleships
+         std::string SleeperReinforcementTypes;  // typeIDs to pick them from (comma separated).  0 or empty = the room's own sleepless battleships
+         bool TelegraphJoin;         // a group member that will join after its reaction delay turns toward the target meanwhile
+         float WarpOutVanishChance;  // chance an idle belt spawn's warp-out is off grid for good (the spawn is gone)
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+index 50418335c..5ea6778af 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+@@ -1356,10 +1356,15 @@ void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital
+     uint64_t key((static_cast<uint64_t>(iItr->second.first) << 32) | pCapital->GetID());
+     if (!m_capitalsSighted.insert(key).second)
+         return;
+-    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u):  %u reinforcements.",
++    // the site's first capital brings one wave, the next ones another, up to SleeperCapitalWaves
++    uint64_t first(static_cast<uint64_t>(iItr->second.first) << 32);
++    uint32 seen(static_cast<uint32>(std::distance(m_capitalsSighted.lower_bound(first), m_capitalsSighted.lower_bound(first + 0x100000000ULL))));
++    uint32 count(((sConfig.npc.SleeperCapitalReinforcements == 0) or (seen > sConfig.npc.SleeperCapitalWaves)) ? 0
++            : (seen == 1 ? sConfig.npc.SleeperCapitalReinforcements : sConfig.npc.SleeperCapitalSecondWave));
++    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u), its capital %u:  %u reinforcements.",
+             pSpotter->GetName(), pSpotter->GetID(), iItr->second.first, iItr->second.second, pCapital->GetName(), pCapital->GetID(),
+-            sConfig.npc.SleeperCapitalReinforcements);
+-    if (sConfig.npc.SleeperCapitalReinforcements == 0)
++            seen, count);
++    if (count == 0)
+         return;
+     // we're inside the spotter's walk over its bubble:  the spawn waits for our Process()
+     Reinforcement r = Reinforcement();
+@@ -1367,6 +1372,7 @@ void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital
+         r.roomIdx = iItr->second.second;
+         r.spotterID = pSpotter->GetID();
+         r.capitalID = pCapital->GetID();
++        r.count = count;
+     m_reinforcements.push_back(r);
+ }
+ 
+@@ -1387,6 +1393,12 @@ void DungeonMgr::GetReinforcementTypes(Instance& inst, uint8 roomIdx, std::vecto
+     }
+     if (!into.empty())
+         return;
++    /* Crucible (eve-survival C5 and C6 pages):  Sleepless Guardians in class 5, Sleepless Wardens in class 6, except its
++     *  magnetometric ('Forgotten') sites, which get Guardians */
++    switch (sDataMgr.GetWHSystemClass(m_system->GetID())) {
++        case 5: into = { 30199 }; return;
++        case 6: into = { (inst.name.compare(0, 9, "Forgotten") == 0 ? 30199u : 30198u) }; return;
++    }
+     // the sleepless (battleship, signature 400) sleepers of this room
+     LiveRoom& room = inst.rooms[roomIdx];
+     auto consider = [&](uint32 itemID) {
+@@ -1434,7 +1446,7 @@ void DungeonMgr::SpawnReinforcements(const Reinforcement& r)
+             liveGroupID = group.liveGroupID;
+ 
+     uint32 count(0);
+-    for (uint32 i = 0; i < sConfig.npc.SleeperCapitalReinforcements; ++i) {
++    for (uint32 i = 0; i < r.count; ++i) {
+         // they warp in 15-25km from the capital
+         GPoint pos(pCapital->GetPosition());
+         pos.MakeRandomPointOnSphere(MakeRandomFloat(15000.0, 25000.0));
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.h b/src/eve-server/system/cosmicMgrs/DungeonMgr.h
+index e757582f7..a410e1d69 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.h
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.h
+@@ -194,9 +194,10 @@ public:
+     // pSE is about to be hit:  an overseer structure or sentry aggroes its whole room (npc ai plan 4.3)
+     void OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker);
+     /* a sleeper (pSpotter) of a dungeon room saw a capital ship (npc ai plan 4.6:  "the sleepers will immediately call for
+-     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance:
+-     *  npc.SleeperCapitalReinforcements sleeper battleships warp in next to the capital on our next Process() (the spotter
+-     *  calls this from inside its bubble walk), join the spotter's group and go for the capital */
++     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance, for the
++     *  first npc.SleeperCapitalWaves capitals:  6 sleeper battleships for the first, 8 for the next (Crucible's eve-survival
++     *  pages) warp in next to the capital on our next Process() (the spotter calls this from inside its bubble walk), join the
++     *  spotter's group and go for the capital */
+     void OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital);
+     /* itemID (an npc, sentry or object of ours) left space without dying (GM /unspawn;  SystemManager::OnNPCRemoved):  it
+      *  is no longer a member (like WarpShipAway), and the dungeon may be complete now (checked on our next Process()) */
+@@ -315,6 +316,7 @@ private:
+         uint8 roomIdx;
+         uint32 spotterID;
+         uint32 capitalID;
++        uint32 count;
+     };
+ 
+     // instance building
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 6dcabb1af..fda560e16 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -369,8 +369,10 @@ boolean can use either 0/1 OR true/false.
+         <!-- npc ai phase 5:  polish, level of detail, telemetry, difficulty (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7;  operator guide:  doc/code_and_design_notes/planning/npc-ai/OPERATING.md) -->
+         <SoftLeashCooldown>20</SoftLeashCooldown><!-- s.  after the soft leash turned an npc back it chases at least this long before it may turn back again.  [DD]  20 default -->
+         <LinkAlertInterval>5</LinkAlertInterval><!-- s.  an npc or sentry tells the groups linked to its own (dunSpawnGroups.aggroLink) at most this often.  [DD]  5 default -->
+-        <SleeperCapitalReinforcements>2</SleeperCapitalReinforcements><!-- sleeper battleships that warp in for each capital ship a sleeper sees (once per capital and site;  era:  "several battleships for each capital").  0 = off.  2 default -->
+-        <SleeperReinforcementTypes>0</SleeperReinforcementTypes><!-- typeIDs (comma separated) the reinforcements are picked from.  0 = the sleepless battleships of the room, else the Sleepless Patroller group (983).  (never leave it empty:  the config parser refuses an empty element.)  0 default -->
++        <SleeperCapitalReinforcements>6</SleeperCapitalReinforcements><!-- sleeper battleships that warp in when a site's sleepers see their first capital ship (Crucible:  6).  0 = off.  6 default -->
++        <SleeperCapitalSecondWave>8</SleeperCapitalSecondWave><!-- and when they see each later capital (Crucible:  8).  8 default -->
++        <SleeperCapitalWaves>2</SleeperCapitalWaves><!-- how many capitals per site bring battleships (Crucible site pages list two escalations).  2 default -->
++        <SleeperReinforcementTypes>0</SleeperReinforcementTypes><!-- typeIDs (comma separated) the reinforcements are picked from.  0 = Sleepless Guardians in class 5, Sleepless Wardens in class 6 (Guardians in its magnetometric sites), elsewhere the sleepless battleships of the room, else the Sleepless Patroller group (983).  (never leave it empty:  the config parser refuses an empty element.)  0 default -->
+         <TelegraphJoin>true</TelegraphJoin><!-- bool  a group member that joins a fight after its reaction delay turns toward the target meanwhile (readability).  true default -->
+         <WarpOutVanishChance>0.04</WarpOutVanishChance><!-- chance an idle belt spawn's group warp-out (WarpOut) is off grid for good:  the spawn is gone and the belt free (era:  "run-away spawns", "1 in 25 vanish").  0 = never.  0.04 default -->
+         <WanderRepickMin>60</WanderRepickMin><!-- s.  an idle belt rat orbits a random asteroid (or the belt) at 10-20 km and picks a new one after U(WanderRepickMin, WanderRepickMax).  60 default -->
+-- 
+2.34.1
+

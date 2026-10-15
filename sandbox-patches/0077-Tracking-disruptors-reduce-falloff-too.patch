@@ -1,0 +1,245 @@
+From 38df372261af6f99ee492e1e37c812a9e349d36c Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:10:19 +0000
+Subject: [PATCH 77/91] Tracking disruptors reduce falloff too
+
+Module and drone TDs now carry their falloff bonus into the ewar state,
+and the player and structure to-hit rolls use it, same as optimal.
+---
+ src/eve-server/npc/DroneAI.cpp                |  7 +++---
+ src/eve-server/ship/modules/EwarModule.cpp    |  9 ++++----
+ .../ship/modules/TurretFormulas.cpp           |  5 +++-
+ src/eve-server/system/EwarState.cpp           | 23 ++++++++++++-------
+ src/eve-server/system/EwarState.h             |  9 ++++----
+ 5 files changed, 33 insertions(+), 20 deletions(-)
+
+diff --git a/src/eve-server/npc/DroneAI.cpp b/src/eve-server/npc/DroneAI.cpp
+index 4260cff19..4699c0cdc 100644
+--- a/src/eve-server/npc/DroneAI.cpp
++++ b/src/eve-server/npc/DroneAI.cpp
+@@ -678,7 +678,7 @@ void DroneAIMgr::StopJam() {
+  *  there, read by targeting, turret and missile formulas, with the client's ewar icon.  the values are the drone's own
+  *  attributes, as in its info window:
+  *   SD  maxTargetRangeMultiplier, scanResolutionMultiplier     -> Damp v1, v2
+- *   TD  trackingSpeedMultiplier, maxRangeMultiplier            -> TrackDisrupt v1, v2  (fallofMultiplier: the state has no falloff)
++ *   TD  trackingSpeedMultiplier, maxRangeMultiplier, fallofMultiplier  -> TrackDisrupt v1, v2, v3
+  *   TP  signatureRadiusBonus (%)                               -> Paint v1
+  *  the entry lasts a cycle and a second, refreshed every cycle, and is removed when the drone stops (StopCycle)
+  */
+@@ -693,7 +693,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
+         return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_float() : def);
+     };
+     uint8 kind(Ewar::None);
+-    float v1(1.0f), v2(1.0f);
++    float v1(1.0f), v2(1.0f), v3(0.0f);
+     switch (m_pDrone->Stats().effectID) {
+         case EVEEffectID::sensorBoostTargetedHostile: {
+             kind = Ewar::Damp;
+@@ -704,6 +704,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
+             kind = Ewar::TrackDisrupt;
+             v1 = attr(AttrTrackingSpeedMultiplier, 1.0f);
+             v2 = attr(AttrMaxRangeMultiplier, 1.0f);
++            v3 = attr(AttrFallofMultiplier, 1.0f);
+         } break;
+         case EVEEffectID::ewTargetPaint: {
+             kind = Ewar::Paint;
+@@ -714,7 +715,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
+             return;
+     }
+     pTarget->GetEwar(true)->Apply(m_pDrone->GetID(), kind, static_cast<uint32>(m_pDrone->Stats().cycleTime) + 1000, v1, v2,
+-                                  InventoryItemRef(nullptr), m_pDrone->GetID());
++                                  InventoryItemRef(nullptr), m_pDrone->GetID(), v3);
+     m_ewarID = pTarget->GetID();
+     m_ewarKind = kind;
+ }
+diff --git a/src/eve-server/ship/modules/EwarModule.cpp b/src/eve-server/ship/modules/EwarModule.cpp
+index a8149cab4..393735b03 100644
+--- a/src/eve-server/ship/modules/EwarModule.cpp
++++ b/src/eve-server/ship/modules/EwarModule.cpp
+@@ -456,11 +456,11 @@ uint32 RemoteEwarModule::DoCycle()
+         return cycleTime;
+ 
+     /* the module's attributes already carry the pilot's skills and its script (charge effects).  bonuses are percentages:
+-     *  TP signatureRadiusBonus (+), damp maxTargetRangeBonus/scanResolutionBonus (-), TD trackingSpeedBonus/maxRangeBonus (-).
+-     *  Crucible TDs also had falloffBonus, which the ewar state has no multiplier for (optimal and tracking only)
++     *  TP signatureRadiusBonus (+), damp maxTargetRangeBonus/scanResolutionBonus (-),
++     *  TD trackingSpeedBonus/maxRangeBonus/falloffBonus (-).
+      *  the entry lasts a cycle and a second, and is refreshed every cycle
+      */
+-    float v1(1.0f), v2(0.0f);
++    float v1(1.0f), v2(0.0f), v3(0.0f);
+     uint8 kind(GetKind());
+     switch (kind) {
+         case Ewar::Paint: {
+@@ -473,12 +473,13 @@ uint32 RemoteEwarModule::DoCycle()
+         case Ewar::TrackDisrupt: {
+             v1 = 1.0f + (GetAttribute(AttrTrackingSpeedBonus).get_float() / 100.0f);
+             v2 = 1.0f + (GetAttribute(AttrMaxRangeBonus).get_float() / 100.0f);
++            v3 = 1.0f + (GetAttribute(AttrFalloffBonus).get_float() / 100.0f);
+         } break;
+         default:
+             return cycleTime;
+     }
+     m_targetSE->GetEwar(true)->Apply(m_shipRef->GetPilot()->GetShipSE()->GetID(), kind, cycleTime + 1000, v1, v2,
+-            InventoryItemRef(nullptr), itemID());
++            InventoryItemRef(nullptr), itemID(), v3);
+     return cycleTime;
+ }
+ 
+diff --git a/src/eve-server/ship/modules/TurretFormulas.cpp b/src/eve-server/ship/modules/TurretFormulas.cpp
+index 34d699682..0fec1b443 100644
+--- a/src/eve-server/ship/modules/TurretFormulas.cpp
++++ b/src/eve-server/ship/modules/TurretFormulas.cpp
+@@ -96,14 +96,16 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
+     if (pShooter == nullptr)
+         return 0;
+     double optimal(pMod->GetAttribute(AttrMaxRange).get_double());
++    double falloff(pMod->GetAttribute(AttrFalloff).get_double());
+     double tracking(pMod->GetAttribute(AttrTrackingSpeed).get_double());
+     // tracking disruptors on the shooter
+     EwarState* pEwar(pShooter->GetEwar());
+     if (pEwar != nullptr) {
+         optimal *= pEwar->GetOptimalMult();
++        falloff *= pEwar->GetFalloffMult();
+         tracking *= pEwar->GetTrackingMult();
+     }
+-    return Roll(pShooter, pTarget, optimal, pMod->GetAttribute(AttrFalloff).get_double(), tracking,
++    return Roll(pShooter, pTarget, optimal, falloff, tracking,
+                 pMod->GetAttribute(AttrOptimalSigRadius).get_double(), MakeRandomFloat(), DAMAGE__TRACE, "Turret");
+ }
+ 
+@@ -168,6 +170,7 @@ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, fl
+     if (pEwar != nullptr) {
+         tracking *= pEwar->GetTrackingMult();
+         optimal *= pEwar->GetOptimalMult();
++        falloff *= pEwar->GetFalloffMult();
+     }
+     return Roll(pSource, pTarget, optimal, falloff, tracking, sigRes, MakeRandomFloat(), DAMAGE__TRACE, "Structure");
+ }
+diff --git a/src/eve-server/system/EwarState.cpp b/src/eve-server/system/EwarState.cpp
+index af93e071b..7a660a807 100644
+--- a/src/eve-server/system/EwarState.cpp
++++ b/src/eve-server/system/EwarState.cpp
+@@ -26,7 +26,7 @@ EwarState::~EwarState()
+ }
+ 
+ void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*0*/, float v2/*0*/,
+-                      InventoryItemRef srcRef/*nullptr*/, uint32 moduleID/*0*/)
++                      InventoryItemRef srcRef/*nullptr*/, uint32 moduleID/*0*/, float v3/*0*/)
+ {
+     if (kind == Ewar::None)
+         return;
+@@ -38,6 +38,7 @@ void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*
+         itr->second.expires = now + ((int64)durationMs * (EvE::Time::Second / 1000));
+         itr->second.v1 = v1;
+         itr->second.v2 = v2;
++        itr->second.v3 = v3;
+         return;
+     }
+ 
+@@ -45,6 +46,7 @@ void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*
+         e.kind = kind;
+         e.v1 = v1;
+         e.v2 = v2;
++        e.v3 = v3;
+         e.start = now;
+         e.expires = now + ((int64)durationMs * (EvE::Time::Second / 1000));
+         e.durationMs = durationMs;
+@@ -191,13 +193,13 @@ float EwarState::GetScrambleStrength() const
+     return strength;
+ }
+ 
+-float EwarState::Penalized(uint8 kind, bool second) const
++float EwarState::Penalized(uint8 kind, uint8 value) const
+ {
+     // stacking penalty: strongest first, nth effect at exp(-(n/2.67)^2)
+     std::vector<float> mults;
+     for (auto& cur : m_entries)
+         if (cur.second.kind == kind) {
+-            float m(second ? cur.second.v2 : cur.second.v1);
++            float m(value == 3 ? cur.second.v3 : (value == 2 ? cur.second.v2 : cur.second.v1));
+             if ((m > 0.0f) and (m != 1.0f))
+                 mults.push_back(m);
+         }
+@@ -213,25 +215,30 @@ float EwarState::Penalized(uint8 kind, bool second) const
+ 
+ float EwarState::GetTargetRangeMult() const
+ {
+-    return Penalized(Ewar::Damp, false);
++    return Penalized(Ewar::Damp, 1);
+ }
+ 
+ float EwarState::GetScanResMult() const
+ {
+-    return Penalized(Ewar::Damp, true);
++    return Penalized(Ewar::Damp, 2);
+ }
+ 
+ float EwarState::GetTrackingMult() const
+ {
+-    return Penalized(Ewar::TrackDisrupt, false);
++    return Penalized(Ewar::TrackDisrupt, 1);
+ }
+ 
+ float EwarState::GetOptimalMult() const
+ {
+-    return Penalized(Ewar::TrackDisrupt, true);
++    return Penalized(Ewar::TrackDisrupt, 2);
++}
++
++float EwarState::GetFalloffMult() const
++{
++    return Penalized(Ewar::TrackDisrupt, 3);
+ }
+ 
+ float EwarState::GetSigRadiusMult() const
+ {
+-    return Penalized(Ewar::Paint, false);
++    return Penalized(Ewar::Paint, 1);
+ }
+diff --git a/src/eve-server/system/EwarState.h b/src/eve-server/system/EwarState.h
+index bf0eb6014..5ab3a9814 100644
+--- a/src/eve-server/system/EwarState.h
++++ b/src/eve-server/system/EwarState.h
+@@ -40,11 +40,11 @@ public:
+      *  values by kind:
+      *   Scramble: v1 = strength            Web: srcRef = item whose AttrSpeedFactor applies (npc or module)
+      *   Jam: -                             Damp: v1 = maxTargetRange mult, v2 = scanResolution mult
+-     *   TrackDisrupt: v1 = tracking mult, v2 = optimal mult      Paint: v1 = signature radius mult
++     *   TrackDisrupt: v1 = tracking mult, v2 = optimal mult, v3 = falloff mult      Paint: v1 = signature radius mult
+      * Apply on an existing entry only extends it.
+      */
+     void Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1 = 0, float v2 = 0,
+-               InventoryItemRef srcRef = InventoryItemRef(nullptr), uint32 moduleID = 0);
++               InventoryItemRef srcRef = InventoryItemRef(nullptr), uint32 moduleID = 0, float v3 = 0);
+     void Remove(uint32 sourceID, uint8 kind, uint32 moduleID = 0);
+     void RemoveSource(uint32 sourceID);  // everything this entity is doing to us
+     void Clear();                        // ends everything (with side effects)
+@@ -57,13 +57,14 @@ public:
+     float GetScanResMult() const;        // Damp v2
+     float GetTrackingMult() const;       // TrackDisrupt v1
+     float GetOptimalMult() const;        // TrackDisrupt v2
++    float GetFalloffMult() const;        // TrackDisrupt v3
+     float GetSigRadiusMult() const;      // Paint v1
+     bool  Empty() const                  { return m_entries.empty(); }
+ 
+ private:
+     struct Entry {
+         uint8 kind;
+-        float v1, v2;
++        float v1, v2, v3;
+         int64 start;                     // filetime
+         int64 expires;                   // filetime
+         uint32 durationMs;
+@@ -75,7 +76,7 @@ private:
+ 
+     void OnStart(Entry& e);
+     void OnEnd(Entry& e);
+-    float Penalized(uint8 kind, bool second) const;
++    float Penalized(uint8 kind, uint8 value) const;     // value 1, 2 or 3:  v1, v2 or v3
+ 
+     SystemEntity* m_owner;               // we do not own this
+     std::map<uint64_t, Entry> m_entries;
+-- 
+2.34.1
+

@@ -1,0 +1,437 @@
+From dfb41882cdf7fbc9cb784a49c9fa518a01f98aad Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 14:38:56 +0000
+Subject: [PATCH 72/91] Wormholes: system effects from the phenomena
+
+W-space systems with a secondary sun get the matching Effect Beacon for
+their class (mapWormholeSystems.effectBeaconTypeID), spawned at the
+secondary sun when the system boots. It is global, so it shows system
+wide.
+
+Ships in space there get the beacon's category 7 effects. They go on with
+the hull's effects on login, boarding and pod, and are swapped on jump and
+undock (old beacon's math undone, new one applied). Docking clears them
+with everything else. Charges loaded in the system and drones/fighters
+(Magnetar damage and speed) get them too.
+
+Effects processor fixes this needed:
+- AddLocationModifier on the ship now hits the fitted modules and charges
+  that have the attribute, not the hull. This also makes Thermodynamics,
+  the T3 subsystem and hull heat damage bonuses work.
+- A multiplier on an attribute the item doesn't have uses the attribute's
+  default instead of treating 0 as 1. Multipliers on 0 now stay 0 and come
+  off cleanly (rocket damage types, smartbomb damage types).
+- CurrentChar[skill] location modifiers from a non-skill source go on the
+  pilot's items (Wolf-Rayet standard missile kinetic damage).
+---
+ src/eve-server/Client.cpp                   |  3 +
+ src/eve-server/effects/EffectsProcessor.cpp | 61 +++++++++++++++++++--
+ src/eve-server/effects/EffectsProcessor.h   |  2 +
+ src/eve-server/npc/Drone.cpp                | 17 +++++-
+ src/eve-server/ship/Ship.cpp                | 60 ++++++++++++++++++++
+ src/eve-server/ship/Ship.h                  |  7 +++
+ src/eve-server/system/SystemManager.cpp     | 38 +++++++++++++
+ src/eve-server/system/SystemManager.h       |  5 ++
+ 8 files changed, 185 insertions(+), 8 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 65e2565a1..91068ea2b 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -920,6 +920,9 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
+         }
+         */
+ 
++        // the new system's effects (w-space phenomena) in place of the old one's, before the movement code reads the ship
++        m_ship->UpdateSystemEffects(m_system, !m_login);
++
+         SetDestiny(shipPos);
+ 
+         // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
+diff --git a/src/eve-server/effects/EffectsProcessor.cpp b/src/eve-server/effects/EffectsProcessor.cpp
+index 39fe21736..c2c86dfd5 100644
+--- a/src/eve-server/effects/EffectsProcessor.cpp
++++ b/src/eve-server/effects/EffectsProcessor.cpp
+@@ -181,6 +181,7 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
+             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
+             if ((skill) and (!data.fxSrc))      // fxSrc = Self in this case.  update to remove this hack?
+                 data.fxSrc = Source::Skill;
++            LocationSource(expression.operandID, skill, data);
+             pItem->AddModifier(data);
+         } break;
+         case Operands::AORSM: { //11, (%(arg1)s).AddOwnerRequiredSkillModifier(%(arg2)s)
+@@ -210,6 +211,7 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
+             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
+             if ((skill) and (!data.fxSrc))     // fxSrc = Self in this case.  update to remove this hack?
+                 data.fxSrc = Source::Skill;
++            LocationSource(expression.operandID, skill, data);
+             pItem->RemoveModifier(data);
+         } break;
+         case Operands::RORSM: { //62, (%(arg1)s).RemoveOwnerRequiredSkillModifier(%(arg2)s)
+@@ -300,6 +302,27 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
+         sProfiler.AddTime(Profile::parseFX, GetTimeUSeconds() - profileStartTime);
+ }
+ 
++void FxProc::LocationSource(uint16 operandID, bool skill, fxData& data)
++{
++    using namespace FX;
++    switch (operandID) {
++        case Operands::ALM:
++        case Operands::RLM: {
++            /* a location modifier on the ship is on everything fitted to it:  the modules (and charges) that have the attribute.
++             *  heat damage and overload bonuses (Thermodynamics, subsystems, strategic cruisers, red giants) are module attribs */
++            if (data.targLoc == Target::Ship)
++                data.fxSrc = Source::Ship;
++        } break;
++        case Operands::ALRSM:
++        case Operands::RLRSM: {
++            /* only skills and implants work on the character's skills.  anything else that names CurrentChar[skill] means
++             *  the pilot's items that need the skill (the wolf-rayet beacons' systemStandardMissileKineticDamage) */
++            if (!skill and (data.targLoc == Target::Char) and (data.fxSrc == Source::Skill) and (data.typeID != 0))
++                data.fxSrc = Source::Owner;
++        } break;
++    }
++}
++
+ bool FxProc::IsCharItemModifier(const fxData& data)
+ {
+     using namespace FX;
+@@ -320,8 +343,8 @@ bool FxProc::WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip
+     using namespace FX;
+     if (data.srcRef.get() == nullptr)
+         return false;
+-    // group, owner and module-by-skill modifiers go on other items
+-    if ((data.fxSrc == Source::Group) or (data.fxSrc == Source::Owner))
++    // group, owner, location and module-by-skill modifiers go on other items
++    if ((data.fxSrc == Source::Group) or (data.fxSrc == Source::Owner) or (data.fxSrc == Source::Ship))
+         return false;
+     if ((data.fxSrc == Source::Skill) and (data.targLoc != Target::Self))
+         return false;
+@@ -568,8 +591,23 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+                 _log(EFFECTS__ERROR, "FxProc::ApplyEffects(): source location invalid.");
+                 continue;
+             } break;
+-            // the parser never produces these (subsystem effects are Self/Skill/Group, target effects use Target::Target)
+-            case Source::Ship:
++            case Source::Ship: {    // location modifier on the ship (LocationSource())
++                if (pShip == nullptr)
++                    continue;
++                std::vector<InventoryItemRef> moduleList;
++                pShip->GetModuleManager()->GetModuleListOfRefsAsc(moduleList);
++                for (auto mod : moduleList)
++                    if (mod->HasAttribute(cur.second.targAttr))
++                        itemRefVec.push_back(mod);
++                std::map<EVEItemFlags, InventoryItemRef> charges;
++                pShip->GetModuleManager()->GetLoadedCharges(charges);
++                for (auto charge : charges)
++                    if ((charge.second.get() != nullptr) and charge.second->HasAttribute(cur.second.targAttr))
++                        itemRefVec.push_back(charge.second);
++                if (itemRefVec.empty())
++                    continue;   // nothing fitted has the attribute.  nbd
++            } break;
++            // the parser never produces this (subsystem effects are Self/Skill/Group, target effects use Target::Target)
+             case Source::Target:
+             default: {
+                 _log(EFFECTS__DEBUG, "FxProc::ApplyEffects(): %s uses source location %s.  ignored.", cur.second.srcRef->name(), GetSourceName(cur.second.fxSrc));
+@@ -652,8 +690,14 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+                 case Math::PostMul:
+                 case Math::PreDiv:
+                 case Math::PostDiv: {
+-                    if (targValue == EvilZero)
+-                        targValue = EvilOne;
++                    /* dogma:  an attribute the item doesn't have is the attribute's default (damageMultiplier 1, the damage
++                     *  types 0).  one it has at 0 stays 0, so a multiplier can be taken off again (rockets' missing damage
++                     *  types, a smartbomb's other damage types) */
++                    if (!item->HasAttribute(cur.second.targAttr)) {
++                        targValue = sDataMgr.GetAttributeDefault(cur.second.targAttr);
++                        if (targValue == EvilZero)
++                            continue;   // still the default:  nothing to write
++                    }
+                 } break;
+             }
+ 
+@@ -715,6 +759,11 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
+     for (auto cur : items)
+         sources.push_back(std::make_pair(cur, passive));
+     sources.push_back(std::make_pair(static_cast<InventoryItemRef>(pShip), all));
++    // the system's effects (w-space phenomena:  missile damage and velocity)
++    if (pShip->GetSystemFx().get() != nullptr) {
++        std::vector<int8> system = {FX::State::System};
++        sources.push_back(std::make_pair(pShip->GetSystemFx(), system));
++    }
+     items.clear();
+     pShip->GetModuleManager()->GetModuleListOfRefsAsc(items);
+     for (auto cur : items) {
+diff --git a/src/eve-server/effects/EffectsProcessor.h b/src/eve-server/effects/EffectsProcessor.h
+index a9c5660cd..d6ccdbe6b 100644
+--- a/src/eve-server/effects/EffectsProcessor.h
++++ b/src/eve-server/effects/EffectsProcessor.h
+@@ -34,6 +34,8 @@ public:
+     /* the modifier changes an attribute of the item it comes from (its source item).  ApplyEffects applies these before the
+      *  modifiers of that item reading the attribute (EVE_DogmaOrder.h) */
+     static bool     WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip);
++    // location modifiers:  ALM on the ship means its fitted items, and CurrentChar[skill] from a non-skill means the pilot's items
++    static void     LocationSource(uint16 operandID, bool skill, fxData& data);
+     /* applies the owner-required-skill modifiers (missile/probe/drone bonuses from skills, implants, boosters, the hull and
+      *  fitted modules) to an item that wasn't there when the ship's effects were processed: a charge loaded in space,
+      *  a launched probe or bomb.  resets the target's attributes first */
+diff --git a/src/eve-server/npc/Drone.cpp b/src/eve-server/npc/Drone.cpp
+index f7a8467da..bcd6f27d6 100644
+--- a/src/eve-server/npc/Drone.cpp
++++ b/src/eve-server/npc/Drone.cpp
+@@ -249,8 +249,21 @@ void DroneSE::UpdateStats() {
+         s.controlRangeMult = last.controlRangeMult;
+     }
+ 
++    /* the system's effects (w-space phenomena, magnetar):  systemDamageDrones (4021) and systemDroneSpeed (4024) are on drones
++     *  (CurrentChar[Drones]), systemDamageFighters (4906) on fighters (CurrentChar[Fighters]).  bombers need neither skill */
++    double sysDamage(1.0), sysVelocity(1.0);
++    InventoryItemRef beacon((m_system == nullptr) ? InventoryItemRef(nullptr) : m_system->GetEffectBeacon());
++    if (beacon.get() != nullptr) {
++        std::map<uint16, Effect> beaconFx;
++        beacon->type().GetEffectMap(FX::State::System, beaconFx);
++        if ((drone and (beaconFx.find(4021) != beaconFx.end())) or (fighter and (beaconFx.find(4906) != beaconFx.end())))
++            sysDamage = beacon->GetAttribute(AttrDamageMultiplierMultiplier).get_double();
++        if (drone and (beaconFx.find(4024) != beaconFx.end()))
++            sysVelocity = beacon->GetAttribute(AttrMaxDroneVelocityMultiplier).get_double();
++    }
++
+     double navBonus(drone ? 1.0 + 0.05 * level(DroneNavigation) : 1.0);
+-    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus * s.hullVelocity;
++    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus * s.hullVelocity * sysVelocity;
+     s.orbitVelocity = base(AttrEntityCruiseSpeed, 0.0);
+     if ((s.orbitVelocity <= 0.0) or (s.orbitVelocity > s.maxVelocity))
+         s.orbitVelocity = s.maxVelocity;
+@@ -320,7 +333,7 @@ void DroneSE::UpdateStats() {
+         s.damageMultiplier *= (1.0 + 0.20 * level(Fighters));
+     if (bomber)
+         s.damageMultiplier *= (1.0 + 0.20 * level(FighterBombers));
+-    s.damageMultiplier *= s.hullDamage;
++    s.damageMultiplier *= s.hullDamage * sysDamage;
+ 
+     s.miningAmount = base(AttrMiningAmount, 0.0) * (1.0 + 0.20 * level(DroneInterfacing)) * (1.0 + 0.05 * level(MiningDroneOperation));
+     if (needsSkill(MiningDroneSpecialization))
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index 15c5ac26b..db564fb88 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -2233,6 +2233,8 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
+         // the charges' effects on their modules went with the reset, and so did the modules' docked effects
+         m_ModuleManager->ChargeFxReset();
+         m_ModuleManager->DockedFxReset();
++        // the system effects went with the reset too
++        m_systemFx = InventoryItemRef(nullptr);
+ 
+         // do we remove fx here?  nah, we've reset everything at this point.
+     }
+@@ -2250,6 +2252,17 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
+         sFxProc.ParseExpression(this, sFxDataMgr.GetExpression(it.second.preExpression), data);
+     }
+ 
++    /* the system's effects (w-space phenomena), with the hull's so they are worked out in the same order.  in space only:
++     *  an undocking ship is still in the station here, and gets them from UpdateSystemEffects() once it is out */
++    m_systemFx = InventoryItemRef(nullptr);
++    if ((m_pilot != nullptr) and (m_pilot->SystemMgr() != nullptr) and (m_pilot->SystemMgr()->GetID() == locationID())) {
++        InventoryItemRef beacon(m_pilot->SystemMgr()->GetEffectBeacon());
++        if (beacon.get() != nullptr) {
++            ParseSystemEffects(beacon, this, true);
++            m_systemFx = beacon;
++        }
++    }
++
+     if (m_isUndocking) {
+         // online modules sent from client (these are onlined in fit window while docked)
+         m_ModuleManager->UpdateModules(m_onlineModuleVec);
+@@ -2265,6 +2278,52 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
+     //ClearModifiers();
+ }
+ 
++void ShipItem::ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pContainer, bool add)
++{
++    // the beacon's system effects (category 7):  added with their pre-expressions, taken off with their post-expressions
++    std::map<uint16, Effect> effectMap;
++    beacon->type().GetEffectMap(FX::State::System, effectMap);
++    for (auto& cur : effectMap) {
++        fxData data = fxData();
++        data.action = FX::Action::Invalid;
++        data.srcRef = beacon;
++        sFxProc.ParseExpression(pContainer, sFxDataMgr.GetExpression(add ? cur.second.preExpression : cur.second.postExpression), data);
++    }
++}
++
++/* a ship in space that has moved to pSys (jump, undock) swaps the old system's effects for the new one's.
++ *  the change is made on the ship's current values:  the old beacon's math is undone, then the new beacon's is applied.
++ *  the beacon is its own scratch container (ApplyEffects() clears it)
++ */
++void ShipItem::UpdateSystemEffects(SystemManager* pSys, bool update/*true*/)
++{
++    if ((m_pilot == nullptr) or (pSys == nullptr) or (pSys->GetID() != locationID()))
++        return;
++    InventoryItemRef beacon(pSys->GetEffectBeacon());
++    if (beacon.get() == m_systemFx.get())
++        return;
++    Character* pChar(m_pilot->GetChar().get());
++    if (pChar == nullptr)
++        return;
++
++    if (m_systemFx.get() != nullptr) {
++        _log(EFFECTS__DEBUG, "ShipItem::UpdateSystemEffects() - %s(%u) loses the effects of %s(%u)", name(), itemID(), m_systemFx->name(), m_systemFx->itemID());
++        ParseSystemEffects(m_systemFx, m_systemFx.get(), false);
++        sFxProc.ApplyEffects(m_systemFx.get(), pChar, this, update);
++    }
++    m_systemFx = beacon;
++    if (beacon.get() != nullptr) {
++        _log(EFFECTS__DEBUG, "ShipItem::UpdateSystemEffects() - %s(%u) gets the effects of %s(%u) in %s", name(), itemID(), beacon->name(), beacon->itemID(), pSys->GetName());
++        ParseSystemEffects(beacon, beacon.get(), true);
++        sFxProc.ApplyEffects(beacon.get(), pChar, this, update);
++    }
++
++    // speed, agility and mass for the movement code
++    ShipSE* pShipSE(m_pilot->GetShipSE());
++    if ((pShipSE != nullptr) and (pShipSE->DestinyMgr() != nullptr))
++        pShipSE->DestinyMgr()->UpdateShipVariables();
++}
++
+ void ShipItem::ClearModuleModifiers()
+ {
+     _log(EFFECTS__TRACE, "ShipItem::ClearModuleModifiers()");
+@@ -2300,6 +2359,7 @@ void ShipItem::ResetEffects() {
+     // the charges' effects on their modules went with the reset, and so did the modules' docked effects
+     m_ModuleManager->ChargeFxReset();
+     m_ModuleManager->DockedFxReset();
++    m_systemFx = InventoryItemRef(nullptr);
+ 
+     ProcessEffects(true, true/*sDataMgr.IsSolarSystem(locationID())*/);
+     _log(EFFECTS__DEBUG, "ShipItem::ResetEffects() - Effects reset in %.3fms", (GetTimeMSeconds() - start));
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index 54febbdf1..2baae30de 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -43,6 +43,7 @@
+ class Client;
+ class GenericModule;
+ class DroneSE;
++class SystemManager;
+ 
+ class ShipItem
+ : public InventoryItem
+@@ -273,6 +274,10 @@ public:
+     void PrepForUndock();               // called by AggresMgr to try saving a bit of runtime by clearing beforehand
+     void ProcessEffects(bool add=false, bool update=false);
+     void CharacterBoardingShip()                        { m_ModuleManager->CharacterBoardingShip(); }
++    /* system effects (w-space phenomena):  the effect beacon whose effects the ship has now (null for none), and the switch
++     *  to pSys's beacon after a jump or undock.  the full reset (ProcessShipEffects) puts the current system's beacon back */
++    InventoryItemRef GetSystemFx()                      { return m_systemFx; }
++    void UpdateSystemEffects(SystemManager* pSys, bool update=true);
+ 
+     /* linking weapons methods */
+     // number of weapons in pMod's bank (1 if not banked)
+@@ -329,6 +334,7 @@ private:
+     //the ship's module manager.  We own this
+     ModuleManager* m_ModuleManager;
+ 
++    InventoryItemRef m_systemFx;        // the effect beacon whose system effects are applied
+     InventoryItemRef m_targetRef;       // this is only used for module effects that require a target.  is here because of the ease of aquiring/sending (common code)
+ 
+     std::vector<uint32> m_onlineModuleVec;      // for onlining modules when undocking
+@@ -348,6 +354,7 @@ private:
+     void SendHeatChange(uint16 attrID, double value, int64 time);
+ 
+     void ProcessShipEffects(bool update=false);
++    void ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pContainer, bool add);
+ 
+     bool m_isActive :1;
+     bool m_isPopped :1;
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index a8c452c7c..8fffadbfd 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -237,10 +237,46 @@ bool SystemManager::BootSystem() {
+ 
+     // a w-space system's statics are always open
+     sWHMgr.SystemBooted(this);
++    if (IsWSpaceID(m_data.systemID))
++        SpawnEffectBeacon();
+ 
+     return (m_loaded = true);
+ }
+ 
++/* w-space phenomena (Crucible).  a system with a secondary sun (magnetar, pulsar...) has the matching Effect Beacon for its
++ *  class (mapWormholeSystems.effectBeaconTypeID).  the beacon is global, and its system effects (effect category 7) are on
++ *  every ship here:  ShipItem::UpdateSystemEffects() and ShipItem::ProcessShipEffects().  it is a temp item, made again on boot
++ */
++void SystemManager::SpawnEffectBeacon()
++{
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res,
++        "SELECT w.effectBeaconTypeID, d.x, d.y, d.z FROM mapWormholeSystems AS w"
++        "  JOIN mapDenormalize AS d ON d.solarSystemID = w.solarSystemID AND d.groupID = %u"
++        " WHERE w.solarSystemID = %u AND w.effectBeaconTypeID <> 0", EVEDB::invGroups::Secondary_Sun, m_data.systemID)) {
++        _log(DATABASE__ERROR, "SystemManager::SpawnEffectBeacon() - %s", res.error.c_str());
++        return;
++    }
++    DBResultRow row;
++    if (!res.GetRow(row))
++        return;
++    uint16 typeID(row.GetUInt(0));
++    GPoint pos(row.GetDouble(1), row.GetDouble(2), row.GetDouble(3));
++    ItemData data(typeID, ownerSystem, m_data.systemID, flagNone, "", pos);
++    InventoryItemRef iRef(sItemFactory.SpawnTempItem(data));
++    if (iRef.get() == nullptr) {
++        _log(COSMIC_MGR__ERROR, "SystemManager::SpawnEffectBeacon() - unable to spawn beacon type %u in %s(%u)", typeID, m_data.name.c_str(), m_data.systemID);
++        return;
++    }
++    sItemFactory.AddItem(iRef);
++    iRef->SetAttribute(AttrIsGlobal, EvilOne, false);
++    CelestialSE* pSE = new CelestialSE(iRef, m_services, this);
++    pSE->SetPosition(pos);
++    AddEntity(pSE, false);
++    m_effectBeacon = iRef;
++    _log(COSMIC_MGR__MESSAGE, "SystemManager::SpawnEffectBeacon() - %s(%u) in %s(%u)", iRef->name(), iRef->itemID(), m_data.name.c_str(), m_data.systemID);
++}
++
+ bool SystemManager::LoadCosmicMgrs()
+ {
+     if (m_beltCount)
+@@ -517,6 +553,8 @@ void SystemManager::UnloadSystem() {
+ 
+     // remove solar system item from ItemFactory
+     sItemFactory.RemoveItem(m_data.systemID);
++    // the beacon's entity went with the rest.  ships that had its effects have left
++    m_effectBeacon = InventoryItemRef(nullptr);
+     m_loaded = false;
+ }
+ 
+diff --git a/src/eve-server/system/SystemManager.h b/src/eve-server/system/SystemManager.h
+index fc4d77bbb..95f9de551 100644
+--- a/src/eve-server/system/SystemManager.h
++++ b/src/eve-server/system/SystemManager.h
+@@ -244,6 +244,8 @@ public:
+ 
+     // the tutorials' warp-to site in a rookie system: a dust cloud near the first planet.  made on first use, kept in the db
+     SystemEntity* GetTutorialSite();
++    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon.  null when none
++    InventoryItemRef GetEffectBeacon() const            { return m_effectBeacon; }
+ 
+ 
+ protected:
+@@ -258,6 +260,8 @@ protected:
+     bool LoadSystemStatics();
+     bool LoadSystemDynamics();
+     bool LoadPlayerDynamics();
++    // a w-space phenomenon's effect beacon, at its secondary sun
++    void SpawnEffectBeacon();
+ 
+ private:
+     AnomalyMgr* m_anomMgr;      //we own this, never NULL.
+@@ -271,6 +275,7 @@ private:
+     EVEServiceManager& m_services;
+     LSCService* m_lsc;
+     SolarSystemRef m_solarSystemRef;
++    InventoryItemRef m_effectBeacon;
+ 
+     // static system data
+     SystemData m_data;
+-- 
+2.34.1
+

@@ -1,0 +1,392 @@
+From 615042dea889adf74c697d495755fa87f9c9a9c0 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 17:21:55 +0000
+Subject: [PATCH 84/91] Incursion system penalties
+
+Vanguard, Assault and Headquarters systems now get the Crucible penalties:
+shield and armour resists and turret, missile, drone and smartbomb damage
+are down 10/25/50% at full Sansha influence, scaling down to nothing at
+zero. The staging system has none. Cynos are jammed (covert cynos still
+work) and CONCORD bounties are halved everywhere in the constellation.
+
+The incursion beacon types use OffensiveDefensiveReduction, which has no
+expression, so it is expanded to the effects its description lists. The
+beacon is an item only and is remade when influence moves a whole percent,
+so ships undo the old figures before taking the new ones.
+
+New incursion option Penalties (default true).
+
+Percent modifiers on an attribute an item doesn't have, with a default of
+0, are now skipped like multipliers, so a smartbomb no longer gains 0
+values for its other damage types.
+---
+ src/eve-server/EVEServerConfig.cpp            |  3 ++
+ src/eve-server/EVEServerConfig.h              |  1 +
+ src/eve-server/effects/EffectsProcessor.cpp   |  4 +-
+ src/eve-server/npc/Drone.cpp                  |  3 ++
+ src/eve-server/ship/Ship.cpp                  |  7 +++
+ src/eve-server/ship/modules/CynoModule.cpp    |  4 ++
+ src/eve-server/system/SystemEntity.cpp        |  4 ++
+ src/eve-server/system/SystemManager.cpp       | 48 +++++++++++++++++++
+ src/eve-server/system/SystemManager.h         |  6 ++-
+ .../system/cosmicMgrs/IncursionMgr.cpp        | 47 ++++++++++++++++++
+ .../system/cosmicMgrs/IncursionMgr.h          |  8 +++-
+ utils/config/eve-server.xml                   |  1 +
+ 12 files changed, 133 insertions(+), 3 deletions(-)
+
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index 829a0faa8..a829d86cf 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -395,6 +395,7 @@ EVEServerConfig::EVEServerConfig()
+     incursion.VanguardSites = 7;
+     incursion.AssaultSites = 5;
+     incursion.HQSites = 5;
++    incursion.Penalties = true;
+     incursion.DelayedLP = true;
+     incursion.GateRestrictions = false;
+     incursion.MothershipDelayHigh = 72;
+@@ -1647,6 +1648,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+     AddValueParser( "VanguardSites",         incursion.VanguardSites );
+     AddValueParser( "AssaultSites",          incursion.AssaultSites );
+     AddValueParser( "HQSites",               incursion.HQSites );
++    AddValueParser( "Penalties",             incursion.Penalties );
+     AddValueParser( "DelayedLP",             incursion.DelayedLP );
+     AddValueParser( "GateRestrictions",      incursion.GateRestrictions );
+     AddValueParser( "MothershipDelayHigh",   incursion.MothershipDelayHigh );
+@@ -1670,6 +1672,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+     RemoveParser( "VanguardSites" );
+     RemoveParser( "AssaultSites" );
+     RemoveParser( "HQSites" );
++    RemoveParser( "Penalties" );
+     RemoveParser( "DelayedLP" );
+     RemoveParser( "GateRestrictions" );
+     RemoveParser( "MothershipDelayHigh" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index 53ffa5d08..cc9be561b 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -498,6 +498,7 @@ public:
+         uint8 VanguardSites;    // live sites per vanguard system (wiki: up to 7)
+         uint8 AssaultSites;     // live sites per assault system (wiki: up to 5)
+         uint8 HQSites;          // live sites per headquarters system, not counting the mothership (wiki: up to 5)
++        bool Penalties;         // the constellation's system penalties: resists and damage by role and influence, cyno jamming, half bounties
+         bool DelayedLP;         // site LP goes into the incursion's pool, paid when the mothership dies (wiki); false pays it per site
+         bool GateRestrictions;  // the Consolidation Network's cruiser and battleship gates check ship class (wiki); off by default
+         uint16 MothershipDelayHigh; // hours from the start before the mothership can appear in high-sec (wiki: 3 days)
+diff --git a/src/eve-server/effects/EffectsProcessor.cpp b/src/eve-server/effects/EffectsProcessor.cpp
+index c63bd907c..059a4d730 100644
+--- a/src/eve-server/effects/EffectsProcessor.cpp
++++ b/src/eve-server/effects/EffectsProcessor.cpp
+@@ -691,7 +691,9 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+                 case Math::PreMul:
+                 case Math::PostMul:
+                 case Math::PreDiv:
+-                case Math::PostDiv: {
++                case Math::PostDiv:
++                case Math::PostPercent:
++                case Math::RevPostPercent: {
+                     /* dogma:  an attribute the item doesn't have is the attribute's default (damageMultiplier 1, the damage
+                      *  types 0).  one it has at 0 stays 0, so a multiplier can be taken off again (rockets' missing damage
+                      *  types, a smartbomb's other damage types) */
+diff --git a/src/eve-server/npc/Drone.cpp b/src/eve-server/npc/Drone.cpp
+index bcd6f27d6..40dabd0c8 100644
+--- a/src/eve-server/npc/Drone.cpp
++++ b/src/eve-server/npc/Drone.cpp
+@@ -260,6 +260,9 @@ void DroneSE::UpdateStats() {
+             sysDamage = beacon->GetAttribute(AttrDamageMultiplierMultiplier).get_double();
+         if (drone and (beaconFx.find(4024) != beaconFx.end()))
+             sysVelocity = beacon->GetAttribute(AttrMaxDroneVelocityMultiplier).get_double();
++        // an incursion's penalty (OffensiveDefensiveReduction, with systemEffectDamageDrones on CurrentChar[Drones])
++        if (drone and (beaconFx.find(4728) != beaconFx.end()))
++            sysDamage *= 1.0 + beacon->GetAttribute(AttrSystemEffectDamageReduction).get_double() / 100.0;
+     }
+ 
+     double navBonus(drone ? 1.0 + 0.05 * level(DroneNavigation) : 1.0);
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index 9c83af815..f342cb5af 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -2309,6 +2309,13 @@ void ShipItem::ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pConta
+     // the beacon's system effects (category 7):  added with their pre-expressions, taken off with their post-expressions
+     std::map<uint16, Effect> effectMap;
+     beacon->type().GetEffectMap(FX::State::System, effectMap);
++    /* the incursion beacons' OffensiveDefensiveReduction (4728) has no expression.  its description lists the effects it combines:
++     *  the shield and armour resistance effects and the drone, gunnery, missile and smartbomb damage effects */
++    if (effectMap.erase(4728) > 0) {
++        static const uint16 parts[] = { 3996, 3997, 3998, 3999, 4135, 4136, 4137, 4138, 4699, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4707, 4708 };
++        for (auto cur : parts)
++            effectMap.emplace(cur, sFxDataMgr.GetEffect(cur));
++    }
+     for (auto& cur : effectMap) {
+         fxData data = fxData();
+         data.action = FX::Action::Invalid;
+diff --git a/src/eve-server/ship/modules/CynoModule.cpp b/src/eve-server/ship/modules/CynoModule.cpp
+index 304fee737..27480903d 100644
+--- a/src/eve-server/ship/modules/CynoModule.cpp
++++ b/src/eve-server/ship/modules/CynoModule.cpp
+@@ -12,6 +12,7 @@
+ #include "fleet/FleetService.h"
+ #include "pos/Tower.h"
+ #include "system/sov/SovereigntyDataMgr.h"
++#include "system/cosmicMgrs/IncursionMgr.h"
+ 
+ CynoFieldSE::CynoFieldSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, uint32 charID, uint32 lifeMS)
+ : ItemSystemEntity(self, services, system),
+@@ -127,6 +128,9 @@ bool CynoModule::CanActivate()
+             SovereigntyData sovData = svDataMgr.GetSovereigntyData(pSystem->GetID());
+             if (sovData.jammerID != 0)
+                 throw UserError("CynosuralGenerationJammed");
++            // so is a Sansha incursion's whole constellation
++            if (sIncursionMgr.PenaltyRole(pSystem->GetID()) != 0)
++                throw UserError("CynosuralGenerationJammed");
+         }
+ 
+         if ((pShipSE->SysBubble() != nullptr) and pShipSE->SysBubble()->HasTower()) {
+diff --git a/src/eve-server/system/SystemEntity.cpp b/src/eve-server/system/SystemEntity.cpp
+index a71cadb96..b3c8367a6 100644
+--- a/src/eve-server/system/SystemEntity.cpp
++++ b/src/eve-server/system/SystemEntity.cpp
+@@ -47,6 +47,7 @@
+ #include "system/SystemBubble.h"
+ #include "system/SystemEntity.h"
+ #include "system/SystemManager.h"
++#include "system/cosmicMgrs/IncursionMgr.h"
+ 
+ 
+ 
+@@ -954,6 +955,9 @@ void SystemEntity::AwardBounty(Client* pClient)
+     // this will use a map{charID/BountyData} in system manager for using a bounty timer.
+     double bounty = m_self->GetAttribute(AttrEntityKillBounty).get_double();
+     bounty *= sConfig.rates.npcBountyMultiply;
++    // CONCORD pays half in a Sansha incursion's constellation
++    if ((m_system != nullptr) and (sIncursionMgr.PenaltyRole(m_system->GetID()) != 0))
++        bounty *= 0.5;
+     if (bounty < 1)
+         return;
+ 
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 86c01836c..03acc6b8f 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -105,6 +105,7 @@ m_activeRatSpawns(0),
+ m_activeGateSpawns(0),
+ m_activeRoidSpawns(0),
+ m_secValue(1.1f),
++m_beaconScale(0),
+ m_tutorialSiteID(0),
+ m_droneIndexStamp(0),
+ m_droneIndexBusy(0),
+@@ -278,6 +279,52 @@ void SystemManager::SpawnEffectBeacon()
+     _log(COSMIC_MGR__MESSAGE, "SystemManager::SpawnEffectBeacon() - %s(%u) in %s(%u)", iRef->name(), iRef->itemID(), m_data.name.c_str(), m_data.systemID);
+ }
+ 
++/* incursion penalties (IncursionMgr::UpdatePenalties()).  a Vanguard, Assault or Headquarters system has the beacon for its role,
++ *  with its resistance and damage figures (10, 25 or 50%) times Sansha influence.  it is an item only:  nothing shows in space.
++ *  a new figure makes a new beacon, so each ship undoes the old one's math with the old item before taking the new one's
++ */
++void SystemManager::SetIncursionBeacon(uint16 typeID, double scale)
++{
++    if (IsWSpaceID(m_data.systemID))
++        return;
++    if (m_effectBeacon.get() == nullptr) {
++        if (typeID == 0)
++            return;
++    } else if ((m_effectBeacon->typeID() == typeID) and (m_beaconScale == scale)) {
++        return;
++    }
++
++    m_effectBeacon = InventoryItemRef(nullptr);
++    m_beaconScale = 0;
++    if (typeID != 0) {
++        ItemData data(typeID, ownerSystem, m_data.systemID, flagNone, "", NULL_ORIGIN);
++        InventoryItemRef iRef(sItemFactory.SpawnTempItem(data));
++        if (iRef.get() == nullptr) {
++            _log(COSMIC_MGR__ERROR, "SystemManager::SetIncursionBeacon() - unable to spawn beacon type %u in %s(%u)", typeID, m_data.name.c_str(), m_data.systemID);
++        } else {
++            static const uint16 attrs[] = {
++                AttrArmorEmDamageResistanceBonus, AttrArmorKineticDamageResistanceBonus, AttrArmorThermalDamageResistanceBonus,
++                AttrArmorExplosiveDamageResistanceBonus, AttrShieldEmDamageResistanceBonus, AttrShieldExplosiveDamageResistanceBonus,
++                AttrShieldKineticDamageResistanceBonus, AttrShieldThermalDamageResistanceBonus, AttrSystemEffectDamageReduction
++            };
++            for (auto cur : attrs)
++                if (iRef->HasAttribute(cur))
++                    iRef->SetAttribute(cur, iRef->GetAttribute(cur).get_double() * scale, false);
++            m_effectBeacon = iRef;
++            m_beaconScale = scale;
++        }
++    }
++    _log(COSMIC_MGR__MESSAGE, "SystemManager::SetIncursionBeacon() - %s(%u) now has beacon type %u at %.0f%%", \
++            m_data.name.c_str(), m_data.systemID, typeID, scale * 100);
++
++    // ships in space here swap the old figures for the new ones.  docked ships get them when they undock
++    std::vector<Client*> clients;
++    GetClientList(clients);
++    for (auto pClient : clients)
++        if (pClient->GetShip().get() != nullptr)
++            pClient->GetShip()->UpdateSystemEffects(this);
++}
++
+ bool SystemManager::LoadCosmicMgrs()
+ {
+     if (m_beltCount)
+@@ -562,6 +609,7 @@ void SystemManager::UnloadSystem() {
+     sItemFactory.RemoveItem(m_data.systemID);
+     // the beacon's entity went with the rest.  ships that had its effects have left
+     m_effectBeacon = InventoryItemRef(nullptr);
++    m_beaconScale = 0;
+     m_loaded = false;
+ }
+ 
+diff --git a/src/eve-server/system/SystemManager.h b/src/eve-server/system/SystemManager.h
+index 95f9de551..4290bee19 100644
+--- a/src/eve-server/system/SystemManager.h
++++ b/src/eve-server/system/SystemManager.h
+@@ -244,8 +244,11 @@ public:
+ 
+     // the tutorials' warp-to site in a rookie system: a dust cloud near the first planet.  made on first use, kept in the db
+     SystemEntity* GetTutorialSite();
+-    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon.  null when none
++    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon, or an incursion's
++    //  penalty.  null when none
+     InventoryItemRef GetEffectBeacon() const            { return m_effectBeacon; }
++    // IncursionMgr:  the penalty beacon for this system's incursion role (typeID 0 = none), its figures times scale (influence)
++    void SetIncursionBeacon(uint16 typeID, double scale);
+ 
+ 
+ protected:
+@@ -276,6 +279,7 @@ private:
+     LSCService* m_lsc;
+     SolarSystemRef m_solarSystemRef;
+     InventoryItemRef m_effectBeacon;
++    double m_beaconScale;       // the incursion beacon's influence
+ 
+     // static system data
+     SystemData m_data;
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+index f74f4f2a3..4cce2b161 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+@@ -10,6 +10,7 @@
+   */
+ 
+ #include <algorithm>
++#include <cmath>
+ #include <ctime>
+ #include <queue>
+ #include <set>
+@@ -264,6 +265,10 @@ void IncursionMgr::Process()
+         m_sites.erase(cur);
+     }
+ 
++    // the system penalties in the incursions' loaded systems
++    for (auto& cur : m_incursions)
++        UpdatePenalties(cur.second);
++
+     // keep the incursion's systems stocked while they're loaded.  the mothership waits in the headquarters system
+     for (auto& cur : m_incursions) {
+         IncData& inc = cur.second;
+@@ -694,6 +699,7 @@ void IncursionMgr::EndIncursion(uint32 incursionID, bool killed/*false*/)
+     }
+     for (auto cur : iItr->second.systems)
+         m_siteCooldown.erase(cur.first);
++    UpdatePenalties(iItr->second, true);
+ 
+     // the LP pool is paid when the mothership dies, and lost otherwise
+     if (killed and sConfig.incursion.DelayedLP)
+@@ -710,6 +716,47 @@ void IncursionMgr::EndIncursion(uint32 incursionID, bool killed/*false*/)
+     Broadcast(msg);
+ }
+ 
++/* the constellation's system penalties (EVE University wiki, Incursions; CCP's 'The Nation strikes back', 2010).  at full influence
++ *  shield and armour resists and turret, launcher, drone and smartbomb damage are down 10% in Vanguard systems, 25% in Assault systems
++ *  and 50% in Headquarters, and they fall with influence to nothing at zero.  the beacon types (Incursion ship attributes effects)
++ *  carry those figures, and SystemManager::SetIncursionBeacon() scales them.  the staging system has none.  cynos are jammed
++ *  (CynoModule) and CONCORD bounties halved (SystemEntity::AwardBounty) in every system of the constellation, whatever the influence
++ */
++void IncursionMgr::UpdatePenalties(IncData& inc, bool clear/*false*/)
++{
++    // whole percents, so slow regrowth doesn't remake the beacons every second
++    double scale(std::round(inc.influence * 100.0) / 100.0);
++    if (!sConfig.incursion.Penalties)
++        clear = true;
++    for (auto cur : inc.systems) {
++        if (!sEntityList.IsSystemLoaded(cur.first))
++            continue;
++        SystemManager* pSys = sEntityList.FindOrBootSystem(cur.first);
++        if (pSys == nullptr)
++            continue;
++        uint16 typeID(0);
++        if (!clear and (scale > 0))
++            switch (cur.second) {
++                case Incursion::scenesType::vanguard:       typeID = 3069; break;   // Incursion ship attributes effects Vanguard
++                case Incursion::scenesType::assault:        typeID = 3493; break;   //  ... Assault
++                case Incursion::scenesType::headquarters:   typeID = 3494; break;   //  ... HQ
++            }
++        pSys->SetIncursionBeacon(typeID, scale);
++    }
++}
++
++uint32 IncursionMgr::PenaltyRole(uint32 systemID)
++{
++    if (!m_initialized or !sConfig.incursion.Penalties)
++        return 0;
++    for (auto& cur : m_incursions) {
++        std::map<uint32, uint8>::const_iterator itr = cur.second.systems.find(systemID);
++        if (itr != cur.second.systems.end())
++            return itr->second;
++    }
++    return 0;
++}
++
+ uint32 IncursionMgr::PickConstellation()
+ {
+     // the wiki's constellations have six systems or more.  fall back to four on small maps
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index 62210ddf4..7df62e054 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -13,7 +13,9 @@
+   *   - at zero influence, once a headquarters site has been run, the mothership appears in the headquarters system.
+   *       killing it ends the incursion.  otherwise it goes established, mobilizing, withdrawing, and ends
+   *   - influence recovers slowly when no sites are completed.  a new incursion starts automatically after a delay
+-  *  not done: staging sites, the constellation penalties, True Sansha loot, the most-damage payout rule
++  *   - the constellation's system penalties (UpdatePenalties):  resists and damage by system role and influence, cynos jammed and
++ *       bounties halved everywhere in it
++ *  not done: staging sites, True Sansha loot, the most-damage payout rule
+   */
+ 
+ #ifndef EVEMU_SYSTEM_INCURSIONMGR_H_
+@@ -219,6 +221,9 @@ public:
+     // a warp to dest inside a site's pocket ends at the site's beacon instead (into).  false = no change (DungeonMgr::RedirectWarp)
+     bool RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into);
+ 
++    // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
++    uint32 PenaltyRole(uint32 systemID);
++
+     // map service (journal and starmap)
+     PyRep* GetGlobalReport();
+     PyRep* GetSystems();
+@@ -261,6 +266,7 @@ private:
+     void CompleteSite(IncLiveSite& site, SystemManager* pSys, uint8 room);
+     void RemoveSite(IncLiveSite& site, SystemManager* pSys);
+     void EndIncursion(uint32 incursionID, bool killed = false);
++    void UpdatePenalties(IncData& inc, bool clear = false);
+     void PayPool(IncData& inc);
+ 
+     // IncursionSites.cpp: rooms, gates, waves and the site scripts
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 3d572fc3b..6dcabb1af 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -471,6 +471,7 @@ boolean can use either 0/1 OR true/false.
+         <AssaultSites>5</AssaultSites><!-- live sites per assault system (wiki: up to 5) -->
+         <HQSites>5</HQSites><!-- live sites per headquarters system, plus the mothership (wiki: up to 5) -->
+         <SiteRespawn>180</SiteRespawn><!-- seconds before a completed site is replaced -->
++        <Penalties>true</Penalties><!-- bool  the system penalties across the constellation:  shield and armour resists and weapon and drone damage down 10% in vanguard, 25% in assault and 50% in headquarters systems at full Sansha influence (less as it drops), cynos jammed and CONCORD bounties halved -->
+         <DelayedLP>true</DelayedLP><!-- bool  site LP goes into the incursion's pool and is paid to everyone who ran sites when the mothership dies (wiki).  false pays it with each site -->
+         <GateRestrictions>false</GateRestrictions><!-- bool  true makes the Nation Consolidation Network's cruiser and battleship gates check ship class, as on the wiki.  off by default so any ship, supercarriers included, can take either gate -->
+         <MinSecurity>0.45</MinSecurity><!-- float  lowest system security an automatic incursion may cover -->
+-- 
+2.34.1
+

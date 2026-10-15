@@ -1,0 +1,137 @@
+From a299fadf02a7d9d17e0d935f7bf165d57d6480e9 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 16:42:22 +0000
+Subject: [PATCH 81/91] Defender missiles
+
+- A launcher loaded with defenders runs without a target. Each cycle it fires
+  one defender at the nearest missile coming at your ship that none of your
+  defenders is already chasing. With nothing incoming it doesn't fire and
+  uses no charge.
+- A missile destroyed in flight now goes away without hitting. Before, a
+  missile killed by an npc's defender showed its explosion and still flew on
+  and did full damage. Npc defenders (entityDefenderChance) now actually stop
+  player missiles: one defender (70 damage) kills one missile (70 hp).
+---
+ src/eve-server/ship/Missile.cpp              |  3 +
+ src/eve-server/ship/modules/ActiveModule.cpp | 62 ++++++++++++++++++++
+ src/eve-server/ship/modules/ActiveModule.h   |  3 +
+ 3 files changed, 68 insertions(+)
+
+diff --git a/src/eve-server/ship/Missile.cpp b/src/eve-server/ship/Missile.cpp
+index 80159a690..7bacbafb4 100644
+--- a/src/eve-server/ship/Missile.cpp
++++ b/src/eve-server/ship/Missile.cpp
+@@ -111,6 +111,9 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
+ }
+ 
+ void Missile::Process() {
++    // shot down by a defender (or anything else that destroyed it):  it goes without hitting
++    if (IsDead())
++        m_alive = false;
+     if (!m_alive) {
+         Delete();
+         return;
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 3b2d1e0fe..6f0ce66b9 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -407,6 +407,9 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+             m_shipRef->ClearTargetRef();
+         }
+     }
++    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender)
++    if (m_launcher and (m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile))
++        targetID = 0;
+     if (IsValidTarget(targetID)) {
+         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
+         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
+@@ -1882,6 +1885,10 @@ void ActiveModule::LaunchMissile()
+     Client* pClient = m_shipRef->GetPilot();
+     if (pClient == nullptr)
+         return;
++    if ((m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile)) {
++        LaunchDefender();
++        return;
++    }
+     // the launcher ran out (or was unloaded) since it was activated.  it stops at the end of this cycle
+     if ((m_chargeRef.get() == nullptr) or (m_targetSE == nullptr)) {
+         m_Stop = true;
+@@ -1930,6 +1937,61 @@ void ActiveModule::LaunchMissile()
+     sStatMgr.Increment(Stat::pcMissiles);
+ }
+ 
++void ActiveModule::LaunchDefender()
++{
++    Client* pClient(m_shipRef->GetPilot());
++    if ((pClient == nullptr) or (m_chargeRef.get() == nullptr))
++        return;
++    ShipSE* pShip(pClient->GetShipSE());
++    if ((pShip == nullptr) or (pShip->SysBubble() == nullptr))
++        return;
++
++    // incoming missiles, and the ones our defenders are already after
++    std::vector<Missile*> incoming;
++    std::set<SystemEntity*> chased;
++    pShip->SysBubble()->ForEachDynamic([&](SystemEntity* pSE) {
++        if (!pSE->IsMissileSE() or pSE->IsDead())
++            return;
++        Missile* pMissile(pSE->GetMissileSE());
++        if (!pMissile->IsAlive())
++            return;
++        if (pMissile->GetLauncherID() == pShip->GetID())
++            chased.insert(pMissile->GetTargetSE());
++        else if (pMissile->GetTargetSE() == pShip)
++            incoming.push_back(pMissile);
++    });
++    Missile* pTarget(nullptr);
++    double best(0.0);
++    for (auto cur : incoming) {
++        if (chased.find(cur) != chased.end())
++            continue;
++        double dist(pShip->GetPosition().distance(cur->GetPosition()));
++        if ((pTarget == nullptr) or (dist < best)) {
++            pTarget = cur;
++            best = dist;
++        }
++    }
++    if (pTarget == nullptr)
++        return;
++
++    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position());
++    InventoryItemRef missileRef(sItemFactory.SpawnItem(idata));
++    if (missileRef.get() == nullptr)
++        return;
++    static const uint16 missileAttrs[] = {
++        AttrEmDamage, AttrExplosiveDamage, AttrKineticDamage, AttrThermalDamage, AttrExplosionDelay, AttrMaxVelocity, AttrHP };
++    for (auto attrID : missileAttrs)
++        if (m_chargeRef->HasAttribute(attrID))
++            missileRef->SetAttribute(attrID, m_chargeRef->GetAttribute(attrID), false);
++
++    SystemManager* pSystem(pClient->SystemMgr());
++    Missile* pDefender(new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, m_modRef, pTarget, pShip, this));
++    pDefender->SetSpeed(missileRef->GetAttribute(AttrMaxVelocity).get_float());
++    pDefender->DestinyMgr()->MakeMissile(pDefender);
++    ConsumeCharge();
++    _log(MODULE__MESSAGE, "%s launched a defender at %s(%u)", pClient->GetName(), pTarget->GetName(), pTarget->GetID());
++}
++
+ void ActiveModule::LaunchProbe()
+ {
+     Client* pClient = m_shipRef->GetPilot();
+diff --git a/src/eve-server/ship/modules/ActiveModule.h b/src/eve-server/ship/modules/ActiveModule.h
+index 1ddef7d51..08c2a5c40 100644
+--- a/src/eve-server/ship/modules/ActiveModule.h
++++ b/src/eve-server/ship/modules/ActiveModule.h
+@@ -75,6 +75,9 @@ public:
+ 
+     void                LaunchProbe();
+     void                LaunchMissile();
++    /* defender missiles (Crucible):  loaded in a launcher that runs without a target.  each cycle fires one at a missile
++     *  on its way to our ship that none of our defenders is chasing yet.  no missile coming, no shot (and no charge used) */
++    void                LaunchDefender();
+     void                LaunchSnowBall();
+     void                LaunchInterdictionSphere();
+ 
+-- 
+2.34.1
+
