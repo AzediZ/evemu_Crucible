@@ -57,6 +57,8 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "corporation/LPService.h"
 #include "corporation/CorporationDB.h"
+#include "../../eve-common/EVE_Standings.h"
+#include "standing/StandingDB.h"
 #include "admin/CommandHelper.h"
 #include "chat/LSCService.h"
 #include "services/ServiceManager.h"
@@ -1104,6 +1106,39 @@ PyResult Command_unban(Client* who, CommandDB* db, EVEServiceManager &services, 
         throw CustomError ("Cannot find character %s", name.c_str());
     ServiceDB::SetAccountBanStatus(accountID, false);
     return new PyString("Unbanned.");
+}
+
+PyResult Command_setstanding(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    // /setstanding (npc corporationID|factionID|agentID) (-10 to 10) [me|charID|"name"]
+    if ((args.argCount() < 3) or !args.isNumber(1) or !args.isNumber(2))
+        throw CustomError ("Correct Usage: /setstanding (npc corporationID|factionID|agentID) (-10 to 10) [me|charID|\"name\"]");
+    uint32 fromID(strtoul(args.arg(1).c_str(), nullptr, 10));
+    if (!IsNPCCorp(fromID) and !IsFaction(fromID) and !IsAgent(fromID))
+        throw CustomError ("%u is not an npc corporation, faction or agent", fromID);
+    float standing(strtof(args.arg(2).c_str(), nullptr));
+    if ((standing < -10.0f) or (standing > 10.0f))
+        throw CustomError ("The standing has to be between -10 and 10");
+    uint32 charID(who->GetCharacterID());
+    if (args.argCount() > 3) {
+        charID = cmd_find_char_id(db, args, 3, who);
+        if (charID == 0)
+            throw CustomError ("Cannot find character %s", args.arg(3).c_str());
+    }
+
+    float old(StandingDB::GetStanding(fromID, charID));
+    Client* pTarget(sEntityList.FindClientByCharID(charID));
+    if ((pTarget != nullptr) and (pTarget->GetChar().get() != nullptr)) {
+        // their client is told (OnStandingSet)
+        pTarget->GetChar()->SetStanding(fromID, charID, standing);
+    } else {
+        StandingDB::SetStanding(fromID, charID, standing);
+    }
+    StandingDB::SaveStandingChanges(fromID, charID, Standings::GMInterventionDirect, standing - old, "Set by a GM");
+
+    char buf[160];
+    snprintf(buf, sizeof(buf), "Standing of %u towards %u set to %.2f (it was %.2f).", fromID, charID, standing, old);
+    return new PyString(buf);
 }
 
 PyResult Command_whois(Client* who, CommandDB* db, EVEServiceManager &services, const Seperator& args)

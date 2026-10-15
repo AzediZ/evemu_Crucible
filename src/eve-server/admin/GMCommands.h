@@ -49,6 +49,8 @@ COMMAND( unban, Acct::Role::ADMIN,
         "(charName) - removes ban on player's account")
 COMMAND( givelp, Acct::Role::ADMIN,
         "('me'|<characterID>) (corporationID) (amount) - adds LP to a character for a specific corporation")
+COMMAND( setstanding, Acct::Role::ADMIN,
+        "(npc corporationID|factionID|agentID) (-10 to 10) [me|charID|\"name\"] - sets a character's standing from an npc corporation, faction or agent (you by default)")
 
 COMMAND( whois, Acct::Role::GMH,
         "(charID|\"name\") - shows account, corp, location and status of a character (online or not)")
