@@ -2399,6 +2399,9 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
             }
         }
     }
+    /* the client lines the gate model's z axis up with minus dunDirection (SpaceObject.AlignToDirection), which left the
+     *  gates facing away from their pocket in game, so it gets the reverse of the line to the room */
+    dir = GVector(-dir.x, -dir.y, -dir.z);
     PyList* dirList = new PyList();
         dirList->AddItem(new PyFloat(dir.x));
         dirList->AddItem(new PyFloat(dir.y));
