@@ -222,6 +222,8 @@ public:
     void ActivateGate(Client* pClient, uint32 gateItemID);
     // the dun* entries of an acceleration gate's slim item
     void MakeGateSlim(uint32 gateItemID, PyDict* slim);
+    // OnSlimItemChange for a gate whose state changed (dungeon and incursion gates)
+    void SendGateSlimUpdate(uint32 gateItemID);
 
     /* escalations */
     // spawns the escalation site of this chrEscalations row (its system must be this one)
@@ -366,7 +368,6 @@ private:
     uint32 CountLiveNPCs(const LiveRoom& room);
 
     // gates
-    void SendGateSlimUpdate(uint32 gateItemID);
     void OpenGate(uint32 gateItemID, LiveGate& gate, bool open);
     void ProcessGateState(uint32 gateItemID, LiveGate& gate);
     bool IsGateOpen(const LiveGate& gate);

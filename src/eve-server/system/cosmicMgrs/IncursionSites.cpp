@@ -55,6 +55,7 @@
 #include "system/SystemManager.h"
 #include "system/TargetManager.h"
 #include "system/cosmicMgrs/BeltMgr.h"
+#include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
 
@@ -290,7 +291,8 @@ SystemEntity* IncursionMgr::FindItem(IncLiveSite& site, SystemManager* pSys, uin
     return nullptr;
 }
 
-SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos, bool global/*false*/)
+SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos,
+                                      bool global/*false*/, const IncGate* gate/*nullptr*/)
 {
     const ItemType* pType = sItemFactory.GetType(typeID);
     if (pType == nullptr) {
@@ -329,7 +331,15 @@ SystemEntity* IncursionMgr::SpawnItem(IncLiveSite& site, SystemManager* pSys, ui
         // beacons are global when spawned.  only the overview beacon stays that way
         if (!global and iRef->HasAttribute(AttrIsGlobal))
             iRef->SetAttribute(AttrIsGlobal, EvilZero, false);
-        pSE = new CelestialSE(iRef, pSys->GetServiceMgr(), pSys);
+        if (gate != nullptr) {
+            /* an acceleration gate, with the dungeon data the client wants (GateSlim):  it points at its pocket and shows as active
+             *  once unlocked.  its record goes in first, as the slim item is made when it enters its bubble */
+            site.gates[iRef->itemID()] = *gate;
+            m_index[iRef->itemID()] = site.siteID;
+            pSE = new AccelGateSE(iRef, pSys->GetServiceMgr(), pSys);
+        } else {
+            pSE = new CelestialSE(iRef, pSys->GetServiceMgr(), pSys);
+        }
         pSys->AddEntity(pSE, false);
     }
 
@@ -356,14 +366,11 @@ void IncursionMgr::SpawnObject(IncLiveSite& site, SystemManager* pSys, const Inc
         } break;
         case Incursion::Role::Gate:
         case Incursion::Role::HiddenGate: {
-            SystemEntity* pSE = SpawnItem(site, pSys, obj.room, obj.role, obj.typeID, obj.name, pos);
-            if (pSE == nullptr)
-                break;
             IncGate gate = IncGate();
                 gate.room = obj.room;
                 gate.destRoom = (uint8)obj.param;
                 gate.lockRoom = (obj.role == Incursion::Role::Gate ? obj.wave : 0);
-            site.gates[pSE->GetID()] = gate;
+            SpawnItem(site, pSys, obj.room, obj.role, obj.typeID, obj.name, pos, false, &gate);
         } break;
         case Incursion::Role::Asteroid: {
             // a temp asteroid on the system's belt manager, like anomaly belts
@@ -658,6 +665,7 @@ void IncursionMgr::RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 roo
     for (auto& cur : site.gates)
         if (cur.second.lockRoom == room) {
             cur.second.lockRoom = 0;
+            pSys->GetDungMgr()->SendGateSlimUpdate(cur.first);     // shows it active
             TellRoom(site, pSys, cur.second.room, "The way is clear: the acceleration gate to the Fleet Staging Area is now active.");
         }
     for (auto& obj : type.objects)
@@ -1290,6 +1298,32 @@ void IncursionMgr::OreMined(SystemEntity* pRoid)
             room = cur.room;
     SpawnWave(site, pSys, room, Incursion::Wave::Mining, false);
     TellRoom(site, pSys, room, "Your mining has drawn the attention of the colony's guards.");
+}
+
+bool IncursionMgr::GateSlim(uint32 gateID, GVector& dir, bool& open)
+{
+    std::map<uint32, uint32>::iterator iItr = m_index.find(gateID);
+    if (iItr == m_index.end())
+        return false;
+    std::map<uint32, IncLiveSite>::iterator sItr = m_sites.find(iItr->second);
+    if (sItr == m_sites.end())
+        return false;
+    IncLiveSite& site = sItr->second;
+    std::map<uint32, IncGate>::iterator gItr = site.gates.find(gateID);
+    if (gItr == site.gates.end())
+        return false;
+    open = (gItr->second.lockRoom == 0);
+    // the pocket is a million km out, so the line between the two pockets' centres is the gate's own to within a hair
+    dir = GVector(0, 0, 1);
+    std::map<uint8, IncLiveRoom>::iterator from = site.rooms.find(gItr->second.room), to = site.rooms.find(gItr->second.destRoom);
+    if ((from != site.rooms.end()) and (to != site.rooms.end())) {
+        GVector d(from->second.center, to->second.center);
+        if (d.length() > 0) {
+            d.normalize();
+            dir = d;
+        }
+    }
+    return true;
 }
 
 /* pockets are deadspace:  bookmarks and fleet warps into one land at the site's beacon, and the gates are the way in */

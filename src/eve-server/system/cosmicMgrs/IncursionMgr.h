@@ -220,6 +220,9 @@ public:
     void OreMined(SystemEntity* pRoid);
     // a warp to dest inside a site's pocket ends at the site's beacon instead (into).  false = no change (DungeonMgr::RedirectWarp)
     bool RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into);
+    /* an incursion gate's slim item (AccelGateSE, DungeonMgr::MakeGateSlim):  dir is where it sends you (its pocket), open whether
+     *  it's unlocked.  false when gateID isn't one of ours */
+    bool GateSlim(uint32 gateID, GVector& dir, bool& open);
 
     // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
     uint32 PenaltyRole(uint32 systemID);
@@ -276,7 +279,8 @@ private:
     void SpawnWave(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 wave, bool count = true);
     NPC* SpawnShip(IncLiveSite& site, SystemManager* pSys, uint8 room, uint16 typeID, const GPoint& pos, const std::string& name = "");
     void SpawnObject(IncLiveSite& site, SystemManager* pSys, const IncSiteObject& obj);
-    SystemEntity* SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos, bool global = false);
+    SystemEntity* SpawnItem(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 role, uint16 typeID, const std::string& name, const GPoint& pos,
+                            bool global = false, const IncGate* gate = nullptr);
     void WaveCleared(IncLiveSite& site, SystemManager* pSys, uint8 room, uint8 wave);
     void RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 room, uint32 now);
     void ScriptTick(IncLiveSite& site, SystemManager* pSys, uint32 now);

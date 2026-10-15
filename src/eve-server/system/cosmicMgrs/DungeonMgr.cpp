@@ -2338,6 +2338,10 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
     auto itr = m_gates.find(gateItemID);
     const LiveGate* pGate((itr == m_gates.end()) ? nullptr : &itr->second);
     const Dungeon::GateDef* pDef((pGate == nullptr) ? nullptr : pGate->def);
+    // an incursion site's gate has no dungeon record:  IncursionMgr knows where it goes and whether it's locked
+    GVector incDir(0, 0, 1);
+    bool incOpen(false);
+    bool incursion((pGate == nullptr) and sIncursionMgr.GateSlim(gateItemID, incDir, incOpen));
 
     slim->SetItemString("dunObjectID", ((pGate != nullptr) and (pGate->objectID != 0)) ? new PyInt(pGate->objectID) : PyStatic.NewNone());
     slim->SetItemString("dunToGateID", PyStatic.NewNone());
@@ -2370,6 +2374,8 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
     // None shows the gate's 'off' state
     if ((pGate != nullptr) and IsGateOpen(*pGate)) {
         slim->SetItemString("dunOpenUntil", new PyLong(pGate->openUntil != 0 ? pGate->openUntil : Win32TimeNow()));
+    } else if (incursion and incOpen) {
+        slim->SetItemString("dunOpenUntil", new PyLong(Win32TimeNow()));
     } else {
         slim->SetItemString("dunOpenUntil", PyStatic.NewNone());
     }
@@ -2379,7 +2385,7 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
         slim->SetItemString("dunMusicUrl", PyStatic.NewNone());
     }
     // the gate points at the room it leads to
-    GVector dir(0, 0, 1);
+    GVector dir(incursion ? incDir : GVector(0, 0, 1));
     if (pGate != nullptr) {
         auto iItr = m_instances.find(pGate->instanceID);
         if (iItr != m_instances.end()) {
