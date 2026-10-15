@@ -71,6 +71,7 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
+#include "system/cosmicMgrs/WormholeMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "npc/LawEnforcement.h"
 #include "npc/ambient/AmbientNPC.h"
@@ -233,6 +234,9 @@ bool SystemManager::BootSystem() {
 
     //start minute timer
     m_minutetimer.Start(60000);
+
+    // a w-space system's statics are always open
+    sWHMgr.SystemBooted(this);
 
     return (m_loaded = true);
 }
@@ -629,7 +633,7 @@ bool SystemManager::LoadSystemDynamics() {
         if (pSE->GetPosition().isZero())
             pSE->SetPosition(sMapData.GetRandPointOnPlanet(m_data.systemID));
         //pSE->SetPosition(sMapData.GetRandPointOnMoon(m_data.systemID));
-        if (pSE->GetTypeID() == EVEDB::invGroups::Wormhole) { //Wormholes don't need anomaly signals
+        if (pSE->GetGroupID() == EVEDB::invGroups::Wormhole) { //Wormholes don't need anomaly signals (theirs are in sysSignatures)
             AddEntity(pSE, false);
         } else {
             AddEntity(pSE);

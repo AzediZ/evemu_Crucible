@@ -30,6 +30,7 @@
 #include "system/Celestial.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/WormholeMgr.h"
 
 /*
  * CelestialObject
@@ -206,16 +207,23 @@ void WormholeSE::EncodeDestiny(Buffer& into)
 PyDict* WormholeSE::MakeSlimItem()
 {
     _log(SE__SLIMITEM, "MakeSlimItem for WormholeSE %s(%u)", GetName(), m_self->itemID());
+    // where it leads, the mass left, its age and the jumps so far come from the wormhole both ends share
+    uint8 otherClass(0), age(m_wormholeAge);
+    float size(m_wormholeSize);
+    int64 expiry(m_expiryDate);
+    uint16 count(m_count);
+    if (!sWHMgr.GetSlimData(m_self->itemID(), otherClass, size, age, expiry, count))
+        otherClass = sDataMgr.GetWHSystemClass(m_system->GetID());
     PyDict *slim = new PyDict();
         slim->SetItemString("itemID",                   new PyLong(m_self->itemID()));
         slim->SetItemString("typeID",                   new PyInt(m_self->typeID()));
         slim->SetItemString("ownerID",                  new PyInt(m_ownerID));
-        slim->SetItemString("otherSolarSystemClass",    new PyInt(sDataMgr.GetWHSystemClass(m_system->GetID())));
-        slim->SetItemString("wormholeSize",             new PyFloat(m_wormholeSize));
-        slim->SetItemString("wormholeAge",              new PyInt(m_wormholeAge));
-        slim->SetItemString("count",                    new PyInt(m_count));   //ships jumped thru?
+        slim->SetItemString("otherSolarSystemClass",    new PyInt(otherClass));
+        slim->SetItemString("wormholeSize",             new PyFloat(size));
+        slim->SetItemString("wormholeAge",              new PyInt(age));
+        slim->SetItemString("count",                    new PyInt(count));
         slim->SetItemString("dunSpawnID",               new PyInt(m_dunSpawnID));
         slim->SetItemString("nebulaType",               new PyInt(m_nebulaType));
-        slim->SetItemString("expiryDate",               new PyLong(m_expiryDate));
+        slim->SetItemString("expiryDate",               new PyLong(expiry));
     return slim;
 }

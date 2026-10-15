@@ -293,7 +293,8 @@ public:
      *  effects.JumpDriveOut/In (effects.JumpDriveOutBO/InBO for black ops).  throws before anything happens when a move is pending */
     void CynoJump(uint32 systemID, const GPoint& beaconPos, const char* outGuid = "effects.JumpDriveOut", const char* inGuid = "effects.JumpDriveIn");
     void CynoJump(InventoryItemRef beacon);
-    void WormholeJump(InventoryItemRef wormhole);
+    // WormholeMgr::Jump() checked it:  through this wormhole to that system, landing at that point
+    void WormholeJump(uint32 wormholeID, uint32 toSystemID, const GPoint& toPoint);
 
     bool IsAutoPilot()                                  { return m_autoPilot; }
     void SetAutoPilot(bool set=false);

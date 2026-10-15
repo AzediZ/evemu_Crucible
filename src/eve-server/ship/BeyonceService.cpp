@@ -56,6 +56,7 @@
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
+#include "system/cosmicMgrs/WormholeMgr.h"
 
 BeyonceService::BeyonceService(EVEServiceManager& mgr)
 : BindableService("beyonce", mgr, eAccessLevel_SolarSystem2)
@@ -630,6 +631,9 @@ PyResult BeyonceBound::CmdWarpToStuff(PyCallArgs &call, PyString* type, PyRep* i
     uint32 toID(0);
     if (!ResolveWarpTarget(call.client, type->content(), id, point, pSE, toID))
         return PyStatic.NewNone();
+    // Crucible:  a wormhole's far end (K162) appears when the first ship warps to it
+    if ((pSE != nullptr) and pSE->IsWormholeSE())
+        sWHMgr.OnWarpTo(pSE->GetID());
 
     // the subordinates (and the group's warp speed) are taken before anyone moves
     std::vector<Client*> members;

@@ -28,6 +28,7 @@
 
 #include "Client.h"
 #include "system/WormholeSvc.h"
+#include "system/cosmicMgrs/WormholeMgr.h"
 
 WormHoleSvc::WormHoleSvc()
 : Service("wormholeMgr")
@@ -74,21 +75,8 @@ PyResult WormHoleSvc::WormholeJump(PyCallArgs& call, PyInt* itemID) {
         throw UserError ("CantEnterWormholeWhileCloaked");
     }
 
-    InventoryItemRef wormhole = sItemFactory.GetItemRefFromID(itemID->value());
-    if (wormhole.get() == nullptr) {
-        call.client->SendNotifyMsg("That wormhole is no longer there.");
-        return PyStatic.NewNone();
-    }
-
-    //Check for jump fuel and make sure there is enough fuel available
-    ShipItemRef ship = call.client->GetShip();
-
-    if (ship->GetAttribute(AttrMass) > wormhole->GetAttribute(AttrWormholeMaxJumpMass).get_int()) {
-        call.client->SendNotifyMsg("Your ship is too large to fit through the wormhole.");
-        return PyStatic.NewNone();
-    }
-
-    call.client->WormholeJump(wormhole);
+    // range, mass, the jump limit and the far end:  WormholeMgr throws to refuse
+    sWHMgr.Jump(call.client, itemID->value());
 
     /* return error msg from this call, if applicable, else nodeid and timestamp */
     // returns nodeID and timestamp

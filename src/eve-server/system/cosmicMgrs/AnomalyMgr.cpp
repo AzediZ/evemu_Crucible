@@ -262,11 +262,9 @@ void AnomalyMgr::LoadAnomalies() {
         } else {
             m_sigByItemID.emplace(sig.sigItemID, sig);
 
-            if (sig.dungeonType == Dungeon::Type::Wormhole) {
-                ++m_WH;
-            } else {
+            // wormholes (statics, K162s, wanderers) are WormholeMgr's.  m_WH counts the wanderers this system rolls
+            if (sig.dungeonType != Dungeon::Type::Wormhole)
                 ++m_Sigs;
-            }
         }
 
         _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::LoadAnomalies() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
@@ -364,15 +362,8 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
             sig.sigGroupID = EVEDB::invGroups::Wormhole;
             sig.scanGroupID = Scanning::Group::Signature;
             sig.scanAttributeID = AttrScanAllStrength;  // Unknown
-            // hand off to WHMgr for creation and exit after return
+            // WormholeMgr makes the wormhole and puts it on our scanner (RegisterWormhole)
             sWHMgr.Create(sig);
-            // creation failure will set itemID to 0, and then there's nothing to keep
-            if (sig.sigItemID == 0)
-                return;
-            m_sigBySigID.emplace(sig.sigID, sig);
-            m_sigByItemID.emplace(sig.sigItemID, sig);
-            // Save wormhole to the database for later loading
-            SaveAnomaly(sig);
             return;
         } break;
         case Dungeon::Type::Anomaly: {      // 7   simple combat sites
@@ -489,6 +480,11 @@ void AnomalyMgr::OnSiteCompleted(const CosmicSignature& sig)
     m_respawnQueue.emplace(Win32TimeNow() + (sConfig.dungeon.RespawnDelay * EvE::Time::Second), sig.dungeonType);
 }
 
+void AnomalyMgr::QueueSite(uint8 dungeonType, uint32 delaySeconds)
+{
+    m_respawnQueue.emplace(Win32TimeNow() + (delaySeconds * EvE::Time::Second), dungeonType);
+}
+
 void AnomalyMgr::SetUpgradeBonus(uint8 combatLevel, uint8 exploreLevel, uint8 oreLevel/*0*/)
 {
     /* infrastructure hub upgrades:  pirate detection arrays add combat anomalies (2 per level),
@@ -513,17 +509,16 @@ void AnomalyMgr::SetUpgradeBonus(uint8 combatLevel, uint8 exploreLevel, uint8 or
     apply(m_bonusOre, oreLevel, Dungeon::Type::Gravimetric, Dungeon::Type::Gravimetric);
 }
 
-// Register an exit wormhole created by WhMgr's 'CreateExit()' function
-void AnomalyMgr::RegisterExitWH(CosmicSignature &sig)
+// a wormhole end WormholeMgr made in this system
+void AnomalyMgr::RegisterWormhole(CosmicSignature &sig)
 {
     m_sigBySigID.emplace(sig.sigID, sig);
     m_sigByItemID.emplace(sig.sigItemID, sig);
-    ++m_Sigs;
 
     // Save anomaly to the database for later loading
     SaveAnomaly(sig);
 
-    _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::RegisterExitWH() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
+    _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::RegisterWormhole() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
             sDunDataMgr.GetDungeonType(sig.dungeonType), sig.dungeonType, \
             sig.sigName.c_str(), m_system->GetName(), sig.systemID, sig.bubbleID, sig.sigStrength *100);
 }

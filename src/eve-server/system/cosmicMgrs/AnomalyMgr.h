@@ -52,7 +52,10 @@ class AnomalyMgr
 
     const char* GetScanGroupName(uint8 groupID=0);
 
-    void RegisterExitWH(CosmicSignature &sig);
+    // a wormhole end WormholeMgr made here:  on the scanner, and saved
+    void RegisterWormhole(CosmicSignature &sig);
+    // a site of this type turns up after the delay (a wandering wormhole that collapsed)
+    void QueueSite(uint8 dungeonType, uint32 delaySeconds);
 
     // a random site position in this system (inside its edge, off other grids)
     GPoint GetSitePosition();

@@ -19,13 +19,41 @@
 #include "utils/Singleton.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 
-/* this class will control all aspects of
- * creating, monitoring, removing, logging
- * connecting, and saving of wormholes.
+/* this class controls all wormholes:  their statics, both ends of each wormhole, the mass and lifetime the two ends
+ *  share, jumps and collapse.  the open wormholes are kept in sysWormholes and each end is an item (with a
+ *  signature) in its system, so they outlive a restart.
+ *
+ * Crucible rules (reports/wormholes-research.md):
+ *  - every w-space system always has its statics (mapWormholeSystems).  a static that collapses is replaced at once
+ *  - the far end (K162) and the destination come when the first ship warps to the wormhole
+ *  - each jump takes the ship's mass (prop modules count) from the mass both ends share.  out of mass or time, it
+ *    collapses
+ *  - a pilot makes at most 2 jumps through a wormhole in 4 minutes, and lands within 5 km of the far end
  */
 
+class Client;
 class EVEServiceManager;
 class SystemManager;
+
+struct WormholePair {
+    uint32 wormholeID;      // itemID of the typed end
+    uint32 typeID;
+    uint32 systemID;
+    GPoint position;
+    bool isStatic;
+    uint32 exitID;          // itemID of the K162.  0 until a ship warps to the wormhole
+    uint32 exitSystemID;
+    GPoint exitPosition;
+    int64 massTotal;        // kg
+    int64 massUsed;
+    uint32 jumps;
+    int64 createTime;       // filetime
+    int64 expiryTime;
+    int64 collapseTime;     // the mass ran out:  it goes once the last ship is through.  0 = not collapsing
+    uint8 age;              // WormHole::Age and WormHole::Size the slim items last showed
+    uint8 size;
+    std::map<uint32, std::vector<int64>> charJumps;     // charID -> jump times in the jump limit window
+};
 
 class WormholeMgr
 : public Singleton<WormholeMgr>
@@ -35,27 +63,58 @@ public:
     ~WormholeMgr();
 
     void Initialize();
+    // 1Hz
     void Process();
 
-    void Create(CosmicSignature& sig, uint32 exitSystemID=0, uint32 exitSourceItemID=0);
-    // this will create a k162 and send data to anomalyMgr for inclusion
-    void CreateExit(SystemManager* pFromSys, SystemManager* pToSys, uint32 sourceItemID);
-    void CreateExit(SystemManager* pFromSys, uint32 exitSystemID, uint32 sourceItemID);
+    bool IsEnabled() const                              { return m_initalized; }
+
+    // a wandering wormhole at the signature AnomalyMgr made.  sig.sigItemID stays 0 when none is made
+    void Create(CosmicSignature& sig);
+    // a system has booted:  its statics are open and its wormhole ends are all there
+    void SystemBooted(SystemManager* pSys);
+    // a ship warps to a wormhole:  the far end opens
+    void OnWarpTo(uint32 itemID);
+    // wormholeMgr.WormholeJump.  throws to refuse
+    void Jump(Client* pClient, uint32 itemID);
+    // what WormholeSE::MakeSlimItem shows.  false when the item isn't a live wormhole
+    bool GetSlimData(uint32 itemID, uint8& otherClass, float& size, uint8& age, int64& expiry, uint16& count);
+
+    // GM commands (/wormhole)
+    std::string GetInfo(uint32 systemID);
+    bool CollapseByItem(uint32 itemID);
+    uint32 SpawnAt(SystemManager* pSys, uint32 typeID, const GPoint& pos);
 
 private:
     ManagerDB* m_mdb;
-    ServiceDB* m_sdb;
 
     Timer m_updateTimer;
 
     bool m_initalized;
 
+    std::map<uint32, WormholePair> m_pairs;     // wormholeID -> pair
+    std::map<uint32, uint32> m_byItem;          // either end's itemID -> wormholeID
+    std::map<uint32, std::vector<uint32>> m_statics;    // w-space systemID -> static typeIDs
+    std::set<uint32> m_staticTypes;             // types that are a static somewhere (never wander)
+    std::set<uint32> m_wspaceLoaded;            // booted w-space systems, for the static check
+
     // Generic functions used when managing wormholes
     const ItemType* GetRandomWormholeType(uint32 systemID);
-    uint32 GetRandomDestination(const ItemType* typeID);
+    uint32 GetRandomDestination(const ItemType* type, uint32 fromSystemID);
 
-    // as system matures, this will definitely need to be updated
-    std::vector<uint32>         m_wormholes;   //exitID
+    // the typed end in its system.  0 on failure
+    uint32 OpenWormhole(uint32 systemID, uint32 typeID, bool isStatic, const GPoint* pos = nullptr, CosmicSignature* sigOut = nullptr);
+    // the far end (K162)
+    void OpenExit(WormholePair& wh);
+    // an end item and its signature in its system (loaded or not).  0 on failure
+    uint32 SpawnEnd(uint32 systemID, uint32 typeID, const GPoint& pos, CosmicSignature& sig);
+    void RemoveEnd(uint32 itemID, uint32 systemID);
+    void Collapse(uint32 wormholeID);
+    void CheckStatics(SystemManager* pSys);
+    void SendSlim(const WormholePair& wh);
+    void Save(const WormholePair& wh);
+
+    static uint8 AgeOf(const WormholePair& wh, int64 now);
+    static uint8 SizeOf(const WormholePair& wh);
 };
 
 

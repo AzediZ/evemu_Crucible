@@ -334,6 +334,7 @@ void EntityList::Process() {
         GuardTick("the locator manager", 0, []{ sLocatorMgr.Process(); });
         GuardTick("the bubble manager", 0, []{ sBubbleMgr.Process(); });
         GuardTick("the incursion manager", 0, []{ sIncursionMgr.Process(); });
+        GuardTick("the wormhole manager", 0, []{ sWHMgr.Process(); });  // collapses, age, statics (30s timer inside)
         GuardTick("the exploration manager", 0, []{ sExplorationMgr.Process(); });
         GuardTick("the fleet service", 0, []{ sFltSvc.Process(); });  // fleet invite timeouts
         GuardTick("the market simulation", 0, []{ sMktSim.Process(); });  // market simulation (keeps to its own time budget)
@@ -348,7 +349,6 @@ void EntityList::Process() {
             GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count
 
             if (m_minutes % 5 == 0) { // ~5m
-                GuardTick("the wormhole manager", 0, []{ sWHMgr.Process(); });
                 GuardTick("the market manager", 0, []{ sMktMgr.Process(); });  // market order expiry, daily price history rollup
                 GuardTick("contract expiry", 0, []{ ContractUtils::ProcessExpiry(); });  // optional contract cleanup and courier failure
                 GuardTick("the corporation manager", 0, []{ sCorpMgr.Process(); });  // vote cases, sanctioned actions, office rent

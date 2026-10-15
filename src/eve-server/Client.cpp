@@ -1714,30 +1714,20 @@ void Client::CynoJump(uint32 systemID, const GPoint& beaconPos, const char* outG
     SetStateTimer(Player::State::DriveJump, Player::Timer::Jumping);
 }
 
-void Client::WormholeJump(InventoryItemRef wormhole) {
+void Client::WormholeJump(uint32 wormholeID, uint32 toSystemID, const GPoint& toPoint) {
     CheckMovePending();
 
-    // Get destination wormhole before any effect is sent
-    uint32 destID = wormhole->GetAttribute(AttrWormholeTargetSystem2).get_uint32();
-    InventoryItemRef destWh = sItemFactory.GetItemRefFromID(destID);
-    if (destWh.get() == nullptr) {
-        _log(DATA__ERROR, "Failed to retrieve destination wormhole %u for wormhole %u", destID, wormhole->itemID());
-        throw CustomError("Jump failed: this wormhole has no destination.");
-    }
-
     MapDB::AddJump(m_locationID);
-    pShipSE->DestinyMgr()->SendJumpOutWormhole(wormhole->itemID());
-    pShipSE->DestinyMgr()->SendWormholeActivity(wormhole->itemID());
+    pShipSE->DestinyMgr()->SendJumpOutWormhole(wormholeID);
+    pShipSE->DestinyMgr()->SendWormholeActivity(wormholeID);
 
-    m_moveSystemID = wormhole->GetAttribute(AttrWormholeTargetSystem1).get_int();
+    m_moveSystemID = toSystemID;
     MapDB::AddJump(m_moveSystemID);
     m_char->VisitSystem(m_moveSystemID);
 
     // start jump timer
-    m_movePoint = destWh->position();
-    m_movePoint.MakeRandomPointOnSphere(2000);
+    m_movePoint = toPoint;
     SetStateTimer(Player::State::WormholeJump, Player::Timer::Jumping);
-
 }
 
 void Client::ExecuteJump() {
