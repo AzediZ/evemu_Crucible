@@ -840,7 +840,14 @@ bool DBResultRow::GetBool( uint32 index ) const
         return false;
     }
 
-    return (mRow[index][0] != 0);
+    const char* value(mRow[index]);
+    if (value == nullptr)
+        return false;
+    /* a bit column comes as its raw byte (0x00 or 0x01), any other as text ("0", "1").  only reading the first byte
+     *  made every tinyint flag true (dungeon gates and triggers, mission flags, wormhole statics, station conquerability) */
+    if (((mLengths == nullptr) or (mLengths[index] == 1)) and ((value[0] == '\0') or (value[0] == '\x01')))
+        return (value[0] != '\0');
+    return (strtol(value, nullptr, 0) != 0);
 }
 
 uint32 DBResultRow::GetUInt( uint32 index ) const
