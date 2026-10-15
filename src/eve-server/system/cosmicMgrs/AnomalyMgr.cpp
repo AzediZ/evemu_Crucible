@@ -309,7 +309,7 @@ void AnomalyMgr::GetAnomalyList(std::vector<CosmicSignature>& sig) {
         sig.push_back(cur.second);
 }
 
-void AnomalyMgr::CreateAnomaly(int8 typeID)
+uint32 AnomalyMgr::CreateAnomaly(int8 typeID, uint32 dungeonID/*0*/, const GPoint* position/*nullptr*/)
 {
     // compile data for new system anomaly.
     CosmicSignature sig = CosmicSignature();
@@ -339,10 +339,10 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
     if (sig.dungeonType == 0) {
         _log(COSMIC_MGR__ERROR, "Dungeon Type returned 0 for %s in %s(%u)", \
                     sig.sigName.c_str(), m_system->GetName(), m_system->GetID());
-        return;
+        return 0;
     }
 
-    sig.position = GetSitePosition();
+    sig.position = (position != nullptr ? *position : GetSitePosition());
 
     // some sites will use sys sov for ships.  use this for them....
     // sig.ownerID = sDataMgr.GetRegionFaction(m_system->GetRegionID());
@@ -380,7 +380,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
             sig.scanAttributeID = AttrScanAllStrength;  // Unknown
             // WormholeMgr makes the wormhole and puts it on our scanner (RegisterWormhole)
             sWHMgr.Create(sig);
-            return;
+            return 0;
         } break;
         case Dungeon::Type::Anomaly: {      // 7   simple combat sites
             sig.sigTypeID = EVEDB::invTypes::CosmicAnomaly;
@@ -408,15 +408,16 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
         // error or denied
         case 0:
         default:
-            return;
+            return 0;
     }
 
     // create and register here
     // all anomalies will be created/populated by dungMgr, except WH (handed off to WHMgr above)
     //  the dungeon:  this faction's for the system's true sec, else any faction's.  in w-space the Sleepers' of its class
     float trueSec(m_system->GetSystemSecurityRating());
-    uint32 dungeonID(0);
-    if (m_whClass != 0) {
+    if (dungeonID != 0) {
+        // a GM's pick:  that dungeon, wherever it would normally spawn
+    } else if (m_whClass != 0) {
         dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, factionSleepers, trueSec, 0, m_whClass);
     } else {
         dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec);
@@ -427,7 +428,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
     if (pDungeon.get() == nullptr) {
         _log(COSMIC_MGR__WARNING, "AnomalyMgr::CreateAnomaly() - no %s dungeon for %s(%u) (true sec %.2f)",
                 sDunDataMgr.GetDungeonType(sig.dungeonType), m_system->GetName(), m_system->GetID(), trueSec);
-        return;
+        return 0;
     }
     Dungeon::SpawnParams params;
         params.dungeonID = dungeonID;
@@ -438,7 +439,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
         params.usePosition = true;
         params.position = sig.position;
     if (m_dungMgr->SpawnInstance(params, &sig) == 0) // pass by ref here, so other vars can be set.
-        return;
+        return 0;
     // add new sig to sysSigMaps
     m_sigBySigID.emplace(sig.sigID, sig);
     if (sig.scanGroupID == Scanning::Group::Anomaly) {
@@ -455,6 +456,7 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
     _log(COSMIC_MGR__MESSAGE, "AnomalyMgr::Create() - Created Signal %s(%u) for %s in %s(%u), bubbleID %u with %.3f%% sigStrength.", \
             sDunDataMgr.GetDungeonType(sig.dungeonType), sig.dungeonType, \
             sig.sigName.c_str(), m_system->GetName(), sig.systemID, sig.bubbleID, sig.sigStrength *100);
+    return sig.sigItemID;
 }
 
 GPoint AnomalyMgr::GetSitePosition()

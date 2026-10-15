@@ -406,6 +406,13 @@ const Dungeon::GateDef* DungeonDataMgr::GetGate(uint32 objectID)
     return &itr->second;
 }
 
+void DungeonDataMgr::GetByArchetype(uint8 archetype, std::vector<uint32>& into)
+{
+    auto range = m_byArchetype.equal_range(archetype);
+    for (auto itr = range.first; itr != range.second; ++itr)
+        into.push_back(itr->second);
+}
+
 void DungeonDataMgr::GetLoot(uint32 lootGroupID, std::vector<Dungeon::LootEntry>& into)
 {
     auto range = m_loot.equal_range(lootGroupID);

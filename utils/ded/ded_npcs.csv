@@ -1,0 +1,655 @@
+typeID,groupID,name,bounty,hp
+23999,593,"Gistatis Legionnaire",131250,4200
+24004,593,"Gistatis Primus",135000,4200
+24005,593,"Gistatis Tribuni",138750,4200
+24006,593,"Gistatis Praefectus",142500,4200
+24007,593,"Gistatis Tribunus",146250,4200
+24008,593,"Gistatis Legatus",153750,4200
+24175,593,"Gistatis Domination Legionnaire",150000,4200
+24176,593,"Gistatis Domination Primus",157500,4200
+24177,593,"Gistatis Domination Tribuni",161250,4200
+24178,593,"Gistatis Domination Praefectus",165000,4200
+24179,593,"Gistatis Domination Tribunus",168750,4200
+24180,593,"Gistatis Domination Legatus",172500,4200
+16892,594,"Gist Commander",375000,11450
+16893,594,"Gist General",431250,12675
+16899,594,"Gist Warlord",543750,15500
+16900,594,"Gist War General",487500,13800
+16921,594,"Gist Domination Commander",600000,11450
+16922,594,"Gist Domination General",656250,12675
+16923,594,"Gist Domination War General",825000,13800
+16924,594,"Gist Domination Saint",1050000,13800
+16925,594,"Gist Domination Nephilim",1106250,15500
+16926,594,"Gist Domination Warlord",937500,15500
+17641,594,"Arch Angel Raelek",1500000,15500
+24125,594,"Gist Saint",712500,15500
+24126,594,"Gist Nephilim",768750,15500
+24127,594,"Gist Malakim",881250,15500
+24128,594,"Gist Throne",993750,15500
+24129,594,"Gist Cherubim",1162500,15500
+24130,594,"Gist Seraphim",1218750,15500
+24131,594,"Gist Domination Malakim",1275000,15500
+24132,594,"Gist Domination Throne",1331250,15500
+24133,594,"Gist Domination Cherubim",1387500,15500
+24134,594,"Gist Domination Seraphim",1443750,15500
+25822,594,"Gist_Defender Battleship",0,15500
+32298,594,"Karkoti Rend",10000000,15500
+32402,594,"Angel Battleship Vessel",543750,15500
+11719,595,"Angel Cartel Transport Ship",25000,1800
+14345,595,"Renegade Angel Goon",75000,3600
+16165,595,"Angel Cartel Personnel Transport",25000,1800
+16875,595,"Gistum Depredator",37500,1875
+16880,595,"Gistum Crusher",51563,3300
+16881,595,"Gistum Smasher",45938,2625
+16884,595,"Gistum Predator",43125,2400
+16889,595,"Gistum Breaker",57188,3600
+16891,595,"Gistum Marauder",68438,4000
+16896,595,"Gistum Liquidator",74063,4200
+16898,595,"Gistum Defeater",62813,3800
+16906,595,"Gistum Domination Depredator",40313,1875
+16909,595,"Gistum Domination Crusher",60000,3300
+16910,595,"Gistum Domination Smasher",54375,2625
+16912,595,"Gistum Domination Predator",48750,2400
+16915,595,"Gistum Domination Breaker",65625,3600
+16916,595,"Gistum Domination Defeater",71250,3800
+16917,595,"Gistum Domination Marauder",82500,4000
+16918,595,"Gistum Domination Phalanx",88125,4000
+16919,595,"Gistum Domination Liquidator",85313,4200
+16920,595,"Gistum Domination Centurion",90938,4200
+24111,595,"Gistum Phalanx",76875,4200
+24112,595,"Gistum Centurion",79688,4200
+24113,595,"Arch Gistum Depredator",180000,4200
+24114,595,"Arch Gistum Predator",191250,4200
+24115,595,"Arch Gistum Smasher",202500,4200
+24116,595,"Arch Gistum Crusher",213750,4200
+24117,595,"Arch Gistum Breaker",225000,4200
+24118,595,"Arch Gistum Defeater",236250,4200
+24119,595,"Arch Gistum Marauder",247500,4200
+24120,595,"Arch Gistum Liquidator",258750,4200
+24121,595,"Arch Gistum Phalanx",270000,4200
+24122,595,"Arch Gistum Centurion",281250,4200
+26752,595,"Angel Transport",75000,4000
+30743,595,"Society of Conscious Thought Cruiser",202500,4200
+32401,595,"Angel Cruiser Vessel",213750,4150
+23969,596,"Gistior Shatterer",11250,750
+23974,596,"Gistior Defacer",11813,750
+23975,596,"Gistior Haunter",12375,750
+23976,596,"Gistior Defiler",13500,750
+23977,596,"Gistior Seizer",14625,750
+23978,596,"Gistior Trasher",15750,750
+24229,596,"Gistior Domination Shatterer",12938,750
+24230,596,"Gistior Domination Defacer",14063,750
+24231,596,"Gistior Domination Haunter",15188,750
+24232,596,"Gistior Domination Defiler",16313,750
+24233,596,"Gistior Domination Seizer",16875,750
+24234,596,"Gistior Domination Trasher",17438,750
+2012,597,"Terrorist Leader",200000,1150
+16874,597,"Gistii Ambusher",7500,560
+16876,597,"Gistii Fugitive",3000,160
+16877,597,"Gistii Hijacker",3000,60
+16878,597,"Gistii Hunter",8250,690
+16879,597,"Gistii Impaler",9000,750
+16882,597,"Gistii Nomad",6375,515
+16883,597,"Gistii Outlaw",4500,225
+16885,597,"Gistii Raider",7875,640
+16886,597,"Gistii Rogue",3750,180
+16887,597,"Gistii Ruffian",6000,345
+16888,597,"Gistii Thug",4875,300
+16890,597,"Arch Gistii Hijacker",18000,1125
+16894,597,"Arch Gistii Thug",21375,1950
+16895,597,"Arch Gistii Outlaw",20250,2050
+16897,597,"Arch Gistii Rogue",19125,1200
+16901,597,"Gistii Domination Hijacker",3375,160
+16902,597,"Gistii Domination Rogue",4125,180
+16903,597,"Gistii Domination Outlaw",5250,225
+16904,597,"Gistii Domination Thug",5625,300
+16905,597,"Gistii Domination Ambusher",8625,560
+16907,597,"Gistii Domination Hunter",9750,690
+16908,597,"Gistii Domination Impaler",10125,750
+16911,597,"Gistii Domination Nomad",7125,515
+16913,597,"Gistii Domination Raider",9375,640
+16914,597,"Gistii Domination Ruffian",6750,345
+24033,597,"Arch Gistii Ruffian",22500,1950
+24034,597,"Arch Gistii Nomad",23625,1950
+24035,597,"Arch Gistii Ambusher",24750,1950
+24036,597,"Arch Gistii Raider",25875,1950
+24037,597,"Arch Gistii Hunter",27000,1950
+24038,597,"Arch Gistii Impaler",28125,1950
+25823,597,"Gistii_Defender_Frigate",0,1950
+32400,597,"Angel Frigate Vessel",20250,1550
+2072,602,"Anire Scarlet",5000000,4500
+24000,602,"Corpatis Bishop",131250,4500
+24009,602,"Corpatis Seer",135000,4500
+24010,602,"Corpatis Shade",138750,4500
+24011,602,"Corpatis Fanatic",142500,4500
+24012,602,"Corpatis Phantom",146250,4500
+24013,602,"Corpatis Exorcist",153750,4500
+24181,602,"Dark Corpatis Bishop",150000,4500
+24182,602,"Dark Corpatis Seer",157500,4500
+24183,602,"Dark Corpatis Shade",161250,4500
+24184,602,"Dark Corpatis Fanatic",165000,4500
+24185,602,"Dark Corpatis Phantom",168750,4500
+24186,602,"Dark Corpatis Exorcist",172500,4500
+16934,603,"Corpus Prophet",431250,13025
+16938,603,"Corpus Oracle",487500,14500
+16941,603,"Corpus Apostle",543750,16750
+16952,603,"Corpus Archon",375000,11725
+16965,603,"Dark Corpus Prophet",656250,13025
+16967,603,"Dark Corpus Oracle",825000,14500
+16968,603,"Dark Corpus Archbishop",1050000,14500
+16969,603,"Dark Corpus Apostle",937500,16750
+16970,603,"Dark Corpus Harbinger",1106250,16750
+16978,603,"Dark Corpus Archon",600000,11725
+24135,603,"Corpus Archbishop",712500,16750
+24136,603,"Corpus Harbinger",768750,16750
+24137,603,"Corpus Monsignor",881250,16750
+24138,603,"Corpus Cardinal",993750,16750
+24139,603,"Corpus Patriarch",1162500,16750
+24140,603,"Corpus Pope",1218750,16750
+24141,603,"Dark Corpus Monsignor",1275000,16750
+24142,603,"Dark Corpus Cardinal",1331250,16750
+24143,603,"Dark Corpus Patriarch",1387500,16750
+24144,603,"Dark Corpus Pope",1443750,16750
+26754,603,"Corpus Messiah",1218750,16750
+11716,604,"Blood Raider Transport Ship",25000,1900
+14346,604,"Renegade Blood Raider",75000,3700
+16166,604,"Blood Raider Personnel Transport",25000,1900
+16927,604,"Corpum Arch Engraver",43125,2450
+16928,604,"Corpum Arch Priest",74063,4500
+16929,604,"Corpum Arch Reaver",37500,2250
+16930,604,"Corpum Arch Sage",68438,4225
+16931,604,"Corpum Arch Templar",45938,2800
+16944,604,"Corpum Priest",62813,3950
+16948,604,"Corpum Revenant",51563,3350
+16949,604,"Corpum Sage",57188,3700
+16956,604,"Dark Corpum Arch Engraver",48750,2450
+16957,604,"Dark Corpum Arch Priest",85313,4500
+16958,604,"Dark Corpum Dark Priest",90938,4500
+16959,604,"Dark Corpum Arch Reaver",40313,2250
+16960,604,"Dark Corpum Arch Sage",82500,4225
+16961,604,"Dark Corpum Shadow Sage",88125,4225
+16962,604,"Dark Corpum Arch Templar",54375,2800
+16971,604,"Dark Corpum Priest",71250,3950
+16975,604,"Dark Corpum Revenant",60000,3350
+16976,604,"Dark Corpum Sage",65625,3700
+24099,604,"Corpum Shadow Sage",76875,4500
+24100,604,"Corpum Dark Priest",79688,4500
+24101,604,"Elder Corpum Arch Reaver",180000,4500
+24102,604,"Elder Corpum Arch Engraver",191250,4500
+24103,604,"Elder Corpum Arch Templar",202500,4500
+24104,604,"Elder Corpum Revenant",213750,4500
+24105,604,"Elder Corpum Sage",225000,4500
+24106,604,"Elder Corpum Priest",236250,4500
+24107,604,"Elder Corpum Arch Sage",247500,4500
+24108,604,"Elder Corpum Arch Priest",258750,4500
+24109,604,"Elder Corpum Shadow Sage",270000,4500
+24110,604,"Elder Corpum Dark Priest",281250,4500
+26712,604,"Blood Phantom - Ectoplasm",215000,3350
+26755,604,"Gurista Guerilla Special Aquirement Division Captain",43125,2450
+26971,604,"Blood Raider Slave Transport Ship",25000,1900
+23970,605,"Corpior Visionary",11250,800
+23979,605,"Corpior Converter",11813,800
+23980,605,"Corpior Templar",12375,800
+23981,605,"Corpior Devoter",13500,800
+23982,605,"Corpior Friar",14625,800
+23983,605,"Corpior Cleric",15750,800
+24223,605,"Dark Corpior Visioner",12938,800
+24224,605,"Dark Corpior Converter",14063,800
+24225,605,"Dark Corpior Templar",15188,800
+24226,605,"Dark Corpior Devoter",16313,800
+24227,605,"Dark Corpior Friar",16875,800
+24228,605,"Dark Corpior Cleric",17438,800
+16563,606,"Blood Wraith",30000,1600
+16564,606,"Blood Disciple",25000,1435
+16932,606,"Corpii Diviner",7875,675
+16933,606,"Corpii Upholder",4875,325
+16935,606,"Corpii Collector",6375,575
+16936,606,"Corpii Follower",3000,60
+16937,606,"Corpii Fugitive",3000,160
+16939,606,"Elder Corpii Herald",20250,1725
+16940,606,"Corpii Reaver",8250,650
+16942,606,"Elder Corpii Upholder",21375,1850
+16943,606,"Elder Corpii Follower",18000,1050
+16945,606,"Corpii Raider",7500,675
+16946,606,"Corpii Herald",4500,180
+16947,606,"Corpii Seeker",6000,400
+16950,606,"Corpii Worshipper",3750,180
+16951,606,"Elder Corpii Worshiper",19125,1125
+16953,606,"Corpii Engraver",9000,800
+16954,606,"Dark Corpii Reaver",9750,650
+16955,606,"Dark Corpii Follower",3375,160
+16963,606,"Dark Corpii Diviner",9375,675
+16964,606,"Dark Corpii Upholder",5625,325
+16966,606,"Dark Corpii Collector",7125,575
+16972,606,"Dark Corpii Raider",8625,675
+16973,606,"Dark Corpii Herald",5250,180
+16974,606,"Dark Corpii Seeker",6750,400
+16977,606,"Dark Corpii Worshipper",4125,180
+16979,606,"Dark Corpii Engraver",10125,800
+24039,606,"Elder Corpii Seeker",22500,1850
+24040,606,"Elder Corpii Collector",23625,1850
+24041,606,"Elder Corpii Raider",24750,1850
+24042,606,"Elder Corpii Diviner",25875,1850
+24043,606,"Elder Corpii Reaver",27000,1850
+24044,606,"Elder Corpii Engraver",28125,1850
+24001,611,"Pithatis Executor",131250,4150
+24014,611,"Pithatis Enforcer",135000,4150
+24015,611,"Pithatis Assaulter",138750,4150
+24016,611,"Pithatis Assassin",142500,4150
+24017,611,"Pithatis Death Dealer",146250,4150
+24018,611,"Pithatis Revolter",153750,4150
+24187,611,"Dread Pithatis Executor",150000,4150
+24188,611,"Dread Pithatis Enforcer",157500,4150
+24189,611,"Dread Pithatis Assaulter",161250,4150
+24190,611,"Dread Pithatis Assassin",165000,4150
+24191,611,"Dread Pithatis Death Dealer",168750,4150
+24192,611,"Dread Pithatis Revolter",172500,4150
+16984,612,"Pith Dismantler",487500,14000
+16988,612,"Pith Obliterator",431250,12750
+16992,612,"Pith Eradicator",375000,11250
+17005,612,"Pith Extinguisher",543750,15750
+17010,612,"Dread Pith Dismantler",825000,14000
+17011,612,"Dread Pith Eliminator",1050000,14000
+17014,612,"Dread Pith Obliterator",656250,12750
+17018,612,"Dread Pith Eradicator",600000,11250
+17030,612,"Dread Pith Extinguisher",937500,15750
+17031,612,"Dread Pith Exterminator",1106250,15750
+24145,612,"Pith Eliminator",712500,15750
+24146,612,"Pith Exterminator",768750,15750
+24147,612,"Pith Destroyer",881250,15750
+24148,612,"Pith Conquistador",993750,15750
+24149,612,"Pith Massacrer",1162500,15750
+24150,612,"Pith Usurper",1218750,15750
+24151,612,"Dread Pith Destroyer",1275000,15750
+24152,612,"Dread Pith Conquistador",1331250,15750
+24153,612,"Dread Pith Massacrer",1387500,15750
+24154,612,"Dread Pith Usurper",1443750,15750
+25824,612,"Pith Defender",0,15750
+32385,612,"Guristas Battleship Vessel",800000,14000
+11601,613,"Guristas Emissary",50000,3250
+11718,613,"Guristas Transport Ship",25000,1800
+14344,613,"Renegade Guristas Pirate",75000,3450
+16169,613,"Guristas Personnel Transport",25000,1800
+16980,613,"Pithum Killer",45938,2675
+16982,613,"Pithum Ascriber",43125,2325
+16991,613,"Pithum Inferno",74063,4150
+16995,613,"Pithum Mortifier",68438,3900
+16998,613,"Pithum Nullifier",62813,3650
+17000,613,"Pithum Murderer",51563,3250
+17003,613,"Pithum Annihilator",57188,3450
+17004,613,"Pithum Silencer",37500,2075
+17007,613,"Dread Pithum Killer",54375,2675
+17009,613,"Dread Pithum Ascriber",48750,2325
+17016,613,"Dread Pithum Inferno",85313,4150
+17017,613,"Dread Pithum Abolisher",90938,4150
+17020,613,"Dread Pithum Mortifier",82500,3900
+17021,613,"Dread Pithum Eraser",88125,3900
+17024,613,"Dread Pithum Nullifier",71250,3650
+17025,613,"Dread Pithum Murderer",60000,3250
+17028,613,"Dread Pithum Annihilator",65625,3450
+17029,613,"Dread Pithum Silencer",40313,2075
+24087,613,"Pithum Eraser",76875,4150
+24088,613,"Pithum Abolisher",79688,4150
+24089,613,"Dire Pithum Silencer",180000,4150
+24090,613,"Dire Pithum Ascriber",191250,4150
+24091,613,"Dire Pithum Killer",202500,4150
+24092,613,"Dire Pithum Murderer",213750,4150
+24093,613,"Dire Pithum Annihilator",225000,4150
+24094,613,"Dire Pithum Nullifier",236250,4150
+24095,613,"Dire Pithum Mortifier",247500,4150
+24096,613,"Dire Pithum Inferno",258750,4150
+24097,613,"Dire Pithum Eraser",270000,4150
+24098,613,"Dire Pithum Abolisher",281250,4150
+23971,614,"Pithior Nihilist",11250,775
+23984,614,"Pithior Anarchist",11813,775
+23985,614,"Pithior Renegade",12375,775
+23986,614,"Pithior Guerilla",13500,775
+23987,614,"Pithior Terrorist",14625,775
+23988,614,"Pithior Supremacist",15750,775
+24217,614,"Dread Pithior Nihilist",12938,775
+24218,614,"Dread Pithior Anarchist",14063,775
+24219,614,"Dread Pithior Renegade",15188,775
+24220,614,"Dread Pithior Guerilla",16313,775
+24221,614,"Dread Pithior Terrorist",16875,775
+24222,614,"Dread Pithior Supremacist",17438,775
+16565,615,"Guristas Kyoukan",30000,1085
+16566,615,"Guristas Webifier",25000,1550
+16981,615,"Pithi Arrogator",3000,55
+16983,615,"Dire Pithi Infiltrator",20250,1550
+16985,615,"Dire Pithi Invader",21375,1625
+16986,615,"Pithi Demolisher",9000,775
+16987,615,"Pithi Despoiler",6000,375
+16989,615,"Pithi Destructor",8250,675
+16990,615,"Dire Pithi Imputor",19125,925
+16993,615,"Pithi Fugitive",3000,160
+16994,615,"Pithi Imputor",3750,180
+16996,615,"Pithi Infiltrator",4500,225
+16997,615,"Pithi Invader",4875,300
+16999,615,"Dire Pithi Arrogator",18000,850
+17001,615,"Pithi Plunderer",7500,550
+17002,615,"Pithi Saboteur",6375,475
+17006,615,"Pithi Wrecker",7875,650
+17008,615,"Dread Pithi Arrogator",3375,160
+17012,615,"Dread Pithi Demolisher",10125,775
+17013,615,"Dread Pithi Despoiler",6750,375
+17015,615,"Dread Pithi Destructor",9750,675
+17019,615,"Dread Pithi Imputor",4125,180
+17022,615,"Dread Pithi Infiltrator",5250,225
+17023,615,"Dread Pithi Invader",5625,300
+17026,615,"Dread Pithi Plunderer",8625,550
+17027,615,"Dread Pithi Saboteur",7125,475
+17032,615,"Dread Pithi Wrecker",9375,650
+24045,615,"Dire Pithi Despoiler",22500,1625
+24046,615,"Dire Pithi Saboteur",23625,1625
+24047,615,"Dire Pithi Plunderer",24750,1625
+24048,615,"Dire Pithi Wrecker",25875,1625
+24049,615,"Dire Pithi Destructor",27000,1625
+24050,615,"Dire Pithi Demolisher",28125,1625
+25825,615,"Pithi Defender",0,925
+32391,615,"Yukiro Demense",1000000,2900
+24002,620,"Centatis Phantasm",131250,4500
+24019,620,"Centatis Specter",135000,4500
+24020,620,"Centatis Wraith",138750,4500
+24021,620,"Centatis Devil",142500,4500
+24022,620,"Centatis Daemon",146250,4500
+24023,620,"Centatis Behemoth",153750,4500
+24193,620,"True Centatis Phantasm",150000,4500
+24194,620,"True Centatis Specter",157500,4500
+24195,620,"True Centatis Wraith",161250,4500
+24196,620,"True Centatis Devil",165000,4500
+24197,620,"True Centatis Daemon",168750,4500
+24198,620,"True Centatis Behemoth",172500,4500
+17058,621,"Centus Lord",375000,11475
+17066,621,"Centus Slave Lord",431250,12550
+17071,621,"Centus Mutant Lord",487500,14225
+17082,621,"Centus Savage Lord",543750,16250
+17085,621,"True Centus Lord",600000,11475
+17090,621,"True Centus Slave Lord",656250,12550
+17095,621,"True Centus Mutant Lord",825000,14225
+17096,621,"True Centus Plague Lord",1050000,14225
+17107,621,"True Centus Beast Lord",1106250,16250
+17108,621,"True Centus Savage Lord",937500,16250
+19737,621,"Sansha's Tyrant Elite",1500000,19050
+24155,621,"Centus Plague Lord",712500,16250
+24156,621,"Centus Beast Lord",768750,16250
+24157,621,"Centus Overlord",881250,16250
+24158,621,"Centus Dark Lord",993750,16250
+24159,621,"Centus Dread Lord",1162500,16250
+24160,621,"Centus Tyrant",1218750,16250
+24161,621,"True Centus Overlord",1275000,16250
+24162,621,"True Centus Dark Lord",1331250,16250
+24163,621,"True Centus Dread Lord",1387500,16250
+24164,621,"True Centus Tyrant",1443750,16250
+11717,622,"Sanshas Transport Ship",25000,1900
+14348,622,"Renegade Sanshas Slaver",75000,3700
+16167,622,"Sanshas Personnel Transport",25000,1900
+17057,622,"Centum Beast",45938,2800
+17062,622,"Centum Slaughterer",57188,3700
+17065,622,"Centum Juggernaut",51563,3350
+17070,622,"Centum Torturer",74063,4500
+17073,622,"Centum Ravager",43125,2450
+17075,622,"Centum Ravisher",37500,2250
+17080,622,"Centum Mutilator",68438,4225
+17083,622,"Centum Execrator",62813,3950
+17084,622,"True Centum Beast",54375,2800
+17087,622,"True Centum Slaughterer",65625,3700
+17089,622,"True Centum Juggernaut",60000,3350
+17093,622,"True Centum Torturer",85313,4500
+17094,622,"True Centum Hellhound",90938,4500
+17098,622,"True Centum Ravager",48750,2450
+17100,622,"True Centum Ravisher",40313,2250
+17104,622,"True Centum Mutilator",82500,4225
+17105,622,"True Centum Fiend",88125,4225
+17109,622,"True Centum Execrator",71250,3950
+24075,622,"Centum Fiend",76875,4500
+24076,622,"Centum Hellhound",79688,4500
+24077,622,"Centum Loyal Ravisher",180000,4500
+24078,622,"Centum Loyal Ravager",191250,4500
+24079,622,"Centum Loyal Beast",202500,4500
+24080,622,"Centum Loyal Juggernaut",213750,4500
+24081,622,"Centum Loyal Slaughterer",225000,4500
+24082,622,"Centum Loyal Execrator",236250,4500
+24083,622,"Centum Loyal Mutilator",247500,4500
+24084,622,"Centum Loyal Torturer",258750,4500
+24085,622,"Centum Loyal Fiend",270000,4500
+24086,622,"Centum Loyal Hellhound",281250,4500
+26750,622,"Sansha Miner",25000,1900
+23972,623,"Centior Misshape",11250,800
+23989,623,"Centior Cannibal",11813,800
+23990,623,"Centior Devourer",12375,800
+23991,623,"Centior Abomination",13500,800
+23992,623,"Centior Monster",14625,800
+23993,623,"Centior Horror",15750,800
+24211,623,"True Centior Misshape",12938,800
+24212,623,"True Centior Cannibal",14063,800
+24213,623,"True Centior Devourer",15188,800
+24214,623,"True Centior Abomination",16313,800
+24215,623,"True Centior Monster",16875,800
+24216,623,"True Centior Horror",17438,800
+16567,624,"Sansha's Demon",30000,1350
+16568,624,"Sansha's Berserker",25000,1430
+17059,624,"Centii Butcher",9000,800
+17060,624,"Centii Loyal Minion",19125,1125
+17061,624,"Centii Loyal Ravener",21375,1850
+17063,624,"Centii Enslaver",7500,675
+17064,624,"Centii Fugitive",3000,155
+17067,624,"Centii Manslayer",8250,675
+17068,624,"Centii Minion",3750,180
+17069,624,"Centii Loyal Servant",18000,1050
+17072,624,"Centii Plague",7875,650
+17074,624,"Centii Ravener",4875,325
+17076,624,"Centii Savage",6000,400
+17077,624,"Centii Scavenger",4500,250
+17078,624,"Centii Servant",3000,55
+17079,624,"Centii Loyal Scavenger",20250,1725
+17081,624,"Centii Slavehunter",6375,575
+17086,624,"True Centii Butcher",10125,800
+17088,624,"True Centii Enslaver",8625,675
+17091,624,"True Centii Manslayer",9750,675
+17092,624,"True Centii Minion",4125,180
+17097,624,"True Centii Plague",9375,650
+17099,624,"True Centii Ravener",5625,325
+17101,624,"True Centii Savage",6750,400
+17102,624,"True Centii Scavenger",5250,250
+17103,624,"True Centii Servant",3375,155
+17106,624,"True Centii Slavehunter",7125,575
+24051,624,"Centii Loyal Savage",22500,1850
+24052,624,"Centii Loyal Slavehunter",23625,1850
+24053,624,"Centii Loyal Enslaver",24750,1850
+24054,624,"Centii Loyal Plague",25875,1850
+24055,624,"Centii Loyal Manslayer",27000,1850
+24056,624,"Centii Loyal Butcher",28125,1850
+24607,624,"TestScanRadar",1000,36
+24003,629,"Corelatis Wing Leader",131250,4500
+24024,629,"Corelatis Squad Leader",135000,4500
+24025,629,"Corelatis Platoon Leader",138750,4500
+24026,629,"Corelatis Captain",142500,4500
+24027,629,"Corelatis Captain Sentry",146250,4500
+24028,629,"Corelatis High Captain",153750,4500
+24199,629,"Shadow Corelatis Wing Leader",150000,4500
+24200,629,"Shadow Corelatis Squad Leader",157500,4500
+24201,629,"Shadow Corelatis Platoon Leader",161250,4500
+24202,629,"Shadow Corelatis Captain",165000,4500
+24203,629,"Shadow Corelatis Captain Sentry",168750,4500
+24204,629,"Shadow Corelatis High Captain",172500,4500
+17034,630,"Core Rear Admiral",543750,16750
+17036,630,"Core Port Admiral",487500,14500
+17037,630,"Core Commodore",431250,13025
+17038,630,"Core Baron",375000,11725
+17049,630,"Shadow Core Port Admiral",825000,14500
+17050,630,"Shadow Core Vice Admiral",1106250,16750
+17051,630,"Shadow Core Commodore",656250,13025
+17052,630,"Shadow Core Baron",600000,11725
+17053,630,"Shadow Core Flotilla Admiral",1050000,14500
+17054,630,"Shadow Core Rear Admiral",937500,16750
+24165,630,"Core Flotilla Admiral",712500,16750
+24166,630,"Core Vice Admiral",768750,16750
+24167,630,"Core Admiral",881250,16750
+24168,630,"Core High Admiral",993750,16750
+24169,630,"Core Grand Admiral",1162500,16750
+24170,630,"Core Lord Admiral",1218750,16750
+24171,630,"Shadow Core Admiral",1275000,16750
+24172,630,"Shadow Core High Admiral",1331250,16750
+24173,630,"Shadow Core Grand Admiral",1387500,16750
+24174,630,"Shadow Core Lord Admiral",1443750,16750
+11720,631,"Serpentis Transport Ship",25000,1800
+14347,631,"Renegade Serpentis Assassin",75000,3700
+16168,631,"Serpentis Personnel Transport",25000,1800
+17033,631,"Corelum Chief Protector",74063,4500
+17039,631,"Corelum Chief Guard",57188,3700
+17042,631,"Corelum Chief Safeguard",62813,3950
+17044,631,"Corelum Chief Defender",68438,4225
+17045,631,"Shadow Corelum Chief Guard",65625,3700
+17046,631,"Shadow Corelum Chief Sentinel",90938,4500
+17047,631,"Shadow Corelum Chief Protector",85313,4500
+17048,631,"Shadow Corelum Chief Infantry",88125,4225
+17055,631,"Shadow Corelum Chief Safeguard",71250,3950
+17056,631,"Shadow Corelum Chief Defender",82500,4225
+17110,631,"Corelum Chief Watchman",45938,2800
+17111,631,"Corelum Chief Patroller",51563,3450
+17112,631,"Corelum Chief Scout",37500,2025
+17114,631,"Corelum Chief Spy",43125,2450
+17123,631,"Shadow Corelum Chief Watchman",54375,2800
+17124,631,"Shadow Corelum Chief Patroller",60000,3450
+17125,631,"Shadow Corelum Chief Scout",40313,2025
+17127,631,"Shadow Corelum Chief Spy",48750,2450
+24063,631,"Corelum Chief Infantry",76875,4500
+24064,631,"Corelum Chief Sentinel",79688,4500
+24065,631,"Corelum Guardian Chief Scout",180000,4500
+24066,631,"Corelum Guardian Chief Spy",191250,4500
+24067,631,"Corelum Guardian Chief Watchman",202500,4500
+24068,631,"Corelum Guardian Chief Patroller",213750,4500
+24069,631,"Corelum Guardian Chief Guard",225000,4500
+24070,631,"Corelum Guardian Chief SafeGuard",236250,4500
+24071,631,"Corelum Guardian Chief Defender",247500,4500
+24072,631,"Corelum Guardian Chief Protector",258750,4500
+24073,631,"Corelum Guardian Chief Infantry",270000,4500
+24074,631,"Corelum Guardian Chief Sentinel",281250,4500
+32192,631,"Underground Circus Ringmaster",1000000,5400
+2098,632,"Phenod's Broke-Ass Destroyer",15750,800
+2128,632,"Locced's Destroyer",15750,800
+23973,632,"Corelior Trooper",11250,800
+23994,632,"Corelior Soldier",11813,800
+23995,632,"Corelior Infantry",12375,800
+23996,632,"Corelior Sentinel",13500,800
+23997,632,"Corelior Cannoneer",14625,800
+23998,632,"Corelior Artillery",15750,800
+24205,632,"Shadow Corelior Trooper",12938,800
+24206,632,"Shadow Corelior Soldier",14063,800
+24207,632,"Shadow Corelior Infantry",15188,800
+24208,632,"Shadow Corelior Sentinel",16313,800
+24209,632,"Shadow Corelior Cannoneer",16875,800
+24210,632,"Shadow Corelior Artillery",17438,800
+2126,633,"Anakism",4875,325
+16569,633,"Guardian Veteran",30000,1080
+17035,633,"Coreli Guardian Scout",19125,1200
+17040,633,"Coreli Guardian Initiate",18000,1125
+17041,633,"Coreli Guardian Spy",20250,1950
+17043,633,"Coreli Guardian Agent",21375,2050
+17113,633,"Coreli Safeguard",7875,675
+17115,633,"Coreli Fugitive",3000,160
+17116,633,"Coreli Watchman",6000,400
+17117,633,"Coreli Scout",3750,180
+17118,633,"Coreli Agent",4875,325
+17119,633,"Coreli Defender",8250,700
+17120,633,"Coreli Patroller",6375,575
+17121,633,"Coreli Initiate",3000,55
+17122,633,"Coreli Protector",9000,800
+17126,633,"Shadow Coreli Safeguard",9375,675
+17128,633,"Shadow Coreli Watchman",6750,400
+17129,633,"Shadow Coreli Scout",4125,180
+17130,633,"Shadow Coreli Agent",5625,325
+17131,633,"Shadow Coreli Defender",9750,700
+17132,633,"Shadow Coreli Patroller",7125,575
+17133,633,"Shadow Coreli Initiate",3375,160
+17134,633,"Shadow Coreli Protector",10125,800
+17278,633,"Coreli Guard",7500,675
+17279,633,"Coreli Spy",4500,250
+17280,633,"Shadow Coreli Guard",8625,675
+17281,633,"Shadow Coreli Spy",5250,250
+24057,633,"Coreli Guardian Watchman",22500,2050
+24058,633,"Coreli Guardian Patroller",23625,2050
+24059,633,"Coreli Guardian Guard",24750,2050
+24060,633,"Coreli Guardian Safeguard",25875,2050
+24061,633,"Coreli Guardian Defender",27000,2050
+24062,633,"Coreli Guardian Protector",28125,2050
+3747,801,"Enforcer Alvatis",0,3600
+18073,801,"Defeater Alvatis",0,3900
+18074,801,"Crippler Alvatis",0,4200
+18075,801,"Striker Alvatis",0,4500
+23489,801,"Siege Alvatis",0,4500
+23490,801,"Exterminator Alvatis",0,4500
+10299,802,"Alvus Controller",0,18000
+21814,802,"Elite Drone Parasite",0,15000
+23497,802,"Swarm Preserver Alvus",0,18000
+23498,802,"Spearhead Alvus",0,18000
+23499,802,"Domination Alvus",0,18000
+23500,802,"Supreme Alvus Parasite",0,18000
+23501,802,"Alvus Ruler",0,18000
+23502,802,"Alvus Creator",0,18000
+23503,802,"Patriarch Alvus",0,18000
+23504,802,"Matriarch Alvus",0,18000
+23505,802,"Alvus Queen",0,18000
+25379,802,"Anti-Stabilizer Drone",1100000,36500
+28136,802,"Drone Battleship Boss lvl5",0,15000
+3745,803,"Viral Infector Alvum",0,2250
+3746,803,"Wrecker Alvum",0,1450
+18076,803,"Violator Alvum",0,2450
+18077,803,"Disintegrator Alvum",0,2650
+18078,803,"Bomber Alvum",0,2850
+18082,803,"Destructor Alvum",0,1650
+18083,803,"Annihilator Alvum",0,1850
+18084,803,"Devastator Alvum",0,2050
+22148,803,"Searcher Drone_MISSION Spawn",0,3600
+22280,803,"COSMOS Strain Matriarch Drone",0,4500
+22281,803,"COSMOS Strain Domination Drone",0,4200
+22282,803,"COSMOS Strain Spearhead Drone",0,2850
+22283,803,"COSMOS Viral Infector Drone",0,3900
+22729,803,"Strain Domination Drone Replica",0,4200
+23487,803,"Atomizer Alvum",0,2850
+23488,803,"Nuker Alvum",0,2850
+23491,803,"Strain Wrecker Alvum",0,1650
+23492,803,"Strain Destructor Alvum",0,1650
+23493,803,"Strain Disintegrator Alvum",0,2850
+23494,803,"Strain Bomber Alvum",0,2850
+23495,803,"Strain Atomizer Alvum",0,2850
+23496,803,"Strain Nuker Alvum",0,2850
+23686,803,"Drone Perimeter Guard",0,2850
+23687,803,"Drone Worker",0,4000
+23921,803,"Strain Annihilator Alvum",0,1850
+23922,803,"Strain Devastator Alvum",0,2050
+23923,803,"Strain Viral Infector Alvum",0,2250
+23924,803,"Strain Violator Alvum",0,2450
+26269,803,"Elite Repair Drone",0,2850
+23475,804,"Shatter Alvior",0,1425
+23476,804,"Ripper Alvior",0,1425
+23477,804,"Shredder Alvior",0,1425
+23478,804,"Predator Alvior",0,1425
+23479,804,"Marauder Alvior",0,1425
+23480,804,"Dismantler Alvior",0,1425
+29215,804,"Unidentified Spacecraft",0,1425
+3744,805,"Silverfish Alvi",0,1175
+3748,805,"Strain Infester Alvi",0,725
+3749,805,"Decimator Alvi",0,600
+3750,805,"Infester Alvi",0,300
+16210,805,"Spider Drone I",0,1450
+16211,805,"Spider Drone II",0,2800
+18070,805,"Strain Splinter Alvi",0,850
+18071,805,"Strain Render Alvi",0,975
+18072,805,"Strain Decimator Alvi",0,1100
+18079,805,"Sunder Alvi",0,700
+18080,805,"Raider Alvi",0,800
+18085,805,"Devilfish Alvi",0,1300
+18086,805,"Barracuda Alvi",0,1425
+18087,805,"Splinter Alvi",0,400
+18088,805,"Render Alvi",0,500
+18564,805,"Hunter Alvi",0,900
+22284,805,"COSMOS Marauder Drone",0,1100
+22285,805,"COSMOS Ripper Drone",0,725
+23481,805,"Strain Sunder Alvi",0,800
+23482,805,"Strain Raider Alvi",0,800
+23483,805,"Strain Hunter Alvi",0,1175
+23484,805,"Strain Silverfish Alvi",0,1175
+23485,805,"Strain Devilfish Alvi",0,1425
+23486,805,"Strain Barracude Alvi",0,1425
+27293,805,"Brute Render Alvi",0,975

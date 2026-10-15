@@ -19,5 +19,7 @@ COMMAND( spawndungeon, Acct::Role::CONTENT,
          " - spawns dungeon <dungeonID> in your system, with BM to location (outdated)")
 COMMAND( removedungeon, Acct::Role::CONTENT,
          " - removes identified dungeon(unimplemented)")
+COMMAND( ded, Acct::Role::CONTENT,
+         "[list] | spawn rating|dungeonID - list the DED complexes, or put one about 20 km from your ship (a rating picks this region's pirates where they have one)")
 
 

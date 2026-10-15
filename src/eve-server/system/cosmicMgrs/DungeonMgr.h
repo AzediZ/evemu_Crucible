@@ -44,6 +44,9 @@ public:
      */
     uint32 PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty = 0, uint8 exactDifficulty = 0);
 
+    // every dungeon of an archetype (GM commands)
+    void GetByArchetype(uint8 archetype, std::vector<uint32>& into);
+
     // acceleration gate rules of a dunRoomObjects object (nullptr = plain open gate)
     const Dungeon::GateDef* GetGate(uint32 objectID);
     void GetLoot(uint32 lootGroupID, std::vector<Dungeon::LootEntry>& into);

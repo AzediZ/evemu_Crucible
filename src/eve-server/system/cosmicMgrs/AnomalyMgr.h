@@ -35,7 +35,8 @@ class AnomalyMgr
     void Close();
     void Process();
 
-    void CreateAnomaly(int8 typeID);
+    // a site of this type.  GMs can name the dungeon and where it goes (/ded).  returns the signature's itemID, 0 on failure
+    uint32 CreateAnomaly(int8 typeID, uint32 dungeonID = 0, const GPoint* position = nullptr);
     void SaveAnomaly(CosmicSignature& sig);
     void LoadAnomalies();
 
