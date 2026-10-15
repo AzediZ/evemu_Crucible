@@ -203,16 +203,22 @@ static std::string KillAttackerTag(uint32 charID, uint32 corpID, uint32 allyID, 
                                    uint16 weaponTypeID, float damage, double security)
 {
     std::stringstream tag;
+    // anything we don't know is left out:  the client looks up every value it gets, and has no owner or type 0
     tag << "<a";
     if (charID != 0)
         tag << " c=" << charID;
-    tag << " r=" << corpID;
+    if (corpID != 0)
+        tag << " r=" << corpID;
     // an npc's line shows only its type, owner and damage
     if ((charID != 0) and (allyID != 0))
         tag << " a=" << allyID;
     if ((charID != 0) and (factionID != 0))
         tag << " f=" << factionID;
-    tag << " s=" << shipTypeID << " w=" << weaponTypeID << " d=" << (uint32)damage;
+    if (shipTypeID != 0)
+        tag << " s=" << shipTypeID;
+    if (weaponTypeID != 0)
+        tag << " w=" << weaponTypeID;
+    tag << " d=" << (uint32)damage;
     if (charID != 0) {
         char sec[16];
         snprintf(sec, sizeof(sec), "%.1f", security);

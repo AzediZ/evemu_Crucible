@@ -2694,23 +2694,25 @@ PyRep* CorporationDB::GetKillsAndLosses(uint32 corpID, uint32 number, uint32 off
         "SELECT"
         "  killID,"
         "  solarSystemID,"
-        "  victimCharacterID,"
+        // the client looks up every one of these it gets (kill list, Copy kill information):  missing ones are None, not 0
+        "  NULLIF(victimCharacterID, 0) AS victimCharacterID,"
         "  victimCorporationID,"
-        "  victimAllianceID,"
-        "  victimFactionID,"
+        "  NULLIF(victimAllianceID, 0) AS victimAllianceID,"
+        "  NULLIF(victimFactionID, 0) AS victimFactionID,"
         "  victimShipTypeID,"
-        "  NULLIF(finalCharacterID, 0) AS finalCharacterID,"   // npcs and structures have no character:  None, not 0
-        "  finalCorporationID,"
-        "  finalAllianceID,"
-        "  finalFactionID,"
-        "  finalShipTypeID,"
-        "  finalWeaponTypeID,"
-        "  killBlob,"
+        "  NULLIF(finalCharacterID, 0) AS finalCharacterID,"   // npcs and structures have no character
+        "  NULLIF(finalCorporationID, 0) AS finalCorporationID,"
+        "  NULLIF(finalAllianceID, 0) AS finalAllianceID,"
+        "  NULLIF(finalFactionID, 0) AS finalFactionID,"
+        "  NULLIF(finalShipTypeID, 0) AS finalShipTypeID,"
+        "  NULLIF(finalWeaponTypeID, 0) AS finalWeaponTypeID,"
+        // kills saved before 15 Oct 2026 can have r=0, s=0 or w=0 in an attacker's tag
+        "  REPLACE(REPLACE(REPLACE(killBlob, ' r=0 ', ' '), ' s=0 ', ' '), ' w=0 ', ' ') AS killBlob,"
         "  killTime,"
         "  victimDamageTaken,"
         "  finalSecurityStatus,"
         "  finalDamageDone,"
-        "  moonID"
+        "  NULLIF(moonID, 0) AS moonID"
         " FROM chrKillTable"
         " WHERE victimCorporationID = %u OR finalCorporationID = %u", corpID, corpID))
     {
