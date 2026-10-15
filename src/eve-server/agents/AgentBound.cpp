@@ -204,9 +204,9 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
                 } else {
                     // dialogue data.  if RequestMission is only option, client auto-responds with DoAction(RequestMission optionID)
                     AddButton(dialog, RequestMission);
-                    std::string response = "Why the fuck am I looking at you again, ";
+                    std::string response = "Hello, ";
                     response += call.client->GetName();
-                    response += "?";
+                    response += ".  What can I do for you?";
                     agentSays->SetItem(0, new PyString(response));  //msgInfo  -- if tuple[0].string then return msgInfo
                     agentSays->SetItem(1, PyStatic.NewNone());      // ContentID  -- PyNone used when msgInfo is string (mostly for initial greetings)
                 }
@@ -360,7 +360,8 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
 
     // extraInfo data....
     PyDict* xtraInfo = new PyDict();
-        xtraInfo->SetItemString("loyaltyPoints",    new PyInt(LPService::GetLPBalanceForCorp(charID, m_agent->GetCorpID())));  // this is char current LP
+        // this is char current LP.  (no balance with this corp yet is -1, which the window showed)
+        xtraInfo->SetItemString("loyaltyPoints",    new PyInt(std::max(0, LPService::GetLPBalanceForCorp(charID, m_agent->GetCorpID()))));
         xtraInfo->SetItemString("missionCompleted", new PyBool(missionCompleted));
         xtraInfo->SetItemString("missionQuit",      new PyBool(missionQuit));
         xtraInfo->SetItemString("missionDeclined",  new PyBool(missionDeclined));
