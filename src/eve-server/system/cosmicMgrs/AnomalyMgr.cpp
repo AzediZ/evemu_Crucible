@@ -70,6 +70,7 @@ m_maxSigs(0),
 m_bonusCombat(0),
 m_bonusExplore(0),
 m_bonusOre(0),
+m_whClass(0),
 m_initalized(false)
 {
     m_sigBySigID.clear();
@@ -159,13 +160,24 @@ bool AnomalyMgr::Init(BeltMgr* beltMgr, DungeonMgr* dungMgr, SpawnMgr* spawnMgr)
     if (m_Unrated > 0) m_Unrated = 0;
     if (m_Complex > 0) m_Complex = 0;
 
-    // populate the type vector with all of the anomaly types we will use in this system
-    for (int i = 0; i < m_maxSigs; i++) { // anomaly and signature count should be accounted for while fillimg the typeList vector
-        m_typeList.push_back(GetDungeonType());
+    // w-space has the Sleepers' sites for its class
+    if (IsWSpaceID(m_system->GetID())) {
+        uint8 whClass(sDataMgr.GetWHSystemClass(m_system->GetID()));
+        if ((whClass > 0) and (whClass < 7))
+            m_whClass = whClass;
     }
-    // add the required anomalies to the list so they're created at the right time
-    for (int i = 0; i < (m_maxSigs / 2); i++) {
-        m_typeList.push_back(Dungeon::Type::Anomaly);
+
+    if (m_whClass != 0) {
+        InitWSpace();
+    } else {
+        // populate the type vector with all of the anomaly types we will use in this system
+        for (int i = 0; i < m_maxSigs; i++) { // anomaly and signature count should be accounted for while fillimg the typeList vector
+            m_typeList.push_back(GetDungeonType());
+        }
+        // add the required anomalies to the list so they're created at the right time
+        for (int i = 0; i < (m_maxSigs / 2); i++) {
+            m_typeList.push_back(Dungeon::Type::Anomaly);
+        }
     }
 
     // infrastructure hub upgrades of this system add sites
@@ -308,7 +320,9 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
         sig.sigStrength = 0.0125;
         // default to rogue drones
         sig.ownerID = factionRogueDrones;
-    if (sConfig.debug.AnomalyFaction) {
+    if (m_whClass != 0) {
+        sig.ownerID = factionSleepers;
+    } else if (sConfig.debug.AnomalyFaction) {
         sig.ownerID = sConfig.debug.AnomalyFaction;
     } else if (MakeRandomFloat() > 0.1) { // 10% chance to be rogue drones
         sig.ownerID = sDataMgr.GetRegionRatFaction(m_system->GetRegionID());
@@ -397,11 +411,16 @@ void AnomalyMgr::CreateAnomaly(int8 typeID)
 
     // create and register here
     // all anomalies will be created/populated by dungMgr, except WH (handed off to WHMgr above)
-    //  the dungeon:  this faction's for the system's true sec, else any faction's
+    //  the dungeon:  this faction's for the system's true sec, else any faction's.  in w-space the Sleepers' of its class
     float trueSec(m_system->GetSystemSecurityRating());
-    uint32 dungeonID(sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec));
-    if (dungeonID == 0)
-        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, 0, trueSec);
+    uint32 dungeonID(0);
+    if (m_whClass != 0) {
+        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, factionSleepers, trueSec, 0, m_whClass);
+    } else {
+        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec);
+        if (dungeonID == 0)
+            dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, 0, trueSec);
+    }
     std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
     if (pDungeon.get() == nullptr) {
         _log(COSMIC_MGR__WARNING, "AnomalyMgr::CreateAnomaly() - no %s dungeon for %s(%u) (true sec %.2f)",
@@ -582,6 +601,38 @@ uint8 AnomalyMgr::GetDungeonType()
     }
 
     return 0;
+}
+
+void AnomalyMgr::InitWSpace()
+{
+    /* Crucible w-space (reports/wormholes-research.md 3.4-3.5, 4.4-4.6):  the Sleepers' combat anomalies, radar and
+     *  magnetometric sites, gas (ladar) and ore (gravimetric) sites of the system's class, and a wandering wormhole half
+     *  the time (the statics are WormholeMgr's).  no Crucible source gives the counts:  these are picks.
+     *  a completed site is replaced by one of its type (OnSiteCompleted)
+     */
+    m_maxSigs = 8;
+    uint8 anoms(MakeRandomInt(3, 5));
+    for (uint8 i = 0; i < anoms; ++i)
+        m_typeList.push_back(Dungeon::Type::Anomaly);
+    // the config caps:  < 0 is switched off
+    auto add = [this](int8& count, uint8 typeID, int number) {
+        if (count < 0)
+            return;
+        for (int i = 0; i < number; ++i) {
+            m_typeList.push_back(typeID);
+            ++count;
+        }
+    };
+    add(m_Radar, Dungeon::Type::Radar, MakeRandomInt(0, 2));
+    add(m_Mag, Dungeon::Type::Magnetometric, MakeRandomInt(0, 2));
+    add(m_Ladar, Dungeon::Type::Ladar, MakeRandomInt(1, 2));
+    add(m_Grav, Dungeon::Type::Gravimetric, MakeRandomInt(0, 1));
+    if ((m_WH == 0) and (MakeRandomFloat() < 0.5)) {
+        m_typeList.push_back(Dungeon::Type::Wormhole);
+        ++m_WH;
+    }
+    _log(COSMIC_MGR__INIT, "AnomalyMgr::InitWSpace() - %s(%u) is class %u:  %u Sleeper sites to make", m_system->GetName(),
+            m_system->GetID(), m_whClass, (uint32)m_typeList.size());
 }
 
 uint32 AnomalyMgr::GetAnomalyID(std::string& sigID)

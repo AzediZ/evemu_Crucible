@@ -39,8 +39,10 @@ public:
     /* weighted random dungeon of this archetype for a system with this true security.
      *  factionID 0 = any faction, else that faction's dungeons, else faction-less ones.  0 if there is none
      *  in null sec the hard sites (difficulty 4+) get likelier as true sec drops, the easy ones (2-) rarer (2011 bands)
+     *  Sleeper dungeons are w-space's:  only a pick for factionSleepers gets them, and it gets nothing else.
+     *  exactDifficulty (the w-space class there):  only dungeons of that difficulty, without the null sec bands
      */
-    uint32 PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty = 0);
+    uint32 PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty = 0, uint8 exactDifficulty = 0);
 
     // acceleration gate rules of a dunRoomObjects object (nullptr = plain open gate)
     const Dungeon::GateDef* GetGate(uint32 objectID);

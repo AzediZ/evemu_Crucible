@@ -69,6 +69,8 @@ protected:
     ServiceDB m_sdb;
 
     uint8 GetDungeonType();
+    // w-space:  the Sleeper sites of this system's class (m_whClass) and a wandering wormhole now and then
+    void InitWSpace();
 
 private:
     /* we do not own any of these (our sysmgr does) */
@@ -106,6 +108,7 @@ private:
     uint8 m_bonusCombat;    // extra sites from sov upgrades
     uint8 m_bonusExplore;
     uint8 m_bonusOre;
+    uint8 m_whClass;        // w-space class 1-6 (Sleeper sites), 0 = known space
 
     std::map<uint32, CosmicSignature> m_sigByItemID;            // signatures in system - need probes to scan down
     std::map<uint32, CosmicSignature> m_anomByItemID;           // anomalies in system - no probes needed

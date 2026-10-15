@@ -347,7 +347,7 @@ std::shared_ptr<const Dungeon::Dungeon> DungeonDataMgr::GetDungeon(uint32 dungeo
     return nullptr;
 }
 
-uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty/*0*/)
+uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty/*0*/, uint8 exactDifficulty/*0*/)
 {
     std::vector<std::pair<uint32, double>> exact, generic;
     auto range = m_byArchetype.equal_range(archetype);
@@ -362,8 +362,13 @@ uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float true
             continue;
         if (dun.difficulty < minDifficulty)
             continue;
+        // the Sleepers stay in w-space, and w-space has nothing but theirs
+        if ((dun.factionID == factionSleepers) != (factionID == factionSleepers))
+            continue;
+        if ((exactDifficulty != 0) and (dun.difficulty != exactDifficulty))
+            continue;
         double weight(dun.weight);
-        if (trueSec < 0.0f) {
+        if ((trueSec < 0.0f) and (exactDifficulty == 0)) {
             // null sec bands (CCP Greyscale, Mar 2011):  the hard sites concentrate in the low true sec systems
             if (dun.difficulty >= 4) {
                 weight *= (1.0 + 4.0 * -trueSec);
