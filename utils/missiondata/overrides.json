@@ -1,3 +1,13 @@
 {
- "NotGneissatAll4": {"objective": {"type": "Mine", "typeID": 28622, "qty": 9000}, "_why": "the ore is Green Arisite, not Gneiss (the joke of the title)"}
+ "NotGneissatAll4": {"objective": {"type": "Mine", "typeID": 28622, "qty": 9000}, "_why": "the ore is Green Arisite, not Gneiss (the joke of the title)"},
+ "BountifulBandine": {"nameID": 57031, "_why": "the client's title, spelled differently on eve-survival"},
+ "CleartheTraderoute1": {"nameID": 54856, "_why": "the client's title, spelled differently on eve-survival"},
+ "FallingNationComesCost3": {"nameID": 54320, "_why": "the client's title, spelled differently on eve-survival"},
+ "ForgottenOutposts4CaldariStateStoryline": {"nameID": 58037, "_why": "the client's title, spelled differently on eve-survival"},
+ "IdEgonicsInc3amca": {"nameID": 56959, "_why": "the client's title, spelled differently on eve-survival"},
+ "LambAmongstLions4": {"nameID": 58035, "_why": "the client's title, spelled differently on eve-survival"},
+ "StrikingDownTwoFliesWithOneSwing1br": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+ "StrikingDownTwoFliesWithOneSwing1gu": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+ "StrikingDownTwoFliesWithOneSwing1se": {"nameID": 55442, "_why": "the client's title, spelled differently on eve-survival"},
+ "UnderstandingAugmene2": {"nameID": 56877, "_why": "the client's title, spelled differently on eve-survival"}
 }

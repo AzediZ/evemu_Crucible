@@ -35,6 +35,8 @@ public:
     bool SetObjectiveComplete(uint32 offerID);
     // called every minute (MissionDataMgr::Process):  despawns released pockets that are due
     void Process();
+    // a pocket is spawned in this system (running, or released and not despawned yet):  the system stays loaded
+    bool HasPocketIn(uint32 systemID) const;
     // server shutdown:  no more dungeon events
     void Close();
 

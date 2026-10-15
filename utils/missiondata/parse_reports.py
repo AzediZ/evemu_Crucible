@@ -518,7 +518,8 @@ def main():
         if not rep['level'] or (nships == 0 and nroids == 0 and rep['typeID'] != 3 and not rep['mining']):
             continue
         del rep['_text']
-        rep['nameID'] = rep.get('nameID') or titles.get(tkey, 0)
+        # a chain part ('In The Midst of Deadspace (3 of 5)') is its own title, so the full name is tried first
+        rep['nameID'] = rep.get('nameID') or titles.get(sdata.title_key(rep['name']), 0) or titles.get(tkey, 0)
         reports.append(rep)
 
     with open(args.out, 'w', encoding='utf-8') as f:

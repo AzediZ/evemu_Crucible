@@ -276,6 +276,14 @@ void WormholeMgr::Create(CosmicSignature& sig)
     // wandering wormholes, made by AnomalyMgr as one of the system's signatures
     if (!m_initalized or (sig.dungeonType != Dungeon::Type::Wormhole))
         return;
+    uint8 wanderers(0);
+    for (auto& cur : m_pairs)
+        if (!cur.second.isStatic and (cur.second.systemID == sig.systemID) and (cur.second.collapseTime == 0))
+            ++wanderers;
+    if (wanderers >= (IsWSpaceID(sig.systemID) ? 2 : 1)) {
+        _log(WORMHOLE_MGR__DEBUG, "WormholeMgr::Create() - system %u already has %u wandering wormholes", sig.systemID, wanderers);
+        return;
+    }
     const ItemType* whType = GetRandomWormholeType(sig.systemID);
     if (whType == nullptr) {
         _log(WORMHOLE_MGR__DEBUG, "WormholeMgr::Create() - no wandering wormhole type for system %u", sig.systemID);

@@ -22,6 +22,14 @@ MissionInstanceMgr::MissionInstanceMgr()
     m_byInstance.clear();
 }
 
+bool MissionInstanceMgr::HasPocketIn(uint32 systemID) const
+{
+    for (auto& cur : m_byOffer)
+        if (cur.second.systemID == systemID)
+            return true;
+    return false;
+}
+
 uint32 MissionInstanceMgr::EnsureInstance(MissionOffer& offer)
 {
     if ((offer.stateID != Mission::State::Accepted) or (offer.dungeonSolarSystemID == 0))

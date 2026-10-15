@@ -172,7 +172,9 @@ bool AnomalyMgr::Init(BeltMgr* beltMgr, DungeonMgr* dungMgr, SpawnMgr* spawnMgr)
     } else {
         // populate the type vector with all of the anomaly types we will use in this system
         for (int i = 0; i < m_maxSigs; i++) { // anomaly and signature count should be accounted for while fillimg the typeList vector
-            m_typeList.push_back(GetDungeonType());
+            uint8 typeID(GetDungeonType());
+            if (typeID != 0)
+                m_typeList.push_back(typeID);
         }
         // add the required anomalies to the list so they're created at the right time
         for (int i = 0; i < (m_maxSigs / 2); i++) {
@@ -545,8 +547,13 @@ void AnomalyMgr::RegisterWormhole(CosmicSignature &sig)
 uint8 AnomalyMgr::GetDungeonType()
 {
     // a few tries for a type this system allows.  0 when nothing is allowed
+    float trueSec(m_system->GetSystemSecurityRating());
     for (uint8 tries = 0; tries < 20; ++tries) {
         uint8 typeID = MakeRandomInt(2,10); // skip typeMission
+        // a type with no dungeon this system could get is a wasted slot (gas sites, DED complexes)
+        if ((typeID != Dungeon::Type::Wormhole) and (typeID != Dungeon::Type::Mission) and (typeID != Dungeon::Type::Escalation)
+        and (sDunDataMgr.PickDungeon(typeID, 0, trueSec) == 0))
+            continue;
         switch(typeID) {
             case Dungeon::Type::Escalation:  // 9
             case Dungeon::Type::Mission: {   // 1

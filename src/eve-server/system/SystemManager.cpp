@@ -65,6 +65,7 @@
 #include "system/SolarSystem.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "missions/MissionInstance.h"
 #include "system/WarpInPoint.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
@@ -434,12 +435,18 @@ void SystemManager::ProcessDestiny() {
 }
 
 bool SystemManager::SystemActivity() {
-    if (m_activityTime == 0)
+    // a system unloads gridUnloadTime seconds after its last pilot left (world gridUnload, gridUnloadTime).
+    //  until then its sites, rats and wrecks are as the pilot left them
+    if ((m_activityTime == 0) or !sConfig.world.gridUnload)
         return true;
-    if ((sEntityList.GetStamp() - m_activityTime) > 60)
-        return false;
-
-    return true;
+    if ((sEntityList.GetStamp() - m_activityTime) <= sConfig.world.gridUnloadTime)
+        return true;
+    // something came up meanwhile (CONCORD, a tower, an anchoring structure, a mission pocket):  the next empty check starts over
+    if (!SafeToUnload()) {
+        m_activityTime = 0;
+        return true;
+    }
+    return false;
 }
 
 // called from EntityList::Process() and EntityList::Close()
@@ -1167,7 +1174,7 @@ void SystemManager::AddClient(Client* pClient, bool count/*false*/, bool jump/*f
         _log(PLAYER__INFO, "%s(%u): Add Jump to %s(%u)", \
         pClient->GetName(), pClient->GetCharacterID(), m_data.name.c_str(), m_data.systemID);
 
-        uint16 stamp = sEntityList.GetStamp();
+        uint32 stamp = sEntityList.GetStamp();
         std::map<uint32, uint8>::iterator itr = m_jumpMap.find(stamp);
         if (itr != m_jumpMap.end()) {
             ++(itr->second);
@@ -1196,6 +1203,9 @@ void SystemManager::RemoveClient(Client* pClient, bool count/*false*/, bool jump
         _log(PLAYER__INFO, "%s(%u): Removed from player count for %s(%u) - new count: %u", \
                 pClient->GetName(), pClient->GetCharacterID(), m_data.name.c_str(), m_data.systemID, m_players);
     }
+    // the last pilot left:  the unload countdown starts now (SystemActivity)
+    if (m_clients.empty() and (m_activityTime == 0) and SafeToUnload())
+        m_activityTime = sEntityList.GetStamp();
     if (jump) {
         //add jump in this system
         MapDB::AddJump(m_data.systemID);
@@ -1203,7 +1213,7 @@ void SystemManager::RemoveClient(Client* pClient, bool count/*false*/, bool jump
         _log(PLAYER__INFO, "%s(%u): Add Jump to %s(%u)", \
                 pClient->GetName(), pClient->GetCharacterID(), m_data.name.c_str(), m_data.systemID);
 
-        uint16 stamp = sEntityList.GetStamp();
+        uint32 stamp = sEntityList.GetStamp();
         std::map<uint32, uint8>::iterator itr = m_jumpMap.find(stamp);
         if (itr != m_jumpMap.end()) {
             ++(itr->second);
@@ -2371,7 +2381,8 @@ void SystemManager::UpdateData()
     MapDB::UpdatePilotCount(m_data.systemID, m_docked, (m_players - m_docked));
 
     uint16 jumps = 0;
-    uint16 stamp = sEntityList.GetStamp() -60;
+    // stamps are seconds since start:  uint16 wrapped after 18 hours and kept old jumps (and the system) forever
+    uint32 stamp = sEntityList.GetStamp() -60;
     std::map<uint32, uint8>::iterator itr = m_jumpMap.begin();
     while (itr != m_jumpMap.end()) {
         if (itr->first < stamp) {
@@ -2386,12 +2397,13 @@ void SystemManager::UpdateData()
     // this is jumps/hour data
     //MapDB::UpdateJumps(m_data.systemID, jumps);
 
-    // if system and jumpmap are both empty, set activity time for unload timer
+    // if system and jumpmap are both empty, set activity time for unload timer (a system booted without a pilot, or one
+    //  that wasn't safe to unload when the last pilot left)
     if (SafeToUnload())
         if (m_activityTime == 0)
             if (m_clients.empty())
                 if (m_jumpMap.empty())
-                    m_activityTime = sEntityList.GetStamp() -50;
+                    m_activityTime = sEntityList.GetStamp();
     ManipulateTimeData();
 }
 
@@ -2400,6 +2412,9 @@ bool SystemManager::SafeToUnload()
 {
     // CONCORD on its way, or ships left in space by pilots who logged off
     if (m_law->IsBusy() and !sConsole.IsShutdown())
+        return false;
+    // a mission pocket would come back fresh (rats respawned, loot gone) after an unload:  it stays until the mission is over
+    if (sMissionInstanceMgr.HasPocketIn(m_data.systemID) and !sConsole.IsShutdown())
         return false;
     for (auto cur: GetEntities() ) {
         // starbases run in real time (fuel, reinforcement, moon mining):  systems with online towers stay loaded

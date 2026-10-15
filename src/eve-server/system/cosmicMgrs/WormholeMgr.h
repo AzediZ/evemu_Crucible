@@ -68,7 +68,8 @@ public:
 
     bool IsEnabled() const                              { return m_initalized; }
 
-    // a wandering wormhole at the signature AnomalyMgr made.  sig.sigItemID stays 0 when none is made
+    /* a wandering wormhole at the signature AnomalyMgr made.  sig.sigItemID stays 0 when none is made.
+     *  a system has at most 1 wanderer of its own open (2 in w-space), so revisits and test-server boots don't pile them up */
     void Create(CosmicSignature& sig);
     // a system has booted:  its statics are open and its wormhole ends are all there
     void SystemBooted(SystemManager* pSys);

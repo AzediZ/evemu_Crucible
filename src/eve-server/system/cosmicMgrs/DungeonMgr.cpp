@@ -750,10 +750,16 @@ uint32 DungeonMgr::SpawnInstance(const Dungeon::SpawnParams& params, CosmicSigna
         for (auto& object : room.def->objects) {
             GPoint pos(room.origin + GPoint(object.x, object.y, object.z));
             if (IsNPCType(object.typeID)) {
-                // an npc placed in the room is a one-ship group present from the start
+                /* an npc placed in the room is a one-ship group present from the start.  it keeps its objectID, so the
+                 *  triggers on it fire (four missions' objective is such a structure:  without it they never completed).
+                 *  a Large Collidable Structure is shot like an npc, but it isn't a hostile the room must be cleared of */
                 uint32 itemID(SpawnNPC(live, i, object.typeID, live.factionID, pos, false, 0));
-                if (itemID != 0)
-                    room.extraNPCs.insert(itemID);
+                if (itemID != 0) {
+                    room.objects[object.objectID] = itemID;
+                    const ItemType* pType(sItemFactory.GetType(object.typeID));
+                    if ((pType == nullptr) or (pType->groupID() != EVEDB::invGroups::Large_Collidable_Structure))
+                        room.extraNPCs.insert(itemID);
+                }
                 continue;
             }
             SpawnObject(live, i, object.typeID, pos, object.objectID, object.radius);
