@@ -32,6 +32,7 @@
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 /* Dungeon flow:
  *  DungeonDataMgr loads the static dungeons (dunDungeons, rooms, objects, spawn groups, triggers/events, gates, loot,
@@ -1183,7 +1184,8 @@ bool DungeonMgr::RedirectWarp(const GPoint& dest, GPoint& into)
                 into = cur.second.rooms[0].origin;
                 return true;
             }
-    return false;
+    // incursion sites' pockets too
+    return sIncursionMgr.RedirectWarp(m_system->GetID(), dest, into);
 }
 
 /* hooks.  these only queue triggers;  Process() runs them */

@@ -31,6 +31,7 @@
 #include "map/MapData.h"
 #include "map/MapService.h"
 #include "system/SystemManager.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/sov/SovereigntyDB.h"
 #include "map/MapDB.h"
@@ -292,8 +293,7 @@ PyResult MapService::GetSystemsInIncursions(PyCallArgs &call) {
      *            -- (sceneType = staging, vanguard)
      */
 
-    // incursions are not implemented (doc/code_and_design_notes/planning/incursions):  an incursion manager would return a list of (solarSystemID, sceneType)
-    return new PyList();
+    return sIncursionMgr.GetSystems();
 }
 
 PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
@@ -301,12 +301,11 @@ PyResult MapService::GetSystemsInIncursionsGM(PyCallArgs &call) {
      *        participatingSystems = ms.GetSystemsInIncursionsGM()
      *        for solarSystemID, sceneType in participatingSystems:
      *            -- (sceneType = staging, vanguard, assault, headquarters)
-     *  incursions are not implemented:  an incursion manager would fill this (keep the role check and the shape)
      */
     if (!(call.client->GetAccountRole() & (Acct::Role::GML | Acct::Role::GMH | Acct::Role::ADMIN)))
         throw CustomError("Access denied.");
 
-    return new PyList();
+    return sIncursionMgr.GetSystems();
 }
 
 //05:52:07 L MapService::Handle_GetIncursionGlobalReport(): size= 0
@@ -367,8 +366,8 @@ PyResult MapService::GetIncursionGlobalReport(PyCallArgs &call) {
               [PyIntegerVar 129493861959830226]
               [PyInt -950263469]
               */
-    // list of KeyVals (above).  incursions are not implemented, so there is nothing to report
-    return new PyList();
+    // list of KeyVals (above), one per incursion
+    return sIncursionMgr.GetGlobalReport();
 }
 
 //   factional warfare shit

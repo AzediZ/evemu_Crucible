@@ -17,6 +17,7 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/SystemBubble.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 
 AsteroidItem::AsteroidItem(const ItemType& type, const ItemData& idata, const AsteroidData& adata)
@@ -171,6 +172,8 @@ bool AsteroidSE::RemoveQuantity(double units)
     SetQuantity(quantity);
     if (m_beltMgr != nullptr)
         m_beltMgr->OnMined(this, units, (quantity <= 0));
+    // incursion ore (mining lasers and mining drones) can bring Sansha guards
+    sIncursionMgr.OreMined(this);
 
     return (quantity <= 0);
 }

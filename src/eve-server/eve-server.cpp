@@ -137,6 +137,7 @@
 // map services
 #include "map/MapData.h"
 #include "map/MapService.h"
+#include "map/RewardMgrService.h"
 // market services
 #include "market/MarketMgr.h"
 #include "market/MarketProxyService.h"
@@ -185,6 +186,7 @@
 // cosmic managers
 #include "system/cosmicMgrs/CivilianMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 // database cleaner service
 #include "DBCleaner.h"
@@ -667,6 +669,7 @@ int main( int argc, char* argv[] )
     newSvcMgr.Register(new DungeonService());
     newSvcMgr.Register(new LookupService());
     newSvcMgr.Register(new MapService());
+    newSvcMgr.Register(new RewardMgrService());
     newSvcMgr.Register(new CalendarMgrService());
     newSvcMgr.Register(new AgentMgrService(newSvcMgr));
     newSvcMgr.Register(new EpicArcService());
@@ -829,6 +832,9 @@ int main( int argc, char* argv[] )
     // clear dynamic system data (player counts, etc) on server start
     MapDB::SystemStartup();
     sLog.Green("       ServerInit", "Dynamic System Data Reset.");
+
+    /* create the IncursionMgr singleton.  needs the data sets above */
+    sIncursionMgr.Initialize();
 
     // starbases run in real time:  systems with online control towers are loaded now and stay loaded
     if (sConfig.pos.KeepTowerSystemsLoaded) {

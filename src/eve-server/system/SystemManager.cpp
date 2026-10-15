@@ -70,6 +70,7 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "npc/LawEnforcement.h"
 #include "npc/ambient/AmbientNPC.h"
@@ -407,6 +408,9 @@ void SystemManager::UnloadSystem() {
         return;
 
     sLog.Magenta("    SystemManager", "UnloadSystem() called for %s(%u).", m_data.name.c_str(), m_data.systemID);
+
+    // incursion sites in this system are rebuilt when it boots again
+    sIncursionMgr.SystemUnloading(m_data.systemID);
 
     // .bubbletrack marker cans go the normal way first (their temp items too).  the global center marker isn't in
     //  m_staticEntities, so the entity loop below can't take it

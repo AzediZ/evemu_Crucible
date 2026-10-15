@@ -92,6 +92,7 @@ NPCAIMgr::NPCAIMgr(NPC* who)
   m_ewarChecked(false),
   m_dormant(false),
   m_wave(false),
+  m_repairsOff(false),
   m_pendingJoined(false),
   m_returnHard(false),
   m_damaged(false),

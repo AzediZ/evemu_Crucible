@@ -91,6 +91,9 @@ bool NpcSupport::RepairDue(bool armor, const RepairState& state, int64 now) cons
 {
     if ((armor ? m_profile.remoteArmor.effectID : m_profile.remoteShield.effectID) == 0)
         return false;
+    // switched off (incursions).  a cycle that was running ends with its beam
+    if (m_ai->IsRemoteRepairsOff())
+        return false;
     return ((state.cycleEnd != 0) ? (now >= state.cycleEnd) : (now >= state.pollAt));
 }
 

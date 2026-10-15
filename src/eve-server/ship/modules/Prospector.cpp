@@ -15,6 +15,7 @@
 #include "system/Container.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 /* this class is for all salvage and data mining types */
 
@@ -169,7 +170,12 @@ void Prospector::CycleComplete()
 
     if (m_targetSE->IsContainerSE()) {
         if (success) {
-            OnContainerSuccess();
+            // incursion logistics control arrays do their own thing when cracked, and stay locked
+            if (sIncursionMgr.Hacked(m_shipRef->GetPilot(), m_targetSE)) {
+                m_Stop = true;
+            } else {
+                OnContainerSuccess();
+            }
         } else {
             SendRemote("LockedContainerNotOpened", ItemArg(m_targetTypeID));
         }

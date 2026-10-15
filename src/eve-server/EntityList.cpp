@@ -50,6 +50,7 @@
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/CivilianMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "system/sov/SovereigntyDataMgr.h"
@@ -332,6 +333,7 @@ void EntityList::Process() {
         GuardTick("the ambient npc manager", 0, []{ sAmbientMgr.Process(); });  // ambient npcs:  transits between systems, the market score refresh
         GuardTick("the locator manager", 0, []{ sLocatorMgr.Process(); });
         GuardTick("the bubble manager", 0, []{ sBubbleMgr.Process(); });
+        GuardTick("the incursion manager", 0, []{ sIncursionMgr.Process(); });
         GuardTick("the exploration manager", 0, []{ sExplorationMgr.Process(); });
         GuardTick("the fleet service", 0, []{ sFltSvc.Process(); });  // fleet invite timeouts
         GuardTick("the market simulation", 0, []{ sMktSim.Process(); });  // market simulation (keeps to its own time budget)

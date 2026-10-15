@@ -7,6 +7,7 @@
 
 #include "admin/debug_commands.h"
 #include "admin/DungeonCommands.h"
+#include "admin/IncursionCommands.h"
 #include "admin/GMToolCommands.h"
 #include "admin/NpcAICommands.h"
 #include "admin/AmbientCommands.h"

@@ -384,6 +384,28 @@ EVEServerConfig::EVEServerConfig()
     cosmic.PIDepletionRegenHours = 168.0f;
     cosmic.PIGantryMaxDistanceKm = 100000.0f;
 
+    // incursion
+    incursion.Enabled = true;
+    incursion.AutoStart = true;
+    incursion.MaxActive = 1;
+    incursion.FleetScale = 100;
+    incursion.Strength = 100;
+    incursion.VanguardSites = 7;
+    incursion.AssaultSites = 5;
+    incursion.HQSites = 5;
+    incursion.DelayedLP = true;
+    incursion.GateRestrictions = false;
+    incursion.MothershipDelayHigh = 72;
+    incursion.MothershipDelayLow = 24;
+    incursion.SiteRespawn = 180;
+    incursion.MinSecurity = 0.45f;
+    incursion.StartDelay = 60;
+    incursion.MobilizeAfter = 120;
+    incursion.Lifetime = 168;
+    incursion.WithdrawTime = 1440;
+    incursion.RegenDelay = 30;
+    incursion.RegenRate = 1.0f;
+
     // exploring
     exploring.Gravametric = 5;
     exploring.Magnetometric = 3;
@@ -667,6 +689,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "npc",         &EVEServerConfig::ProcessNPC );
     AddMemberParser( "cosmic",      &EVEServerConfig::ProcessCosmic );
     AddMemberParser( "exploring",   &EVEServerConfig::ProcessExploring );
+    AddMemberParser( "incursion",   &EVEServerConfig::ProcessIncursion );
     AddMemberParser( "dungeon",     &EVEServerConfig::ProcessDungeon );
     AddMemberParser( "missions",    &EVEServerConfig::ProcessMissions );
     AddMemberParser( "agents",      &EVEServerConfig::ProcessAgents );
@@ -701,6 +724,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "npc" );
     RemoveParser( "cosmic" );
     RemoveParser( "exploring" );
+    RemoveParser( "incursion" );
     RemoveParser( "dungeon" );
     RemoveParser( "missions" );
     RemoveParser( "agents" );
@@ -1603,6 +1627,55 @@ bool EVEServerConfig::ProcessMissions( const TiXmlElement* ele )
         "GateRestrictions" };
     for (auto cur : names)
         RemoveParser( cur );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
+{
+    AddValueParser( "Enabled",               incursion.Enabled );
+    AddValueParser( "AutoStart",             incursion.AutoStart );
+    AddValueParser( "MaxActive",             incursion.MaxActive );
+    AddValueParser( "FleetScale",            incursion.FleetScale );
+    AddValueParser( "Strength",              incursion.Strength );
+    AddValueParser( "VanguardSites",         incursion.VanguardSites );
+    AddValueParser( "AssaultSites",          incursion.AssaultSites );
+    AddValueParser( "HQSites",               incursion.HQSites );
+    AddValueParser( "DelayedLP",             incursion.DelayedLP );
+    AddValueParser( "GateRestrictions",      incursion.GateRestrictions );
+    AddValueParser( "MothershipDelayHigh",   incursion.MothershipDelayHigh );
+    AddValueParser( "MothershipDelayLow",    incursion.MothershipDelayLow );
+    AddValueParser( "SiteRespawn",           incursion.SiteRespawn );
+    AddValueParser( "MinSecurity",           incursion.MinSecurity );
+    AddValueParser( "StartDelay",            incursion.StartDelay );
+    AddValueParser( "MobilizeAfter",         incursion.MobilizeAfter );
+    AddValueParser( "Lifetime",              incursion.Lifetime );
+    AddValueParser( "WithdrawTime",          incursion.WithdrawTime );
+    AddValueParser( "RegenDelay",            incursion.RegenDelay );
+    AddValueParser( "RegenRate",             incursion.RegenRate );
+
+    const bool result = ParseElementChildren( ele );
+
+    RemoveParser( "Enabled" );
+    RemoveParser( "AutoStart" );
+    RemoveParser( "MaxActive" );
+    RemoveParser( "FleetScale" );
+    RemoveParser( "Strength" );
+    RemoveParser( "VanguardSites" );
+    RemoveParser( "AssaultSites" );
+    RemoveParser( "HQSites" );
+    RemoveParser( "DelayedLP" );
+    RemoveParser( "GateRestrictions" );
+    RemoveParser( "MothershipDelayHigh" );
+    RemoveParser( "MothershipDelayLow" );
+    RemoveParser( "SiteRespawn" );
+    RemoveParser( "MinSecurity" );
+    RemoveParser( "StartDelay" );
+    RemoveParser( "MobilizeAfter" );
+    RemoveParser( "Lifetime" );
+    RemoveParser( "WithdrawTime" );
+    RemoveParser( "RegenDelay" );
+    RemoveParser( "RegenRate" );
 
     return result;
 }

@@ -161,6 +161,10 @@ public:
     void ReserveArmor(float amount, int64 until);
     // a group assist (NpcAI::Buff) on us:  x mult for durationMs (a different one of the same kind replaces it)
     void ApplyBuff(uint8 kind, float mult, uint32 durationMs);
+    /* our remote repairs stop (an incursion mothership's hacked logistics control array:  IncursionMgr sends them to the
+     *  pilots instead while it lasts) */
+    void SetRemoteRepairsOff(bool off = true)           { m_repairsOff = off; }
+    bool IsRemoteRepairsOff() const                     { return m_repairsOff; }
     // ms (GetSteadyTime) of the last damage we took
     int64 GetLastDamagedAt() const                      { return m_lastDamagedAt; }
 
@@ -295,6 +299,7 @@ private:
     bool m_ewarChecked      :1;
     bool m_dormant          :1;
     bool m_wave             :1;     // a dungeon wave's npc, before its first target
+    bool m_repairsOff       :1;     // SetRemoteRepairsOff()
     bool m_pendingJoined    :1;     // the queued aggro is a group join (its reaction delay is done)
     bool m_returnHard       :1;     // Returning:  the hard leash
     bool m_damaged          :1;     // hurt since we spawned (haulers flee at once)

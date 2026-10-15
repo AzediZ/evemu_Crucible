@@ -46,6 +46,7 @@
 #include "dungeon/DungeonDB.h"
 #include "services/ServiceManager.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 KeeperService::KeeperService(EVEServiceManager& mgr) :
     Service("keeper", eAccessLevel_SolarSystem2),
@@ -111,6 +112,10 @@ PyResult KeeperService::ActivateAccelerationGate(PyCallArgs &call, PyInt* itemID
 
     Client *pClient(call.client);
     if ((pClient->SystemMgr() == nullptr) or (pClient->GetShipSE() == nullptr))
+        return PyStatic.NewNone();
+
+    // incursion gates know where they go (throws to refuse)
+    if (sIncursionMgr.UseGate(pClient, itemID->value()))
         return PyStatic.NewNone();
 
     // range, ship, lock, skill and key rules, then the warp to the gate's room (throws the client's errors)
