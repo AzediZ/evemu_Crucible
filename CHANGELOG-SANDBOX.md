@@ -4,6 +4,36 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 ---
 
+## 2026-10-15: DED complexes and fixes from the first in-game test (branch `revised`)
+
+Patches `0092` to `0098` · Status: **compiles and boot-tested** (15 Oct 2026). Azedi confirmed the pod fix in game. All 48 complexes were spawned on a test server with every pocket populated, and the server ran on with them and shut down cleanly. The rest isn't tested in game yet.
+
+**DED complexes**
+- `0098` There were no rated complexes, so the scanner never found one. There are now 48, 1/10 to 10/10, for Angel, Blood Raiders, Guristas, Sansha, Serpentis and the rogue drones. Each is a signature in its faction's space and security band.
+- Each one has an entry gate that only takes the ships its rating allows (frigates at 1/10, up to battlecruisers at 4/10, anything but capitals from 5/10), then 2 to 5 pockets. Each pocket has 2 or 3 waves of the faction's deadspace ships, and the next wave comes when the last one dies. The overseer in the last pocket drops Overseer's Personal Effects and completes the site.
+- Bosses are the client's named overseers where the 2011-2012 pages name one. Gate limits and OPE tiers come from the same pages. Wave sizes and ship classes are standard ones scaled by rating, because nothing from the Crucible era lists them per room.
+- Angel Mineral Acquisition Outpost was unrated in 2012, and in Crucible the 1/10s and most 2/10s were static beacons, not signatures. Both are kept as picks for now.
+- GM: `/ded list` lists them, `/ded spawn rating` or `/ded spawn dungeonID` puts one about 20 km from your ship.
+- `utils/ded/gen_ded_sql.py` writes the migration from the list of complexes and `utils/ded/ded_npcs.csv`.
+
+**Fixes from the first in-game test**
+- `0092` **Killmails** open, copy and drag into chat again. The client looked up every ID with the kill, and a 0 for a missing alliance, faction, ship or weapon broke all three.
+- `0093` The **journal** opens again. Its Incursions tab asked for the encounter rewards, which the server didn't have.
+- `0094` **Station services** at outposts and NPC conquerable stations can be shot whenever the station can. At 1% structure a service goes offline until it's repaired. While it's offline:
+  - cloning, factory, lab, fitting, repair and reprocessing are refused
+  - factory and lab jobs pause
+  - pilots whose clone is there wake up in their starting station
+- `0095` A character created since the server started got a **pod** with no attributes after their first death: 100 m/s, no capacitor and no hit points. The client then showed it in the wrong place.
+- `0096` **Acceleration gates** pointed away from their pocket. They now face it, in missions and complexes as well as incursions.
+- `0097` **Incursion beacon gates** are checked when a site spawns. A gate that landed off the beacon's grid is moved onto it, and a missing one is logged. One Nation Mining Colony had no gate in game; this is a guess at why.
+
+**Before the first start**
+- Rebuild from the control panel. The next start applies `20261023100000-ded-complexes`.
+
+**How to test.** Undock and run `/ded spawn 3`. The entry gate is on your grid about 20 km away; fly to it and take it. Any rating from 1 to 10 works except 9, since there were no 9/10s. The complexes also turn up on their own as signatures in their faction's space.
+
+---
+
 ## 2026-10-15: Industry, wormholes, incursions, combat fixes and outposts (branch `revised`)
 
 Patches `0068` to `0091` · Status: **compiles and boot-tested** (15 Oct 2026): the server was started natively against MariaDB 11.8 with the new migrations and stopped cleanly. Wormholes, incursion penalties and outpost sieges were also run through on the server with GM commands. Not yet tested in game.

@@ -1,0 +1,31 @@
+From 01200b2f401f064e9c71e1cbe3631649c2f7a4ac Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 21:59:22 +0000
+Subject: [PATCH 96/98] Acceleration gates face their pocket the right way
+ round
+
+The client lines a gate model's z axis up with minus dunDirection, so
+sending the line towards the next room left every gate facing away from
+it (seen on the incursion gates). The direction is now reversed. This
+covers mission and complex gates as well, which use the same code.
+---
+ src/eve-server/system/cosmicMgrs/DungeonMgr.cpp | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+index 4a97909e..bef561ba 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+@@ -2399,6 +2399,9 @@ void DungeonMgr::MakeGateSlim(uint32 gateItemID, PyDict* slim)
+             }
+         }
+     }
++    /* the client lines the gate model's z axis up with minus dunDirection (SpaceObject.AlignToDirection), which left the
++     *  gates facing away from their pocket in game, so it gets the reverse of the line to the room */
++    dir = GVector(-dir.x, -dir.y, -dir.z);
+     PyList* dirList = new PyList();
+         dirList->AddItem(new PyFloat(dir.x));
+         dirList->AddItem(new PyFloat(dir.y));
+-- 
+2.34.1
+

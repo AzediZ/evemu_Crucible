@@ -1,0 +1,190 @@
+From 6f888eb14f5693fa24f750a26099d7cf2dd9c8d0 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 21:28:15 +0000
+Subject: [PATCH 93/98] Journal opens again: incursion encounter rewards
+
+The journal's Incursions tab lists the encounters with the most LP and ISK
+each pays, and asks rewardMgr.GetRewardData for them when the window
+opens if that list was ever expanded. The server didn't have it, so the
+client got None and the journal wouldn't open at all.
+
+GetRewardData now returns the payout table for scout, vanguard, assault,
+headquarters and mothership sites, worked out the same way site payouts
+are: a full fleet's pay up to the site's fleet size (scaled by FleetScale),
+split between the pilots above that, and 10/7 of it in low and null-sec.
+With DelayedLP the LP is listed as a delayed reward. An unknown rewardID
+gets empty tables. rewardTypeLP is 1 (from the client's traceback); ISK as
+2 and the security criteria as 1 and 2 are guesses, since no client source
+I could find has the constants.
+---
+ src/eve-server/map/RewardMgrService.cpp       |  8 +-
+ src/eve-server/map/RewardMgrService.h         |  4 +-
+ .../system/cosmicMgrs/IncursionMgr.cpp        | 89 +++++++++++++++++++
+ .../system/cosmicMgrs/IncursionMgr.h          |  2 +
+ 4 files changed, 101 insertions(+), 2 deletions(-)
+
+diff --git a/src/eve-server/map/RewardMgrService.cpp b/src/eve-server/map/RewardMgrService.cpp
+index cfd02b3f..1bfa2417 100644
+--- a/src/eve-server/map/RewardMgrService.cpp
++++ b/src/eve-server/map/RewardMgrService.cpp
+@@ -1,6 +1,6 @@
+  /**
+   * @name RewardMgrService.cpp
+-  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies)
++  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies) and the site payout tables
+   *
+   * @date:          12 October 2026
+   *
+@@ -19,9 +19,15 @@ RewardMgrService::RewardMgrService() :
+     Service("rewardMgr", eAccessLevel_Character)
+ {
+     this->Add("GetDelayedRewardsByGroupIDs", &RewardMgrService::GetDelayedRewardsByGroupIDs);
++    this->Add("GetRewardData", &RewardMgrService::GetRewardData);
+ }
+ 
+ PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs)
+ {
+     return sIncursionMgr.GetDelayedRewards(call.client->GetCharacterID(), groupIDs);
+ }
++
++PyResult RewardMgrService::GetRewardData(PyCallArgs& call, PyInt* rewardID)
++{
++    return sIncursionMgr.GetRewardData(rewardID->value());
++}
+diff --git a/src/eve-server/map/RewardMgrService.h b/src/eve-server/map/RewardMgrService.h
+index e63c3f67..cbb58d02 100644
+--- a/src/eve-server/map/RewardMgrService.h
++++ b/src/eve-server/map/RewardMgrService.h
+@@ -1,6 +1,6 @@
+  /**
+   * @name RewardMgrService.h
+-  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies)
++  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies) and the site payout tables
+   *
+   * @date:          12 October 2026
+   *
+@@ -20,6 +20,8 @@ protected:
+     // the Journal's Incursions tab: {rewardGroupID: [util.KeyVal(rewardQuantity)]}.  groupIDs is a tuple from the
+     //  Crucible client (seen in a server log), so take any sequence
+     PyResult GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs);   // the client sends a tuple
++    // the Journal's encounter list and its payout chart: what a site of one kind pays by fleet size
++    PyResult GetRewardData(PyCallArgs& call, PyInt* rewardID);
+ };
+ 
+ #endif  // EVEMU_MAP_REWARDMGRSERVICE_H_
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+index a8b32470..e1fe772f 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.cpp
+@@ -1103,6 +1103,95 @@ PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyRep* groupIDs)
+     return dict;
+ }
+ 
++/* rewardMgr.GetRewardData(rewardID), for the journal's encounter list (incursionSvc.GetMaxRewardValueByID) and its chart:
++ *   util.KeyVal(immediateRewards = {rewardCriteria: [table]}, delayedRewards = {rewardCriteria: [table]})
++ *   table = util.KeyVal(rewardTypeID, entries = [util.KeyVal(playerCount, quantity)])
++ *  entries go up in playerCount, and a fleet gets the last entry at or under its size.  the rewardIDs are the
++ *  client's own (journal.py): 8 scout, 1 vanguard, 2 assault, 3 headquarters, 10 mothership.  an unknown one gets
++ *  empty tables, since the client reads immediateRewards off whatever comes back and a None stops the journal opening.
++ *  the tables follow CompleteSite(): a full fleet's pay up to the site's fleet size (scaled by FleetScale), then
++ *  split between the pilots, and low/null-sec 10/7 of high-sec.  the const values aren't in any client source I
++ *  could find: rewardTypeLP is 1 (the journal asks for LP first and the client's traceback shows 1), ISK is taken
++ *  as 2 and the criteria as 1 high-sec and 2 low/null-sec
++ */
++PyRep* IncursionMgr::GetRewardData(int32 rewardID)
++{
++    static const int32 rewardTypeLP = 1, rewardTypeISK = 2;
++    static const int32 criteriaHigh = 1, criteriaLow = 2;
++
++    uint32 sceneType(0);
++    switch (rewardID) {
++        case 1:  sceneType = Incursion::scenesType::vanguard;      break;
++        case 2:  sceneType = Incursion::scenesType::assault;       break;
++        case 3:  sceneType = Incursion::scenesType::headquarters;  break;
++        case 8:  sceneType = Incursion::scenesType::staging;       break;
++        case 10: sceneType = Incursion::scenesType::boss;          break;
++    }
++
++    uint32 isk(0), lp(0), fleet(0);
++    for (auto cur : m_siteTypes) {
++        if ((sceneType == 0) or (cur.second.sceneType != sceneType))
++            continue;
++        isk = std::max(isk, cur.second.iskReward);
++        lp = std::max(lp, cur.second.lpReward);
++        fleet = std::max(fleet, (uint32)cur.second.designFleet);
++    }
++
++    PyDict* immediate = new PyDict();
++    PyDict* delayed = new PyDict();
++    if (fleet > 0) {
++        double scaled = fleet * sConfig.incursion.FleetScale / 100.0;
++        if (scaled < 0.1)
++            scaled = 0.1;
++        uint32 last = std::max(8u, (uint32)std::ceil(scaled * 2));
++        // DelayedLP puts site LP in the incursion's pool, paid when the mothership dies
++        bool pool = sConfig.incursion.DelayedLP;
++
++        auto table = [&](int32 typeID, uint32 amount, double secMod) {
++            PyList* entries = new PyList();
++            int64 prev = -1;
++            for (uint32 count = 1; count <= last; ++count) {
++                double share = std::min(1.0, scaled / count) * secMod;
++                int64 quantity = (int64)(amount * share + 0.5);
++                if ((quantity == prev) and (count < last))
++                    continue;
++                prev = quantity;
++                PyDict* entry = new PyDict();
++                    entry->SetItemString("playerCount", new PyInt(count));
++                    entry->SetItemString("quantity", new PyLong(quantity));
++                entries->AddItem(new PyObject("util.KeyVal", entry));
++            }
++            PyDict* dict = new PyDict();
++                dict->SetItemString("rewardTypeID", new PyInt(typeID));
++                dict->SetItemString("entries", entries);
++            return new PyObject("util.KeyVal", dict);
++        };
++
++        // the chart plots each criteria's first table against the largest ISK figure, so ISK goes first
++        for (int32 criteria : {criteriaHigh, criteriaLow}) {
++            double secMod = (criteria == criteriaLow ? 10.0 / 7.0 : 1.0);
++            PyList* now = new PyList();
++                now->AddItem(table(rewardTypeISK, isk, secMod));
++            if (lp > 0) {
++                if (pool) {
++                    PyList* later = new PyList();
++                        later->AddItem(table(rewardTypeLP, lp, secMod));
++                    delayed->SetItem(new PyInt(criteria), later);
++                } else {
++                    now->AddItem(table(rewardTypeLP, lp, secMod));
++                }
++            }
++            immediate->SetItem(new PyInt(criteria), now);
++        }
++    }
++
++    PyDict* reward = new PyDict();
++        reward->SetItemString("rewardID", new PyInt(rewardID));
++        reward->SetItemString("immediateRewards", immediate);
++        reward->SetItemString("delayedRewards", delayed);
++    return new PyObject("util.KeyVal", reward);
++}
++
+ void IncursionMgr::Broadcast(const std::string& msg)
+ {
+     std::vector<Client*> list;
+diff --git a/src/eve-server/system/cosmicMgrs/IncursionMgr.h b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+index 2216aee5..e899bf38 100644
+--- a/src/eve-server/system/cosmicMgrs/IncursionMgr.h
++++ b/src/eve-server/system/cosmicMgrs/IncursionMgr.h
+@@ -245,6 +245,8 @@ public:
+     PyRep* GetSystems();
+     // rewardMgr: the character's LP in each incursion's pool
+     PyRep* GetDelayedRewards(uint32 charID, PyRep* groupIDs);
++    // rewardMgr: the payout table for one kind of site (the journal's encounter rewardIDs)
++    PyRep* GetRewardData(int32 rewardID);
+ 
+     // GM commands.  each returns a message for the caller
+     std::string Start(uint32 constellationID = 0);
+-- 
+2.34.1
+

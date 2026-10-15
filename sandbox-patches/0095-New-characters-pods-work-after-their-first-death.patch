@@ -1,0 +1,57 @@
+From 24cd44e15aa4b1b6ed5f7d2726497b36f803e6ed Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 21:44:50 +0000
+Subject: [PATCH 95/98] New characters' pods work after their first death
+
+A character created since the server started had a pod with no
+attributes. The pod is spawned during character creation, when
+ShipItem::_Load() skips the attribute map, and the item factory kept that
+half-loaded copy. After the character's first death the pod came out with
+the movement code's defaults (100 m/s, mass 1) and no capacitor or hit
+points: it didn't move on the server, the client's movement maths went to
+NaN, and the client showed it next to things the server said it was
+kilometres from (a wormhole jump was refused at 13.7 km while the client
+showed 51 m).
+
+The pod is now logged out with the rookie ship at the end of character
+creation, so it is loaded properly when first used, and a ship that
+still hasn't loaded its attributes loads them when a pilot gets in.
+---
+ src/eve-server/character/CharUnboundMgrService.cpp | 3 +++
+ src/eve-server/ship/Ship.cpp                       | 6 ++++++
+ 2 files changed, 9 insertions(+)
+
+diff --git a/src/eve-server/character/CharUnboundMgrService.cpp b/src/eve-server/character/CharUnboundMgrService.cpp
+index 5affc1bb..7b987130 100644
+--- a/src/eve-server/character/CharUnboundMgrService.cpp
++++ b/src/eve-server/character/CharUnboundMgrService.cpp
+@@ -403,6 +403,9 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
+ 
+     charRef->LogOut();
+     sRef->LogOut();
++    // the pod too:  it was loaded without its attributes (ShipItem::_Load() skips them during creation), so it has to be
++    //  loaded again from the database when the character first uses it
++    pClient->GetPod()->LogOut();
+ 
+     sEntityList.RemovePlayer(pClient);
+ 
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index 7ea6ec70..f380e445 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -147,6 +147,12 @@ void ShipItem::SetPlayer(Client* pClient) {
+     if (pClient->IsCharCreation())
+         return;
+ 
++    /* a ship first loaded while its character was being created has no attributes (_Load() skips them then), and the
++     *  item factory keeps it that way.  that was the new character's pod:  after their first death it came out with no speed,
++     *  mass, capacitor or hit points, so it didn't move on the server and the client's movement maths broke (speed NaN) */
++    if (!m_loaded)
++        _Load();
++
+     Init();
+ 
+     // proc effects when changing ships, or on login.
+-- 
+2.34.1
+

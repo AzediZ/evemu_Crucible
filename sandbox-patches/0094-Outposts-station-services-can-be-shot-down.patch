@@ -1,0 +1,1072 @@
+From 43b983b270e10f247b50006c467a695023306714 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Thu, 15 Oct 2026 21:28:30 +0000
+Subject: [PATCH 94/98] Outposts: station services can be shot down
+
+Each outpost and NPC conquerable station gets its service structures in
+space (fitting, reprocessing, factory, cloning, repair and laboratory),
+as in Dominion and Crucible. They can be shot whenever the station
+itself can, and they don't die: at 1% structure the service goes offline
+until it is repaired to full armour and structure and its shields come
+back to 50%.
+
+While a service is offline:
+- cloning: no new clone contracts, jump clones or home station moves
+  there, and pilots podded with their clone there wake up in their
+  starting station
+- factory and laboratory: no new jobs, and running ones pause until it's
+  back (the two are separate)
+- fitting: no fitting modules while docked
+- repair and reprocessing: refused
+
+The station lobby greys the service out (OnProcessStationServiceItemChange)
+and the owning corp gets StationStateChange. Service items are spawned for
+existing stations when their system boots, and on outpost upgrades. They
+change hands with the station. /sov siege lists them and
+/sov siege repair repairs them.
+---
+ src/eve-common/EVE_Outpost.h                  |  74 ++++
+ src/eve-server/Client.cpp                     |  14 +-
+ src/eve-server/admin/SystemCommands.cpp       |  20 +-
+ src/eve-server/corporation/CorpStationMgr.cpp |   6 +
+ src/eve-server/dogmaim/DogmaIMService.cpp     |   3 +-
+ src/eve-server/inventory/AttributeMap.cpp     |   6 +-
+ src/eve-server/inventory/InventoryBound.cpp   |   4 +-
+ src/eve-server/manufacturing/FactoryDB.cpp    |  26 +-
+ src/eve-server/manufacturing/FactoryDB.h      |   6 +-
+ .../manufacturing/RamProxyService.cpp         |   6 +
+ src/eve-server/ship/Ship.cpp                  |   4 +
+ src/eve-server/station/JumpCloneService.cpp   |   2 +
+ src/eve-server/station/Outpost.cpp            | 325 ++++++++++++++++--
+ src/eve-server/station/Outpost.h              |  70 +++-
+ src/eve-server/station/RepairService.cpp      |   2 +
+ .../station/ReprocessingService.cpp           |   2 +
+ src/eve-server/system/Damage.cpp              |   9 +
+ src/eve-server/system/SystemEntity.h          |   3 +
+ src/eve-server/system/SystemManager.cpp       |  14 +-
+ src/eve-test/utils/OutpostRulesTest.cpp       |  14 +
+ utils/config/eve-server.xml                   |   2 +-
+ 21 files changed, 562 insertions(+), 50 deletions(-)
+
+diff --git a/src/eve-common/EVE_Outpost.h b/src/eve-common/EVE_Outpost.h
+index 814de94d..11d4bd7e 100644
+--- a/src/eve-common/EVE_Outpost.h
++++ b/src/eve-common/EVE_Outpost.h
+@@ -597,5 +597,79 @@ namespace OutpostSiege {
+     }
+ }
+ 
++/* station services (Destructible Station Services, group 874):  each service of an outpost is a structure at the station
++ *  that can be shot while the station itself can be.  Shot down to its incapacitation ratio of structure (1%) the service
++ *  is off:  "cannot be used until it is repaired back to 50% shields" and "100% structure and armour" (CCP, "Of Outposts,
++ *  Improvements, Upgrades and Dragons", 2007, still the rule in 2012).  Medical stops new clone contracts, factories and labs
++ *  stop new jobs and pause the running ones, fitting stops fitting, repair stops repairs, reprocessing stops refining */
++namespace OutpostServices {
++    // the service structure types and the station service bits (staServices) each one stands for
++    static constexpr uint16_t TypeFitting       = 28155;
++    static constexpr uint16_t TypeReprocessing  = 28156;
++    static constexpr uint16_t TypeFactory       = 28157;
++    static constexpr uint16_t TypeCloning       = 28158;
++    static constexpr uint16_t TypeRepair        = 28159;
++    static constexpr uint16_t TypeLaboratory    = 28166;
++
++    static constexpr uint32_t ReprocessingPlant = 16;
++    static constexpr uint32_t Refinery          = 32;
++    static constexpr uint32_t Cloning           = 512;
++    static constexpr uint32_t RepairFacilities  = 4096;
++    static constexpr uint32_t Factory           = 8192;
++    static constexpr uint32_t Laboratory        = 16384;
++    static constexpr uint32_t Fitting           = 65536;
++
++    static constexpr double IncapacitationRatio = 0.01;     // the types' incapacitationRatio
++    static constexpr double OnlineShield        = 0.5;
++
++    struct Service { uint16_t typeID; uint32_t serviceID; };
++    // serviceID is what the client asks about (GetStationServiceStates):  reprocessing answers for the refinery too
++    static constexpr std::array<Service, 6> All = {{
++        {TypeFitting,       Fitting},
++        {TypeReprocessing,  ReprocessingPlant},
++        {TypeFactory,       Factory},
++        {TypeCloning,       Cloning},
++        {TypeRepair,        RepairFacilities},
++        {TypeLaboratory,    Laboratory}
++    }};
++
++    // the station service bits a service structure covers.  0 for any other type
++    inline uint32_t Covers(uint16_t typeID)
++    {
++        for (auto& cur : All)
++            if (cur.typeID == typeID)
++                return (cur.serviceID == ReprocessingPlant ? (ReprocessingPlant | Refinery) : cur.serviceID);
++        return 0;
++    }
++    // the structure type standing for a station's service bits, 0 for services that can't be shot (market, insurance...)
++    inline uint16_t TypeFor(uint32_t serviceMask)
++    {
++        for (auto& cur : All)
++            if ((Covers(cur.typeID) & serviceMask) != 0)
++                return cur.typeID;
++        return 0;
++    }
++    inline uint32_t ServiceID(uint16_t typeID)
++    {
++        for (auto& cur : All)
++            if (cur.typeID == typeID)
++                return cur.serviceID;
++        return 0;
++    }
++
++    // shot down to (1 - ratio) of its structure
++    inline bool Incapacitated(double damage, double hp, double ratio = IncapacitationRatio)
++    {
++        return (hp > 0.0) and (damage >= (hp * (1.0 - ratio)) - 0.001);
++    }
++    // back on at 50% shield with full armor and structure
++    inline bool BackOnline(double shieldCharge, double shieldCapacity, double armorDamage, double damage)
++    {
++        if ((armorDamage > 0.5) or (damage > 0.5))
++            return false;
++        return (shieldCapacity <= 0.0) or (shieldCharge >= (shieldCapacity * OnlineShield) - 0.001);
++    }
++}
++
+ 
+ #endif  // EVE_OUTPOST_H
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 91068ea2..f378ae85 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -68,6 +68,7 @@
+ #include "station/TradeService.h"
+ #include "pos/Tower.h"
+ #include "system/cosmicMgrs/WormholeMgr.h"
++#include "station/Outpost.h"
+ 
+ static const uint32 PING_INTERVAL_MS = 600000; //10m
+ 
+@@ -1420,10 +1421,19 @@ void Client::ResetAfterPodded() {
+     CreateNewPod();
+     SetShip(m_pod);
+ 
++    /* the clone contract's station had its cloning service shot down (OutpostServices):  the contract stands, but the pilot
++     *  wakes up in their starting station */
++    uint32 wakeStationID(GetCloneStationID());
++    if (OutpostSE::IsServiceOffline(wakeStationID, Station::Cloning)) {
++        uint32 startID(CharacterDB::GetStartingStationByCareer(m_char->careerID()));
++        if (startID != 0)
++            wakeStationID = startID;
++    }
++
+     // verify clone station hangar isnt loaded yet.
+-    RemoveStationHangar(GetCloneStationID());
++    RemoveStationHangar(wakeStationID);
+ 
+-    MoveToLocation(GetCloneStationID(), NULL_ORIGIN);
++    MoveToLocation(wakeStationID, NULL_ORIGIN);
+ 
+     m_ship->Move(m_locationID, flagHangar);
+     m_ship->SaveShip();
+diff --git a/src/eve-server/admin/SystemCommands.cpp b/src/eve-server/admin/SystemCommands.cpp
+index 8b728f8f..e988bf88 100644
+--- a/src/eve-server/admin/SystemCommands.cpp
++++ b/src/eve-server/admin/SystemCommands.cpp
+@@ -1207,7 +1207,7 @@ namespace {
+ 
+     /* /sov siege [info|next|repair] [stationID]
+      *  an outpost or conquerable station in your system (the first one if no stationID).  info shows its siege, next ends
+-     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it back to full health
++     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it and its service structures back to full health
+      */
+     PyResult SiegeCommand(Client* pClient, const Seperator& args)
+     {
+@@ -1247,7 +1247,23 @@ namespace {
+                  (OutpostSiege::IsReinforced(pOSE->GetSiegePhase())
+                     ? ("  reinforced for " + std::to_string((pOSE->GetReinforcementEnd() - GetFileTimeNow()) / EvE::Time::Minute) + " more minutes.").c_str()
+                     : ""));
+-        return new PyString(buf);
++        // its service structures
++        std::string out(buf);
++        for (auto id : pOSE->GetServiceIDs()) {
++            SystemEntity* pSE(pClient->SystemMgr()->GetSE(id));
++            if ((pSE == nullptr) or !pSE->IsStationServiceSE())
++                continue;
++            InventoryItemRef sRef(pSE->GetSelf());
++            double sCap(sRef->GetAttribute(AttrShieldCapacity).get_double()), sArmor(sRef->GetAttribute(AttrArmorHP).get_double());
++            double sHP(sRef->GetAttribute(AttrHP).get_double());
++            snprintf(buf, sizeof(buf), "<br>%s (%u):  %s, shield %.1f%%, armor %.1f%%, structure %.1f%%", pSE->GetName(), id,
++                     (pSE->GetStationServiceSE()->IsOnline() ? "online" : "shot down"),
++                     (sCap > 0 ? 100.0 * sRef->GetAttribute(AttrShieldCharge).get_double() / sCap : 0.0),
++                     (sArmor > 0 ? 100.0 * (1.0 - sRef->GetAttribute(AttrArmorDamage).get_double() / sArmor) : 0.0),
++                     (sHP > 0 ? 100.0 * (1.0 - sRef->GetAttribute(AttrDamage).get_double() / sHP) : 0.0));
++            out += buf;
++        }
++        return new PyString(out);
+     }
+ 
+     /* /sov and /pos (anchor|online|offline|unanchor|complete) (itemID)
+diff --git a/src/eve-server/corporation/CorpStationMgr.cpp b/src/eve-server/corporation/CorpStationMgr.cpp
+index 3b56d07b..a34baeaf 100644
+--- a/src/eve-server/corporation/CorpStationMgr.cpp
++++ b/src/eve-server/corporation/CorpStationMgr.cpp
+@@ -62,6 +62,7 @@
+ #include "services/ServiceManager.h"
+ #include "character/Character.h"
+ #include "inventory/AttributeEnum.h"
++#include "station/Outpost.h"
+ 
+ // the client's const.costCloneContract (AskAcceptCloneContractCost shows it), so not configurable  (F15)
+ static constexpr double CloneContractCost = 5600.0;
+@@ -241,6 +242,7 @@ PyResult CorpStationMgrIMBound::SetCloneTypeID(PyCallArgs &call, PyInt* cloneTyp
+     stDataMgr.GetStationData(pClient->GetStationID(), stData);
+     if ((stData.serviceMask & Station::Cloning) == 0)
+         throw CustomError("This station does not offer cloning services.");
++    OutpostSE::CheckServiceOnline(pClient->GetStationID(), Station::Cloning);
+     const ItemType* pType(sItemFactory.GetType(cloneTypeID->value()));
+     if ((pType == nullptr) or (pType->groupID() != EVEDB::invGroups::Clone))
+         throw CustomError("That is not a clone.");
+@@ -495,6 +497,8 @@ PyResult CorpStationMgrIMBound::SetHomeStation(PyCallArgs &call, PyInt* newHomeS
+     m_db.GetCorpStations(pClient->GetCorporationID(), stVec);
+     if (std::find(stVec.begin(), stVec.end(), (uint32)newHomeStationID->value()) == stVec.end())
+         throw CustomError("You can't move your clone contract to that station.");
++    // no new contracts where the cloning service has been shot down
++    OutpostSE::CheckServiceOnline(newHomeStationID->value(), Station::Cloning);
+     // the client asked AskAcceptCloneContractCost {cost: const.costCloneContract}, paid to the new station's owner  (F15)
+     std::string reason("DESC: Clone contract moved to ");
+     reason += stDataMgr.GetStationName(newHomeStationID->value());
+@@ -518,6 +522,8 @@ PyResult CorpStationMgrIMBound::DoStandingCheckForStationService(PyCallArgs &cal
+     call.Dump(CORP__CALL_DUMP);
+ 
+     Client* pClient(call.client);
++    // a service shot down at an outpost (OutpostServices) can't be used by anyone
++    OutpostSE::CheckServiceOnline(m_stationID, stationServiceID->value());
+     uint32 ownerID = pStationItem->GetOwnerID();
+     if (!IsPlayerCorp(ownerID))
+         return nullptr;
+diff --git a/src/eve-server/dogmaim/DogmaIMService.cpp b/src/eve-server/dogmaim/DogmaIMService.cpp
+index ed19c8c6..1e73d90e 100644
+--- a/src/eve-server/dogmaim/DogmaIMService.cpp
++++ b/src/eve-server/dogmaim/DogmaIMService.cpp
+@@ -415,7 +415,8 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
+     or (tSE->GetSelf()->HasAttribute(AttrUntargetable)))
+         throw UserError ("DeniedTargetEvadesSensors")
+                 .AddFormatValue ("targetName", new PyString (tSE->GetName ()));
+-    if (tSE->IsInvul() and !tSE->IsOutpostSE())
++    // outposts and their services can be locked when they can't be shot:  logistics repair them
++    if (tSE->IsInvul() and !tSE->IsOutpostSE() and !tSE->IsStationServiceSE())
+         throw UserError ("DeniedTargetInvulnerable");
+     // ecm.  jammed ships can't lock anything (locking the jammer came with the 2018 balance pass)
+     if (mySE->TargetMgr()->IsJammed())
+diff --git a/src/eve-server/inventory/AttributeMap.cpp b/src/eve-server/inventory/AttributeMap.cpp
+index 4ffd473e..8d68da5b 100644
+--- a/src/eve-server/inventory/AttributeMap.cpp
++++ b/src/eve-server/inventory/AttributeMap.cpp
+@@ -436,9 +436,9 @@ bool AttributeMap::Add(uint16 attrID, EvilNumber& num) {
+ bool AttributeMap::SendChanges(PyTuple* attrChange) {
+     if (attrChange == nullptr)
+         return true;
+-    /* stations (outposts under siege) tell nobody:  clients get their hit points from the damage state.  a corp-owned one
+-     *  would multicast every hit to its corp (with an error and a stack trace in the log) */
+-    if (IsStationID(mItem.itemID()))
++    /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
++     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
++    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services))
+         return true;
+ 
+     /** @todo update this to use my new multicast replacement */
+diff --git a/src/eve-server/inventory/InventoryBound.cpp b/src/eve-server/inventory/InventoryBound.cpp
+index 947844d0..7fcf3be8 100644
+--- a/src/eve-server/inventory/InventoryBound.cpp
++++ b/src/eve-server/inventory/InventoryBound.cpp
+@@ -1490,7 +1490,7 @@ void InventoryBound::BuildOutpost(Client* pClient, StructureSE* pPlatform, uint1
+     pSystem->AddOutpost(oSE);
+ 
+     _log(POS__MESSAGE, "Creating new station service entities...");
+-    oSE->SpawnStationServices(pClient, stData, 0, stData.serviceMask);
++    oSE->SpawnStationServices(0, stData.serviceMask);
+ 
+     pClient->SendNotifyMsg("%s has been built.", stData.name.c_str());
+ }
+@@ -1571,7 +1571,7 @@ void InventoryBound::BuildOutpostUpgrade(Client* pClient, StructureSE* pPlatform
+ 
+     SystemEntity* pOutpost(pClient->SystemMgr()->GetSE(stationID));
+     if ((pOutpost != nullptr) and (pOutpost->GetOutpostSE() != nullptr))
+-        pOutpost->GetOutpostSE()->SpawnStationServices(pClient, stData, oldMask, stData.serviceMask);
++        pOutpost->GetOutpostSE()->SpawnStationServices(oldMask, stData.serviceMask);
+ 
+     _log(POS__MESSAGE, "%s built %s into %s(%u):  upgrade level %u", pClient->GetName(), typeName.c_str(), stData.name.c_str(), stationID, stData.upgradeLevel);
+     pClient->SendNotifyMsg("The %s has been installed in %s.  Docked pilots see the new services when they next dock.", typeName.c_str(), stData.name.c_str());
+diff --git a/src/eve-server/manufacturing/FactoryDB.cpp b/src/eve-server/manufacturing/FactoryDB.cpp
+index e74621a8..11533228 100644
+--- a/src/eve-server/manufacturing/FactoryDB.cpp
++++ b/src/eve-server/manufacturing/FactoryDB.cpp
+@@ -1036,7 +1036,17 @@ bool FactoryDB::SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID,
+     return true;
+ }
+ 
+-void FactoryDB::PauseJobsInContainer(uint32 containerID)
++// the lines a pause or resume covers (PauseJobsInContainer)
++static const char* LineFilter(int8 lines)
++{
++    switch (lines) {
++        case 1:  return " AND line.activityID = 1";
++        case 2:  return " AND line.activityID <> 1";
++    }
++    return "";
++}
++
++void FactoryDB::PauseJobsInContainer(uint32 containerID, int8 lines/*0*/)
+ {
+     DBerror err;
+     double now(GetFileTimeNow());
+@@ -1045,12 +1055,12 @@ void FactoryDB::PauseJobsInContainer(uint32 containerID)
+         " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+         " SET job.pauseProductionTime = %.0f"
+         " WHERE line.containerID = %u AND job.completedStatusID = 0"
+-        " AND job.pauseProductionTime IS NULL AND job.endProductionTime > %.0f",
+-        now, containerID, now))
++        " AND job.pauseProductionTime IS NULL AND job.endProductionTime > %.0f%s",
++        now, containerID, now, LineFilter(lines)))
+         _log(DATABASE__ERROR, "Failed to pause jobs in container %u: %s", containerID, err.c_str());
+ }
+ 
+-void FactoryDB::ResumeJobsInContainer(uint32 containerID)
++void FactoryDB::ResumeJobsInContainer(uint32 containerID, int8 lines/*0*/)
+ {
+     DBerror err;
+     double now(GetFileTimeNow());
+@@ -1062,8 +1072,8 @@ void FactoryDB::ResumeJobsInContainer(uint32 containerID)
+         "         job.beginProductionTime + (%.0f - job.pauseProductionTime), job.beginProductionTime),"
+         "     job.endProductionTime = job.endProductionTime + (%.0f - job.pauseProductionTime)"
+         " WHERE line.containerID = %u AND job.completedStatusID = 0"
+-        " AND job.pauseProductionTime IS NOT NULL AND job.pauseProductionTime < %.0f",
+-        now, now, containerID, now))
++        " AND job.pauseProductionTime IS NOT NULL AND job.pauseProductionTime < %.0f%s",
++        now, now, containerID, now, LineFilter(lines)))
+     {
+         _log(DATABASE__ERROR, "Failed to move jobs in container %u: %s", containerID, err.c_str());
+         return;
+@@ -1072,8 +1082,8 @@ void FactoryDB::ResumeJobsInContainer(uint32 containerID)
+         "UPDATE ramJobs AS job"
+         " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
+         " SET job.pauseProductionTime = NULL"
+-        " WHERE line.containerID = %u AND job.completedStatusID = 0 AND job.pauseProductionTime IS NOT NULL",
+-        containerID))
++        " WHERE line.containerID = %u AND job.completedStatusID = 0 AND job.pauseProductionTime IS NOT NULL%s",
++        containerID, LineFilter(lines)))
+     {
+         _log(DATABASE__ERROR, "Failed to resume jobs in container %u: %s", containerID, err.c_str());
+         return;
+diff --git a/src/eve-server/manufacturing/FactoryDB.h b/src/eve-server/manufacturing/FactoryDB.h
+index 7f579540..7904cb24 100644
+--- a/src/eve-server/manufacturing/FactoryDB.h
++++ b/src/eve-server/manufacturing/FactoryDB.h
+@@ -88,8 +88,10 @@ public:
+     static bool SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID, uint32 ownerID, uint32 systemID, uint32 regionID,
+                                          const std::map<uint8, uint16>& lines);
+     // offline structures pause their jobs (client shows 'Offline'), onlining resumes them with the lost time added
+-    static void PauseJobsInContainer(uint32 containerID);
+-    static void ResumeJobsInContainer(uint32 containerID);
++    /* lines:  0 every line in the container, 1 its manufacturing lines only, 2 every other line (a station's factory and
++     *  laboratory services go off on their own, OutpostServices) */
++    static void PauseJobsInContainer(uint32 containerID, int8 lines = 0);
++    static void ResumeJobsInContainer(uint32 containerID, int8 lines = 0);
+     static void GetActiveJobsInContainer(uint32 containerID, std::vector<EvERam::JobProperties>& into);
+     static bool UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConfig& data);
+ 
+diff --git a/src/eve-server/manufacturing/RamProxyService.cpp b/src/eve-server/manufacturing/RamProxyService.cpp
+index a590e19e..c0c5820a 100644
+--- a/src/eve-server/manufacturing/RamProxyService.cpp
++++ b/src/eve-server/manufacturing/RamProxyService.cpp
+@@ -43,6 +43,7 @@
+ #include "market/sim/SimFacilityMgr.h"
+ #include "station/StationDataMgr.h"
+ #include "system/CalendarDB.h"
++#include "station/Outpost.h"
+ 
+ RamProxyService::RamProxyService() :
+     Service("ramProxy")
+@@ -181,6 +182,11 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
+     if (structureLine)
+         sRamMthd.StructureCheck(pClient, args.lineContainerID);
+ 
++    // an outpost's factory or laboratory that has been shot down takes no jobs (OutpostServices)
++    if (sDataMgr.IsStation(args.lineContainerID))
++        OutpostSE::CheckServiceOnline(args.lineContainerID,
++                (args.activityID == EvERam::Activity::Manufacturing ? Station::Factory : Station::Laboratory));
++
+     // range to the installation, then the line's activity
+     sRamMthd.InstallationCheck(pClient, args.lineContainerID, args.activityID);
+     sRamMthd.ActivityCheck(pClient, args, installedItem, structureLine);
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index f342cb5a..7ea6ec70 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -24,6 +24,7 @@
+ #include "system/SolarSystem.h"
+ #include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
++#include "station/Outpost.h"
+ 
+ /*
+  * ShipItem
+@@ -2626,6 +2627,9 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client*
+             }
+ 
+             if (IsModuleSlot(flag)) {
++                // docked at an outpost whose fitting service has been shot down (OutpostServices).  loading charges is fine
++                if ((iRef->categoryID() != EVEDB::invCategories::Charge) and sDataMgr.IsStation(locationID()))
++                    OutpostSE::CheckServiceOnline(locationID(), Station::Fitting);
+                 // the subsystem errors are more telling than the generic group check below
+                 CheckSubSystemFit(flag, iRef);
+                 if (!Skill::FitModuleSkillCheck(iRef, pClient->GetChar())) {
+diff --git a/src/eve-server/station/JumpCloneService.cpp b/src/eve-server/station/JumpCloneService.cpp
+index 2ac1a1cf..f11fb751 100644
+--- a/src/eve-server/station/JumpCloneService.cpp
++++ b/src/eve-server/station/JumpCloneService.cpp
+@@ -39,6 +39,7 @@
+ #include "station/JumpCloneService.h"
+ #include "station/StationDataMgr.h"
+ #include "services/ServiceManager.h"
++#include "station/Outpost.h"
+ 
+ JumpCloneService::JumpCloneService(EVEServiceManager& mgr) :
+     BindableService("jumpCloneSvc", mgr)
+@@ -260,6 +261,7 @@ PyResult JumpCloneBound::InstallCloneInStation(PyCallArgs &call) {
+      *  window adds the bit to every station (base_stationmanagement.GetStationServiceMask).  so cloning is what counts */
+     if ((stData.serviceMask & (Station::JumpCloneFacility | Station::Cloning)) == 0)
+         throw CustomError("This station has no jump clone facility.");
++    OutpostSE::CheckServiceOnline(stationID, Station::Cloning);
+ 
+     // Infomorph Psychology: one clone per level
+     uint32 maxClones(cRef->GetSkillLevel(EvESkill::InfomorphPsychology));
+diff --git a/src/eve-server/station/Outpost.cpp b/src/eve-server/station/Outpost.cpp
+index 43b2f6fd..232e71ce 100644
+--- a/src/eve-server/station/Outpost.cpp
++++ b/src/eve-server/station/Outpost.cpp
+@@ -21,6 +21,7 @@
+ #include "mail/NotificationMgr.h"
+ #include "pos/PosMgrDB.h"
+ #include "station/StationDB.h"
++#include "system/DestinyManager.h"
+ #include "system/TargetManager.h"
+ #include "system/sov/SovereigntyDataMgr.h"
+ 
+@@ -314,6 +315,12 @@ void OutpostSE::Conquer(uint32 corpID, uint32 charID)
+         sRef->UpdateSettings();
+     }
+     UpdateOwner();
++    // the service structures go with it, as they are (shot down ones stay down)
++    for (auto id : m_serviceIDs) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE != nullptr) and pSE->IsStationServiceSE())
++            pSE->GetStationServiceSE()->SetOwner(corpID, m_allyID);
++    }
+ 
+     /* what the new owner gets isn't written down anywhere.  the structure is repaired and the shield and armor are left as
+      *  they are, so the next attacker has to grind the structure again rather than take it with one shot */
+@@ -388,9 +395,15 @@ void OutpostSE::NotifyAttack(SystemEntity* pAttacker, bool force/*false*/)
+ 
+ void OutpostSE::ProcessSiege()
+ {
++    int64 now(GetFileTimeNow());
++    // the service structures (they come back online once repaired)
++    for (auto id : m_serviceIDs) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE != nullptr) and pSE->IsStationServiceSE())
++            pSE->GetStationServiceSE()->ProcessService(now);
++    }
+     if (!m_conquerable)
+         return;
+-    int64 now(GetFileTimeNow());
+     // the owner's alliance may change
+     if ((now - m_lastOwnerCheck) >= EvE::Time::Minute)
+         UpdateOwner();
+@@ -462,32 +475,294 @@ void OutpostSE::GMRepair()
+     SaveSiege();
+     SendSlimUpdate();
+     SendDamageStateChanged();
++    for (auto id : m_serviceIDs) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE != nullptr) and pSE->IsStationServiceSE())
++            pSE->GetStationServiceSE()->GMRepair();
++    }
++}
++
++/* station services (OutpostServices).  their structures sit at the station's position, as Crucible's did */
++void OutpostSE::SpawnStationServices(uint32 oldMask, uint32 newMask)
++{
++    if (m_system == nullptr)
++        return;
++    for (auto& cur : OutpostServices::All) {
++        uint32 covers(OutpostServices::Covers(cur.typeID));
++        if (((newMask & covers) == 0) or ((oldMask & covers) != 0) or (GetService(cur.typeID) != nullptr))
++            continue;
++        const ItemType* pType(sItemFactory.GetType(cur.typeID));
++        ItemData data(cur.typeID, m_corpID, m_system->GetID(), flagStructureActive,
++                      (pType != nullptr ? pType->name().c_str() : ""), GetPosition());
++        InventoryItemRef iRef(sItemFactory.SpawnItem(data));
++        if (iRef.get() == nullptr) {
++            _log(POS__ERROR, "OutpostSE::SpawnStationServices() - %s(%u):  could not make service %u", GetName(), GetID(), cur.typeID);
++            continue;
++        }
++        iRef->SaveItem();
++        FactionData fData = FactionData();
++            fData.ownerID = m_corpID;
++            fData.corporationID = m_corpID;
++            fData.allianceID = m_allyID;
++        StationServiceSE* pSSE(new StationServiceSE(iRef, m_services, m_system, fData));
++        pSSE->Save();
++        m_system->AddEntity(pSSE, false);
++        _log(POS__MESSAGE, "OutpostSE::SpawnStationServices() - %s(%u):  %s(%u) added", GetName(), GetID(), iRef->name(), iRef->itemID());
++    }
++}
++
++void OutpostSE::InitServices()
++{
++    // npc stations in npc null-sec can't be besieged, so their services can't be shot either
++    if (!m_conquerable)
++        return;
++    StationData data = StationData();
++    if (stDataMgr.GetStationData(m_self->itemID(), data))
++        SpawnStationServices(0, data.serviceMask);
++}
++
++StationServiceSE* OutpostSE::GetService(uint16 typeID)
++{
++    if (m_system == nullptr)
++        return nullptr;
++    for (auto id : m_serviceIDs) {
++        SystemEntity* pSE(m_system->GetSE(id));
++        if ((pSE != nullptr) and pSE->IsStationServiceSE() and (pSE->GetTypeID() == typeID))
++            return pSE->GetStationServiceSE();
++    }
++    return nullptr;
+ }
+ 
+-// Each outpost has station service entities which are spawned at the same position as the station itself
+-void OutpostSE::SpawnStationService(Client* pClient, StationData stData, uint32 serviceType) {
+-    ItemData svcData(serviceType, stData.corporationID, stData.systemID, flagNone);
+-    InventoryItemRef svcRef = sItemFactory.SpawnItem(svcData);
+-    ItemSystemEntity* svcSE = new ItemSystemEntity(svcRef, pClient->services(), pClient->SystemMgr());
+-    svcSE->SetPosition(stData.position);
+-    svcRef->SaveItem();
+-    pClient->SystemMgr()->AddEntity(svcSE);
+-}
+-
+-void OutpostSE::SpawnStationServices(Client* pClient, const StationData& stData, uint32 oldMask, uint32 newMask)
+-{
+-    // the service entities StationDB::GetStationServiceStates knows
+-    static const std::pair<uint32, uint32> services[6] = {
+-        {Station::Fitting,              EVEDB::invTypes::FittingService},
+-        {Station::ReprocessingPlant,    EVEDB::invTypes::ReprocessingService},
+-        {Station::Factory,              EVEDB::invTypes::FactoryService},
+-        {Station::Cloning,              EVEDB::invTypes::CloningService},
+-        {Station::RepairFacilities,     EVEDB::invTypes::RepairService},
+-        {Station::Laboratory,           EVEDB::invTypes::LaboratoryService}
+-    };
+-    for (auto& cur : services)
+-        if (((newMask & cur.first) != 0) and ((oldMask & cur.first) == 0))
+-            SpawnStationService(pClient, stData, cur.second);
++bool OutpostSE::ServicesVulnerable()
++{
++    return (m_conquerable and m_vulnerable and !OutpostSiege::IsReinforced(m_phase));
++}
++
++bool OutpostSE::IsServiceOffline(uint32 stationID, uint32 serviceIDs)
++{
++    SystemManager* pSys(sEntityList.FindSystem(sDataMgr.GetStationSystem(stationID)));
++    if (pSys == nullptr)
++        return false;
++    SystemEntity* pSE(pSys->GetSE(stationID));
++    if ((pSE == nullptr) or !pSE->IsOutpostSE())
++        return false;
++    OutpostSE* pOSE(pSE->GetOutpostSE());
++    for (auto id : pOSE->m_serviceIDs) {
++        SystemEntity* pSvc(pSys->GetSE(id));
++        if ((pSvc == nullptr) or !pSvc->IsStationServiceSE())
++            continue;
++        StationServiceSE* pSSE(pSvc->GetStationServiceSE());
++        if (!pSSE->IsOnline() and ((pSSE->GetCovers() & serviceIDs) != 0))
++            return true;
++    }
++    return false;
++}
++
++void OutpostSE::CheckServiceOnline(uint32 stationID, uint32 serviceIDs)
++{
++    if (!IsServiceOffline(stationID, serviceIDs))
++        return;
++    uint16 typeID(OutpostServices::TypeFor(serviceIDs));
++    const ItemType* pType(typeID ? sItemFactory.GetType(typeID) : nullptr);
++    throw CustomError("The %s of this station has been shot down. It can't be used until it is repaired to half its shield and full armor and structure.",
++                      (pType != nullptr ? pType->name().c_str() : "service"));
++}
++
++StationServiceSE::StationServiceSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data)
++: ObjectSystemEntity(self, services, system),
++m_stationID(0),
++m_covers(OutpostServices::Covers(self->typeID())),
++m_online(true),
++m_dirty(false),
++m_lastProcess(GetFileTimeNow()),
++m_lastSave(m_lastProcess)
++{
++    m_warID = data.factionID;
++    m_allyID = data.allianceID;
++    m_corpID = data.corporationID;
++    m_ownerID = data.ownerID;
++
++    // the type's hit points.  shield, armor and structure damage are the item's own (saved attributes)
++    const ItemType& type(self->type());
++    double shield(type.HasAttribute(AttrShieldCapacity) ? type.GetAttribute(AttrShieldCapacity).get_double() : 0.0);
++    self->SetAttribute(AttrShieldCapacity, shield, false);
++    if (!self->HasAttribute(AttrShieldCharge))
++        self->SetAttribute(AttrShieldCharge, shield, false);
++    if (!self->HasAttribute(AttrArmorDamage))
++        self->SetAttribute(AttrArmorDamage, EvilZero, false);
++    if (!self->HasAttribute(AttrDamage))
++        self->SetAttribute(AttrDamage, EvilZero, false);
++    if (type.HasAttribute(AttrSignatureRadius))
++        self->SetAttribute(AttrSignatureRadius, type.GetAttribute(AttrSignatureRadius), false);
++    self->SetAttribute(AttrRadius, type.radius(), false);
++    self->SetAttribute(AttrMass, type.mass(), false);
++
++    // the station it belongs to sits at the same position
++    if (system != nullptr)
++        for (auto cur : system->GetOutposts())
++            if ((cur != nullptr) and (cur->GetPosition().distance(GetPosition()) < 10.0)) {
++                m_stationID = cur->GetID();
++                cur->AddService(self->itemID());
++                break;
++            }
++    if (m_stationID == 0)
++        _log(POS__WARNING, "StationServiceSE() - %s(%u) has no station at its position", self->name(), self->itemID());
++
++    // older outposts made theirs with no flag (GetStationServiceStates read that as off)
++    m_online = (self->flag() != flagStructureInactive);
++    if (m_online and (self->flag() != flagStructureActive)) {
++        self->SetFlag(flagStructureActive, false);
++        self->SaveItem();
++    }
++}
++
++StationServiceSE::~StationServiceSE()
++{
++    if (m_dirty)
++        Save();
++}
++
++OutpostSE* StationServiceSE::GetStation()
++{
++    if ((m_stationID == 0) or (m_system == nullptr))
++        return nullptr;
++    SystemEntity* pSE(m_system->GetSE(m_stationID));
++    return ((pSE != nullptr) ? pSE->GetOutpostSE() : nullptr);
++}
++
++bool StationServiceSE::IsInvul()
++{
++    if (ObjectSystemEntity::IsInvul())
++        return true;
++    OutpostSE* pOSE(GetStation());
++    return ((pOSE == nullptr) or !pOSE->ServicesVulnerable());
++}
++
++void StationServiceSE::EncodeDestiny(Buffer& into)
++{
++    // a rigid ball inside the station.  not massive:  ships fly through it to dock
++    using namespace Destiny;
++    BallHeader head = BallHeader();
++        head.entityID = m_self->itemID();
++        head.mode = Ball::Mode::RIGID;
++        head.radius = m_radius;
++        head.posX = x();
++        head.posY = y();
++        head.posZ = z();
++        head.flags = 0;
++    into.Append( head );
++    RIGID_Struct main;
++        main.formationID = 0xFF;
++    into.Append( main );
++}
++
++void StationServiceSE::OnDamaged(SystemEntity* pAttacker)
++{
++    m_dirty = true;
++    OutpostSE* pOSE(GetStation());
++    if (pOSE != nullptr)
++        pOSE->OnServiceAttacked(pAttacker);
++    if (m_online and OutpostServices::Incapacitated(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double(),
++                     (m_self->HasAttribute(AttrIncapacitationRatio) ? m_self->GetAttribute(AttrIncapacitationRatio).get_double() : OutpostServices::IncapacitationRatio)))
++        SetOnline(false);
++}
++
++void StationServiceSE::ProcessService(int64 now)
++{
++    // shields come back by themselves (very slowly:  the types' recharge time is 23 days).  armor and structure need repairing
++    if ((now - m_lastProcess) >= (10 * EvE::Time::Second)) {
++        double capacity(m_self->GetAttribute(AttrShieldCapacity).get_double());
++        double charge(m_self->GetAttribute(AttrShieldCharge).get_double());
++        if (charge < capacity) {
++            double rechargeSec(m_self->GetAttribute(AttrShieldRechargeRate).get_double() / 1000.0);
++            double dt((double)(now - m_lastProcess) / EvE::Time::Second);
++            m_self->SetAttribute(AttrShieldCharge, OutpostSiege::RechargedShield(charge, capacity, rechargeSec, dt), false);
++            m_dirty = true;
++        }
++        m_lastProcess = now;
++        // remote repairs change the attributes directly
++        if (!m_online or (m_self->GetAttribute(AttrArmorDamage).get_double() > 0) or (m_self->GetAttribute(AttrDamage).get_double() > 0))
++            m_dirty = true;
++    }
++    if (!m_online and OutpostServices::BackOnline(m_self->GetAttribute(AttrShieldCharge).get_double(), m_self->GetAttribute(AttrShieldCapacity).get_double(),
++                                                  m_self->GetAttribute(AttrArmorDamage).get_double(), m_self->GetAttribute(AttrDamage).get_double()))
++        SetOnline(true);
++    if (m_dirty and ((now - m_lastSave) >= EvE::Time::Minute))
++        Save();
++}
++
++void StationServiceSE::Save()
++{
++    m_lastSave = GetFileTimeNow();
++    m_dirty = false;
++    m_self->SaveAttributes();
++}
++
++void StationServiceSE::SetOnline(bool online)
++{
++    if (m_online == online)
++        return;
++    m_online = online;
++    m_self->SetFlag(online ? flagStructureActive : flagStructureInactive, false);
++    m_self->SaveItem();
++    Save();
++
++    // factory and laboratory jobs here stand still while their service is off
++    if ((m_covers & OutpostServices::Factory) != 0) {
++        if (online)
++            FactoryDB::ResumeJobsInContainer(m_stationID, 1);
++        else
++            FactoryDB::PauseJobsInContainer(m_stationID, 1);
++    } else if ((m_covers & OutpostServices::Laboratory) != 0) {
++        if (online)
++            FactoryDB::ResumeJobsInContainer(m_stationID, 2);
++        else
++            FactoryDB::PauseJobsInContainer(m_stationID, 2);
++    }
++
++    uint32 serviceID(OutpostServices::ServiceID(m_self->typeID()));
++    uint32 systemID(m_system != nullptr ? m_system->GetID() : 0);
++    // the service buttons of the pilots docked there (lobby.OnProcessStationServiceItemChange)
++    if (m_stationID != 0) {
++        PyTuple* tuple = new PyTuple(5);
++            tuple->SetItem(0, new PyInt(m_stationID));
++            tuple->SetItem(1, new PyInt(systemID));
++            tuple->SetItem(2, new PyInt(serviceID));
++            tuple->SetItem(3, new PyInt(m_self->itemID()));
++            tuple->SetItem(4, new PyBool(online));
++        sEntityList.Multicast("OnProcessStationServiceItemChange", "stationid", &tuple, NOTIF_DEST__LOCATION, m_stationID);
++    }
++    // 'Outpost service disabled' and 're-enabled' (StationStateChange:  entities.STATE_INCAPACITATED and STATE_IDLE)
++    if (IsPlayerCorp(m_corpID) and (m_stationID != 0)) {
++        PyDict* data = new PyDict();
++            data->SetItemString("state",                new PyInt(online ? 0 : -1));
++            data->SetItemString("stationID",            new PyInt(m_stationID));
++            data->SetItemString("solarSystemID",        new PyInt(systemID));
++            data->SetItemString("typeID",               new PyInt(m_self->typeID()));
++            data->SetItemString("serviceID",            new PyInt(serviceID));
++            data->SetItemString("stationServiceItemID", new PyInt(m_self->itemID()));
++        NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationStateChange, m_corpID, data);
++    }
++    _log(POS__MESSAGE, "StationServiceSE::SetOnline() - %s(%u) at station %u is %s", GetName(), GetID(), m_stationID, (online ? "back online" : "shot down"));
++}
++
++void StationServiceSE::SetOwner(uint32 corpID, int32 allianceID)
++{
++    m_corpID = corpID;
++    m_ownerID = corpID;
++    m_allyID = allianceID;
++    m_self->ChangeOwner(corpID, false);
++    m_self->SaveItem();
++}
++
++void StationServiceSE::GMRepair()
++{
++    m_self->SetAttribute(AttrShieldCharge, m_self->GetAttribute(AttrShieldCapacity), false);
++    m_self->SetAttribute(AttrArmorDamage, EvilZero, false);
++    m_self->SetAttribute(AttrDamage, EvilZero, false);
++    SetOnline(true);
++    Save();
++    SendDamageStateChanged();
+ }
+ 
+ bool OutpostSE::Refresh(uint32 stationID)
+diff --git a/src/eve-server/station/Outpost.h b/src/eve-server/station/Outpost.h
+index 1c77ba3d..32c7400a 100644
+--- a/src/eve-server/station/Outpost.h
++++ b/src/eve-server/station/Outpost.h
+@@ -13,6 +13,7 @@
+ #include "pos/Structure.h"
+ #include "station/Station.h"
+ #include "../eve-common/EVE_Outpost.h"
++#include "../eve-common/EVE_Station.h"
+ 
+ // Class for Construction Platform (egg)
+ class PlatformSE
+@@ -56,9 +57,24 @@ public:
+     virtual void SendDamageStateChanged()               { m_damagePending = true; }
+     void SendSlimUpdate();
+ 
+-    virtual void SpawnStationService(Client* pClient, StationData stData, uint32 serviceType);
+-    // the destructible service entities (Station_Services types) of the services in newMask that oldMask lacked
+-    void SpawnStationServices(Client* pClient, const StationData& stData, uint32 oldMask, uint32 newMask);
++    /* station services (OutpostServices):  their structures sit at the station and are shot like it */
++    // the service structures of the services in newMask that oldMask lacked
++    void SpawnStationServices(uint32 oldMask, uint32 newMask);
++    // after the system loaded:  a besiegeable station gets the service structures it's missing
++    void InitServices();
++    // a service structure here (StationServiceSE c'tor)
++    void AddService(uint32 itemID)                      { m_serviceIDs.push_back(itemID); }
++    const std::vector<uint32>& GetServiceIDs()          { return m_serviceIDs; }
++    StationServiceSE* GetService(uint16 typeID);
++    // the services can be shot whenever the station can
++    bool ServicesVulnerable();
++    // a service's attack alerts are the station's
++    void OnServiceAttacked(SystemEntity* pAttacker)     { NotifyAttack(pAttacker); }
++    /* any of serviceIDs (Station:: bits) shot down at this station.  only loaded systems are asked:  a pilot docked there
++     *  keeps its system loaded */
++    static bool IsServiceOffline(uint32 stationID, uint32 serviceIDs);
++    // throws when it is
++    static void CheckServiceOnline(uint32 stationID, uint32 serviceIDs);
+ 
+     /* works out what the outpost's upgrade level and improvements give (OutpostRules:  services, office slots, refinery,
+      *  assembly lines) from its type's static data, saves it and updates the station data the clients get.
+@@ -106,6 +122,54 @@ private:
+     int64 m_lastOwnerCheck;
+     int64 m_lastAttackNotify;
+     int64 m_lastDamageSend;
++    std::vector<uint32> m_serviceIDs;    // the service structures here (looked up by ID:  they unload on their own)
++};
++
++/* a station service structure (Destructible Station Services):  shot down to 1% structure, its service at the station stops
++ *  until it is repaired to 50% shield and full armor and structure (OutpostServices).  it can't be destroyed */
++class StationServiceSE
++: public ObjectSystemEntity
++{
++public:
++    StationServiceSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data);
++    virtual ~StationServiceSE();
++
++    /* class type pointer querys. */
++    virtual StationServiceSE*   GetStationServiceSE()   { return this; }
++    /* class type tests. */
++    virtual bool                IsStationServiceSE()    { return true; }
++
++    /* SystemEntity interface */
++    virtual bool                IsInvul();
++    virtual void                GetDamageLimits(DamageLimits& into)     { into.canDie = false; }
++    virtual void                EncodeDestiny(Buffer& into);
++    virtual void                Killed(Damage& damage)  { /* never */ }
++
++    // a hit we took (Damage.cpp)
++    void                        OnDamaged(SystemEntity* pAttacker);
++    // from the station's ProcessSiege:  shields regenerate, the service comes back, the state is saved
++    void                        ProcessService(int64 now);
++    void                        Save();
++    // the station changed hands (OutpostSE::Conquer)
++    void                        SetOwner(uint32 corpID, int32 allianceID);
++    // GM:  full health and online
++    void                        GMRepair();
++
++    bool                        IsOnline() const        { return m_online; }
++    uint32                      GetStationID() const    { return m_stationID; }
++    // the station service bits this one stands for (OutpostServices::Covers)
++    uint32                      GetCovers() const       { return m_covers; }
++
++private:
++    OutpostSE*                  GetStation();
++    void                        SetOnline(bool online);
++
++    uint32                      m_stationID;
++    uint32                      m_covers;
++    bool                        m_online;
++    bool                        m_dirty;
++    int64                       m_lastProcess;
++    int64                       m_lastSave;
+ };
+ 
+ #endif  // EVEMU_POS_OUTPOST_H_
+diff --git a/src/eve-server/station/RepairService.cpp b/src/eve-server/station/RepairService.cpp
+index 66bcf362..d6abb67f 100644
+--- a/src/eve-server/station/RepairService.cpp
++++ b/src/eve-server/station/RepairService.cpp
+@@ -40,6 +40,7 @@
+ #include "station/Station.h"
+ #include "system/SystemManager.h"
+ #include "services/ServiceManager.h"
++#include "station/Outpost.h"
+ 
+ 
+ RepairService::RepairService(EVEServiceManager& mgr) :
+@@ -368,6 +369,7 @@ PyResult RepairServiceBound::RepairItems(PyCallArgs &call, PyList* itemIDs, PyFl
+ 
+     if ((uint32)call.client->GetStationID() != m_locationID)
+         throw CustomError("You must be docked in this station to use its repair facilities.");
++    OutpostSE::CheckServiceOnline(m_locationID, Station::RepairFacilities);
+ 
+     /* itemIDs is list of itemIDs to repair (damage report lines: ships, their fitted modules, other items).
+      * iskAmount is how much to spend on repairs.
+diff --git a/src/eve-server/station/ReprocessingService.cpp b/src/eve-server/station/ReprocessingService.cpp
+index 838df80a..92b8007e 100755
+--- a/src/eve-server/station/ReprocessingService.cpp
++++ b/src/eve-server/station/ReprocessingService.cpp
+@@ -48,6 +48,7 @@
+ #include "Station.h"
+ #include "system/SystemManager.h"
+ #include "services/ServiceManager.h"
++#include "station/Outpost.h"
+ 
+ ReprocessingService::ReprocessingService(EVEServiceManager& mgr) :
+     BindableService("reprocessingSvc", mgr)
+@@ -193,6 +194,7 @@ PyResult ReprocessingServiceBound::Reprocess(PyCallArgs &call, PyList* itemIDs,
+         _log(MANUF__WARNING, "Character %s tried to reprocess, but isn't docked in this station.", call.client->GetName());
+         throw CustomError("You must be docked in this station to use its reprocessing plant.");
+     }
++    OutpostSE::CheckServiceOnline(m_stationRef->GetID(), Station::ReprocessingPlant | Station::Refinery);
+ 
+     _log(MANUF__INFO, "%s: Calling Reprocess().", call.client->GetName());
+     call.Dump(MANUF__DUMP);
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index 6e008e83..4ffbfc10 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -641,6 +641,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
+         // outposts:  reinforcement, the owner's alerts, and changing hands at 0 structure
+         if (IsOutpostSE())
+             GetOutpostSE()->OnSiegeDamage(d.srcSE);
++        // an outpost's services go off at 1% structure
++        if (IsStationServiceSE())
++            GetStationServiceSE()->OnDamaged(d.srcSE);
+     }
+ 
+     if (sConfig.debug.UseProfiling)
+@@ -1060,6 +1063,12 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
+         // they wake up in their clone
+         uint32 cloneStationID(0);
+         if ((cRef.get() != nullptr) and CharacterDB::GetCharHomeStation(ownerID, cloneStationID) and (cloneStationID != 0)) {
++            // or in their starting station, when the contract's cloning service has been shot down (OutpostServices)
++            if (OutpostSE::IsServiceOffline(cloneStationID, Station::Cloning)) {
++                uint32 startID(CharacterDB::GetStartingStationByCareer(cRef->careerID()));
++                if (startID != 0)
++                    cloneStationID = startID;
++            }
+             std::string podName(cRef->itemName() + "'s Capsule");
+             ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
+             ShipItemRef newPod(sItemFactory.SpawnShip(podItem));
+diff --git a/src/eve-server/system/SystemEntity.h b/src/eve-server/system/SystemEntity.h
+index 819b5d99..915e19b8 100644
+--- a/src/eve-server/system/SystemEntity.h
++++ b/src/eve-server/system/SystemEntity.h
+@@ -81,6 +81,7 @@ class ReactorSE;
+ class JumpBridgeSE;
+ class PlatformSE;
+ class OutpostSE;
++class StationServiceSE;
+ class DungeonEditSE;
+ 
+ /*
+@@ -150,6 +151,7 @@ public:
+     virtual StructureSE*        GetJammerSE()           { return nullptr; }
+     virtual JumpBridgeSE*       GetJumpBridgeSE()       { return nullptr; }
+     virtual OutpostSE*          GetOutpostSE()          { return nullptr; }
++    virtual StationServiceSE*   GetStationServiceSE()   { return nullptr; }
+     virtual PlatformSE*         GetPlatformSE()         { return nullptr; }
+     virtual TowerSE*            GetTowerSE()            { return nullptr; }
+     virtual ArraySE*            GetArraySE()            { return nullptr; }
+@@ -209,6 +211,7 @@ public:
+     virtual bool                IsModuleSE()            { return false; }
+     virtual bool                IsMoonMiner()           { return false; }
+     virtual bool                IsOutpostSE()           { return false; }
++    virtual bool                IsStationServiceSE()    { return false; }
+     virtual bool                IsPlatformSE()          { return false; }
+     virtual bool                IsAsteroidSE()          { return false; }
+     virtual bool                IsDeployableSE()        { return false; }
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 1b840771..3d229cc1 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -192,6 +192,10 @@ bool SystemManager::BootSystem() {
+         return false;
+     }
+ 
++    // besiegeable stations get the service structures they're missing
++    for (auto cur : m_outposts)
++        cur->InitServices();
++
+     // check for operational static entities which need to be initialized (such as sovereignty structures)
+     for (auto cur: m_opStaticEntities)
+         if (cur.second ->IsOperSE())
+@@ -1004,6 +1008,15 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
+                     _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making ContainerSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
+                     return cSE;
+                 } break;
++                // an outpost's service structures (OutpostServices).  the stations are loaded by now (LoadSystemStatics)
++                case EVEDB::invGroups::Destructable_Station_Services: {
++                    InventoryItemRef iRef = sItemFactory.GetItemRef( entity.itemID );
++                    if (iRef.get() == nullptr)
++                        return nullptr;
++                    StationServiceSE* sSE = new StationServiceSE(iRef, sysMgr.GetServiceMgr(), &sysMgr, data);
++                    _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making StationServiceSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
++                    return sSE;
++                } break;
+             /** @todo (Allan)  need to separate these by class to create proper SE (started) */
+                 case EVEDB::invGroups::Biomass:
+                 case EVEDB::invGroups::Ring:/*wtf*/
+@@ -1014,7 +1027,6 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
+                 case EVEDB::invGroups::Cloud:
+                 case EVEDB::invGroups::Landmark:
+                 case EVEDB::invGroups::Comet:
+-                case EVEDB::invGroups::Destructable_Station_Services:
+                 /* test these to see if they are POS types */
+                 case EVEDB::invGroups::Global_Warp_Disruptor:
+                 case EVEDB::invGroups::Force_Field:  // <<<  this one is POS type but it IS a plain CSE
+diff --git a/src/eve-test/utils/OutpostRulesTest.cpp b/src/eve-test/utils/OutpostRulesTest.cpp
+index e71f3c05..9b71578d 100644
+--- a/src/eve-test/utils/OutpostRulesTest.cpp
++++ b/src/eve-test/utils/OutpostRulesTest.cpp
+@@ -175,6 +175,20 @@ int utils_OutpostRulesTest( int /*argc*/, char* /*argv*/[] )
+         Check((r > 98.0) and (r < 100.0), "one recharge time brings it nearly full");
+     }
+ 
++    ::printf("station services:\n");
++    {
++        using namespace OutpostServices;
++        Check(Covers(TypeReprocessing) == (ReprocessingPlant | Refinery), "the reprocessing service covers the refinery too");
++        Check((Covers(TypeFitting) == Fitting) and (Covers(TypeLaboratory) == Laboratory) and (Covers(12242) == 0), "one bit each, none for a station");
++        Check((TypeFor(Refinery) == TypeReprocessing) and (TypeFor(Cloning) == TypeCloning) and (TypeFor(64) == 0), "market can't be shot");
++        Check(ServiceID(TypeReprocessing) == ReprocessingPlant, "the client asks about the plant");
++        Check(!Incapacitated(9899.0, 10000.0) and Incapacitated(9900.0, 10000.0) and Incapacitated(10000.0, 10000.0), "off at 1% structure");
++        Check(!Incapacitated(0.0, 0.0), "no structure, never off");
++        Check(BackOnline(40.5e6 * 0.5, 40.5e6, 0.0, 0.0), "back at 50% shield");
++        Check(!BackOnline(40.5e6 * 0.49, 40.5e6, 0.0, 0.0), "not at 49%");
++        Check(!BackOnline(40.5e6, 40.5e6, 1.0, 0.0) and !BackOnline(40.5e6, 40.5e6, 0.0, 1.0), "armor and structure must be full");
++    }
++
+     ::printf("%s\n", (failures ? "OutpostRulesTest FAILED" : "OutpostRulesTest passed"));
+     return failures;
+ }
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index 1c33a6f1..a0e9bb71 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -464,7 +464,7 @@ boolean can use either 0/1 OR true/false.
+     </cosmic>
+ 
+     <incursion>
+-        <Enabled>true</Enabled><!-- bool  Sansha incursions: overview beacons, acceleration gates, pockets and the wiki's site mechanics.  no constellation penalties yet -->
++        <Enabled>true</Enabled><!-- bool  Sansha incursions: overview beacons, acceleration gates, pockets and the wiki's site mechanics -->
+         <AutoStart>true</AutoStart><!-- bool  start incursions automatically.  GMs can always use /incursion -->
+         <MaxActive>1</MaxActive><!-- incursions running at once -->
+         <FleetScale>100</FleetScale><!-- percent of full fleet size the sites are scaled to (vanguard 10 pilots, assault 20, headquarters 40, mothership 80).  lower it for small fleets -->
+-- 
+2.34.1
+
