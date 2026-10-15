@@ -1207,7 +1207,7 @@ namespace {
 
     /* /sov siege [info|next|repair] [stationID]
      *  an outpost or conquerable station in your system (the first one if no stationID).  info shows its siege, next ends
-     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it back to full health
+     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it and its service structures back to full health
      */
     PyResult SiegeCommand(Client* pClient, const Seperator& args)
     {
@@ -1247,7 +1247,23 @@ namespace {
                  (OutpostSiege::IsReinforced(pOSE->GetSiegePhase())
                     ? ("  reinforced for " + std::to_string((pOSE->GetReinforcementEnd() - GetFileTimeNow()) / EvE::Time::Minute) + " more minutes.").c_str()
                     : ""));
-        return new PyString(buf);
+        // its service structures
+        std::string out(buf);
+        for (auto id : pOSE->GetServiceIDs()) {
+            SystemEntity* pSE(pClient->SystemMgr()->GetSE(id));
+            if ((pSE == nullptr) or !pSE->IsStationServiceSE())
+                continue;
+            InventoryItemRef sRef(pSE->GetSelf());
+            double sCap(sRef->GetAttribute(AttrShieldCapacity).get_double()), sArmor(sRef->GetAttribute(AttrArmorHP).get_double());
+            double sHP(sRef->GetAttribute(AttrHP).get_double());
+            snprintf(buf, sizeof(buf), "<br>%s (%u):  %s, shield %.1f%%, armor %.1f%%, structure %.1f%%", pSE->GetName(), id,
+                     (pSE->GetStationServiceSE()->IsOnline() ? "online" : "shot down"),
+                     (sCap > 0 ? 100.0 * sRef->GetAttribute(AttrShieldCharge).get_double() / sCap : 0.0),
+                     (sArmor > 0 ? 100.0 * (1.0 - sRef->GetAttribute(AttrArmorDamage).get_double() / sArmor) : 0.0),
+                     (sHP > 0 ? 100.0 * (1.0 - sRef->GetAttribute(AttrDamage).get_double() / sHP) : 0.0));
+            out += buf;
+        }
+        return new PyString(out);
     }
 
     /* /sov and /pos (anchor|online|offline|unanchor|complete) (itemID)

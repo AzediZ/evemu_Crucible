@@ -641,6 +641,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // outposts:  reinforcement, the owner's alerts, and changing hands at 0 structure
         if (IsOutpostSE())
             GetOutpostSE()->OnSiegeDamage(d.srcSE);
+        // an outpost's services go off at 1% structure
+        if (IsStationServiceSE())
+            GetStationServiceSE()->OnDamaged(d.srcSE);
     }
 
     if (sConfig.debug.UseProfiling)
@@ -1060,6 +1063,12 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
         // they wake up in their clone
         uint32 cloneStationID(0);
         if ((cRef.get() != nullptr) and CharacterDB::GetCharHomeStation(ownerID, cloneStationID) and (cloneStationID != 0)) {
+            // or in their starting station, when the contract's cloning service has been shot down (OutpostServices)
+            if (OutpostSE::IsServiceOffline(cloneStationID, Station::Cloning)) {
+                uint32 startID(CharacterDB::GetStartingStationByCareer(cRef->careerID()));
+                if (startID != 0)
+                    cloneStationID = startID;
+            }
             std::string podName(cRef->itemName() + "'s Capsule");
             ItemData podItem(itemTypeCapsule, ownerID, locTemp, flagNone, podName.c_str());
             ShipItemRef newPod(sItemFactory.SpawnShip(podItem));

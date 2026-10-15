@@ -1036,7 +1036,17 @@ bool FactoryDB::SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID,
     return true;
 }
 
-void FactoryDB::PauseJobsInContainer(uint32 containerID)
+// the lines a pause or resume covers (PauseJobsInContainer)
+static const char* LineFilter(int8 lines)
+{
+    switch (lines) {
+        case 1:  return " AND line.activityID = 1";
+        case 2:  return " AND line.activityID <> 1";
+    }
+    return "";
+}
+
+void FactoryDB::PauseJobsInContainer(uint32 containerID, int8 lines/*0*/)
 {
     DBerror err;
     double now(GetFileTimeNow());
@@ -1045,12 +1055,12 @@ void FactoryDB::PauseJobsInContainer(uint32 containerID)
         " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
         " SET job.pauseProductionTime = %.0f"
         " WHERE line.containerID = %u AND job.completedStatusID = 0"
-        " AND job.pauseProductionTime IS NULL AND job.endProductionTime > %.0f",
-        now, containerID, now))
+        " AND job.pauseProductionTime IS NULL AND job.endProductionTime > %.0f%s",
+        now, containerID, now, LineFilter(lines)))
         _log(DATABASE__ERROR, "Failed to pause jobs in container %u: %s", containerID, err.c_str());
 }
 
-void FactoryDB::ResumeJobsInContainer(uint32 containerID)
+void FactoryDB::ResumeJobsInContainer(uint32 containerID, int8 lines/*0*/)
 {
     DBerror err;
     double now(GetFileTimeNow());
@@ -1062,8 +1072,8 @@ void FactoryDB::ResumeJobsInContainer(uint32 containerID)
         "         job.beginProductionTime + (%.0f - job.pauseProductionTime), job.beginProductionTime),"
         "     job.endProductionTime = job.endProductionTime + (%.0f - job.pauseProductionTime)"
         " WHERE line.containerID = %u AND job.completedStatusID = 0"
-        " AND job.pauseProductionTime IS NOT NULL AND job.pauseProductionTime < %.0f",
-        now, now, containerID, now))
+        " AND job.pauseProductionTime IS NOT NULL AND job.pauseProductionTime < %.0f%s",
+        now, now, containerID, now, LineFilter(lines)))
     {
         _log(DATABASE__ERROR, "Failed to move jobs in container %u: %s", containerID, err.c_str());
         return;
@@ -1072,8 +1082,8 @@ void FactoryDB::ResumeJobsInContainer(uint32 containerID)
         "UPDATE ramJobs AS job"
         " JOIN ramAssemblyLines AS line ON line.assemblyLineID = job.assemblyLineID"
         " SET job.pauseProductionTime = NULL"
-        " WHERE line.containerID = %u AND job.completedStatusID = 0 AND job.pauseProductionTime IS NOT NULL",
-        containerID))
+        " WHERE line.containerID = %u AND job.completedStatusID = 0 AND job.pauseProductionTime IS NOT NULL%s",
+        containerID, LineFilter(lines)))
     {
         _log(DATABASE__ERROR, "Failed to resume jobs in container %u: %s", containerID, err.c_str());
         return;

@@ -24,6 +24,7 @@
 #include "system/SolarSystem.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "station/Outpost.h"
 
 /*
  * ShipItem
@@ -2626,6 +2627,9 @@ void ShipItem::VerifyHoldType(EVEItemFlags flag, InventoryItemRef iRef, Client* 
             }
 
             if (IsModuleSlot(flag)) {
+                // docked at an outpost whose fitting service has been shot down (OutpostServices).  loading charges is fine
+                if ((iRef->categoryID() != EVEDB::invCategories::Charge) and sDataMgr.IsStation(locationID()))
+                    OutpostSE::CheckServiceOnline(locationID(), Station::Fitting);
                 // the subsystem errors are more telling than the generic group check below
                 CheckSubSystemFit(flag, iRef);
                 if (!Skill::FitModuleSkillCheck(iRef, pClient->GetChar())) {

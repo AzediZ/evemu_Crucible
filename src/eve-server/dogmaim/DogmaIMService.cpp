@@ -415,7 +415,8 @@ PyResult DogmaIMBound::AddTarget(PyCallArgs& call, PyInt* targetID) {
     or (tSE->GetSelf()->HasAttribute(AttrUntargetable)))
         throw UserError ("DeniedTargetEvadesSensors")
                 .AddFormatValue ("targetName", new PyString (tSE->GetName ()));
-    if (tSE->IsInvul() and !tSE->IsOutpostSE())
+    // outposts and their services can be locked when they can't be shot:  logistics repair them
+    if (tSE->IsInvul() and !tSE->IsOutpostSE() and !tSE->IsStationServiceSE())
         throw UserError ("DeniedTargetInvulnerable");
     // ecm.  jammed ships can't lock anything (locking the jammer came with the 2018 balance pass)
     if (mySE->TargetMgr()->IsJammed())

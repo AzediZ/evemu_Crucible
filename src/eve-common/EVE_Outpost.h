@@ -597,5 +597,79 @@ namespace OutpostSiege {
     }
 }
 
+/* station services (Destructible Station Services, group 874):  each service of an outpost is a structure at the station
+ *  that can be shot while the station itself can be.  Shot down to its incapacitation ratio of structure (1%) the service
+ *  is off:  "cannot be used until it is repaired back to 50% shields" and "100% structure and armour" (CCP, "Of Outposts,
+ *  Improvements, Upgrades and Dragons", 2007, still the rule in 2012).  Medical stops new clone contracts, factories and labs
+ *  stop new jobs and pause the running ones, fitting stops fitting, repair stops repairs, reprocessing stops refining */
+namespace OutpostServices {
+    // the service structure types and the station service bits (staServices) each one stands for
+    static constexpr uint16_t TypeFitting       = 28155;
+    static constexpr uint16_t TypeReprocessing  = 28156;
+    static constexpr uint16_t TypeFactory       = 28157;
+    static constexpr uint16_t TypeCloning       = 28158;
+    static constexpr uint16_t TypeRepair        = 28159;
+    static constexpr uint16_t TypeLaboratory    = 28166;
+
+    static constexpr uint32_t ReprocessingPlant = 16;
+    static constexpr uint32_t Refinery          = 32;
+    static constexpr uint32_t Cloning           = 512;
+    static constexpr uint32_t RepairFacilities  = 4096;
+    static constexpr uint32_t Factory           = 8192;
+    static constexpr uint32_t Laboratory        = 16384;
+    static constexpr uint32_t Fitting           = 65536;
+
+    static constexpr double IncapacitationRatio = 0.01;     // the types' incapacitationRatio
+    static constexpr double OnlineShield        = 0.5;
+
+    struct Service { uint16_t typeID; uint32_t serviceID; };
+    // serviceID is what the client asks about (GetStationServiceStates):  reprocessing answers for the refinery too
+    static constexpr std::array<Service, 6> All = {{
+        {TypeFitting,       Fitting},
+        {TypeReprocessing,  ReprocessingPlant},
+        {TypeFactory,       Factory},
+        {TypeCloning,       Cloning},
+        {TypeRepair,        RepairFacilities},
+        {TypeLaboratory,    Laboratory}
+    }};
+
+    // the station service bits a service structure covers.  0 for any other type
+    inline uint32_t Covers(uint16_t typeID)
+    {
+        for (auto& cur : All)
+            if (cur.typeID == typeID)
+                return (cur.serviceID == ReprocessingPlant ? (ReprocessingPlant | Refinery) : cur.serviceID);
+        return 0;
+    }
+    // the structure type standing for a station's service bits, 0 for services that can't be shot (market, insurance...)
+    inline uint16_t TypeFor(uint32_t serviceMask)
+    {
+        for (auto& cur : All)
+            if ((Covers(cur.typeID) & serviceMask) != 0)
+                return cur.typeID;
+        return 0;
+    }
+    inline uint32_t ServiceID(uint16_t typeID)
+    {
+        for (auto& cur : All)
+            if (cur.typeID == typeID)
+                return cur.serviceID;
+        return 0;
+    }
+
+    // shot down to (1 - ratio) of its structure
+    inline bool Incapacitated(double damage, double hp, double ratio = IncapacitationRatio)
+    {
+        return (hp > 0.0) and (damage >= (hp * (1.0 - ratio)) - 0.001);
+    }
+    // back on at 50% shield with full armor and structure
+    inline bool BackOnline(double shieldCharge, double shieldCapacity, double armorDamage, double damage)
+    {
+        if ((armorDamage > 0.5) or (damage > 0.5))
+            return false;
+        return (shieldCapacity <= 0.0) or (shieldCharge >= (shieldCapacity * OnlineShield) - 0.001);
+    }
+}
+
 
 #endif  // EVE_OUTPOST_H

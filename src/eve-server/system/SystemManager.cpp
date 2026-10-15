@@ -192,6 +192,10 @@ bool SystemManager::BootSystem() {
         return false;
     }
 
+    // besiegeable stations get the service structures they're missing
+    for (auto cur : m_outposts)
+        cur->InitServices();
+
     // check for operational static entities which need to be initialized (such as sovereignty structures)
     for (auto cur: m_opStaticEntities)
         if (cur.second ->IsOperSE())
@@ -1004,6 +1008,15 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                     _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making ContainerSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
                     return cSE;
                 } break;
+                // an outpost's service structures (OutpostServices).  the stations are loaded by now (LoadSystemStatics)
+                case EVEDB::invGroups::Destructable_Station_Services: {
+                    InventoryItemRef iRef = sItemFactory.GetItemRef( entity.itemID );
+                    if (iRef.get() == nullptr)
+                        return nullptr;
+                    StationServiceSE* sSE = new StationServiceSE(iRef, sysMgr.GetServiceMgr(), &sysMgr, data);
+                    _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making StationServiceSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
+                    return sSE;
+                } break;
             /** @todo (Allan)  need to separate these by class to create proper SE (started) */
                 case EVEDB::invGroups::Biomass:
                 case EVEDB::invGroups::Ring:/*wtf*/
@@ -1014,7 +1027,6 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 case EVEDB::invGroups::Cloud:
                 case EVEDB::invGroups::Landmark:
                 case EVEDB::invGroups::Comet:
-                case EVEDB::invGroups::Destructable_Station_Services:
                 /* test these to see if they are POS types */
                 case EVEDB::invGroups::Global_Warp_Disruptor:
                 case EVEDB::invGroups::Force_Field:  // <<<  this one is POS type but it IS a plain CSE

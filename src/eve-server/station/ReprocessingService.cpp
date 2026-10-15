@@ -48,6 +48,7 @@
 #include "Station.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
+#include "station/Outpost.h"
 
 ReprocessingService::ReprocessingService(EVEServiceManager& mgr) :
     BindableService("reprocessingSvc", mgr)
@@ -193,6 +194,7 @@ PyResult ReprocessingServiceBound::Reprocess(PyCallArgs &call, PyList* itemIDs, 
         _log(MANUF__WARNING, "Character %s tried to reprocess, but isn't docked in this station.", call.client->GetName());
         throw CustomError("You must be docked in this station to use its reprocessing plant.");
     }
+    OutpostSE::CheckServiceOnline(m_stationRef->GetID(), Station::ReprocessingPlant | Station::Refinery);
 
     _log(MANUF__INFO, "%s: Calling Reprocess().", call.client->GetName());
     call.Dump(MANUF__DUMP);

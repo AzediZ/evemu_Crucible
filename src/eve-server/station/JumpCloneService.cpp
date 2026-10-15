@@ -39,6 +39,7 @@
 #include "station/JumpCloneService.h"
 #include "station/StationDataMgr.h"
 #include "services/ServiceManager.h"
+#include "station/Outpost.h"
 
 JumpCloneService::JumpCloneService(EVEServiceManager& mgr) :
     BindableService("jumpCloneSvc", mgr)
@@ -260,6 +261,7 @@ PyResult JumpCloneBound::InstallCloneInStation(PyCallArgs &call) {
      *  window adds the bit to every station (base_stationmanagement.GetStationServiceMask).  so cloning is what counts */
     if ((stData.serviceMask & (Station::JumpCloneFacility | Station::Cloning)) == 0)
         throw CustomError("This station has no jump clone facility.");
+    OutpostSE::CheckServiceOnline(stationID, Station::Cloning);
 
     // Infomorph Psychology: one clone per level
     uint32 maxClones(cRef->GetSkillLevel(EvESkill::InfomorphPsychology));

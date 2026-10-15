@@ -175,6 +175,20 @@ int utils_OutpostRulesTest( int /*argc*/, char* /*argv*/[] )
         Check((r > 98.0) and (r < 100.0), "one recharge time brings it nearly full");
     }
 
+    ::printf("station services:\n");
+    {
+        using namespace OutpostServices;
+        Check(Covers(TypeReprocessing) == (ReprocessingPlant | Refinery), "the reprocessing service covers the refinery too");
+        Check((Covers(TypeFitting) == Fitting) and (Covers(TypeLaboratory) == Laboratory) and (Covers(12242) == 0), "one bit each, none for a station");
+        Check((TypeFor(Refinery) == TypeReprocessing) and (TypeFor(Cloning) == TypeCloning) and (TypeFor(64) == 0), "market can't be shot");
+        Check(ServiceID(TypeReprocessing) == ReprocessingPlant, "the client asks about the plant");
+        Check(!Incapacitated(9899.0, 10000.0) and Incapacitated(9900.0, 10000.0) and Incapacitated(10000.0, 10000.0), "off at 1% structure");
+        Check(!Incapacitated(0.0, 0.0), "no structure, never off");
+        Check(BackOnline(40.5e6 * 0.5, 40.5e6, 0.0, 0.0), "back at 50% shield");
+        Check(!BackOnline(40.5e6 * 0.49, 40.5e6, 0.0, 0.0), "not at 49%");
+        Check(!BackOnline(40.5e6, 40.5e6, 1.0, 0.0) and !BackOnline(40.5e6, 40.5e6, 0.0, 1.0), "armor and structure must be full");
+    }
+
     ::printf("%s\n", (failures ? "OutpostRulesTest FAILED" : "OutpostRulesTest passed"));
     return failures;
 }

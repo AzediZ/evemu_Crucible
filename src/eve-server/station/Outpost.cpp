@@ -21,6 +21,7 @@
 #include "mail/NotificationMgr.h"
 #include "pos/PosMgrDB.h"
 #include "station/StationDB.h"
+#include "system/DestinyManager.h"
 #include "system/TargetManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
 
@@ -314,6 +315,12 @@ void OutpostSE::Conquer(uint32 corpID, uint32 charID)
         sRef->UpdateSettings();
     }
     UpdateOwner();
+    // the service structures go with it, as they are (shot down ones stay down)
+    for (auto id : m_serviceIDs) {
+        SystemEntity* pSE(m_system->GetSE(id));
+        if ((pSE != nullptr) and pSE->IsStationServiceSE())
+            pSE->GetStationServiceSE()->SetOwner(corpID, m_allyID);
+    }
 
     /* what the new owner gets isn't written down anywhere.  the structure is repaired and the shield and armor are left as
      *  they are, so the next attacker has to grind the structure again rather than take it with one shot */
@@ -388,9 +395,15 @@ void OutpostSE::NotifyAttack(SystemEntity* pAttacker, bool force/*false*/)
 
 void OutpostSE::ProcessSiege()
 {
+    int64 now(GetFileTimeNow());
+    // the service structures (they come back online once repaired)
+    for (auto id : m_serviceIDs) {
+        SystemEntity* pSE(m_system->GetSE(id));
+        if ((pSE != nullptr) and pSE->IsStationServiceSE())
+            pSE->GetStationServiceSE()->ProcessService(now);
+    }
     if (!m_conquerable)
         return;
-    int64 now(GetFileTimeNow());
     // the owner's alliance may change
     if ((now - m_lastOwnerCheck) >= EvE::Time::Minute)
         UpdateOwner();
@@ -462,32 +475,294 @@ void OutpostSE::GMRepair()
     SaveSiege();
     SendSlimUpdate();
     SendDamageStateChanged();
+    for (auto id : m_serviceIDs) {
+        SystemEntity* pSE(m_system->GetSE(id));
+        if ((pSE != nullptr) and pSE->IsStationServiceSE())
+            pSE->GetStationServiceSE()->GMRepair();
+    }
 }
 
-// Each outpost has station service entities which are spawned at the same position as the station itself
-void OutpostSE::SpawnStationService(Client* pClient, StationData stData, uint32 serviceType) {
-    ItemData svcData(serviceType, stData.corporationID, stData.systemID, flagNone);
-    InventoryItemRef svcRef = sItemFactory.SpawnItem(svcData);
-    ItemSystemEntity* svcSE = new ItemSystemEntity(svcRef, pClient->services(), pClient->SystemMgr());
-    svcSE->SetPosition(stData.position);
-    svcRef->SaveItem();
-    pClient->SystemMgr()->AddEntity(svcSE);
-}
-
-void OutpostSE::SpawnStationServices(Client* pClient, const StationData& stData, uint32 oldMask, uint32 newMask)
+/* station services (OutpostServices).  their structures sit at the station's position, as Crucible's did */
+void OutpostSE::SpawnStationServices(uint32 oldMask, uint32 newMask)
 {
-    // the service entities StationDB::GetStationServiceStates knows
-    static const std::pair<uint32, uint32> services[6] = {
-        {Station::Fitting,              EVEDB::invTypes::FittingService},
-        {Station::ReprocessingPlant,    EVEDB::invTypes::ReprocessingService},
-        {Station::Factory,              EVEDB::invTypes::FactoryService},
-        {Station::Cloning,              EVEDB::invTypes::CloningService},
-        {Station::RepairFacilities,     EVEDB::invTypes::RepairService},
-        {Station::Laboratory,           EVEDB::invTypes::LaboratoryService}
-    };
-    for (auto& cur : services)
-        if (((newMask & cur.first) != 0) and ((oldMask & cur.first) == 0))
-            SpawnStationService(pClient, stData, cur.second);
+    if (m_system == nullptr)
+        return;
+    for (auto& cur : OutpostServices::All) {
+        uint32 covers(OutpostServices::Covers(cur.typeID));
+        if (((newMask & covers) == 0) or ((oldMask & covers) != 0) or (GetService(cur.typeID) != nullptr))
+            continue;
+        const ItemType* pType(sItemFactory.GetType(cur.typeID));
+        ItemData data(cur.typeID, m_corpID, m_system->GetID(), flagStructureActive,
+                      (pType != nullptr ? pType->name().c_str() : ""), GetPosition());
+        InventoryItemRef iRef(sItemFactory.SpawnItem(data));
+        if (iRef.get() == nullptr) {
+            _log(POS__ERROR, "OutpostSE::SpawnStationServices() - %s(%u):  could not make service %u", GetName(), GetID(), cur.typeID);
+            continue;
+        }
+        iRef->SaveItem();
+        FactionData fData = FactionData();
+            fData.ownerID = m_corpID;
+            fData.corporationID = m_corpID;
+            fData.allianceID = m_allyID;
+        StationServiceSE* pSSE(new StationServiceSE(iRef, m_services, m_system, fData));
+        pSSE->Save();
+        m_system->AddEntity(pSSE, false);
+        _log(POS__MESSAGE, "OutpostSE::SpawnStationServices() - %s(%u):  %s(%u) added", GetName(), GetID(), iRef->name(), iRef->itemID());
+    }
+}
+
+void OutpostSE::InitServices()
+{
+    // npc stations in npc null-sec can't be besieged, so their services can't be shot either
+    if (!m_conquerable)
+        return;
+    StationData data = StationData();
+    if (stDataMgr.GetStationData(m_self->itemID(), data))
+        SpawnStationServices(0, data.serviceMask);
+}
+
+StationServiceSE* OutpostSE::GetService(uint16 typeID)
+{
+    if (m_system == nullptr)
+        return nullptr;
+    for (auto id : m_serviceIDs) {
+        SystemEntity* pSE(m_system->GetSE(id));
+        if ((pSE != nullptr) and pSE->IsStationServiceSE() and (pSE->GetTypeID() == typeID))
+            return pSE->GetStationServiceSE();
+    }
+    return nullptr;
+}
+
+bool OutpostSE::ServicesVulnerable()
+{
+    return (m_conquerable and m_vulnerable and !OutpostSiege::IsReinforced(m_phase));
+}
+
+bool OutpostSE::IsServiceOffline(uint32 stationID, uint32 serviceIDs)
+{
+    SystemManager* pSys(sEntityList.FindSystem(sDataMgr.GetStationSystem(stationID)));
+    if (pSys == nullptr)
+        return false;
+    SystemEntity* pSE(pSys->GetSE(stationID));
+    if ((pSE == nullptr) or !pSE->IsOutpostSE())
+        return false;
+    OutpostSE* pOSE(pSE->GetOutpostSE());
+    for (auto id : pOSE->m_serviceIDs) {
+        SystemEntity* pSvc(pSys->GetSE(id));
+        if ((pSvc == nullptr) or !pSvc->IsStationServiceSE())
+            continue;
+        StationServiceSE* pSSE(pSvc->GetStationServiceSE());
+        if (!pSSE->IsOnline() and ((pSSE->GetCovers() & serviceIDs) != 0))
+            return true;
+    }
+    return false;
+}
+
+void OutpostSE::CheckServiceOnline(uint32 stationID, uint32 serviceIDs)
+{
+    if (!IsServiceOffline(stationID, serviceIDs))
+        return;
+    uint16 typeID(OutpostServices::TypeFor(serviceIDs));
+    const ItemType* pType(typeID ? sItemFactory.GetType(typeID) : nullptr);
+    throw CustomError("The %s of this station has been shot down. It can't be used until it is repaired to half its shield and full armor and structure.",
+                      (pType != nullptr ? pType->name().c_str() : "service"));
+}
+
+StationServiceSE::StationServiceSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data)
+: ObjectSystemEntity(self, services, system),
+m_stationID(0),
+m_covers(OutpostServices::Covers(self->typeID())),
+m_online(true),
+m_dirty(false),
+m_lastProcess(GetFileTimeNow()),
+m_lastSave(m_lastProcess)
+{
+    m_warID = data.factionID;
+    m_allyID = data.allianceID;
+    m_corpID = data.corporationID;
+    m_ownerID = data.ownerID;
+
+    // the type's hit points.  shield, armor and structure damage are the item's own (saved attributes)
+    const ItemType& type(self->type());
+    double shield(type.HasAttribute(AttrShieldCapacity) ? type.GetAttribute(AttrShieldCapacity).get_double() : 0.0);
+    self->SetAttribute(AttrShieldCapacity, shield, false);
+    if (!self->HasAttribute(AttrShieldCharge))
+        self->SetAttribute(AttrShieldCharge, shield, false);
+    if (!self->HasAttribute(AttrArmorDamage))
+        self->SetAttribute(AttrArmorDamage, EvilZero, false);
+    if (!self->HasAttribute(AttrDamage))
+        self->SetAttribute(AttrDamage, EvilZero, false);
+    if (type.HasAttribute(AttrSignatureRadius))
+        self->SetAttribute(AttrSignatureRadius, type.GetAttribute(AttrSignatureRadius), false);
+    self->SetAttribute(AttrRadius, type.radius(), false);
+    self->SetAttribute(AttrMass, type.mass(), false);
+
+    // the station it belongs to sits at the same position
+    if (system != nullptr)
+        for (auto cur : system->GetOutposts())
+            if ((cur != nullptr) and (cur->GetPosition().distance(GetPosition()) < 10.0)) {
+                m_stationID = cur->GetID();
+                cur->AddService(self->itemID());
+                break;
+            }
+    if (m_stationID == 0)
+        _log(POS__WARNING, "StationServiceSE() - %s(%u) has no station at its position", self->name(), self->itemID());
+
+    // older outposts made theirs with no flag (GetStationServiceStates read that as off)
+    m_online = (self->flag() != flagStructureInactive);
+    if (m_online and (self->flag() != flagStructureActive)) {
+        self->SetFlag(flagStructureActive, false);
+        self->SaveItem();
+    }
+}
+
+StationServiceSE::~StationServiceSE()
+{
+    if (m_dirty)
+        Save();
+}
+
+OutpostSE* StationServiceSE::GetStation()
+{
+    if ((m_stationID == 0) or (m_system == nullptr))
+        return nullptr;
+    SystemEntity* pSE(m_system->GetSE(m_stationID));
+    return ((pSE != nullptr) ? pSE->GetOutpostSE() : nullptr);
+}
+
+bool StationServiceSE::IsInvul()
+{
+    if (ObjectSystemEntity::IsInvul())
+        return true;
+    OutpostSE* pOSE(GetStation());
+    return ((pOSE == nullptr) or !pOSE->ServicesVulnerable());
+}
+
+void StationServiceSE::EncodeDestiny(Buffer& into)
+{
+    // a rigid ball inside the station.  not massive:  ships fly through it to dock
+    using namespace Destiny;
+    BallHeader head = BallHeader();
+        head.entityID = m_self->itemID();
+        head.mode = Ball::Mode::RIGID;
+        head.radius = m_radius;
+        head.posX = x();
+        head.posY = y();
+        head.posZ = z();
+        head.flags = 0;
+    into.Append( head );
+    RIGID_Struct main;
+        main.formationID = 0xFF;
+    into.Append( main );
+}
+
+void StationServiceSE::OnDamaged(SystemEntity* pAttacker)
+{
+    m_dirty = true;
+    OutpostSE* pOSE(GetStation());
+    if (pOSE != nullptr)
+        pOSE->OnServiceAttacked(pAttacker);
+    if (m_online and OutpostServices::Incapacitated(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double(),
+                     (m_self->HasAttribute(AttrIncapacitationRatio) ? m_self->GetAttribute(AttrIncapacitationRatio).get_double() : OutpostServices::IncapacitationRatio)))
+        SetOnline(false);
+}
+
+void StationServiceSE::ProcessService(int64 now)
+{
+    // shields come back by themselves (very slowly:  the types' recharge time is 23 days).  armor and structure need repairing
+    if ((now - m_lastProcess) >= (10 * EvE::Time::Second)) {
+        double capacity(m_self->GetAttribute(AttrShieldCapacity).get_double());
+        double charge(m_self->GetAttribute(AttrShieldCharge).get_double());
+        if (charge < capacity) {
+            double rechargeSec(m_self->GetAttribute(AttrShieldRechargeRate).get_double() / 1000.0);
+            double dt((double)(now - m_lastProcess) / EvE::Time::Second);
+            m_self->SetAttribute(AttrShieldCharge, OutpostSiege::RechargedShield(charge, capacity, rechargeSec, dt), false);
+            m_dirty = true;
+        }
+        m_lastProcess = now;
+        // remote repairs change the attributes directly
+        if (!m_online or (m_self->GetAttribute(AttrArmorDamage).get_double() > 0) or (m_self->GetAttribute(AttrDamage).get_double() > 0))
+            m_dirty = true;
+    }
+    if (!m_online and OutpostServices::BackOnline(m_self->GetAttribute(AttrShieldCharge).get_double(), m_self->GetAttribute(AttrShieldCapacity).get_double(),
+                                                  m_self->GetAttribute(AttrArmorDamage).get_double(), m_self->GetAttribute(AttrDamage).get_double()))
+        SetOnline(true);
+    if (m_dirty and ((now - m_lastSave) >= EvE::Time::Minute))
+        Save();
+}
+
+void StationServiceSE::Save()
+{
+    m_lastSave = GetFileTimeNow();
+    m_dirty = false;
+    m_self->SaveAttributes();
+}
+
+void StationServiceSE::SetOnline(bool online)
+{
+    if (m_online == online)
+        return;
+    m_online = online;
+    m_self->SetFlag(online ? flagStructureActive : flagStructureInactive, false);
+    m_self->SaveItem();
+    Save();
+
+    // factory and laboratory jobs here stand still while their service is off
+    if ((m_covers & OutpostServices::Factory) != 0) {
+        if (online)
+            FactoryDB::ResumeJobsInContainer(m_stationID, 1);
+        else
+            FactoryDB::PauseJobsInContainer(m_stationID, 1);
+    } else if ((m_covers & OutpostServices::Laboratory) != 0) {
+        if (online)
+            FactoryDB::ResumeJobsInContainer(m_stationID, 2);
+        else
+            FactoryDB::PauseJobsInContainer(m_stationID, 2);
+    }
+
+    uint32 serviceID(OutpostServices::ServiceID(m_self->typeID()));
+    uint32 systemID(m_system != nullptr ? m_system->GetID() : 0);
+    // the service buttons of the pilots docked there (lobby.OnProcessStationServiceItemChange)
+    if (m_stationID != 0) {
+        PyTuple* tuple = new PyTuple(5);
+            tuple->SetItem(0, new PyInt(m_stationID));
+            tuple->SetItem(1, new PyInt(systemID));
+            tuple->SetItem(2, new PyInt(serviceID));
+            tuple->SetItem(3, new PyInt(m_self->itemID()));
+            tuple->SetItem(4, new PyBool(online));
+        sEntityList.Multicast("OnProcessStationServiceItemChange", "stationid", &tuple, NOTIF_DEST__LOCATION, m_stationID);
+    }
+    // 'Outpost service disabled' and 're-enabled' (StationStateChange:  entities.STATE_INCAPACITATED and STATE_IDLE)
+    if (IsPlayerCorp(m_corpID) and (m_stationID != 0)) {
+        PyDict* data = new PyDict();
+            data->SetItemString("state",                new PyInt(online ? 0 : -1));
+            data->SetItemString("stationID",            new PyInt(m_stationID));
+            data->SetItemString("solarSystemID",        new PyInt(systemID));
+            data->SetItemString("typeID",               new PyInt(m_self->typeID()));
+            data->SetItemString("serviceID",            new PyInt(serviceID));
+            data->SetItemString("stationServiceItemID", new PyInt(m_self->itemID()));
+        NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationStateChange, m_corpID, data);
+    }
+    _log(POS__MESSAGE, "StationServiceSE::SetOnline() - %s(%u) at station %u is %s", GetName(), GetID(), m_stationID, (online ? "back online" : "shot down"));
+}
+
+void StationServiceSE::SetOwner(uint32 corpID, int32 allianceID)
+{
+    m_corpID = corpID;
+    m_ownerID = corpID;
+    m_allyID = allianceID;
+    m_self->ChangeOwner(corpID, false);
+    m_self->SaveItem();
+}
+
+void StationServiceSE::GMRepair()
+{
+    m_self->SetAttribute(AttrShieldCharge, m_self->GetAttribute(AttrShieldCapacity), false);
+    m_self->SetAttribute(AttrArmorDamage, EvilZero, false);
+    m_self->SetAttribute(AttrDamage, EvilZero, false);
+    SetOnline(true);
+    Save();
+    SendDamageStateChanged();
 }
 
 bool OutpostSE::Refresh(uint32 stationID)

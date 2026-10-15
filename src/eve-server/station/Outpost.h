@@ -13,6 +13,7 @@
 #include "pos/Structure.h"
 #include "station/Station.h"
 #include "../eve-common/EVE_Outpost.h"
+#include "../eve-common/EVE_Station.h"
 
 // Class for Construction Platform (egg)
 class PlatformSE
@@ -56,9 +57,24 @@ public:
     virtual void SendDamageStateChanged()               { m_damagePending = true; }
     void SendSlimUpdate();
 
-    virtual void SpawnStationService(Client* pClient, StationData stData, uint32 serviceType);
-    // the destructible service entities (Station_Services types) of the services in newMask that oldMask lacked
-    void SpawnStationServices(Client* pClient, const StationData& stData, uint32 oldMask, uint32 newMask);
+    /* station services (OutpostServices):  their structures sit at the station and are shot like it */
+    // the service structures of the services in newMask that oldMask lacked
+    void SpawnStationServices(uint32 oldMask, uint32 newMask);
+    // after the system loaded:  a besiegeable station gets the service structures it's missing
+    void InitServices();
+    // a service structure here (StationServiceSE c'tor)
+    void AddService(uint32 itemID)                      { m_serviceIDs.push_back(itemID); }
+    const std::vector<uint32>& GetServiceIDs()          { return m_serviceIDs; }
+    StationServiceSE* GetService(uint16 typeID);
+    // the services can be shot whenever the station can
+    bool ServicesVulnerable();
+    // a service's attack alerts are the station's
+    void OnServiceAttacked(SystemEntity* pAttacker)     { NotifyAttack(pAttacker); }
+    /* any of serviceIDs (Station:: bits) shot down at this station.  only loaded systems are asked:  a pilot docked there
+     *  keeps its system loaded */
+    static bool IsServiceOffline(uint32 stationID, uint32 serviceIDs);
+    // throws when it is
+    static void CheckServiceOnline(uint32 stationID, uint32 serviceIDs);
 
     /* works out what the outpost's upgrade level and improvements give (OutpostRules:  services, office slots, refinery,
      *  assembly lines) from its type's static data, saves it and updates the station data the clients get.
@@ -106,6 +122,54 @@ private:
     int64 m_lastOwnerCheck;
     int64 m_lastAttackNotify;
     int64 m_lastDamageSend;
+    std::vector<uint32> m_serviceIDs;    // the service structures here (looked up by ID:  they unload on their own)
+};
+
+/* a station service structure (Destructible Station Services):  shot down to 1% structure, its service at the station stops
+ *  until it is repaired to 50% shield and full armor and structure (OutpostServices).  it can't be destroyed */
+class StationServiceSE
+: public ObjectSystemEntity
+{
+public:
+    StationServiceSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data);
+    virtual ~StationServiceSE();
+
+    /* class type pointer querys. */
+    virtual StationServiceSE*   GetStationServiceSE()   { return this; }
+    /* class type tests. */
+    virtual bool                IsStationServiceSE()    { return true; }
+
+    /* SystemEntity interface */
+    virtual bool                IsInvul();
+    virtual void                GetDamageLimits(DamageLimits& into)     { into.canDie = false; }
+    virtual void                EncodeDestiny(Buffer& into);
+    virtual void                Killed(Damage& damage)  { /* never */ }
+
+    // a hit we took (Damage.cpp)
+    void                        OnDamaged(SystemEntity* pAttacker);
+    // from the station's ProcessSiege:  shields regenerate, the service comes back, the state is saved
+    void                        ProcessService(int64 now);
+    void                        Save();
+    // the station changed hands (OutpostSE::Conquer)
+    void                        SetOwner(uint32 corpID, int32 allianceID);
+    // GM:  full health and online
+    void                        GMRepair();
+
+    bool                        IsOnline() const        { return m_online; }
+    uint32                      GetStationID() const    { return m_stationID; }
+    // the station service bits this one stands for (OutpostServices::Covers)
+    uint32                      GetCovers() const       { return m_covers; }
+
+private:
+    OutpostSE*                  GetStation();
+    void                        SetOnline(bool online);
+
+    uint32                      m_stationID;
+    uint32                      m_covers;
+    bool                        m_online;
+    bool                        m_dirty;
+    int64                       m_lastProcess;
+    int64                       m_lastSave;
 };
 
 #endif  // EVEMU_POS_OUTPOST_H_

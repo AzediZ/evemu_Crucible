@@ -1490,7 +1490,7 @@ void InventoryBound::BuildOutpost(Client* pClient, StructureSE* pPlatform, uint1
     pSystem->AddOutpost(oSE);
 
     _log(POS__MESSAGE, "Creating new station service entities...");
-    oSE->SpawnStationServices(pClient, stData, 0, stData.serviceMask);
+    oSE->SpawnStationServices(0, stData.serviceMask);
 
     pClient->SendNotifyMsg("%s has been built.", stData.name.c_str());
 }
@@ -1571,7 +1571,7 @@ void InventoryBound::BuildOutpostUpgrade(Client* pClient, StructureSE* pPlatform
 
     SystemEntity* pOutpost(pClient->SystemMgr()->GetSE(stationID));
     if ((pOutpost != nullptr) and (pOutpost->GetOutpostSE() != nullptr))
-        pOutpost->GetOutpostSE()->SpawnStationServices(pClient, stData, oldMask, stData.serviceMask);
+        pOutpost->GetOutpostSE()->SpawnStationServices(oldMask, stData.serviceMask);
 
     _log(POS__MESSAGE, "%s built %s into %s(%u):  upgrade level %u", pClient->GetName(), typeName.c_str(), stData.name.c_str(), stationID, stData.upgradeLevel);
     pClient->SendNotifyMsg("The %s has been installed in %s.  Docked pilots see the new services when they next dock.", typeName.c_str(), stData.name.c_str());

@@ -68,6 +68,7 @@
 #include "station/TradeService.h"
 #include "pos/Tower.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
+#include "station/Outpost.h"
 
 static const uint32 PING_INTERVAL_MS = 600000; //10m
 
@@ -1420,10 +1421,19 @@ void Client::ResetAfterPodded() {
     CreateNewPod();
     SetShip(m_pod);
 
-    // verify clone station hangar isnt loaded yet.
-    RemoveStationHangar(GetCloneStationID());
+    /* the clone contract's station had its cloning service shot down (OutpostServices):  the contract stands, but the pilot
+     *  wakes up in their starting station */
+    uint32 wakeStationID(GetCloneStationID());
+    if (OutpostSE::IsServiceOffline(wakeStationID, Station::Cloning)) {
+        uint32 startID(CharacterDB::GetStartingStationByCareer(m_char->careerID()));
+        if (startID != 0)
+            wakeStationID = startID;
+    }
 
-    MoveToLocation(GetCloneStationID(), NULL_ORIGIN);
+    // verify clone station hangar isnt loaded yet.
+    RemoveStationHangar(wakeStationID);
+
+    MoveToLocation(wakeStationID, NULL_ORIGIN);
 
     m_ship->Move(m_locationID, flagHangar);
     m_ship->SaveShip();

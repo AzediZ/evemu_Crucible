@@ -62,6 +62,7 @@
 #include "services/ServiceManager.h"
 #include "character/Character.h"
 #include "inventory/AttributeEnum.h"
+#include "station/Outpost.h"
 
 // the client's const.costCloneContract (AskAcceptCloneContractCost shows it), so not configurable  (F15)
 static constexpr double CloneContractCost = 5600.0;
@@ -241,6 +242,7 @@ PyResult CorpStationMgrIMBound::SetCloneTypeID(PyCallArgs &call, PyInt* cloneTyp
     stDataMgr.GetStationData(pClient->GetStationID(), stData);
     if ((stData.serviceMask & Station::Cloning) == 0)
         throw CustomError("This station does not offer cloning services.");
+    OutpostSE::CheckServiceOnline(pClient->GetStationID(), Station::Cloning);
     const ItemType* pType(sItemFactory.GetType(cloneTypeID->value()));
     if ((pType == nullptr) or (pType->groupID() != EVEDB::invGroups::Clone))
         throw CustomError("That is not a clone.");
@@ -495,6 +497,8 @@ PyResult CorpStationMgrIMBound::SetHomeStation(PyCallArgs &call, PyInt* newHomeS
     m_db.GetCorpStations(pClient->GetCorporationID(), stVec);
     if (std::find(stVec.begin(), stVec.end(), (uint32)newHomeStationID->value()) == stVec.end())
         throw CustomError("You can't move your clone contract to that station.");
+    // no new contracts where the cloning service has been shot down
+    OutpostSE::CheckServiceOnline(newHomeStationID->value(), Station::Cloning);
     // the client asked AskAcceptCloneContractCost {cost: const.costCloneContract}, paid to the new station's owner  (F15)
     std::string reason("DESC: Clone contract moved to ");
     reason += stDataMgr.GetStationName(newHomeStationID->value());
@@ -518,6 +522,8 @@ PyResult CorpStationMgrIMBound::DoStandingCheckForStationService(PyCallArgs &cal
     call.Dump(CORP__CALL_DUMP);
 
     Client* pClient(call.client);
+    // a service shot down at an outpost (OutpostServices) can't be used by anyone
+    OutpostSE::CheckServiceOnline(m_stationID, stationServiceID->value());
     uint32 ownerID = pStationItem->GetOwnerID();
     if (!IsPlayerCorp(ownerID))
         return nullptr;

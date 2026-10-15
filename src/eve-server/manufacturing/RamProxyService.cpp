@@ -43,6 +43,7 @@
 #include "market/sim/SimFacilityMgr.h"
 #include "station/StationDataMgr.h"
 #include "system/CalendarDB.h"
+#include "station/Outpost.h"
 
 RamProxyService::RamProxyService() :
     Service("ramProxy")
@@ -180,6 +181,11 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     bool structureLine(sRamMthd.IsStructureLine(args.lineContainerID));
     if (structureLine)
         sRamMthd.StructureCheck(pClient, args.lineContainerID);
+
+    // an outpost's factory or laboratory that has been shot down takes no jobs (OutpostServices)
+    if (sDataMgr.IsStation(args.lineContainerID))
+        OutpostSE::CheckServiceOnline(args.lineContainerID,
+                (args.activityID == EvERam::Activity::Manufacturing ? Station::Factory : Station::Laboratory));
 
     // range to the installation, then the line's activity
     sRamMthd.InstallationCheck(pClient, args.lineContainerID, args.activityID);

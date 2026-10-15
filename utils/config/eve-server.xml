@@ -464,7 +464,7 @@ boolean can use either 0/1 OR true/false.
     </cosmic>
 
     <incursion>
-        <Enabled>true</Enabled><!-- bool  Sansha incursions: overview beacons, acceleration gates, pockets and the wiki's site mechanics.  no constellation penalties yet -->
+        <Enabled>true</Enabled><!-- bool  Sansha incursions: overview beacons, acceleration gates, pockets and the wiki's site mechanics -->
         <AutoStart>true</AutoStart><!-- bool  start incursions automatically.  GMs can always use /incursion -->
         <MaxActive>1</MaxActive><!-- incursions running at once -->
         <FleetScale>100</FleetScale><!-- percent of full fleet size the sites are scaled to (vanguard 10 pilots, assault 20, headquarters 40, mothership 80).  lower it for small fleets -->

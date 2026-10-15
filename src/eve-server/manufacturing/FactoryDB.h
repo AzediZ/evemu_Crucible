@@ -88,8 +88,10 @@ public:
     static bool SyncStationAssemblyLines(uint32 stationID, uint16 stationTypeID, uint32 ownerID, uint32 systemID, uint32 regionID,
                                          const std::map<uint8, uint16>& lines);
     // offline structures pause their jobs (client shows 'Offline'), onlining resumes them with the lost time added
-    static void PauseJobsInContainer(uint32 containerID);
-    static void ResumeJobsInContainer(uint32 containerID);
+    /* lines:  0 every line in the container, 1 its manufacturing lines only, 2 every other line (a station's factory and
+     *  laboratory services go off on their own, OutpostServices) */
+    static void PauseJobsInContainer(uint32 containerID, int8 lines = 0);
+    static void ResumeJobsInContainer(uint32 containerID, int8 lines = 0);
     static void GetActiveJobsInContainer(uint32 containerID, std::vector<EvERam::JobProperties>& into);
     static bool UpdateAssemblyLine(uint32 assemblyLineID, const EvERam::LineConfig& data);
 

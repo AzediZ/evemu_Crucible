@@ -40,6 +40,7 @@
 #include "station/Station.h"
 #include "system/SystemManager.h"
 #include "services/ServiceManager.h"
+#include "station/Outpost.h"
 
 
 RepairService::RepairService(EVEServiceManager& mgr) :
@@ -368,6 +369,7 @@ PyResult RepairServiceBound::RepairItems(PyCallArgs &call, PyList* itemIDs, PyFl
 
     if ((uint32)call.client->GetStationID() != m_locationID)
         throw CustomError("You must be docked in this station to use its repair facilities.");
+    OutpostSE::CheckServiceOnline(m_locationID, Station::RepairFacilities);
 
     /* itemIDs is list of itemIDs to repair (damage report lines: ships, their fitted modules, other items).
      * iskAmount is how much to spend on repairs.

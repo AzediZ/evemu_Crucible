@@ -436,9 +436,9 @@ bool AttributeMap::Add(uint16 attrID, EvilNumber& num) {
 bool AttributeMap::SendChanges(PyTuple* attrChange) {
     if (attrChange == nullptr)
         return true;
-    /* stations (outposts under siege) tell nobody:  clients get their hit points from the damage state.  a corp-owned one
-     *  would multicast every hit to its corp (with an error and a stack trace in the log) */
-    if (IsStationID(mItem.itemID()))
+    /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
+     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
+    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services))
         return true;
 
     /** @todo update this to use my new multicast replacement */
