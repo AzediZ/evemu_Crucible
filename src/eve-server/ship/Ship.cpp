@@ -147,6 +147,12 @@ void ShipItem::SetPlayer(Client* pClient) {
     if (pClient->IsCharCreation())
         return;
 
+    /* a ship first loaded while its character was being created has no attributes (_Load() skips them then), and the
+     *  item factory keeps it that way.  that was the new character's pod:  after their first death it came out with no speed,
+     *  mass, capacitor or hit points, so it didn't move on the server and the client's movement maths broke (speed NaN) */
+    if (!m_loaded)
+        _Load();
+
     Init();
 
     // proc effects when changing ships, or on login.

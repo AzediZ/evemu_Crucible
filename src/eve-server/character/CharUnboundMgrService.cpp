@@ -403,6 +403,9 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
 
     charRef->LogOut();
     sRef->LogOut();
+    // the pod too:  it was loaded without its attributes (ShipItem::_Load() skips them during creation), so it has to be
+    //  loaded again from the database when the character first uses it
+    pClient->GetPod()->LogOut();
 
     sEntityList.RemovePlayer(pClient);
 
