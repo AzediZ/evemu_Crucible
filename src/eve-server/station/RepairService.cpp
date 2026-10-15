@@ -223,6 +223,12 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
             // an audit log container with a log entry less than three weeks old
             if (ContainerSecurity::IsAuditLog(iRef) and sContSec.HasRecentLog(itemID, GetFileTimeNow() - (Win32Time_Day * 21)))
                 throw UserError("CanNotRepackageALSC");
+            // a container's contents would be lost inside the package
+            if (!iRef->IsShipItem() and (iRef->GetMyInventory() != nullptr)) {
+                iRef->GetMyInventory()->LoadContents();
+                if (!iRef->GetMyInventory()->IsEmpty())
+                    throw CustomError("Empty %s before repackaging it.", iRef->name());
+            }
             if (iRef->IsShipItem()) {
                 // fitted modules lose their damage when the ship is repackaged
                 std::vector<InventoryItemRef> modules;
@@ -257,13 +263,25 @@ PyResult RepairService::UnasembleItems(PyCallArgs& call, PyDict* validIDsByStati
                             // Item cannot be repackaged once used!
                             continue;
                         }
-                        // if this is a ship, remove all modules and empty cargo holds before repacking
-                        //  maybe we should instruct player that ship is fitted/has cargo, and let them do this
+                        /* a ship's modules, subsystems, charges, drones and cargo go to the hangar and its rigs are destroyed.
+                         *  its insurance ends.  the pilot is told what happened */
                         if (iRef->IsShipItem()) {
-                            iRef->GetShipItem()->EmptyCargo();
-                            iRef->GetShipItem()->StripFitting(true);
-                            // check insurance and delete if applicable
+                            bool fitted(false), cargo(false);
+                            std::vector<InventoryItemRef> contents;
+                            iRef->GetMyInventory()->GetInventoryVec(contents);
+                            for (auto cur : contents) {
+                                if (IsModuleSlot(cur->flag()) or IsSubSystem(cur->flag()))
+                                    fitted = true;
+                                else if (!IsRigSlot(cur->flag()))
+                                    cargo = true;
+                            }
+                            uint8 rigs(iRef->GetShipItem()->PrepareRepackage());
                             ShipDB::DeleteInsuranceByShipID(itemID);
+                            if (fitted or cargo or (rigs > 0))
+                                call.client->SendNotifyMsg("%s was repackaged.%s%s%s", iRef->name(),
+                                        (fitted ? " Its modules were moved to your hangar." : ""),
+                                        (cargo ? " Its cargo was moved to your hangar." : ""),
+                                        (rigs > 0 ? " Its rigs were destroyed." : ""));
                         }
                         // a repackaged secure container loses its passwords
                         if (ContainerSecurity::IsSecure(iRef)) {

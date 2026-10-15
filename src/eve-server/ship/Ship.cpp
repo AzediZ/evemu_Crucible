@@ -1624,6 +1624,32 @@ void ShipItem::EvictExcessModules()
     }
 }
 
+uint8 ShipItem::PrepareRepackage()
+{
+    UnlinkAllWeapons(true);
+
+    std::vector<InventoryItemRef> items;
+    // a ship boarded this session has module objects:  take them off first (charges are unloaded into the cargo hold)
+    pInventory->GetInventoryVec(items);
+    for (auto cur : items)
+        if ((IsModuleSlot(cur->flag()) or IsRigSlot(cur->flag()) or IsSubSystem(cur->flag()))
+        and (m_ModuleManager->GetModule(cur->itemID()) != nullptr))
+            m_ModuleManager->UnfitModule(cur->itemID());
+
+    uint8 rigs(0);
+    items.clear();
+    pInventory->GetInventoryVec(items);
+    for (auto cur : items) {
+        if (IsRigSlot(cur->flag())) {
+            ++rigs;
+            cur->Delete();
+            continue;
+        }
+        cur->Move(locationID(), flagHangar, true);
+    }
+    return rigs;
+}
+
 void ShipItem::EmptyCargo()
 {
     std::map<uint32, InventoryItemRef> invMap;

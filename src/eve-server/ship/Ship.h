@@ -141,6 +141,9 @@ public:
     void StripFitting(bool all=false);
     // this will remove all items from all ship cargo holds
     void EmptyCargo();
+    /* repackaging (RepairService::UnasembleItems):  fitted modules and subsystems come off, rigs are destroyed, and charges,
+     *  drones and every hold's contents go to the hangar.  returns how many rigs were destroyed */
+    uint8 PrepareRepackage();
     // after a subsystem change: modules past the ship's slots or hardpoints go to the hangar (cargo in space)
     void EvictExcessModules();
     // after a pilot change: shield/capacitor charge and armor/structure damage are cut to the new capacities
