@@ -691,7 +691,9 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                 case Math::PreMul:
                 case Math::PostMul:
                 case Math::PreDiv:
-                case Math::PostDiv: {
+                case Math::PostDiv:
+                case Math::PostPercent:
+                case Math::RevPostPercent: {
                     /* dogma:  an attribute the item doesn't have is the attribute's default (damageMultiplier 1, the damage
                      *  types 0).  one it has at 0 stays 0, so a multiplier can be taken off again (rockets' missing damage
                      *  types, a smartbomb's other damage types) */

@@ -498,6 +498,7 @@ public:
         uint8 VanguardSites;    // live sites per vanguard system (wiki: up to 7)
         uint8 AssaultSites;     // live sites per assault system (wiki: up to 5)
         uint8 HQSites;          // live sites per headquarters system, not counting the mothership (wiki: up to 5)
+        bool Penalties;         // the constellation's system penalties: resists and damage by role and influence, cyno jamming, half bounties
         bool DelayedLP;         // site LP goes into the incursion's pool, paid when the mothership dies (wiki); false pays it per site
         bool GateRestrictions;  // the Consolidation Network's cruiser and battleship gates check ship class (wiki); off by default
         uint16 MothershipDelayHigh; // hours from the start before the mothership can appear in high-sec (wiki: 3 days)

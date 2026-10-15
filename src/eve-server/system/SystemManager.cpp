@@ -105,6 +105,7 @@ m_activeRatSpawns(0),
 m_activeGateSpawns(0),
 m_activeRoidSpawns(0),
 m_secValue(1.1f),
+m_beaconScale(0),
 m_tutorialSiteID(0),
 m_droneIndexStamp(0),
 m_droneIndexBusy(0),
@@ -276,6 +277,52 @@ void SystemManager::SpawnEffectBeacon()
     AddEntity(pSE, false);
     m_effectBeacon = iRef;
     _log(COSMIC_MGR__MESSAGE, "SystemManager::SpawnEffectBeacon() - %s(%u) in %s(%u)", iRef->name(), iRef->itemID(), m_data.name.c_str(), m_data.systemID);
+}
+
+/* incursion penalties (IncursionMgr::UpdatePenalties()).  a Vanguard, Assault or Headquarters system has the beacon for its role,
+ *  with its resistance and damage figures (10, 25 or 50%) times Sansha influence.  it is an item only:  nothing shows in space.
+ *  a new figure makes a new beacon, so each ship undoes the old one's math with the old item before taking the new one's
+ */
+void SystemManager::SetIncursionBeacon(uint16 typeID, double scale)
+{
+    if (IsWSpaceID(m_data.systemID))
+        return;
+    if (m_effectBeacon.get() == nullptr) {
+        if (typeID == 0)
+            return;
+    } else if ((m_effectBeacon->typeID() == typeID) and (m_beaconScale == scale)) {
+        return;
+    }
+
+    m_effectBeacon = InventoryItemRef(nullptr);
+    m_beaconScale = 0;
+    if (typeID != 0) {
+        ItemData data(typeID, ownerSystem, m_data.systemID, flagNone, "", NULL_ORIGIN);
+        InventoryItemRef iRef(sItemFactory.SpawnTempItem(data));
+        if (iRef.get() == nullptr) {
+            _log(COSMIC_MGR__ERROR, "SystemManager::SetIncursionBeacon() - unable to spawn beacon type %u in %s(%u)", typeID, m_data.name.c_str(), m_data.systemID);
+        } else {
+            static const uint16 attrs[] = {
+                AttrArmorEmDamageResistanceBonus, AttrArmorKineticDamageResistanceBonus, AttrArmorThermalDamageResistanceBonus,
+                AttrArmorExplosiveDamageResistanceBonus, AttrShieldEmDamageResistanceBonus, AttrShieldExplosiveDamageResistanceBonus,
+                AttrShieldKineticDamageResistanceBonus, AttrShieldThermalDamageResistanceBonus, AttrSystemEffectDamageReduction
+            };
+            for (auto cur : attrs)
+                if (iRef->HasAttribute(cur))
+                    iRef->SetAttribute(cur, iRef->GetAttribute(cur).get_double() * scale, false);
+            m_effectBeacon = iRef;
+            m_beaconScale = scale;
+        }
+    }
+    _log(COSMIC_MGR__MESSAGE, "SystemManager::SetIncursionBeacon() - %s(%u) now has beacon type %u at %.0f%%", \
+            m_data.name.c_str(), m_data.systemID, typeID, scale * 100);
+
+    // ships in space here swap the old figures for the new ones.  docked ships get them when they undock
+    std::vector<Client*> clients;
+    GetClientList(clients);
+    for (auto pClient : clients)
+        if (pClient->GetShip().get() != nullptr)
+            pClient->GetShip()->UpdateSystemEffects(this);
 }
 
 bool SystemManager::LoadCosmicMgrs()
@@ -562,6 +609,7 @@ void SystemManager::UnloadSystem() {
     sItemFactory.RemoveItem(m_data.systemID);
     // the beacon's entity went with the rest.  ships that had its effects have left
     m_effectBeacon = InventoryItemRef(nullptr);
+    m_beaconScale = 0;
     m_loaded = false;
 }
 

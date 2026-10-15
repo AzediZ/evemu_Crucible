@@ -395,6 +395,7 @@ EVEServerConfig::EVEServerConfig()
     incursion.VanguardSites = 7;
     incursion.AssaultSites = 5;
     incursion.HQSites = 5;
+    incursion.Penalties = true;
     incursion.DelayedLP = true;
     incursion.GateRestrictions = false;
     incursion.MothershipDelayHigh = 72;
@@ -1647,6 +1648,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
     AddValueParser( "VanguardSites",         incursion.VanguardSites );
     AddValueParser( "AssaultSites",          incursion.AssaultSites );
     AddValueParser( "HQSites",               incursion.HQSites );
+    AddValueParser( "Penalties",             incursion.Penalties );
     AddValueParser( "DelayedLP",             incursion.DelayedLP );
     AddValueParser( "GateRestrictions",      incursion.GateRestrictions );
     AddValueParser( "MothershipDelayHigh",   incursion.MothershipDelayHigh );
@@ -1670,6 +1672,7 @@ bool EVEServerConfig::ProcessIncursion( const TiXmlElement* ele )
     RemoveParser( "VanguardSites" );
     RemoveParser( "AssaultSites" );
     RemoveParser( "HQSites" );
+    RemoveParser( "Penalties" );
     RemoveParser( "DelayedLP" );
     RemoveParser( "GateRestrictions" );
     RemoveParser( "MothershipDelayHigh" );

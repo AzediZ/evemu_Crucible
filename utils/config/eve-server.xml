@@ -471,6 +471,7 @@ boolean can use either 0/1 OR true/false.
         <AssaultSites>5</AssaultSites><!-- live sites per assault system (wiki: up to 5) -->
         <HQSites>5</HQSites><!-- live sites per headquarters system, plus the mothership (wiki: up to 5) -->
         <SiteRespawn>180</SiteRespawn><!-- seconds before a completed site is replaced -->
+        <Penalties>true</Penalties><!-- bool  the system penalties across the constellation:  shield and armour resists and weapon and drone damage down 10% in vanguard, 25% in assault and 50% in headquarters systems at full Sansha influence (less as it drops), cynos jammed and CONCORD bounties halved -->
         <DelayedLP>true</DelayedLP><!-- bool  site LP goes into the incursion's pool and is paid to everyone who ran sites when the mothership dies (wiki).  false pays it with each site -->
         <GateRestrictions>false</GateRestrictions><!-- bool  true makes the Nation Consolidation Network's cruiser and battleship gates check ship class, as on the wiki.  off by default so any ship, supercarriers included, can take either gate -->
         <MinSecurity>0.45</MinSecurity><!-- float  lowest system security an automatic incursion may cover -->

@@ -244,8 +244,11 @@ public:
 
     // the tutorials' warp-to site in a rookie system: a dust cloud near the first planet.  made on first use, kept in the db
     SystemEntity* GetTutorialSite();
-    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon.  null when none
+    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon, or an incursion's
+    //  penalty.  null when none
     InventoryItemRef GetEffectBeacon() const            { return m_effectBeacon; }
+    // IncursionMgr:  the penalty beacon for this system's incursion role (typeID 0 = none), its figures times scale (influence)
+    void SetIncursionBeacon(uint16 typeID, double scale);
 
 
 protected:
@@ -276,6 +279,7 @@ private:
     LSCService* m_lsc;
     SolarSystemRef m_solarSystemRef;
     InventoryItemRef m_effectBeacon;
+    double m_beaconScale;       // the incursion beacon's influence
 
     // static system data
     SystemData m_data;

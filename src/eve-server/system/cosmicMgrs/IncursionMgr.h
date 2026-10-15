@@ -13,7 +13,9 @@
   *   - at zero influence, once a headquarters site has been run, the mothership appears in the headquarters system.
   *       killing it ends the incursion.  otherwise it goes established, mobilizing, withdrawing, and ends
   *   - influence recovers slowly when no sites are completed.  a new incursion starts automatically after a delay
-  *  not done: staging sites, the constellation penalties, True Sansha loot, the most-damage payout rule
+  *   - the constellation's system penalties (UpdatePenalties):  resists and damage by system role and influence, cynos jammed and
+ *       bounties halved everywhere in it
+ *  not done: staging sites, True Sansha loot, the most-damage payout rule
   */
 
 #ifndef EVEMU_SYSTEM_INCURSIONMGR_H_
@@ -219,6 +221,9 @@ public:
     // a warp to dest inside a site's pocket ends at the site's beacon instead (into).  false = no change (DungeonMgr::RedirectWarp)
     bool RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into);
 
+    // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
+    uint32 PenaltyRole(uint32 systemID);
+
     // map service (journal and starmap)
     PyRep* GetGlobalReport();
     PyRep* GetSystems();
@@ -261,6 +266,7 @@ private:
     void CompleteSite(IncLiveSite& site, SystemManager* pSys, uint8 room);
     void RemoveSite(IncLiveSite& site, SystemManager* pSys);
     void EndIncursion(uint32 incursionID, bool killed = false);
+    void UpdatePenalties(IncData& inc, bool clear = false);
     void PayPool(IncData& inc);
 
     // IncursionSites.cpp: rooms, gates, waves and the site scripts

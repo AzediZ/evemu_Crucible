@@ -47,6 +47,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemEntity.h"
 #include "system/SystemManager.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 
 
@@ -954,6 +955,9 @@ void SystemEntity::AwardBounty(Client* pClient)
     // this will use a map{charID/BountyData} in system manager for using a bounty timer.
     double bounty = m_self->GetAttribute(AttrEntityKillBounty).get_double();
     bounty *= sConfig.rates.npcBountyMultiply;
+    // CONCORD pays half in a Sansha incursion's constellation
+    if ((m_system != nullptr) and (sIncursionMgr.PenaltyRole(m_system->GetID()) != 0))
+        bounty *= 0.5;
     if (bounty < 1)
         return;
 

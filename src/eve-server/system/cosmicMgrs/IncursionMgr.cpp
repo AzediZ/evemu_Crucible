@@ -10,6 +10,7 @@
   */
 
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <queue>
 #include <set>
@@ -263,6 +264,10 @@ void IncursionMgr::Process()
             itr = (itr->second == cur ? m_index.erase(itr) : ++itr);
         m_sites.erase(cur);
     }
+
+    // the system penalties in the incursions' loaded systems
+    for (auto& cur : m_incursions)
+        UpdatePenalties(cur.second);
 
     // keep the incursion's systems stocked while they're loaded.  the mothership waits in the headquarters system
     for (auto& cur : m_incursions) {
@@ -694,6 +699,7 @@ void IncursionMgr::EndIncursion(uint32 incursionID, bool killed/*false*/)
     }
     for (auto cur : iItr->second.systems)
         m_siteCooldown.erase(cur.first);
+    UpdatePenalties(iItr->second, true);
 
     // the LP pool is paid when the mothership dies, and lost otherwise
     if (killed and sConfig.incursion.DelayedLP)
@@ -708,6 +714,47 @@ void IncursionMgr::EndIncursion(uint32 incursionID, bool killed/*false*/)
     m_nextAutoStart = TimeNow() + sConfig.incursion.StartDelay * 60u;
 
     Broadcast(msg);
+}
+
+/* the constellation's system penalties (EVE University wiki, Incursions; CCP's 'The Nation strikes back', 2010).  at full influence
+ *  shield and armour resists and turret, launcher, drone and smartbomb damage are down 10% in Vanguard systems, 25% in Assault systems
+ *  and 50% in Headquarters, and they fall with influence to nothing at zero.  the beacon types (Incursion ship attributes effects)
+ *  carry those figures, and SystemManager::SetIncursionBeacon() scales them.  the staging system has none.  cynos are jammed
+ *  (CynoModule) and CONCORD bounties halved (SystemEntity::AwardBounty) in every system of the constellation, whatever the influence
+ */
+void IncursionMgr::UpdatePenalties(IncData& inc, bool clear/*false*/)
+{
+    // whole percents, so slow regrowth doesn't remake the beacons every second
+    double scale(std::round(inc.influence * 100.0) / 100.0);
+    if (!sConfig.incursion.Penalties)
+        clear = true;
+    for (auto cur : inc.systems) {
+        if (!sEntityList.IsSystemLoaded(cur.first))
+            continue;
+        SystemManager* pSys = sEntityList.FindOrBootSystem(cur.first);
+        if (pSys == nullptr)
+            continue;
+        uint16 typeID(0);
+        if (!clear and (scale > 0))
+            switch (cur.second) {
+                case Incursion::scenesType::vanguard:       typeID = 3069; break;   // Incursion ship attributes effects Vanguard
+                case Incursion::scenesType::assault:        typeID = 3493; break;   //  ... Assault
+                case Incursion::scenesType::headquarters:   typeID = 3494; break;   //  ... HQ
+            }
+        pSys->SetIncursionBeacon(typeID, scale);
+    }
+}
+
+uint32 IncursionMgr::PenaltyRole(uint32 systemID)
+{
+    if (!m_initialized or !sConfig.incursion.Penalties)
+        return 0;
+    for (auto& cur : m_incursions) {
+        std::map<uint32, uint8>::const_iterator itr = cur.second.systems.find(systemID);
+        if (itr != cur.second.systems.end())
+            return itr->second;
+    }
+    return 0;
 }
 
 uint32 IncursionMgr::PickConstellation()

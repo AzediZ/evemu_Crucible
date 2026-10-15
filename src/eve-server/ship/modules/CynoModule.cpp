@@ -12,6 +12,7 @@
 #include "fleet/FleetService.h"
 #include "pos/Tower.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 
 CynoFieldSE::CynoFieldSE(InventoryItemRef self, EVEServiceManager& services, SystemManager* system, const FactionData& data, uint32 charID, uint32 lifeMS)
 : ItemSystemEntity(self, services, system),
@@ -126,6 +127,9 @@ bool CynoModule::CanActivate()
         if (!IsCovert()) {
             SovereigntyData sovData = svDataMgr.GetSovereigntyData(pSystem->GetID());
             if (sovData.jammerID != 0)
+                throw UserError("CynosuralGenerationJammed");
+            // so is a Sansha incursion's whole constellation
+            if (sIncursionMgr.PenaltyRole(pSystem->GetID()) != 0)
                 throw UserError("CynosuralGenerationJammed");
         }
 

@@ -260,6 +260,9 @@ void DroneSE::UpdateStats() {
             sysDamage = beacon->GetAttribute(AttrDamageMultiplierMultiplier).get_double();
         if (drone and (beaconFx.find(4024) != beaconFx.end()))
             sysVelocity = beacon->GetAttribute(AttrMaxDroneVelocityMultiplier).get_double();
+        // an incursion's penalty (OffensiveDefensiveReduction, with systemEffectDamageDrones on CurrentChar[Drones])
+        if (drone and (beaconFx.find(4728) != beaconFx.end()))
+            sysDamage *= 1.0 + beacon->GetAttribute(AttrSystemEffectDamageReduction).get_double() / 100.0;
     }
 
     double navBonus(drone ? 1.0 + 0.05 * level(DroneNavigation) : 1.0);

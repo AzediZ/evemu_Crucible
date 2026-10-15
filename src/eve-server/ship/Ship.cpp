@@ -2309,6 +2309,13 @@ void ShipItem::ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pConta
     // the beacon's system effects (category 7):  added with their pre-expressions, taken off with their post-expressions
     std::map<uint16, Effect> effectMap;
     beacon->type().GetEffectMap(FX::State::System, effectMap);
+    /* the incursion beacons' OffensiveDefensiveReduction (4728) has no expression.  its description lists the effects it combines:
+     *  the shield and armour resistance effects and the drone, gunnery, missile and smartbomb damage effects */
+    if (effectMap.erase(4728) > 0) {
+        static const uint16 parts[] = { 3996, 3997, 3998, 3999, 4135, 4136, 4137, 4138, 4699, 4700, 4701, 4702, 4703, 4704, 4705, 4706, 4707, 4708 };
+        for (auto cur : parts)
+            effectMap.emplace(cur, sFxDataMgr.GetEffect(cur));
+    }
     for (auto& cur : effectMap) {
         fxData data = fxData();
         data.action = FX::Action::Invalid;
