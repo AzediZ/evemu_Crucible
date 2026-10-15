@@ -26,7 +26,7 @@ EwarState::~EwarState()
 }
 
 void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*0*/, float v2/*0*/,
-                      InventoryItemRef srcRef/*nullptr*/, uint32 moduleID/*0*/)
+                      InventoryItemRef srcRef/*nullptr*/, uint32 moduleID/*0*/, float v3/*0*/)
 {
     if (kind == Ewar::None)
         return;
@@ -38,6 +38,7 @@ void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*
         itr->second.expires = now + ((int64)durationMs * (EvE::Time::Second / 1000));
         itr->second.v1 = v1;
         itr->second.v2 = v2;
+        itr->second.v3 = v3;
         return;
     }
 
@@ -45,6 +46,7 @@ void EwarState::Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1/*
         e.kind = kind;
         e.v1 = v1;
         e.v2 = v2;
+        e.v3 = v3;
         e.start = now;
         e.expires = now + ((int64)durationMs * (EvE::Time::Second / 1000));
         e.durationMs = durationMs;
@@ -191,13 +193,13 @@ float EwarState::GetScrambleStrength() const
     return strength;
 }
 
-float EwarState::Penalized(uint8 kind, bool second) const
+float EwarState::Penalized(uint8 kind, uint8 value) const
 {
     // stacking penalty: strongest first, nth effect at exp(-(n/2.67)^2)
     std::vector<float> mults;
     for (auto& cur : m_entries)
         if (cur.second.kind == kind) {
-            float m(second ? cur.second.v2 : cur.second.v1);
+            float m(value == 3 ? cur.second.v3 : (value == 2 ? cur.second.v2 : cur.second.v1));
             if ((m > 0.0f) and (m != 1.0f))
                 mults.push_back(m);
         }
@@ -213,25 +215,30 @@ float EwarState::Penalized(uint8 kind, bool second) const
 
 float EwarState::GetTargetRangeMult() const
 {
-    return Penalized(Ewar::Damp, false);
+    return Penalized(Ewar::Damp, 1);
 }
 
 float EwarState::GetScanResMult() const
 {
-    return Penalized(Ewar::Damp, true);
+    return Penalized(Ewar::Damp, 2);
 }
 
 float EwarState::GetTrackingMult() const
 {
-    return Penalized(Ewar::TrackDisrupt, false);
+    return Penalized(Ewar::TrackDisrupt, 1);
 }
 
 float EwarState::GetOptimalMult() const
 {
-    return Penalized(Ewar::TrackDisrupt, true);
+    return Penalized(Ewar::TrackDisrupt, 2);
+}
+
+float EwarState::GetFalloffMult() const
+{
+    return Penalized(Ewar::TrackDisrupt, 3);
 }
 
 float EwarState::GetSigRadiusMult() const
 {
-    return Penalized(Ewar::Paint, false);
+    return Penalized(Ewar::Paint, 1);
 }

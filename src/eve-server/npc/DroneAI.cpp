@@ -678,7 +678,7 @@ void DroneAIMgr::StopJam() {
  *  there, read by targeting, turret and missile formulas, with the client's ewar icon.  the values are the drone's own
  *  attributes, as in its info window:
  *   SD  maxTargetRangeMultiplier, scanResolutionMultiplier     -> Damp v1, v2
- *   TD  trackingSpeedMultiplier, maxRangeMultiplier            -> TrackDisrupt v1, v2  (fallofMultiplier: the state has no falloff)
+ *   TD  trackingSpeedMultiplier, maxRangeMultiplier, fallofMultiplier  -> TrackDisrupt v1, v2, v3
  *   TP  signatureRadiusBonus (%)                               -> Paint v1
  *  the entry lasts a cycle and a second, refreshed every cycle, and is removed when the drone stops (StopCycle)
  */
@@ -693,7 +693,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
         return (type.HasAttribute(attrID) ? type.GetAttribute(attrID).get_float() : def);
     };
     uint8 kind(Ewar::None);
-    float v1(1.0f), v2(1.0f);
+    float v1(1.0f), v2(1.0f), v3(0.0f);
     switch (m_pDrone->Stats().effectID) {
         case EVEEffectID::sensorBoostTargetedHostile: {
             kind = Ewar::Damp;
@@ -704,6 +704,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
             kind = Ewar::TrackDisrupt;
             v1 = attr(AttrTrackingSpeedMultiplier, 1.0f);
             v2 = attr(AttrMaxRangeMultiplier, 1.0f);
+            v3 = attr(AttrFallofMultiplier, 1.0f);
         } break;
         case EVEEffectID::ewTargetPaint: {
             kind = Ewar::Paint;
@@ -714,7 +715,7 @@ void DroneAIMgr::ApplyEwar(SystemEntity* pTarget) {
             return;
     }
     pTarget->GetEwar(true)->Apply(m_pDrone->GetID(), kind, static_cast<uint32>(m_pDrone->Stats().cycleTime) + 1000, v1, v2,
-                                  InventoryItemRef(nullptr), m_pDrone->GetID());
+                                  InventoryItemRef(nullptr), m_pDrone->GetID(), v3);
     m_ewarID = pTarget->GetID();
     m_ewarKind = kind;
 }

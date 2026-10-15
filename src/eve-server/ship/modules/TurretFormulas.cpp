@@ -96,14 +96,16 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
     if (pShooter == nullptr)
         return 0;
     double optimal(pMod->GetAttribute(AttrMaxRange).get_double());
+    double falloff(pMod->GetAttribute(AttrFalloff).get_double());
     double tracking(pMod->GetAttribute(AttrTrackingSpeed).get_double());
     // tracking disruptors on the shooter
     EwarState* pEwar(pShooter->GetEwar());
     if (pEwar != nullptr) {
         optimal *= pEwar->GetOptimalMult();
+        falloff *= pEwar->GetFalloffMult();
         tracking *= pEwar->GetTrackingMult();
     }
-    return Roll(pShooter, pTarget, optimal, pMod->GetAttribute(AttrFalloff).get_double(), tracking,
+    return Roll(pShooter, pTarget, optimal, falloff, tracking,
                 pMod->GetAttribute(AttrOptimalSigRadius).get_double(), MakeRandomFloat(), DAMAGE__TRACE, "Turret");
 }
 
@@ -168,6 +170,7 @@ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, fl
     if (pEwar != nullptr) {
         tracking *= pEwar->GetTrackingMult();
         optimal *= pEwar->GetOptimalMult();
+        falloff *= pEwar->GetFalloffMult();
     }
     return Roll(pSource, pTarget, optimal, falloff, tracking, sigRes, MakeRandomFloat(), DAMAGE__TRACE, "Structure");
 }

@@ -40,11 +40,11 @@ public:
      *  values by kind:
      *   Scramble: v1 = strength            Web: srcRef = item whose AttrSpeedFactor applies (npc or module)
      *   Jam: -                             Damp: v1 = maxTargetRange mult, v2 = scanResolution mult
-     *   TrackDisrupt: v1 = tracking mult, v2 = optimal mult      Paint: v1 = signature radius mult
+     *   TrackDisrupt: v1 = tracking mult, v2 = optimal mult, v3 = falloff mult      Paint: v1 = signature radius mult
      * Apply on an existing entry only extends it.
      */
     void Apply(uint32 sourceID, uint8 kind, uint32 durationMs, float v1 = 0, float v2 = 0,
-               InventoryItemRef srcRef = InventoryItemRef(nullptr), uint32 moduleID = 0);
+               InventoryItemRef srcRef = InventoryItemRef(nullptr), uint32 moduleID = 0, float v3 = 0);
     void Remove(uint32 sourceID, uint8 kind, uint32 moduleID = 0);
     void RemoveSource(uint32 sourceID);  // everything this entity is doing to us
     void Clear();                        // ends everything (with side effects)
@@ -57,13 +57,14 @@ public:
     float GetScanResMult() const;        // Damp v2
     float GetTrackingMult() const;       // TrackDisrupt v1
     float GetOptimalMult() const;        // TrackDisrupt v2
+    float GetFalloffMult() const;        // TrackDisrupt v3
     float GetSigRadiusMult() const;      // Paint v1
     bool  Empty() const                  { return m_entries.empty(); }
 
 private:
     struct Entry {
         uint8 kind;
-        float v1, v2;
+        float v1, v2, v3;
         int64 start;                     // filetime
         int64 expires;                   // filetime
         uint32 durationMs;
@@ -75,7 +76,7 @@ private:
 
     void OnStart(Entry& e);
     void OnEnd(Entry& e);
-    float Penalized(uint8 kind, bool second) const;
+    float Penalized(uint8 kind, uint8 value) const;     // value 1, 2 or 3:  v1, v2 or v3
 
     SystemEntity* m_owner;               // we do not own this
     std::map<uint64_t, Entry> m_entries;

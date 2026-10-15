@@ -456,11 +456,11 @@ uint32 RemoteEwarModule::DoCycle()
         return cycleTime;
 
     /* the module's attributes already carry the pilot's skills and its script (charge effects).  bonuses are percentages:
-     *  TP signatureRadiusBonus (+), damp maxTargetRangeBonus/scanResolutionBonus (-), TD trackingSpeedBonus/maxRangeBonus (-).
-     *  Crucible TDs also had falloffBonus, which the ewar state has no multiplier for (optimal and tracking only)
+     *  TP signatureRadiusBonus (+), damp maxTargetRangeBonus/scanResolutionBonus (-),
+     *  TD trackingSpeedBonus/maxRangeBonus/falloffBonus (-).
      *  the entry lasts a cycle and a second, and is refreshed every cycle
      */
-    float v1(1.0f), v2(0.0f);
+    float v1(1.0f), v2(0.0f), v3(0.0f);
     uint8 kind(GetKind());
     switch (kind) {
         case Ewar::Paint: {
@@ -473,12 +473,13 @@ uint32 RemoteEwarModule::DoCycle()
         case Ewar::TrackDisrupt: {
             v1 = 1.0f + (GetAttribute(AttrTrackingSpeedBonus).get_float() / 100.0f);
             v2 = 1.0f + (GetAttribute(AttrMaxRangeBonus).get_float() / 100.0f);
+            v3 = 1.0f + (GetAttribute(AttrFalloffBonus).get_float() / 100.0f);
         } break;
         default:
             return cycleTime;
     }
     m_targetSE->GetEwar(true)->Apply(m_shipRef->GetPilot()->GetShipSE()->GetID(), kind, cycleTime + 1000, v1, v2,
-            InventoryItemRef(nullptr), itemID());
+            InventoryItemRef(nullptr), itemID(), v3);
     return cycleTime;
 }
 
