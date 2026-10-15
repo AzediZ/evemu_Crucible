@@ -334,6 +334,9 @@ public:
         uint16 StaticTimer;
         uint16 RespawnTimer;        // s.  a killed belt rat respawns this long (+ RespawnJitter) after it died
         uint32 RatFaction;
+        float OfficerChance;        // chance a null-sec belt spawn is an officer and its escort (not rogue drones)
+        float CommanderChance;      // chance a low or null-sec belt spawn is led by a faction commander
+        float HaulerChance;         // chance a belt spawn is a hauler group (not rogue drones)
         float ThreatRadius;         // deprecated (npc ai phase 3) and ignored:  level-one npcs consider everything within R_acq
         float WarpFollowChance;
         float TargetPodSec;

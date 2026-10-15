@@ -290,6 +290,9 @@ EVEServerConfig::EVEServerConfig()
     npc.StaticTimer = 600 /*s*/;
     npc.RespawnTimer = 1200 /*s*/;  // Crucible belt rats "reliably reappear in 20 to 25 minutes" (with RespawnJitter)
     npc.RatFaction = 0;
+    npc.OfficerChance = 0.01;      // of a null-sec belt spawn
+    npc.CommanderChance = 0.05;    // of a low or null-sec belt spawn
+    npc.HaulerChance = 0.08;       // of any belt spawn
     npc.TargetPodSec = 0;
     npc.TargetPod = false;
     npc.UseDamageMultiplier = true;
@@ -1213,6 +1216,9 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "StaticTimer",              npc.StaticTimer );
     AddValueParser( "RespawnTimer",             npc.RespawnTimer );
     AddValueParser( "RatFaction",               npc.RatFaction );
+    AddValueParser( "OfficerChance",            npc.OfficerChance );
+    AddValueParser( "CommanderChance",          npc.CommanderChance );
+    AddValueParser( "HaulerChance",             npc.HaulerChance );
     AddValueParser( "TargetPod",                npc.TargetPod );
     AddValueParser( "TargetPodSec",             npc.TargetPodSec );
     AddValueParser( "UseDamageMultiplier",      npc.UseDamageMultiplier );
@@ -1293,6 +1299,9 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "StaticTimer" );
     RemoveParser( "RespawnTimer" );
     RemoveParser( "RatFaction" );
+    RemoveParser( "OfficerChance" );
+    RemoveParser( "CommanderChance" );
+    RemoveParser( "HaulerChance" );
     RemoveParser( "TargetPod" );
     RemoveParser( "TargetPodSec" );
     RemoveParser( "UseDamageMultiplier" );

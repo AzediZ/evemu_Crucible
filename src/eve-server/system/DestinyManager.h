@@ -144,6 +144,8 @@ public:
     // the warp back to the logoff point at login (EVE_Logoff.h):  the ship is already aligned at full speed, so it enters warp at once.
     //  call it before the pilot's SetState goes out (Client::StartLoginWarp()), so the client gets the warp in its first state
     void LoginWarpTo(const GPoint& where);
+    // warp that starts on the next tick:  the ball goes to full speed pointed at the destination first (LoginWarpTo, belt rats warping in)
+    void AlignedWarpTo(const GPoint& where, int32 distance = 0);
 
     /* Ship State Query functions */
     bool IsMoving()                                     { return ((m_ballMode != Destiny::Ball::Mode::STOP) or (m_velocity.lengthSquared() > 1.0)); }

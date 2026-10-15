@@ -1295,6 +1295,14 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
  *  ball (the login cloak comes off first)
  */
 void DestinyManager::LoginWarpTo(const GPoint& where) {
+    AlignedWarpTo(where);
+}
+
+/* a warp that starts on the next tick:  the ball is put at full speed, pointed at the destination, first.  for the login
+ *  warp above, and for belt rats coming in from off grid:  no one sees them align there, a battleship took 15-20s to get
+ *  going, and with npc.SleepEmptyBubbles off the npc ai's first idle think stopped the align (there is nothing to wander
+ *  around off grid), so the rat never arrived (upstream PR #327 found this) */
+void DestinyManager::AlignedWarpTo(const GPoint& where, int32 distance/*0*/) {
     Logoff::Vec vel(Logoff::LoginVelocity(Logoff::Vec{m_position.x, m_position.y, m_position.z},
             Logoff::Vec{where.x, where.y, where.z}, static_cast<double>(m_maxShipSpeed)));
     GVector dir(vel.x, vel.y, vel.z);
@@ -1310,7 +1318,7 @@ void DestinyManager::LoginWarpTo(const GPoint& where) {
         PyTuple* up = bv.Encode();
         SendSingleDestinyUpdate(&up);   // consumed
     }
-    WarpTo(where, 0, false, nullptr, 0, false, true);
+    WarpTo(where, distance, false, nullptr, 0, false, true);
 }
 
 void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {

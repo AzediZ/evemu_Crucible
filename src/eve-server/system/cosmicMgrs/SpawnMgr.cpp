@@ -17,6 +17,7 @@
 #include "system/DestinyManager.h"
 #include "system/SystemManager.h"
 #include "system/SystemBubble.h"
+#include "system/CrimeWatch.h"
 #include "system/TargetManager.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
@@ -475,7 +476,7 @@ NPC* SpawnMgr::SpawnDungeonNPC(SystemBubble* pBubble, uint16 typeID, uint32 fact
     if (warpIn) {
         // its home is where it is going
         pNPC->GetAIMgr()->SetHome(pos);
-        pNPC->DestinyMgr()->WarpTo(pos, 0);
+        pNPC->DestinyMgr()->AlignedWarpTo(pos);
     }
 
     return pNPC;
@@ -624,7 +625,11 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
 {
     if (pBubble == nullptr)
         return false;
-    float secRating = m_system->GetSecValue();
+    /* true security, -1.0 to 1.0.  this used GetSecValue() (1.1 - true security, 0.1 to 2.0) against the numbers below,
+     *  so high-sec belts got the hardest spawns and null-sec the easiest, and the officer, commander and hauler roll
+     *  needed a system above 0.9, where belts don't spawn */
+    float secRating = m_system->GetSystemSecurityRating();
+    uint8 secClass = CrimeWatch::SecurityClass(secRating);
     bool anomaly = false;
     // get faction for this region
     uint32 factionID = factionRogueDrones;  // default to rogue drones.  this is my internal rogue drone factionID.
@@ -640,20 +645,15 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
 
     // if rat, get possible spawn groups for this secRating.
     if (sClass == Spawn::Class::None) {
-        if ((secRating < 0.2) and pBubble->IsBelt()) {   // check for hauler, commander, officer spawn, but ONLY in a belt
-            //NOTE  random checks here are for TESTING only....all rates are high.  make config option later?
-            double rand = MakeRandomFloat();
-            if (rand < 0.1) { // officer spawn
-                if (factionID != factionRogueDrones) {  //but not for drones.  they dont have officers..make this the rare drone hauler spawn (which isnt written yet)
-                    sClass = Spawn::Class::Officer;
-                } else {
-                    sClass = Spawn::Class::Hauler;
-                }
-            } else if (rand < 0.15) { // commander spawn
+        if (pBubble->IsBelt()) {   // hauler, commander and officer spawns are only in belts
+            // rogue drones have no officers, and no hauler ships in the data
+            bool drones(factionID == factionRogueDrones);
+            if (!drones and (secClass == Crime::SecClass::Null) and (MakeRandomFloat() < sConfig.npc.OfficerChance)) {
+                sClass = Spawn::Class::Officer;
+            } else if ((secClass != Crime::SecClass::High) and (MakeRandomFloat() < sConfig.npc.CommanderChance)) {
                 sClass = Spawn::Class::Commander;
-            } else if (rand < 0.25) { // hauler spawn
-                if (factionID != factionRogueDrones)
-                    sClass = Spawn::Class::Hauler;
+            } else if (!drones and (MakeRandomFloat() < sConfig.npc.HaulerChance)) {
+                sClass = Spawn::Class::Hauler;
             }
         }
     } else {
@@ -663,24 +663,21 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
 
     if (sClass == Spawn::Class::None) {
         if (pBubble->IsBelt()) {
-            if ((factionID != factionRogueDrones) and (MakeRandomFloat() < 0.08)) { // second chance for hauler spawn, but include ALL secRating in this one
-                sClass = Spawn::Class::Hauler;
-            } else { // gonna be a 'regular' trusec-based spawn in a belt.
-                if (secRating < -0.7) {
-                    sClass = Spawn::Class::Insane;
-                } else if (secRating < -0.4) {
-                    sClass = Spawn::Class::Crazy;
-                } else if (secRating < -0.1) {
-                    sClass = Spawn::Class::Hard;
-                } else if (secRating < 0.3) {
-                    sClass = Spawn::Class::Medium;
-                } else if (secRating < 0.6) {
-                    sClass = Spawn::Class::Average;
-                } else if (secRating < 0.85) {
-                    sClass = Spawn::Class::Fair;
-                } else {
-                    sClass = Spawn::Class::Easy;
-                }
+            // a 'regular' trusec-based spawn in a belt
+            if (secRating < -0.7) {
+                sClass = Spawn::Class::Insane;
+            } else if (secRating < -0.4) {
+                sClass = Spawn::Class::Crazy;
+            } else if (secRating < -0.1) {
+                sClass = Spawn::Class::Hard;
+            } else if (secRating < 0.3) {
+                sClass = Spawn::Class::Medium;
+            } else if (secRating < 0.6) {
+                sClass = Spawn::Class::Average;
+            } else if (secRating < 0.85) {
+                sClass = Spawn::Class::Fair;
+            } else {
+                sClass = Spawn::Class::Easy;
             }
             if ((secRating < 0) and  (sClass < Spawn::Class::Hauler))
                 if (MakeRandomFloat() < 0.1)
@@ -730,6 +727,15 @@ bool SpawnMgr::PrepSpawn(SystemBubble* pBubble, uint8 sClass/*Spawn::Class::None
         else                        { level = 1; }
     } else if (sClass <= Spawn::Class::Hell) {
         level = MakeRandomInt(0, spawnEntry.size());  // random belt/gate spawn type.
+    } else if (sClass == Spawn::Class::Commander) {
+        /* the first half of the commander groups lead frigates, destroyers, cruisers and battlecruisers;  most of the second
+         *  half bring battleships.  those are null-sec only */
+        int64 rows(spawnEntry.size());
+        if (secClass != Crime::SecClass::Null)
+            rows = std::max<int64>(rows /2, 1);
+        level = MakeRandomInt(0, rows -1);
+    } else if (sClass == Spawn::Class::Officer) {
+        level = MakeRandomInt(0, static_cast<int64>(spawnEntry.size()) -1);
     } else {
         // do we need anything else here?
     }
@@ -839,13 +845,12 @@ void SpawnMgr::MakeSpawn(SystemBubble* pBubble, uint32 factionID, uint8 sClass, 
             pNPC->GetAIMgr()->SetRole(cur.role);
 
             pNPC->DestinyMgr()->SetPosition(startPos);
-            //  begin warp.  this may have to be looked into later for timing of large spawns (>6)
-            //  actually looks kinda cool when larger ships come in later...
+            //  begin warp at once (DestinyManager::AlignedWarpTo())
             if (sClass <= Spawn::Class::Officer) {   // ratspawn will warp in, others will not.
                 // adjust warpIn point so show some variation instead of a straight line.
                 GPoint warpTo(warpToPoint);
                 warpTo.MakeRandomPointOnSphere(sClass *1000);  // random point <class (1-12)> x 1k from center
-                pNPC->DestinyMgr()->WarpTo(warpTo, (MakeRandomInt(-5, 10) *1000));
+                pNPC->DestinyMgr()->AlignedWarpTo(warpTo, (MakeRandomInt(-5, 10) *1000));
             }
 
             SpawnEntry se = SpawnEntry();
@@ -932,7 +937,7 @@ bool SpawnMgr::ReSpawn(SystemBubble* pBubble, SpawnEntry& spawnEntry)
     pNPC->GetAIMgr()->SetGroup(m_aggroGroups.Get(NpcAI::GroupKind::Belt, spawnEntry.spawnID));
     // it starts off grid and warps in, like the first spawn
     pNPC->DestinyMgr()->SetPosition(startPos);
-    pNPC->DestinyMgr()->WarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));
+    pNPC->DestinyMgr()->AlignedWarpTo(warpToPoint, (MakeRandomInt(-5, 10) *1000));
 
     // the entry follows the new npc (bug B4c:  it kept the dead one's itemID, so the new one wasn't tracked)
     spawnEntry.itemID = iRef->itemID();
