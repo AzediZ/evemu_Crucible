@@ -245,6 +245,8 @@ public:
     PyRep* GetSystems();
     // rewardMgr: the character's LP in each incursion's pool
     PyRep* GetDelayedRewards(uint32 charID, PyRep* groupIDs);
+    // rewardMgr: the payout table for one kind of site (the journal's encounter rewardIDs)
+    PyRep* GetRewardData(int32 rewardID);
 
     // GM commands.  each returns a message for the caller
     std::string Start(uint32 constellationID = 0);

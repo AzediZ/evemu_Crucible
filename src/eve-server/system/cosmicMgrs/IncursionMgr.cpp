@@ -1103,6 +1103,95 @@ PyRep* IncursionMgr::GetDelayedRewards(uint32 charID, PyRep* groupIDs)
     return dict;
 }
 
+/* rewardMgr.GetRewardData(rewardID), for the journal's encounter list (incursionSvc.GetMaxRewardValueByID) and its chart:
+ *   util.KeyVal(immediateRewards = {rewardCriteria: [table]}, delayedRewards = {rewardCriteria: [table]})
+ *   table = util.KeyVal(rewardTypeID, entries = [util.KeyVal(playerCount, quantity)])
+ *  entries go up in playerCount, and a fleet gets the last entry at or under its size.  the rewardIDs are the
+ *  client's own (journal.py): 8 scout, 1 vanguard, 2 assault, 3 headquarters, 10 mothership.  an unknown one gets
+ *  empty tables, since the client reads immediateRewards off whatever comes back and a None stops the journal opening.
+ *  the tables follow CompleteSite(): a full fleet's pay up to the site's fleet size (scaled by FleetScale), then
+ *  split between the pilots, and low/null-sec 10/7 of high-sec.  the const values aren't in any client source I
+ *  could find: rewardTypeLP is 1 (the journal asks for LP first and the client's traceback shows 1), ISK is taken
+ *  as 2 and the criteria as 1 high-sec and 2 low/null-sec
+ */
+PyRep* IncursionMgr::GetRewardData(int32 rewardID)
+{
+    static const int32 rewardTypeLP = 1, rewardTypeISK = 2;
+    static const int32 criteriaHigh = 1, criteriaLow = 2;
+
+    uint32 sceneType(0);
+    switch (rewardID) {
+        case 1:  sceneType = Incursion::scenesType::vanguard;      break;
+        case 2:  sceneType = Incursion::scenesType::assault;       break;
+        case 3:  sceneType = Incursion::scenesType::headquarters;  break;
+        case 8:  sceneType = Incursion::scenesType::staging;       break;
+        case 10: sceneType = Incursion::scenesType::boss;          break;
+    }
+
+    uint32 isk(0), lp(0), fleet(0);
+    for (auto cur : m_siteTypes) {
+        if ((sceneType == 0) or (cur.second.sceneType != sceneType))
+            continue;
+        isk = std::max(isk, cur.second.iskReward);
+        lp = std::max(lp, cur.second.lpReward);
+        fleet = std::max(fleet, (uint32)cur.second.designFleet);
+    }
+
+    PyDict* immediate = new PyDict();
+    PyDict* delayed = new PyDict();
+    if (fleet > 0) {
+        double scaled = fleet * sConfig.incursion.FleetScale / 100.0;
+        if (scaled < 0.1)
+            scaled = 0.1;
+        uint32 last = std::max(8u, (uint32)std::ceil(scaled * 2));
+        // DelayedLP puts site LP in the incursion's pool, paid when the mothership dies
+        bool pool = sConfig.incursion.DelayedLP;
+
+        auto table = [&](int32 typeID, uint32 amount, double secMod) {
+            PyList* entries = new PyList();
+            int64 prev = -1;
+            for (uint32 count = 1; count <= last; ++count) {
+                double share = std::min(1.0, scaled / count) * secMod;
+                int64 quantity = (int64)(amount * share + 0.5);
+                if ((quantity == prev) and (count < last))
+                    continue;
+                prev = quantity;
+                PyDict* entry = new PyDict();
+                    entry->SetItemString("playerCount", new PyInt(count));
+                    entry->SetItemString("quantity", new PyLong(quantity));
+                entries->AddItem(new PyObject("util.KeyVal", entry));
+            }
+            PyDict* dict = new PyDict();
+                dict->SetItemString("rewardTypeID", new PyInt(typeID));
+                dict->SetItemString("entries", entries);
+            return new PyObject("util.KeyVal", dict);
+        };
+
+        // the chart plots each criteria's first table against the largest ISK figure, so ISK goes first
+        for (int32 criteria : {criteriaHigh, criteriaLow}) {
+            double secMod = (criteria == criteriaLow ? 10.0 / 7.0 : 1.0);
+            PyList* now = new PyList();
+                now->AddItem(table(rewardTypeISK, isk, secMod));
+            if (lp > 0) {
+                if (pool) {
+                    PyList* later = new PyList();
+                        later->AddItem(table(rewardTypeLP, lp, secMod));
+                    delayed->SetItem(new PyInt(criteria), later);
+                } else {
+                    now->AddItem(table(rewardTypeLP, lp, secMod));
+                }
+            }
+            immediate->SetItem(new PyInt(criteria), now);
+        }
+    }
+
+    PyDict* reward = new PyDict();
+        reward->SetItemString("rewardID", new PyInt(rewardID));
+        reward->SetItemString("immediateRewards", immediate);
+        reward->SetItemString("delayedRewards", delayed);
+    return new PyObject("util.KeyVal", reward);
+}
+
 void IncursionMgr::Broadcast(const std::string& msg)
 {
     std::vector<Client*> list;

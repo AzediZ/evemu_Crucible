@@ -1,6 +1,6 @@
  /**
   * @name RewardMgrService.cpp
-  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies)
+  *     rewardMgr: delayed rewards (the LP an incursion pays when its mothership dies) and the site payout tables
   *
   * @date:          12 October 2026
   *
@@ -19,9 +19,15 @@ RewardMgrService::RewardMgrService() :
     Service("rewardMgr", eAccessLevel_Character)
 {
     this->Add("GetDelayedRewardsByGroupIDs", &RewardMgrService::GetDelayedRewardsByGroupIDs);
+    this->Add("GetRewardData", &RewardMgrService::GetRewardData);
 }
 
 PyResult RewardMgrService::GetDelayedRewardsByGroupIDs(PyCallArgs& call, PyRep* groupIDs)
 {
     return sIncursionMgr.GetDelayedRewards(call.client->GetCharacterID(), groupIDs);
+}
+
+PyResult RewardMgrService::GetRewardData(PyCallArgs& call, PyInt* rewardID)
+{
+    return sIncursionMgr.GetRewardData(rewardID->value());
 }
