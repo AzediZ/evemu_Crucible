@@ -208,6 +208,83 @@ void ServiceDB::SaveHeartbeat() {
         codelog(DATABASE__ERROR, "Error in query: %s", err.c_str());
 }
 
+void ServiceDB::FreezeForDowntime(int64 off)
+{
+    /* filetime columns move by 'off', the market sim's and incursions' unix second columns by 'sec'.  timers that only
+     *  matter while they're still running (an expiry, a deadline) move when they're past the last heartbeat or still open;
+     *  progress anchors (a last cycle, a start time) move on every live row */
+    int64 last((int64)GetFileTimeNow() - off);
+    int64 sec(off / EvE::Time::Second);
+    const char* queries[] = {
+        // industry jobs that aren't delivered, research agents, boosters, clone jump and respec timers
+        "UPDATE ramJobs SET installTime = installTime + {off}, beginProductionTime = beginProductionTime + {off},"
+            " endProductionTime = endProductionTime + {off},"
+            " pauseProductionTime = IF(pauseProductionTime IS NULL OR pauseProductionTime = 0, pauseProductionTime, pauseProductionTime + {off})"
+            " WHERE completedStatusID = 0",
+        "UPDATE chrAgentResearch SET lastUpdate = lastUpdate + {off} WHERE lastUpdate > 0",
+        "UPDATE chrBoosters SET expiryTime = expiryTime + {off} WHERE expiryTime > 0",
+        "UPDATE chrCharacters SET lastCloneJumpTime = lastCloneJumpTime + {off} WHERE lastCloneJumpTime > 0",
+        "UPDATE chrCharacters SET nextRespecDateTime = nextRespecDateTime + {off} WHERE nextRespecDateTime > {last}",
+        // kill rights, escalations, saved dungeons, mission offers and missions in progress
+        "UPDATE crimeKillRights SET expiresAt = expiresAt + {off} WHERE expiresAt > {last}",
+        "UPDATE chrEscalations SET expiryTime = expiryTime + {off} WHERE expiryTime > 0",
+        "UPDATE dunActive SET dunExpiryTime = dunExpiryTime + {off} WHERE dunExpiryTime > 0",
+        "UPDATE agtOffers SET expiryTime = IF(expiryTime > 0, expiryTime + {off}, 0), dateIssued = IF(dateIssued > 0, dateIssued + {off}, 0),"
+            " dateAccepted = IF(dateAccepted > 0, dateAccepted + {off}, 0) WHERE dateCompleted = 0",
+        // contracts (outstanding, in progress) and market orders
+        "UPDATE ctrContracts SET dateExpired = dateExpired + {off} WHERE status IN (0, 1) AND dateExpired > 0",
+        "UPDATE ctrContracts SET dateAccepted = dateAccepted + {off} WHERE status = 1 AND dateAccepted > 0",
+        "UPDATE mktOrders SET issued = issued + {off}",
+        // towers, structures (sov, outposts) and customs offices
+        "UPDATE posTowerData SET lastCycle = IF(lastCycle > 0, lastCycle + {off}, 0), reinforceUntil = IF(reinforceUntil > 0, reinforceUntil + {off}, 0),"
+            " fuelExpiry = IF(fuelExpiry > 0, fuelExpiry + {off}, 0)",
+        "UPDATE posStructureData SET timestamp = timestamp + {off} WHERE timestamp > 0",
+        "UPDATE posCustomsOfficeData SET timestamp = timestamp + {off} WHERE timestamp > 0",
+        // planets
+        "UPDATE piPins SET lastRunTime = IF(lastRunTime > 0, lastRunTime + {off}, 0), expiryTime = IF(expiryTime > 0, expiryTime + {off}, 0),"
+            " installTime = IF(installTime > 0, installTime + {off}, 0), launchTime = IF(launchTime > 0, launchTime + {off}, 0)",
+        "UPDATE piCCPin SET lastSimTime = lastSimTime + {off} WHERE lastSimTime > 0",
+        "UPDATE piLaunches SET launchTime = launchTime + {off} WHERE launchTime > 0",
+        "UPDATE piResourceDepletion SET startTime = startTime + {off} WHERE startTime > 0",
+        // wormholes, sov indices, wars, votes, recruitment ads, insurance
+        "UPDATE sysWormholes SET expiryTime = expiryTime + {off}, createTime = createTime + {off}",
+        "UPDATE sovDevIndices SET lastDecayTime = lastDecayTime + {off} WHERE lastDecayTime > 0",
+        "UPDATE crpWars SET timeDeclared = timeDeclared + {off} WHERE timeFinished IS NULL OR timeFinished > {last}",
+        "UPDATE crpWars SET timeFinished = timeFinished + {off} WHERE timeFinished > {last}",
+        "UPDATE crpVoteItems SET endDateTime = endDateTime + {off}, expires = expires + {off} WHERE endDateTime > {last}",
+        "UPDATE crpAdRegistry SET expiryDateTime = expiryDateTime + {off} WHERE expiryDateTime > {last}",
+        "UPDATE shipInsurance SET endDate = endDate + {off} WHERE endDate > {last}",
+        // the market sim and incursions keep unix seconds
+        "UPDATE mktSimCell SET lastTime = IF(lastTime > 0, lastTime + {sec}, 0), nextDue = IF(nextDue > 0, nextDue + {sec}, 0)",
+        "UPDATE mktSimJob SET startTime = startTime + {sec}, endTime = endTime + {sec}",
+        "UPDATE mktSimShipment SET depart = depart + {sec}, arrive = arrive + {sec}",
+        "UPDATE mktSimState SET value = CAST(CAST(value AS SIGNED) + {sec} AS CHAR) WHERE name = 'lastIncome' AND CAST(value AS SIGNED) > 0",
+        "UPDATE incIncursions SET startTime = startTime + {sec}, stateTime = stateTime + {sec}, lastProgress = lastProgress + {sec}",
+    };
+    auto fill = [&](std::string q) {
+        const std::pair<const char*, int64> values[] = { {"{off}", off}, {"{last}", last}, {"{sec}", sec} };
+        for (auto& v : values)
+            boost::replace_all(q, v.first, std::to_string(v.second));
+        return q;
+    };
+    DBerror err;
+    uint8 failed(0);
+    for (auto q : queries)
+        if (!sDatabase.RunQuery(err, "%s", fill(q).c_str())) {
+            ++failed;
+            codelog(DATABASE__ERROR, "FreezeForDowntime: %s", err.c_str());
+        }
+    if (sConfig.world.FreezeSkillTraining) {
+        if (!sDatabase.RunQuery(err, "UPDATE chrSkillQueue SET startTime = startTime + %lli, endTime = endTime + %lli WHERE endTime > 0", off, off))
+            ++failed;
+        if (!sDatabase.RunQuery(err, "UPDATE chrCharacters SET skillQueueEndTime = skillQueueEndTime + %lli WHERE skillQueueEndTime > 0", off))
+            ++failed;
+    }
+    sLog.Blue("     ServerFreeze", "The server was off for %.1f hours:  game timers moved on by that much (skill training %s).%s",
+              (double)off / EvE::Time::Hour, (sConfig.world.FreezeSkillTraining ? "too" : "kept running"),
+              (failed > 0 ? "  Some updates failed, see the log." : ""));
+}
+
 int64 ServiceDB::GetLastHeartbeat() {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res, "SELECT lastHeartbeat FROM srvStatus WHERE AI = 1")) {

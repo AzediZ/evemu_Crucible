@@ -57,6 +57,9 @@ public:
     // the last time the server was running (FILETIME), saved every minute and at shutdown.  0 = never saved
     static void SaveHeartbeat();
     static int64 GetLastHeartbeat();
+    /* world FreezeWhileOff:  every game timer moves on by 'off' (filetime) so the time the server was off never happened.
+     *  skill training too, unless FreezeSkillTraining is off.  bills are moved by BillingMgr */
+    static void FreezeForDowntime(int64 off);
     static void SetAccountOnlineStatus(uint32 accountID, bool online=false);
     static void SetAccountBanStatus(uint32 accountID, bool banned=false);
     static void SaveServerStats(double threads, float rss, float vm, float user, float kernel, uint32 items, uint32 bubbles);

@@ -133,11 +133,16 @@ void BillingMgr::PauseForDowntime()
     int64 now = GetFileTimeNow();
     int64 last = ServiceDB::GetLastHeartbeat();
     ServiceDB::SaveHeartbeat();
-    if (!sConfig.corp.PauseBillsWhileOff or (last <= 0) or (last >= now))
+    if ((last <= 0) or (last >= now))
         return;
     int64 off = now - last;
     // a quick restart isn't worth it (the heartbeat is saved once a minute)
     if (off < 5 * EvE::Time::Minute)
+        return;
+    // world FreezeWhileOff:  everything else stands still too (bills always do then)
+    if (sConfig.world.FreezeWhileOff)
+        ServiceDB::FreezeForDowntime(off);
+    else if (!sConfig.corp.PauseBillsWhileOff)
         return;
 
     DBerror err;

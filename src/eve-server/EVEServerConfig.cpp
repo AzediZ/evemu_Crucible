@@ -72,6 +72,8 @@ EVEServerConfig::EVEServerConfig()
     world.globalChat = true;    // one server-wide "Global" channel every character joins at login
     world.gridUnload = true;
     world.gridUnloadTime = 300 /*s*/; // 5 mins
+    world.FreezeWhileOff = false;
+    world.FreezeSkillTraining = true;
     world.loginInfo = true;     // after the login MOTD, send GMs the server version/uptime/population
     world.loginMsg = true;      // show account.loginMessage after authentication
     world.saveOnMove = false;
@@ -826,12 +828,16 @@ bool EVEServerConfig::ProcessWorld( const TiXmlElement* ele )
     AddValueParser( "StoreShipWithCargo", world.StoreShipWithCargo );
     AddValueParser( "TrashRetentionDays", world.TrashRetentionDays );
     AddValueParser( "SecureContainerOwnerBypass", world.SecureContainerOwnerBypass );
+    AddValueParser( "FreezeWhileOff",    world.FreezeWhileOff );
+    AddValueParser( "FreezeSkillTraining", world.FreezeSkillTraining );
 
     const bool result = ParseElementChildren( ele );
 
     RemoveParser( "chatLogs" );
     RemoveParser( "globalChat" );
     RemoveParser( "gridUnload" );
+    RemoveParser( "FreezeWhileOff" );
+    RemoveParser( "FreezeSkillTraining" );
     RemoveParser( "gridUnloadTime" );
     RemoveParser( "loginInfo" );
     RemoveParser( "loginMsg" );

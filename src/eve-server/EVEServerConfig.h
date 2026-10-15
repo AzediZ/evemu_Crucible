@@ -97,6 +97,8 @@ public:
         uint16 apWarptoDistance;
         uint16 fleetInviteTimeout;      // s an unanswered fleet invite (and the position it holds) lasts.  0 = never times out
         uint16 TrashRetentionDays;      // days a trashed item is kept for GM restore before it's purged at startup.  0 = deleted at once  (F20)
+        bool FreezeWhileOff;            // at startup, game timers move on by the time the server was off (ServiceDB::FreezeForDowntime)
+        bool FreezeSkillTraining;       // with FreezeWhileOff:  skill training stands still too
     } world;
 
     // From <rates>

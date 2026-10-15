@@ -84,6 +84,12 @@ boolean can use either 0/1 OR true/false.
         <!-- no longer used -->
         <gridUnload>true</gridUnload><!-- bool -->
         <gridUnloadTime>300</gridUnloadTime><!-- in seconds (5 min default)-->
+        <FreezeWhileOff>false</FreezeWhileOff><!-- bool  -at startup, move every game timer on by the time the server was off, so nothing
+                                                       happens while it's off:  industry jobs, research agents, boosters, kill rights,
+                                                       escalations, mission offers and deadlines, contracts, market orders and the market
+                                                       sim, tower fuel and reinforcement, structures, planets, wormholes, incursions, sov
+                                                       indices, wars, votes, insurance and bills.  quick restarts (under 5 min) are ignored -->
+        <FreezeSkillTraining>true</FreezeSkillTraining><!-- bool  -with FreezeWhileOff, skill training stands still too.  false keeps it running -->
         <chatLogs>false</chatLogs><!-- bool  -append every chat channel message to <logDir>/chat_YYYY-MM-DD.log -->
         <!-- the login message of the day is etc/motd.txt next to this file (format described in it).  empty or missing = none.
              it goes into Global when globalChat is on, else into Local, once per login.  /motd shows it, /motd reload rereads it. -->
