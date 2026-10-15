@@ -2038,7 +2038,7 @@ PyRep* CharacterDB::GetKillOrLoss(uint32 charID) {
         "  victimAllianceID,"
         "  victimFactionID,"
         "  victimShipTypeID,"
-        "  finalCharacterID,"
+        "  NULLIF(finalCharacterID, 0) AS finalCharacterID,"   // npcs and structures have no character:  None, not 0
         "  finalCorporationID,"
         "  finalAllianceID,"
         "  finalFactionID,"

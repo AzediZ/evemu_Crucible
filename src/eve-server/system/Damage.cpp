@@ -163,6 +163,144 @@ void SystemEntity::Destroy(Damage &d)
     SystemEntity::Killed(d);    // this removes dead SE from system then deletes itemRef and all its contents
 }
 
+/* killmails (Crucible):  everyone who damaged the victim in the 15 minutes before it died is an involved party, with their
+ *  security status, ship, the weapon they did most damage with and their total damage.  drones count for their pilot, with
+ *  the drone as the weapon.  'damage taken' is the sum of it all */
+static const int64 KillAttackerWindow(15 * EvE::Time::Minute);
+
+// the pilot behind an attack:  a ship's pilot, or a drone's controller (or owner).  nullptr for npcs, sentries and structures
+static Client* AttackerPilot(SystemEntity* pSE)
+{
+    if (pSE == nullptr)
+        return nullptr;
+    if (pSE->HasPilot())
+        return pSE->GetPilot();
+    if (pSE->IsDroneSE()) {
+        Client* pClient(pSE->GetDroneSE()->GetControllerClient());
+        return ((pClient != nullptr) ? pClient : pSE->GetDroneSE()->GetOwnerClient());
+    }
+    return nullptr;
+}
+
+// what a killmail names as the weapon:  the drone, the missile, or the module (an npc is its own weapon)
+static uint16 AttackWeapon(Damage& d)
+{
+    if ((d.srcSE != nullptr) and d.srcSE->IsDroneSE())
+        return d.srcSE->GetTypeID();
+    if (d.chargeRef.get() != nullptr)
+        return d.chargeRef->typeID();
+    if (d.weaponRef.get() != nullptr)
+        return d.weaponRef->typeID();
+    return ((d.srcSE != nullptr) ? d.srcSE->GetTypeID() : 0);
+}
+
+/* one involved party in the kill blob:  <attackers><a .../>...</attackers> before <items> (eveCommonUtils.py
+ *  GetAttackersAndItemsFromKillMail).  the client quotes bare numbers and reads it with expat, so the security text, which
+ *  can be negative, goes in quoted.  an attribute left out is None:  no c makes the line an npc's ("{type} / {owner}"), and
+ *  no a or f shows no alliance or faction.  the final blow comes from the final* columns and isn't listed here */
+static std::string KillAttackerTag(uint32 charID, uint32 corpID, uint32 allyID, uint32 factionID, uint16 shipTypeID,
+                                   uint16 weaponTypeID, float damage, double security)
+{
+    std::stringstream tag;
+    tag << "<a";
+    if (charID != 0)
+        tag << " c=" << charID;
+    tag << " r=" << corpID;
+    // an npc's line shows only its type, owner and damage
+    if ((charID != 0) and (allyID != 0))
+        tag << " a=" << allyID;
+    if ((charID != 0) and (factionID != 0))
+        tag << " f=" << factionID;
+    tag << " s=" << shipTypeID << " w=" << weaponTypeID << " d=" << (uint32)damage;
+    if (charID != 0) {
+        char sec[16];
+        snprintf(sec, sizeof(sec), "%.1f", security);
+        tag << " t=\"" << sec << "\"";
+    }
+    tag << "/>";
+    return tag.str();
+}
+
+void SystemEntity::RecordAttacker(Damage& d, float amount)
+{
+    if ((d.srcSE == nullptr) or (d.srcSE == this) or (amount <= 0.0f))
+        return;
+    Client* pClient(AttackerPilot(d.srcSE));
+    KillAttacker& a = m_attackers[(pClient != nullptr) ? pClient->GetCharacterID() : d.srcSE->GetID()];
+    // who they are as of their latest hit
+    if (pClient != nullptr) {
+        a.charID = pClient->GetCharacterID();
+        a.corpID = pClient->GetCorporationID();
+        a.allyID = pClient->GetAllianceID();
+        a.factionID = pClient->GetWarFactionID();
+        a.security = pClient->GetSecurityRating();
+        a.shipTypeID = ((pClient->GetShipSE() != nullptr) ? pClient->GetShipSE()->GetTypeID() : d.srcSE->GetTypeID());
+    } else {
+        a.charID = 0;
+        a.corpID = d.srcSE->GetCorporationID();
+        a.allyID = d.srcSE->GetAllianceID();
+        a.factionID = d.srcSE->GetWarFactionID();
+        a.security = 0.0;
+        a.shipTypeID = d.srcSE->GetTypeID();
+    }
+    a.weapons[AttackWeapon(d)] += amount;
+    a.damage += amount;
+    a.lastHit = Win32TimeNow();
+}
+
+std::string SystemEntity::FillKillAttackers(KillData& data, Damage& fatal_blow)
+{
+    Client* pKiller(AttackerPilot(fatal_blow.srcSE));
+    uint32 finalKey(0);
+    if (pKiller != nullptr) {
+        finalKey = pKiller->GetCharacterID();
+        data.finalCharacterID = finalKey;
+        data.finalCorporationID = pKiller->GetCorporationID();
+        data.finalAllianceID = pKiller->GetAllianceID();
+        data.finalFactionID = pKiller->GetWarFactionID();
+        data.finalSecurityStatus = pKiller->GetSecurityRating();
+        if (pKiller->GetShipSE() != nullptr)
+            data.finalShipTypeID = pKiller->GetShipSE()->GetTypeID();
+    } else {
+        /* no character:  the killmail names npcs, sentries and structures by their type and owner.  0 is stored, and the
+         *  kill lists send it as None (CharacterDB::GetKillOrLoss), which is what the client tests for */
+        finalKey = ((fatal_blow.srcSE != nullptr) ? fatal_blow.srcSE->GetID() : 0);
+        data.finalCharacterID = 0;
+        data.finalSecurityStatus = 0.0;
+    }
+    if (fatal_blow.srcSE != nullptr)
+        data.finalWeaponTypeID = AttackWeapon(fatal_blow);
+
+    int64 now(Win32TimeNow());
+    double taken(0.0);
+    std::stringstream blob;
+    for (auto& cur : m_attackers) {
+        const KillAttacker& a = cur.second;
+        if ((now - a.lastHit) > KillAttackerWindow)
+            continue;
+        taken += a.damage;
+        if (cur.first == finalKey) {
+            data.finalDamageDone = (uint32)a.damage;
+            continue;
+        }
+        uint16 weaponTypeID(0);
+        float most(-1.0f);
+        for (auto& w : a.weapons)
+            if (w.second > most) {
+                most = w.second;
+                weaponTypeID = w.first;
+            }
+        blob << KillAttackerTag(a.charID, a.corpID, a.allyID, a.factionID, a.shipTypeID, weaponTypeID, a.damage, a.security);
+    }
+    // a kill with no recorded damage (gm, self-destruct) keeps the caller's figures
+    if (taken > 0.0)
+        data.victimDamageTaken = (uint32)taken;
+    std::string attackers(blob.str());
+    if (attackers.empty())
+        return attackers;
+    return "<attackers>" + attackers + "</attackers>";
+}
+
 bool SystemEntity::ApplyDamage(Damage &d) {
     double profileStartTime(GetTimeUSeconds());
 
@@ -386,6 +524,10 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             GetShipSE()->DamageRandModule(sConfig.server.ModuleDamageChance);    // config option for random module damage chance
     }
 
+    // killmails:  everyone who hurt us
+    if ((total_damage > 0.0f) and (IsShipSE() or IsPOSSE() or IsCOSE()))
+        RecordAttacker(d, total_damage);
+
     if (killed) {
         if (m_killed)
             return true;
@@ -606,16 +748,19 @@ void ShipSE::Killed(Damage &fatal_blow) {
         data.finalAllianceID = killer->GetAllianceID();
         data.finalFactionID = (killer->GetWarFactionID() > 500021 ? 500021 : killer->GetWarFactionID());
         data.finalShipTypeID = killer->GetTypeID();
-        data.finalWeaponTypeID = fatal_blow.weaponRef->typeID();
-        data.finalSecurityStatus = 0;   /* fix this */
+        data.finalWeaponTypeID = ((fatal_blow.weaponRef.get() != nullptr) ? fatal_blow.weaponRef->typeID() : killer->GetTypeID());
+        data.finalSecurityStatus = 0;
         data.finalDamageDone = fatal_blow.GetTotal();
 
         uint32 totalHP = m_self->GetAttribute(AttrHP).get_int();
             totalHP += m_self->GetAttribute(AttrArmorHP).get_int();
             totalHP += m_self->GetAttribute(AttrShieldCapacity).get_int();
         data.victimDamageTaken = totalHP;
+    // the final blow's pilot, security and damage, the damage taken, and everyone else involved
+    std::string attackers(FillKillAttackers(data, fatal_blow));
 
     std::stringstream blob;
+    blob << attackers;
     std::vector<InventoryItemRef> survivedItems;
     if (pPilot->InPod()) {
         // the capsule and the implants lost with it  (F15)
@@ -849,8 +994,9 @@ void ShipSE::KilledLoggedOff(Damage& fatal_blow, SystemEntity* killer, uint32 ki
         data.finalDamageDone = fatal_blow.GetTotal();
         data.victimDamageTaken = m_self->GetAttribute(AttrHP).get_int() + m_self->GetAttribute(AttrArmorHP).get_int()
                                + m_self->GetAttribute(AttrShieldCapacity).get_int();
+    std::string attackers(FillKillAttackers(data, fatal_blow));
     std::stringstream blob;
-    blob << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/>";
+    blob << attackers << "<items><i t=" << data.victimShipTypeID << " f=0 s=1 d=0 x=1/>";
     // a pod loses its implants  (F15)
     if (pod and (cRef.get() != nullptr)) {
         std::vector<InventoryItemRef> implants;

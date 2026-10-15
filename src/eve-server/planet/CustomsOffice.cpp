@@ -861,15 +861,17 @@ void CustomsSE::Killed(Damage &damage) {
         data.finalFactionID = killer->GetWarFactionID();
         data.finalShipTypeID = killer->GetTypeID();
         data.finalWeaponTypeID = damage.weaponRef->typeID();
-        data.finalSecurityStatus = 0;  /* fix this */
+        data.finalSecurityStatus = 0;
         data.finalDamageDone = damage.GetTotal();
 
         uint32 totalHP = m_self->GetAttribute(AttrHP).get_int();
             totalHP += m_self->GetAttribute(AttrArmorHP).get_int();
             totalHP += m_self->GetAttribute(AttrShieldCapacity).get_int();
         data.victimDamageTaken = totalHP;
+    // the final blow's pilot, security and damage, the damage taken, and everyone else involved
+    std::string attackers(FillKillAttackers(data, damage));
 
-        data.killBlob = blob.str().c_str();
+        data.killBlob = attackers + blob.str();
         data.killTime = GetFileTimeNow();
         data.moonID = m_oData.planetID;    /* denotes moonID for POS/Structure kills */
 

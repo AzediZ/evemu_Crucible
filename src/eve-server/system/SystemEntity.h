@@ -40,6 +40,7 @@ class Client;
 class Concord;
 class ContainerSE;
 class Damage;
+struct KillData;
 class DroneSE;
 class NPC;
 class Sentry;
@@ -87,6 +88,7 @@ class DungeonEditSE;
  * complete rewrite of entity class system  - allan  9 January 2016
  * finally added rule of 5.  -allan 4Nov21
  */
+#include <map>
 #include <set>
 
 /* passive shield and capacitor recharge rate (units per second) at 'current' of 'capacity' with the given recharge time
@@ -280,6 +282,10 @@ public:
     bool                        ApplyDamage(Damage &d); /* This method is defined in Damage.cpp */
     /* blows this entity up the same way combat does (explosion, wreck/pod/killmail, removal).  defined in Damage.cpp */
     void                        Destroy(Damage &d);
+    /* killmails:  records who damaged us (ApplyDamage), then fills a killmail's final blow, damage totals and the other
+     *  involved parties from it (returns the blob's <attackers> part).  data's final* fields must be set first.  defined in Damage.cpp */
+    void                        RecordAttacker(Damage& d, float amount);
+    std::string                 FillKillAttackers(KillData& data, Damage& fatal_blow);
     /* GM: unkillable entities never drop below 1 structure hp.  kept by itemID, so it survives leaving and re-entering space */
     static void                 SetUnkillable(uint32 itemID, bool set);
     static bool                 IsUnkillable(uint32 itemID);
@@ -330,6 +336,20 @@ protected:
     InventoryItemRef            m_self;
 
     bool                        m_killed;
+
+    /* who damaged us in the last 15 minutes, for killmails:  by character (drones count for their pilot) or npc itemID */
+    struct KillAttacker {
+        uint32 charID;                      // 0 for npcs, sentries and structures
+        uint32 corpID;
+        uint32 allyID;
+        uint32 factionID;
+        uint16 shipTypeID;
+        double security;
+        float damage;
+        int64 lastHit;
+        std::map<uint16, float> weapons;    // damage by weapon type (the charge for missiles, the drone for drones)
+    };
+    std::map<uint32, KillAttacker> m_attackers;
 
     static std::set<uint32>     s_unkillable;
 

@@ -2122,8 +2122,10 @@ void StructureSE::Killed(Damage &damage)
     totalHP += m_self->GetAttribute(AttrArmorHP).get_uint32();
     totalHP += m_self->GetAttribute(AttrShieldCapacity).get_uint32();
     data.victimDamageTaken = totalHP;
+    // the final blow's pilot, security and damage, the damage taken, and everyone else involved
+    std::string attackers(FillKillAttackers(data, damage));
 
-    data.killBlob = blob.str().c_str();
+    data.killBlob = attackers + blob.str();
     data.killTime = GetFileTimeNow();
     data.moonID = (m_moonSE == nullptr ? 0 : m_moonSE->GetID()); /* denotes moonID for POS/Structure kills */
 

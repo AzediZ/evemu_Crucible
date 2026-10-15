@@ -2699,7 +2699,7 @@ PyRep* CorporationDB::GetKillsAndLosses(uint32 corpID, uint32 number, uint32 off
         "  victimAllianceID,"
         "  victimFactionID,"
         "  victimShipTypeID,"
-        "  finalCharacterID,"
+        "  NULLIF(finalCharacterID, 0) AS finalCharacterID,"   // npcs and structures have no character:  None, not 0
         "  finalCorporationID,"
         "  finalAllianceID,"
         "  finalFactionID,"
