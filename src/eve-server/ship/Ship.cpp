@@ -2233,6 +2233,8 @@ void ShipItem::ProcessEffects(bool add/*false*/, bool update/*false*/)
         // the charges' effects on their modules went with the reset, and so did the modules' docked effects
         m_ModuleManager->ChargeFxReset();
         m_ModuleManager->DockedFxReset();
+        // the system effects went with the reset too
+        m_systemFx = InventoryItemRef(nullptr);
 
         // do we remove fx here?  nah, we've reset everything at this point.
     }
@@ -2250,6 +2252,17 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
         sFxProc.ParseExpression(this, sFxDataMgr.GetExpression(it.second.preExpression), data);
     }
 
+    /* the system's effects (w-space phenomena), with the hull's so they are worked out in the same order.  in space only:
+     *  an undocking ship is still in the station here, and gets them from UpdateSystemEffects() once it is out */
+    m_systemFx = InventoryItemRef(nullptr);
+    if ((m_pilot != nullptr) and (m_pilot->SystemMgr() != nullptr) and (m_pilot->SystemMgr()->GetID() == locationID())) {
+        InventoryItemRef beacon(m_pilot->SystemMgr()->GetEffectBeacon());
+        if (beacon.get() != nullptr) {
+            ParseSystemEffects(beacon, this, true);
+            m_systemFx = beacon;
+        }
+    }
+
     if (m_isUndocking) {
         // online modules sent from client (these are onlined in fit window while docked)
         m_ModuleManager->UpdateModules(m_onlineModuleVec);
@@ -2263,6 +2276,52 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
     // apply processed effects
     sFxProc.ApplyEffects(this, m_pilot->GetChar().get(), this, update);
     //ClearModifiers();
+}
+
+void ShipItem::ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pContainer, bool add)
+{
+    // the beacon's system effects (category 7):  added with their pre-expressions, taken off with their post-expressions
+    std::map<uint16, Effect> effectMap;
+    beacon->type().GetEffectMap(FX::State::System, effectMap);
+    for (auto& cur : effectMap) {
+        fxData data = fxData();
+        data.action = FX::Action::Invalid;
+        data.srcRef = beacon;
+        sFxProc.ParseExpression(pContainer, sFxDataMgr.GetExpression(add ? cur.second.preExpression : cur.second.postExpression), data);
+    }
+}
+
+/* a ship in space that has moved to pSys (jump, undock) swaps the old system's effects for the new one's.
+ *  the change is made on the ship's current values:  the old beacon's math is undone, then the new beacon's is applied.
+ *  the beacon is its own scratch container (ApplyEffects() clears it)
+ */
+void ShipItem::UpdateSystemEffects(SystemManager* pSys, bool update/*true*/)
+{
+    if ((m_pilot == nullptr) or (pSys == nullptr) or (pSys->GetID() != locationID()))
+        return;
+    InventoryItemRef beacon(pSys->GetEffectBeacon());
+    if (beacon.get() == m_systemFx.get())
+        return;
+    Character* pChar(m_pilot->GetChar().get());
+    if (pChar == nullptr)
+        return;
+
+    if (m_systemFx.get() != nullptr) {
+        _log(EFFECTS__DEBUG, "ShipItem::UpdateSystemEffects() - %s(%u) loses the effects of %s(%u)", name(), itemID(), m_systemFx->name(), m_systemFx->itemID());
+        ParseSystemEffects(m_systemFx, m_systemFx.get(), false);
+        sFxProc.ApplyEffects(m_systemFx.get(), pChar, this, update);
+    }
+    m_systemFx = beacon;
+    if (beacon.get() != nullptr) {
+        _log(EFFECTS__DEBUG, "ShipItem::UpdateSystemEffects() - %s(%u) gets the effects of %s(%u) in %s", name(), itemID(), beacon->name(), beacon->itemID(), pSys->GetName());
+        ParseSystemEffects(beacon, beacon.get(), true);
+        sFxProc.ApplyEffects(beacon.get(), pChar, this, update);
+    }
+
+    // speed, agility and mass for the movement code
+    ShipSE* pShipSE(m_pilot->GetShipSE());
+    if ((pShipSE != nullptr) and (pShipSE->DestinyMgr() != nullptr))
+        pShipSE->DestinyMgr()->UpdateShipVariables();
 }
 
 void ShipItem::ClearModuleModifiers()
@@ -2300,6 +2359,7 @@ void ShipItem::ResetEffects() {
     // the charges' effects on their modules went with the reset, and so did the modules' docked effects
     m_ModuleManager->ChargeFxReset();
     m_ModuleManager->DockedFxReset();
+    m_systemFx = InventoryItemRef(nullptr);
 
     ProcessEffects(true, true/*sDataMgr.IsSolarSystem(locationID())*/);
     _log(EFFECTS__DEBUG, "ShipItem::ResetEffects() - Effects reset in %.3fms", (GetTimeMSeconds() - start));

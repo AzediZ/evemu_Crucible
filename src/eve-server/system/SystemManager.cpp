@@ -237,8 +237,44 @@ bool SystemManager::BootSystem() {
 
     // a w-space system's statics are always open
     sWHMgr.SystemBooted(this);
+    if (IsWSpaceID(m_data.systemID))
+        SpawnEffectBeacon();
 
     return (m_loaded = true);
+}
+
+/* w-space phenomena (Crucible).  a system with a secondary sun (magnetar, pulsar...) has the matching Effect Beacon for its
+ *  class (mapWormholeSystems.effectBeaconTypeID).  the beacon is global, and its system effects (effect category 7) are on
+ *  every ship here:  ShipItem::UpdateSystemEffects() and ShipItem::ProcessShipEffects().  it is a temp item, made again on boot
+ */
+void SystemManager::SpawnEffectBeacon()
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT w.effectBeaconTypeID, d.x, d.y, d.z FROM mapWormholeSystems AS w"
+        "  JOIN mapDenormalize AS d ON d.solarSystemID = w.solarSystemID AND d.groupID = %u"
+        " WHERE w.solarSystemID = %u AND w.effectBeaconTypeID <> 0", EVEDB::invGroups::Secondary_Sun, m_data.systemID)) {
+        _log(DATABASE__ERROR, "SystemManager::SpawnEffectBeacon() - %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return;
+    uint16 typeID(row.GetUInt(0));
+    GPoint pos(row.GetDouble(1), row.GetDouble(2), row.GetDouble(3));
+    ItemData data(typeID, ownerSystem, m_data.systemID, flagNone, "", pos);
+    InventoryItemRef iRef(sItemFactory.SpawnTempItem(data));
+    if (iRef.get() == nullptr) {
+        _log(COSMIC_MGR__ERROR, "SystemManager::SpawnEffectBeacon() - unable to spawn beacon type %u in %s(%u)", typeID, m_data.name.c_str(), m_data.systemID);
+        return;
+    }
+    sItemFactory.AddItem(iRef);
+    iRef->SetAttribute(AttrIsGlobal, EvilOne, false);
+    CelestialSE* pSE = new CelestialSE(iRef, m_services, this);
+    pSE->SetPosition(pos);
+    AddEntity(pSE, false);
+    m_effectBeacon = iRef;
+    _log(COSMIC_MGR__MESSAGE, "SystemManager::SpawnEffectBeacon() - %s(%u) in %s(%u)", iRef->name(), iRef->itemID(), m_data.name.c_str(), m_data.systemID);
 }
 
 bool SystemManager::LoadCosmicMgrs()
@@ -517,6 +553,8 @@ void SystemManager::UnloadSystem() {
 
     // remove solar system item from ItemFactory
     sItemFactory.RemoveItem(m_data.systemID);
+    // the beacon's entity went with the rest.  ships that had its effects have left
+    m_effectBeacon = InventoryItemRef(nullptr);
     m_loaded = false;
 }
 

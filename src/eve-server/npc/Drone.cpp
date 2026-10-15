@@ -249,8 +249,21 @@ void DroneSE::UpdateStats() {
         s.controlRangeMult = last.controlRangeMult;
     }
 
+    /* the system's effects (w-space phenomena, magnetar):  systemDamageDrones (4021) and systemDroneSpeed (4024) are on drones
+     *  (CurrentChar[Drones]), systemDamageFighters (4906) on fighters (CurrentChar[Fighters]).  bombers need neither skill */
+    double sysDamage(1.0), sysVelocity(1.0);
+    InventoryItemRef beacon((m_system == nullptr) ? InventoryItemRef(nullptr) : m_system->GetEffectBeacon());
+    if (beacon.get() != nullptr) {
+        std::map<uint16, Effect> beaconFx;
+        beacon->type().GetEffectMap(FX::State::System, beaconFx);
+        if ((drone and (beaconFx.find(4021) != beaconFx.end())) or (fighter and (beaconFx.find(4906) != beaconFx.end())))
+            sysDamage = beacon->GetAttribute(AttrDamageMultiplierMultiplier).get_double();
+        if (drone and (beaconFx.find(4024) != beaconFx.end()))
+            sysVelocity = beacon->GetAttribute(AttrMaxDroneVelocityMultiplier).get_double();
+    }
+
     double navBonus(drone ? 1.0 + 0.05 * level(DroneNavigation) : 1.0);
-    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus * s.hullVelocity;
+    s.maxVelocity = base(AttrMaxVelocity, 0.0) * navBonus * s.hullVelocity * sysVelocity;
     s.orbitVelocity = base(AttrEntityCruiseSpeed, 0.0);
     if ((s.orbitVelocity <= 0.0) or (s.orbitVelocity > s.maxVelocity))
         s.orbitVelocity = s.maxVelocity;
@@ -320,7 +333,7 @@ void DroneSE::UpdateStats() {
         s.damageMultiplier *= (1.0 + 0.20 * level(Fighters));
     if (bomber)
         s.damageMultiplier *= (1.0 + 0.20 * level(FighterBombers));
-    s.damageMultiplier *= s.hullDamage;
+    s.damageMultiplier *= s.hullDamage * sysDamage;
 
     s.miningAmount = base(AttrMiningAmount, 0.0) * (1.0 + 0.20 * level(DroneInterfacing)) * (1.0 + 0.05 * level(MiningDroneOperation));
     if (needsSkill(MiningDroneSpecialization))

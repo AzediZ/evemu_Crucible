@@ -43,6 +43,7 @@
 class Client;
 class GenericModule;
 class DroneSE;
+class SystemManager;
 
 class ShipItem
 : public InventoryItem
@@ -273,6 +274,10 @@ public:
     void PrepForUndock();               // called by AggresMgr to try saving a bit of runtime by clearing beforehand
     void ProcessEffects(bool add=false, bool update=false);
     void CharacterBoardingShip()                        { m_ModuleManager->CharacterBoardingShip(); }
+    /* system effects (w-space phenomena):  the effect beacon whose effects the ship has now (null for none), and the switch
+     *  to pSys's beacon after a jump or undock.  the full reset (ProcessShipEffects) puts the current system's beacon back */
+    InventoryItemRef GetSystemFx()                      { return m_systemFx; }
+    void UpdateSystemEffects(SystemManager* pSys, bool update=true);
 
     /* linking weapons methods */
     // number of weapons in pMod's bank (1 if not banked)
@@ -329,6 +334,7 @@ private:
     //the ship's module manager.  We own this
     ModuleManager* m_ModuleManager;
 
+    InventoryItemRef m_systemFx;        // the effect beacon whose system effects are applied
     InventoryItemRef m_targetRef;       // this is only used for module effects that require a target.  is here because of the ease of aquiring/sending (common code)
 
     std::vector<uint32> m_onlineModuleVec;      // for onlining modules when undocking
@@ -348,6 +354,7 @@ private:
     void SendHeatChange(uint16 attrID, double value, int64 time);
 
     void ProcessShipEffects(bool update=false);
+    void ParseSystemEffects(InventoryItemRef beacon, InventoryItem* pContainer, bool add);
 
     bool m_isActive :1;
     bool m_isPopped :1;

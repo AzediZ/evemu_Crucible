@@ -34,6 +34,8 @@ public:
     /* the modifier changes an attribute of the item it comes from (its source item).  ApplyEffects applies these before the
      *  modifiers of that item reading the attribute (EVE_DogmaOrder.h) */
     static bool     WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip);
+    // location modifiers:  ALM on the ship means its fitted items, and CurrentChar[skill] from a non-skill means the pilot's items
+    static void     LocationSource(uint16 operandID, bool skill, fxData& data);
     /* applies the owner-required-skill modifiers (missile/probe/drone bonuses from skills, implants, boosters, the hull and
      *  fitted modules) to an item that wasn't there when the ship's effects were processed: a charge loaded in space,
      *  a launched probe or bomb.  resets the target's attributes first */

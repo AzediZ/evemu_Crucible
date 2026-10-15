@@ -181,6 +181,7 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
             if ((skill) and (!data.fxSrc))      // fxSrc = Self in this case.  update to remove this hack?
                 data.fxSrc = Source::Skill;
+            LocationSource(expression.operandID, skill, data);
             pItem->AddModifier(data);
         } break;
         case Operands::AORSM: { //11, (%(arg1)s).AddOwnerRequiredSkillModifier(%(arg2)s)
@@ -210,6 +211,7 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
             ParseExpression(pItem, sFxDataMgr.GetExpression(expression.arg2), data, pMod);
             if ((skill) and (!data.fxSrc))     // fxSrc = Self in this case.  update to remove this hack?
                 data.fxSrc = Source::Skill;
+            LocationSource(expression.operandID, skill, data);
             pItem->RemoveModifier(data);
         } break;
         case Operands::RORSM: { //62, (%(arg1)s).RemoveOwnerRequiredSkillModifier(%(arg2)s)
@@ -300,6 +302,27 @@ void FxProc::ParseExpression(InventoryItem* pItem, Expression expression, fxData
         sProfiler.AddTime(Profile::parseFX, GetTimeUSeconds() - profileStartTime);
 }
 
+void FxProc::LocationSource(uint16 operandID, bool skill, fxData& data)
+{
+    using namespace FX;
+    switch (operandID) {
+        case Operands::ALM:
+        case Operands::RLM: {
+            /* a location modifier on the ship is on everything fitted to it:  the modules (and charges) that have the attribute.
+             *  heat damage and overload bonuses (Thermodynamics, subsystems, strategic cruisers, red giants) are module attribs */
+            if (data.targLoc == Target::Ship)
+                data.fxSrc = Source::Ship;
+        } break;
+        case Operands::ALRSM:
+        case Operands::RLRSM: {
+            /* only skills and implants work on the character's skills.  anything else that names CurrentChar[skill] means
+             *  the pilot's items that need the skill (the wolf-rayet beacons' systemStandardMissileKineticDamage) */
+            if (!skill and (data.targLoc == Target::Char) and (data.fxSrc == Source::Skill) and (data.typeID != 0))
+                data.fxSrc = Source::Owner;
+        } break;
+    }
+}
+
 bool FxProc::IsCharItemModifier(const fxData& data)
 {
     using namespace FX;
@@ -320,8 +343,8 @@ bool FxProc::WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip
     using namespace FX;
     if (data.srcRef.get() == nullptr)
         return false;
-    // group, owner and module-by-skill modifiers go on other items
-    if ((data.fxSrc == Source::Group) or (data.fxSrc == Source::Owner))
+    // group, owner, location and module-by-skill modifiers go on other items
+    if ((data.fxSrc == Source::Group) or (data.fxSrc == Source::Owner) or (data.fxSrc == Source::Ship))
         return false;
     if ((data.fxSrc == Source::Skill) and (data.targLoc != Target::Self))
         return false;
@@ -568,8 +591,23 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                 _log(EFFECTS__ERROR, "FxProc::ApplyEffects(): source location invalid.");
                 continue;
             } break;
-            // the parser never produces these (subsystem effects are Self/Skill/Group, target effects use Target::Target)
-            case Source::Ship:
+            case Source::Ship: {    // location modifier on the ship (LocationSource())
+                if (pShip == nullptr)
+                    continue;
+                std::vector<InventoryItemRef> moduleList;
+                pShip->GetModuleManager()->GetModuleListOfRefsAsc(moduleList);
+                for (auto mod : moduleList)
+                    if (mod->HasAttribute(cur.second.targAttr))
+                        itemRefVec.push_back(mod);
+                std::map<EVEItemFlags, InventoryItemRef> charges;
+                pShip->GetModuleManager()->GetLoadedCharges(charges);
+                for (auto charge : charges)
+                    if ((charge.second.get() != nullptr) and charge.second->HasAttribute(cur.second.targAttr))
+                        itemRefVec.push_back(charge.second);
+                if (itemRefVec.empty())
+                    continue;   // nothing fitted has the attribute.  nbd
+            } break;
+            // the parser never produces this (subsystem effects are Self/Skill/Group, target effects use Target::Target)
             case Source::Target:
             default: {
                 _log(EFFECTS__DEBUG, "FxProc::ApplyEffects(): %s uses source location %s.  ignored.", cur.second.srcRef->name(), GetSourceName(cur.second.fxSrc));
@@ -652,8 +690,14 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
                 case Math::PostMul:
                 case Math::PreDiv:
                 case Math::PostDiv: {
-                    if (targValue == EvilZero)
-                        targValue = EvilOne;
+                    /* dogma:  an attribute the item doesn't have is the attribute's default (damageMultiplier 1, the damage
+                     *  types 0).  one it has at 0 stays 0, so a multiplier can be taken off again (rockets' missing damage
+                     *  types, a smartbomb's other damage types) */
+                    if (!item->HasAttribute(cur.second.targAttr)) {
+                        targValue = sDataMgr.GetAttributeDefault(cur.second.targAttr);
+                        if (targValue == EvilZero)
+                            continue;   // still the default:  nothing to write
+                    }
                 } break;
             }
 
@@ -715,6 +759,11 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
     for (auto cur : items)
         sources.push_back(std::make_pair(cur, passive));
     sources.push_back(std::make_pair(static_cast<InventoryItemRef>(pShip), all));
+    // the system's effects (w-space phenomena:  missile damage and velocity)
+    if (pShip->GetSystemFx().get() != nullptr) {
+        std::vector<int8> system = {FX::State::System};
+        sources.push_back(std::make_pair(pShip->GetSystemFx(), system));
+    }
     items.clear();
     pShip->GetModuleManager()->GetModuleListOfRefsAsc(items);
     for (auto cur : items) {

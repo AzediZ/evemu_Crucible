@@ -244,6 +244,8 @@ public:
 
     // the tutorials' warp-to site in a rookie system: a dust cloud near the first planet.  made on first use, kept in the db
     SystemEntity* GetTutorialSite();
+    // the effect beacon whose system effects (category 7) every ship here has:  a w-space phenomenon.  null when none
+    InventoryItemRef GetEffectBeacon() const            { return m_effectBeacon; }
 
 
 protected:
@@ -258,6 +260,8 @@ protected:
     bool LoadSystemStatics();
     bool LoadSystemDynamics();
     bool LoadPlayerDynamics();
+    // a w-space phenomenon's effect beacon, at its secondary sun
+    void SpawnEffectBeacon();
 
 private:
     AnomalyMgr* m_anomMgr;      //we own this, never NULL.
@@ -271,6 +275,7 @@ private:
     EVEServiceManager& m_services;
     LSCService* m_lsc;
     SolarSystemRef m_solarSystemRef;
+    InventoryItemRef m_effectBeacon;
 
     // static system data
     SystemData m_data;

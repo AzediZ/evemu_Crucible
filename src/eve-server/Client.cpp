@@ -920,6 +920,9 @@ void Client::MoveToLocation(uint32 locationID, const GPoint& pt) {
         }
         */
 
+        // the new system's effects (w-space phenomena) in place of the old one's, before the movement code reads the ship
+        m_ship->UpdateSystemEffects(m_system, !m_login);
+
         SetDestiny(shipPos);
 
         // the ship arrives from a jump already stopped.  stop it quietly: a Stop command would switch the
