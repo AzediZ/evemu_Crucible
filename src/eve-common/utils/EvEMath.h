@@ -36,14 +36,13 @@ namespace EvEMath {
     }
 
     namespace RAM {
-        int32 CopyTime(uint16 BaseTime, uint8 ScienceLevel, float SlotModifier=1, float ImplantModifier=1);
+        int32 CopyTime(uint32 BaseTime, uint32 CopyRuns, uint32 MaxRuns, float CharModifier=1, float SlotModifier=1);
         int32 InventionTime(uint32 BaseTime, float SlotModifier = 1, float ImplantModifier = 1);
         int32 ProductionTime(uint32 BaseTime, float bpProductivityModifier, float ProductionLevel, float TimeModifier=1);
-        int32 ME_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 MetallurgyLevel, float SlotModifier=1, float ImplantModifier=1);
-        int32 PE_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 ResearchLevel, float SlotModifier=1, float ImplantModifier=1);
-        int32 RE_ResearchTime(uint32 BaseTime, uint8 ResearchLevel, float SlotModifier=1, float ImplantModifier=1);
+        // ME or PE research, all the runs (levels)
+        int32 ResearchTime(uint32 BaseTime, int32 Runs, float CharModifier=1, float SlotModifier=1);
+        int32 ClampTime(double seconds);
 
-        float Research_LevelModifier(uint8 BlueprintLevel, int32 Runs);
         float ME_EffectOnWaste(float MaterialAmount, float BaseWasteFactor, float MaterialEfficiency);
         float ResearchPointsPerDay(float Multiplier, float AgentEffectiveQuality, uint8 CharSkillLevel, uint8 AgentSkillLevel );
 

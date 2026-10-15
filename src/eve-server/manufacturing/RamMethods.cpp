@@ -14,6 +14,7 @@
 #include "inventory/Inventory.h"
 #include "manufacturing/Blueprint.h"
 #include "manufacturing/RamMethods.h"
+#include "map/MapData.h"
 #include "market/sim/SimFacilityMgr.h"
 #include "pos/PosMgrDB.h"
 #include "pos/Structure.h"
@@ -53,11 +54,11 @@ void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& arg
         throw UserError ("RamAssemblyLineHasNoActivity");
 
     if (args.activityID == EvERam::Activity::ReverseEngineering) {
-        // reverse engineering (experimental laboratories and caldari research outposts) takes an ancient relic
+        /* reverse engineering (experimental laboratories and caldari research outposts) takes an ancient relic.  the line's
+         *  activity is checked with its permissions, and any reverse engineering line takes relics:  the client's data lists
+         *  the category for the outpost's line only, not the experimental laboratory's */
         if (iRef->categoryID() != EVEDB::invCategories::AncientRelics)
             throw UserError ("RamActivityRequiresABlueprint");
-        if (!FactoryDB::IsProducableBy(args.AssemblyLineID, &iRef->type(), structureLine))
-            throw UserError ("RamBadEndProductForActivity");
         return;
     }
 
@@ -78,17 +79,20 @@ void RamMethods::ActivityCheck(Client* const pClient, const Call_InstallJob& arg
             pType = &bpRef->productType();
         } break;
         case EvERam::Activity::ResearchMaterial: {
-            if (bpRef->mLevel() + args.runs > 10){
-                throw UserError ("RamActivityInvalid"); // The client should have a specific user error for this
-            }
+            // no cap before Crius, but the level is kept in a tinyint
+            if (args.runs < 1)
+                throw UserError ("RamActivityInvalid");
+            if (bpRef->mLevel() + args.runs > INT8_MAX)
+                throw CustomError ("Blueprints can be researched to level %i at most.", INT8_MAX);
             if (bpRef->copy())
                 throw UserError ("RamCannotResearchABlueprintCopy");
             pType = &bpRef->type();
         } break;
         case EvERam::Activity::ResearchTime: {
-            if (bpRef->pLevel() + args.runs > 10){
-                throw UserError ("RamActivityInvalid"); // The client should have a specific user error for this
-            }
+            if (args.runs < 1)
+                throw UserError ("RamActivityInvalid");
+            if (bpRef->pLevel() + args.runs > INT8_MAX)
+                throw CustomError ("Blueprints can be researched to level %i at most.", INT8_MAX);
             if (bpRef->copy())
                 throw UserError ("RamCannotResearchABlueprintCopy");
             pType = &bpRef->type();
@@ -153,34 +157,39 @@ void RamMethods::JobsCheck(Character* pChar, const Call_InstallJob& args)
     }
 }
 
-void RamMethods::InstallationCheck(Client*const pClient, int32 lineLocationID)
+void RamMethods::InstallationCheck(Client*const pClient, int32 lineLocationID, int32 activityID)
 {
-    if (sDataMgr.IsStation(lineLocationID)) {
-        uint32 regionID = sDataMgr.GetStationRegion(lineLocationID);
-        if (!IsRegionID(regionID))
-            throw UserError ("RamIsNotAnInstallation");
-        if (pClient->GetRegionID() != regionID)
-            throw UserError ("RamRangeLimitationRegion");
-    } else {
-        // get structure data and run tests
-        // RamStructureNotInSpace
-        // RamStructureNotIsSolarsystem
+    // station lines only.  POS arrays and labs must be in this system (StructureCheck)
+    if (!sDataMgr.IsStation(lineLocationID))
+        return;
+    if ((uint32)lineLocationID == pClient->GetStationID())
+        return;
+
+    uint32 regionID = sDataMgr.GetStationRegion(lineLocationID);
+    if (!IsRegionID(regionID))
+        throw UserError ("RamIsNotAnInstallation");
+    if (pClient->GetRegionID() != regionID)
+        throw UserError ("RamRangeLimitationRegion");
+
+    /* jobs in another station:  Supply Chain Management (manufacturing) or Scientific Networking (the rest).  Crucible:
+     *  without the skill, the station you are in;  level 1 the solar system;  2 within 5 jumps;  3 10;  4 20;  5 the region */
+    bool manuf(activityID == EvERam::Activity::Manufacturing);
+    uint16 skillID(manuf ? EvESkill::SupplyChainManagement : EvESkill::ScientificNetworking);
+    uint8 level(pClient->GetChar()->GetSkillLevel(skillID));
+    if (level >= 5)
+        return;
+    const char* skillName(manuf ? "Supply Chain Management" : "Scientific Networking");
+    if (level < 1)
+        throw CustomError ("You must be docked in that station to install a job there.  %s lets you install jobs remotely.", skillName);
+
+    static const int32 jumpsPerLevel[5] = { -1, 0, 5, 10, 20 };
+    uint32 systemID(sDataMgr.GetStationSystem(lineLocationID));
+    int32 jumps(sMapData.GetJumpCount(pClient->GetSystemID(), systemID, (uint8)jumpsPerLevel[level]));
+    if ((jumps < 0) or (jumps > jumpsPerLevel[level])) {
+        if (level == 1)
+            throw CustomError ("That installation is not in this solar system.  %s %u lets you install jobs in this system only.", skillName, level);
+        throw CustomError ("That installation is too far away.  %s %u lets you install jobs within %i jumps.", skillName, level, jumpsPerLevel[level]);
     }
-
-    // check player skill for limits
-    // RamRangeLimitation
-    // RamRangeLimitationJumps
-    // RamRangeLimitationJumpsNoSkill
-
-    /*
-     *        jumpsPerSkillLevel =
-     *        {0: -1,   // station/structure
-     *         1: 0,    // system
-     *         2: 5,
-     *         3: 10,
-     *         4: 20,
-     *         5: 50}
-     */
 }
 
 void RamMethods::LinePermissionCheck(Client*const pClient, const Call_InstallJob& args, EvERam::LineRestrictions& data)
@@ -704,15 +713,31 @@ const char* RamMethods::GetInventionResultLabel(bool success, float chance)
     return "UI/ScienceAndIndustry/Invention/InventionResultFailedImpossible";
 }
 
-uint32 RamMethods::GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs)
+void RamMethods::SetMaterialWaste(float wasteFactor, std::vector<EvERam::RequiredItem>& reqItems)
 {
+    // the blueprint's waste (Blueprint::GetME()) is on the base materials only, a run's rounded on its own
+    for (auto& cur : reqItems)
+        if (!cur.isSkill and !cur.extra)
+            cur.waste = (uint32)round(cur.quantity * wasteFactor);
+}
+
+uint32 RamMethods::GetBaseQuantity(const EvERam::RequiredItem& item, float materialMultiplier, uint32 runs)
+{
+    // a run's materials with the blueprint's waste, times the assembly line's multiplier
     if (item.isSkill)
         return 0;
-    // "extra" materials are not affected by skills
-    uint32 qty((uint32)round(item.quantity * materialMultiplier));
-    if (!item.extra)
-        qty += (uint32)round(item.quantity * charMaterialMultiplier - item.quantity);
-    return qty * runs;
+    return (uint32)round((item.quantity + item.waste) * materialMultiplier) * runs;
+}
+
+uint32 RamMethods::GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs)
+{
+    /* pre-Crius:  extra materials (the T1 item, components, R.A.M., research items) only take the line's multiplier.  base
+     *  materials also take the blueprint's waste and the character's (manufactureCostMultiplier:  1.25, down to 1.0 at
+     *  Production Efficiency 5), each rounded on its own */
+    uint32 qty(GetBaseQuantity(item, materialMultiplier, runs));
+    if (!item.isSkill and !item.extra and (charMaterialMultiplier > 1.0f))
+        qty += (uint32)round(item.quantity * (charMaterialMultiplier - 1.0f)) * runs;
+    return qty;
 }
 
 uint32 RamMethods::GetReturnQuantity(const EvERam::RequiredItem& item, uint32 runs)
@@ -730,7 +755,8 @@ uint32 RamMethods::GetReturnQuantity(const EvERam::RequiredItem& item, uint32 ru
 
 void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems)
 {
-    Inventory* pInv(GetBOMInventory(bomLocation));
+    // a type can be both a base and an extra material, so the check is on the sum
+    std::map<uint16, uint32> needed;
     for (auto cur : reqItems) {
         if (cur.isSkill) { // check skill (quantity is required level)
             if (pClient->GetChar()->GetSkillLevel(cur.typeID) < cur.quantity) {
@@ -741,13 +767,17 @@ void RamMethods::MaterialSkillsCheck(Client* const pClient, uint32 runs, const P
             continue;
         }
 
-        uint32 qtyNeeded(GetMaterialQuantity(cur, rsp.materialMultiplier, rsp.charMaterialMultiplier, runs));
-        if (qtyNeeded == 0)
+        needed[cur.typeID] += GetMaterialQuantity(cur, rsp.materialMultiplier, rsp.charMaterialMultiplier, runs);
+    }
+
+    Inventory* pInv(GetBOMInventory(bomLocation));
+    for (auto cur : needed) {
+        if (cur.second == 0)
             continue;
-        uint32 qtyHave(pInv == nullptr ? 0 : pInv->GetTypeQtyForOwner(cur.typeID, (EVEItemFlags)bomLocation.flagID, ownerID));
-        if (qtyHave < qtyNeeded)
+        uint32 qtyHave(pInv == nullptr ? 0 : pInv->GetTypeQtyForOwner(cur.first, (EVEItemFlags)bomLocation.flagID, ownerID));
+        if (qtyHave < cur.second)
             throw UserError ("RamNeedMoreForJob")
-                    .AddFormatValue ("item", new PyInt (cur.typeID));
+                    .AddFormatValue ("item", new PyInt (cur.first));
     }
 }
 
@@ -846,13 +876,14 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
             into.charMaterialMultiplier = EvE::max(1.0f, pChar->GetAttribute (AttrManufactureCostMultiplier).get_float ());
             pType = &bpRef->productType();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            into.materialMultiplier += bpRef->GetME();
-            /* Production Efficiency is not applied here:  it lowers the character's manufactureCostMultiplier (1.25 base, -4% a level,
-             *  dogma effect 429), which is charMaterialMultiplier, the skill waste on the base quantity apart from the blueprint's
-             *  ME waste (infosvc bill of materials:  base + base * wastageFactor, then + base * charMult - base)
+            /* materialMultiplier is the line's.  the blueprint's waste goes on each base material (SetMaterialWaste).  Production
+             *  Efficiency lowers the character's manufactureCostMultiplier (1.25 base, -4% a level, dogma effect 429), which is
+             *  charMaterialMultiplier, the skill waste on the base quantity apart from the blueprint's
+             *  (infosvc bill of materials:  base + base * wastageFactor, then + base * charMult - base)
              */
             into.materialMultiplier *= sConfig.ram.MatMod;
-            into.charTimeMultiplier *= (1.0f - (0.04f * pChar->GetSkillLevel(EvESkill::Industry)));
+            // manufactureTimeMultiplier:  Industry takes 4% a level off, Beancounter implants more
+            into.charTimeMultiplier = pChar->GetAttribute(AttrManufactureTimeMultiplier).get_float();
             into.productionTime = EvEMath::RAM::ProductionTime(bpRef->type().productionTime(), bpRef->type().productivityModifier(),
                                                                bpRef->pLevel(), into.timeMultiplier);
             // modify base time by char multiplier
@@ -863,34 +894,27 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
         case EvERam::Activity::ResearchMaterial: {
             pType = &bpRef->type();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            into.productionTime = EvEMath::RAM::ME_ResearchTime(bpRef->type().researchMaterialTime(),
-                                                                bpRef->mLevel(), args.runs,
-                                                                pChar->GetSkillLevel(EvESkill::Metallurgy), into.timeMultiplier
-                                                                /*implant modifier here*/);
-            into.productionTime *= sConfig.ram.ResME;
-            into.charTimeMultiplier *= pChar->GetAttribute(AttrMineralNeedResearchSpeed).get_float();
+            into.charTimeMultiplier = pChar->GetAttribute(AttrMineralNeedResearchSpeed).get_float();
+            into.productionTime = EvEMath::RAM::ResearchTime(bpRef->type().researchMaterialTime(), args.runs,
+                                                             into.charTimeMultiplier, into.timeMultiplier);
+            into.productionTime = EvEMath::RAM::ClampTime(into.productionTime * (double)sConfig.ram.ResME);
         }  break;
         case EvERam::Activity::ResearchTime: {
             pType = &bpRef->type();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            //ch->GetAttribute(AttrResearchCostPercent).get_int();   << this is not used
-
-            into.productionTime = EvEMath::RAM::PE_ResearchTime(bpRef->type().researchProductivityTime(),
-                                                                bpRef->pLevel(), args.runs,
-                                                                pChar->GetSkillLevel(EvESkill::Research), into.timeMultiplier
-                                                                /*implant modifier here*/);
-            into.productionTime *= sConfig.ram.ResPE;
-            into.charTimeMultiplier *= pChar->GetAttribute(AttrManufacturingTimeResearchSpeed).get_float();
+            into.charTimeMultiplier = pChar->GetAttribute(AttrManufacturingTimeResearchSpeed).get_float();
+            into.productionTime = EvEMath::RAM::ResearchTime(bpRef->type().researchProductivityTime(), args.runs,
+                                                             into.charTimeMultiplier, into.timeMultiplier);
+            into.productionTime = EvEMath::RAM::ClampTime(into.productionTime * (double)sConfig.ram.ResPE);
         }  break;
         case EvERam::Activity::Copying: {
+            // a copy's time, times the number of copies (runs) below
             pType = &bpRef->type();
             FactoryDB::GetMultipliers(args.AssemblyLineID, pType, into);
-            into.productionTime = EvEMath::RAM::CopyTime(bpRef->type().researchCopyTime(),
-                                                         pChar->GetSkillLevel(EvESkill::Science), into.timeMultiplier
-                                                         /*implant modifier here*/);
-            into.productionTime *= sConfig.ram.CopyTime;
-            into.charTimeMultiplier *= pChar->GetAttribute(AttrCopySpeedPercent).get_float();
-            //bpRef->type().chanceOfDuplicating();
+            into.charTimeMultiplier = pChar->GetAttribute(AttrCopySpeedPercent).get_float();
+            into.productionTime = EvEMath::RAM::CopyTime(bpRef->type().researchCopyTime(), args.copyRuns, bpRef->type().maxProductionLimit(),
+                                                         into.charTimeMultiplier, into.timeMultiplier);
+            into.productionTime = EvEMath::RAM::ClampTime(into.productionTime * (double)sConfig.ram.CopyTime);
         }  break;
         case EvERam::Activity::Invention: {
             // no skill shortens invention.  base time is the T1 blueprint's researchTechTime
@@ -904,10 +928,9 @@ bool RamMethods::Calculate(const Call_InstallJob &args, InventoryItemRef iRef, C
             return false;
     }
 
-    // multiply single run time by run count for total time
-    if (args.activityID != EvERam::Activity::ResearchMaterial && args.activityID != EvERam::Activity::ResearchTime) { // Dont multiply ME/PE activities as the time isnt linear.
-        into.productionTime *= args.runs;
-    }
+    // multiply single run time by run count for total time (ME and PE research time is for all the levels)
+    if ((args.activityID != EvERam::Activity::ResearchMaterial) and (args.activityID != EvERam::Activity::ResearchTime))
+        into.productionTime = EvEMath::RAM::ClampTime((double)into.productionTime * args.runs);
 
     // calculate cost (rent per started hour of the whole job)
     into.usageCost *= ceil(into.productionTime / 3600.0f);
@@ -935,25 +958,23 @@ void RamMethods::EncodeBillOfMaterials(const std::vector<EvERam::RequiredItem> &
             continue;
         }
 
-        int qtyNeeded = GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
+        int32 qtyNeeded = GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
 
         // otherwise, make line for material list
         MaterialList_Line line;
         line.requiredTypeID = cur.typeID;
-        line.quantity = (int32) round (cur.quantity * materialMultiplier) * runs;
+        line.quantity = GetBaseQuantity(cur, materialMultiplier, runs);
         line.damagePerJob = cur.damagePerJob;
         line.isSkillCheck = false;  // no idea what is this for
         line.requiresHP = false;    // no idea what is this for
 
-        /** @todo update this shit.....  */
-        // "Extra material" is not affected by skills, and return upon completion
-        // "Raw material" is fully consumed and affected by skills/efficiency
-        // "Waste Material" is amount of material wasted ...
+        // "Extra material" has no waste.  what is not used up (damagePerJob < 1) comes back on delivery
+        // "Raw material" is used up, with the blueprint's waste
+        // "Waste Material" is the character's waste on the raw material (Production Efficiency)
         if (cur.extra) {
             into.extras.lines->AddItem( line.Encode() );
         } else {
-            // if there are losses, make line for waste material list
-            if (charMaterialMultiplier > 1.0) {
+            if (qtyNeeded > line.quantity) {
                 MaterialList_Line wastage( line );  // simply copy original line ...
                 wastage.quantity = qtyNeeded - line.quantity;
                 into.wasteMaterials.lines->AddItem( wastage.Encode() );
@@ -965,34 +986,21 @@ void RamMethods::EncodeBillOfMaterials(const std::vector<EvERam::RequiredItem> &
 
 void RamMethods::EncodeMissingMaterials(const std::vector<EvERam::RequiredItem> &reqItems, const PathElement &bomLocation, uint32 ownerID, Client *const pClient, float materialMultiplier, float charMaterialMultiplier, int32 runs, std::map<int32, PyRep *> &into) {
     Inventory* pInv(GetBOMInventory(bomLocation));
+    std::map<uint16, uint32> needed;
     for (auto cur : reqItems) {
-        uint32 qtyReq(0), qtyHave(0);
         if (cur.isSkill) {
-            qtyReq = cur.quantity;
-            qtyHave = pClient->GetChar()->GetSkillLevel(cur.typeID);
+            if (pClient->GetChar()->GetSkillLevel(cur.typeID) < cur.quantity)
+                into[cur.typeID] = new PyInt(cur.quantity - pClient->GetChar()->GetSkillLevel(cur.typeID));
         } else {
-            qtyReq = GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
-            if (pInv != nullptr)
-                qtyHave = pInv->GetTypeQtyForOwner(cur.typeID, (EVEItemFlags)bomLocation.flagID, ownerID);
+            needed[cur.typeID] += GetMaterialQuantity(cur, materialMultiplier, charMaterialMultiplier, runs);
         }
-
-        if (qtyReq > qtyHave)
-            into[cur.typeID] = new PyInt(qtyReq - qtyHave);
     }
-}
 
-/* For each material required for a blueprint (from invTypeMaterials), the quantity is affected by ME research and skills.
- * Then there’s the extra materials, which come from the ramTypeRequirements table for that BP.
- * Next, any materials in ramTypeRequirements which are marked as recyclable, have their recycled materials (from invTypeMaterials) subtracted from the list of materials required for the produced item.
- * The remaining materials from invTypeMaterials are then modified by skills and ME research as follows:
- *      xmatls = ramTypeRequirements.extra
- *      reqMatls = (invTypeMaterials.reqMatls - xmatls)
- *      waste = reqMatls * charSkills (which is wastage multiplier based on skills)
- *      totalReqMatls = (reqMatls * skill mods) + xmatls + waste
- */
-void RamMethods::GetAdjustedRamRequiredMaterials()
-{
-    // will need to update this using above formula for correct material list
+    for (auto cur : needed) {
+        uint32 qtyHave(pInv == nullptr ? 0 : pInv->GetTypeQtyForOwner(cur.first, (EVEItemFlags)bomLocation.flagID, ownerID));
+        if (cur.second > qtyHave)
+            into[cur.first] = new PyInt(cur.second - qtyHave);
+    }
 }
 
 const char* RamMethods::GetActivityName(int8 activityID)

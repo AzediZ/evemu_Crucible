@@ -378,12 +378,18 @@ double MarketMgr::GetInsuranceValue(uint16 shipTypeID)
 
     // materials of the ship, plus the components a blueprint consumes (T2 components, the T1 hull)
     double value(0.0);
-    std::vector<EvERam::RamMaterials> matls;
-    sDataMgr.GetRamMaterials(shipTypeID, matls);
-    for (auto& matl : matls)
-        value += matl.quantity * GetMaterialIndexPrice(matl.materialTypeID);
     uint16 bpTypeID(sDataMgr.GetBlueprintTypeForProduct(shipTypeID));
-    if (bpTypeID != 0) {
+    if (bpTypeID == 0) {
+        std::vector<EvERam::RamMaterials> matls;
+        sDataMgr.GetRamMaterials(shipTypeID, matls);
+        for (auto& matl : matls)
+            value += matl.quantity * GetMaterialIndexPrice(matl.materialTypeID);
+    } else {
+        // a T2 hull's materials less its T1 hull's, which is counted whole with the extras
+        std::map<uint16, uint32> base;
+        sDataMgr.GetRamBaseMaterials(bpTypeID, base);
+        for (auto& matl : base)
+            value += matl.second * GetMaterialIndexPrice(matl.first);
         std::vector<EvERam::RamRequirements> reqs;
         sDataMgr.GetRamRequirements(bpTypeID, reqs);
         for (auto& req : reqs)

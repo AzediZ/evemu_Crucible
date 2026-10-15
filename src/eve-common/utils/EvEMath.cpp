@@ -76,34 +76,31 @@ int32 EvEMath::RAM::ProductionTime(uint32 BaseTime, float bpProductivityModifier
     return (BaseTime * effModifier * TimeModifier);
 }
 
-float EvEMath::RAM::Research_LevelModifier(uint8 BlueprintLevel, int32 Runs)
+int32 EvEMath::RAM::ResearchTime(uint32 BaseTime, int32 Runs, float CharModifier/*1*/, float SlotModifier/*1*/)
 {
-    if (BlueprintLevel + Runs > 10){
-        return 0.0f;
-    }
-    const int LEVELMODIFIERS [11] = { 0, 105, 250, 595, 1414, 3360, 8000, 19000, 45255, 107700, 256000 };
-    return (LEVELMODIFIERS[BlueprintLevel + Runs] / 105) - (LEVELMODIFIERS[BlueprintLevel] / 105);
+    /* pre-Crius ME and PE research:  every level takes the blueprint's base time (Crius made later levels take longer).
+     *  CharModifier is the character's mineralNeedResearchSpeed (ME) or manufacturingTimeResearchSpeed (PE):  Metallurgy or
+     *  Research take 5% a level off, Beancounter implants more */
+    return ClampTime((double)BaseTime * CharModifier * SlotModifier * Runs);
 }
 
-int32 EvEMath::RAM::ME_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 MetallurgyLevel, float SlotModifier/*1*/, float ImplantModifier/*1*/ )
+int32 EvEMath::RAM::CopyTime(uint32 BaseTime, uint32 CopyRuns, uint32 MaxRuns, float CharModifier/*1*/, float SlotModifier/*1*/)
 {
-    return (BaseTime * (1.0f + (0.05f * MetallurgyLevel)) * SlotModifier * ImplantModifier * Research_LevelModifier(BlueprintLevel, Runs)) / 13.0f; // Technically this 13 doesnt belong here however it makes the values more realistic based on the SDE crucible uses
+    /* a copy's time is in proportion to its runs, the base time being for a copy of the blueprint's max runs.  CharModifier is the
+     *  character's copySpeedPercent (2, Science takes 5% a level off, Beancounter implants more) */
+    if (MaxRuns < 1)
+        MaxRuns = 1;
+    return ClampTime((double)BaseTime * CharModifier * SlotModifier * CopyRuns / MaxRuns);
 }
 
-int32 EvEMath::RAM::PE_ResearchTime(uint32 BaseTime, uint8 BlueprintLevel, int32 Runs, uint8 ResearchLevel, float SlotModifier/*1*/, float ImplantModifier/*1*/ )
+int32 EvEMath::RAM::ClampTime(double seconds)
 {
-    return (BaseTime * (1.0f + (0.05f * ResearchLevel)) * SlotModifier * ImplantModifier * Research_LevelModifier(BlueprintLevel, Runs)) / 15.0f; // Technically this 15 doesnt belong here however it makes the values more realistic based on the SDE crucible uses
-}
-
-int32 EvEMath::RAM::RE_ResearchTime(uint32 BaseTime, uint8 ResearchLevel, float SlotModifier, float ImplantModifier)
-{
-    // base RE time is 60 min.  we may update/modify this later as system matures
-    return 60;
-}
-
-int32 EvEMath::RAM::CopyTime(uint16 BaseTime, uint8 ScienceLevel, float SlotModifier/*1*/, float ImplantModifier/*1*/ )
-{
-    return (BaseTime * (1.0f - (0.05f * ScienceLevel)) * SlotModifier * ImplantModifier);
+    // research and copy times of high levels or many runs pass int32 (RamMethods::ProductionTimeCheck turns them down)
+    if (seconds > 2147483647.0)
+        return 2147483647;
+    if (seconds < 0.0)
+        return 0;
+    return (int32)seconds;
 }
 
 int32 EvEMath::RAM::InventionTime(uint32 BaseTime, float SlotModifier/*1*/, float ImplantModifier/*1*/ )

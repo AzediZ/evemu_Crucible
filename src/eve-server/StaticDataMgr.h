@@ -89,6 +89,7 @@ public:
     void                GetRamReturns(uint16 typeID, int8 activityID, std::vector< EvERam::RequiredItem >& ramReqs); // bp typeID/data
     void                GetRamMaterials(uint16 typeID, std::vector<EvERam::RamMaterials>& ramMatls);    // bp productTypeID/data{typeID/qty}
     void                GetRamRequirements(uint16 typeID, std::vector< EvERam::RamRequirements >& ramReqs); // bp typeID/data
+    void                GetRamBaseMaterials(uint16 bpTypeID, std::map<uint16, uint32>& into);   // manufacturing:  product materials less the recycled T1 item's
     // this is for ALL needed materials for RAM activity from BP.  these are NOT modified.
     void                GetRamRequiredItems(const uint32 typeID, const int8 activity, std::vector<EvERam::RequiredItem> &into);
 

@@ -25,7 +25,8 @@ public:
     // verify job count for char
     void JobsCheck(Character* pChar, const Call_InstallJob& args);
     // verify range for stations and structure data for POS
-    void InstallationCheck(Client* const pClient, int32 lineLocationID);
+    // the installer's range to a station line (Supply Chain Management, Scientific Networking)
+    void InstallationCheck(Client* const pClient, int32 lineLocationID, int32 activityID);
     // verify roles and restrictions.  returns the line's restriction data (owner, container)
     void LinePermissionCheck(Client* const pClient, const Call_InstallJob& args, EvERam::LineRestrictions& into);
     void ItemOwnerCheck(Client* const pClient, const Call_InstallJob& args, InventoryItemRef iRef);
@@ -49,7 +50,10 @@ public:
     void MaterialSkillsCheck(Client* const pClient, uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
     // remove the job's materials owned by ownerID from bomLocation.  call MaterialSkillsCheck() first
     void ConsumeMaterials(uint32 runs, const PathElement& bomLocation, uint32 ownerID, const Rsp_InstallJob& rsp, const std::vector< EvERam::RequiredItem >& reqItems);
-    // units of a required item a job takes
+    // set the blueprint's waste (Blueprint::GetME()) on a manufacturing job's base materials
+    void SetMaterialWaste(float wasteFactor, std::vector< EvERam::RequiredItem >& reqItems);
+    // units of a required item a job takes, without and with the character's waste
+    uint32 GetBaseQuantity(const EvERam::RequiredItem& item, float materialMultiplier, uint32 runs);
     uint32 GetMaterialQuantity(const EvERam::RequiredItem& item, float materialMultiplier, float charMaterialMultiplier, uint32 runs);
     // units of an item that is not used up (damage < 1, from StaticDataMgr::GetRamReturns) that come back when the job ends
     uint32 GetReturnQuantity(const EvERam::RequiredItem& item, uint32 runs);
@@ -85,7 +89,6 @@ public:
     // a T3 blueprint for the relic's kind and the decryptor's race (random when several match).  0 if none
     uint16 PickReverseEngineeringOutput(uint16 relicGroupID, uint8 raceID);
 
-    void GetAdjustedRamRequiredMaterials();
     const char* GetActivityName(int8 activityID);
 };
 

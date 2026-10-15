@@ -487,7 +487,7 @@ void StaticDataMgr::Populate()
         ramReq.requiredTypeID   = row.GetInt(2);
         ramReq.quantity         = row.GetInt(3);
         ramReq.damagePerJob     = row.GetFloat(4);
-        ramReq.extra            = row.GetBool(5);
+        ramReq.recycle          = row.GetBool(5);
         m_ramReq.emplace(row.GetInt(0), ramReq);
     }
     sLog.Cyan("    StaticDataMgr", "%lu R.A.M. defs loaded in %.3fms.", (m_ramMatl.size() + m_ramReq.size()), (GetTimeMSeconds() - startTime));
@@ -1190,7 +1190,7 @@ void StaticDataMgr::GetRamReturns(uint16 typeID, int8 activityID, std::vector< E
             data.quantity = it->second.quantity;
             data.damagePerJob = it->second.damagePerJob;
             data.isSkill = IsSkillTypeID(it->second.requiredTypeID);
-            data.extra = it->second.extra;
+            data.extra = true;
             ramReqs.push_back(data);
         }
 }
@@ -1209,18 +1209,51 @@ void StaticDataMgr::GetRamRequirements(uint16 typeID, std::vector< EvERam::RamRe
         ramReqs.push_back(it->second);
 }
 
+void StaticDataMgr::GetRamBaseMaterials(uint16 bpTypeID, std::map<uint16, uint32>& into)
+{
+    /* pre-Crius manufacturing:  the product's invTypeMaterials, less the materials of a requirement marked recycle (the T1
+     *  item a T2 one is built from brings its own).  these take the blueprint's and the character's waste.  the rest of
+     *  ramTypeRequirements are extra materials, with no waste */
+    std::map<uint16, EvERam::bpTypeData>::iterator itr = m_bpTypeData.find(bpTypeID);
+    if (itr == m_bpTypeData.end())
+        return;
+    auto range = m_ramMatl.equal_range(itr->second.productTypeID);
+    for (auto it = range.first; it != range.second; ++it)
+        into[it->second.materialTypeID] += it->second.quantity;
+
+    auto reqs = m_ramReq.equal_range(bpTypeID);
+    for (auto it = reqs.first; it != reqs.second; ++it) {
+        if ((it->second.activityID != EvERam::Activity::Manufacturing) or !it->second.recycle)
+            continue;
+        auto mats = m_ramMatl.equal_range(it->second.requiredTypeID);
+        for (auto m = mats.first; m != mats.second; ++m) {
+            std::map<uint16, uint32>::iterator base = into.find(m->second.materialTypeID);
+            if (base == into.end())
+                continue;
+            int64 used((int64)m->second.quantity * it->second.quantity);
+            base->second = ((int64)base->second > used) ? (uint32)(base->second - used) : 0;
+        }
+    }
+
+    for (std::map<uint16, uint32>::iterator base = into.begin(); base != into.end(); )
+        if (base->second == 0) {
+            base = into.erase(base);
+        } else {
+            ++base;
+        }
+}
+
 void StaticDataMgr::GetRamRequiredItems(const uint32 typeID, const int8 activity, std::vector< EvERam::RequiredItem >& into)
 {
     if (activity == EvERam::Activity::Manufacturing) {
-        std::map<uint16, EvERam::bpTypeData>::iterator itr = m_bpTypeData.find(typeID);
-        if (itr != m_bpTypeData.end()) {
-            auto range = m_ramMatl.equal_range(itr->second.productTypeID);
-            for (auto it = range.first; it != range.second; ++it) {
-                EvERam::RequiredItem data = EvERam::RequiredItem();
-                data.typeID = it->second.materialTypeID;
-                data.quantity = it->second.quantity;
-                into.push_back(data);
-            }
+        std::map<uint16, uint32> base;
+        GetRamBaseMaterials(typeID, base);
+        for (auto cur : base) {
+            EvERam::RequiredItem data = EvERam::RequiredItem();
+            data.typeID = cur.first;
+            data.quantity = cur.second;
+            data.damagePerJob = 1.0f;
+            into.push_back(data);
         }
     }
 
@@ -1232,7 +1265,7 @@ void StaticDataMgr::GetRamRequiredItems(const uint32 typeID, const int8 activity
             data.quantity = it->second.quantity;
             data.damagePerJob = it->second.damagePerJob;
             data.isSkill = IsSkillTypeID(it->second.requiredTypeID);
-            data.extra = it->second.extra;
+            data.extra = !data.isSkill;
             into.push_back(data);
         }
 }
@@ -1578,15 +1611,14 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
 
     // NOTE: this is for BLUEPRINTS ONLY and is always populated (ancient relic error fix)
     if (catID == EVEDB::invCategories::Blueprint) {
-        // ramMaterials is only for manufacturing the bp product
-        std::vector<EvERam::RamMaterials> ramMatls;
-        ramMatls.clear();
-        GetRamMaterials(prodID, ramMatls);
-        for (auto cur : ramMatls) {
+        // the base materials are only for manufacturing the bp product.  the client adds the blueprint's and character's waste to them
+        std::map<uint16, uint32> base;
+        GetRamBaseMaterials(typeID, base);
+        for (auto cur : base) {
             PyIncRef(header);   // every row/rowset releases its header reference
             PyPackedRow* row = new PyPackedRow(header);
-                row->SetField("quantity",        new PyInt(cur.quantity));
-                row->SetField("requiredTypeID",  new PyInt(cur.materialTypeID));
+                row->SetField("quantity",        new PyInt(cur.second));
+                row->SetField("requiredTypeID",  new PyInt(cur.first));
                 row->SetField("damagePerJob",    new PyFloat(1.0f));
             matlListManuf->AddItem(row);
         }
@@ -1610,14 +1642,12 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
         using namespace EvERam;
         switch(cur.activityID) {
             case Activity::Manufacturing: {         //1
-                /** @todo  this needs work.  dunno how to remove 'extra' materials from this list */
+                // everything in ramTypeRequirements but skills is an extra material (no waste)
                 manuf = true;
                 if (IsSkillTypeID(cur.requiredTypeID)) {
                     skillListManuf->AddItem(row);
-                } else if (cur.extra) {
-                    extraListManuf->AddItem(row);
                 } else {
-                    matlListManuf->AddItem(row);
+                    extraListManuf->AddItem(row);
                 }
             } break;
             case Activity::ResearchTech: {          //2
@@ -1651,10 +1681,8 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
                 dup = true;
                 if (IsSkillTypeID(cur.requiredTypeID)) {
                     skillListDup->AddItem(row);
-                } else if (cur.extra) {
-                    extraListDup->AddItem(row);
                 } else {
-                    matlListDup->AddItem(row);
+                    extraListDup->AddItem(row);
                 }
             } break;
             case Activity::ReverseEngineering: {    //7

@@ -181,7 +181,8 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     if (structureLine)
         sRamMthd.StructureCheck(pClient, args.lineContainerID);
 
-    // check assy line activity
+    // range to the installation, then the line's activity
+    sRamMthd.InstallationCheck(pClient, args.lineContainerID, args.activityID);
     sRamMthd.ActivityCheck(pClient, args, installedItem, structureLine);
     // everything but reverse engineering (relics) installs a blueprint
     BlueprintRef bpRef(nullptr);
@@ -309,6 +310,8 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     // get required items for activity
     std::vector<EvERam::RequiredItem> reqItems;
     sDataMgr.GetRamRequiredItems(installedItem->typeID(), (int8)args.activityID, reqItems);
+    if ((args.activityID == EvERam::Activity::Manufacturing) and (bpRef.get() != nullptr))
+        sRamMthd.SetMaterialWaste(bpRef->GetME(), reqItems);
 
     // invention output, chance and optional inputs
     EvERam::InventionData invData = EvERam::InventionData();
@@ -373,18 +376,18 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
     }
 
     uint32 payeeID(lineData.ownerID);
+    bool paid(false);
+    int32 payKey(Account::KeyType::Cash);
     if ((cost > 0) and (payeeID != 0) and (payeeID != ownerID)) {
         if (args.isCorpJob) {
             // corp jobs are paid from the wallet division the installer is using
-            int32 accountKey(pClient->GetCorpAccountKey());
-            if ((accountKey < Account::KeyType::Cash) or (accountKey > Account::KeyType::Cash7))
+            payKey = pClient->GetCorpAccountKey();
+            if ((payKey < Account::KeyType::Cash) or (payKey > Account::KeyType::Cash7))
                 throw UserError ("RamNoCorpAccount");
-            AccountService::TransferFunds(ownerID, payeeID, cost, reason.c_str(), Journal::EntryType::FactorySlotRentalFee,
-                                          locationID, accountKey, Account::KeyType::Cash, pClient);
-        } else {
-            AccountService::TransferFunds(ownerID, payeeID, cost, reason.c_str(), Journal::EntryType::FactorySlotRentalFee,
-                                          locationID, Account::KeyType::Cash, Account::KeyType::Cash, pClient);
         }
+        AccountService::TransferFunds(ownerID, payeeID, cost, reason.c_str(), Journal::EntryType::FactorySlotRentalFee,
+                                      locationID, payKey, Account::KeyType::Cash, pClient);
+        paid = true;
     }
 
     int64 beginTime(GetFileTimeNow());
@@ -419,9 +422,15 @@ PyResult RamProxyService::InstallJob(PyCallArgs &call, PyRep* locationData, PyRe
                                          (invData.outputBpTypeID ? &invData : nullptr));
 
     if (jobID < 1) {
+        // nothing is taken yet but the fee:  give it back
         _log(MANUF__ERROR, "Could not InstallJob for %s using %s", pClient->GetName(), installedItem->name());
-        // make client error here...
-        return nullptr;
+        if (paid) {
+            std::string refund("DESC: Refund, the job could not be installed in ");
+            refund += locationName;
+            AccountService::TransferFunds(payeeID, ownerID, cost, refund.c_str(), Journal::EntryType::FactorySlotRentalFee,
+                                          locationID, Account::KeyType::Cash, payKey, pClient);
+        }
+        throw CustomError ("The job could not be installed.  Nothing was charged for it.");
     }
 
     // unpackage bpo and move to factory

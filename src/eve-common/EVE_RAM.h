@@ -67,7 +67,7 @@ namespace EvERam {
 
     /* POD structure for blueprint ram requirements */
     struct RamRequirements {
-        bool extra;
+        bool recycle;           // ramTypeRequirements.extra (the SDE's recycle):  its materials come off the product's (a T2 item's T1 item)
         uint8 activityID;
         uint16 requiredTypeID;
         uint32 quantity;
@@ -82,10 +82,11 @@ namespace EvERam {
 
     /* POD structure for blueprint required materials  */
     struct RequiredItem {
-        bool extra :1;
+        bool extra :1;          // from ramTypeRequirements:  no blueprint or skill waste
         bool isSkill :1;
         uint16 typeID;
-        uint32 quantity;
+        uint32 quantity;        // a run's  (skills:  the level)
+        uint32 waste;           // a run's blueprint waste  (manufacturing base materials:  RamMethods::SetMaterialWaste)
         float damagePerJob;
     };
 
