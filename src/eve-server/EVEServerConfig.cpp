@@ -342,7 +342,9 @@ EVEServerConfig::EVEServerConfig()
     // npc ai phase 5:  polish (npc ai plan phase 5, 6.7).  [DD] unless noted
     npc.SoftLeashCooldown = 20 /*s*/;   // [DD] phase 2's constant:  without it a soft-leashed npc could never resume the chase
     npc.LinkAlertInterval = 5 /*s*/;    // [DD] phase 2's constant
-    npc.SleeperCapitalReinforcements = 2;   // era (high):  "several battleships for each capital will spawn" (plan 4.6, phase 5)
+    npc.SleeperCapitalReinforcements = 6;   // Crucible (eve-survival C5/C6 pages):  1st capital escalation 6 Sleepless battleships,
+    npc.SleeperCapitalSecondWave = 8;       //  2nd capital escalation 8.  no page lists a third
+    npc.SleeperCapitalWaves = 2;
     npc.SleeperReinforcementTypes = "";
     npc.TelegraphJoin = true;           // plan phase 5 readability:  npcs turn toward their target before the lock completes
     npc.WarpOutVanishChance = 0.04f;    // era (med):  "run-away spawns", "1 in 25 vanish"
@@ -1304,6 +1306,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     AddValueParser( "SoftLeashCooldown",        npc.SoftLeashCooldown );
     AddValueParser( "LinkAlertInterval",        npc.LinkAlertInterval );
     AddValueParser( "SleeperCapitalReinforcements", npc.SleeperCapitalReinforcements );
+    AddValueParser( "SleeperCapitalSecondWave", npc.SleeperCapitalSecondWave );
+    AddValueParser( "SleeperCapitalWaves", npc.SleeperCapitalWaves );
     AddValueParser( "SleeperReinforcementTypes",    npc.SleeperReinforcementTypes );
     AddValueParser( "TelegraphJoin",            npc.TelegraphJoin );
     AddValueParser( "WarpOutVanishChance",      npc.WarpOutVanishChance );
@@ -1383,6 +1387,8 @@ bool EVEServerConfig::ProcessNPC( const TiXmlElement* ele )
     RemoveParser( "SoftLeashCooldown" );
     RemoveParser( "LinkAlertInterval" );
     RemoveParser( "SleeperCapitalReinforcements" );
+    RemoveParser( "SleeperCapitalSecondWave" );
+    RemoveParser( "SleeperCapitalWaves" );
     RemoveParser( "SleeperReinforcementTypes" );
     RemoveParser( "TelegraphJoin" );
     RemoveParser( "WarpOutVanishChance" );

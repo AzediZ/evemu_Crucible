@@ -194,9 +194,10 @@ public:
     // pSE is about to be hit:  an overseer structure or sentry aggroes its whole room (npc ai plan 4.3)
     void OnRoomAggression(SystemEntity* pSE, SystemEntity* pAttacker);
     /* a sleeper (pSpotter) of a dungeon room saw a capital ship (npc ai plan 4.6:  "the sleepers will immediately call for
-     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance:
-     *  npc.SleeperCapitalReinforcements sleeper battleships warp in next to the capital on our next Process() (the spotter
-     *  calls this from inside its bubble walk), join the spotter's group and go for the capital */
+     *  reinforcements, and several battleships for each capital will spawn").  once per capital and dungeon instance, for the
+     *  first npc.SleeperCapitalWaves capitals:  6 sleeper battleships for the first, 8 for the next (Crucible's eve-survival
+     *  pages) warp in next to the capital on our next Process() (the spotter calls this from inside its bubble walk), join the
+     *  spotter's group and go for the capital */
     void OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital);
     /* itemID (an npc, sentry or object of ours) left space without dying (GM /unspawn;  SystemManager::OnNPCRemoved):  it
      *  is no longer a member (like WarpShipAway), and the dungeon may be complete now (checked on our next Process()) */
@@ -315,6 +316,7 @@ private:
         uint8 roomIdx;
         uint32 spotterID;
         uint32 capitalID;
+        uint32 count;
     };
 
     // instance building

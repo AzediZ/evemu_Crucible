@@ -387,7 +387,9 @@ public:
         // npc ai phase 5:  polish (doc/code_and_design_notes/planning/npc-ai/PLAN.md phase 5, 6.7;  OPERATING.md)
         uint32 SoftLeashCooldown;   // s.  after a soft leash an npc chases at least this long before it turns back again
         uint32 LinkAlertInterval;   // s.  linked groups (dunSpawnGroups.aggroLink) are told at most this often per member
-        uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for each capital a sleeper sees.  0 = off
+        uint32 SleeperCapitalReinforcements;    // sleeper battleships that warp in for the first capital a site's sleepers see.  0 = off
+        uint32 SleeperCapitalSecondWave;        // and for each later one
+        uint32 SleeperCapitalWaves;             // capitals per site that bring battleships
         std::string SleeperReinforcementTypes;  // typeIDs to pick them from (comma separated).  0 or empty = the room's own sleepless battleships
         bool TelegraphJoin;         // a group member that will join after its reaction delay turns toward the target meanwhile
         float WarpOutVanishChance;  // chance an idle belt spawn's warp-out is off grid for good (the spawn is gone)

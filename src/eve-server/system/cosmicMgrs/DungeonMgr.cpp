@@ -1356,10 +1356,15 @@ void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital
     uint64_t key((static_cast<uint64_t>(iItr->second.first) << 32) | pCapital->GetID());
     if (!m_capitalsSighted.insert(key).second)
         return;
-    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u):  %u reinforcements.",
+    // the site's first capital brings one wave, the next ones another, up to SleeperCapitalWaves
+    uint64_t first(static_cast<uint64_t>(iItr->second.first) << 32);
+    uint32 seen(static_cast<uint32>(std::distance(m_capitalsSighted.lower_bound(first), m_capitalsSighted.lower_bound(first + 0x100000000ULL))));
+    uint32 count(((sConfig.npc.SleeperCapitalReinforcements == 0) or (seen > sConfig.npc.SleeperCapitalWaves)) ? 0
+            : (seen == 1 ? sConfig.npc.SleeperCapitalReinforcements : sConfig.npc.SleeperCapitalSecondWave));
+    _log(NPC__AI_TRACE, "DungeonMgr: %s(%u) of dungeon instance %u room %u sighted the capital %s(%u), its capital %u:  %u reinforcements.",
             pSpotter->GetName(), pSpotter->GetID(), iItr->second.first, iItr->second.second, pCapital->GetName(), pCapital->GetID(),
-            sConfig.npc.SleeperCapitalReinforcements);
-    if (sConfig.npc.SleeperCapitalReinforcements == 0)
+            seen, count);
+    if (count == 0)
         return;
     // we're inside the spotter's walk over its bubble:  the spawn waits for our Process()
     Reinforcement r = Reinforcement();
@@ -1367,6 +1372,7 @@ void DungeonMgr::OnCapitalSighted(SystemEntity* pSpotter, SystemEntity* pCapital
         r.roomIdx = iItr->second.second;
         r.spotterID = pSpotter->GetID();
         r.capitalID = pCapital->GetID();
+        r.count = count;
     m_reinforcements.push_back(r);
 }
 
@@ -1387,6 +1393,12 @@ void DungeonMgr::GetReinforcementTypes(Instance& inst, uint8 roomIdx, std::vecto
     }
     if (!into.empty())
         return;
+    /* Crucible (eve-survival C5 and C6 pages):  Sleepless Guardians in class 5, Sleepless Wardens in class 6, except its
+     *  magnetometric ('Forgotten') sites, which get Guardians */
+    switch (sDataMgr.GetWHSystemClass(m_system->GetID())) {
+        case 5: into = { 30199 }; return;
+        case 6: into = { (inst.name.compare(0, 9, "Forgotten") == 0 ? 30199u : 30198u) }; return;
+    }
     // the sleepless (battleship, signature 400) sleepers of this room
     LiveRoom& room = inst.rooms[roomIdx];
     auto consider = [&](uint32 itemID) {
@@ -1434,7 +1446,7 @@ void DungeonMgr::SpawnReinforcements(const Reinforcement& r)
             liveGroupID = group.liveGroupID;
 
     uint32 count(0);
-    for (uint32 i = 0; i < sConfig.npc.SleeperCapitalReinforcements; ++i) {
+    for (uint32 i = 0; i < r.count; ++i) {
         // they warp in 15-25km from the capital
         GPoint pos(pCapital->GetPosition());
         pos.MakeRandomPointOnSphere(MakeRandomFloat(15000.0, 25000.0));
