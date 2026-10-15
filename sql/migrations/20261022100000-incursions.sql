@@ -1,5 +1,5 @@
--- Incursions:  the incursion state tables and the eleven sites (vanguard, assault, headquarters and the two
---  motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this
+-- Incursions:  the incursion state tables and the fifteen sites (staging, vanguard, assault, headquarters and the
+--  two motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this
 --  - incSiteTypes, incSiteObjects:  site data.  each object has a room (0 the beacon grid, 1+ the pockets behind
 --    acceleration gates), a wave and a role (IncursionMgr.h)
 --  - incIncursions, incSystems, incLPPool:  running incursions, their systems and the LP paid when the mothership dies
@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS incSiteTypes;
 CREATE TABLE incSiteTypes (
   siteTypeID SMALLINT UNSIGNED NOT NULL,
   siteName VARCHAR(100) NOT NULL,
-  sceneType INT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
+  sceneType INT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
   designFleet TINYINT UNSIGNED NOT NULL COMMENT 'fleet size the site is built for',
   iskReward INT UNSIGNED NOT NULL COMMENT 'per pilot, full fleet, high-sec',
   lpReward INT UNSIGNED NOT NULL COMMENT 'CONCORD LP per pilot, full fleet, high-sec',
@@ -55,7 +55,7 @@ ALTER TABLE incIncursions
 CREATE TABLE IF NOT EXISTS incSystems (
   incursionID INT UNSIGNED NOT NULL,
   systemID INT UNSIGNED NOT NULL,
-  sceneType TINYINT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters',
+  sceneType TINYINT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters',
   PRIMARY KEY (incursionID, systemID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 CREATE TABLE IF NOT EXISTS incLPPool (
@@ -76,7 +76,11 @@ INSERT INTO incSiteTypes (siteTypeID, siteName, sceneType, designFleet, iskRewar
 (8, 'True Creations Research Center', 1, 40, 31500000, 7000, 10.0, 0, 0),
 (9, 'True Power Provisional Headquarters', 1, 40, 31500000, 7000, 10.0, 0, 0),
 (10, 'The Kundalini Manifest', 1000001, 80, 63000000, 14000, 0.0, 3, 2192),
-(11, 'Uroborus', 1000001, 80, 63000000, 14000, 0.0, 4, 3071);
+(11, 'Uroborus', 1000001, 80, 63000000, 14000, 0.0, 4, 3071),
+(12, 'Distress Beacon', 4, 5, 50000, 50, 0.0, 0, 0),
+(13, 'Forward Reconnaissance Outpost', 4, 5, 50000, 50, 0.0, 0, 0),
+(14, 'Propaganda Cluster', 4, 5, 50000, 50, 0.0, 0, 0),
+(15, 'Nation Industrial Proxy', 4, 5, 50000, 50, 0.0, 0, 0);
 INSERT INTO incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z) VALUES
 (1, 0, 0, 6, 17831, 1, 1, '', 0, 0, 14500),
 (1, 1, 0, 5, 3056, 1, 0, '', -8000, 0, 12000),
@@ -403,7 +407,70 @@ INSERT INTO incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, para
 (11, 1, 5, 1, 2859, 3, 0, '', 0, -5000, 35000),
 (11, 1, 5, 1, 2190, 2, 0, '', 0, -5000, 35000),
 (11, 1, 5, 1, 2966, 2, 0, '', 0, -5000, 35000),
-(11, 1, 6, 1, 2950, 10, 0, '', 0, 3000, 30000);
+(11, 1, 6, 1, 2950, 10, 0, '', 0, 3000, 30000),
+(12, 1, 0, 5, 32420, 1, 0, 'Civilian Orca', 0, 0, 12000),
+(12, 1, 0, 9, 17470, 1, 4000, '', 18000, -2000, 12000),
+(12, 1, 0, 9, 17470, 1, 4000, '', 17654, 0, 15512),
+(12, 1, 0, 9, 17470, 1, 4000, '', 16630, 2000, 18888),
+(12, 1, 0, 9, 17470, 1, 4000, '', 14966, -2000, 22000),
+(12, 1, 0, 9, 17470, 1, 4000, '', 12728, 0, 24728),
+(12, 1, 0, 9, 17470, 1, 4000, '', 10000, 2000, 26966),
+(12, 1, 0, 9, 17470, 1, 4000, '', 6888, -2000, 28630),
+(12, 1, 0, 9, 17470, 1, 4000, '', 3512, 0, 29654),
+(12, 1, 0, 9, 1230, 1, 4000, '', 0, 2000, 30000),
+(12, 1, 0, 9, 1230, 1, 4000, '', -3512, -2000, 29654),
+(12, 1, 0, 9, 1230, 1, 4000, '', -6888, 0, 28630),
+(12, 1, 0, 9, 1230, 1, 4000, '', -10000, 2000, 26966),
+(12, 1, 0, 9, 1230, 1, 4000, '', -12728, -2000, 24728),
+(12, 1, 0, 9, 1230, 1, 4000, '', -14966, 0, 22000),
+(12, 1, 0, 9, 1230, 1, 4000, '', -16630, 2000, 18888),
+(12, 1, 0, 9, 1230, 1, 4000, '', -17654, -2000, 15512),
+(12, 1, 0, 9, 17464, 1, 4000, '', -18000, 0, 12000),
+(12, 1, 0, 9, 17464, 1, 4000, '', -17654, 2000, 8488),
+(12, 1, 0, 9, 17464, 1, 4000, '', -16630, -2000, 5112),
+(12, 1, 0, 9, 17464, 1, 4000, '', -14966, 0, 2000),
+(12, 1, 0, 9, 17464, 1, 4000, '', -12728, 2000, -728),
+(12, 1, 0, 9, 17464, 1, 4000, '', -10000, -2000, -2966),
+(12, 1, 0, 9, 17464, 1, 4000, '', -6888, 0, -4630),
+(12, 1, 0, 9, 17464, 1, 4000, '', -3512, 2000, -5654),
+(12, 1, 0, 9, 1228, 1, 4000, '', 0, -2000, -6000),
+(12, 1, 0, 9, 1228, 1, 4000, '', 3512, 0, -5654),
+(12, 1, 0, 9, 1228, 1, 4000, '', 6888, 2000, -4630),
+(12, 1, 0, 9, 1228, 1, 4000, '', 10000, -2000, -2966),
+(12, 1, 0, 9, 1228, 1, 4000, '', 12728, 0, -728),
+(12, 1, 0, 9, 1228, 1, 4000, '', 14966, 2000, 2000),
+(12, 1, 0, 9, 1228, 1, 4000, '', 16630, -2000, 5112),
+(12, 1, 0, 9, 1228, 1, 4000, '', 17654, 0, 8488),
+(12, 1, 1, 0, 3524, 2, 0, '', 0, 2000, 18000),
+(12, 1, 1, 0, 3525, 1, 0, '', 0, 2000, 18000),
+(12, 1, 2, 0, 3526, 1, 0, '', 12000, 0, 20000),
+(12, 1, 2, 0, 3524, 2, 0, '', 12000, 0, 20000),
+(12, 1, 3, 0, 3526, 1, 0, '', -12000, 0, 20000),
+(12, 1, 3, 0, 3525, 2, 0, '', -12000, 0, 20000),
+(13, 1, 0, 5, 22064, 1, 0, 'Orbiting Radio Telescope', 0, 0, 25000),
+(13, 1, 0, 5, 29602, 1, 0, 'Transmitter Array', -8000, 0, 15000),
+(13, 1, 0, 5, 29602, 1, 0, 'Transmitter Array', 8000, 0, 15000),
+(13, 1, 1, 0, 3524, 3, 0, '', 0, 0, 15000),
+(13, 1, 2, 0, 3524, 2, 0, '', 10000, 2000, 18000),
+(13, 1, 2, 0, 3526, 1, 0, '', 10000, 2000, 18000),
+(13, 1, 3, 0, 3524, 3, 0, '', -10000, -2000, 18000),
+(13, 1, 4, 0, 3524, 2, 0, '', 0, 4000, 20000),
+(13, 1, 4, 0, 3526, 1, 0, '', 0, 4000, 20000),
+(13, 1, 5, 0, 3524, 2, 0, '', 0, 0, 22000),
+(13, 1, 5, 0, 3526, 2, 0, '', 0, 0, 22000),
+(14, 1, 0, 5, 29599, 1, 0, 'Media Control Facility', 0, 0, 20000),
+(14, 1, 0, 5, 29208, 1, 0, 'Nation Broadcast Array', -10000, 3000, 18000),
+(14, 1, 0, 5, 29208, 1, 0, 'Nation Broadcast Array', 10000, 3000, 18000),
+(14, 1, 1, 0, 3524, 3, 0, '', 0, 0, 16000),
+(14, 1, 2, 0, 3524, 2, 0, '', 12000, 0, 18000),
+(14, 1, 2, 0, 3525, 2, 0, '', 12000, 0, 18000),
+(14, 1, 3, 0, 3525, 2, 0, '', -12000, 0, 18000),
+(14, 1, 3, 0, 3524, 1, 0, '', -12000, 0, 18000),
+(14, 1, 4, 0, 3527, 1, 0, '', 0, 2000, 22000),
+(15, 1, 0, 5, 29603, 1, 0, 'Nation Industrial Proxy', 5000, 0, 10000),
+(15, 1, 1, 0, 3524, 3, 0, '', 0, 0, 12000),
+(15, 1, 2, 0, 3524, 1, 0, '', 8000, 2000, 14000),
+(15, 1, 2, 0, 3525, 2, 0, '', 8000, 2000, 14000);
 
 DELETE FROM invTypesToWrecks WHERE typeID IN (3805,19955);
 INSERT INTO invTypesToWrecks (typeID, typeName, wreckTypeID, wreckName) VALUES

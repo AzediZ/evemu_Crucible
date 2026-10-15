@@ -18,6 +18,8 @@ public:
     static void GetSiteTypes(DBQueryResult& res);
     // incSiteObjects (siteTypeID, room, wave, role, typeID, quantity, param, itemName, x, y, z)
     static void GetSiteObjects(DBQueryResult& res);
+    // the published True Sansha modules
+    static void GetTrueSanshaModules(std::vector<uint16>& into);
 
     static void GetIncursions(DBQueryResult& res);
     static void GetIncursionSystems(DBQueryResult& res);

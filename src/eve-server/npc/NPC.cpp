@@ -37,6 +37,7 @@
 #include "system/SystemBubble.h"
 #include "system/Damage.h"
 #include "system/SystemManager.h"
+#include "system/cosmicMgrs/IncursionMgr.h"
 #include "system/sov/SovereigntyDataMgr.h"
 
 
@@ -349,6 +350,8 @@ void NPC::Killed(Damage &damage) {
     // what drops (and how often nothing does) is the npc's data;  LootDropChance can only thin it out
     if ((sConfig.npc.LootDropChance >= 1.0f) or (MakeRandomFloat() < sConfig.npc.LootDropChance) or (m_allyID == factionRogueDrones))
         DropLoot(wreckItemRef, m_self->groupID(), killerID);
+    // an incursion mothership's own loot
+    sIncursionMgr.MothershipLoot(m_self->typeID(), wreckItemRef, killerID);
 
     DBSystemDynamicEntity wreckEntity = DBSystemDynamicEntity();
         wreckEntity.allianceID = (killer->GetAllianceID() == 0 ? m_allyID : killer->GetAllianceID());

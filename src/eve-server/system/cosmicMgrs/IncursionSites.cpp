@@ -41,6 +41,7 @@
 #include "EVE_Incursion.h"
 #include "StaticDataMgr.h"
 #include "inventory/ItemFactory.h"
+#include "manufacturing/Blueprint.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
 #include "npc/ai/AggroGroup.h"
@@ -96,7 +97,15 @@ namespace IncType {
         Ostingele               = 2932,
         Renyn                   = 2190,
         Romi                    = 2859,
-        Vylade                  = 2207
+        Vylade                  = 2207,
+        // the motherships and their blueprint copies
+        Kundalini               = 2192,
+        Uroborus                = 3071,
+        ShadowBlueprint         = 2949,
+        SuccubusBlueprint       = 17925,
+        PhantasmBlueprint       = 17719,
+        NightmareBlueprint      = 17737,
+        RevenantBlueprint       = 3515
     };
 }
 
@@ -416,8 +425,8 @@ void IncursionMgr::SpawnRoomObjects(IncLiveSite& site, SystemManager* pSys, uint
         return;
     IncSiteType& type = itr->second;
 
-    // each pocket has its own beacon, seen only there
-    if (room > 0) {
+    // each pocket has its own beacon, seen only there.  an ungated site's room is the beacon grid
+    if ((room > 0) and (site.rooms[room].center.distance(site.position) > BUBBLE_RADIUS_METERS)) {
         SystemEntity* pSE = SpawnItem(site, pSys, room, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, site.rooms[room].center);
         if (pSE != nullptr)
             site.rooms[room].beaconID = pSE->GetID();
@@ -489,7 +498,7 @@ NPC* IncursionMgr::SpawnShip(IncLiveSite& site, SystemManager* pSys, uint8 room,
         pNPC->GetAIMgr()->SetGroup(pSys->GetSpawnMgr()->GetAggroGroups().Get(NpcAI::GroupKind::Incursion, roomKey,
                 NpcAI::AggroMode::Proactive, 0, 0, roomKey));
         // a hacked logistics control array:  the mothership's logistics repair the pilots for now (RepairPilots)
-        if (site.repairsOff and (site.siteTypeID >= Incursion::Site::KundaliniManifest))
+        if (site.repairsOff and Incursion::Site::IsMothership(site.siteTypeID))
             pNPC->GetAIMgr()->SetRemoteRepairsOff(true);
     }
     return pNPC;
@@ -616,6 +625,9 @@ void IncursionMgr::StartRoom(IncLiveSite& site, SystemManager* pSys, uint8 room,
         case Incursion::Site::OverrideTransferArray: {
             site.nextRefill = now + 5;      // the station's next repair
         } break;
+        case Incursion::Site::IndustrialProxy: {
+            TellRoom(site, pSys, room, "Incoming transmission: Sansha's Nation forces have claimed this belt for the Nation's industry. Hostiles are moving to engage.");
+        } break;
     }
 }
 
@@ -677,7 +689,11 @@ void IncursionMgr::RoomCleared(IncLiveSite& site, SystemManager* pSys, uint8 roo
     switch (site.siteTypeID) {
         case Incursion::Site::CommanderOutpost:
         case Incursion::Site::RebirthFacility:
-        case Incursion::Site::ConsolidationNetwork: {
+        case Incursion::Site::ConsolidationNetwork:
+        case Incursion::Site::DistressBeacon:
+        case Incursion::Site::ReconOutpost:
+        case Incursion::Site::PropagandaCluster:
+        case Incursion::Site::IndustrialProxy: {
             if (room == type.rooms)
                 CompleteSite(site, pSys, room);
         } break;
@@ -880,7 +896,7 @@ bool IncursionMgr::ProcessSite(uint32 siteID, IncLiveSite& site, SystemManager* 
         if ((r == 0) or !room.started or room.cleared)
             continue;
         // these run on timers and their own triggers
-        if ((r == 1) and ((site.siteTypeID == Incursion::Site::ResearchCenter) or (site.siteTypeID >= Incursion::Site::KundaliniManifest)))
+        if ((r == 1) and ((site.siteTypeID == Incursion::Site::ResearchCenter) or Incursion::Site::IsMothership(site.siteTypeID)))
             continue;
         if (!room.npcs.empty())
             continue;
@@ -1326,6 +1342,43 @@ bool IncursionMgr::GateSlim(uint32 gateID, GVector& dir, bool& open)
     return true;
 }
 
+/* the mothership's wreck (Crucible-era EVE University wiki, March 2013, and CCP's 2010 Incursion blog):  "up to three True
+ *  Sansha faction modules" and one blueprint copy of a Sansha ship:  the Shadow fighter-bomber, Succubus, Phantasm or Nightmare,
+ *  or in low-sec only the Revenant supercarrier.  CCP never published the chances.  picks:  1-3 modules evenly, the Revenant
+ *  one time in ten in low-sec, one run for a ship copy and ten for the Shadow */
+void IncursionMgr::MothershipLoot(uint16 typeID, WreckContainerRef wreckRef, uint32 ownerID)
+{
+    if ((typeID != IncType::Kundalini) and (typeID != IncType::Uroborus))
+        return;
+    if (wreckRef.get() == nullptr)
+        return;
+
+    if (!m_trueSansha.empty()) {
+        int count(MakeRandomInt(1, 3));
+        for (int i = 0; i < count; ++i) {
+            ItemData idata(m_trueSansha[RandomIndex(m_trueSansha.size())], ownerID, wreckRef->itemID(), flagNone, 1);
+            InventoryItemRef iRef(sItemFactory.SpawnItem(idata));
+            if (iRef.get() != nullptr)
+                wreckRef->AddItem(iRef);
+        }
+    }
+
+    const uint16 bpcs[] = { IncType::ShadowBlueprint, IncType::SuccubusBlueprint, IncType::PhantasmBlueprint, IncType::NightmareBlueprint };
+    uint16 bpTypeID(bpcs[RandomIndex(4)]);
+    if ((typeID == IncType::Uroborus) and (MakeRandomFloat() < 0.1))
+        bpTypeID = IncType::RevenantBlueprint;
+    ItemData bdata(bpTypeID, ownerID, wreckRef->itemID(), flagNone);
+    EvERam::bpData bp = EvERam::bpData();
+        bp.copy = true;
+        bp.runs = (bpTypeID == IncType::ShadowBlueprint ? 10 : 1);
+        bp.mLevel = 0;
+        bp.pLevel = 0;
+    BlueprintRef bRef(Blueprint::Spawn(bdata, bp));
+    if (bRef.get() != nullptr)
+        wreckRef->AddItem(bRef);
+    _log(COSMIC_MGR__MESSAGE, "IncursionMgr::MothershipLoot() - %u's wreck %u holds a copy of %u", typeID, wreckRef->itemID(), bpTypeID);
+}
+
 /* pockets are deadspace:  bookmarks and fleet warps into one land at the site's beacon, and the gates are the way in */
 bool IncursionMgr::RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& into)
 {
@@ -1335,6 +1388,9 @@ bool IncursionMgr::RedirectWarp(uint32 systemID, const GPoint& dest, GPoint& int
             continue;
         for (auto& room : site.rooms) {
             if ((room.first == 0) or (room.second.center.distance(dest) >= BUBBLE_RADIUS_METERS))
+                continue;
+            // an ungated site's room is its beacon grid:  nothing to redirect
+            if (room.second.center.distance(site.position) <= BUBBLE_RADIUS_METERS)
                 continue;
             into = site.position;
             into.MakeRandomPointOnSphere(2500);

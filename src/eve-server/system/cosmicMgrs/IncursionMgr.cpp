@@ -94,6 +94,7 @@ void IncursionMgr::Initialize()
     }
 
     LoadSiteTypes();
+    IncursionDB::GetTrueSanshaModules(m_trueSansha);
     if (m_siteTypes.empty()) {
         sLog.Error("Incursion Manager", "No incursion site data found (incSiteTypes).  Have the incursions database updates been applied?  Incursions Disabled.");
         return;
@@ -275,8 +276,6 @@ void IncursionMgr::Process()
         if (inc.endPending)
             continue;
         for (auto sys : inc.systems) {
-            if (sys.second == Incursion::scenesType::staging)
-                continue;
             TopUpSites(inc, sys.first, sys.second, now);
             if (inc.hasBoss and (sys.second == Incursion::scenesType::headquarters))
                 TopUpSites(inc, sys.first, Incursion::scenesType::boss, now);
@@ -371,6 +370,7 @@ void IncursionMgr::TopUpSites(IncData& inc, uint32 systemID, uint32 sceneType, u
         case Incursion::scenesType::vanguard:       limit = sConfig.incursion.VanguardSites; break;
         case Incursion::scenesType::assault:        limit = sConfig.incursion.AssaultSites; break;
         case Incursion::scenesType::headquarters:   limit = sConfig.incursion.HQSites; break;
+        case Incursion::scenesType::staging:        limit = sConfig.incursion.StagingSites; break;
         case Incursion::scenesType::boss:           limit = 1; break;
     }
 
@@ -456,12 +456,26 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
         site.systemID = pSys->GetID();
         site.siteTypeID = siteTypeID;
         site.position = GetSitePoint(pSys);
+    // the Nation Industrial Proxy waits at an asteroid belt
+    bool atBelt(false);
+    if (siteTypeID == Incursion::Site::IndustrialProxy) {
+        std::vector<DBGPointEntity> belts;
+        uint8 total(0);
+        MapDB::GetBelts(pSys->GetID(), belts, total);
+        if (!belts.empty()) {
+            site.position = belts[RandomIndex(belts.size())].position;
+            site.position.MakeRandomPointOnSphere(MakeRandomInt(15, 30) * 1000);
+            atBelt = true;
+        }
+    }
 
-    // the beacon grid is room 0.  each pocket is about a million km out in its own direction, with its own beacon
+    /* the beacon grid is room 0.  each pocket is about a million km out in its own direction, with its own beacon.  the
+     *  staging system's sites have no gates:  their one room is the beacon grid */
+    bool ungated(type.sceneType == Incursion::scenesType::staging);
     for (uint8 i = 0; i <= type.rooms; ++i) {
         IncLiveRoom room = IncLiveRoom();
             room.center = site.position;
-        if (i > 0) {
+        if ((i > 0) and !ungated) {
             GVector dir(MakeRandomFloat(-1.0, 1.0), MakeRandomFloat(-0.3, 0.3), MakeRandomFloat(-1.0, 1.0));
             if (dir.length() < 0.01)
                 dir = GVector(1, 0, 0);
@@ -473,8 +487,8 @@ bool IncursionMgr::SpawnSite(IncData& inc, SystemManager* pSys, uint16 siteTypeI
 
     IncLiveSite& live = m_sites.emplace(site.siteID, site).first->second;
 
-    // the overview beacon.  global, so the whole system sees it and can warp to it
-    SystemEntity* pBeacon = SpawnItem(live, pSys, 0, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, live.position, true);
+    // the overview beacon.  global, so the whole system sees it and can warp to it.  a belt site's is only seen on grid
+    SystemEntity* pBeacon = SpawnItem(live, pSys, 0, Incursion::Role::Structure, EVEDB::invTypes::CelestialBeacon, type.name, live.position, !atBelt);
     if (pBeacon == nullptr) {
         _log(COSMIC_MGR__ERROR, "IncursionMgr::SpawnSite() - unable to spawn beacon for %s in %s", type.name.c_str(), pSys->GetName());
         m_sites.erase(live.siteID);

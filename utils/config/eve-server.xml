@@ -472,6 +472,7 @@ boolean can use either 0/1 OR true/false.
         <VanguardSites>7</VanguardSites><!-- live sites per vanguard system (wiki: up to 7) -->
         <AssaultSites>5</AssaultSites><!-- live sites per assault system (wiki: up to 5) -->
         <HQSites>5</HQSites><!-- live sites per headquarters system, plus the mothership (wiki: up to 5) -->
+        <StagingSites>5</StagingSites><!-- live scout sites in the staging system (wiki: up to 5) -->
         <SiteRespawn>180</SiteRespawn><!-- seconds before a completed site is replaced -->
         <Penalties>true</Penalties><!-- bool  the system penalties across the constellation:  shield and armour resists and weapon and drone damage down 10% in vanguard, 25% in assault and 50% in headquarters systems at full Sansha influence (less as it drops), cynos jammed and CONCORD bounties halved -->
         <DelayedLP>true</DelayedLP><!-- bool  site LP goes into the incursion's pool and is paid to everyone who ran sites when the mothership dies (wiki).  false pays it with each site -->

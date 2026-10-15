@@ -15,7 +15,10 @@
   *   - influence recovers slowly when no sites are completed.  a new incursion starts automatically after a delay
   *   - the constellation's system penalties (UpdatePenalties):  resists and damage by system role and influence, cynos jammed and
  *       bounties halved everywhere in it
- *  not done: staging sites, True Sansha loot, the most-damage payout rule
+ *   - the staging system has small scout sites (50,000 ISK and 50 LP, no influence).  the Nation Industrial Proxy has no
+ *       overview beacon:  it waits at one of the system's asteroid belts
+ *   - the mothership drops one to three True Sansha modules and a Sansha blueprint copy (MothershipLoot)
+ *  not done: gate camps and belt rats (no Crucible rosters), the most-damage payout rule
   */
 
 #ifndef EVEMU_SYSTEM_INCURSIONMGR_H_
@@ -25,6 +28,7 @@
 
 #include "utils/Singleton.h"
 #include "POD_containers.h"
+#include "inventory/ItemRef.h"
 
 class PyList;
 class PyRep;
@@ -83,8 +87,15 @@ namespace Incursion {
             ResearchCenter          = 8,
             ProvisionalHQ           = 9,
             KundaliniManifest       = 10,
-            Uroborus                = 11
+            Uroborus                = 11,
+            // the staging system's scout sites
+            DistressBeacon          = 12,
+            ReconOutpost            = 13,
+            PropagandaCluster       = 14,
+            IndustrialProxy         = 15
         };
+
+        inline bool IsMothership(uint16 siteTypeID) { return ((siteTypeID == KundaliniManifest) or (siteTypeID == Uroborus)); }
     }
 }
 
@@ -223,6 +234,8 @@ public:
     /* an incursion gate's slim item (AccelGateSE, DungeonMgr::MakeGateSlim):  dir is where it sends you (its pocket), open whether
      *  it's unlocked.  false when gateID isn't one of ours */
     bool GateSlim(uint32 gateID, GVector& dir, bool& open);
+    // a mothership's own loot, added to its wreck (NPC::Killed).  nothing for other types
+    void MothershipLoot(uint16 typeID, WreckContainerRef wreckRef, uint32 ownerID);
 
     // the system's role in an incursion (Incursion::scenesType), 0 when none or when penalties are off.  for the cyno jam and bounties
     uint32 PenaltyRole(uint32 systemID);
@@ -249,6 +262,7 @@ private:
     Timer m_procTimer;
 
     std::map<uint16, IncSiteType> m_siteTypes;
+    std::vector<uint16> m_trueSansha;              // True Sansha modules, for the mothership's wreck
     std::map<uint32, IncData> m_incursions;         // incursionID
     std::map<uint32, IncLiveSite> m_sites;          // siteID
     std::map<uint32, uint32> m_siteCooldown;        // systemID, unix time a new site may spawn

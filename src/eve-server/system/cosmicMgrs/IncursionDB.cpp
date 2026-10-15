@@ -17,6 +17,20 @@ void IncursionDB::GetSiteTypes(DBQueryResult& res)
         _log(DATABASE__ERROR, "Error in GetSiteTypes query: %s", res.error.c_str());
 }
 
+void IncursionDB::GetTrueSanshaModules(std::vector<uint16>& into)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT t.typeID FROM invTypes AS t JOIN invGroups AS g ON g.groupID = t.groupID"
+        " WHERE t.typeName LIKE 'True Sansha %%' AND g.categoryID = 7 AND t.published = 1")) {
+        _log(DATABASE__ERROR, "Error in GetTrueSanshaModules query: %s", res.error.c_str());
+        return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back(row.GetUInt(0));
+}
+
 void IncursionDB::GetSiteObjects(DBQueryResult& res)
 {
     if (!sDatabase.RunQuery(res,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates sql/migrations/20261022100000-incursions.sql:  the incursion tables and the eleven sites.
+"""Generates sql/migrations/20261022100000-incursions.sql:  the incursion tables and the fifteen sites.
 
 Layouts follow each site's EVE University wiki page.  The wiki gives rosters, wave identifiers, spawn distances and
 bearings, but never per-wave counts or gate distances; those are picks.  Positions are km from the room's centre (its
@@ -13,11 +13,12 @@ import sys
 # ---- roles and special waves (Incursion::Role, Incursion::Wave in IncursionMgr.h) ----
 SHIP, FREE, OBJ, PICK, RESPAWN, STRUCT, GATE, HGATE, CONT, ROID = range(10)
 MINING, SCRIPTED = 254, 255
-VAN, ASSAULT, HQ, BOSS = 3, 2, 1, 1000001
+VAN, ASSAULT, HQ, STAGING, BOSS = 3, 2, 1, 4, 1000001
 
 # ---- types ----
 GATE_T = 17831
 EYSTUR, RENYN, SCHMAEEL, TAMA, NIARJA, ORKASHU, YOUL, COMMANDER = 2966, 2190, 2907, 2939, 2909, 3526, 3525, 3492
+JEL = 3524
 AUGA, ANTEM, ARNON, MARA, ROMI, RAA, UITRA, VYLADE, LIRSAUTTON = 2936, 2191, 2209, 2931, 2859, 3527, 2208, 2207, 2950
 DELTOLE, INTAKI, OSTINGELE, OUTUNI, YULAI = 2933, 2855, 2932, 2845, 2935
 CITIZENS = (3484, 3485, 3486, 3487, 3490)
@@ -27,6 +28,8 @@ BASTION, TPHQ = 3805, 19955                      # objective NPCs: the Battletow
 BATTLETOWER, COLONY, OUTPOST, CONTROL_LCO, RUINS, SNAKE, OBELISK = 2234, 2928, 3056, 3059, 3626, 10787, 32137
 LOGI_STATION, ARRAY_LCO = 3510, 3509
 LYAVITE = 28620
+LCO_ORCA, RADIO_TELESCOPE, BILLBOARD, BUNKER, JUNCTION, LOOKOUT = 32420, 22064, 29208, 29599, 29602, 29603
+VELDSPAR, CONC_VELDSPAR, SCORDITE, MASSIVE_SCORDITE = 1230, 17470, 1228, 17464
 # containers
 LCA, MTAC_FACTORY, CONTROL_TOWER, REFINERY, EVAC, NEXUS, RELAY, COMMS = 3261, 3498, 3495, 3502, 3503, 3506, 3508, 3491
 CONTAINERS = (LCA, MTAC_FACTORY, CONTROL_TOWER, REFINERY, EVAC, NEXUS, RELAY, COMMS)
@@ -207,6 +210,58 @@ def boss(mothership):
 SITES[10] = ('The Kundalini Manifest', BOSS, 80, 63000000, 14000, 0.0, 3, KUNDALINI, boss(KUNDALINI))
 SITES[11] = ('Uroborus', BOSS, 80, 63000000, 14000, 0.0, 4, UROBORUS, boss(UROBORUS))
 
+# --- the staging system's scout sites (wiki, June 2011 revisions):  50,000 ISK and 50 LP each, no influence.  small
+#     ungated sites:  everything is on the beacon's grid (room 1 sits on the beacon, IncursionMgr::SpawnSite).  the
+#     wiki lists the npc types but not the counts or positions, which are picks ---
+def ring(typeIDs, per, radius, at, units):
+    """per rocks of each type on a ring around at"""
+    import math
+    rows, n, total = [], 0, per * len(typeIDs)
+    for t in typeIDs:
+        for i in range(per):
+            a = 2 * math.pi * n / total
+            rows.append(o(1, 0, ROID, t, (at[0] + radius * math.cos(a), at[1] + (n % 3 - 1) * 2, at[2] + radius * math.sin(a)), param=units))
+            n += 1
+    return rows
+
+# --- Distress Beacon: an Orca under attack.  Orkashu Myelen, Jel Rhomben and Youl Meten.  8 rocks each of Concentrated
+#     Veldspar, Veldspar, Massive Scordite and Scordite ---
+SITES[12] = ('Distress Beacon', STAGING, 5, 50000, 50, 0.0, 0, 0, [
+    o(1, 0, STRUCT, LCO_ORCA, (0, 0, 12), name='Civilian Orca'),
+    *ring((CONC_VELDSPAR, VELDSPAR, MASSIVE_SCORDITE, SCORDITE), 8, 18, (0, 0, 12), 4000),
+    *wave(1, 1, (0, 2, 18), (JEL, 2), (YOUL, 1)),
+    *wave(1, 2, (12, 0, 20), (ORKASHU, 1), (JEL, 2)),
+    *wave(1, 3, (-12, 0, 20), (ORKASHU, 1), (YOUL, 2))])
+
+# --- Forward Reconnaissance Outpost: transmitter arrays and an Orbiting Radio Telescope.  five waves of Jel Rhomben
+#     and Orkashu Myelen ---
+SITES[13] = ('Forward Reconnaissance Outpost', STAGING, 5, 50000, 50, 0.0, 0, 0, [
+    o(1, 0, STRUCT, RADIO_TELESCOPE, (0, 0, 25), name='Orbiting Radio Telescope'),
+    o(1, 0, STRUCT, JUNCTION, (-8, 0, 15), name='Transmitter Array'),
+    o(1, 0, STRUCT, JUNCTION, (8, 0, 15), name='Transmitter Array'),
+    *wave(1, 1, (0, 0, 15), (JEL, 3)),
+    *wave(1, 2, (10, 2, 18), (JEL, 2), (ORKASHU, 1)),
+    *wave(1, 3, (-10, -2, 18), (JEL, 3)),
+    *wave(1, 4, (0, 4, 20), (JEL, 2), (ORKASHU, 1)),
+    *wave(1, 5, (0, 0, 22), (JEL, 2), (ORKASHU, 2))])
+
+# --- Propaganda Cluster: a media control facility.  waves of Jel Rhomben and Youl Meten, then a Raa Thalamus ---
+SITES[14] = ('Propaganda Cluster', STAGING, 5, 50000, 50, 0.0, 0, 0, [
+    o(1, 0, STRUCT, BUNKER, (0, 0, 20), name='Media Control Facility'),
+    o(1, 0, STRUCT, BILLBOARD, (-10, 3, 18), name='Nation Broadcast Array'),
+    o(1, 0, STRUCT, BILLBOARD, (10, 3, 18), name='Nation Broadcast Array'),
+    *wave(1, 1, (0, 0, 16), (JEL, 3)),
+    *wave(1, 2, (12, 0, 18), (JEL, 2), (YOUL, 2)),
+    *wave(1, 3, (-12, 0, 18), (YOUL, 2), (JEL, 1)),
+    *wave(1, 4, (0, 2, 22), (RAA, 1))])
+
+# --- Nation Industrial Proxy: no overview beacon.  it sits at one of the staging system's asteroid belts and pilots
+#     who warp there get an incoming transmission.  3 Jel Rhomben, then 1 Jel Rhomben and 2 Youl Meten ---
+SITES[15] = ('Nation Industrial Proxy', STAGING, 5, 50000, 50, 0.0, 0, 0, [
+    o(1, 0, STRUCT, LOOKOUT, (5, 0, 10), name='Nation Industrial Proxy'),
+    *wave(1, 1, (0, 0, 12), (JEL, 3)),
+    *wave(1, 2, (8, 2, 14), (JEL, 1), (YOUL, 2))])
+
 # the objective npcs have no wreck in the shipped data
 WRECKS = {BASTION: "Sansha's Nation Central Bastion", TPHQ: "'True Power' Assembly Security HQ"}
 LARGE_WRECK, LARGE_WRECK_NAME = 26581, 'Sanshas Large Wreck'
@@ -220,8 +275,8 @@ def km(v):
 def main(path):
     out = []
     w = out.append
-    w('-- Incursions:  the incursion state tables and the eleven sites (vanguard, assault, headquarters and the two')
-    w('--  motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this')
+    w('-- Incursions:  the incursion state tables and the fifteen sites (staging, vanguard, assault, headquarters and the')
+    w('--  two motherships), laid out from their EVE University wiki pages.  utils/incursions/gen_incursion_sql.py writes this')
     w('--  - incSiteTypes, incSiteObjects:  site data.  each object has a room (0 the beacon grid, 1+ the pockets behind')
     w('--    acceleration gates), a wave and a role (IncursionMgr.h)')
     w('--  - incIncursions, incSystems, incLPPool:  running incursions, their systems and the LP paid when the mothership dies')
@@ -232,7 +287,7 @@ def main(path):
 CREATE TABLE incSiteTypes (
   siteTypeID SMALLINT UNSIGNED NOT NULL,
   siteName VARCHAR(100) NOT NULL,
-  sceneType INT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
+  sceneType INT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters, 1000001 mothership (EVE_Incursion.h)',
   designFleet TINYINT UNSIGNED NOT NULL COMMENT 'fleet size the site is built for',
   iskReward INT UNSIGNED NOT NULL COMMENT 'per pilot, full fleet, high-sec',
   lpReward INT UNSIGNED NOT NULL COMMENT 'CONCORD LP per pilot, full fleet, high-sec',
@@ -277,7 +332,7 @@ ALTER TABLE incIncursions
 CREATE TABLE IF NOT EXISTS incSystems (
   incursionID INT UNSIGNED NOT NULL,
   systemID INT UNSIGNED NOT NULL,
-  sceneType TINYINT UNSIGNED NOT NULL COMMENT '3 vanguard, 2 assault, 1 headquarters',
+  sceneType TINYINT UNSIGNED NOT NULL COMMENT '4 staging, 3 vanguard, 2 assault, 1 headquarters',
   PRIMARY KEY (incursionID, systemID)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 CREATE TABLE IF NOT EXISTS incLPPool (
