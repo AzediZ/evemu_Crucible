@@ -75,6 +75,9 @@ public:
 
     void                LaunchProbe();
     void                LaunchMissile();
+    /* defender missiles (Crucible):  loaded in a launcher that runs without a target.  each cycle fires one at a missile
+     *  on its way to our ship that none of our defenders is chasing yet.  no missile coming, no shot (and no charge used) */
+    void                LaunchDefender();
     void                LaunchSnowBall();
     void                LaunchInterdictionSphere();
 

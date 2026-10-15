@@ -111,6 +111,9 @@ Missile::Missile( InventoryItemRef self, EVEServiceManager& services, SystemMana
 }
 
 void Missile::Process() {
+    // shot down by a defender (or anything else that destroyed it):  it goes without hitting
+    if (IsDead())
+        m_alive = false;
     if (!m_alive) {
         Delete();
         return;

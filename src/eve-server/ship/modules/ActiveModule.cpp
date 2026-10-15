@@ -407,6 +407,9 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
             m_shipRef->ClearTargetRef();
         }
     }
+    // defenders don't take a target:  they go after missiles coming at us (LaunchDefender)
+    if (m_launcher and (m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile))
+        targetID = 0;
     if (IsValidTarget(targetID)) {
         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
@@ -1882,6 +1885,10 @@ void ActiveModule::LaunchMissile()
     Client* pClient = m_shipRef->GetPilot();
     if (pClient == nullptr)
         return;
+    if ((m_chargeRef.get() != nullptr) and (m_chargeRef->groupID() == EVEDB::invGroups::Defender_Missile)) {
+        LaunchDefender();
+        return;
+    }
     // the launcher ran out (or was unloaded) since it was activated.  it stops at the end of this cycle
     if ((m_chargeRef.get() == nullptr) or (m_targetSE == nullptr)) {
         m_Stop = true;
@@ -1928,6 +1935,61 @@ void ActiveModule::LaunchMissile()
 
     // add data to StatisticMgr
     sStatMgr.Increment(Stat::pcMissiles);
+}
+
+void ActiveModule::LaunchDefender()
+{
+    Client* pClient(m_shipRef->GetPilot());
+    if ((pClient == nullptr) or (m_chargeRef.get() == nullptr))
+        return;
+    ShipSE* pShip(pClient->GetShipSE());
+    if ((pShip == nullptr) or (pShip->SysBubble() == nullptr))
+        return;
+
+    // incoming missiles, and the ones our defenders are already after
+    std::vector<Missile*> incoming;
+    std::set<SystemEntity*> chased;
+    pShip->SysBubble()->ForEachDynamic([&](SystemEntity* pSE) {
+        if (!pSE->IsMissileSE() or pSE->IsDead())
+            return;
+        Missile* pMissile(pSE->GetMissileSE());
+        if (!pMissile->IsAlive())
+            return;
+        if (pMissile->GetLauncherID() == pShip->GetID())
+            chased.insert(pMissile->GetTargetSE());
+        else if (pMissile->GetTargetSE() == pShip)
+            incoming.push_back(pMissile);
+    });
+    Missile* pTarget(nullptr);
+    double best(0.0);
+    for (auto cur : incoming) {
+        if (chased.find(cur) != chased.end())
+            continue;
+        double dist(pShip->GetPosition().distance(cur->GetPosition()));
+        if ((pTarget == nullptr) or (dist < best)) {
+            pTarget = cur;
+            best = dist;
+        }
+    }
+    if (pTarget == nullptr)
+        return;
+
+    ItemData idata(m_chargeRef->typeID(), pClient->GetCharacterID(), pClient->GetLocationID(), flagMissile, m_chargeRef->name(), m_shipRef->position());
+    InventoryItemRef missileRef(sItemFactory.SpawnItem(idata));
+    if (missileRef.get() == nullptr)
+        return;
+    static const uint16 missileAttrs[] = {
+        AttrEmDamage, AttrExplosiveDamage, AttrKineticDamage, AttrThermalDamage, AttrExplosionDelay, AttrMaxVelocity, AttrHP };
+    for (auto attrID : missileAttrs)
+        if (m_chargeRef->HasAttribute(attrID))
+            missileRef->SetAttribute(attrID, m_chargeRef->GetAttribute(attrID), false);
+
+    SystemManager* pSystem(pClient->SystemMgr());
+    Missile* pDefender(new Missile(missileRef, pSystem->GetServiceMgr(), pSystem, m_modRef, pTarget, pShip, this));
+    pDefender->SetSpeed(missileRef->GetAttribute(AttrMaxVelocity).get_float());
+    pDefender->DestinyMgr()->MakeMissile(pDefender);
+    ConsumeCharge();
+    _log(MODULE__MESSAGE, "%s launched a defender at %s(%u)", pClient->GetName(), pTarget->GetName(), pTarget->GetID());
 }
 
 void ActiveModule::LaunchProbe()
