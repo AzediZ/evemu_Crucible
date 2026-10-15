@@ -379,6 +379,14 @@ bool CrimeWatch::CanAttackFreely(Client* pAggressor, const Owner& target)
     return false;
 }
 
+bool CrimeWatch::IsFreeTarget(Client* pAggressor, SystemEntity* pTarget)
+{
+    Owner target;
+    if ((pAggressor == nullptr) or !GetOwner(pTarget, target) or (target.charID == 0))
+        return false;
+    return CanAttackFreely(pAggressor, target);
+}
+
 /* ------------------------------------------------------------------------------------------------------------------
  *  aggressive acts
  * ------------------------------------------------------------------------------------------------------------------ */

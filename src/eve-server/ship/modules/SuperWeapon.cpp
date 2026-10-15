@@ -30,6 +30,7 @@
 #include "ship/Ship.h"
 #include "ship/modules/SuperWeapon.h"
 #include "system/Damage.h"
+#include "system/DestinyManager.h"
 #include "system/TargetManager.h"
 
 SuperWeapon::SuperWeapon(ModuleItemRef mRef, ShipItemRef sRef)
@@ -81,11 +82,16 @@ void SuperWeapon::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/*
     if ((m_ModuleState != Module::State::Activated) or !m_shipRef->HasPilot() or (m_targetSE == nullptr))
         return;
 
-    // no warp for effectDeactivationDelay (ms), no jump drive, portal or cloak for jumpDelayDuration (s)
+    /* no warp for effectDeactivationDelay (ms), no jump drive, portal or cloak for jumpDelayDuration (s).
+     *  speedFactor -100: the titan is held in place for effectDeactivationDelay too.  the effect has no expression, so the
+     *  hold is done here and the destiny manager lets go when it runs out */
     ShipSE* pShip(m_shipRef->GetPilot()->GetShipSE());
     int64 now(GetFileTimeNow());
-    pShip->SetWarpLockout(now + (GetAttribute(AttreffectDeactivationDelay).get_int() * (EvE::Time::Second / 1000)));
+    int64 holdUntil(now + (GetAttribute(AttreffectDeactivationDelay).get_int() * (EvE::Time::Second / 1000)));
+    pShip->SetWarpLockout(holdUntil);
     pShip->SetJumpLockout(now + (GetAttribute(AttrJumpDelayDuration).get_int() * EvE::Time::Second));
+    if ((holdUntil > now) and (GetAttribute(AttrSpeedFactor) <= -100) and (pShip->DestinyMgr() != nullptr))
+        pShip->DestinyMgr()->HoldUntil(holdUntil);
 
     // the damage lands at once (no build-up delay).  the cycle that follows is the rate of fire
     ApplySuperWeaponDamage();

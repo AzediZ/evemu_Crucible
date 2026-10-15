@@ -84,6 +84,8 @@ public:
     bool IsFlaggedTo(uint32 aggressorID, uint32 victimID);       // aggressor has a live flag towards victim (char or corp)
     bool HasLiveFlags(uint32 charID);                            // live aggressor towards anyone, or a live criminal
     bool IsOutlaw(float secStatus)                               { return (roundf(secStatus * 10.0f) / 10.0f) <= -5.0f; }
+    // a pilot's ship (or one they left in space) the aggressor can shoot without a crime (automated targeting)
+    bool IsFreeTarget(Client* pAggressor, SystemEntity* pTarget);
 
     /* Crimewatch 1 sentries (npc ai plan 4.10, phase 4) */
     // charID attacked a gate/station gun (objectID = the gate or station it guards), or a gun picked them:  (re)starts the timer

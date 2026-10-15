@@ -79,7 +79,7 @@ bool TargetManager::Process() {
             case TargMgr::State::Idle:
             case TargMgr::State::Locked:{          //do nothing
             } break;
-            case TargMgr::State::Passive:   // this will be used with stealth modules (which, ofc, are not written yet)
+            case TargMgr::State::Passive:   // passive targeter (the target wasn't told)
             case TargMgr::State::Locking: {
                 if (itr->second->timer.Check(false)) {
                     itr->second->timer.Disable();
@@ -129,19 +129,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
         mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
         return false;
     }
-    // get lower of ship and char target skills, with minimum of 1
-    uint8 maxLockedTargets = 1;
-    uint8 maxCharTargets = mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Targeting);
-    maxCharTargets += mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Multitasking);
-    if (maxCharTargets > 0)
-        if (maxLockedTargets < maxCharTargets)
-            maxLockedTargets = maxCharTargets;
-
-    uint8 maxShipTargets = (uint8)sRef->GetAttribute(AttrMaxLockedTargets).get_uint32();
-    if (maxShipTargets > 0)
-        if (maxLockedTargets > maxShipTargets)
-            maxLockedTargets = maxShipTargets;
-
+    uint8 maxLockedTargets(GetMaxLockedTargets(sRef));
     if (m_targets.size() >= maxLockedTargets) {
         mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only handle %u targets at a time.", maxLockedTargets);
         _log(TARGET__DEBUG, " %s(%u): Told to target %s(%u), but we already have max targets of %u.  Ignoring request.", \
@@ -168,10 +156,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
     }
 
     // Check against max target range
-    double maxTargetRange = sRef->GetAttribute(AttrMaxTargetRange).get_double();
-    // sensor dampeners on us
-    if (mySE->GetEwar() != nullptr)
-        maxTargetRange *= mySE->GetEwar()->GetTargetRangeMult();
+    double maxTargetRange(GetMaxTargetRange(sRef));
     GVector rangeToTarget( mySE->GetPosition(), tSE->GetPosition() );
     // adjust for target radius, in case of ice or other large objects..
     double targetDistance = rangeToTarget.length();
@@ -202,6 +187,63 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
     sEntityList.AddTargMgr(mySE, this);
 
     Dump();
+    return true;
+}
+
+uint8 TargetManager::GetMaxLockedTargets(ShipItemRef sRef) const
+{
+    // get lower of ship and char target skills, with minimum of 1
+    uint8 maxLockedTargets = 1;
+    if (mySE->HasPilot()) {
+        uint8 maxCharTargets = mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Targeting);
+        maxCharTargets += mySE->GetPilot()->GetChar()->GetSkillLevel(EvESkill::Multitasking);
+        if (maxCharTargets > 0)
+            if (maxLockedTargets < maxCharTargets)
+                maxLockedTargets = maxCharTargets;
+    }
+
+    uint8 maxShipTargets = (uint8)sRef->GetAttribute(AttrMaxLockedTargets).get_uint32();
+    if (maxShipTargets > 0)
+        if (maxLockedTargets > maxShipTargets)
+            maxLockedTargets = maxShipTargets;
+    return maxLockedTargets;
+}
+
+double TargetManager::GetMaxTargetRange(ShipItemRef sRef) const
+{
+    double maxTargetRange = sRef->GetAttribute(AttrMaxTargetRange).get_double();
+    // sensor dampeners on us
+    if (mySE->GetEwar() != nullptr)
+        maxTargetRange *= mySE->GetEwar()->GetTargetRangeMult();
+    return maxTargetRange;
+}
+
+bool TargetManager::StartPassiveTargeting(SystemEntity* tSE, ShipItemRef sRef)
+{
+    if (!mySE->HasPilot() or (tSE == nullptr) or (tSE->TargetMgr() == nullptr))
+        return false;
+    if (m_targets.find(tSE) != m_targets.end())
+        return false;
+    if (IsJammed())
+        return false;
+    uint8 maxLockedTargets(GetMaxLockedTargets(sRef));
+    if (m_targets.size() >= maxLockedTargets) {
+        mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only handle %u targets at a time.", maxLockedTargets);
+        return false;
+    }
+
+    uint32 lockTime((uint32)(TimeToLock(sRef, tSE) * 1000));
+
+    TargetEntry *te = new TargetEntry();
+        te->state = TargMgr::State::Passive;
+        te->timer.Start(lockTime);
+    m_targets[tSE] = te;
+    tSE->TargetMgr()->TargetedAdd(mySE, true);
+
+    _log(TARGET__INFO, "Pilot %s in %s(%u) started passive targeting %s(%u) with %ums lock time.", \
+            mySE->GetPilot()->GetName(), mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID(), lockTime);
+
+    sEntityList.AddTargMgr(mySE, this);
     return true;
 }
 
@@ -398,9 +440,11 @@ void TargetManager::TargetedByLost(SystemEntity* pSE) {
     _log(TARGET__TRACE, "%s(%u) is no longer locked by %s(%u)", \
             mySE->GetName(), mySE->GetID(), pSE->GetName(), pSE->GetID());
 
+    bool passive(itr->second->passive);
     SafeDelete(itr->second);
     m_targetedBy.erase(itr);
-    TargetedLost(pSE);
+    if (!passive)
+        TargetedLost(pSE);
 }
 
 /*
@@ -434,7 +478,7 @@ void TargetManager::TargetAdded(SystemEntity* tSE) {
     mySE->GetPilot()->QueueDestinyUpdate(&up);
 }
 
-void TargetManager::TargetedAdd(SystemEntity *tSE) {
+void TargetManager::TargetedAdd(SystemEntity *tSE, bool passive/*false*/) {
     //first make sure they are not already in the list
     if (m_targetedBy.find(tSE) != m_targetedBy.end()) {
         _log(TARGET__INFO, "Cannot add %s(%u) to %s(%u)'s locked list: they're already in there.", \
@@ -446,8 +490,11 @@ void TargetManager::TargetedAdd(SystemEntity *tSE) {
                 mySE->GetName(), mySE->GetID(), tSE->GetName(), tSE->GetID());
         TargetedByEntry *te = new TargetedByEntry();
         te->state = TargMgr::State::Locking;
+        te->passive = passive;
         m_targetedBy[tSE] = te;
     }
+    if (passive)
+        return;
     if (mySE->IsNPCSE())
         mySE->GetNPCSE()->TargetedAdd(tSE);
     // sentries answer a lock on their next think (npc ai plan phase 4:  pirate guns lock back, law guns only eligible targets)
@@ -540,7 +587,16 @@ void TargetManager::GetTargetModules(std::vector<ActiveModule*>& into) const
 
 bool TargetManager::IsTargetedBy(SystemEntity* pSE)
 {
-    return (m_targetedBy.find(pSE) != m_targetedBy.end());
+    std::map<SystemEntity*, TargetedByEntry*>::const_iterator itr(m_targetedBy.find(pSE));
+    return ((itr != m_targetedBy.end()) and !itr->second->passive);
+}
+
+bool TargetManager::IsTargeted() const
+{
+    for (auto& cur : m_targetedBy)
+        if (!cur.second->passive)
+            return true;
+    return false;
 }
 
 SystemEntity* TargetManager::GetFirstTarget(bool need_locked/*false*/) {
@@ -584,7 +640,8 @@ PyList* TargetManager::GetTargeters() const {
 
     std::map<SystemEntity*, TargetedByEntry*>::const_iterator itr = m_targetedBy.begin();
     for(; itr != m_targetedBy.end(); ++itr)
-        result->AddItemInt( itr->first->GetID() );
+        if (!itr->second->passive)
+            result->AddItemInt( itr->first->GetID() );
 
     return result;
 }

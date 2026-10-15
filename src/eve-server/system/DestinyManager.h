@@ -229,7 +229,9 @@ public:
     bool HasMissileHit() const                          { return m_missileHit; }
 
     bool IsFrozen()                                     { return m_frozen; }
-    void SetFrozen(bool set=false)                      { m_frozen = set; }
+    void SetFrozen(bool set=false)                      { m_frozen = set; m_holdUntil = 0; }
+    // stops the ship and keeps it frozen until 'until' (filetime).  Process() lets it go
+    void HoldUntil(int64 until);
 
     // Prevents actions if the player is performing the login warp
     bool AbortIfLoginWarping(bool showMsg);
@@ -296,6 +298,7 @@ protected:
 
 private:
     bool m_frozen;                      // hack to keep ship from moving when using modules that prevent movement
+    int64 m_holdUntil;                  // filetime a timed hold ends (HoldUntil), 0 for none
 
     // client-semantics state changes.  these do not send anything
     void ApplyStop();

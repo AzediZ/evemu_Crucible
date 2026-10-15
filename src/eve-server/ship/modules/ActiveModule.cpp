@@ -19,6 +19,7 @@
 #include "inventory/AttributeEnum.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
+#include "npc/ambient/AmbientNPC.h"
 #include "npc/Sentry.h"
 #include "npc/SentryAI.h"
 #include "ship/Missile.h"
@@ -839,10 +840,14 @@ uint32 ActiveModule::DoCycle() {
         } break;
         case EVEDB::invGroups::Artifacts_and_Prototypes: {
         } break;
+        case EVEDB::invGroups::Passive_Targeting_System: {
+            // TargetSilently:  the lock starts with the cycle.  a target we already have is left alone
+            if ((m_targetSE != nullptr) and (m_targMgr != nullptr))
+                m_targMgr->StartPassiveTargeting(m_targetSE, m_shipRef);
+        } break;
         // these passive modules will need specific code
         case EVEDB::invGroups::Missile_Launcher_Defender:
-        case EVEDB::invGroups::Countermeasure_Launcher:
-        case EVEDB::invGroups::Passive_Targeting_System: {
+        case EVEDB::invGroups::Countermeasure_Launcher: {
         } break;
         // these active modules will need specific code
         case EVEDB::invGroups::Cynosural_Field_Generator:
@@ -1047,6 +1052,61 @@ void ActiveModule::CycleComplete()
         case EVEDB::invGroups::Cargo_Scanner: {
             CargoScanResult();
         } break;
+        case EVEDB::invGroups::Automated_Targeting_System: {
+            TargetHostiles();
+        } break;
+    }
+}
+
+void ActiveModule::TargetHostiles()
+{
+    /* "Targets any hostile ship within range on activation."  hostile:  rats (any npc that isn't police, a navy, CONCORD or a
+     *  protected ambient npc) and pilots we can shoot without a crime (war, outlaw, criminal or suspect to us, kill right,
+     *  enemy militia).  nearest first, up to our free target slots and within our own targeting range */
+    if ((m_shipSE == nullptr) or (m_targMgr == nullptr) or !m_shipRef->HasPilot() or (m_shipSE->SysBubble() == nullptr))
+        return;
+    if (m_targMgr->IsJammed())
+        return;
+    uint8 maxTargets(m_targMgr->GetMaxLockedTargets(m_shipRef));
+    if (m_targMgr->TargetCount() >= maxTargets)
+        return;
+    double range(GetAttribute(AttrTargetHostileRange).get_double());
+    double maxRange(m_targMgr->GetMaxTargetRange(m_shipRef));
+    if (range > maxRange)
+        range = maxRange;
+
+    Client* pClient(m_shipRef->GetPilot());
+    std::vector<std::pair<double, SystemEntity*>> found;
+    m_shipSE->SysBubble()->ForEachDynamic([&](SystemEntity* pSE) {
+        if ((pSE == m_shipSE) or (pSE->TargetMgr() == nullptr) or pSE->IsDead())
+            return;
+        if (m_targMgr->GetTarget(pSE->GetID(), false) != nullptr)
+            return;
+        if (pSE->IsNPCSE()) {
+            NPC* pNPC(pSE->GetNPCSE());
+            if (pNPC->IsLawEnforcer() or (pSE->GetCorporationID() == corpCONCORD))
+                return;
+            if ((pNPC->GetAmbientNPC() != nullptr) and pNPC->GetAmbientNPC()->IsProtected())
+                return;
+        } else if (pSE->IsShipSE()) {
+            if (!pSE->HasPilot() or (pSE->GetPilot() == pClient) or pSE->GetPilot()->InPod())
+                return;
+            if (!sCrimeWatch.IsFreeTarget(pClient, pSE))
+                return;
+        } else {
+            return;
+        }
+        double dist(m_shipSE->GetPosition().distance(pSE->GetPosition()) - pSE->GetRadius());
+        if (dist <= range)
+            found.push_back(std::make_pair(dist, pSE));
+    });
+    std::sort(found.begin(), found.end(), [](const std::pair<double, SystemEntity*>& a, const std::pair<double, SystemEntity*>& b) {
+        return a.first < b.first;
+    });
+    for (auto& cur : found) {
+        if (m_targMgr->TargetCount() >= maxTargets)
+            break;
+        m_targMgr->StartTargeting(cur.second, m_shipRef);
     }
 }
 
@@ -1536,6 +1596,14 @@ bool ActiveModule::CanActivate() {
             } break;
             case Cargo_Scanner: {
                 range = GetAttribute(AttrCargoScanRange).get_float();
+            } break;
+            case Super_Weapon: {
+                // no range attribute:  the target only has to stay locked (checked in SuperWeapon::CanActivate)
+                return true;
+            }
+            case Passive_Targeting_System: {
+                // the ship's own targeting range
+                range = m_shipRef->GetPilot()->GetShipSE()->TargetMgr()->GetMaxTargetRange(m_shipRef);
             } break;
             case Ship_Scanner: {
                 // results thin out over the falloff (ShipScanResult)

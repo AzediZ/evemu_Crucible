@@ -92,7 +92,8 @@ public:
     void                TargetLost(SystemEntity *tSE);
     void                ClearTarget(SystemEntity *tSE);
     void                TargetAdded(SystemEntity *tSE);
-    void                TargetedAdd(SystemEntity *tSE);
+    // passive: a passive targeter's lock.  the target isn't told and its npc ai doesn't see it
+    void                TargetedAdd(SystemEntity *tSE, bool passive=false);
     void                TargetedLost(SystemEntity *tSE);
     void                ClearTargets(bool notify=true);
     void                ClearAllTargets(bool notify=true);
@@ -134,11 +135,18 @@ public:
 
     // called by player ships
     bool                StartTargeting(SystemEntity* tSE, ShipItemRef sRef);
+    /* passive targeter (TargetSilently, on activation):  a lock the target isn't told about, with the ship's lock time.
+     *  range is checked by the module */
+    bool                StartPassiveTargeting(SystemEntity* tSE, ShipItemRef sRef);
+    // the lower of the pilot's targeting skills and the ship's maxLockedTargets, at least 1
+    uint8               GetMaxLockedTargets(ShipItemRef sRef) const;
+    // the ship's targeting range with sensor dampeners on us
+    double              GetMaxTargetRange(ShipItemRef sRef) const;
 
     /* NPC AI Methods */
     bool                IsTargetedBy(SystemEntity *pSE);
     // somebody has (or is getting) a lock on us
-    bool                IsTargeted() const              { return !m_targetedBy.empty(); }
+    bool                IsTargeted() const;
     SystemEntity*       GetFirstTarget(bool need_locked=false);
     // everything we target (locking or locked), or only completed locks
     void                GetTargetEntities(std::vector<SystemEntity*>& into, bool need_locked=false) const;
@@ -209,11 +217,12 @@ protected:
     class TargetedByEntry {
     public:
         TargetedByEntry()
-        : state(TargMgr::State::Idle) {}
+        : state(TargMgr::State::Idle), passive(false) {}
 
         void Dump(SystemEntity* pSE) const;
 
         uint8 state;
+        bool passive;   // passive targeter:  nobody is told
     };
 
 private:

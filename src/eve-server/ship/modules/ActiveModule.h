@@ -156,6 +156,9 @@ private:
     // the target resists this scanner (shipScanResistance / cargoScanResistance, % chance)
     bool                ScanResisted(uint16 resistAttr);
 
+    // automated targeting system (TargetHostiles, at the end of each cycle):  locks hostile ships within targetHostileRange
+    void                TargetHostiles();
+
     /* warp disruption field generator, sphere mode */
     void                StartDisruptField();
     void                StopDisruptField();

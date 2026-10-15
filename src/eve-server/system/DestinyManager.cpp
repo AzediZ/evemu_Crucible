@@ -107,7 +107,8 @@ namespace {
 DestinyManager::DestinyManager(SystemEntity *self)
 : mySE(self),
 m_targBubbleID(0),
-m_frozen(false)
+m_frozen(false),
+m_holdUntil(0)
 {
     m_hasSentShipUpdates = false;
 
@@ -166,6 +167,18 @@ DestinyManager::~DestinyManager() {
 void DestinyManager::Process() {
     if (mySE->IsFrozen())
         Halt();
+    if ((m_holdUntil > 0) and (GetFileTimeNow() >= m_holdUntil)) {
+        m_holdUntil = 0;
+        m_frozen = false;
+        SpeedBoost();
+    }
+}
+
+void DestinyManager::HoldUntil(int64 until)
+{
+    Halt();
+    m_frozen = true;
+    m_holdUntil = until;
 }
 
 /* ======================================================================================
