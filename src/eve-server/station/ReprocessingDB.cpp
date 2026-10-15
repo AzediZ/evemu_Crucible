@@ -30,10 +30,12 @@
 bool ReprocessingDB::GetRecoverables(const uint32 typeID, std::vector<Recoverable> &into) {
     DBQueryResult res;
 
+    /* the components a blueprint uses up.  not a requirement marked recycle (extra, the T1 item of a T2 one):  its
+     *  materials are already in the product's invTypeMaterials, below */
     if (!sDatabase.RunQuery(res,
                 "SELECT requiredTypeID, MIN(quantity) FROM ramTypeRequirements"
                 " LEFT JOIN invBlueprintTypes ON typeID = blueprintTypeID"
-                " WHERE damagePerJob = 1 AND ("
+                " WHERE damagePerJob = 1 AND extra = 0 AND ("
                 "   (activityID = 6 AND typeID = %u)"
                 "   OR"
                 "    (activityID = 1 AND productTypeID = %u))"

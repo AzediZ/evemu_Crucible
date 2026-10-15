@@ -291,7 +291,7 @@ float ReprocessingServiceBound::CalcReprocessingEfficiency(const Client* pClient
         reprocessingEfficiency = 0.375
         *(1 + 0.02 * RefiningSkill)
         *(1 + 0.04 * RefineryEfficiencySkill)
-        *(1 + 0.05 * OreProcessingSkill)
+        *(1 + 0.05 * OreProcessingSkill)     (modules, ships and the rest:  Scrapmetal Processing, also 5% a level)
     */
     CharacterRef cRef = pClient->GetChar();
     double efficiency =  (0.375f
@@ -303,7 +303,7 @@ float ReprocessingServiceBound::CalcReprocessingEfficiency(const Client* pClient
         if (specificSkill) {
             efficiency *= (1 + 0.05f * cRef->GetSkillLevel(specificSkill));
         } else {
-            efficiency *= (1 + 0.04f * cRef->GetSkillLevel(EvESkill::ScrapmetalProcessing));    // use Scrapmetal Processing as default
+            efficiency *= (1 + 0.05f * cRef->GetSkillLevel(EvESkill::ScrapmetalProcessing));    // use Scrapmetal Processing as default
         }
     }
 
