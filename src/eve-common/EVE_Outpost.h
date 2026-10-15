@@ -32,6 +32,7 @@
 #define EVE_OUTPOST_H
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <vector>
@@ -460,6 +461,139 @@ namespace OutpostRules {
     inline uint16_t OfficeSlots(Race race, uint16_t baseSlots, const Slots& slots)
     {
         return baseSlots + ExtraSlotsInstalled(race, slots, Kind::Office);
+    }
+}
+
+
+/* outpost sieges (Dominion rules, unchanged in Crucible).  the npc conquerable stations (12242, 12294, 12295) follow them too:
+ *  their types have the same hit points and reinforcement attributes as the outposts.
+ *   - an outpost whose owner's alliance holds sovereignty in its system can only be attacked while that claim is under
+ *     blockade (SBUs online at more than half the stargates).  any other outpost can be attacked at any time, without SBUs
+ *     ("An owner without sovereignty has a vulnerable Outpost.  The attacker does not need SBU(s)", CCP Abathur, 'Dominion -
+ *     Storming the Gates', 2009).  if the blockade breaks "the siege is considered over" and it is invulnerable again
+ *   - two reinforcement timers, only while the owner holds sovereignty there ("Stations only have reinforcement timers,
+ *     when the station holder has sovereignty"):  at 25% shield it goes into reinforcement and comes out at 0% shield, at
+ *     50% armor it goes into reinforcement again and comes out at 25% armor.  reinforced, it can't be shot or repaired
+ *   - it comes out at the exit time the owner set in station management (staStations.exitTime, HHMM, 12:00 if none) once
+ *     that time has come round again plus 48 hours (the type's reinforcementDuration), give or take 3 hours (its
+ *     reinforcementVariance).  "2x 48 hour reinforcement timers to ensure at least 4 days between it switching hands"
+ *   - at 0% structure "the ownership of the station changes over to the corporation, which the last player to damage the
+ *     station belongs to" ('sovereignty for the uninitiated', A Mule in EvE, April 2011).  taking it doesn't give sovereignty
+ *   - hit points:  100m shield, 150m armor, 100m structure (the types' data)
+ */
+namespace OutpostSiege {
+
+    enum class Phase : uint8_t {
+        Shield              = 0,    // the next reinforcement is at 25% shield
+        ShieldReinforced    = 1,
+        Armor               = 2,    // the next reinforcement is at 50% armor
+        ArmorReinforced     = 3,
+        Structure           = 4     // taken at 0% structure
+    };
+
+    static constexpr double ShieldReinforceAt   = 0.25;
+    static constexpr double ShieldExit          = 0.0;
+    static constexpr double ArmorReinforceAt    = 0.50;
+    static constexpr double ArmorExit           = 0.25;
+    // staStations.exitTime is NULL:  noon EVE time
+    static constexpr int32_t DefaultExitTime    = 1200;
+
+    inline bool IsReinforced(Phase phase)
+    {
+        return ((phase == Phase::ShieldReinforced) or (phase == Phase::ArmorReinforced));
+    }
+
+    // the owner's alliance (0 for none), the alliance holding sovereignty in the system (0 for none) and the blockade
+    inline bool Vulnerable(uint32_t ownerAllianceID, uint32_t sovAllianceID, bool blockaded)
+    {
+        if ((ownerAllianceID == 0) or (ownerAllianceID != sovAllianceID))
+            return true;
+        return blockaded;
+    }
+
+    // reinforcement timers only for an owner holding sovereignty here
+    inline bool HasTimers(uint32_t ownerAllianceID, uint32_t sovAllianceID)
+    {
+        return ((ownerAllianceID != 0) and (ownerAllianceID == sovAllianceID));
+    }
+
+    // the phase a hit leaves it in, from the layers' fractions left (0 to 1).  timers:  HasTimers()
+    inline Phase AfterHit(Phase phase, bool timers, double shieldLeft, double armorLeft)
+    {
+        if (!timers)
+            return phase;
+        if ((phase == Phase::Shield) and (shieldLeft <= ShieldReinforceAt))
+            return Phase::ShieldReinforced;
+        if ((phase == Phase::Armor) and (armorLeft <= ArmorReinforceAt))
+            return Phase::ArmorReinforced;
+        return phase;
+    }
+
+    /* how far one hit may go, as fractions of the layer:  it stops at shieldFloor shield or armorFloor armor (the rest is
+     *  lost), -1 for no stop.  it never destroys the station */
+    struct HitLimits {
+        double shieldFloor;
+        double armorFloor;
+    };
+    inline HitLimits Limits(Phase phase, bool timers)
+    {
+        HitLimits limits = {-1.0, -1.0};
+        if (!timers)
+            return limits;
+        if (phase == Phase::Shield)
+            limits.shieldFloor = ShieldReinforceAt;
+        else if (phase == Phase::Armor)
+            limits.armorFloor = ArmorReinforceAt;
+        return limits;
+    }
+
+    // the phase after a reinforcement ends
+    inline Phase AfterReinforcement(Phase phase)
+    {
+        switch (phase) {
+            case Phase::ShieldReinforced:   return Phase::Armor;
+            case Phase::ArmorReinforced:    return Phase::Structure;
+            default:                        return phase;
+        }
+    }
+
+    /* the time a reinforcement ends, in seconds since midnight UTC of some day (now's day).  exitTime is HHMM (or < 0 for
+     *  none), duration and variance in seconds, offset a random number in [-variance, variance]:
+     *  the next exit time after now, plus the duration, plus the offset */
+    inline int64_t ReinforcementEnd(int64_t nowSec, int32_t exitTime, int64_t durationSec, int64_t offsetSec)
+    {
+        static constexpr int64_t day(86400);
+        if ((exitTime < 0) or (exitTime > 2359) or ((exitTime % 100) > 59))
+            exitTime = DefaultExitTime;
+        int64_t exitOfDay(((exitTime / 100) * 3600) + ((exitTime % 100) * 60));
+        int64_t midnight(nowSec - (((nowSec % day) + day) % day));
+        int64_t next(midnight + exitOfDay);
+        if (next <= nowSec)
+            next += day;
+        return next + durationSec + offsetSec;
+    }
+
+    // the client's slim item structureState (spaceObject.Station.HandleStateChange shows the reinforcement effects)
+    inline int8_t ClientState(Phase phase)
+    {
+        switch (phase) {
+            case Phase::ShieldReinforced:   return 7;   // pos.STRUCTURE_SHIELD_REINFORCE
+            case Phase::ArmorReinforced:    return 8;   // pos.STRUCTURE_ARMOR_REINFORCE
+            default:                        return 4;   // pos.STRUCTURE_ONLINE
+        }
+    }
+
+    /* passive shield regeneration over dt seconds, recharge time T seconds (shieldRechargeRate / 1000):
+     *  C(t) = Cmax * (1 + e^(-5t/T) * (sqrt(C0/Cmax) - 1))^2, the curve the client draws from the damage state */
+    inline double RechargedShield(double charge, double capacity, double rechargeSec, double dtSec)
+    {
+        if ((capacity <= 0.0) or (rechargeSec <= 0.0) or (dtSec <= 0.0))
+            return charge;
+        if (charge >= capacity)
+            return capacity;
+        double frac(charge > 0.0 ? charge / capacity : 0.0);
+        double root(1.0 + std::exp(-5.0 * dtSec / rechargeSec) * (std::sqrt(frac) - 1.0));
+        return capacity * root * root;
     }
 }
 

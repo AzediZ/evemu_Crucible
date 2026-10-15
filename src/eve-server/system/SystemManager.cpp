@@ -130,6 +130,7 @@ m_inSpace(0)
     m_ticEntities.clear();
     m_staticEntities.clear();
     m_opStaticEntities.clear();
+    m_outposts.clear();
 
     // zero-init our data containers
     m_data = SystemData();
@@ -406,6 +407,10 @@ bool SystemManager::ProcessTic() {
     // ambient npcs (one branch while no player is in space here)
     m_ambient->Process();
 
+    // outpost sieges (reinforcement timers, shield regeneration, saving)
+    for (auto cur : m_outposts)
+        cur->ProcessSiege();
+
     // customs office and gantry timers (anchoring, upgrading, unanchoring, reinforcement)
     for (auto cur : m_planetMap) {
         CustomsSE* pCO(cur.second->GetPlanetSE()->GetCustomsOffice());
@@ -589,6 +594,7 @@ void SystemManager::UnloadSystem() {
     m_ticEntities.clear();
     // at this point, system static entity list should be clear...but just in case, hit it again
     m_staticEntities.clear();
+    m_outposts.clear();
     // clear operational static entity list too
     m_opStaticEntities.clear();
 
@@ -634,8 +640,15 @@ bool SystemManager::LoadSystemStatics() {
                 StationSE *pSSE(nullptr);
                 if (IsOutpost(cur.itemID)) {
                     // player outposts:  their services, slots and lines follow their upgrades (also fixes outposts built before)
-                    pSSE = new OutpostSE(itemRef, GetServiceMgr(), this);
+                    OutpostSE* pOSE = new OutpostSE(itemRef, GetServiceMgr(), this);
                     OutpostSE::Refresh(cur.itemID);
+                    m_outposts.push_back(pOSE);
+                    pSSE = pOSE;
+                } else if (OutpostSE::IsConquerableType(cur.typeID)) {
+                    // the npc conquerable stations can be besieged and taken like outposts
+                    OutpostSE* pOSE = new OutpostSE(itemRef, GetServiceMgr(), this);
+                    m_outposts.push_back(pOSE);
+                    pSSE = pOSE;
                 } else {
                     pSSE = new StationSE(itemRef, GetServiceMgr(), this);
                 }

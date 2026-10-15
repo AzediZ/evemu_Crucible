@@ -623,6 +623,47 @@ void StationDB::SaveOutpostStats(uint32 stationID, uint8 upgradeLevel, uint8 off
         codelog(DATABASE__ERROR, "Error saving outpost stats of %u: %s", stationID, err.c_str());
 }
 
+bool StationDB::LoadSiege(uint32 stationID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT phase, shieldCharge, armorDamage, damage, timerEnd, updated FROM staStationSiege WHERE stationID = %u", stationID)) {
+        codelog(DATABASE__ERROR, "Error loading the siege of %u: %s", stationID, res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    phase = row.GetUInt(0);
+    shieldCharge = row.GetDouble(1);
+    armorDamage = row.GetDouble(2);
+    damage = row.GetDouble(3);
+    timerEnd = row.GetInt64(4);
+    updated = row.GetInt64(5);
+    return true;
+}
+
+void StationDB::SaveSiege(uint32 stationID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO staStationSiege (stationID, phase, shieldCharge, armorDamage, damage, timerEnd, updated) VALUES (%u, %u, %f, %f, %f, %lli, %lli)"
+        " ON DUPLICATE KEY UPDATE phase = VALUES(phase), shieldCharge = VALUES(shieldCharge), armorDamage = VALUES(armorDamage),"
+        " damage = VALUES(damage), timerEnd = VALUES(timerEnd), updated = VALUES(updated)",
+        stationID, phase, shieldCharge, armorDamage, damage, timerEnd, (int64)GetFileTimeNow()))
+        codelog(DATABASE__ERROR, "Error saving the siege of %u: %s", stationID, err.c_str());
+}
+
+int32 StationDB::GetExitTime(uint32 stationID)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT exitTime FROM staStations WHERE stationID = %u", stationID))
+        return -1;
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return -1;
+    return row.GetInt(0);
+}
+
 PyRep* StationDB::GetStationsByRegion(uint32 regionID)
 {
     DBQueryResult res;

@@ -442,7 +442,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
                 Clear();
                 throw UserError ("DeniedTargetInvulnerable");
             }
-            // highsec customs offices, outposts (no sov sieges yet), reinforced structures
+            // highsec customs offices, outposts out of reach or reinforced (OutpostSiege), reinforced structures
             if (m_targetSE->IsInvul()) {
                 // an outpost whose owner's alliance holds sovereignty here says why
                 if (m_targetSE->IsOutpostSE()) {

@@ -35,6 +35,7 @@
 #include "pos/PosMgrDB.h"
 #include "pos/Tower.h"
 #include "pos/Structure.h"
+#include "station/Outpost.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "tables/invGroups.h"
 #include "tables/invCategories.h"
@@ -1192,6 +1193,63 @@ namespace {
         return "unknown";
     }
 
+    const char* SiegePhaseName(OutpostSiege::Phase phase)
+    {
+        switch (phase) {
+            case OutpostSiege::Phase::Shield:           return "shield (reinforces at 25%)";
+            case OutpostSiege::Phase::ShieldReinforced: return "shield reinforced";
+            case OutpostSiege::Phase::Armor:            return "armor (reinforces at 50%)";
+            case OutpostSiege::Phase::ArmorReinforced:  return "armor reinforced";
+            case OutpostSiege::Phase::Structure:        return "structure (taken at 0%)";
+        }
+        return "unknown";
+    }
+
+    /* /sov siege [info|next|repair] [stationID]
+     *  an outpost or conquerable station in your system (the first one if no stationID).  info shows its siege, next ends
+     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it back to full health
+     */
+    PyResult SiegeCommand(Client* pClient, const Seperator& args)
+    {
+        if (!pClient->IsInSpace())
+            throw CustomError ("You must be in space.");
+        std::string what((args.argCount() > 2) ? args.arg(2) : "info");
+        if ((what != "info") and (what != "next") and (what != "repair"))
+            throw CustomError ("Correct Usage: /sov siege [info|next|repair] [stationID]");
+        OutpostSE* pOSE(nullptr);
+        if ((args.argCount() > 3) and args.isNumber(3)) {
+            SystemEntity* pSE(pClient->SystemMgr()->GetSE(atoi(args.arg(3).c_str())));
+            if (pSE != nullptr)
+                pOSE = pSE->GetOutpostSE();
+        } else if (!pClient->SystemMgr()->GetOutposts().empty()) {
+            pOSE = pClient->SystemMgr()->GetOutposts().front();
+        }
+        if (pOSE == nullptr)
+            throw CustomError ("No outpost or conquerable station found in this system.");
+
+        if (what == "next") {
+            if (!pOSE->GMEndReinforcement())
+                throw CustomError ("%s can't go into reinforcement (no timers:  its owner doesn't hold sovereignty here).", pOSE->GetName());
+        } else if (what == "repair") {
+            pOSE->GMRepair();
+        }
+
+        InventoryItemRef iRef(pOSE->GetSelf());
+        double shieldCap(iRef->GetAttribute(AttrShieldCapacity).get_double()), armorHP(iRef->GetAttribute(AttrArmorHP).get_double());
+        double hp(iRef->GetAttribute(AttrHP).get_double());
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "%s (%u), owner %u:  %s, %s.  shield %.1f%%, armor %.1f%%, structure %.1f%%.%s",
+                 pOSE->GetName(), pOSE->GetID(), pOSE->GetCorporationID(), SiegePhaseName(pOSE->GetSiegePhase()),
+                 (pOSE->IsInvul() ? "invulnerable" : "vulnerable"),
+                 (shieldCap > 0 ? 100.0 * iRef->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0),
+                 (armorHP > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrArmorDamage).get_double() / armorHP) : 0.0),
+                 (hp > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrDamage).get_double() / hp) : 0.0),
+                 (OutpostSiege::IsReinforced(pOSE->GetSiegePhase())
+                    ? ("  reinforced for " + std::to_string((pOSE->GetReinforcementEnd() - GetFileTimeNow()) / EvE::Time::Minute) + " more minutes.").c_str()
+                    : ""));
+        return new PyString(buf);
+    }
+
     /* /sov and /pos (anchor|online|offline|unanchor|complete) (itemID)
      *  any structure in your system:  control towers and their modules, sovereignty structures (TCU, SBU, IHub),
      *  outpost construction, upgrade and improvement platforms, customs offices and gantries.  it happens at once:  the delays, the pilot's
@@ -1224,6 +1282,14 @@ namespace {
                 return new PyString("Done:  " + name + " is now a customs office.");
             return new PyString("Done:  " + name + ".");
         }
+        // outposts and conquerable stations:  complete ends a reinforcement now
+        if (pSE->GetOutpostSE() != nullptr) {
+            OutpostSE* pOSE(pSE->GetOutpostSE());
+            if ((action != StructureTiming::GMAction::Complete) or !OutpostSiege::IsReinforced(pOSE->GetSiegePhase()))
+                return new PyString("Nothing to do:  " + name + " isn't reinforced.  /sov siege next puts it into reinforcement.");
+            pOSE->GMEndReinforcement();
+            return new PyString("Done:  " + name + " is out of reinforcement.");
+        }
         if (pSE->GetPOSSE() == nullptr)
             throw CustomError ("%u is not a structure in this system", itemID);
 
@@ -1242,6 +1308,8 @@ PyResult Command_sov(Client* pClient, CommandDB* db, EVEServiceManager &services
      *  /sov tenure (days) [solarSystemID]
      *  backdates the claim to this many days held;  the strategic ("Sovereignty") index follows from the days
      */
+    if ((args.argCount() > 1) and (args.arg(1) == "siege"))
+        return SiegeCommand(pClient, args);
     if ((args.argCount() > 1) and (args.arg(1) == "tenure")) {
         if ((args.argCount() < 3) or !args.isNumber(2) or (atoi(args.arg(2).c_str()) < 0) or (atoi(args.arg(2).c_str()) > 36500)
         or ((args.argCount() > 3) and !args.isNumber(3)))

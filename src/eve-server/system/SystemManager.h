@@ -73,6 +73,7 @@ public:
     static SystemEntity* BuildEntity(SystemManager& pSysMgr, const DBSystemDynamicEntity& entity);
 };
 
+class OutpostSE;
 class SystemManager
 {
 public:
@@ -236,6 +237,9 @@ public:
     SystemEntity* GetEntityByID(uint32 itemID) { return m_entities.find(itemID)->second; }
 
     void GetClientList(std::vector<Client*>& cVec);
+    // an outpost built here (sieges are processed every tic)
+    void AddOutpost(OutpostSE* pOSE)                    { m_outposts.push_back(pOSE); }
+    const std::vector<OutpostSE*>& GetOutposts()        { return m_outposts; }
 
     std::map< uint32, SystemEntity* > GetEntities()     { return m_entities; }
     const std::map<uint32, SystemEntity*>& GetMoonMap() const { return m_moonMap; }
@@ -322,6 +326,7 @@ private:
     std::map<uint32, SystemEntity*> m_entities;         // this list is all entities in this system.  we own these.
     std::map<uint32, SystemEntity*> m_ticEntities;      // this list is for entities that need process tics (objects, npc, client ships)
     std::map<uint32, SystemEntity*> m_staticEntities;   // this list is for static entities to send in setstate
+    std::vector<OutpostSE*> m_outposts;                 // outposts and conquerable stations (sieges)
     std::map<uint32, SystemEntity*> m_opStaticEntities; // this list is for static entities which are operational and need to be initialized and operated upon even when system is empty
     std::map<uint32, DroneSE*> m_drones;                // all drones in space here.  we do not own these (they are also in m_entities)
     // ForEachAggressionDrone():  drones by controlling shipID and by the charID they guard

@@ -80,6 +80,12 @@ public:
     // staStationTypes.reprocessingEfficiency of a station type (0 for none)
     static float GetStationTypeReprocessingEfficiency(uint16 stationTypeID);
     static void SaveOutpostStats(uint32 stationID, uint8 upgradeLevel, uint8 officeSlots, float reprocessingEfficiency);
+    /* outpost sieges (staStationSiege):  phase, the layers' damage, the end of a reinforcement and when it was saved.  false
+     *  when the station has never been attacked (full health) */
+    static bool LoadSiege(uint32 stationID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated);
+    static void SaveSiege(uint32 stationID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd);
+    // the reinforcement exit time set in station management (HHMM), -1 if none
+    static int32 GetExitTime(uint32 stationID);
     // stations of a region for the remote buy order station picker (quote.py PickStation)
     static PyRep* GetStationsByRegion(uint32 regionID);
 

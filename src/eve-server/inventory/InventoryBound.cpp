@@ -1487,6 +1487,7 @@ void InventoryBound::BuildOutpost(Client* pClient, StructureSE* pPlatform, uint1
     OutpostSE* oSE = new OutpostSE(itemRef, pClient->services(), pSystem);
     sEntityList.AddStation(stData.stationID, itemRef);
     pSystem->AddEntity(oSE);
+    pSystem->AddOutpost(oSE);
 
     _log(POS__MESSAGE, "Creating new station service entities...");
     oSE->SpawnStationServices(pClient, stData, 0, stData.serviceMask);

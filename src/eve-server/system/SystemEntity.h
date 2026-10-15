@@ -280,6 +280,15 @@ public:
     // pays this entity's bounty (entityKillBounty) to its killer (npcs and destructible sentries)
     void                        AwardBounty(Client* pClient);
     bool                        ApplyDamage(Damage &d); /* This method is defined in Damage.cpp */
+    /* how far one hit may go (ApplyDamage):  a hit that takes the shield down to shieldFloor (or the armor down to armorFloor),
+     *  as fractions of the layer, stops there and the rest of it is lost.  -1 for no stop.  canDie false:  the structure
+     *  stops at 0 instead of the entity being destroyed.  sieged outposts stop at their reinforcement thresholds */
+    struct DamageLimits {
+        double shieldFloor = -1.0;
+        double armorFloor = -1.0;
+        bool canDie = true;
+    };
+    virtual void                GetDamageLimits(DamageLimits& into) { /* no limits */ }
     /* blows this entity up the same way combat does (explosion, wreck/pod/killmail, removal).  defined in Damage.cpp */
     void                        Destroy(Damage &d);
     /* killmails:  records who damaged us (ApplyDamage), then fills a killmail's final blow, damage totals and the other

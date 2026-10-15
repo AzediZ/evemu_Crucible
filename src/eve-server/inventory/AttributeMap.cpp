@@ -436,6 +436,10 @@ bool AttributeMap::Add(uint16 attrID, EvilNumber& num) {
 bool AttributeMap::SendChanges(PyTuple* attrChange) {
     if (attrChange == nullptr)
         return true;
+    /* stations (outposts under siege) tell nobody:  clients get their hit points from the damage state.  a corp-owned one
+     *  would multicast every hit to its corp (with an error and a stack trace in the log) */
+    if (IsStationID(mItem.itemID()))
+        return true;
 
     /** @todo update this to use my new multicast replacement */
     if (IsPlayerCorp(mItem.ownerID())) {

@@ -142,6 +142,39 @@ int utils_OutpostRulesTest( int /*argc*/, char* /*argv*/[] )
     Check((cf.count(6) == 0) and (cf[70] == 5), "caldari basic factory:  5 'Factory Tier1' lines");
     Check(ManufacturingLine(Race::Gallente, 3, 2) == 103, "gallente 'Factory1(2) Tier3(2)'");
 
+    ::printf("sieges:\n");
+    {
+        using namespace OutpostSiege;
+        Check(Vulnerable(0, 0, false), "an owner outside an alliance is always vulnerable");
+        Check(Vulnerable(99000001, 0, false), "no sovereignty here:  vulnerable without SBUs");
+        Check(Vulnerable(99000001, 99000002, false), "somebody else's sovereignty:  vulnerable");
+        Check(!Vulnerable(99000001, 99000001, false), "the owner holds sovereignty:  invulnerable");
+        Check(Vulnerable(99000001, 99000001, true), "...until the claim is under blockade");
+        Check(HasTimers(99000001, 99000001) and !HasTimers(99000001, 0) and !HasTimers(0, 0), "timers only for the sovereign");
+        Check(AfterHit(Phase::Shield, true, 0.25, 1.0) == Phase::ShieldReinforced, "25% shield reinforces");
+        Check(AfterHit(Phase::Shield, true, 0.26, 1.0) == Phase::Shield, "26% shield doesn't");
+        Check(AfterHit(Phase::Armor, true, 0.0, 0.5) == Phase::ArmorReinforced, "50% armor reinforces");
+        Check(AfterHit(Phase::Shield, false, 0.0, 0.0) == Phase::Shield, "no timers, no reinforcement");
+        Check(AfterReinforcement(Phase::ShieldReinforced) == Phase::Armor, "out of shield reinforcement, on to armor");
+        Check(AfterReinforcement(Phase::ArmorReinforced) == Phase::Structure, "out of armor reinforcement, on to structure");
+        HitLimits l1(Limits(Phase::Shield, true)), l2(Limits(Phase::Armor, true)), l3(Limits(Phase::Structure, true)), l4(Limits(Phase::Shield, false));
+        Check(Near(l1.shieldFloor, 0.25) and (l1.armorFloor < 0), "shield phase stops hits at 25% shield");
+        Check((l2.shieldFloor < 0) and Near(l2.armorFloor, 0.50), "armor phase stops hits at 50% armor");
+        Check((l3.shieldFloor < 0) and (l3.armorFloor < 0) and (l4.shieldFloor < 0), "structure phase and no timers:  no stops");
+        // 10:00 on a day, exit time 12:00:  noon today plus 48 hours
+        int64_t day(86400), base(150000LL * day);
+        Check(ReinforcementEnd(base + 10 * 3600, 1200, 172800, 0) == base + 12 * 3600 + 172800, "exit at noon two days after today's noon");
+        Check(ReinforcementEnd(base + 13 * 3600, 1200, 172800, 0) == base + day + 12 * 3600 + 172800, "past noon:  from tomorrow's noon");
+        Check(ReinforcementEnd(base + 13 * 3600, -1, 172800, -3600) == base + day + 11 * 3600 + 172800, "no exit time is noon, offset applies");
+        Check(ReinforcementEnd(base, 1830, 0, 0) == base + 18 * 3600 + 1800, "18:30");
+        Check((ClientState(Phase::ShieldReinforced) == 7) and (ClientState(Phase::ArmorReinforced) == 8) and (ClientState(Phase::Armor) == 4),
+              "slim structureState 7/8/4");
+        Check(Near(RechargedShield(100.0, 100.0, 1000.0, 10.0), 100.0), "a full shield stays full");
+        Check(Near(RechargedShield(0.0, 100.0, 1000.0, 0.0), 0.0), "no time, no recharge");
+        double r(RechargedShield(25.0, 100.0, 1000.0, 1000.0));
+        Check((r > 98.0) and (r < 100.0), "one recharge time brings it nearly full");
+    }
+
     ::printf("%s\n", (failures ? "OutpostRulesTest FAILED" : "OutpostRulesTest passed"));
     return failures;
 }

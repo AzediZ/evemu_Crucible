@@ -26,6 +26,7 @@
 
 
 #include "system/Damage.h"
+#include "station/Outpost.h"
 #include "planet/CustomsOffice.h"
 
 #include "../../eve-common/EVE_Damage.h"
@@ -405,14 +406,19 @@ bool SystemEntity::ApplyDamage(Damage &d) {
      */
     bool killed(false), armorDepleted(false);
     float total_damage(0.0f);
+    DamageLimits limits;
+    GetDamageLimits(limits);
 
     // Shield:
     float shieldCapacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
     if (shieldCapacity > 0.0f) {
-        float available_shield(EvE::max(m_self->GetAttribute(AttrShieldCharge).get_float()));
+        // a shield floor:  the hit stops there
+        float shieldFloor(limits.shieldFloor >= 0.0 ? (float)(limits.shieldFloor * shieldCapacity) : 0.0f);
+        float charge(EvE::max(m_self->GetAttribute(AttrShieldCharge).get_float()));
+        float available_shield(EvE::max(charge - shieldFloor));
         float leak(0.0f);
         if (sConfig.server.ShieldBleedThrough and (damageID > 0))
-            leak = LeakFraction(available_shield, shieldCapacity, AttrShieldUniformity);
+            leak = LeakFraction(charge, shieldCapacity, AttrShieldUniformity);
         // the leaked part skips the shield
         Damage toShield(d);
         toShield *= (1.0f - leak);
@@ -425,7 +431,7 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         float shield_damage(DamageToShield.GetTotal());
         if (shield_damage <= available_shield) {
             total_damage += shield_damage;
-            float new_charge = available_shield - shield_damage;
+            float new_charge = charge - shield_damage;
             m_self->SetAttribute(AttrShieldCharge, new_charge);
             // only the leaked part goes on
             d *= leak;
@@ -436,11 +442,14 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             float absorbed(available_shield / shield_damage);
             d *= (leak + ((1.0f - leak) * (1.0f - absorbed)));
             total_damage += available_shield;
+            // ...unless the hit stops at the floor
+            if (limits.shieldFloor >= 0.0)
+                d *= 0.0f;
 
             if (available_shield > 0.0f) {
                 _log(DAMAGE__INFO, "%s(%u): Shield depleted with %.2f damage. %.2f damage remains.",
                      GetName(), GetID(), available_shield, d.GetTotal());
-                m_self->SetAttribute(AttrShieldCharge, EvilZero);
+                m_self->SetAttribute(AttrShieldCharge, shieldFloor);
             }
         }
     }
@@ -448,10 +457,12 @@ bool SystemEntity::ApplyDamage(Damage &d) {
     //Armor:
     float armorHP(m_self->GetAttribute(AttrArmorHP).get_float());
     if ((d.GetTotal() > 0.0f) and (armorHP > 0.0f)) {
-        float available_armor(EvE::max(armorHP - m_self->GetAttribute(AttrArmorDamage).get_float()));
+        float armorFloor(limits.armorFloor >= 0.0 ? (float)(limits.armorFloor * armorHP) : 0.0f);
+        float armorLeft(EvE::max(armorHP - m_self->GetAttribute(AttrArmorDamage).get_float()));
+        float available_armor(EvE::max(armorLeft - armorFloor));
         float leak(0.0f);
         if (sConfig.server.ArmorBleedThrough and (damageID > 0))
-            leak = LeakFraction(available_armor, armorHP, AttrArmorUniformity);
+            leak = LeakFraction(armorLeft, armorHP, AttrArmorUniformity);
         Damage toArmor(d);
         toArmor *= (1.0f - leak);
         Damage DamageToArmor = toArmor.MultiplyDup(
@@ -472,12 +483,15 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             float absorbed(available_armor / armor_damage);
             d *= (leak + ((1.0f - leak) * (1.0f - absorbed)));
             total_damage += available_armor;
-            armorDepleted = true;
+            if (limits.armorFloor >= 0.0)
+                d *= 0.0f;
+            else
+                armorDepleted = true;
 
             if (available_armor > 0) {
                 _log(DAMAGE__INFO, "%s(%u): Armor depleted with %.2f damage. %.2f damage remains.",
                      GetName(), GetID(), available_armor, d.GetTotal());
-                m_self->SetAttribute(AttrArmorDamage, m_self->GetAttribute(AttrArmorHP));
+                m_self->SetAttribute(AttrArmorDamage, armorHP - armorFloor);
             }
         }
     }
@@ -500,6 +514,11 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             m_self->SetAttribute(AttrDamage, new_damage);
             _log(DAMAGE__DEBUG, "%s(%u): Applying %.2f damage to structure. New structure damage: %.2f",
                  GetName(), GetID(), hull_damage, new_damage);
+        } else if (!limits.canDie) {
+            // the structure is gone, but this can't be destroyed (a sieged outpost changes hands instead)
+            total_damage += EvE::max(available_hull);
+            m_self->SetAttribute(AttrDamage, hp);
+            _log(DAMAGE__INFO, "%s(%u): %.2f damage has depleted our structure.", GetName(), GetID(), hull_damage);
         } else if (IsUnkillable(GetID())) {
             // GM: hold at 1hp
             float max_damage = hp - 1.0f;
@@ -613,6 +632,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // player customs offices go reinforced at 25% shield
         if (IsCOSE())
             GetCOSE()->OnShieldDamaged();
+        // outposts:  reinforcement, the owner's alerts, and changing hands at 0 structure
+        if (IsOutpostSE())
+            GetOutpostSE()->OnSiegeDamage(d.srcSE);
     }
 
     if (sConfig.debug.UseProfiling)
