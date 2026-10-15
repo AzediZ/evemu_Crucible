@@ -53,6 +53,17 @@ public:
 
     EvilNumber      CalculateAttributeValue(EvilNumber val1, EvilNumber val2, /*FX::Math*/int8 method);
 
+    /* stacking penalties (dogma).  a module's (and rig's) multiplier on an attribute that isn't stackable is penalised:
+     *  PreMul, PreDiv, PostMul, PostDiv and PostPercent each have their own chain per item and attribute (a damage control's
+     *  PreMul resists don't stack with the hardeners' PostPercent ones), bonuses and penalties are ranked apart, strongest
+     *  first, and the n-th one counts 0.5 ^ ((n / 2.22292081)^2).  skills, implants, boosters, the hull, subsystems, charges
+     *  and system effects aren't penalised.
+     *  the modifier joins the item's chain for its attribute and math method, or leaves it on a remove (math is the map key,
+     *  inverted by InventoryItem::RemoveModifier), and the value moves by the change of the chain's penalised product.
+     *  false when the modifier isn't penalised:  it is applied as it is */
+    bool            ApplyPenalized(InventoryItem* pItem, const fxData& data, int8 math, double srcValue, EvilNumber targValue,
+                                   EvilNumber& newValue);
+
     void DecodeEffects(const uint16 fxID);
 protected:
     void EvaluateExpression(const uint16 expID, const char* type);

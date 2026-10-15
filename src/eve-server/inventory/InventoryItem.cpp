@@ -52,6 +52,7 @@ struct ModifierContainer : public ModifierContainerBase
 {
     std::multimap<int8, fxData> modifiers;     // k,v of math, data<math, src, targLoc, targAttr, srcAttr, grpID, typeID>, ordered by key (mathMethod)
     std::map<int64, EvilNumber> snapshots;    // (attrID << 32 | srcID), value before an irreversible modifier from srcID
+    std::map<uint32, std::map<int64, double>> penalized;   // (attrID << 8 | math) -> stacking-penalised multipliers
 };
 
 /*
@@ -1587,6 +1588,7 @@ void InventoryItem::ResetAttributes() {
     _log(EFFECTS__TRACE, "Resetting attrib map for %s", m_data.name.c_str());
     pAttributeMap->Load(true);
     static_cast<ModifierContainer*>(m_modifierContainer)->snapshots.clear();
+    static_cast<ModifierContainer*>(m_modifierContainer)->penalized.clear();
 }
 
 void InventoryItem::SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value)
@@ -1605,6 +1607,12 @@ bool InventoryItem::TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& valu
     value = itr->second;
     modifierContainer->snapshots.erase(itr);
     return true;
+}
+
+std::map<int64, double>& InventoryItem::GetPenalizedChain(uint16 attrID, int8 math)
+{
+    ModifierContainer* modifierContainer = static_cast<ModifierContainer*>(m_modifierContainer);
+    return modifierContainer->penalized[((uint32)attrID << 8) | (uint8)math];
 }
 
 std::multimap<int8, fxData>& InventoryItem::GetModifiers()

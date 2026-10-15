@@ -49,6 +49,7 @@ m_npcDivisions(nullptr)
     m_regions.clear();
     m_attrTypeData.clear();
     m_attrDefaults.clear();
+    m_attrStackable.clear();
     m_minerals.clear();
     m_compounds.clear();
     m_bpMatlData.clear();
@@ -108,6 +109,7 @@ void StaticDataMgr::Clear()
     m_regions.clear();
     m_attrTypeData.clear();
     m_attrDefaults.clear();
+    m_attrStackable.clear();
     m_minerals.clear();
     m_compounds.clear();
     m_bpMatlData.clear();
@@ -271,7 +273,7 @@ void StaticDataMgr::Populate()
     startTime = GetTimeMSeconds();
     ManagerDB::GetAttributeTypes(*res);
     while (res->GetRow(row)) {
-        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue FROM dgmAttribute
+        //SELECT attributeID, attributeName, attributeCategory, displayName, categoryID, defaultValue, stackable FROM dgmAttributeTypes
         AttrTypeData typeData               = AttrTypeData();
         typeData.attributeID            = row.GetInt(0);
         typeData.attributeName          = (row.IsNull(1) ? "*none*" : row.GetText(1));
@@ -284,6 +286,9 @@ void StaticDataMgr::Populate()
         if (m_attrDefaults.size() <= attrID)
             m_attrDefaults.resize(attrID + 1, 0.0);
         m_attrDefaults[attrID] = (row.IsNull(5) ? 0.0 : row.GetDouble(5));
+        if (m_attrStackable.size() <= attrID)
+            m_attrStackable.resize(attrID + 1, true);
+        m_attrStackable[attrID] = (row.IsNull(6) or row.GetBool(6));
     }
     sLog.Cyan("    StaticDataMgr", "%lu Attribute data sets loaded in %.3fms.", m_attrTypeData.size(), (GetTimeMSeconds() - startTime));
 
@@ -821,6 +826,13 @@ const char* StaticDataMgr::GetAttrName(uint16 attrID)
 
     _log(DATA__ERROR, "GetAttrName() - Attribute %u not found in map", attrID);
     return "None";
+}
+
+bool StaticDataMgr::IsAttributeStackable(uint16 attrID) const
+{
+    if (attrID < m_attrStackable.size())
+        return m_attrStackable[attrID];
+    return true;
 }
 
 double StaticDataMgr::GetAttributeDefault(uint16 attrID) const

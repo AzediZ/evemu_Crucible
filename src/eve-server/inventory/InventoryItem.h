@@ -302,6 +302,9 @@ public:
      *  srcID's modifier was applied is kept, and put back when that modifier is removed.  ResetAttributes() clears them */
     void SaveFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber value);     // keeps the first value saved
     bool TakeFxSnapshot(uint16 attrID, uint32 srcID, EvilNumber& value);    // false if none.  removes it
+    /* the stacking-penalised modifiers applied to an attribute with one math method (FxProc::ApplyPenalized):
+     *  (source itemID << 16 | source attrID) -> multiplier.  ResetAttributes() clears them */
+    std::map<int64, double>& GetPenalizedChain(uint16 attrID, int8 math);
 
     //  if itemType requires skill(skillID) return true else return false
     bool HasReqSkill(const uint16 skillID)              { return m_type.HasReqSkill(skillID); }

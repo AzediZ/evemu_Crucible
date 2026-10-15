@@ -18,11 +18,13 @@
 #include "ship/Ship.h"
 #include "ship/modules/GenericModule.h"
 
+#include <cmath>
 #include <cstddef>
 #include <utility>
 #include <vector>
 
 #include "EVE_DogmaOrder.h"
+#include "npc/ai/NpcMath.h"
 
 /*
  * # Effects Logging:
@@ -702,7 +704,8 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
             }
 
             // send data to calculator
-            newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
+            if (!ApplyPenalized(item.get(), cur.second, cur.first, srcValue.get_double(), targValue, newValue))
+                newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
 
             if (is_log_enabled(EFFECTS__MESSAGE))
                 _log(EFFECTS__MESSAGE, "FxProc::ApplyEffects(%i): %s(%u) - src(%s:%s[%u])=%.3f <%s> targ(%s:%s[%u]) set %s from %.3f to %.3f.", \
@@ -800,7 +803,9 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
             continue;
         EvilNumber srcValue(cur.second.srcRef->GetAttribute(cur.second.srcAttr));
         EvilNumber targValue(target->GetAttribute(cur.second.targAttr));
-        EvilNumber newValue(CalculateAttributeValue(targValue, srcValue, cur.first));
+        EvilNumber newValue(EvilZero);
+        if (!ApplyPenalized(target.get(), cur.second, cur.first, srcValue.get_double(), targValue, newValue))
+            newValue = CalculateAttributeValue(targValue, srcValue, cur.first);
         if (is_log_enabled(EFFECTS__MESSAGE))
             _log(EFFECTS__MESSAGE, "FxProc::ApplyOwnerModifiers(%i): %s(%u) - src %s=%.3f <%s> set %s on %s from %.3f to %.3f.", \
                 cur.first, cur.second.srcRef->name(), cur.second.srcRef->itemID(), sDataMgr.GetAttrName(cur.second.srcAttr), \
@@ -812,6 +817,73 @@ void FxProc::ApplyOwnerModifiers(InventoryItemRef target, Character* pChar, Ship
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);
+}
+
+namespace {
+    // the penalised product of a chain:  bonuses and penalties are ranked apart
+    double PenalizedProduct(const std::map<int64, double>& chain)
+    {
+        std::vector<double> up, down;
+        for (auto& cur : chain)
+            (cur.second > 1.0 ? up : down).push_back(cur.second);
+        return NpcMath::StackedProduct(up.data(), up.size()) * NpcMath::StackedProduct(down.data(), down.size());
+    }
+}
+
+bool FxProc::ApplyPenalized(InventoryItem* pItem, const fxData& data, int8 math, double srcValue, EvilNumber targValue,
+                            EvilNumber& newValue)
+{
+    if ((pItem == nullptr) or (data.srcRef.get() == nullptr))
+        return false;
+    // the modifier's own math method (a remove's is inverted)
+    int8 base(math);
+    if (data.remove) {
+        switch (math) {
+            case FX::Math::PreDiv:          base = FX::Math::PreMul;        break;
+            case FX::Math::PreMul:          base = FX::Math::PreDiv;        break;
+            case FX::Math::PostDiv:         base = FX::Math::PostMul;       break;
+            case FX::Math::PostMul:         base = FX::Math::PostDiv;       break;
+            case FX::Math::RevPostPercent:  base = FX::Math::PostPercent;   break;
+            default:                        return false;
+        }
+    }
+    double multiplier(0.0);
+    switch (base) {
+        case FX::Math::PreMul:
+        case FX::Math::PostMul:     multiplier = srcValue;                                      break;
+        case FX::Math::PreDiv:
+        case FX::Math::PostDiv:     multiplier = ((srcValue == 0.0) ? 0.0 : (1.0 / srcValue));  break;
+        case FX::Math::PostPercent: multiplier = 1.0 + (srcValue / 100.0);                      break;
+        default:                    return false;
+    }
+    // modules and rigs only, on attributes that aren't stackable
+    if ((data.srcRef->categoryID() != EVEDB::invCategories::Module) or sDataMgr.IsAttributeStackable(data.targAttr))
+        return false;
+
+    std::map<int64, double>& chain(pItem->GetPenalizedChain(data.targAttr, base));
+    int64 key(((int64)data.srcRef->itemID() << 16) | data.srcAttr);
+    std::map<int64, double>::iterator itr(chain.find(key));
+    if (data.remove) {
+        // one that wasn't applied through the chain (x0, -100%:  undone from its snapshot) is removed as it was applied
+        if (itr == chain.end())
+            return false;
+    } else if (!(multiplier > 0.0) or !std::isfinite(multiplier)) {
+        return false;
+    }
+
+    double before(PenalizedProduct(chain));
+    if (data.remove) {
+        chain.erase(itr);
+    } else {
+        chain[key] = multiplier;
+    }
+    double after(PenalizedProduct(chain));
+    newValue = targValue * EvilNumber(after / before);
+    if (is_log_enabled(EFFECTS__DEBUG))
+        _log(EFFECTS__DEBUG, "FxProc::ApplyPenalized(): %s(%u) %s x%.4f on %s %s(%u):  chain of %u, penalised product %.4f -> %.4f, %.4f -> %.4f", \
+                data.srcRef->name(), data.srcRef->itemID(), data.remove ? "removes" : "adds", multiplier, sDataMgr.GetAttrName(data.targAttr), \
+                pItem->name(), pItem->itemID(), (uint32)chain.size(), before, after, targValue.get_double(), newValue.get_double());
+    return true;
 }
 
 EvilNumber FxProc::CalculateAttributeValue(EvilNumber val1/*targ*/, EvilNumber val2/*src*/, int8 method)
