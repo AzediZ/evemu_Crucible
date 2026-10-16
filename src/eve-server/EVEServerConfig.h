@@ -674,7 +674,7 @@ public:
         uint8 MinerCyclesMin;               // laser cycles until a miner is full
         uint8 MinerCyclesMax;               // laser cycles
         float MinerRockSwitchChance;        // chance after each cycle (from the 2nd) to move to another rock
-        std::string MinerModel;             // hull = mining barges with strip miner beams.  entity = Civilian Hulk entities without beams
+        std::string MinerModel;             // entity = Civilian Hulk entities without beams (default).  hull = mining barges with strip miner beams, which look like pilotless player ships
         bool MinerHaulerVisits;             // a hauler visits belts with 2 or more miners
         uint16 MinerHaulerInterval;         // seconds, mean time between hauler visits per belt
         float IceMinerFactor;               // x miners on ice belts

@@ -644,7 +644,7 @@ boolean can use either 0/1 OR true/false.
         <MinerCyclesMin>4</MinerCyclesMin><!-- laser cycles until a miner is full -->
         <MinerCyclesMax>10</MinerCyclesMax><!-- laser cycles -->
         <MinerRockSwitchChance>0.3</MinerRockSwitchChance><!-- chance after each cycle (from the 2nd) to move to another rock -->
-        <MinerModel>hull</MinerModel><!-- hull = mining barges with strip miner beams.  entity = Civilian Hulk entities without beams -->
+        <MinerModel>entity</MinerModel><!-- entity = Civilian Hulk entities without beams.  hull = mining barges with strip miner beams, which look like pilotless player ships.  default: entity -->
         <MinerHaulerVisits>true</MinerHaulerVisits><!-- bool - a hauler visits belts with 2 or more miners -->
         <MinerHaulerInterval>600</MinerHaulerInterval><!-- seconds, mean time between hauler visits per belt -->
         <IceMinerFactor>0.5</IceMinerFactor><!-- x miners on ice belts -->

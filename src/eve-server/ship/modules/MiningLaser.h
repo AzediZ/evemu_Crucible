@@ -47,12 +47,15 @@ public:
 
 protected:
 	void ProcessCycle(bool abort=false);
+	// takes oreAmount from the target rock into the hold (all of it when that empties the rock)
+	void AddOre(InventoryItemRef roidRef, float oreAmount, float roidQuantity, float cycleVol, bool abort);
 
 
 private:
     //cached item-type stuff
     bool m_rMiner, m_dcMiner, m_iMiner, m_gMiner;
     bool m_IsInitialCycle;
+    bool m_depleting;           // emptying its rock (AddOre).  stopping the module meanwhile mustn't process another cycle
 
     float m_crystalDmg;
     float m_crystalDmgAmount;

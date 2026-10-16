@@ -567,7 +567,7 @@ EVEServerConfig::EVEServerConfig()
     ambient.MinerCyclesMin = 4;
     ambient.MinerCyclesMax = 10;
     ambient.MinerRockSwitchChance = 0.3f;
-    ambient.MinerModel = "hull";
+    ambient.MinerModel = "entity";
     ambient.MinerHaulerVisits = true;
     ambient.MinerHaulerInterval = 600;
     ambient.IceMinerFactor = 0.5f;
