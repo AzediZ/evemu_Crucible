@@ -142,29 +142,101 @@ PyResult LPService::TakeOffer(PyCallArgs& call, PyInt* corpID, PyInt* storeID) {
   return new PyBool(true);
 }
 
-PyResult LPService::ExchangeConcordLP(PyCallArgs& call, PyInt* corporationID, PyFloat* amount)
-{/**
-            ret = sm.RemoteSvc('LPSvc').TakeOffer(self.cache.corpID, data.offerID)
-            */
-  sLog.White( "LPService::Handle_ExchangeConcordLP()", "size=%lu", call.tuple->size());
-
+PyResult LPService::ExchangeConcordLP(PyCallArgs& call, PyInt* corporationID, PyRep* amount)
+{
+  // ret = sm.RemoteSvc('LPSvc').ExchangeConcordLP(corpID, amount)  (the convert button of a corporation's LP store)
   call.Dump(SERVICE__CALL_DUMP);
-    return new PyList;
+  uint32 corpID(corporationID->value());
+  double rate(GetConcordExchangeRate(corpID));
+  if (rate <= 0.0)
+    throw CustomError("CONCORD loyalty points can't be exchanged for this corporation's.");
+  int64 concordLP(0);
+  if (amount->IsInt())
+    concordLP = amount->AsInt()->value();
+  else if (amount->IsLong())
+    concordLP = amount->AsLong()->value();
+  else if (amount->IsFloat())
+    concordLP = (int64)amount->AsFloat()->value();
+  if (concordLP < 1)
+    throw CustomError("Enter the number of CONCORD loyalty points to exchange.");
+
+  uint32 charID(call.client->GetCharacterID());
+  int balance(GetLPBalanceForCorp(charID, corpCONCORD));
+  if (balance < concordLP)
+    throw CustomError("You only have %i CONCORD loyalty points.", (balance > 0 ? balance : 0));
+  int64 gained((int64)(concordLP * rate + 0.0001));
+  if (gained < 1)
+    throw CustomError("You do not have enough CONCORD loyalty points to exchange any to this corporation's.");
+
+  AddLP(charID, corpCONCORD, -(int)concordLP);
+  AddLP(charID, corpID, (int)gained);
+  _log(SERVICE__MESSAGE, "LPService::ExchangeConcordLP() - %s exchanged %lli CONCORD LP for %lli LP of corp %u (rate %.1f)",
+       call.client->GetName(), concordLP, gained, corpID, rate);
+  return PyStatic.NewNone();
 }
 
-//17:09:54 L LPService::Handle_GetLPExchangeRates(): size= 0
 PyResult LPService::GetLPExchangeRates(PyCallArgs& call)
-{/**
-            self.cache.exchangeRates = sm.RemoteSvc('LPSvc').GetLPExchangeRates()
+{
+  // self.cache.exchangeRates = sm.RemoteSvc('LPSvc').GetLPExchangeRates()
+  std::map<uint32, double> rates;
+  GetConcordExchangeRates(rates);
+  PyDict* dict = new PyDict();
+  for (auto cur : rates)
+    dict->SetItem(new PyInt(cur.first), new PyFloat(cur.second));
+  return dict;
+}
 
-05:42:04 [SvcCall] Service LPSvc: calling GetLPExchangeRates
-05:42:04 [SvcCall]   Call Arguments:
-05:42:04 [SvcCall]       Tuple: Empty
-05:42:04 [SvcCall]   Call Named Arguments:
-05:42:04 [SvcCall]     Argument 'machoVersion':
-05:42:04 [SvcCall]         Integer field: 1
-*/
-    return new PyList;
+double LPService::GetConcordExchangeRate(uint32 corporationID)
+{
+  std::map<uint32, double> rates;
+  GetConcordExchangeRates(rates);
+  auto itr = rates.find(corporationID);
+  return (itr == rates.end() ? 0.0 : itr->second);
+}
+
+void LPService::GetConcordExchangeRates(std::map<uint32, double>& into)
+{
+  // the rates never change:  read once
+  static std::map<uint32, double> s_rates;
+  static bool s_loaded(false);
+  if (!s_loaded) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT DISTINCT l.corporationID, c.factionID FROM lpStore AS l"
+        " JOIN crpNPCCorporations AS c ON c.corporationID = l.corporationID")) {
+      codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+      return;
+    }
+    DBResultRow row;
+    while (res.GetRow(row)) {
+      uint32 corpID(row.GetUInt(0));
+      // the factional warfare militias
+      if ((corpID == 1000179) or (corpID == 1000180) or (corpID == 1000181) or (corpID == 1000182))
+        continue;
+      switch (row.IsNull(1) ? 0 : row.GetUInt(1)) {
+        case 500001:    // Caldari State
+        case 500002:    // Minmatar Republic
+        case 500003:    // Amarr Empire
+        case 500004:    // Gallente Federation
+        case 500007:    // Ammatar Mandate
+        case 500008:    // Khanid Kingdom
+          s_rates[corpID] = 0.8;
+          break;
+        case 500009:    // The Syndicate
+        case 500014:    // ORE
+        case 500015:    // Thukker Tribe
+        case 500016:    // Servant Sisters of EVE
+        case 500017:    // The Society of Conscious Thought
+        case 500018:    // Mordu's Legion Command
+          s_rates[corpID] = 0.4;
+          break;
+        default:        // CONCORD itself and the pirates
+          break;
+      }
+    }
+    s_loaded = true;
+  }
+  into = s_rates;
 }
 
 //18:46:38 L CharMgrService::Handle_GetLPForCharacterCorp(): size= 1, 0=Integer(1000049)

@@ -50,7 +50,11 @@ public:
 
 protected:
     PyResult TakeOffer(PyCallArgs& call, PyInt* corpID, PyInt* storeID);
-    PyResult ExchangeConcordLP(PyCallArgs& call, PyInt* corporationID, PyFloat* amount);
+    /* CONCORD LP into another corporation's LP (Incursion 1.1.0, unchanged in Crucible):  0.8 for the empire factions'
+     *  corporations, 0.4 for the fringe factions' (Syndicate, ORE, Thukker, Sisters, Society, Mordu's Legion), no matter
+     *  the standings.  pirate and militia corporations are left out.  one way only, no fee.  amount is the CONCORD LP */
+    PyResult ExchangeConcordLP(PyCallArgs& call, PyInt* corporationID, PyRep* amount);
+    // {corporationID: rate} of the corporations CONCORD LP can go to (the LP store's exchange button)
     PyResult GetLPExchangeRates(PyCallArgs& call);
     PyResult GetLPForCharacterCorp(PyCallArgs& call, PyInt* corporationID);
     PyResult GetLPsForCharacter(PyCallArgs& call);
@@ -60,6 +64,10 @@ protected:
     static DBQueryResult GetLPOffersForCorp(int32 corporationID);
     static DBQueryResult GetRequiredItemsForOffer(int32 storeID);
     static bool GetLPOffer(int32 storeID, LPOffer& into);
+    // the CONCORD LP exchange rate to corporationID, 0 when it can't be exchanged to
+    static double GetConcordExchangeRate(uint32 corporationID);
+    // corporationID -> rate of every corporation with an LP store that takes CONCORD LP
+    static void GetConcordExchangeRates(std::map<uint32, double>& into);
     static void CreateNewLPBalance(int32 characterID, int32 corporationID, int balance);
     static void UpdateLPBalance(int32 characterID, int32 corporationID, int balance);
 };
