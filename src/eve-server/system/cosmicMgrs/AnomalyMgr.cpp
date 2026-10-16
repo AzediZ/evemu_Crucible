@@ -28,6 +28,17 @@
 
 #include "../../../eve-common/EVE_Scanning.h"
 
+/* gas sites (Ladar) are bound to their regions and hot-spot constellations, and are rare elsewhere in the region:  their
+ *  spawnWeights are weighed against this much of nothing when a system rolls a Ladar signature */
+static const double GAS_SITE_NONE_WEIGHT = 100.0;
+
+/* a whole number from low to high, each as likely.  MakeRandomInt() truncates a float between its bounds, so it almost
+ *  never returns high:  a roll of MakeRandomInt(2, 10) never gave a DED complex (10) */
+static int64 RandomBetween(int64 low, int64 high)
+{
+    return std::min<int64>(MakeRandomInt(low, high + 1), high);
+}
+
 /*  this class will keep track of all Anomalies for its system
  *.   the scan system will query this class for current anomaly data
  *
@@ -420,9 +431,10 @@ uint32 AnomalyMgr::CreateAnomaly(int8 typeID, uint32 dungeonID/*0*/, const GPoin
     } else if (m_whClass != 0) {
         dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, factionSleepers, trueSec, 0, m_whClass);
     } else {
-        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec);
+        uint32 regionID(m_system->GetRegionID()), constellationID(m_system->GetConstellationID());
+        dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, sig.ownerID, trueSec, 0, 0, regionID, constellationID);
         if (dungeonID == 0)
-            dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, 0, trueSec);
+            dungeonID = sDunDataMgr.PickDungeon(sig.dungeonType, 0, trueSec, 0, 0, regionID, constellationID);
     }
     std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
     if (pDungeon.get() == nullptr) {
@@ -430,6 +442,8 @@ uint32 AnomalyMgr::CreateAnomaly(int8 typeID, uint32 dungeonID/*0*/, const GPoin
                 sDunDataMgr.GetDungeonType(sig.dungeonType), m_system->GetName(), m_system->GetID(), trueSec);
         return 0;
     }
+    if (pDungeon->sigStrength > 0.0f)
+        sig.sigStrength = pDungeon->sigStrength;
     Dungeon::SpawnParams params;
         params.dungeonID = dungeonID;
         params.archetype = sig.dungeonType;
@@ -551,10 +565,11 @@ uint8 AnomalyMgr::GetDungeonType()
     // a few tries for a type this system allows.  0 when nothing is allowed
     float trueSec(m_system->GetSystemSecurityRating());
     for (uint8 tries = 0; tries < 20; ++tries) {
-        uint8 typeID = MakeRandomInt(2,10); // skip typeMission
+        uint8 typeID = RandomBetween(2, 10); // skip typeMission
         // a type with no dungeon this system could get is a wasted slot (gas sites, DED complexes)
         if ((typeID != Dungeon::Type::Wormhole) and (typeID != Dungeon::Type::Mission) and (typeID != Dungeon::Type::Escalation)
-        and (sDunDataMgr.PickDungeon(typeID, 0, trueSec) == 0))
+        and (sDunDataMgr.PickDungeon(typeID, 0, trueSec, 0, 0, m_system->GetRegionID(), m_system->GetConstellationID(),
+                (typeID == Dungeon::Type::Ladar ? GAS_SITE_NONE_WEIGHT : 0.0)) == 0))
             continue;
         switch(typeID) {
             case Dungeon::Type::Escalation:  // 9
@@ -620,7 +635,7 @@ void AnomalyMgr::InitWSpace()
      *  a completed site is replaced by one of its type (OnSiteCompleted)
      */
     m_maxSigs = 8;
-    uint8 anoms(MakeRandomInt(3, 5));
+    uint8 anoms(RandomBetween(3, 5));
     for (uint8 i = 0; i < anoms; ++i)
         m_typeList.push_back(Dungeon::Type::Anomaly);
     // the config caps:  < 0 is switched off
@@ -632,10 +647,10 @@ void AnomalyMgr::InitWSpace()
             ++count;
         }
     };
-    add(m_Radar, Dungeon::Type::Radar, MakeRandomInt(0, 2));
-    add(m_Mag, Dungeon::Type::Magnetometric, MakeRandomInt(0, 2));
-    add(m_Ladar, Dungeon::Type::Ladar, MakeRandomInt(1, 2));
-    add(m_Grav, Dungeon::Type::Gravimetric, MakeRandomInt(0, 1));
+    add(m_Radar, Dungeon::Type::Radar, RandomBetween(0, 2));
+    add(m_Mag, Dungeon::Type::Magnetometric, RandomBetween(0, 2));
+    add(m_Ladar, Dungeon::Type::Ladar, RandomBetween(1, 2));
+    add(m_Grav, Dungeon::Type::Gravimetric, RandomBetween(0, 1));
     if ((m_WH == 0) and (MakeRandomFloat() < 0.5)) {
         m_typeList.push_back(Dungeon::Type::Wormhole);
         ++m_WH;

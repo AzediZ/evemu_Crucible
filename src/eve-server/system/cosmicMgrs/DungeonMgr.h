@@ -42,7 +42,10 @@ public:
      *  Sleeper dungeons are w-space's:  only a pick for factionSleepers gets them, and it gets nothing else.
      *  exactDifficulty (the w-space class there):  only dungeons of that difficulty, without the null sec bands
      */
-    uint32 PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty = 0, uint8 exactDifficulty = 0);
+    /* a weighted pick of the dungeons this system could get.  regionID, constellationID:  the system's (dungeons bound to
+     *  another region or constellation are left out).  noneWeight:  the weight of picking nothing (0 = always a dungeon) */
+    uint32 PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty = 0, uint8 exactDifficulty = 0,
+                       uint32 regionID = 0, uint32 constellationID = 0, double noneWeight = 0.0);
 
     // every dungeon of an archetype (GM commands)
     void GetByArchetype(uint8 archetype, std::vector<uint32>& into);

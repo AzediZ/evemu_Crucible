@@ -299,6 +299,9 @@ namespace Dungeon {
         float maxSec;
         uint32 weight;
         uint32 lifetimeHours;
+        uint32 regionID;                        // only spawns in this region (0 = anywhere)
+        uint32 constellationID;                 // only spawns in this constellation (0 = anywhere)
+        float sigStrength;                      // the signature's scan strength (0 = AnomalyMgr's default)
         bool hasCompletionEvent;                // some trigger completes the dungeon (else: all groups destroyed)
         std::vector<uint32> roomOrder;          // roomIDs ascending.  index 0 is the entry room
         std::map<uint32, Room> rooms;

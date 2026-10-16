@@ -309,7 +309,8 @@ static std::string DungeonFilter(uint32 dungeonID, const char* column)
 void DungeonDB::GetDungeonRows(DBQueryResult& res, uint32 dungeonID/*0*/)
 {
     if (!sDatabase.RunQuery(res, "SELECT dungeonID, dungeonName, dungeonStatus, factionID, archetypeID,"
-        " COALESCE(dungeonNameID, 0), difficulty, minSecurity, maxSecurity, spawnWeight, lifetimeHours"
+        " COALESCE(dungeonNameID, 0), difficulty, minSecurity, maxSecurity, spawnWeight, lifetimeHours,"
+        " regionID, constellationID, sigStrength"
         " FROM dunDungeons%s", DungeonFilter(dungeonID, "dungeonID").c_str()))
         _log(DATABASE__ERROR, "Error in GetDungeonRows query: %s", res.error.c_str());
 }

@@ -166,3 +166,74 @@ PyResult Command_ded(Client* pClient, CommandDB* db, EVEServiceManager& services
     }
     throw CustomError ("Unknown option '%s'.  Use list or spawn.", cmd.c_str());
 }
+
+/* gas sites (Ladar nebulae in known space):  /gas lists the ones of this region, /gas spawn puts one near the caller's
+ *  ship as a scannable signature, so it can be tested without probing for one */
+PyResult Command_gas(Client* pClient, CommandDB* db, EVEServiceManager& services, const Seperator& args)
+{
+    SystemManager* pSys(pClient->SystemMgr());
+    if (pSys == nullptr)
+        throw CustomError ("You don't appear to be in a solar system.");
+    std::vector<uint32> list;
+    sDunDataMgr.GetByArchetype(Dungeon::Type::Ladar, list);
+    float trueSec(pSys->GetSystemSecurityRating());
+    // this region's, and whether this system can get it
+    std::map<std::string, std::pair<uint32, bool>> mine;
+    for (auto id : list) {
+        std::shared_ptr<const Dungeon::Dungeon> pDun(sDunDataMgr.GetDungeon(id));
+        if ((pDun.get() == nullptr) or (pDun->factionID != 0) or (pDun->weight == 0) or (pDun->regionID != pSys->GetRegionID()))
+            continue;
+        bool here((trueSec >= pDun->minSec) and (trueSec <= pDun->maxSec)
+                  and ((pDun->constellationID == 0) or (pDun->constellationID == pSys->GetConstellationID())));
+        auto& cur = mine[pDun->name];
+        if ((cur.first == 0) or (here and !cur.second))
+            cur = std::make_pair(id, here);
+    }
+
+    std::string cmd(args.argCount() < 2 ? "list" : args.arg(1));
+    if (cmd == "list") {
+        if (mine.empty())
+            return new PyString("There are no gas sites in this region.  They're in The Forge, Lonetrek, Placid, Solitude, Derelik, "
+                    "Aridia, Molden Heath and Heimatar (Akkio and Amamake are hot spots), and in their null-sec neighbours.  "
+                    "/gas spawn puts one next to you anywhere.");
+        std::string msg;
+        for (auto& cur : mine)
+            msg += cur.first + "  (" + std::to_string(cur.second.first) + ")" + (cur.second.second ? "  can spawn here" : "") + "<br>";
+        return new PyString(msg);
+    }
+    if (cmd == "spawn") {
+        if (pClient->IsDocked() or (pClient->GetShipSE() == nullptr))
+            throw CustomError ("You must be in space.");
+        uint32 dungeonID(0);
+        if (args.argCount() > 2) {
+            if (!args.isNumber(2))
+                throw CustomError ("Usage: /gas spawn [dungeonID]");
+            dungeonID = atoi(args.arg(2).c_str());
+            std::shared_ptr<const Dungeon::Dungeon> pDun(sDunDataMgr.GetDungeon(dungeonID));
+            if ((pDun.get() == nullptr) or (pDun->archetypeID != Dungeon::Type::Ladar) or (pDun->factionID != 0))
+                throw CustomError ("%u is not a gas site.  /gas list shows this region's.", dungeonID);
+        } else {
+            dungeonID = sDunDataMgr.PickDungeon(Dungeon::Type::Ladar, 0, trueSec, 0, 0, pSys->GetRegionID(), pSys->GetConstellationID());
+            if (dungeonID == 0) {
+                // this system gets none:  any gas site, to test with
+                std::vector<uint32> any;
+                for (auto id : list) {
+                    std::shared_ptr<const Dungeon::Dungeon> pDun(sDunDataMgr.GetDungeon(id));
+                    if ((pDun.get() != nullptr) and (pDun->factionID == 0) and (pDun->weight > 0))
+                        any.push_back(id);
+                }
+                if (any.empty())
+                    throw CustomError ("There are no gas sites in the database.  Has the kspace-gas-sites migration been applied?");
+                dungeonID = any[std::min<size_t>(MakeRandomInt(0, any.size()), any.size() - 1)];
+            }
+        }
+        GPoint pos(pClient->GetShipSE()->GetPosition());
+        pos.MakeRandomPointOnSphereLayer(18000, 22000);
+        uint32 itemID(pSys->GetAnomMgr()->CreateAnomaly(Dungeon::Type::Ladar, dungeonID, &pos));
+        if (itemID == 0)
+            throw CustomError ("The site could not be spawned here (see the server log).");
+        std::shared_ptr<const Dungeon::Dungeon> pDun(sDunDataMgr.GetDungeon(dungeonID));
+        return new PyString("Spawned " + (pDun.get() != nullptr ? pDun->name : std::string("the site")) + " about 20 km from you (signature " + std::to_string(itemID) + ").  Its clouds are on your grid.");
+    }
+    throw CustomError ("Unknown option '%s'.  Use list or spawn.", cmd.c_str());
+}

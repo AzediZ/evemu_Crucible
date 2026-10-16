@@ -32,6 +32,7 @@
 
 #include "eve-server.h"
 
+#include "ConsoleCommands.h"
 #include "EVEServerConfig.h"
 #include "Profiler.h"
 #include "Client.h"

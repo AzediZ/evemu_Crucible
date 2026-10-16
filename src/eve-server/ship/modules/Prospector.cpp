@@ -95,9 +95,8 @@ void Prospector::CheckTarget()
         // the container's requiredSkill1 names the module that opens it (Hacking: codebreakers, Archaeology: analyzers,
         //  Salvaging: salvagers).  a container without one opens with any data miner
         uint16 needSkill(tType.HasAttribute(AttrRequiredSkill1) ? tType.GetAttribute(AttrRequiredSkill1).get_uint32() : 0);
-        uint16 mySkill(m_modRef->type().GetAttribute(AttrRequiredSkill1).get_uint32());
         if (needSkill > 0) {
-            if (needSkill != mySkill)
+            if (needSkill != ModuleSkill())
                 throw UserError ("DeniedActivateTargetModuleDisallowed");
         } else if (!m_dataMiner) {
             throw UserError ("DeniedActivateTargetModuleDisallowed");
@@ -337,13 +336,24 @@ void Prospector::TargetDestroyed()
         SendRemote("SalvagingTooLate", TypeArg(m_targetTypeID));
 }
 
+uint16 Prospector::ModuleSkill() const
+{
+    const ItemType& type(m_modRef->type());
+    for (uint16 attr : { AttrRequiredSkill1, AttrRequiredSkill2, AttrRequiredSkill3 }) {
+        uint16 skill(type.GetAttribute(attr).get_uint32());
+        if ((skill == EvESkill::Hacking) or (skill == EvESkill::Archaeology) or (skill == EvESkill::Salvaging))
+            return skill;
+    }
+    return 0;
+}
+
 void Prospector::SendTrigger(uint32 itemID, bool success)
 {
     Client* pClient(m_shipRef->GetPilot());
     if ((pClient == nullptr) or (pClient->SystemMgr() == nullptr))
         return;
     uint16 trigger(0);
-    switch (m_modRef->type().GetAttribute(AttrRequiredSkill1).get_uint32()) {
+    switch (ModuleSkill()) {
         case EvESkill::Hacking:     trigger = (success ? Dungeon::Trigger::HackingSuccess : Dungeon::Trigger::HackingFailure); break;
         case EvESkill::Archaeology: trigger = (success ? Dungeon::Trigger::ArchaeologySuccess : Dungeon::Trigger::ArchaeologyFailure); break;
         case EvESkill::Salvaging:   trigger = (success ? Dungeon::Trigger::SalvagingSuccess : Dungeon::Trigger::SalvagingFailure); break;

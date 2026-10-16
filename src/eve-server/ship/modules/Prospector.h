@@ -52,6 +52,10 @@ protected:
     void OnSalvageSuccess();
     // EVEDB::invGroups::Salvager module rolling on a wreck
     bool IsSalvaging()                                  { return (m_salvager and (m_targetSE != nullptr) and m_targetSE->IsWreckSE()); }
+    /* the skill the module works by (Hacking, Archaeology or Salvaging), whichever of its required skills it is:
+     *  codebreakers, analyzers and salvagers have theirs as requiredSkill2.  0 for none of them
+     */
+    uint16 ModuleSkill() const;
     // dungeon trigger for this module's skill
     void SendTrigger(uint32 itemID, bool success);
 

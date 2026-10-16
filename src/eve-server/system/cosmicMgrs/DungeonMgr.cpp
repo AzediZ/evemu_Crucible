@@ -34,6 +34,7 @@
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
+#include "exploration/Exploration.h"
 
 /* Dungeon flow:
  *  DungeonDataMgr loads the static dungeons (dunDungeons, rooms, objects, spawn groups, triggers/events, gates, loot,
@@ -150,6 +151,9 @@ void DungeonDataMgr::Load(uint32 dungeonID)
             dData->maxSec = row.GetFloat(8);
             dData->weight = (row.GetInt(9) > 0 ? row.GetInt(9) : 0);
             dData->lifetimeHours = row.GetUInt(10);
+            dData->regionID = row.GetUInt(11);
+            dData->constellationID = row.GetUInt(12);
+            dData->sigStrength = row.GetFloat(13);
             dData->hasCompletionEvent = false;
         m_dungeons[dData->dungeonID] = dData;
     }
@@ -348,7 +352,8 @@ std::shared_ptr<const Dungeon::Dungeon> DungeonDataMgr::GetDungeon(uint32 dungeo
     return nullptr;
 }
 
-uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty/*0*/, uint8 exactDifficulty/*0*/)
+uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float trueSec, uint8 minDifficulty/*0*/, uint8 exactDifficulty/*0*/,
+                                   uint32 regionID/*0*/, uint32 constellationID/*0*/, double noneWeight/*0*/)
 {
     std::vector<std::pair<uint32, double>> exact, generic;
     auto range = m_byArchetype.equal_range(archetype);
@@ -360,6 +365,10 @@ uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float true
         if ((dun.weight == 0) or dun.rooms.empty())
             continue;
         if ((trueSec < dun.minSec) or (trueSec > dun.maxSec))
+            continue;
+        // the gas sites keep to their regions and constellations
+        if (((dun.regionID != 0) and (dun.regionID != regionID))
+        or ((dun.constellationID != 0) and (dun.constellationID != constellationID)))
             continue;
         if (dun.difficulty < minDifficulty)
             continue;
@@ -390,7 +399,10 @@ uint32 DungeonDataMgr::PickDungeon(uint8 archetype, uint32 factionID, float true
         total += cur.second;
     if (total <= 0.0)
         return 0;
-    double roll(MakeRandomFloat(0.0, total));
+    // noneWeight:  the odds of nothing at all, against the weights
+    double roll(MakeRandomFloat(0.0, total + noneWeight));
+    if (roll >= total)
+        return ((noneWeight > 0.0) ? 0 : list.back().first);
     for (auto& cur : list) {
         if (roll < cur.second)
             return cur.first;
@@ -622,7 +634,8 @@ uint32 DungeonMgr::SpawnInstance(const Dungeon::SpawnParams& params, CosmicSigna
 
     uint32 dungeonID(params.dungeonID);
     if (dungeonID == 0)
-        dungeonID = sDunDataMgr.PickDungeon(params.archetype, params.factionID, m_system->GetSystemSecurityRating());
+        dungeonID = sDunDataMgr.PickDungeon(params.archetype, params.factionID, m_system->GetSystemSecurityRating(), 0, 0,
+                m_system->GetRegionID(), m_system->GetConstellationID());
     std::shared_ptr<const Dungeon::Dungeon> pDungeon(sDunDataMgr.GetDungeon(dungeonID));
     if ((pDungeon.get() == nullptr) or pDungeon->roomOrder.empty()) {
         _log(DUNG__WARNING, "DungeonMgr::SpawnInstance() - no usable dungeon (id %u, archetype %u) in %s(%u)",
@@ -1552,6 +1565,12 @@ void DungeonMgr::OnObjectEvent(uint32 itemID, uint16 triggerType, uint32 charID,
         if (pSE != nullptr)
             ctx.pos = pSE->GetPosition();
         QueueTrigger(itr->first, iItr->second.second, triggerType, ctx);
+        // a container opened:  that may be the site's last (CheckImplicitCompletion()), and its opener completes it
+        if ((triggerType == Dungeon::Trigger::HackingSuccess) or (triggerType == Dungeon::Trigger::ArchaeologySuccess)) {
+            if (charID != 0)
+                itr->second.lastCharID = charID;
+            m_completionChecks.insert(itr->first);
+        }
         return;
     }
 
@@ -1929,7 +1948,10 @@ void DungeonMgr::FlushNotices()
 
 void DungeonMgr::CheckImplicitCompletion(Instance& inst)
 {
-    // dungeons without a completion event are done when every room-created/room-entered group was spawned and destroyed
+    /* dungeons without a completion event are done when every room-created/room-entered group was spawned and destroyed,
+     *  and every locked container (a data or relic site's) was opened.  known space's data and relic sites have no npcs
+     *  and no events:  without the containers they were never done, and sat on the scanner until they expired
+     */
     if (inst.completed or inst.dungeon->hasCompletionEvent)
         return;
     bool any(false);
@@ -1938,6 +1960,15 @@ void DungeonMgr::CheckImplicitCompletion(Instance& inst)
             if (group.def->spawnMode == Dungeon::SpawnMode::TriggerOnly)
                 continue;
             if (!group.spawned or !group.destroyed)
+                return;
+            any = true;
+        }
+    for (auto& room : inst.rooms)
+        for (auto& cur : room.objects) {
+            SystemEntity* pSE(m_system->GetSE(cur.second));
+            if ((pSE == nullptr) or !pSE->IsContainerSE() or !sExplorationMgr.IsLockedType(pSE->GetTypeID()))
+                continue;
+            if (pSE->GetContSE()->IsLocked())
                 return;
             any = true;
         }
@@ -2633,7 +2664,8 @@ void DungeonMgr::TryEscalate(Instance& inst, uint32 charID)
                 if ((pDest.get() == nullptr) or (sysData.securityRating < pDest->minSec) or (sysData.securityRating > pDest->maxSec))
                     continue;
             } else {
-                dungeonID = sDunDataMgr.PickDungeon(pRule->destArchetypeID, inst.factionID, sysData.securityRating, minDifficulty);
+                dungeonID = sDunDataMgr.PickDungeon(pRule->destArchetypeID, inst.factionID, sysData.securityRating, minDifficulty, 0,
+                        sysData.regionID, sysData.constellationID);
                 if (dungeonID == 0)
                     continue;
             }
