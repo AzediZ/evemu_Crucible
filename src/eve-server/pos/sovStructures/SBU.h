@@ -39,6 +39,8 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
+    // attack alerts to the owner (SovereigntySBUDamage), at most once an hour
+    virtual void                OnDamaged(SystemEntity* pAttacker);
 
     // anchoring done:  it holds its stargate, and the holding alliance hears of it
     void                        OnAnchored();

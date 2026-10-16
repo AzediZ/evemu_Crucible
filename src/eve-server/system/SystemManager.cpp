@@ -560,6 +560,10 @@ void SystemManager::UnloadSystem() {
         if (pSE->TargetMgr() != nullptr)
             pSE->TargetMgr()->Unload();
 
+        // a structure's hit points (shots at it while the system was up) are in its attributes:  saved, or the next boot forgets them
+        if (pSE->IsPOSSE() and (pSE->GetSelf().get() != nullptr))
+            pSE->GetSelf()->SaveAttributes();
+
         if (pSE->IsStaticEntity() or pSE->isGlobal()) {
             if (pSE->IsStationSE()) {
                 pSE->GetStationSE()->UnloadStation();

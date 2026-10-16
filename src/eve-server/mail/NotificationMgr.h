@@ -50,6 +50,9 @@ public:
     static void   SendToCorp(uint32 corpID, int64 roleMask, uint16 typeID, uint32 senderID, PyDict* data);
     // all members of all corps in an alliance (roleMask as above).  consumes `data`
     static void   SendToAlliance(uint32 allianceID, int64 roleMask, uint16 typeID, uint32 senderID, PyDict* data);
+    // 'Ownership transferred' (OwnershipTransferred) to the directors and roleMask holders of both corporations
+    static void   SendOwnershipTransferred(uint32 charID, uint32 oldCorpID, uint32 newCorpID, uint32 solarSystemID,
+                                           uint32 structureID, uint16 structureTypeID, int64 roleMask);
 
     // group id (Notify::Groups) for a type, -1 when the type is not a client notification (eg. 125-129)
     static int8   GetGroup(uint16 typeID);

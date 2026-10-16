@@ -27,6 +27,9 @@
 #include "manufacturing/Blueprint.h"
 #include "map/MapDB.h"
 #include "math/Trig.h"
+#include "mail/NotificationMgr.h"
+#include "../eve-common/EVE_Mail.h"
+#include "../eve-common/EVE_Roles.h"
 #include "packets/Planet.h"
 #include "planet/CustomsOffice.h"
 #include "planet/Planet.h"
@@ -44,7 +47,8 @@
 CustomsSE::CustomsSE(StructureItemRef sRef, EVEServiceManager &services, SystemManager* system, const FactionData& data)
 : ObjectSystemEntity(sRef, services, system),
 m_system(system),
-m_reinforceArmed(true)
+m_reinforceArmed(true),
+m_lastAttackAlert(0)
 {
     m_warID = data.factionID;
     m_allyID = data.allianceID;
@@ -418,8 +422,38 @@ bool CustomsSE::CanBeAttacked()
     return !IsReinforced();
 }
 
-void CustomsSE::OnShieldDamaged()
+void CustomsSE::NotifyOwner(SystemEntity* pAttacker, uint16 notifyType, int64 reinforceExitTime/*0*/)
 {
+    if (!IsPlayerCorp(m_corpID) or (m_system == nullptr))
+        return;
+    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
+    StructureSE::GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
+    PyDict* data = new PyDict();
+        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
+        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
+        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
+        data->SetItemString("planetID",             new PyInt(m_oData.planetID));
+        data->SetItemString("planetTypeID",         (m_planetSE == nullptr ? PyStatic.NewNone() : new PyInt(m_planetSE->GetTypeID())));
+        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
+        data->SetItemString("typeID",               new PyInt(GetTypeID()));
+    if (notifyType == Notify::Types::OrbitalReinforced) {
+        data->SetItemString("reinforceExitTime",    new PyLong(reinforceExitTime));
+    } else {
+        float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+        data->SetItemString("shieldLevel",          new PyFloat(capacity > 0.0f ? m_self->GetAttribute(AttrShieldCharge).get_float() / capacity : 0.0f));
+    }
+    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::InfrastructureTacticalOfficer, notifyType, m_corpID, data);
+}
+
+void CustomsSE::OnShieldDamaged(SystemEntity* pAttacker)
+{
+    // at most once an hour
+    int64 now(GetFileTimeNow());
+    if ((now - m_lastAttackAlert) >= EvE::Time::Hour) {
+        m_lastAttackAlert = now;
+        NotifyOwner(pAttacker, Notify::Types::OrbitalAttacked);
+    }
+
     /* dev blog "Player-owned Customs Office" (18 Oct 2011):  reinforced at 25% shields, out "somewhere within the time of
      *  day specified by the owner, at least 24 hours after".  reinforcementDuration and reinforcementVariance of the type
      *  (86400 s, 3600 s on the Customs Office; Interbus offices have none and don't reinforce).  the reinforcement hour is UTC.
@@ -442,7 +476,7 @@ void CustomsSE::OnShieldDamaged()
     int64 variance = (int64)m_self->GetAttribute(AttrreinforcementVariance).get_float();
 
     // the first time on the selected hour at least the reinforcement duration from now, give or take the variance
-    int64 now = GetFileTimeNow();
+    now = GetFileTimeNow();
     int64 earliest = now + duration * EvE::Time::Second;
     int64 dayStart = earliest - (earliest % EvE::Time::Day);
     int64 exit = dayStart + m_cData.selectedHour * EvE::Time::Hour;
@@ -456,6 +490,7 @@ void CustomsSE::OnShieldDamaged()
     m_reinforceArmed = false;
     SaveState();
     SendSlimUpdate();
+    NotifyOwner(pAttacker, Notify::Types::OrbitalReinforced, exit);
     _log(POS__MESSAGE, "CustomsSE::OnShieldDamaged() - %s(%u) reinforced until %lli", GetName(), GetID(), exit);
 }
 

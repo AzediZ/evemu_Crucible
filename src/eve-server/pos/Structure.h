@@ -288,6 +288,12 @@ public:
     void                        SendEffectUpdate(int16 effectID, bool active);
     // a starbase weapon a pilot may man (posPlayerControlStructure)
     bool                        IsControllable();
+    /* attack alerts in the TowerAlert format (aggressor, system, type, shield/armor/hull fractions left) to the owner
+     *  corp's starbase officers (Config Starbase Equipment, Infrastructure Tactical Officer, directors), at most once an
+     *  hour per structure.  force:  always.  sovereignty structures (SovereigntyTCU/SBU/IHDamage) and customs offices */
+    void                        NotifyStructureAttack(SystemEntity* pAttacker, uint16 notifyType, bool force = false);
+    // the pilot (or drone owner, or npc owner) behind an attack, with corp and alliance
+    static void                 GetAggressor(SystemEntity* pAttacker, uint32& charID, uint32& corpID, uint32& allyID);
 
 protected:
     // the Crucible anchoring rules.  modules return the control tower they anchor at
@@ -339,6 +345,7 @@ private:
     Timer m_regenTimer;             // shield regeneration, 1s
     uint32 m_controllerID;          // manual control (runtime)
     uint8 m_regenTicks;             // damage state sent every 5 regeneration tics
+    int64 m_lastAttackAlert;        // NotifyStructureAttack
 
     bool m_tcu :1;              // Territorial Claim Unit
     bool m_sbu :1;              // System Blockade Unit

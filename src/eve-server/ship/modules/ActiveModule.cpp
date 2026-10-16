@@ -56,6 +56,18 @@ namespace {
         }
         return -1.0;
     }
+
+    /* a conquerable station (an outpost) to shoot.  IsValidTarget() leaves the npc stations' ids out, and the conquerable
+     *  stations of the static data have theirs among them, so a gun or launcher activated on one had no target and stopped.
+     *  only weapons:  webs, ewar and the rest want something that moves
+     */
+    bool OutpostTarget(ShipItemRef shipRef, uint32 targetID)
+    {
+        if (!IsStationID(targetID) or !shipRef->HasPilot() or (shipRef->GetPilot()->SystemMgr() == nullptr))
+            return false;
+        SystemEntity* pSE(shipRef->GetPilot()->SystemMgr()->GetSE(targetID));
+        return ((pSE != nullptr) and pSE->IsOutpostSE());
+    }
 }
 
 ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
@@ -412,7 +424,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         targetID = 0;
     if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb)
         targetID = 0;
-    if (IsValidTarget(targetID)) {
+    if (IsValidTarget(targetID) or ((m_turret or m_launcher) and OutpostTarget(m_shipRef, targetID))) {
         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
         m_needsTarget = true;
@@ -448,10 +460,12 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
                 if (m_targetSE->IsOutpostSE()) {
                     uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(m_targetSE->SystemMgr()->GetID()));
                     if ((sovAllianceID > 0) and (PosMgrDB::GetCorpAllianceID(m_targetSE->GetSelf()->ownerID()) == sovAllianceID)) {
+                        // its name before Clear() lets go of the target (this crashed)
+                        std::string name(m_targetSE->GetName());
                         Clear();
                         throw UserError ("DeniedStationInvulnerableSovereign")
                                 .AddFormatValue("module", new PyInt(typeID()))
-                                .AddFormatValue("targetname", new PyString(m_targetSE->GetName()));
+                                .AddFormatValue("targetname", new PyString(name));
                     }
                 }
                 Clear();

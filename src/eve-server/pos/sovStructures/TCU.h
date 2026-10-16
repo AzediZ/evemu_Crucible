@@ -38,6 +38,8 @@ public:
 
     /* virtual functions default to base class and overridden as needed */
     virtual void                Init();
+    // attack alerts to the owner (SovereigntyTCUDamage), at most once an hour
+    virtual void                OnDamaged(SystemEntity* pAttacker);
 
     // removes this TCU's claim on the system (offline or gone)
     void                        DropClaim();

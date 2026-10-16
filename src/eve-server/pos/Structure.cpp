@@ -26,6 +26,8 @@
 #include "manufacturing/Blueprint.h"
 #include "map/MapDB.h"
 #include "math/Trig.h"
+#include "mail/NotificationMgr.h"
+#include "../eve-common/EVE_Mail.h"
 #include "planet/Moon.h"
 #include "planet/Planet.h"
 #include "planet/CustomsOffice.h"
@@ -234,6 +236,7 @@ StructureSE::StructureSE(StructureItemRef structure, EVEServiceManager&services,
     m_procTimer(10000), // arbitrary default
     m_regenTimer(1000),
     m_regenTicks(0),
+    m_lastAttackAlert(0),
     m_controllerID(0),
     m_tcu(false),
     m_sbu(false),
@@ -287,7 +290,7 @@ void StructureSE::InitData()
         if (m_gateSE != nullptr)
             m_data.anchorpointID = m_gateSE->GetID();
     }
-    if (m_platform and IsOutpostUpgradePlatform())
+    else if (m_platform and IsOutpostUpgradePlatform())
     { //outpost upgrade and improvement platforms are anchored at the system's outpost (one per system)
         uint32 outpostID(stDataMgr.GetOutpostInSystem(m_system->GetID()));
         if (outpostID != 0)
@@ -432,6 +435,17 @@ void StructureSE::Init()
         if (m_gateSE == nullptr)
         {
             m_gateSE = pSE->GetGateSE();
+        }
+        // saved with a moon for its anchor point (InitData gave SBUs one):  the stargate nearest it, as when it was put down
+        if (m_gateSE == nullptr)
+        {
+            SystemEntity* pGate(m_system->GetClosestGateSE(GetPosition()));
+            m_gateSE = (pGate == nullptr ? nullptr : pGate->GetGateSE());
+            if (m_gateSE != nullptr)
+            {
+                m_data.anchorpointID = m_gateSE->GetID();
+                m_db.UpdateBaseData(m_data);
+            }
         }
     }
     if (m_ihub)
@@ -1159,6 +1173,58 @@ void StructureSE::OnDamaged(SystemEntity* pAttacker)
     TowerSE* pTower(m_tower ? GetTowerSE() : m_towerSE);
     if (pTower != nullptr)
         pTower->OnStructureDamaged(this, pAttacker);
+}
+
+void StructureSE::GetAggressor(SystemEntity* pAttacker, uint32& charID, uint32& corpID, uint32& allyID)
+{
+    charID = corpID = allyID = 0;
+    if (pAttacker == nullptr)
+        return;
+    // pilots (and their drones) by character, anything else by its owner
+    if (pAttacker->HasPilot()) {
+        Client* pPilot(pAttacker->GetPilot());
+        charID = pPilot->GetCharacterID();
+        corpID = pPilot->GetCorporationID();
+        allyID = pPilot->GetAllianceID();
+    } else if (pAttacker->IsDroneSE() and IsCharacterID(pAttacker->GetSelf()->ownerID())) {
+        charID = pAttacker->GetSelf()->ownerID();
+        corpID = pAttacker->GetCorporationID();
+        allyID = pAttacker->GetAllianceID();
+    } else {
+        charID = pAttacker->GetOwnerID();
+        corpID = pAttacker->GetCorporationID();
+        allyID = pAttacker->GetAllianceID();
+    }
+}
+
+void StructureSE::NotifyStructureAttack(SystemEntity* pAttacker, uint16 notifyType, bool force/*false*/)
+{
+    int64 now(GetFileTimeNow());
+    if (!force and ((now - m_lastAttackAlert) < EvE::Time::Hour))
+        return;
+    m_lastAttackAlert = now;
+    if (!IsPlayerCorp(m_corpID) or (m_system == nullptr))
+        return;
+
+    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
+    GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
+    float armorHP(m_self->GetAttribute(AttrArmorHP).get_float()), hp(m_self->GetAttribute(AttrHP).get_float());
+    float shieldCap(m_self->GetAttribute(AttrShieldCapacity).get_float());
+
+    PyDict* data = new PyDict();
+        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
+        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
+        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
+        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
+        data->SetItemString("typeID",               new PyInt(GetTypeID()));
+        data->SetItemString("shieldValue",          new PyFloat(shieldCap > 0.0f ? m_self->GetAttribute(AttrShieldCharge).get_float() / shieldCap : 0.0f));
+        data->SetItemString("armorValue",           new PyFloat(armorHP > 0.0f ? 1.0f - m_self->GetAttribute(AttrArmorDamage).get_float() / armorHP : 0.0f));
+        data->SetItemString("hullValue",            new PyFloat(hp > 0.0f ? 1.0f - m_self->GetAttribute(AttrDamage).get_float() / hp : 0.0f));
+    // customs offices also say which planet
+    if (m_planetSE != nullptr)
+        data->SetItemString("planetID",             new PyInt(m_planetSE->GetID()));
+    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::InfrastructureTacticalOfficer,
+                                notifyType, m_corpID, data);
 }
 
 float StructureSE::GetShieldFraction()

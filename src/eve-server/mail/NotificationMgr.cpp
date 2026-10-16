@@ -148,6 +148,21 @@ void NotificationMgr::SendToAlliance(uint32 allianceID, int64 roleMask, uint16 t
     Send(toIDs, typeID, senderID, data);
 }
 
+void NotificationMgr::SendOwnershipTransferred(uint32 charID, uint32 oldCorpID, uint32 newCorpID, uint32 solarSystemID,
+                                               uint32 structureID, uint16 structureTypeID, int64 roleMask)
+{
+    for (uint32 toCorp : {oldCorpID, newCorpID}) {
+        PyDict* data = new PyDict();
+            data->SetItemString("charID",           (charID == 0 ? PyStatic.NewNone() : new PyInt(charID)));
+            data->SetItemString("oldOwnerCorpID",   new PyInt(oldCorpID));
+            data->SetItemString("newOwnerCorpID",   new PyInt(newCorpID));
+            data->SetItemString("solarSystemID",    new PyInt(solarSystemID));
+            data->SetItemString("structureID",      new PyInt(structureID));
+            data->SetItemString("structureTypeID",  new PyInt(structureTypeID));
+        SendToCorp(toCorp, roleMask, Notify::Types::OwnershipTransferred, toCorp, data);
+    }
+}
+
 std::string NotificationMgr::ToYaml(PyRep* rep)
 {
     std::string yaml;

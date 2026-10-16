@@ -68,8 +68,8 @@ public:
     StationServiceSE* GetService(uint16 typeID);
     // the services can be shot whenever the station can
     bool ServicesVulnerable();
-    // a service's attack alerts are the station's
-    void OnServiceAttacked(SystemEntity* pAttacker)     { NotifyAttack(pAttacker); }
+    // 'Station service under attack' (StationAggression1) to the owner's station managers, at most once an hour per station
+    void OnServiceAttacked(StationServiceSE* pService, SystemEntity* pAttacker);
     /* any of serviceIDs (Station:: bits) shot down at this station.  only loaded systems are asked:  a pilot docked there
      *  keeps its system loaded */
     static bool IsServiceOffline(uint32 stationID, uint32 serviceIDs);
@@ -121,6 +121,7 @@ private:
     int64 m_lastSave;
     int64 m_lastOwnerCheck;
     int64 m_lastAttackNotify;
+    int64 m_lastServiceNotify;
     int64 m_lastDamageSend;
     std::vector<uint32> m_serviceIDs;    // the service structures here (looked up by ID:  they unload on their own)
 };

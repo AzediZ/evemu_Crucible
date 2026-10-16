@@ -27,6 +27,12 @@
 #include "system/EwarState.h"
 
 namespace {
+    // something to roll against:  in space with a destiny manager, or an outpost (stations have none, and stand still)
+    bool Rollable(SystemEntity* pTarget)
+    {
+        return ((pTarget != nullptr) and ((pTarget->DestinyMgr() != nullptr) or pTarget->IsOutpostSE()));
+    }
+
     NpcMath::Vec3 PositionOf(SystemEntity* pSE)
     {
         const GPoint& p(pSE->DestinyMgr() != nullptr ? pSE->DestinyMgr()->GetPosition() : pSE->GetPosition());
@@ -90,7 +96,7 @@ float TurretFormulas::Roll(SystemEntity* pShooter, SystemEntity* pTarget, double
 
 float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEntity* pTarget)
 {
-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr) or (shipRef->GetPilot() == nullptr))
+    if (!Rollable(pTarget) or (shipRef->GetPilot() == nullptr))
         return 0;
     SystemEntity* pShooter(shipRef->GetPilot()->GetShipSE());
     if (pShooter == nullptr)
@@ -111,7 +117,7 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
 
 float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
 {
-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
+    if (!Rollable(pTarget))
         return 0;
     const NpcProfile& p(pNPC->GetAIMgr()->GetProfile());
     double optimal(p.optimal), tracking(p.tracking);
@@ -129,7 +135,7 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, floa
 {
     if (quality != nullptr)
         *quality = 0.0f;
-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
+    if (!Rollable(pTarget))
         return 0;
     const DroneStats& stats(pDrone->Stats());
     /* fighter bombers (after AzediZ, Incursion rules):  their "fake missile" always hits a target within entityAttackRange
@@ -163,7 +169,7 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, floa
 
 float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget)
 {
-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
+    if (!Rollable(pTarget))
         return 0;
     // tracking disruptors on the battery
     EwarState* pEwar(pSource->GetEwar());
@@ -177,7 +183,7 @@ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, fl
 
 float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
 {
-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
+    if (!Rollable(pTarget))
         return 0;
     // maxRange is the optimal (it used to be entityAttackRange, with the target's whole speed as transversal)
     const NpcProfile& p(pSentry->GetAIMgr()->GetProfile());

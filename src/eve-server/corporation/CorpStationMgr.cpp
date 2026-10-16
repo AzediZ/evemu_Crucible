@@ -49,6 +49,7 @@
 #include "chat/LSCService.h"
 #include "corporation/CorpMgr.h"
 #include "EVE_Mail.h"
+#include "mail/NotificationMgr.h"
 #include "corporation/BillingMgr.h"
 #include "corporation/ItemLockdown.h"
 #include "alliance/AllianceDB.h"
@@ -717,10 +718,13 @@ PyResult CorpStationMgrIMBound::UpdateStationOwner(PyCallArgs& call, PyInt* newO
     if (corpID == pStationItem->GetOwnerID())
         return nullptr;
 
+    uint32 oldCorpID(pStationItem->GetOwnerID());
     StationDB::SetStationOwner(m_stationID, corpID);
     stDataMgr.SetStationOwner(m_stationID, corpID);
     pStationItem->UpdateSettings();
     pStationItem->ChangeOwner(corpID, true);
+    NotificationMgr::SendOwnershipTransferred(call.client->GetCharacterID(), oldCorpID, corpID, pStationItem->locationID(), m_stationID,
+                                              pStationItem->typeID(), Corp::Role::StationManager);
 
     _log(CORP__INFO, "CorpStationMgrIMBound::UpdateStationOwner() - station %u handed to corp %u by %u", m_stationID, corpID, call.client->GetCharacterID());
     return nullptr;

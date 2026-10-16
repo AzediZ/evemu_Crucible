@@ -59,6 +59,12 @@ public:
     static void LogSovChange(uint32 systemID, uint32 stationID, uint32 ownerID, uint32 oldOwnerID);
     // solarSystemID, stationID, ownerID, oldOwnerID  of changes at or after 'since' (filetime)
     static void GetRecentSovChanges(DBQueryResult& res, int64 since);
+
+    /* infrastructure hub sieges (sovHubSiege):  phase is OutpostSiege::Phase, timerEnd the filetime its reinforcement ends,
+     *  updated the filetime of the save.  false when the hub has none */
+    static bool LoadHubSiege(uint32 hubID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated);
+    static void SaveHubSiege(uint32 hubID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd);
+    static void DeleteHubSiege(uint32 hubID);
 };
 
 #endif

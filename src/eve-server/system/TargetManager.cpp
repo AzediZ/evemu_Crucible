@@ -137,9 +137,11 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
         return false;
     }
 
-    // Check if target is an invulnerable structure
+    /* Check if target is an invulnerable structure.  a claim's TCU and hub only while its claim isn't open to attack (SBUs
+     *  online at more than half the stargates), and a hub in reinforcement
+     */
     if (tSE->IsTCUSE()) {
-        if (tSE->GetTCUSE()->GetState() == EVEPOS::StructureState::Online) {
+        if (tSE->GetTCUSE()->IsInvul()) {
             mySE->GetPilot()->SendNotifyMsg("You cannot target an invulnerable structure.");
             return false;
         }
@@ -149,7 +151,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
             return false;
         }
     } else if (tSE->IsIHubSE()) {
-        if (tSE->GetIHubSE()->GetState() == EVEPOS::StructureState::Online) {
+        if (tSE->GetIHubSE()->IsInvul()) {
             mySE->GetPilot()->SendNotifyMsg("You cannot target an invulnerable structure.");
             return false;
         }
@@ -158,10 +160,9 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
     // Check against max target range
     double maxTargetRange(GetMaxTargetRange(sRef));
     GVector rangeToTarget( mySE->GetPosition(), tSE->GetPosition() );
-    // adjust for target radius, in case of ice or other large objects..
-    double targetDistance = rangeToTarget.length();
-    if (tSE->IsAsteroidSE())
-        targetDistance -= tSE->GetRadius();
+    // to the target's surface, as the client shows it and module ranges go:  a station's center is tens of km in, so no
+    //  ship in reach of its walls could lock it.  (this was for ice and other large objects only)
+    double targetDistance = rangeToTarget.length() - tSE->GetRadius();
     if (targetDistance > maxTargetRange) {
         mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only target to %.0f meters.  %s is %.0f meters away.", \
         maxTargetRange, tSE->GetName(), targetDistance);

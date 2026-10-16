@@ -29,6 +29,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "../eve-common/EVE_Mail.h"
 #include "StaticDataMgr.h"
 
 #include <set>
@@ -131,4 +132,10 @@ void SBUSE::SendAudioEvent(uint8 eventID)
             params->SetItemString("owner", new PyString(owner));
         svDataMgr.SendAudioEvent(cur, eventID, params);
     }
+}
+
+void SBUSE::OnDamaged(SystemEntity* pAttacker)
+{
+    StructureSE::OnDamaged(pAttacker);
+    NotifyStructureAttack(pAttacker, Notify::Types::SovereigntySBUDamage);
 }

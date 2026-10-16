@@ -637,7 +637,7 @@ bool SystemEntity::ApplyDamage(Damage &d) {
             GetPOSSE()->OnDamaged(d.srcSE);
         // player customs offices go reinforced at 25% shield
         if (IsCOSE())
-            GetCOSE()->OnShieldDamaged();
+            GetCOSE()->OnShieldDamaged(d.srcSE);
         // outposts:  reinforcement, the owner's alerts, and changing hands at 0 structure
         if (IsOutpostSE())
             GetOutpostSE()->OnSiegeDamage(d.srcSE);

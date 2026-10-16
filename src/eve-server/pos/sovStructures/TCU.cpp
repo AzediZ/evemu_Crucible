@@ -29,6 +29,7 @@
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
 #include "system/sov/SovereigntyDataMgr.h"
+#include "../eve-common/EVE_Mail.h"
 #include "StaticDataMgr.h"
 
 TCUSE::TCUSE(StructureItemRef structure, EVEServiceManager&services, SystemManager *system, const FactionData &fData)
@@ -146,4 +147,10 @@ bool TCUSE::IsInvul()
 void TCUSE::Process()
 {
     StructureSE::Process();
+}
+
+void TCUSE::OnDamaged(SystemEntity* pAttacker)
+{
+    StructureSE::OnDamaged(pAttacker);
+    NotifyStructureAttack(pAttacker, Notify::Types::SovereigntyTCUDamage);
 }

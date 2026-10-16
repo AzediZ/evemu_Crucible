@@ -57,6 +57,7 @@
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/ManagerDB.h"
 #include "system/cosmicMgrs/WormholeMgr.h"
+#include "mail/NotificationMgr.h"
 
 BeyonceService::BeyonceService(EVEServiceManager& mgr)
 : BindableService("beyonce", mgr, eAccessLevel_SolarSystem2)
@@ -923,6 +924,8 @@ PyResult BeyonceBound::CmdChangeStructureOwner(PyCallArgs &call, PyInt* itemID, 
         throw CustomError ("The customs office can't change hands while it is reinforced.");
 
     pCO->ChangeOwner(newOwner, PosMgrDB::GetCorpAllianceID(newOwner));
+    NotificationMgr::SendOwnershipTransferred(pClient->GetCharacterID(), ownerID, newOwner, pSystem->GetID(), pCO->GetID(), pCO->GetTypeID(),
+                                              Corp::Role::StarbaseConfig);
     _log(POS__MESSAGE, "%s transferred customs office %u from %u to %u", pClient->GetName(), pCO->GetID(), ownerID, newOwner);
     return PyStatic.NewNone();
 }

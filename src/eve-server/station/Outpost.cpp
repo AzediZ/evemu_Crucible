@@ -38,6 +38,7 @@ m_lastProcess(GetFileTimeNow()),
 m_lastSave(m_lastProcess),
 m_lastOwnerCheck(0),
 m_lastAttackNotify(0),
+m_lastServiceNotify(0),
 m_lastDamageSend(0)
 {
     /* the type's hit points (100m shield, 150m armor, 100m structure).  the conquerable stations have a signature radius,
@@ -393,6 +394,36 @@ void OutpostSE::NotifyAttack(SystemEntity* pAttacker, bool force/*false*/)
     NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationAggression2, m_corpID, data);
 }
 
+void OutpostSE::OnServiceAttacked(StationServiceSE* pService, SystemEntity* pAttacker)
+{
+    int64 now(GetFileTimeNow());
+    if ((pService == nullptr) or ((now - m_lastServiceNotify) < EvE::Time::Hour))
+        return;
+    m_lastServiceNotify = now;
+    if (!IsPlayerCorp(m_corpID))
+        return;
+
+    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
+    StructureSE::GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
+    InventoryItemRef sRef(pService->GetSelf());
+    double shieldCap(sRef->GetAttribute(AttrShieldCapacity).get_double());
+    double armorHP(sRef->GetAttribute(AttrArmorHP).get_double());
+    double hp(sRef->GetAttribute(AttrHP).get_double());
+
+    PyDict* data = new PyDict();
+        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
+        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
+        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
+        data->SetItemString("stationID",            new PyInt(m_self->itemID()));
+        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
+        // the service's structure type
+        data->SetItemString("typeID",               new PyInt(sRef->typeID()));
+        data->SetItemString("shieldValue",          new PyFloat(shieldCap > 0 ? sRef->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0));
+        data->SetItemString("armorValue",           new PyFloat(armorHP > 0 ? 1.0 - sRef->GetAttribute(AttrArmorDamage).get_double() / armorHP : 0.0));
+        data->SetItemString("hullValue",            new PyFloat(hp > 0 ? 1.0 - sRef->GetAttribute(AttrDamage).get_double() / hp : 0.0));
+    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationAggression1, m_corpID, data);
+}
+
 void OutpostSE::ProcessSiege()
 {
     int64 now(GetFileTimeNow());
@@ -661,7 +692,7 @@ void StationServiceSE::OnDamaged(SystemEntity* pAttacker)
     m_dirty = true;
     OutpostSE* pOSE(GetStation());
     if (pOSE != nullptr)
-        pOSE->OnServiceAttacked(pAttacker);
+        pOSE->OnServiceAttacked(this, pAttacker);
     if (m_online and OutpostServices::Incapacitated(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double(),
                      (m_self->HasAttribute(AttrIncapacitationRatio) ? m_self->GetAttribute(AttrIncapacitationRatio).get_double() : OutpostServices::IncapacitationRatio)))
         SetOnline(false);

@@ -36,6 +36,7 @@
 #include "pos/Tower.h"
 #include "pos/Structure.h"
 #include "station/Outpost.h"
+#include "pos/sovStructures/IHub.h"
 #include "system/sov/SovereigntyDataMgr.h"
 #include "tables/invGroups.h"
 #include "tables/invCategories.h"
@@ -1205,9 +1206,37 @@ namespace {
         return "unknown";
     }
 
-    /* /sov siege [info|next|repair] [stationID]
-     *  an outpost or conquerable station in your system (the first one if no stationID).  info shows its siege, next ends
-     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it and its service structures back to full health
+    // the infrastructure hub's siege (/sov siege with a hub)
+    PyResult HubSiegeCommand(IHubSE* pHub, const std::string& what)
+    {
+        if (what == "next") {
+            if (!pHub->GMEndReinforcement())
+                throw CustomError ("%s can't go into reinforcement (no timers:  it isn't the hub of its alliance's claim).", pHub->GetName());
+        } else if (what == "repair") {
+            pHub->GMRepair();
+        }
+        InventoryItemRef iRef(pHub->GetSelf());
+        double shieldCap(iRef->GetAttribute(AttrShieldCapacity).get_double()), armorHP(iRef->GetAttribute(AttrArmorHP).get_double());
+        double hp(iRef->GetAttribute(AttrHP).get_double());
+        std::string reinforced;
+        if (OutpostSiege::IsReinforced(pHub->GetSiegePhase()))
+            reinforced = "  reinforced for " + std::to_string((pHub->GetReinforcementEnd() - GetFileTimeNow()) / EvE::Time::Minute) + " more minutes.";
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "%s (%u), owner %u:  %s, %s%s.  shield %.1f%%, armor %.1f%%, structure %.1f%%.%s",
+                 pHub->GetName(), pHub->GetID(), pHub->GetCorporationID(),
+                 (OutpostSiege::IsReinforced(pHub->GetSiegePhase()) or (pHub->GetSiegePhase() != OutpostSiege::Phase::Structure)
+                    ? SiegePhaseName(pHub->GetSiegePhase()) : "structure (destroyed at 0%)"),
+                 (pHub->IsInvul() ? "invulnerable" : "vulnerable"), (pHub->HasTimers() ? "" : ", no timers"),
+                 (shieldCap > 0 ? 100.0 * iRef->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0),
+                 (armorHP > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrArmorDamage).get_double() / armorHP) : 0.0),
+                 (hp > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrDamage).get_double() / hp) : 0.0), reinforced.c_str());
+        return new PyString(buf);
+    }
+
+    /* /sov siege [info|next|repair] [itemID]
+     *  an outpost, conquerable station or infrastructure hub in your system (the first outpost, else the claim's hub, if no
+     *  itemID).  info shows its siege, next ends a reinforcement or puts it into its next one (the layer set to the
+     *  threshold), repair takes it (and an outpost's service structures) back to full health
      */
     PyResult SiegeCommand(Client* pClient, const Seperator& args)
     {
@@ -1215,17 +1244,28 @@ namespace {
             throw CustomError ("You must be in space.");
         std::string what((args.argCount() > 2) ? args.arg(2) : "info");
         if ((what != "info") and (what != "next") and (what != "repair"))
-            throw CustomError ("Correct Usage: /sov siege [info|next|repair] [stationID]");
+            throw CustomError ("Correct Usage: /sov siege [info|next|repair] [itemID]");
         OutpostSE* pOSE(nullptr);
+        IHubSE* pHub(nullptr);
         if ((args.argCount() > 3) and args.isNumber(3)) {
             SystemEntity* pSE(pClient->SystemMgr()->GetSE(atoi(args.arg(3).c_str())));
-            if (pSE != nullptr)
+            if (pSE != nullptr) {
                 pOSE = pSE->GetOutpostSE();
+                if (pSE->IsPOSSE())
+                    pHub = pSE->GetPOSSE()->GetIHubSE();
+            }
         } else if (!pClient->SystemMgr()->GetOutposts().empty()) {
             pOSE = pClient->SystemMgr()->GetOutposts().front();
+        } else {
+            uint32 hubID(svDataMgr.GetSovereigntyData(pClient->GetSystemID()).hubID);
+            SystemEntity* pSE(hubID > 0 ? pClient->SystemMgr()->GetSE(hubID) : nullptr);
+            if ((pSE != nullptr) and pSE->IsPOSSE())
+                pHub = pSE->GetPOSSE()->GetIHubSE();
         }
+        if (pHub != nullptr)
+            return HubSiegeCommand(pHub, what);
         if (pOSE == nullptr)
-            throw CustomError ("No outpost or conquerable station found in this system.");
+            throw CustomError ("No outpost, conquerable station or claimed infrastructure hub found in this system.");
 
         if (what == "next") {
             if (!pOSE->GMEndReinforcement())
@@ -1310,6 +1350,12 @@ namespace {
             throw CustomError ("%u is not a structure in this system", itemID);
 
         StructureSE* pStruct(pSE->GetPOSSE());
+        // a reinforced infrastructure hub:  complete ends the reinforcement now
+        if ((pStruct->GetIHubSE() != nullptr) and (action == StructureTiming::GMAction::Complete)
+        and OutpostSiege::IsReinforced(pStruct->GetIHubSE()->GetSiegePhase())) {
+            pStruct->GetIHubSE()->GMEndReinforcement();
+            return new PyString("Done:  " + name + " is out of reinforcement.");
+        }
         if (!pStruct->GMChangeState(action))
             return new PyString("Nothing to do:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");
         return new PyString("Done:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");

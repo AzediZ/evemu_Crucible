@@ -1488,6 +1488,9 @@ void TowerSE::ChangeProvisionType(uint32 itemID, uint16 typeID)
                     case EVEDB::invGroups::Composite:
                     case EVEDB::invGroups::Gas_Isotopes:
                     case EVEDB::invGroups::Mineral:
+                    // ...and a polymer reactor's fullerite and its polymer:  without them no polymer reaction could run
+                    case EVEDB::invGroups::Harvestable_Cloud:
+                    case EVEDB::invGroups::Hybrid_Polymers:
                         break;
                     default:
                         throw UserError("MoonInvalidSiloType");

@@ -82,8 +82,9 @@ public:
     // the gantry becomes the customs office it builds.  deletes this entity
     void                        Upgrade();
     bool                        CanBeAttacked();
-    // after damage:  25% shield or less puts a player office into reinforcement
-    void                        OnShieldDamaged();
+    /* after damage:  25% shield or less puts a player office into reinforcement.  the owner's starbase officers hear about
+     *  the attack (OrbitalAttacked, at most once an hour) and the reinforcement (OrbitalReinforced) */
+    void                        OnShieldDamaged(SystemEntity* pAttacker);
     // posMgr callers:  the gantry or office, owned by the client's corp, and the role to change it
     void                        CheckCorpAccess(Client* pClient, int64 role);
 
@@ -122,6 +123,8 @@ protected:
     void                        SaveState();
     // OnMajorPlanetStateUpdate to the planet's colonists online (their customs office changed)
     void                        NotifyColonists();
+    // OrbitalAttacked / OrbitalReinforced to the owner corp.  reinforceExitTime only for OrbitalReinforced
+    void                        NotifyOwner(SystemEntity* pAttacker, uint16 notifyType, int64 reinforceExitTime = 0);
 
 private:
     PosMgrDB                    m_db;
@@ -134,6 +137,7 @@ private:
 
     // an office that came out of reinforcement goes again only once its shield was above 25%
     bool                        m_reinforceArmed;
+    int64                       m_lastAttackAlert;
 };
 
 #endif  // EVEMU_POS_CUSTOMS_OFFICE_H_

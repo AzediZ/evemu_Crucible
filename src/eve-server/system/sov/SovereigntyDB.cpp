@@ -181,3 +181,40 @@ void SovereigntyDB::GetActiveUpgrades(DBQueryResult& res, const std::string& hub
         codelog(SOV__ERROR, "Error in GetActiveUpgrades query: %s", res.error.c_str());
     }
 }
+
+bool SovereigntyDB::LoadHubSiege(uint32 hubID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT phase, shieldCharge, armorDamage, damage, timerEnd, updated FROM sovHubSiege WHERE hubID = %u", hubID)) {
+        codelog(SOV__ERROR, "Error loading the siege of hub %u: %s", hubID, res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return false;
+    phase = row.GetUInt(0);
+    shieldCharge = row.GetDouble(1);
+    armorDamage = row.GetDouble(2);
+    damage = row.GetDouble(3);
+    timerEnd = row.GetInt64(4);
+    updated = row.GetInt64(5);
+    return true;
+}
+
+void SovereigntyDB::SaveHubSiege(uint32 hubID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err,
+        "INSERT INTO sovHubSiege (hubID, phase, shieldCharge, armorDamage, damage, timerEnd, updated) VALUES (%u, %u, %f, %f, %f, %lli, %lli)"
+        " ON DUPLICATE KEY UPDATE phase = VALUES(phase), shieldCharge = VALUES(shieldCharge), armorDamage = VALUES(armorDamage),"
+        " damage = VALUES(damage), timerEnd = VALUES(timerEnd), updated = VALUES(updated)",
+        hubID, phase, shieldCharge, armorDamage, damage, timerEnd, (int64)GetFileTimeNow()))
+        codelog(SOV__ERROR, "Error saving the siege of hub %u: %s", hubID, err.c_str());
+}
+
+void SovereigntyDB::DeleteHubSiege(uint32 hubID)
+{
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "DELETE FROM sovHubSiege WHERE hubID = %u", hubID))
+        codelog(SOV__ERROR, "Error deleting the siege of hub %u: %s", hubID, err.c_str());
+}

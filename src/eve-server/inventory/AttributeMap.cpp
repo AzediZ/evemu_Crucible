@@ -437,8 +437,11 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
     if (attrChange == nullptr)
         return true;
     /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
-     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
-    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)) {
+     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log).  the
+     *  sovereignty structures in space the same (a siege's hits) */
+    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)
+        or (mItem.groupID() == EVEDB::invGroups::Territorial_Claim_Units) or (mItem.groupID() == EVEDB::invGroups::Infrastructure_Hubs)
+        or (mItem.groupID() == EVEDB::invGroups::Sovereignty_Blockade_Units)) {
         PyDecRef(attrChange);
         return true;
     }
