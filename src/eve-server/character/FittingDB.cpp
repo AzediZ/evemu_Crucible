@@ -174,11 +174,11 @@ void FittingDB::CheckNameAndDescription(std::string& name, std::string& descript
 
 static bool IsFittingFlag(int64 flag)
 {
-    // eveCfg.IsShipFittingFlag() or the drone bay
+    // eveCfg.IsShipFittingFlag(), the drone bay or the cargo hold (charges and ice products:  fittingSvc.VerifyFitting)
     return ((flag >= flagLowSlot0) and (flag <= flagHiSlot7))
         or ((flag >= flagRigSlot0) and (flag <= flagRigSlot7))
         or ((flag >= flagSubSystem0) and (flag <= flagSubSystem7))
-        or (flag == flagDroneBay);
+        or (flag == flagDroneBay) or (flag == flagCargoHold);
 }
 
 void FittingDB::Decode(PyRep* rep, FittingData& into)

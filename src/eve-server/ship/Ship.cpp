@@ -2302,6 +2302,10 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
         }
     }
 
+    /* the hull's bonuses to its modules and charges go on before the modules come online:  the cpu and powergrid checks in
+     *  GenericModule::Online() read them (a stealth bomber's torpedo launchers need 1750 powergrid without its role bonus) */
+    sFxProc.ApplyEffects(this, m_pilot->GetChar().get(), this, update, FX::Pass::Fitted);
+
     if (m_isUndocking) {
         // online modules sent from client (these are onlined in fit window while docked)
         m_ModuleManager->UpdateModules(m_onlineModuleVec);
@@ -2312,7 +2316,7 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
         m_ModuleManager->LoadOnline();
     }
 
-    // apply processed effects
+    // apply the rest of the processed effects
     sFxProc.ApplyEffects(this, m_pilot->GetChar().get(), this, update);
     //ClearModifiers();
 }

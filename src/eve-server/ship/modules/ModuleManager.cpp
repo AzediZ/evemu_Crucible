@@ -1562,7 +1562,9 @@ void ModuleManager::UpdateModules(std::vector<uint32> modVec)
     GetShipSubSystems(modVec);
     std::vector< GenericModule* > modList;
     SortModulesBySlotDec(modVec, modList);
-    /** @todo check this.  may have to rework */
+    /* that's subsystems, rigs, then high, mid and low slots.  the low slots go first, as in LoadOnline():  co-processors and
+     *  power upgrades must be on before the cpu and powergrid checks of the modules they make room for */
+    std::reverse(std::stable_partition(modList.begin(), modList.end(), [](GenericModule* pMod) { return pMod->isRig() or pMod->isSubSystem(); }), modList.end());
     for (auto cur : modList) {
         cur->Update();
         cur->Online();

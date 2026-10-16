@@ -340,6 +340,18 @@ bool FxProc::IsCharItemModifier(const fxData& data)
     return false;
 }
 
+bool FxProc::IsFittedModifier(const fxData& data)
+{
+    using namespace FX;
+    switch (data.fxSrc) {
+        case Source::Group:     return (data.targLoc != Target::Char);
+        case Source::Owner:
+        case Source::Ship:      return true;
+        case Source::Skill:     return (((data.targLoc == Target::Ship) and (data.typeID != 0)) or (data.targLoc == Target::Charge));
+    }
+    return false;
+}
+
 bool FxProc::WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip)
 {
     using namespace FX;
@@ -372,9 +384,13 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
     mods.reserve(pItem->GetModifiers().size());
     nodes.reserve(pItem->GetModifiers().size());
     for (auto& cur : pItem->GetModifiers()) {
-        if (pass != Pass::All)
+        if (pass == Pass::Fitted) {
+            if (!IsFittedModifier(cur.second))
+                continue;
+        } else if (pass != Pass::All) {
             if (IsCharItemModifier(cur.second) != (pass == Pass::CharItems))
                 continue;
+        }
         mods.push_back(cur);
         DogmaOrder::Modifier node = DogmaOrder::Modifier();
         if (cur.second.srcRef.get() != nullptr) {
@@ -726,9 +742,18 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
         sFxAct.DoAction(action, pShip->GetPilot()->GetShipSE());   // this MUST be called AFTER all active effects are applied, as it uses those modified values
      */
 
-    // the CharItems pass leaves the map for the Rest pass
-    if (pass != Pass::CharItems)
+    // the CharItems pass leaves the map for the Rest pass, and the Fitted pass leaves the modifiers it didn't apply
+    if (pass == Pass::Fitted) {
+        std::multimap<int8, fxData>& modifiers(pItem->GetModifiers());
+        for (auto itr = modifiers.begin(); itr != modifiers.end(); )
+            if (IsFittedModifier(itr->second)) {
+                itr = modifiers.erase(itr);
+            } else {
+                ++itr;
+            }
+    } else if (pass != Pass::CharItems) {
         pItem->ClearModifiers();
+    }
 
     if (sConfig.debug.UseProfiling)
         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);

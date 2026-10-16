@@ -27,10 +27,12 @@ public:
     FxProc()        { /* do nothing here */ }
     ~FxProc()       { /* do nothing here */ }
 
-    // pItem is modifier container.  pass = FX::Pass  (CharItems/Rest split the character's modifiers, see IsCharItemModifier)
+    // pItem is modifier container.  pass = FX::Pass  (CharItems/Rest split the character's modifiers, see IsCharItemModifier.  Fitted, see IsFittedModifier)
     void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false, int8 pass=0);
     // modifiers whose targets are the character's own items (skills, implants, boosters)
     static bool     IsCharItemModifier(const fxData& data);
+    // the modifier changes the ship's fitted modules or loaded charges (a hull bonus to launcher powergrid need, ...)
+    static bool     IsFittedModifier(const fxData& data);
     /* the modifier changes an attribute of the item it comes from (its source item).  ApplyEffects applies these before the
      *  modifiers of that item reading the attribute (EVE_DogmaOrder.h) */
     static bool     WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip);

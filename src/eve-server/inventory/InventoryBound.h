@@ -41,6 +41,12 @@ public:
 protected:
     PyResult GetItem(PyCallArgs& call);
     PyResult StripFitting(PyCallArgs& call);
+    /* 'Fit Ship' from a saved fitting (fittingSvc.LoadFitting):  shipInv.FitFitting(shipID, itemsToFit, stationID,
+     *  modulesByFlag, dronesByType, chargesByType).  the arguments are told apart by what they hold, so their order
+     *  doesn't matter.  returns [(typeID, qty)] of what could not be fitted or loaded */
+    PyResult FitFitting(PyCallArgs& call, std::optional<PyRep*> a0, std::optional<PyRep*> a1, std::optional<PyRep*> a2,
+                        std::optional<PyRep*> a3, std::optional<PyRep*> a4, std::optional<PyRep*> a5,
+                        std::optional<PyRep*> a6, std::optional<PyRep*> a7);
     PyResult DestroyFitting(PyCallArgs& call, PyInt* itemID);
     PyResult StackAll(PyCallArgs& call, std::optional <PyInt*> flag);
     PyResult ImportExportWithPlanet(PyCallArgs& call, PyInt* spaceportPinID, PyDict* importData, PyDict* exportData, PyFloat* taxRate);

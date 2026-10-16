@@ -1899,7 +1899,9 @@ void Client::SetInvulTimer(uint32 time/*Player::Timer::Default*/)
         return;
     }
 
-    if (m_invulTimer.Enabled()) {
+    /* a login's warp-in timer runs out unchecked while docked (ProcessClient() checks it in space only), so the first undock
+     *  after logging in found it still on and got no undock invulnerability */
+    if (m_invulTimer.Enabled() and (m_invulTimer.GetRemainingTime() > 0)) {
         _log(CLIENT__ERROR, "%s: Invul Timer called but timer already enabled with %ums remaining.", m_char->name(), m_invulTimer.GetRemainingTime());
         EvE::traceStack();
         return;

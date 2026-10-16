@@ -145,7 +145,8 @@ namespace FX {
         enum {
             All             = 0,
             CharItems       = 1,
-            Rest            = 2
+            Rest            = 2,
+            Fitted          = 3     // the ship's modifiers on its fitted modules and charges, before the modules go online (IsFittedModifier)
         };
     }
 

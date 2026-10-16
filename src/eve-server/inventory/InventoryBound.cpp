@@ -72,6 +72,7 @@ InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<Invent
     EVEBoundObject::Add("MultiMerge", &InventoryBound::MultiMerge);
     EVEBoundObject::Add("StackAll", &InventoryBound::StackAll);
     EVEBoundObject::Add("StripFitting", &InventoryBound::StripFitting);
+    EVEBoundObject::Add("FitFitting", &InventoryBound::FitFitting);
     EVEBoundObject::Add("DestroyFitting", &InventoryBound::DestroyFitting);
     EVEBoundObject::Add("ImportExportWithPlanet", &InventoryBound::ImportExportWithPlanet);
     EVEBoundObject::Add("CreateBookmarkVouchers", &InventoryBound::CreateBookmarkVouchers);
@@ -117,6 +118,149 @@ PyResult InventoryBound::StripFitting(PyCallArgs &call)
 {
     GetFittableShip(call.client, m_self)->StripFitting();
     return nullptr;
+}
+
+PyResult InventoryBound::FitFitting(PyCallArgs& call, std::optional<PyRep*> a0, std::optional<PyRep*> a1, std::optional<PyRep*> a2,
+                                   std::optional<PyRep*> a3, std::optional<PyRep*> a4, std::optional<PyRep*> a5,
+                                   std::optional<PyRep*> a6, std::optional<PyRep*> a7)
+{
+    _log(INV__MESSAGE, "Calling InventoryBound::FitFitting() for %s(%u)", m_self->name(), m_itemID);
+    if (is_log_enabled(INV__DUMP))
+        call.Dump(INV__DUMP);
+
+    Client* pClient(call.client);
+    ShipItem* pShip(GetFittableShip(pClient, m_self));
+    if (!pClient->IsDocked())
+        throw UserError("CannotLoadFittingInSpace");
+    // the active ship only (the client fits util.GetActiveShip())
+    if (pShip->itemID() != pClient->GetShipID())
+        throw CustomError("You can only fit the ship you are in.");
+
+    /* what to fit:  modules by slot flag, then drones and cargo (charges) by type and quantity.  itemsToFit (the
+     *  hangar items the client picked, a defaultdict of sets) isn't needed:  the hangar is searched here */
+    std::map<uint16, uint16> modules;           // flag -> typeID
+    std::map<uint16, uint32> drones, cargo;     // typeID -> qty
+    for (auto arg : {a1, a2, a3, a4, a5, a6, a7}) {
+        if (!arg.has_value() or (arg.value() == nullptr) or !arg.value()->IsDict())
+            continue;
+        PyDict* dict(arg.value()->AsDict());
+        bool slots(true), counts(true);
+        for (auto cur : *dict) {
+            if (!cur.first->IsInt() or !cur.second->IsInt()) {
+                slots = counts = false;
+                break;
+            }
+            int32 key(cur.first->AsInt()->value());
+            if (!IsModuleSlot(key))
+                slots = false;
+        }
+        if (!counts or dict->empty())
+            continue;
+        for (auto cur : *dict) {
+            uint32 key(cur.first->AsInt()->value()), value(cur.second->AsInt()->value());
+            if (slots) {
+                modules[key] = value;
+            } else if (value > 0) {
+                // drones to the drone bay, anything else (charges) to the cargo hold
+                const ItemType* type(sItemFactory.GetType(key));
+                if (type == nullptr)
+                    continue;
+                if (type->categoryID() == EVEDB::invCategories::Drone)
+                    drones[key] += value;
+                else
+                    cargo[key] += value;
+            }
+        }
+    }
+
+    // my hangar here, by type (singletons and stacks)
+    StationItemRef sRef(sItemFactory.GetStationRef(pClient->GetStationID()));
+    if (sRef.get() == nullptr)
+        throw CustomError("Your station's hangar could not be found.");
+    std::vector<InventoryItemRef> owned;
+    sRef->GetMyInventory()->GetInvForOwner(pClient->GetCharacterID(), owned);
+    std::multimap<uint16, InventoryItemRef> hangar;
+    for (auto cur : owned)
+        if ((cur->flag() == flagHangar) and (cur->quantity() > 0))
+            hangar.emplace(cur->typeID(), cur);
+
+    std::map<uint16, uint32> failed;
+    std::vector<std::string> reasons;
+    // moves qty of typeID from the hangar to toFlag.  returns what was moved
+    auto moveFromHangar = [&](uint16 typeID, uint32 qty, EVEItemFlags toFlag) -> uint32 {
+        uint32 moved(0);
+        auto range(hangar.equal_range(typeID));
+        for (auto itr = range.first; (itr != range.second) and (moved < qty); ++itr) {
+            InventoryItemRef iRef(itr->second);
+            if ((iRef->locationID() != sRef->itemID()) or (iRef->flag() != flagHangar) or (iRef->quantity() < 1))
+                continue;
+            uint32 want(qty - moved);
+            uint32 take(std::min(want, (uint32)iRef->quantity()));
+            std::vector<int32> items;
+            items.push_back(iRef->itemID());
+            try {
+                PyRep* res(MoveItems(pClient, items, toFlag, take, (take >= (uint32)iRef->quantity()), 0.0f));
+                PySafeDecRef(res);
+                moved += take;
+            } catch (...) {
+                // CPU, powergrid, slot limits, bay space...
+                sItemFactory.UnsetUsingClient();
+                break;
+            }
+        }
+        return moved;
+    };
+
+    // subsystems first (they give the slots), then rigs, then low, mid and high slots
+    std::vector<std::pair<uint16, uint16>> order;
+    for (auto cur : modules)
+        if (IsSubSystem(cur.first))
+            order.push_back(cur);
+    for (auto cur : modules)
+        if (IsRigSlot(cur.first))
+            order.push_back(cur);
+    for (auto cur : modules)
+        if (!IsSubSystem(cur.first) and !IsRigSlot(cur.first))
+            order.push_back(cur);
+    for (auto cur : order) {
+        EVEItemFlags flag((EVEItemFlags)cur.first);
+        // already fitted
+        InventoryItemRef fitted(pShip->GetModuleRef(flag));
+        if ((fitted.get() != nullptr) and (fitted->typeID() == cur.second))
+            continue;
+        if ((fitted.get() != nullptr) and !IsSubSystem(flag)) {
+            failed[cur.second] += 1;
+            continue;
+        }
+        if (moveFromHangar(cur.second, 1, flag) < 1)
+            failed[cur.second] += 1;
+    }
+    for (auto cur : drones) {
+        uint32 moved(moveFromHangar(cur.first, cur.second, flagDroneBay));
+        if (moved < cur.second)
+            failed[cur.first] += cur.second - moved;
+    }
+    for (auto cur : cargo) {
+        uint32 moved(moveFromHangar(cur.first, cur.second, flagCargoHold));
+        if (moved < cur.second)
+            failed[cur.first] += cur.second - moved;
+    }
+
+    PyList* list = new PyList();
+    std::string text;
+    for (auto cur : failed) {
+        PyTuple* tuple = new PyTuple(2);
+            tuple->SetItem(0, new PyInt(cur.first));
+            tuple->SetItem(1, new PyInt(cur.second));
+        list->AddItem(tuple);
+        const ItemType* type(sItemFactory.GetType(cur.first));
+        text += (text.empty() ? "" : ", ") + std::to_string(cur.second) + "x " + (type == nullptr ? std::to_string(cur.first) : type->name());
+    }
+    if (!text.empty())
+        pClient->SendNotifyMsg("Not everything in the fitting could be fitted or loaded (missing from your hangar here, or the ship can't take it):  %s", text.c_str());
+    _log(INV__MESSAGE, "FitFitting() - %s fitted %s(%u):  %lu modules, %lu drone types, %lu cargo types, %lu failed",
+         pClient->GetName(), pShip->name(), pShip->itemID(), modules.size(), drones.size(), cargo.size(), failed.size());
+    return list;
 }
 
 PyResult InventoryBound::DestroyFitting(PyCallArgs &call, PyInt* itemID) {
