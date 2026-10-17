@@ -1006,6 +1006,7 @@ static void SetupSignals()
 
 static void CatchSignal( int sig_num )
 {
+    sLog.SetFlushEachLine();
     sLog.Error( "    Signal System", "Caught signal: %d", sig_num );
     if (sConfig.debug.StackTrace)
         EvE::traceStack();
@@ -1059,6 +1060,8 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
     /* every shutdown path ends here (console 'x', /shutdown, scheduled shutdown, signals)
      * @note  these are order-dependent...
      */
+    sLog.SetFlushEachLine();
+    double started(GetTimeMSeconds());
     sLog.Warning("   ServerShutdown", "Main loop has stopped." );
     sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
     if (!sConsole.IsDbError()) {
@@ -1095,8 +1098,10 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
     /* Close the standings manager */
     sStandingMgr.Close();
     sLog.Warning("   ServerShutdown", "Saving Items." );
+    double saving(GetTimeMSeconds());
     if (!sConsole.IsDbError())
         sItemFactory.SaveItems();
+    sLog.Warning("   ServerShutdown", "Items saved in %.1f s.", (GetTimeMSeconds() - saving) / 1000.0);
     /* Close the entity list */
     sEntityList.Close();
     /* Shut down the Item system */
@@ -1113,7 +1118,7 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
     sLog.Warning("   ServerShutdown", "Shutting down Thread Manager." );
     /* join open threads */
     sThread.EndThreads();
-    sLog.Warning("   ServerShutdown", "EVEmu is Offline.");
+    sLog.Warning("   ServerShutdown", "EVEmu is Offline (the shutdown took %.1f s after the main loop stopped).", (GetTimeMSeconds() - started) / 1000.0);
     /* close logfile */
     log_close_logfile();
 }

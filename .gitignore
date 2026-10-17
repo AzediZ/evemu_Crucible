@@ -98,6 +98,8 @@ out/
 
 # evenmu runtime
 config/
+logs/*
+!logs/README.txt
 # universe backups made by the control panel
 /backups/
 

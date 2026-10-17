@@ -156,6 +156,10 @@ public:
      * @param[in] time is the timestamp.
      */
     void SetTime( time_t time ) { mTime = time; }
+    /**
+     * @brief Writes each line to the logfile as it comes (the server is stopping:  a stop Docker cuts short keeps what was said).
+     */
+    void SetFlushEachLine() { mFlushEach = true; }
 
 protected:
     /// A convenience color enum.
@@ -227,6 +231,9 @@ protected:
     FILE* mLogfile;
     /// Current timestamp.
     time_t mTime; // crap there should be 1 generic easy to understand time manager.
+    /// The logfile was last flushed (a release build:  at most a second behind), and every line is flushed (stopping)
+    time_t mFlushedAt = 0;
+    bool mFlushEach = false;
     /// Protection against concurrent log messages
     Mutex mMutex;
 

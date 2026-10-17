@@ -300,7 +300,7 @@ function Get-FailureHint([string]$log) {
         return 'Docker ran out of disk space. Click "Free up space", make room on the drive shown under Disk space, then try again.'
     }
     if ($log -match 'is already in use by container') {
-        return 'Your server was set up from a different folder. Open "EVEmu Control Panel.bat" from the folder you normally use, then try again.'
+        return 'Docker tried to replace the server twice at once. The server is usually running anyway: check the status line at the top. If it is not, click Start.'
     }
     if ($log -match 'error during connect|dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|Internal Server Error') {
         return 'Docker stopped responding. Restart Docker Desktop, then try again. If Windows says a drive is full, make room on it first.'
@@ -358,6 +358,18 @@ function Ensure-Engine {
 function Test-Image([string]$name) {
     & $docker image inspect $name 2>&1 | Out-Null
     return ($LASTEXITCODE -eq 0)
+}
+function Test-NameClash {
+    # Docker Compose now and then replaces a container twice at once and stops on the name clash, though the
+    # first replacement worked. Test-Folder has already ruled out a server set up from another folder.
+    $tail = Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue
+    return [bool]($tail -match 'is already in use by container')
+}
+function Up-AfterClash([int]$c) {
+    if (($c -eq 0) -or (-not (Test-NameClash))) { return $c }
+    Say 'Docker tripped over itself replacing the server (it does that now and then). Starting it again in 5 seconds...'
+    Start-Sleep -Seconds 5
+    return (Dock compose up -d)
 }
 function Test-Folder {
     # The containers are always named server and db, so only one folder can run them. If they
@@ -501,6 +513,7 @@ if (($c -ne 0) -and (-not $fresh)) {
     Start-Sleep -Seconds 15
     $c = Dock compose up -d
 }
+$c = Up-AfterClash $c
 if ($fresh) { Clean-Docker $false }
 if ($c -ne 0) { exit $c }
 Say ''
@@ -509,7 +522,7 @@ exit 0
 '@
     Stop = @'
 if (-not (Test-Folder)) { exit 1 }
-Say 'Stopping the server...'
+Say 'Stopping the server. It saves everything first, which can take a few minutes on a busy universe...'
 $c = Dock compose stop
 exit $c
 '@
@@ -525,6 +538,7 @@ if (-not (Ensure-Engine)) { exit 1 }
 if (-not (Test-Folder)) { exit 1 }
 Say 'Rebuilding the server from the code in this folder. The first rebuild takes 15 to 30 minutes; later ones usually a few minutes...'
 $c = Dock compose up -d --build
+$c = Up-AfterClash $c
 Clean-Docker $false
 if ($c -ne 0) { exit $c }
 Say ''

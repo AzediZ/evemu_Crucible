@@ -264,11 +264,33 @@ bool ItemDB::SaveItem(uint32 itemID, const ItemData &data) {
 
 void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
 {
+    /* a few thousand rows a statement:  the server's whole item cache in one (a quarter of a million items after a long
+     *  run) was over the database's max_allowed_packet, which drops the connection, so the save was lost and with it the
+     *  commit of everything saved before it in the transaction
+     */
+    const uint32 BatchRows = 2000;
     std::ostringstream Inserts;
-    // start the insert into command.
-    Inserts << "INSERT INTO entity";
-    Inserts << " (itemID, typeID, ownerID, locationID, flag, contraband, singleton, quantity, x, y, z, customInfo)";
-    bool first = true;
+    uint32 rows(0);
+    auto flush = [&Inserts, &rows]() {
+        if (rows == 0)
+            return;
+        Inserts << " ON DUPLICATE KEY UPDATE ";
+        Inserts << "quantity=VALUES(quantity), ";
+        Inserts << "ownerID=VALUES(ownerID), ";
+        Inserts << "locationID=VALUES(locationID), ";
+        Inserts << "flag=VALUES(flag), ";
+        Inserts << "singleton=VALUES(singleton), ";
+        Inserts << "x=VALUES(x), ";
+        Inserts << "y=VALUES(y), ";
+        Inserts << "z=VALUES(z), ";
+        Inserts << "customInfo=VALUES(customInfo) ";
+        DBerror err;
+        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
+            _log(DATABASE__ERROR, "SaveItems - unable to save data - %s", err.c_str());
+        Inserts.str("");
+        Inserts.clear();
+        rows = 0;
+    };
     for (auto cur : data) {
         if (cur.position.isNaN() or cur.position.isInf()) {
             _log(DATABASE__ERROR, "ItemDB::SaveItems() - %u has invalid position", cur.itemID);
@@ -278,9 +300,10 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
             _log(DATABASE__ERROR, "ItemDB::SaveItems() - %u has invalid location", cur.itemID);
             continue;
         }
-        if (first) {
+        if (rows == 0) {
+            Inserts << "INSERT INTO entity";
+            Inserts << " (itemID, typeID, ownerID, locationID, flag, contraband, singleton, quantity, x, y, z, customInfo)";
             Inserts << " VALUES ";
-            first = false;
         } else {
             Inserts << ", ";
         }
@@ -292,24 +315,10 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
         std::string info;
         sDatabase.DoEscapeString(info, cur.customInfo);
         Inserts << ", '" << info << "')";
+        if (++rows >= BatchRows)
+            flush();
     }
-
-    if (!first) {
-        Inserts << "ON DUPLICATE KEY UPDATE ";
-        Inserts << "quantity=VALUES(quantity), ";
-        Inserts << "ownerID=VALUES(ownerID), ";
-        Inserts << "locationID=VALUES(locationID), ";
-        Inserts << "flag=VALUES(flag), ";
-        Inserts << "singleton=VALUES(singleton), ";
-        Inserts << "quantity=VALUES(quantity), ";
-        Inserts << "x=VALUES(x), ";
-        Inserts << "y=VALUES(y), ";
-        Inserts << "z=VALUES(z), ";
-        Inserts << "customInfo=VALUES(customInfo) ";
-        DBerror err;
-        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
-            _log(DATABASE__ERROR, "SaveItems - unable to save data - %s", err.c_str());
-    }
+    flush();
 }
 
 void ItemDB::SaveAttributes(bool isChar, std::vector<Inv::AttrData>& data)
@@ -350,6 +359,45 @@ void ItemDB::SaveAttributes(bool isChar, std::vector<Inv::AttrData>& data)
         if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
             _log(DATABASE__ERROR, "SaveItems - unable to save data - %s", err.c_str());
     }
+}
+
+void ItemDB::SaveAttributeRows(const std::vector<Inv::AttrData>& data)
+{
+    /* the shutdown's save:  a statement an item was most of it (every skill of every character loaded, 137,000 items on a
+     *  test server took 26 s).  a few thousand rows a statement, as SaveItems() writes the items, written as
+     *  SaveAttributes() writes them
+     */
+    const uint32 BatchRows = 2000;
+    std::ostringstream Inserts;
+    uint32 rows(0);
+    auto flush = [&Inserts, &rows]() {
+        if (rows == 0)
+            return;
+        Inserts << " ON DUPLICATE KEY UPDATE ";
+        Inserts << "valueInt=VALUES(valueInt), ";
+        Inserts << "valueFloat=VALUES(valueFloat)";
+        DBerror err;
+        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
+            _log(DATABASE__ERROR, "SaveAttributeRows - unable to save data - %s", err.c_str());
+        Inserts.str("");
+        Inserts.clear();
+        rows = 0;
+    };
+    for (auto& cur : data) {
+        if (rows == 0)
+            Inserts << "INSERT INTO entity_attributes (itemID, attributeID, valueInt, valueFloat) VALUES ";
+        else
+            Inserts << ", ";
+        Inserts << "(" << cur.itemID << ", " << cur.attrID << ", ";
+        if (cur.type) {
+            Inserts << "NULL, " << cur.valueFloat << ")";
+        } else {
+            Inserts << cur.valueInt << ", NULL)";
+        }
+        if (++rows >= BatchRows)
+            flush();
+    }
+    flush();
 }
 
 bool ItemDB::DeleteItem(uint32 itemID) {

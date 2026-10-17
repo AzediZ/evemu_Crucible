@@ -57,6 +57,10 @@ public:
     bool HasAttribute(const uint16 attrID, EvilNumber& value) const;
 
     bool Save();
+    /* ...what Save() would write for an item that isn't a character, added to into (a shutdown's save writes them all a
+     *  few thousand rows to a statement:  ItemDB::SaveAttributeRows()).  false:  it saves none of its attributes here
+     */
+    bool Gather(std::vector<Inv::AttrData>& into);
 
     void Delete();
     void DeleteAttribute(uint16 attrID);

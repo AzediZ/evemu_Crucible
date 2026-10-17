@@ -8,6 +8,7 @@ services:
     container_name: server
     volumes:
       - ./config:/app/etc
+      - ./logs:/app/logs # the server's own log file, one per start (see logs/README.txt)
       # the caches belong to the universe in db_revised:  server_cache keeps static data read from that database
       - server_cache_revised:/app/server_cache
       - image_cache_revised:/app/image_cache
@@ -24,8 +25,9 @@ services:
     tty: true
     # docker stop (and compose stop, restart and down) sends SIGTERM, which start.sh passes on to eve-server:  it logs
     #  everyone out and saves before it exits.  Docker kills it after stop_grace_period (default 10 s), so allow
-    #  time for the save;  the stop ends as soon as the server has exited
-    stop_grace_period: 2m
+    #  time for the save;  the stop ends as soon as the server has exited.  a busy universe's save can take more than two
+    #  minutes, so allow ten
+    stop_grace_period: 10m
     init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
     # Docker keeps everything the server prints (docker logs server) in a file that otherwise grows for as long as
     #  the container exists.  Keep the last 100 MB, in 5 files of 20 MB

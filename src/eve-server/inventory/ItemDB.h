@@ -46,6 +46,8 @@ public:
     static bool SaveItem(uint32 itemID, const ItemData &data);
     static void SaveItems(std::vector< Inv::SaveData > &data);
     static void SaveAttributes(bool isChar, std::vector< Inv::AttrData > &data);
+    // ...many items' attributes (not characters'), a few thousand rows to a statement
+    static void SaveAttributeRows(const std::vector< Inv::AttrData > &data);
 
     // only used in ConsoleCommands to test/process fx data
     static void GetItems(uint16 catID, std::map<uint16, std::string> &typeIDs);

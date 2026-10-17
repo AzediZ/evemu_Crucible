@@ -185,10 +185,17 @@ Client::~Client() {
                 // remove char from station
                 sEntityList.GetStationByID(m_locationID)->RemoveItem(m_char);
             }
+        } else if (IsDocked()) {
+            // halting, nobody is told.  but the station mustn't keep a client that's gone:  one logging in there before the
+            //  halt is done would notify it
+            StationItemRef sRef(sEntityList.GetStationByID(m_locationID));
+            if (sRef.get() != nullptr)
+                sRef->RemoveGuest(this);
         }
-        // drop fleet invites/join requests and leave the fleet before the character goes away
-        if (!sConsole.IsShutdown())
-            sFltSvc.ClientLogout(this);
+        /* drop fleet invites/join requests and leave the fleet before the character goes away.  when halting too:  the
+         *  fleet would keep a pointer to this client, and a fleetmate going after it (a lit cyno going out) would notify it
+         */
+        sFltSvc.ClientLogout(this);
 
         // container passwords entered this session are forgotten
         sContSec.ForgetCharacter(m_char->itemID());

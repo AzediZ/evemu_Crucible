@@ -306,7 +306,16 @@ void NewLog::PrintVa( const char* fmt, va_list ap )
 #ifndef NDEBUG
         // flush immediately so logfile is accurate if we crash
         fflush( mLogfile );
-#endif /* !NDEBUG */
+#else /* NDEBUG */
+        // a release build writes the file in blocks:  at most a second behind what the console shows, and line by line once
+        //  the server is stopping, so a stop Docker cuts short keeps what the server said
+        time_t now( std::time( nullptr ) );
+        if( mFlushEach or ( now != mFlushedAt ) )
+        {
+            fflush( mLogfile );
+            mFlushedAt = now;
+        }
+#endif /* NDEBUG */
 
         va_end( ap2 );
     }

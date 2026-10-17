@@ -326,6 +326,7 @@ public:
     bool HasAttribute(const uint16 attrID) const                       { return pAttributeMap->HasAttribute(attrID); }
     bool HasAttribute(const uint16 attrID, EvilNumber &value) const    { return pAttributeMap->HasAttribute(attrID, value); }
     bool SaveAttributes()                                              { return pAttributeMap->SaveAttributes(); }
+    bool GatherAttributes(std::vector<Inv::AttrData>& into)           { return pAttributeMap->Gather(into); }
     void ResetAttribute(uint16 attrID, bool notify=false)              { pAttributeMap->ResetAttribute(attrID, notify); }
     void DeleteAttribute(uint16 attrID)                                { pAttributeMap->DeleteAttribute(attrID); }
 

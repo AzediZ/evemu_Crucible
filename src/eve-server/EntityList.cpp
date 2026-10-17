@@ -116,6 +116,9 @@ void EntityList::Shutdown() {
      * server run loop will exit after control is returned from this function, which will clean up remaining items.
      */
     m_closing = true;
+    // the log line by line from here (a console exit or a scheduled shutdown comes here without a signal)
+    sLog.SetFlushEachLine();
+
     if (m_clients.empty())
         return;
 

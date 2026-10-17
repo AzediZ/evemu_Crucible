@@ -117,11 +117,16 @@ bool AttributeMap::Save() {
     if (IsStaticItem(mItem.itemID()))
         return true;
 
-    bool save(false);
     std::vector<Inv::AttrData> attribs;
-    attribs.clear();
+    if (!IsCharacterID(mItem.itemID())) {
+        if (!Gather(attribs))
+            return (mItem.categoryID() == EVEDB::invCategories::Ship);
+        if (!attribs.empty())
+            ItemDB::SaveAttributes(false, attribs);
+        return true;
+    }
     AttrMapItr itr = mAttributes.begin(), end = mAttributes.end();
-    if (IsCharacterID(mItem.itemID())) {
+    {
         for (; itr != end; ++itr) {
             switch (itr->first) {
                 case AttrCharisma:
@@ -151,15 +156,26 @@ bool AttributeMap::Save() {
                 }
             }
         }
-    } else {
+    }
+
+    if (!attribs.empty())
+        ItemDB::SaveAttributes(true, attribs);
+    return true;
+}
+
+bool AttributeMap::Gather(std::vector<Inv::AttrData>& attribs)
+{
+    if (IsStaticItem(mItem.itemID()) or IsCharacterID(mItem.itemID()))
+        return false;
+    bool save(false);
+    AttrMapItr itr = mAttributes.begin(), end = mAttributes.end();
+    {
         bool skill(false), damage(false), owner(false), module(false);
         switch (mItem.categoryID()) {
             case EVEDB::invCategories::Asteroid:    // asteroids and blueprints are NOT saved here
-            case EVEDB::invCategories::Blueprint: {
-                return false;
-            } break;
+            case EVEDB::invCategories::Blueprint:
             case EVEDB::invCategories::Ship: {      // ship attribs saved in shipItem, not here.
-                return true;
+                return false;
             } break;
             case EVEDB::invCategories::Skill: {     // save SP, Level and times for skills
                 skill = true;
@@ -212,9 +228,6 @@ bool AttributeMap::Save() {
             }
         }
     }
-
-    if (!attribs.empty())
-        ItemDB::SaveAttributes(IsCharacterID(mItem.itemID()), attribs);
     return true;
 }
 

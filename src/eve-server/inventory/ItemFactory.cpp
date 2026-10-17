@@ -99,9 +99,14 @@ void ItemFactory::SaveItems() {
     double startTime = GetTimeMSeconds();
     std::vector<Inv::SaveData> items;
     items.clear();
+    // the attributes of all but the characters a few thousand rows to a statement (ItemDB::SaveAttributeRows())
+    std::vector<Inv::AttrData> attribs;
     for (auto cur : m_items) {
         if (IsPlayerItem(cur.first)) { // this is a hack for now.  will eventually move to static/dynamic item maps
-            cur.second->SaveAttributes();
+            if (IsCharacterID(cur.first))
+                cur.second->SaveAttributes();
+            else
+                cur.second->GatherAttributes(attribs);
             Inv::SaveData data = Inv::SaveData();
                 data.itemID = cur.first;
                 data.contraband = cur.second->contraband();
@@ -117,6 +122,7 @@ void ItemFactory::SaveItems() {
             ++count;
         }
     }
+    ItemDB::SaveAttributeRows(attribs);
     ItemDB::SaveItems(items);
     sLog.Warning("        SaveItems", "Saved %u Dynamic Items in %.3fms.", count, (GetTimeMSeconds() -startTime));
 }
