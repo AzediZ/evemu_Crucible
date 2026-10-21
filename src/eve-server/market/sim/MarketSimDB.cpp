@@ -166,6 +166,14 @@ size_t MarketSimDB::LoadCalibration(StaticData& data, const std::set<uint32>& re
         // PLEX and Apparel are players' only (simClass 0), whatever the calibration says
         if ((t.typeID == 29668) or (t.categoryID == Category::Apparel))
             t.simClass = SimClass::Excluded;
+        /* ...and so are the capital ships that may not enter high security (carriers, dreadnoughts, supercarriers, titans,
+         *  the Rorqual):  the sim trades at the trade hubs, all high security, and on Tranquility those are only ever sold in
+         *  low and null security, where they're built.  their orders go as the sim starts (no cell backs them) */
+        if (Group::KeptOutOfHighSec((uint16_t)t.groupID))
+            t.simClass = SimClass::Excluded;
+        // ...and the alliance tournament prize ships and the gift ships, which no NPC ever sold
+        if (PrizeOrGiftShip(t.typeID))
+            t.simClass = SimClass::Excluded;
         data.types[t.typeID] = t;
     }
 
@@ -294,6 +302,7 @@ void MarketSimDB::LoadVendorOffers(StaticData& data, const std::string& mode, co
         codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
         return;
     }
+    std::set<std::pair<uint32, uint32>> offered;
     while (res.GetRow(row)) {
         VendorOffer o = VendorOffer();
         o.corpID = row.GetUInt(0);
@@ -302,6 +311,43 @@ void MarketSimDB::LoadVendorOffers(StaticData& data, const std::string& mode, co
         o.systemID = row.GetUInt(3);
         o.regionID = row.GetUInt(4);
         data.vendors.push_back(o);
+        offered.insert(std::make_pair(o.typeID, o.stationID));
+    }
+    if (mode == "hubsOnly")
+        return;
+    /* every blueprint the npc corps sell, at every hub too:  a corp's own stations in its home region carried
+     *  few of them at a hub (2 at Amarr, none at Dodixie), so a pilot shopping at one found almost none.  sold by the
+     *  hub's own corp where it trades the blueprint, else the lowest corp that does.  what no npc corp trades (tech two,
+     *  faction and pirate blueprints) stays out
+     */
+    std::string list;
+    for (auto h : hubs)
+        list += (list.empty() ? "" : ",") + std::to_string(h);
+    if (list.empty())
+        return;
+    if (!sDatabase.RunQuery(res,
+        "SELECT IFNULL(MAX(IF(t.corporationID = s.corporationID, t.corporationID, NULL)), MIN(t.corporationID)),"
+        " t.typeID, s.stationID, s.solarSystemID, s.regionID"
+        " FROM crpNPCCorporationTrades t"
+        " JOIN mktCalType c ON c.typeID = t.typeID AND c.simClass = %u"
+        " JOIN invTypes i ON i.typeID = t.typeID"
+        " JOIN invGroups g ON g.groupID = i.groupID AND g.categoryID = %u"
+        " JOIN staStations s ON s.stationID IN (%s)"
+        " GROUP BY t.typeID, s.stationID ORDER BY t.typeID, s.stationID",
+        SimClass::NpcVendor, EVEDB::invCategories::Blueprint, list.c_str()))
+    {
+        codelog(MARKET__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return;
+    }
+    while (res.GetRow(row)) {
+        VendorOffer o = VendorOffer();
+        o.corpID = row.GetUInt(0);
+        o.typeID = row.GetUInt(1);
+        o.stationID = row.GetUInt(2);
+        o.systemID = row.GetUInt(3);
+        o.regionID = row.GetUInt(4);
+        if (offered.insert(std::make_pair(o.typeID, o.stationID)).second)
+            data.vendors.push_back(o);
     }
 }
 

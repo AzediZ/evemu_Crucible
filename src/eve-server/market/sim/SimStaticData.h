@@ -96,8 +96,32 @@ namespace MktSim {
         enum : uint16_t {
             MiningBarge     = 463,
             Exhumer         = 543,
-            Ice             = 465
+            Ice             = 465,
+            // the capital ships that may not enter high security
+            Titan           = 30,
+            Dreadnought     = 485,
+            Carrier         = 547,
+            Supercarrier    = 659,
+            CapitalIndustrial = 883     // the Rorqual
         };
+        inline bool KeptOutOfHighSec(uint16_t groupID)  { return (groupID == Titan) or (groupID == Dreadnought) or (groupID == Carrier)
+                                                                 or (groupID == Supercarrier) or (groupID == CapitalIndustrial); }
+    }
+
+    // the alliance tournament's prize ships and the ships given away to players:  never sold by an NPC on Tranquility
+    inline bool PrizeOrGiftShip(uint32_t typeID) {
+        switch (typeID) {
+            case 11940: case 11942:     // Gold Magnate, Silver Magnate
+            case 11011:                 // Guardian-Vexor
+            case 3516:  case 3518:      // Malice, Vangel
+            case 2834:  case 2836:      // Utu, Adrestia
+            case 32207: case 32209:     // Freki, Mimir
+            case 2078:  case 3532:      // Zephyr, Echelon
+            case 29266: case 2863:      // Apotheosis, Primae
+            case 11936: case 11938:     // Apocalypse Imperial Issue, Armageddon Imperial Issue:  the Emperor's gifts
+                return true;
+        }
+        return false;
     }
 
     // mktCalGroup.  NaN = not set (the plan's default is used)

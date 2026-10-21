@@ -489,7 +489,7 @@ void AccountService::TransferFunds(
             reason,
             referenceID
         );
-    } else if (IsPlayerCorp(fromID)) {
+    } else if (IsPlayerCorp(fromID) and (fromKey != Account::KeyType::Escrow)) {
         uint32 userID(0);
         if (pClient != nullptr) {
             userID = pClient->GetCharacterID();
@@ -506,7 +506,9 @@ void AccountService::TransferFunds(
             reason,
             referenceID
         );
-    } // fromID could be npc or _System.  nothing to do on this side.
+    } /* fromID could be npc or _System.  nothing to do on this side.  nor for escrow held at a player corp's station:  the market holds
+       *  it, not the station's owner (its wallet has no escrow division, and paying the seller out of it failed)
+       */
 
     uint8 toCurrency = Account::CreditType::ISK;
     if (IsAUR(toKey)) {
@@ -542,7 +544,7 @@ void AccountService::TransferFunds(
                 reason,
                 referenceID
             );
-        } else if (IsPlayerCorp(toID)) {
+        } else if (IsPlayerCorp(toID) and (toKey != Account::KeyType::Escrow)) {
             uint32 userID(0);
 
             if (pClient != nullptr) {
@@ -685,7 +687,7 @@ void AccountService::RefundSender(uint32 fromID, uint32 toID, double amount, uin
                 newBalance = pClientFrom->GetBalance(fromCurrency);
             }
             AccountDB::AddJournalEntry(fromID, entryTypeID, toID, fromID, fromCurrency, fromKey, amount, newBalance, refund, referenceID);
-        } else if (IsPlayerCorp(fromID)) {
+        } else if (IsPlayerCorp(fromID) and (fromKey != Account::KeyType::Escrow)) {
             HandleCorpTransaction(fromID, entryTypeID, toID, fromID, fromCurrency, fromKey, amount, refund, referenceID);
         }
     } catch (...) {
