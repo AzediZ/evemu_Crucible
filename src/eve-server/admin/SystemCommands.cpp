@@ -8,6 +8,7 @@
 #include "eve-server.h"
 
 #include "Client.h"
+#include "EVEServerConfig.h"
 #include "ConsoleCommands.h"
 #include "log/logsys.h"
 #include "npc/NPC.h"
@@ -948,6 +949,22 @@ PyResult Command_unspawn(Client* pClient, CommandDB* db, EVEServiceManager &serv
 #undef DEFAULT_RANGE
 
     return new PyString("Removed " + std::to_string(count) + " objects.");
+}
+
+PyResult Command_killboard(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    if (!sConfig.killboard.Enabled)
+        throw CustomError ("The killboard is turned off on this server.");
+    // chat links, which the client opens in the in-game browser
+    std::string base(pClient->GetImageServerURL() + "kb/");
+    std::string text("<b>" + sConfig.killboard.Title + "</b>:  <url=" + base + ">recent kills</url>  |  <url=" + base + "pilot/"
+                     + std::to_string(pClient->GetCharacterID()) + ">your kills and losses</url>  |  <url=" + base + "battles>battle reports</url>");
+    return new PyString(text);
+}
+
+PyResult Command_kb(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)
+{
+    return Command_killboard(pClient, db, services, args);
 }
 
 PyResult Command_location(Client* pClient, CommandDB* db, EVEServiceManager &services, const Seperator& args)

@@ -754,6 +754,16 @@ public:
         uint32 ExecutorMinMemberDays;       // days of membership before a corporation may declare executor support
     } alliance;
 
+    // From <killboard>  (kill reports, killboard and battle reports, served by the image server)
+    struct {
+        bool Enabled;                       // serve the pages at http://<image server>/kb/
+        std::string Title;                  // the name shown on every page
+        bool MailKillReports;               // mail every player involved in a kill a link to its kill report
+        uint32 MaxCachedKills;              // newest kills kept in memory for the lists, stats and battles.  0 = all
+        uint32 BattleGap;                   // minutes:  kills in one system this close together are one battle
+        uint32 BattleMinKills;              // fewest kills (not counting kills by npcs alone) that make a battle
+    } killboard;
+
     // From <testing>
     struct {
         bool EnableDrones;
@@ -800,6 +810,7 @@ protected:
     bool ProcessAmbient( const TiXmlElement* ele );
     bool ProcessSov( const TiXmlElement* ele );
     bool ProcessPOS( const TiXmlElement* ele );
+    bool ProcessKillboard( const TiXmlElement* ele );
     bool ProcessCorp( const TiXmlElement* ele );
     bool ProcessWar( const TiXmlElement* ele );
     bool ProcessAlliance( const TiXmlElement* ele );

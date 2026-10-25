@@ -600,6 +600,13 @@ EVEServerConfig::EVEServerConfig()
     sov.DevIndexDecayPerHour = 100000;
 
     // pos
+    killboard.Enabled = true;
+    killboard.Title = "Killboard";
+    killboard.MailKillReports = true;
+    killboard.MaxCachedKills = 250000;
+    killboard.BattleGap = 20;
+    killboard.BattleMinKills = 4;
+
     pos.FuelRate = 1.0f;
     pos.RequireCharters = true;
     pos.HighSecStandingCheck = true;
@@ -703,6 +710,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     AddMemberParser( "ambient",     &EVEServerConfig::ProcessAmbient );
     AddMemberParser( "sov",         &EVEServerConfig::ProcessSov );
     AddMemberParser( "pos",         &EVEServerConfig::ProcessPOS );
+    AddMemberParser( "killboard",   &EVEServerConfig::ProcessKillboard );
     AddMemberParser( "corp",        &EVEServerConfig::ProcessCorp );
     AddMemberParser( "war",         &EVEServerConfig::ProcessWar );
     AddMemberParser( "alliance",    &EVEServerConfig::ProcessAlliance );
@@ -738,6 +746,7 @@ bool EVEServerConfig::ProcessEveServer( const TiXmlElement* ele )
     RemoveParser( "ambient" );
     RemoveParser( "sov" );
     RemoveParser( "pos" );
+    RemoveParser( "killboard" );
     RemoveParser( "corp" );
     RemoveParser( "war" );
     RemoveParser( "alliance" );
@@ -1933,6 +1942,23 @@ bool EVEServerConfig::ProcessSov( const TiXmlElement* ele )
     RemoveParser( "MilitaryPointsPerBountyISK" );
     RemoveParser( "IndustrialPointsPerM3" );
     RemoveParser( "DevIndexDecayPerHour" );
+
+    return result;
+}
+
+bool EVEServerConfig::ProcessKillboard( const TiXmlElement* ele )
+{
+    AddValueParser( "Enabled",          killboard.Enabled );
+    AddValueParser( "Title",            killboard.Title );
+    AddValueParser( "MailKillReports",  killboard.MailKillReports );
+    AddValueParser( "MaxCachedKills",   killboard.MaxCachedKills );
+    AddValueParser( "BattleGap",        killboard.BattleGap );
+    AddValueParser( "BattleMinKills",   killboard.BattleMinKills );
+
+    const bool result = ParseElementChildren( ele );
+
+    for (const char* name : {"Enabled", "Title", "MailKillReports", "MaxCachedKills", "BattleGap", "BattleMinKills"})
+        RemoveParser( name );
 
     return result;
 }

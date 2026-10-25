@@ -325,6 +325,13 @@ SET( imageserver_SOURCE
      "${TARGET_SOURCE_DIR}/imageserver/ImageServerConnection.cpp"
      "${TARGET_SOURCE_DIR}/imageserver/ImageServerListener.cpp" )
 
+SET( killboard_INCLUDE
+     "${TARGET_INCLUDE_DIR}/killboard/Killboard.h"
+     "${TARGET_INCLUDE_DIR}/killboard/KillboardData.h" )
+SET( killboard_SOURCE
+     "${TARGET_SOURCE_DIR}/killboard/Killboard.cpp"
+     "${TARGET_SOURCE_DIR}/killboard/KillboardData.cpp" )
+
 SET( inventory_INCLUDE
      "${TARGET_INCLUDE_DIR}/inventory/AttributeEnum.h"
      "${TARGET_INCLUDE_DIR}/inventory/AttributeMap.h"
@@ -811,6 +818,7 @@ SOURCE_GROUP( "src\\exploration"   FILES ${explore_INCLUDE} )
 SOURCE_GROUP( "src\\faction"       FILES ${faction_INCLUDE} )
 SOURCE_GROUP( "src\\fleet"         FILES ${fleet_INCLUDE} )
 SOURCE_GROUP( "src\\imageserver"   FILES ${imageserver_INCLUDE} )
+SOURCE_GROUP( "src\\killboard"     FILES ${killboard_INCLUDE} )
 SOURCE_GROUP( "src\\inventory"     FILES ${inventory_INCLUDE} )
 SOURCE_GROUP( "src\\mail"          FILES ${mail_INCLUDE} )
 SOURCE_GROUP( "src\\manufacturing" FILES ${manufacturing_INCLUDE} )
@@ -850,6 +858,7 @@ SOURCE_GROUP( "src\\exploration"   FILES ${explore_SOURCE} )
 SOURCE_GROUP( "src\\faction"       FILES ${faction_SOURCE} )
 SOURCE_GROUP( "src\\fleet"         FILES ${fleet_SOURCE} )
 SOURCE_GROUP( "src\\imageserver"   FILES ${imageserver_SOURCE} )
+SOURCE_GROUP( "src\\killboard"     FILES ${killboard_SOURCE} )
 SOURCE_GROUP( "src\\inventory"     FILES ${inventory_SOURCE} )
 SOURCE_GROUP( "src\\mail"          FILES ${mail_SOURCE} )
 SOURCE_GROUP( "src\\manufacturing" FILES ${manufacturing_SOURCE} )
@@ -890,6 +899,7 @@ ADD_EXECUTABLE( "${TARGET_NAME}"
                 ${faction_INCLUDE}        ${faction_SOURCE}
                 ${fleet_INCLUDE}          ${fleet_SOURCE}
                 ${imageserver_INCLUDE}    ${imageserver_SOURCE}
+                ${killboard_INCLUDE}      ${killboard_SOURCE}
                 ${inventory_INCLUDE}      ${inventory_SOURCE}
                 ${mail_INCLUDE}           ${mail_SOURCE}
                 ${manufacturing_INCLUDE}  ${manufacturing_SOURCE}

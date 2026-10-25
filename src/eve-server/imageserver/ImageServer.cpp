@@ -204,7 +204,8 @@ std::shared_ptr<std::vector<char> > ImageServer::ReadFile(const std::string& pat
 
 std::shared_ptr<std::vector<char> > ImageServer::GetImage(std::string& category, uint32 id, uint32 size)
 {
-    sLog.Cyan("      ImageServer"," GetImage() called. Cat: %s, id: %u, size:%u", category.c_str(), id, size);
+    // every portrait and icon the client or a killboard page asks for comes through here
+    _log(IMAGE__TRACE, "GetImage() called. Cat: %s, id: %u, size:%u", category.c_str(), id, size);
 
     if (!ValidateCategory(category) || !ValidateSize(category, size))
         return std::shared_ptr<std::vector<char> >();

@@ -691,6 +691,15 @@ boolean can use either 0/1 OR true/false.
         <TowerSnapToMoon>false</TowerSnapToMoon><!-- bool - legacy: anchoring moves the tower to a fixed point at its moon and warps the pilot there -->
     </pos>
 
+    <killboard><!-- kill reports, a killboard and battle reports, as web pages from the image server (http://<imageServer>:<imageServerPort>/kb/).  they open in the in-game browser -->
+        <Enabled>true</Enabled><!-- bool - serve the killboard pages -->
+        <Title>Killboard</Title><!-- the name shown at the top of every page -->
+        <MailKillReports>true</MailKillReports><!-- bool - mail every player involved in a kill (victim and attackers) a link to its kill report -->
+        <MaxCachedKills>250000</MaxCachedKills><!-- newest kills kept in memory for the lists, stats and battle reports.  older kill reports still open.  0 = all -->
+        <BattleGap>20</BattleGap><!-- minutes - kills in one system with no more than this between them are one battle -->
+        <BattleMinKills>4</BattleMinKills><!-- fewest kills that make a battle (kills by npcs alone don't count) -->
+    </killboard>
+
     <corp><!-- corporation management (Crucible: 24 hour corporate stasis, share-weighted votes, 30 day office rent bills, 2M isk per corp monthly alliance maintenance) -->
         <StasisHours>24</StasisHours><!-- hours after a member's roles and titles are removed before they may quit or be kicked (the "Prepare to Quit Corp" stasis).  0 = no stasis -->
         <CEOVoteMinSharePercent>5</CEOVoteMinSharePercent><!-- percent of the corporation's shares a member must hold to run for CEO.  0 = no share requirement -->

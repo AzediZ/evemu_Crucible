@@ -48,6 +48,8 @@ public:
 private:
     ImageServerConnection(boost::asio::io_context& io);
     void ProcessHeaders(const boost::system::error_code& ec, std::size_t bytes);
+    // a killboard page (everything under /kb)
+    void ServeKillboard(const std::string& request, std::istream& stream);
     void SendImage();
     void NotFound();
     void Close();
@@ -62,6 +64,7 @@ private:
     uint32 _id;
     uint32 _size;
     std::string _redirectUrl;
+    std::string _response;      // a killboard page, kept until it's written
 
     // bounded: a client that never ends its headers gets an error instead of growing this without limit
     boost::asio::streambuf _buffer{8192};

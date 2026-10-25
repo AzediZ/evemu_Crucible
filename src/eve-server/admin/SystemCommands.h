@@ -16,6 +16,10 @@ COMMAND( halt, Acct::Role::VIP,
          "- Immediately stops ship, setting Destiny::State = dstball_halt.")
 COMMAND( location, Acct::Role::PLAYER,
          "- Gives you back your current location in space." )
+COMMAND( killboard, Acct::Role::PLAYER,
+         "- Links to the killboard:  recent kills, your kills and losses, and battle reports (they open in the in-game browser)." )
+COMMAND( kb, Acct::Role::PLAYER,
+         "- Same as /killboard." )
 COMMAND( syncloc, Acct::Role::PLAYER,
          "- Synchronizes your location in client with location on server." )
 COMMAND( syncpos, Acct::Role::PLAYER,

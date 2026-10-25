@@ -30,6 +30,7 @@
 #include "EntityList.h"
 #include "EVEServerConfig.h"
 #include "ServiceDB.h"
+#include "killboard/Killboard.h"
 #include "config/ConfigDB.h"
 
 uint32 ServiceDB::SetClientSeed()
@@ -698,7 +699,8 @@ void ServiceDB::GetCorpHangarNames(uint32 corpID, std::map<uint8, std::string> &
 
 void ServiceDB::SaveKillOrLoss(KillData &data) {
     DBerror err;
-    sDatabase.RunQuery(err,
+    uint32 killID(0);
+    sDatabase.RunQueryLID(err, killID,
             " INSERT INTO chrKillTable (solarSystemID, victimCharacterID, victimCorporationID, victimAllianceID, victimFactionID,"
             "victimShipTypeID, victimDamageTaken, finalCharacterID, finalCorporationID, finalAllianceID, finalFactionID, finalShipTypeID,"
             "finalWeaponTypeID, finalSecurityStatus, finalDamageDone, killBlob, killTime, moonID)"
@@ -708,4 +710,6 @@ void ServiceDB::SaveKillOrLoss(KillData &data) {
                 data.finalCharacterID, data.finalCorporationID, data.finalAllianceID, data.finalFactionID,
                 data.finalShipTypeID, data.finalWeaponTypeID, data.finalSecurityStatus, data.finalDamageDone,
                 data.killBlob.c_str(), data.killTime, data.moonID);
+    // everyone involved gets a link to the kill report
+    Killboard::MailKillReport(killID, data);
 }

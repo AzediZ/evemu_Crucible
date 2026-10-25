@@ -339,32 +339,32 @@ void MapDB::UpdateKillData(uint32 sysID, SystemKillData& data)
 void MapDB::AddKill(uint32 sysID) {
     DBerror err;
     sDatabase.RunQuery(err,
-            "UPDATE mapDynamicData SET killsHour = killsHour + 1, kills24Hour = kills24Hour + 1 WHERE solarSystemID = %u", sysID);
+            "UPDATE mapDynamicData SET killsHour = LEAST(killsHour + 1, 32767), kills24Hour = LEAST(kills24Hour + 1, 32767) WHERE solarSystemID = %u", sysID);
 }
 
 void MapDB::AddFactionKill(uint32 sysID) {
     DBerror err;
     sDatabase.RunQuery(err,
-            "UPDATE mapDynamicData SET factionKills = factionKills + 1, factionKills24Hour = factionKills24Hour + 1 WHERE solarSystemID = %u", sysID);
+            "UPDATE mapDynamicData SET factionKills = LEAST(factionKills + 1, 32767), factionKills24Hour = LEAST(factionKills24Hour + 1, 32767) WHERE solarSystemID = %u", sysID);
 }
 
 void MapDB::AddPodKill(uint32 sysID) {
     DBerror err;
     sDatabase.RunQuery(err,
-            "UPDATE mapDynamicData SET podKillsHour = podKillsHour + 1, podKills24Hour = podKills24Hour + 1 WHERE solarSystemID = %u", sysID);
+            "UPDATE mapDynamicData SET podKillsHour = LEAST(podKillsHour + 1, 32767), podKills24Hour = LEAST(podKills24Hour + 1, 32767) WHERE solarSystemID = %u", sysID);
 }
 
 // will need to write methods to retrieve/manipulate/set system dynamic data as systems may/may not be loaded
 
 void MapDB::ManipulateTimeData()
 {
-    /* called once an hour.  the star map's "last hour" counters start again every hour, and the "last 24 hours"
+    /* called once an hour.  the star map's "last hour" counters (kills and jumps) start again every hour, and the "last 24 hours"
      *  counters every 24 hours (a simple stand-in for rolling windows:  before, they only ever went up) */
     static uint32 hours(0);
     ++hours;
     DBerror err;
     int64 now(GetFileTimeNow());
-    sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = 0, factionKills = 0, podKillsHour = 0,"
+    sDatabase.RunQuery(err, "UPDATE mapDynamicData SET killsHour = 0, factionKills = 0, podKillsHour = 0, jumpsHour = 0,"
         " killsDateTime = %lli, factionDateTime = %lli, podDateTime = %lli", now, now, now);
     if (hours % 24 == 0)
         sDatabase.RunQuery(err, "UPDATE mapDynamicData SET kills24Hour = 0, factionKills24Hour = 0, podKills24Hour = 0,"
