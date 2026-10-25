@@ -32,6 +32,7 @@
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
+#include "faction/FacWarMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
 #include "exploration/Exploration.h"
@@ -512,6 +513,8 @@ const char* DungeonDataMgr::GetDungeonType(int8 typeID)
         case Dungeon::Type::Escalation:     return "Escalation";
         case Dungeon::Type::Wormhole:       return "Wormhole";
         case Dungeon::Type::Incursion:      return "Incursion";
+        case Dungeon::Type::FacWarDefensive: return "FacWarDefensive";
+        case Dungeon::Type::FacWarOffensive: return "FacWarOffensive";
         default:                            return "Invalid";
     }
 }
@@ -713,9 +716,10 @@ uint32 DungeonMgr::SpawnInstance(const Dungeon::SpawnParams& params, CosmicSigna
         inst.instanceID = sItemFactory.GetNextTempID();
     }
 
-    // lifetime:  the caller's, the dungeon's, or the config default of its kind (0 = forever)
+    // lifetime:  the caller's, the dungeon's, or the config default of its kind (0 = forever).  a factional warfare complex
+    //  lasts until it's taken
     int64 lifetime(params.lifetimeSec * EvE::Time::Second);
-    if (lifetime == 0) {
+    if ((lifetime == 0) and !Dungeon::Type::IsFacWar(pDungeon->archetypeID)) {
         if (pDungeon->lifetimeHours > 0) {
             lifetime = pDungeon->lifetimeHours * EvE::Time::Hour;
         } else if (params.kind == Dungeon::Kind::Anomaly) {
@@ -1187,6 +1191,14 @@ uint32 DungeonMgr::GetInstanceOf(uint32 itemID)
     if (itr == m_entityIndex.end())
         return 0;
     return itr->second.first;
+}
+
+uint32 DungeonMgr::GetInstanceDungeon(uint32 instanceID)
+{
+    auto itr = m_instances.find(instanceID);
+    if ((itr == m_instances.end()) or (itr->second.dungeon.get() == nullptr))
+        return 0;
+    return itr->second.dungeon->dungeonID;
 }
 
 bool DungeonMgr::IsInDungeon(const GPoint& pos)
@@ -1954,6 +1966,9 @@ void DungeonMgr::CheckImplicitCompletion(Instance& inst)
      */
     if (inst.completed or inst.dungeon->hasCompletionEvent)
         return;
+    // a factional warfare complex is done when it's taken (ProcessCapture), not when its guards are dead
+    if (Dungeon::Type::IsFacWar(inst.dungeon->archetypeID))
+        return;
     bool any(false);
     for (auto& room : inst.rooms)
         for (auto& group : room.groups) {
@@ -1974,6 +1989,59 @@ void DungeonMgr::CheckImplicitCompletion(Instance& inst)
         }
     if (any)
         CompleteInstance(inst, inst.lastCharID);
+}
+
+void DungeonMgr::ProcessCapture(Instance& inst, int64 now)
+{
+    uint8 size(0);
+    uint32 holderID(0);
+    if (!sFacWarMgr.ComplexOf(inst.instanceID, size, holderID) or inst.rooms.empty())
+        return;
+    double seconds((inst.lastCapture == 0) ? 0.0 : (double)(now - inst.lastCapture) / EvE::Time::Second);
+    inst.lastCapture = now;
+    // a stall (a long tick, a loaded server) doesn't capture anything by itself
+    seconds = EvE::min(seconds, 5.0);
+    // the capture point is in the last room, with the guards
+    LiveRoom& room = inst.rooms.back();
+    SystemEntity* pPoint(nullptr);
+    for (auto& cur : room.objects) {
+        SystemEntity* pSE(m_system->GetSE(cur.second));
+        if ((pSE != nullptr) and (pSE->GetSelf()->groupID() == EVEDB::invGroups::Capture_Point)) {
+            pPoint = pSE;
+            break;
+        }
+    }
+    if (pPoint == nullptr)
+        return;
+    // the ships in range (not pods, not cloaked, not warping), by side.  the attacker is the holder's zone enemy
+    double range(10000.0 * size);
+    uint32 attackerID(FacWarMgr::ZoneEnemyOf(holderID)), holders(0);
+    std::vector<uint32> takers;
+    std::vector<Client*> clients;
+    m_system->GetClientList(clients);
+    for (auto pClient : clients) {
+        ShipSE* pShip(pClient->GetShipSE());
+        if ((pShip == nullptr) or !pClient->IsInSpace() or pClient->InPod() or (pShip->DestinyMgr() == nullptr)
+        or pShip->DestinyMgr()->IsWarping() or pShip->DestinyMgr()->IsCloaked())
+            continue;
+        if (pShip->GetPosition().distance(pPoint->GetPosition()) > range)
+            continue;
+        uint32 factionID((uint32)pClient->GetWarFactionID());
+        if (FacWarMgr::SameSide(factionID, attackerID)) {
+            takers.push_back(pClient->GetCharacterID());
+        } else if (FacWarMgr::SameSide(factionID, holderID)) {
+            ++holders;
+        }
+    }
+    if (takers.empty() and (holders == 0))
+        return;
+    // the guards:  the ones left, and the waves still to come
+    uint32 guards(CountLiveNPCs(room));
+    for (auto& group : room.groups)
+        if (!group.spawned)
+            ++guards;
+    if (sFacWarMgr.CaptureTick(inst.instanceID, takers, holders, guards, seconds))
+        CompleteInstance(inst, takers.front());
 }
 
 void DungeonMgr::CompleteInstance(Instance& inst, uint32 charID)
@@ -2291,6 +2359,8 @@ void DungeonMgr::Process()
         if (itr == m_instances.end())
             continue;
         ProcessPresence(itr->second, ships);
+        if ((m_instances.find(id) != m_instances.end()) and !itr->second.completed and Dungeon::Type::IsFacWar(itr->second.dungeon->archetypeID))
+            ProcessCapture(itr->second, now);
         for (uint8 i = 0; (m_instances.find(id) != m_instances.end()) and (i < itr->second.rooms.size()); ++i) {
             if (itr->second.rooms[i].groups.empty() and itr->second.rooms[i].objects.empty())
                 continue;

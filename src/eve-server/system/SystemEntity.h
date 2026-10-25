@@ -82,6 +82,7 @@ class JumpBridgeSE;
 class PlatformSE;
 class OutpostSE;
 class StationServiceSE;
+class ControlBunkerSE;
 class DungeonEditSE;
 
 /*
@@ -152,6 +153,7 @@ public:
     virtual JumpBridgeSE*       GetJumpBridgeSE()       { return nullptr; }
     virtual OutpostSE*          GetOutpostSE()          { return nullptr; }
     virtual StationServiceSE*   GetStationServiceSE()   { return nullptr; }
+    virtual ControlBunkerSE*    GetControlBunkerSE()    { return nullptr; }
     virtual PlatformSE*         GetPlatformSE()         { return nullptr; }
     virtual TowerSE*            GetTowerSE()            { return nullptr; }
     virtual ArraySE*            GetArraySE()            { return nullptr; }
@@ -212,6 +214,7 @@ public:
     virtual bool                IsMoonMiner()           { return false; }
     virtual bool                IsOutpostSE()           { return false; }
     virtual bool                IsStationServiceSE()    { return false; }
+    virtual bool                IsControlBunkerSE()     { return false; }
     virtual bool                IsPlatformSE()          { return false; }
     virtual bool                IsAsteroidSE()          { return false; }
     virtual bool                IsDeployableSE()        { return false; }

@@ -27,8 +27,14 @@
 #include "eve-server.h"
 
 
+#include "Client.h"
+#include "StaticDataMgr.h"
+#include "alliance/AllianceManager.h"
 #include "cache/ObjCacheService.h"
+#include "faction/FacWarMgr.h"
 #include "faction/FactionWarMgrService.h"
+#include "inventory/ItemFactory.h"
+#include "station/StationDataMgr.h"
 
 /*
  * FACWAR__ERROR
@@ -112,18 +118,8 @@ PyResult FactionWarMgrService::GetFWSystems(PyCallArgs& call)
             [PyString "factionID"]
             [PyInt 500004]
             */
-    ObjectCachedMethodID method_id( GetName().c_str(), "GetFacWarSystems" );
-
-    if ( !this->m_cache->IsCacheLoaded( method_id ) )
-    {
-        PyRep* res = m_db.GetFacWarSystems();
-        if ( res == NULL )
-            return nullptr;
-
-        this->m_cache->GiveCache( method_id, &res );
-    }
-
-    return this->m_cache->MakeObjectCachedMethodCallResult( method_id );
+    // who holds what changes at downtime (FacWarMgr.h), so it's FacWarMgr's, not a cached copy
+    return sFacWarMgr.GetFWSystems();
 }
 
 /**     ***********************************************************************
@@ -158,28 +154,15 @@ PyResult FactionWarMgrService::GetMyCharacterRankOverview(PyCallArgs& call) {
                               [PyInt 64]
      */
 
-// will need data from DB...
-  util_Rowset rs;
-
-    rs.header.push_back( "currentRank" );
-    rs.header.push_back( "highestRank" );
-    rs.header.push_back( "factionID" );
-    rs.header.push_back( "lastModified" );
-
-    return rs.Encode();
+    // the character's ranks with each faction it fought for, its militia's up to date (FacWarRewards.cpp)
+    return sFacWarMgr.RankRows(call.client->GetCharacterID(), call.client->GetWarFactionID());
 }
 
 PyResult FactionWarMgrService::GetMyCharacterRankInfo(PyCallArgs& call) {
   _log(FACWAR__CALL, "FacWarMgr::Handle_GetMyCharacterRankInfo() size=%lli", call.tuple->size());
   call.Dump(FACWAR__CALL_DUMP);
-  util_Rowset rs;
 
-    rs.header.push_back( "currentRank" );
-    rs.header.push_back( "highestRank" );
-    rs.header.push_back( "factionID" );
-    rs.header.push_back( "lastModified" );
-
-    return rs.Encode();
+    return sFacWarMgr.RankRows(call.client->GetCharacterID(), call.client->GetWarFactionID());
 }
 
 PyResult FactionWarMgrService::GetFactionMilitiaCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -213,7 +196,8 @@ PyResult FactionWarMgrService::GetSystemStatus(PyCallArgs &call, PyInt* solarsys
 
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetSystemStatus()");
     call.Dump(FACWAR__CALL_DUMP);
-    return new PyInt(FacWar::SysStatus::None);
+    // contested, vulnerable or captured (its bunker destroyed), whoever asks
+    return new PyInt(sFacWarMgr.SystemStatus(solarsystemID->value()));
 }
 
 // these next two should use static data or cached data to avoid db hits
@@ -229,8 +213,8 @@ PyResult FactionWarMgrService::IsEnemyFaction(PyCallArgs &call, PyInt* enemyID, 
     _log(FACWAR__CALL, "FacWarMgr::Handle_IsEnemyFaction()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    // return boolean
-    return PyStatic.NewFalse();
+    // Amarr and Caldari against Gallente and Minmatar (FacWarMgr.h)
+    return new PyBool(FacWarMgr::AreEnemies(enemyID->value(), factionID->value()));
 }
 
 PyResult FactionWarMgrService::IsEnemyCorporation(PyCallArgs &call, PyInt* enemyID, PyInt* factionID) {
@@ -238,8 +222,8 @@ PyResult FactionWarMgrService::IsEnemyCorporation(PyCallArgs &call, PyInt* enemy
     _log(FACWAR__CALL, "FacWarMgr::Handle_IsEnemyCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    // return boolean
-    return PyStatic.NewFalse();
+    // the corporation's militia is at war with the faction's
+    return new PyBool(FacWarMgr::AreEnemies(sFacWarMgr.WarFactionOf(enemyID->value()), factionID->value()));
 }
 
 /**     ***********************************************************************
@@ -258,19 +242,44 @@ PyResult FactionWarMgrService::GetFactionalWarStatus(PyCallArgs &call) {
   _log(FACWAR__CALL, "FacWarMgr::Handle_GetFactionalWarStatus()");
   call.Dump(FACWAR__CALL_DUMP);
 
-    // base_fw / charactersheet:  .status, .factionID, .startDate.  nobody is in (or joining) a militia here
+    // base_fw / charactersheet:  .status, .factionID, .startDate.  the character's militia, its corporation's or the one its
+    //  corporation is joining (FacWar::CorpStatus)
+    uint32 factionID(0);
+    uint8 status(0);
+    int64 since(0);
     PyDict* dict = new PyDict();
+    if (sFacWarMgr.StatusOf(call.client->GetCharacterID(), call.client->GetCorporationID(), factionID, status, since)) {
+        dict->SetItemString("factionID", new PyInt(factionID));
+        dict->SetItemString("startDate", (since != 0) ? (PyRep*)new PyLong(since) : PyStatic.NewNone());
+        dict->SetItemString("status", new PyInt(status));
+    } else {
         dict->SetItemString("factionID", PyStatic.NewNone());
         dict->SetItemString("startDate", PyStatic.NewNone());
         dict->SetItemString("status", PyStatic.NewNone());
+    }
     return new PyObject("util.KeyVal", dict);
 }
 
-PyResult FactionWarMgrService::JoinFactionAsCharacter(PyCallArgs &call, PyInt* factionID) {
+namespace {
+    // enlisting is done at a militia office:  docked in a station of the faction's
+    void RequireFactionStation(Client* pClient, uint32 factionID)
+    {
+        StationData data = StationData();
+        if (!pClient->IsDocked() or !stDataMgr.GetStationData(pClient->GetStationID(), data)
+            or (sDataMgr.GetCorpFaction(data.corporationID) != factionID))
+            throw CustomError("You enlist in the %s militia at the militia office of one of its stations.", sDataMgr.GetOwnerName(factionID).c_str());
+    }
+}
+
+PyResult FactionWarMgrService::JoinFactionAsCharacter(PyCallArgs &call, PyInt* factionID, std::optional<PyRep*> extra) {
   _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCharacter()");
   call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    RequireFactionStation(call.client, factionID->value());
+    std::string err;
+    if (!sFacWarMgr.Enlist(call.client->GetCharacterID(), factionID->value(), false, err))
+        throw CustomError("%s", err.c_str());
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::GetCorporationWarFactionID(PyCallArgs &call, PyInt* corporationID) {
@@ -278,7 +287,8 @@ PyResult FactionWarMgrService::GetCorporationWarFactionID(PyCallArgs &call, PyIn
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetCorporationWarFactionID()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return nullptr;
+    uint32 factionID(sFacWarMgr.WarFactionOf(corporationID->value()));
+    return ((factionID == 0) ? PyStatic.NewNone() : (PyRep*)new PyInt(factionID));
 }
 
 PyResult FactionWarMgrService::GetSystemsConqueredThisRun(PyCallArgs &call) {
@@ -290,8 +300,8 @@ PyResult FactionWarMgrService::GetSystemsConqueredThisRun(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_GetSystemsConqueredThisRun()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    // a list of {solarsystemID, occupierID} dicts
-    return new PyList();
+    // a list of {solarsystemID, occupierID} dicts:  the systems whose bunker fell, and who takes them at downtime
+    return sFacWarMgr.GetSystemsConquered();
 }
 
 PyResult FactionWarMgrService::GetFactionCorporations(PyCallArgs &call, PyInt* factionID) {
@@ -300,7 +310,12 @@ PyResult FactionWarMgrService::GetFactionCorporations(PyCallArgs &call, PyInt* f
     call.Dump(FACWAR__CALL_DUMP);
 
     // corporations in the faction's militia
-    return new PyList();
+    std::vector<uint32> corps;
+    sFacWarMgr.CorpsOf(factionID->value(), corps);
+    PyList* list = new PyList();
+    for (uint32 corpID : corps)
+        list->AddItem(new PyInt(corpID));
+    return list;
 }
 
 PyResult FactionWarMgrService::JoinFactionAsCharacterRecommendationLetter(PyCallArgs &call, PyInt* factionID, PyInt* itemID) {
@@ -311,7 +326,19 @@ PyResult FactionWarMgrService::JoinFactionAsCharacterRecommendationLetter(PyCall
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCharacterRecommendationLetter()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    // the letter is handed in instead of the standing
+    RequireFactionStation(call.client, factionID->value());
+    InventoryItemRef letter(sItemFactory.GetItemRef(itemID->value()));
+    if ((letter.get() == nullptr) or (letter->ownerID() != call.client->GetCharacterID()) or (letter->typeID() != EVEDB::invTypes::LetterOfRecommendation))
+        throw CustomError("That isn't a Letter of Recommendation of yours.");
+    std::string err;
+    if (!sFacWarMgr.Enlist(call.client->GetCharacterID(), factionID->value(), true, err))
+        throw CustomError("%s", err.c_str());
+    if (letter->quantity() > 1)
+        letter->AlterQuantity(-1, true);
+    else
+        letter->Delete();
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::JoinFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -319,7 +346,7 @@ PyResult FactionWarMgrService::JoinFactionAsAlliance(PyCallArgs &call, PyInt* fa
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    throw CustomError("Alliances can't enlist in a militia, nor can corporations in one.");
 }
 
 PyResult FactionWarMgrService::JoinFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -327,7 +354,13 @@ PyResult FactionWarMgrService::JoinFactionAsCorporation(PyCallArgs &call, PyInt*
     _log(FACWAR__CALL, "FacWarMgr::Handle_JoinFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    // the CEO or a director, for the corporation:  it joins at the next downtime
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw CustomError("Only your corporation's CEO or a director can enlist it in a militia.");
+    std::string err;
+    if (!sFacWarMgr.AskToJoin(call.client->GetCorporationID(), factionID->value(), call.client->GetCharacterID(), err))
+        throw CustomError("%s", err.c_str());
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::GetStats_FactionInfo(PyCallArgs &call) {
@@ -336,7 +369,18 @@ PyResult FactionWarMgrService::GetStats_FactionInfo(PyCallArgs &call) {
     call.Dump(FACWAR__CALL_DUMP);
 
     // factionID -> KeyVal(totalMembersCount, systemsCount, ...);  the client reads missing ones as 0
-    return new PyDict();
+    std::vector<uint32> factions;
+    m_db.GetWarFactionIDs(factions);
+    PyDict* res = new PyDict();
+    for (uint32 factionID : factions) {
+        std::vector<uint32> corps;
+        sFacWarMgr.CorpsOf(factionID, corps);
+        PyDict* info = new PyDict();
+            info->SetItemString("totalMembersCount", new PyInt(m_db.CountMembers(corps)));
+            info->SetItemString("systemsCount", new PyInt(m_db.CountOccupied(factionID)));
+        res->SetItem(new PyInt(factionID), new PyObject("util.KeyVal", info));
+    }
+    return res;
 }
 
 PyResult FactionWarMgrService::GetStats_TopAndAllKillsAndVPs(PyCallArgs &call) {
@@ -424,7 +468,7 @@ PyResult FactionWarMgrService::LeaveFactionAsAlliance(PyCallArgs &call, PyInt* f
     _log(FACWAR__CALL, "FacWarMgr::Handle_LeaveFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    throw CustomError("Alliances can't be in a militia.");
 }
 
 PyResult FactionWarMgrService::LeaveFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -432,7 +476,13 @@ PyResult FactionWarMgrService::LeaveFactionAsCorporation(PyCallArgs &call, PyInt
     _log(FACWAR__CALL, "FacWarMgr::Handle_LeaveFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    // ...and leaves at the next downtime
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw CustomError("Only your corporation's CEO or a director can take it out of its militia.");
+    std::string err;
+    if (!sFacWarMgr.AskToLeave(call.client->GetCorporationID(), factionID->value(), call.client->GetCharacterID(), err))
+        throw CustomError("%s", err.c_str());
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::WithdrawJoinFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -440,7 +490,7 @@ PyResult FactionWarMgrService::WithdrawJoinFactionAsAlliance(PyCallArgs &call, P
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawJoinFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    throw CustomError("Alliances can't enlist in a militia.");
 }
 
 PyResult FactionWarMgrService::WithdrawJoinFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -448,7 +498,12 @@ PyResult FactionWarMgrService::WithdrawJoinFactionAsCorporation(PyCallArgs &call
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawJoinFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw CustomError("Only your corporation's CEO or a director can do that.");
+    std::string err;
+    if (!sFacWarMgr.Withdraw(call.client->GetCorporationID(), true, err))
+        throw CustomError("%s", err.c_str());
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::WithdrawLeaveFactionAsAlliance(PyCallArgs &call, PyInt* factionID) {
@@ -456,7 +511,7 @@ PyResult FactionWarMgrService::WithdrawLeaveFactionAsAlliance(PyCallArgs &call, 
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawLeaveFactionAsAlliance()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    throw CustomError("Alliances can't be in a militia.");
 }
 
 PyResult FactionWarMgrService::WithdrawLeaveFactionAsCorporation(PyCallArgs &call, PyInt* factionID) {
@@ -464,7 +519,12 @@ PyResult FactionWarMgrService::WithdrawLeaveFactionAsCorporation(PyCallArgs &cal
     _log(FACWAR__CALL, "FacWarMgr::Handle_WithdrawLeaveFactionAsCorporation()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    throw CustomError("Factional Warfare is not available on this server.");
+    if (!AllianceManager::IsCEOOrDirector(call.client))
+        throw CustomError("Only your corporation's CEO or a director can do that.");
+    std::string err;
+    if (!sFacWarMgr.Withdraw(call.client->GetCorporationID(), false, err))
+        throw CustomError("%s", err.c_str());
+    return PyStatic.NewNone();
 }
 
 PyResult FactionWarMgrService::RefreshCorps(PyCallArgs &call) {
@@ -480,5 +540,13 @@ PyResult FactionWarMgrService::CheckForRankChange(PyCallArgs &call) {
     _log(FACWAR__CALL, "FacWarMgr::Handle_CheckForRankChange()");
     call.Dump(FACWAR__CALL_DUMP);
 
-    return PyStatic.NewNone();
+    // its rank goes by its standing with its militia's faction (FacWarRewards.cpp):  the new one when it changed
+    uint32 factionID(call.client->GetWarFactionID());
+    if (factionID == 0)
+        return PyStatic.NewNone();
+    bool changed(false);
+    uint8 rank(sFacWarMgr.UpdateRank(call.client->GetCharacterID(), factionID, changed));
+    if (!changed)
+        return PyStatic.NewNone();
+    return new PyInt(rank);
 }

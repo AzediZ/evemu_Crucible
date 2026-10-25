@@ -81,8 +81,10 @@ uint8 Agent::GetMissionType()
         case StoryLine:
             // only the storyline offers made for a pilot (MissionDataMgr::OnMissionCompleted)
             return 0;
-        case Event:
         case Agents::Type::FacWar:
+            // militia missions:  the militia's enemy, in a system it holds
+            return Mission::Type::Encounter;
+        case Event:
         case EpicArc:
         case Tutorial:
         case Aura:
@@ -742,6 +744,9 @@ bool Agent::CanUseAgent(Client* pClient)
     // port of the client's eveCfg.CanUseAgent
     if (m_agentData.typeID == Agents::Type::Aura)
         return true;
+    // a militia agent works only with its militia's pilots, and then by standings as any agent
+    if ((m_agentData.typeID == Agents::Type::FacWar) and ((uint32)pClient->GetChar()->warFactionID() != m_agentData.factionID))
+        return false;
     if (m_agentData.level == 1)
         if (m_agentData.typeID != Agents::Type::Research)
             return true;
@@ -757,8 +762,11 @@ bool Agent::CanUseAgent(Client* pClient)
     return false;
 }
 
-PyTuple* Agent::GetCantUseRsp(Client* pClient)
+PyRep* Agent::GetCantUseRsp(Client* pClient)
 {
+    if ((m_agentData.typeID == Agents::Type::FacWar) and ((uint32)pClient->GetChar()->warFactionID() != m_agentData.factionID))
+        return new PyString("I only work with pilots of the " + sDataMgr.GetOwnerName(m_agentData.corporationID)
+                            + ".  Enlist with us at a militia office if you want to fight for the " + sDataMgr.GetOwnerName(m_agentData.factionID) + ".");
     float facChr(0), corpChr(0), charChr(0), m(0);
     GetUseStandings(pClient, facChr, corpChr, charChr, m);
     PyDict* args = new PyDict();

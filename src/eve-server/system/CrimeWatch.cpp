@@ -16,6 +16,7 @@
 #include "EVEServerConfig.h"
 #include "StaticDataMgr.h"
 #include "character/Character.h"
+#include "faction/FacWarMgr.h"
 #include "faction/WarManager.h"
 #include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"
@@ -339,12 +340,9 @@ bool CrimeWatch::GetOwner(SystemEntity* pSE, Owner& into)
 }
 
 namespace {
-    // factional warfare: Caldari/Gallente and Amarr/Minmatar militias may fight anywhere
+    // factional warfare:  the Amarr and Caldari militias and the Gallente and Minmatar ones may fight anywhere (FacWarMgr.h)
     bool EnemyMilitia(int32 a, int32 b) {
-        if ((a == 0) or (b == 0))
-            return false;
-        return (((a == factionCaldari) and (b == factionGallente)) or ((a == factionGallente) and (b == factionCaldari))
-             or ((a == factionAmarr) and (b == factionMinmatar)) or ((a == factionMinmatar) and (b == factionAmarr)));
+        return FacWarMgr::AreEnemies((uint32)a, (uint32)b);
     }
 }
 

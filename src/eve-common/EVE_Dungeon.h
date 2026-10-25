@@ -20,8 +20,14 @@ namespace Dungeon {
             Unrated         = 8, // non-rated dungeon  no waves, possible escalation to complex
             Escalation      = 9, // new dungeon from previous site. very limited access
             Rated           = 10,// DED rated dungeon
-            Incursion       = 11 // incursion site (server-only archetype)
+            Incursion       = 11,// incursion site (server-only archetype)
+            // factional warfare complexes (FacWarMgr.h):  one held by the system's occupier (offensive:  its enemy takes it to
+            //  contest the system), or by its enemy (defensive:  the occupier takes it back).  the client's dunArchetypeFacwar*
+            FacWarDefensive = 32,
+            FacWarOffensive = 35
         };
+        // a factional warfare complex's:  it lasts until it's taken, and FacWarMgr replaces it
+        inline bool IsFacWar(int type)                  { return ((type == FacWarDefensive) or (type == FacWarOffensive)); }
     }
 
     // what a live dungeon instance is for (DungeonMgr::SpawnInstance)

@@ -42,6 +42,8 @@ class AnomalyMgr
 
     //  assign sigID and add to anom list to allow showing on scanner
     void AddSignal(SystemEntity* pSE, uint32 id = 0);
+    // a structure that's found like a combat site (a factional warfare control bunker):  on the scanner as an anomaly
+    void AddSiteSignal(SystemEntity* pSE, const std::string& name);
     void RemoveSignal(uint32 itemID);
     // list for ship scanner
     void GetAnomalyList(std::vector< CosmicSignature >& sig);

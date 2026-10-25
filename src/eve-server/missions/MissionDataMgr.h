@@ -95,6 +95,8 @@ private:
     void                ApplyContent(const MissionContent& content, uint8 level, MissionOffer& data);
     // can this agent offer this content (enemy faction against the agent's own side, race mask)
     bool                IsEligible(const MissionContent& content, Agent* pAgent);
+    // a militia mission's content (utils/facwar/gen_facwar_missions.py):  its page key starts "facwar-"
+    static bool         IsMilitiaContent(const MissionContent& content)   { return (content.pageKey.compare(0, 7, "facwar-") == 0); }
 
     std::map<std::string, uint32> m_names;
     std::multimap<uint8, CourierData> m_courier;    // level/data

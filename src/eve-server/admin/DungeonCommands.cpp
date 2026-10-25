@@ -25,6 +25,7 @@
 #include "system/cosmicMgrs/DungeonMgr.h"
 #include "system/cosmicMgrs/SpawnMgr.h"
 #include "StaticDataMgr.h"
+#include "faction/FacWarMgr.h"
 
 
 
@@ -169,6 +170,36 @@ PyResult Command_ded(Client* pClient, CommandDB* db, EVEServiceManager& services
 
 /* gas sites (Ladar nebulae in known space):  /gas lists the ones of this region, /gas spawn puts one near the caller's
  *  ship as a scannable signature, so it can be tested without probing for one */
+/* factional warfare (FacWarMgr.h):  /fw shows the war zone system's state, /fw vp sets its victory points, /fw complex adds
+ *  complexes here now, /fw flip hands the systems whose bunker fell to their conquerors now (as downtime does) */
+PyResult Command_fw(Client* pClient, CommandDB* db, EVEServiceManager& services, const Seperator& args)
+{
+    SystemManager* pSys(pClient->SystemMgr());
+    if (pSys == nullptr)
+        throw CustomError ("You don't appear to be in a solar system.");
+    std::string cmd(args.argCount() < 2 ? "status" : args.arg(1));
+    if (cmd == "status")
+        return new PyString(sFacWarMgr.Describe(pSys->GetID()));
+    if (cmd == "flip") {
+        sFacWarMgr.FlipConquered();
+        return new PyString("Done.  " + sFacWarMgr.Describe(pSys->GetID()));
+    }
+    if (!sFacWarMgr.IsZoneSystem(pSys->GetID()))
+        throw CustomError ("%s is not in a war zone.", pSys->GetName());
+    if (cmd == "vp") {
+        if ((args.argCount() < 3) or !args.isNumber(2))
+            throw CustomError ("Usage: /fw vp <points>");
+        sFacWarMgr.SetVictoryPoints(pSys->GetID(), atoi(args.arg(2).c_str()));
+        return new PyString(sFacWarMgr.Describe(pSys->GetID()));
+    }
+    if (cmd == "complex") {
+        uint8 count(((args.argCount() > 2) and args.isNumber(2)) ? (uint8)std::min(atoi(args.arg(2).c_str()), 10) : 1);
+        sFacWarMgr.AddComplexes(pSys, count);
+        return new PyString(sFacWarMgr.Describe(pSys->GetID()));
+    }
+    throw CustomError ("Unknown option '%s'.  Use status, vp, complex or flip.", cmd.c_str());
+}
+
 PyResult Command_gas(Client* pClient, CommandDB* db, EVEServiceManager& services, const Seperator& args)
 {
     SystemManager* pSys(pClient->SystemMgr());

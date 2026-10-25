@@ -46,7 +46,7 @@ protected:
     PyResult IsEnemyCorporation(PyCallArgs& call, PyInt* enemyID, PyInt* factionID);
     PyResult GetCharacterRankInfo(PyCallArgs& call, PyInt* characterID);
     PyResult GetFactionalWarStatus(PyCallArgs& call);
-    PyResult JoinFactionAsCharacter(PyCallArgs& call, PyInt* factionID);
+    PyResult JoinFactionAsCharacter(PyCallArgs& call, PyInt* factionID, std::optional<PyRep*> extra);
     PyResult GetCorporationWarFactionID(PyCallArgs& call, PyInt* corporationID);
     PyResult GetSystemsConqueredThisRun(PyCallArgs& call);
     PyResult GetFactionCorporations(PyCallArgs& call, PyInt* factionID);

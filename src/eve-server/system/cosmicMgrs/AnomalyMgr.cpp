@@ -19,6 +19,7 @@
 #include "system/BubbleManager.h"
 #include "system/SystemBubble.h"
 #include "system/SystemManager.h"
+#include "faction/FacWarMgr.h"
 #include "system/cosmicMgrs/AnomalyMgr.h"
 #include "system/cosmicMgrs/BeltMgr.h"
 #include "system/cosmicMgrs/DungeonMgr.h"
@@ -222,6 +223,9 @@ void AnomalyMgr::Process() {
 
             m_typeList.clear();
         }
+        // a war zone system's factional warfare complexes and control bunker (FacWarMgr.h)
+        if ((m_system->PlayerCount() > 0) and sFacWarMgr.IsZoneSystem(m_system->GetID()))
+            sFacWarMgr.SyncSystem(m_system, *this);
         // Once initial spawn is complete, set correct timer based upon whether this is test server or not
         if (m_firstSpawn) {
             if (sConfig.debug.IsTestServer) {
@@ -393,6 +397,8 @@ uint32 AnomalyMgr::CreateAnomaly(int8 typeID, uint32 dungeonID/*0*/, const GPoin
             sWHMgr.Create(sig);
             return 0;
         } break;
+        case Dungeon::Type::FacWarDefensive:    // 32, 35  factional warfare complexes (FacWarMgr names the dungeon)
+        case Dungeon::Type::FacWarOffensive:
         case Dungeon::Type::Anomaly: {      // 7   simple combat sites
             sig.sigTypeID = EVEDB::invTypes::CosmicAnomaly;
             sig.sigGroupID = EVEDB::invGroups::Cosmic_Anomaly;
@@ -508,6 +514,9 @@ void AnomalyMgr::OnSiteCompleted(const CosmicSignature& sig)
     } else if (m_Sigs > 0) {
         --m_Sigs;
     }
+    // FacWarMgr replaces factional warfare complexes itself, somewhere in the war zones
+    if (Dungeon::Type::IsFacWar(sig.dungeonType))
+        return;
     // sites an upgrade no longer pays for aren't replaced
     auto itr = m_skip.find(sig.dungeonType);
     if ((itr != m_skip.end()) and (itr->second > 0)) {
@@ -770,6 +779,28 @@ void AnomalyMgr::AddSignal(SystemEntity* pSE, uint32 id/*0*/)
     } else {
         m_sigByItemID.emplace(sig.sigItemID, sig);
     }
+}
+
+void AnomalyMgr::AddSiteSignal(SystemEntity* pSE, const std::string& name)
+{
+    if (!m_initalized or (pSE == nullptr))
+        return;
+    CosmicSignature sig = CosmicSignature();
+        sig.dungeonType = Dungeon::Type::Anomaly;
+        sig.ownerID = pSE->GetSelf()->ownerID();
+        sig.sigID = sEntityList.GetAnomalyID();
+        sig.sigItemID = pSE->GetID();
+        sig.sigName = name;
+        sig.systemID = m_system->GetID();
+        sig.position = pSE->GetPosition();
+        sig.sigStrength = 1.0f;
+        sig.sigTypeID = EVEDB::invTypes::CosmicAnomaly;
+        sig.sigGroupID = EVEDB::invGroups::Cosmic_Anomaly;
+        sig.scanGroupID = Scanning::Group::Anomaly;
+        sig.scanAttributeID = AttrScanAllStrength;
+        sig.bubbleID = ((pSE->SysBubble() != nullptr) ? pSE->SysBubble()->GetID() : 0);
+    m_sigBySigID.emplace(sig.sigID, sig);
+    m_anomByItemID.emplace(sig.sigItemID, sig);
 }
 
 void AnomalyMgr::RemoveSignal(uint32 itemID)

@@ -609,10 +609,14 @@ bool MissionDataMgr::IsEligible(const MissionContent& content, Agent* pAgent)
 bool MissionDataMgr::PickContent(uint8 typeID, uint8 level, Agent* pAgent, bool storyline, MissionContent& out)
 {
     std::vector<const MissionContent*> candidates, local;
+    // militia agents give the militia missions, and only they do
+    bool militia(pAgent->GetTypeID() == Agents::Type::FacWar);
     auto range = m_contentIdx.equal_range((uint16)((level << 8) | typeID));
     for (auto itr = range.first; itr != range.second; ++itr) {
         const MissionContent* pContent(GetContent(itr->second));
         if ((pContent == nullptr) or (pContent->storyline != storyline))
+            continue;
+        if (IsMilitiaContent(*pContent) != militia)
             continue;
         if (!IsEligible(*pContent, pAgent))
             continue;

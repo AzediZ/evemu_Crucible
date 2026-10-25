@@ -38,6 +38,9 @@ public:
     uint32 GetFactionMilitiaCorporation(const uint32 factionID);
     // the factions with a militia
     void GetWarFactionIDs(std::vector<uint32>& into);
+    // the characters in the corporations, and the war zone systems the faction holds
+    uint32 CountMembers(const std::vector<uint32>& corps);
+    uint32 CountOccupied(uint32 factionID);
 };
 
 #endif /* __FACTION_WAR_MGR_DB__H__INCL__ */

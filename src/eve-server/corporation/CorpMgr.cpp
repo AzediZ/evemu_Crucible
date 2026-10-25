@@ -38,6 +38,7 @@
 #include "character/CharacterDB.h"
 #include "corporation/CorporationDB.h"
 #include "corporation/CorpMgr.h"
+#include "faction/FacWarMgr.h"
 #include "faction/WarManager.h"
 #include "alliance/AllianceManager.h"
 #include "corporation/ItemLockdown.h"
@@ -450,6 +451,9 @@ bool CorpMgr::CanLeave(uint32 charID, std::string& errorKey, PyDict*& args)
     if (!LoadMemberData(charID, data))
         return false;
 
+    // a militia's corporation:  quitting it is resigning from the militia (FacWarMgr.h)
+    if (FacWarMgr::IsMilitiaCorp(data.corporationID))
+        return true;
     if (!IsPlayerCorp(data.corporationID)) {
         errorKey = "CrpCantQuitDefaultCorporation";
         args = new PyDict();
@@ -565,6 +569,14 @@ void CorpMgr::MoveMemberToCorp(uint32 charID, uint32 newCorpID)
         CharacterDB::AddEmployment(charID, newCorpID, oldCorpID);
         CharacterDB::SaveCorpData(charID, data);
         CharacterDB::SetTitle(charID, "");
+        // ...and the character as the server has it loaded, if it is (for its killmails), else its old corp stays on it
+        sItemFactory.UnsetUsingClient();
+        InventoryItemRef iRef(sItemFactory.GetItemRefFromID(charID, false));
+        if (iRef.get() != nullptr) {
+            CharacterRef cRef(CharacterRef::StaticCast(iRef));
+            cRef->SetCorpTitle("");
+            cRef->UpdateCorpData(data);
+        }
     }
 
     CorporationDB cdb;

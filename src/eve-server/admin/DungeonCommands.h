@@ -21,6 +21,8 @@ COMMAND( removedungeon, Acct::Role::CONTENT,
          " - removes identified dungeon(unimplemented)")
 COMMAND( gas, Acct::Role::CONTENT,
          "[list] | spawn [dungeonID] - list this region's gas sites, or put one about 20 km from your ship (one this system could get, any one if it gets none, or that one)")
+COMMAND( fw, Acct::Role::CONTENT,
+         "[status] | vp <points> | complex [count] | flip - this war zone system's holder, victory points, bunker and complexes;  set its victory points;  add complexes here now;  hand the systems whose bunker fell to their conquerors now")
 COMMAND( ded, Acct::Role::CONTENT,
          "[list] | spawn rating|dungeonID - list the DED complexes, or put one about 20 km from your ship (a rating picks this region's pirates where they have one)")
 

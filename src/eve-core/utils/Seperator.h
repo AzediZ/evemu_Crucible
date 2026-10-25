@@ -43,8 +43,9 @@ public:
     const std::string& arg( size_t index ) const { return mArgs[ index ]; }
     size_t argCount() const { return mArgs.size(); }
 
-    bool isNumber( size_t index ) const { return ::IsNumber( arg( index ) ); }
-    bool isHexNumber( size_t index ) const { return ::IsHexNumber( arg( index ) ); }
+    // false past the last argument (an optional one left out)
+    bool isNumber( size_t index ) const { return ( index < mArgs.size() ) && ::IsNumber( arg( index ) ); }
+    bool isHexNumber( size_t index ) const { return ( index < mArgs.size() ) && ::IsHexNumber( arg( index ) ); }
 
 protected:
     std::vector<std::string> mArgs;

@@ -29,6 +29,7 @@
 
 #include "StaticDataMgr.h"
 #include "map/MapData.h"
+#include "faction/FacWarMgr.h"
 #include "map/MapService.h"
 #include "system/SystemManager.h"
 #include "system/cosmicMgrs/IncursionMgr.h"
@@ -374,16 +375,9 @@ PyResult MapService::GetIncursionGlobalReport(PyCallArgs &call) {
 //https://wiki.eveonline.com/en/wiki/Victory_Points_and_Command_Bunker
 PyResult MapService::GetVictoryPoints(PyCallArgs &call)
 {/**  {factionID: {'attacking'|'defending': [(solarSystemID, threshold, current), ...]}}
-   *  faction warfare is out of scope:  the four empire factions with no contested systems
+   *  the contested war zone systems (FacWarMgr.h)
    */
-    PyDict* result = new PyDict();
-    for (uint32 factionID = 500001; factionID <= 500004; ++factionID) {
-        PyDict* modes = new PyDict();
-            modes->SetItemString("attacking", new PyList());
-            modes->SetItemString("defending", new PyList());
-        result->SetItem(new PyInt(factionID), modes);
-    }
-    return result;
+    return sFacWarMgr.GetVictoryPoints();
 }
 
 

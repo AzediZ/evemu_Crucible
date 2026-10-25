@@ -102,3 +102,24 @@ void FactionWarMgrDB::GetWarFactionIDs(std::vector<uint32>& into) {
     while (res.GetRow(row))
         into.push_back(row.GetUInt(0));
 }
+
+uint32 FactionWarMgrDB::CountMembers(const std::vector<uint32>& corps) {
+    if (corps.empty())
+        return 0;
+    std::string list;
+    for (uint32 corpID : corps)
+        list += (list.empty() ? "" : ",") + std::to_string(corpID);
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM chrCharacters WHERE corporationID IN (%s)", list.c_str()) or !res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}
+
+uint32 FactionWarMgrDB::CountOccupied(uint32 factionID) {
+    DBQueryResult res;
+    DBResultRow row;
+    if (!sDatabase.RunQuery(res, "SELECT COUNT(*) FROM facWarSystems WHERE occupierID = %u", factionID) or !res.GetRow(row))
+        return 0;
+    return row.GetUInt(0);
+}

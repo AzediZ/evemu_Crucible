@@ -53,6 +53,7 @@
 #include "pos/sovStructures/IHub.h"
 #include "pos/JumpBridge.h"
 #include "station/Outpost.h"
+#include "faction/ControlBunker.h"
 #include "pos/Weapon.h"
 #include "ship/Missile.h"
 #include "ship/Ship.h"
@@ -1170,6 +1171,15 @@ SystemEntity* DynamicEntityFactory::BuildEntity(SystemManager& sysMgr, const DBS
                 sEntityList.AddNPC();
                 _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making NPCSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
                 return npcSE;
+            }
+            // a factional warfare system's control bunker (FacWarMgr.h)
+            else if (entity.groupID == EVEDB::invGroups::Control_Bunker) {
+                InventoryItemRef iRef = sItemFactory.GetItemRef( entity.itemID );
+                if (iRef.get() == nullptr)
+                    return nullptr;
+                ControlBunkerSE* bSE = new ControlBunkerSE(iRef, sysMgr.GetServiceMgr(), &sysMgr, data);
+                _log(ITEM__TRACE, "DynamicEntityFactory::BuildEntity() making ControlBunkerSE for %s (%u)", entity.itemName.c_str(), entity.itemID);
+                return bSE;
             }
             // may have to create unique class for Billboard (EVEDB::invGroups::Billboard)
             else {

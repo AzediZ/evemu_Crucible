@@ -292,12 +292,18 @@ SET( explore_SOURCE
      "${TARGET_SOURCE_DIR}/exploration/ScanningDB.cpp")
 
 SET( faction_INCLUDE
+     "${TARGET_INCLUDE_DIR}/faction/ControlBunker.h"
+     "${TARGET_INCLUDE_DIR}/faction/FacWarMgr.h"
      "${TARGET_INCLUDE_DIR}/faction/FactionWarMgrDB.h"
      "${TARGET_INCLUDE_DIR}/faction/FactionWarMgrService.h"
      "${TARGET_INCLUDE_DIR}/faction/WarDB.h"
      "${TARGET_INCLUDE_DIR}/faction/WarManager.h"
      "${TARGET_INCLUDE_DIR}/faction/WarRegistryService.h" )
 SET( faction_SOURCE
+     "${TARGET_SOURCE_DIR}/faction/ControlBunker.cpp"
+     "${TARGET_SOURCE_DIR}/faction/FacWarMgr.cpp"
+     "${TARGET_SOURCE_DIR}/faction/FacWarSystems.cpp"
+     "${TARGET_SOURCE_DIR}/faction/FacWarRewards.cpp"
      "${TARGET_SOURCE_DIR}/faction/FactionWarMgrDB.cpp"
      "${TARGET_SOURCE_DIR}/faction/FactionWarMgrService.cpp"
      "${TARGET_SOURCE_DIR}/faction/WarDB.cpp"

@@ -11,6 +11,7 @@
 #include "agents/Agent.h"
 #include "map/MapData.h"
 #include "map/MapDB.h"
+#include "faction/FacWarMgr.h"
 #include "station/StationDataMgr.h"
 #include "system/SystemManager.h"
 #include "system/SystemEntity.h"
@@ -406,6 +407,23 @@ bool MapData::GetMissionDungeonLocation(Agent* pAgent, uint8 level, MissionOffer
         candidates.push_back(originSys);
 
     uint32 systemID(candidates[MakeRandomInt(0, candidates.size() - 1)]);
+    // a militia mission is in a war zone system its enemy holds:  one within a jump more than the level,
+    //  else the nearest within 10.  none:  as any agent's
+    if ((pAgent->GetTypeID() == Agents::Type::FacWar) and (offer.enemyFactionID != 0)) {
+        std::vector<std::pair<uint32, uint8>> zone;
+        GetSystemsWithinJumps(originSys, 10, zone);
+        std::vector<uint32> held;
+        uint8 nearest(0xFF);
+        for (auto cur : zone)
+            if (sFacWarMgr.OccupierOf(cur.first) == offer.enemyFactionID)
+                if (cur.second < nearest)
+                    nearest = cur.second;
+        for (auto cur : zone)
+            if ((sFacWarMgr.OccupierOf(cur.first) == offer.enemyFactionID) and (cur.second <= ((nearest > level + 1) ? nearest : level + 1)))
+                held.push_back(cur.first);
+        if (!held.empty())
+            systemID = held[MakeRandomInt(0, held.size() - 1)];
+    }
     SystemData sysData = SystemData();
     sDataMgr.GetSystemData(systemID, sysData);
     double maxDist(sysData.radius * 0.9);

@@ -53,6 +53,7 @@
 #include "inventory/AttributeEnum.h"
 #include "npc/Drone.h"
 #include "npc/NPC.h"
+#include "faction/FacWarMgr.h"
 #include "npc/NPCAI.h"
 #include "npc/LawEnforcement.h"
 #include "npc/NPCEwar.h"
@@ -1476,6 +1477,9 @@ bool NPCAIMgr::CanAggro(SystemEntity* pSE)
         return false;
     if (pSE->HasPilot()) {
         if (pSE->GetPilot()->IsInvul())
+            return false;
+        // an empire's ships leave its militia and its allies' alone (factional warfare complexes' guards, FacWarMgr.h)
+        if (FacWarMgr::SameSide((uint32)pSE->GetPilot()->GetWarFactionID(), (uint32)m_npc->GetWarFactionID()))
             return false;
         // NPCs do not attack pods (EVElopedia).  npc.TargetPod is a GM/test override (bug B10)
         if (pSE->GetPilot()->InPod()) {

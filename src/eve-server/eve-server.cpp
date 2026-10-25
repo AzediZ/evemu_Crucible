@@ -91,6 +91,7 @@
 #include "corporation/CorpBookmarkMgr.h"
 #include "corporation/CorpFittingMgr.h"
 #include "corporation/BillingMgr.h"
+#include "faction/FacWarMgr.h"
 #include "faction/WarManager.h"
 #include "alliance/AllianceManager.h"
 #include "corporation/CorpMgr.h"
@@ -801,6 +802,7 @@ int main( int argc, char* argv[] )
     sCorpMgr.Initialize();
     sWarMgr.Initialize();
     sAllianceMgr.Initialize();
+    sFacWarMgr.Initialize();
     std::printf("\n");     // spacer
     sFxDataMgr.Initialize();
     std::printf("\n");     // spacer

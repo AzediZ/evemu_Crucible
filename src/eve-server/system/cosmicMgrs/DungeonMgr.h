@@ -184,6 +184,8 @@ public:
     /* queries */
     bool IsDungeonEntity(uint32 itemID)                 { return (m_entityIndex.find(itemID) != m_entityIndex.end()); }
     uint32 GetInstanceOf(uint32 itemID);
+    // the dungeon a live instance is of (a factional warfare complex still there, FacWarMgr).  0 when there's no such instance
+    uint32 GetInstanceDungeon(uint32 instanceID);
     // point is in a room of a live instance
     bool IsInDungeon(const GPoint& pos);
     // point is in deadspace:  any room past the first, or any room of a signature/escalation/mission site
@@ -297,6 +299,7 @@ private:
         bool hasSignal = false;
         std::set<uint32> visitors;  // charIDs who entered (entered-notifications sent)
         std::map<uint32, uint32> escalationOwners;  // escalation site:  chrEscalations.instanceID -> charID (fleet members may share it)
+        int64 lastCapture = 0;      // a factional warfare complex's last capture tick (FILETIME)
     };
     struct PendingTrigger {
         uint32 instanceID;
@@ -357,6 +360,8 @@ private:
     void ProcessGates(Instance& inst, uint8 roomIdx);
     void FlushNotices();
     void CheckImplicitCompletion(Instance& inst);
+    // a factional warfare complex:  who is in range of its capture point, for FacWarMgr's clock.  completed when it's taken
+    void ProcessCapture(Instance& inst, int64 now);
     void CompleteInstance(Instance& inst, uint32 charID);
     void SendTriggerMessage(Instance& inst, uint8 roomIdx, const Dungeon::EventDef& event);
     void Notify(Instance& inst, uint16 type, uint32 roomID, const Ctx& ctx, const Dungeon::EventDef* pEvent = nullptr);

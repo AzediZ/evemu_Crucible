@@ -80,8 +80,10 @@ public:
     void SendMissionUpdate(Client* pClient, std::string action);
 
     bool CanUseAgent(Client* pClient);
-    // the client's UI/Agents/Incompatible/* reply (label, kwargs) for a pilot CanUseAgent() refuses
-    PyTuple* GetCantUseRsp(Client* pClient);
+    /* the client's UI/Agents/Incompatible/* reply (label, kwargs) for a pilot CanUseAgent() refuses.  a militia agent
+     *  says it works only with its militia's pilots
+     */
+    PyRep* GetCantUseRsp(Client* pClient);
     // the pilot's effective personal standing with this agent (social skills included)
     float GetEffectiveCharStanding(Client* pClient);
 

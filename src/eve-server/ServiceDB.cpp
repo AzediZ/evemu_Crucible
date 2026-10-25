@@ -31,6 +31,7 @@
 #include "EVEServerConfig.h"
 #include "ServiceDB.h"
 #include "killboard/Killboard.h"
+#include "faction/FacWarMgr.h"
 #include "config/ConfigDB.h"
 
 uint32 ServiceDB::SetClientSeed()
@@ -712,4 +713,6 @@ void ServiceDB::SaveKillOrLoss(KillData &data) {
                 data.killBlob.c_str(), data.killTime, data.moonID);
     // everyone involved gets a link to the kill report
     Killboard::MailKillReport(killID, data);
+    // an enemy militia pilot's ship pays its militia attackers loyalty points
+    sFacWarMgr.OnKill(data);
 }

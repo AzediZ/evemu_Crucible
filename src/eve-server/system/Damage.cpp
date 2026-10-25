@@ -25,6 +25,7 @@
 */
 
 
+#include "faction/ControlBunker.h"
 #include "system/Damage.h"
 #include "station/Outpost.h"
 #include "planet/CustomsOffice.h"
@@ -644,6 +645,9 @@ bool SystemEntity::ApplyDamage(Damage &d) {
         // an outpost's services go off at 1% structure
         if (IsStationServiceSE())
             GetStationServiceSE()->OnDamaged(d.srcSE);
+        // a factional warfare control bunker:  FacWarMgr keeps what's left of it
+        if (IsControlBunkerSE())
+            GetControlBunkerSE()->OnDamaged(d.srcSE);
     }
 
     if (sConfig.debug.UseProfiling)

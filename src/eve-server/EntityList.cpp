@@ -56,6 +56,7 @@
 #include "system/sov/SovereigntyDataMgr.h"
 #include "corporation/CorporationDB.h"
 #include "corporation/BillingMgr.h"
+#include "faction/FacWarMgr.h"
 #include "faction/WarManager.h"
 #include "alliance/AllianceManager.h"
 #include "corporation/CorpMgr.h"
@@ -350,6 +351,7 @@ void EntityList::Process() {
             GuardTick("the mission manager", 0, []{ sMissionDataMgr.Process(); });  // 1m
             GuardTick("the war manager", 0, []{ sWarMgr.Process(); });  // 1m  war notifications and bills
             GuardTick("the alliance manager", 0, []{ sAllianceMgr.Process(); });  // 1m  alliance joins, daily executor count
+            GuardTick("the militias", 0, []{ sFacWarMgr.Process(); });  // 1m  corporations' militia joins and leaves at downtime, daily standing check
 
             if (m_minutes % 5 == 0) { // ~5m
                 GuardTick("the market manager", 0, []{ sMktMgr.Process(); });  // market order expiry, daily price history rollup
