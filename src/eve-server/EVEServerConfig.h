@@ -290,6 +290,12 @@ public:
     struct {
         bool allow3edChar;
         uint8 statMultiplier;
+        /// skill training runs this many times as fast as on TQ (1.0)
+        float skillTrainingSpeed;
+        /// a player's new character starts with every skill injected (untrained), so it never needs a skillbook
+        bool injectAllSkills;
+        /// new characters start with the 'magic 14' core skills at level V
+        bool magic14AtFive;
         /// Starting corp ID for new characters
         uint32 startCorporation;
         /// Delay for terminating a character in seconds

@@ -14,6 +14,7 @@
 #include "admin/AmbientCommands.h"
 #include "admin/MarketSimCommands.h"
 #include "admin/SimFacilityCommands.h"
+#include "admin/SkillQueueCommands.h"
 
 //clean up macros
 #undef COMMAND

@@ -1686,6 +1686,24 @@ bool CharacterDB::GetSkillsByRace(uint32 raceID, std::map<uint32, uint8> &into) 
     return true;
 }
 
+bool CharacterDB::GetPublishedSkills(std::vector<uint16>& into) {
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res,
+        "SELECT t.typeID FROM invTypes AS t"
+        "  JOIN invGroups AS g ON g.groupID = t.groupID"
+        " WHERE g.categoryID = %u AND t.published = 1", (uint32)EVEDB::invCategories::Skill))
+    {
+        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
+        return false;
+    }
+
+    DBResultRow row;
+    while (res.GetRow(row))
+        into.push_back((uint16)row.GetUInt(0));
+
+    return true;
+}
+
 bool CharacterDB::GetSkillsByCareer(uint32 careerID, std::map<uint32, uint8> &into) {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,

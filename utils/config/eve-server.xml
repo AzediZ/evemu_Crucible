@@ -290,6 +290,9 @@ boolean can use either 0/1 OR true/false.
         <startCorporation>0</startCorporation><!-- corporationID for new characters '0' to use default based on school -->
         <terminationDelay>1800</terminationDelay> <!-- seconds  30m default -->
         <statMultiplier>1</statMultiplier><!-- stats are multiplied by this (after remap) -->
+        <skillTrainingSpeed>10.0</skillTrainingSpeed><!-- float  skills train this many times as fast as on TQ.  1.0 is TQ's speed.  the client's own estimates of a skill's training time (skill info, before it's queued) still show TQ's speed;  the queue shows the real end times -->
+        <injectAllSkills>true</injectAllSkills><!-- bool  a player's new character starts with every skill injected, untrained, so it never needs a skillbook -->
+        <magic14AtFive>true</magic14AtFive><!-- bool  new characters start with the 'magic 14' core skills at V:  CPU (Electronics), Power Grid (Engineering) and Capacitor Management (Energy Management), Capacitor Systems Operation (Energy Systems Operation), Mechanics, Hull Upgrades, Shield Management, Shield Operation, Long Range Targeting, Signature Analysis, Navigation, Evasive Maneuvering, Warp Drive Operation and Spaceship Command -->
         <allow3edChar>false</allow3edChar><!-- (dis)allow creating a third character -->
         <!-- clones, implants and boosters -->
         <requirePausedTraining>true</requirePausedTraining><!-- bool  Crucible: plugging in implants, consuming boosters and clone jumping need a paused skill queue.  false recalculates the queue instead -->

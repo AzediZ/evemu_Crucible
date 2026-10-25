@@ -157,13 +157,16 @@ void Skill::VerifyAttribs()
 {
     if (!isSingleton())
         ChangeSingleton(true);
+    /* a float 0.0 equals an int 0, so SetAttribute() kept the float:  an untrained skill (injected, or every skill a new character
+     *  gets) loads its type's float 0.0, and the client's skill queue window broke on it ("integer argument expected, got float")
+     */
     if (GetAttribute(AttrSkillLevel).get_type() != evil_number_int) {
         _log(SKILL__INFO, "Skill %s level type != int.  Fixing...", name());
-        SetAttribute(AttrSkillLevel, GetAttribute(AttrSkillLevel).get_uint32(), false);
+        GetAttributeMap()->ReplaceAttribute(AttrSkillLevel, EvilNumber((int64)GetAttribute(AttrSkillLevel).get_uint32()));
     }
     if (GetAttribute(AttrSkillPoints).get_type() != evil_number_int) {
         _log(SKILL__INFO, "Skill %s sp type != int.  Fixing...", name());
-        SetAttribute(AttrSkillPoints, GetAttribute(AttrSkillPoints).get_uint32(), false);
+        GetAttributeMap()->ReplaceAttribute(AttrSkillPoints, EvilNumber((int64)GetAttribute(AttrSkillPoints).get_uint32()));
     }
 }
 

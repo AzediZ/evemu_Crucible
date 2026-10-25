@@ -45,6 +45,10 @@ public:
     ~AttributeMap() noexcept;
 
     void SetAttribute(uint16 attrID, EvilNumber& num, bool notify=true);
+    /* the value as it is, its type too, with no notice to the client:  SetAttribute() keeps a float 0.0 when given an int 0
+     *  (they're equal), and the client wants some as ints (a skill's level)
+     */
+    void ReplaceAttribute(uint16 attrID, EvilNumber num)            { mAttributes[attrID] = num; }
     void MultiplyAttribute(uint16 attrID, EvilNumber& num, bool notify=false);
 
     EvilNumber GetAttribute(const uint16 attrID) const;

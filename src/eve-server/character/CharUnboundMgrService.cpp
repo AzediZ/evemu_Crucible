@@ -326,6 +326,24 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
              char_type->bloodlineID(), cdata.ancestryID);
         // dont really care if this fails.  not enough to deny creation ...maybe make error?
     }
+    //  the 'magic 14' core skills at V (eve-server.xml magic14AtFive)
+    if (sConfig.character.magic14AtFive) {
+        static const uint16 magic14[] = {
+            3426 /*Electronics (CPU Management)*/, 3413 /*Engineering (Power Grid Management)*/,
+            3418 /*Energy Management (Capacitor Management)*/, 3417 /*Energy Systems Operation (Capacitor Systems Operation)*/,
+            3392 /*Mechanics*/, 3394 /*Hull Upgrades*/, 3419 /*Shield Management*/, 3416 /*Shield Operation*/,
+            3428 /*Long Range Targeting*/, 3431 /*Signature Analysis*/, 3449 /*Navigation*/, 3453 /*Evasive Maneuvering*/,
+            3455 /*Warp Drive Operation*/, 3327 /*Spaceship Command*/ };
+        for (uint16 typeID : magic14)
+            startingSkills[typeID] = 5;
+    }
+    //  every other skill injected untrained (injectAllSkills):  no skillbooks to buy
+    if (sConfig.character.injectAllSkills) {
+        std::vector<uint16> all;
+        CharacterDB::GetPublishedSkills(all);
+        for (uint16 typeID : all)
+            startingSkills.emplace(typeID, 0);
+    }
 
     //spawn all the skills
     uint8 skillLevel = 0;
@@ -346,6 +364,9 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
         skill->SetAttribute(AttrSkillPoints, skillPoints, false);
         skill->SaveItem();
         cdata.skillPoints += skillPoints;
+        // an untrained skill (injectAllSkills) has no history
+        if (skillPoints == 0)
+            continue;
         charRef->SaveSkillHistory(EvESkill::Event::SkillPointsApplied/*EvESkill::Event::CharCreation*/, // 'CharCreation' shows as "Unknown" in PD>Skill>History
                                   GetFileTimeNow(),
                                     charRef->itemID(),
@@ -364,8 +385,19 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
     // need system loaded for proper ship creation/loading and subsquent character login
     sEntityList.FindOrBootSystem(cdata.solarSystemID);
 
-    // create alpha-level clone
-    ItemData iData( itemCloneAlpha, charRef->itemID(), cdata.locationID, flagClone, 1 );
+    // create its clone:  the cheapest grade that saves the skill points it starts with (alpha, unless it starts with the magic 14)
+    uint16 cloneTypeID(itemCloneAlpha);
+    static const uint16 cloneGrades[] = { itemCloneAlpha, 165 /*Beta*/, 166 /*Gamma*/, 9917 /*Delta*/, 9919 /*Epsilon*/,
+                                          9921 /*Zeta*/, 9923 /*Eta*/, 9925 /*Theta*/, 9927 /*Iota*/, 9929 /*Kappa*/ };
+    for (uint16 typeID : cloneGrades) {
+        const ItemType* pType(sItemFactory.GetType(typeID));
+        if (pType == nullptr)
+            continue;
+        cloneTypeID = typeID;
+        if (pType->GetAttribute(AttrSkillPointsSaved).get_double() >= cdata.skillPoints)
+            break;
+    }
+    ItemData iData( cloneTypeID, charRef->itemID(), cdata.locationID, flagClone, 1 );
         iData.customInfo="Active: ";
         iData.customInfo += charRef->itemName();
         iData.customInfo += "(";

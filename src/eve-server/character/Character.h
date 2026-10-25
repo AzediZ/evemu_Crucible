@@ -263,6 +263,11 @@ public:
     void            UpdateSkillQueueEndTime();
     void            RemoveFromQueue(SkillRef sRef);
     bool            IsSkillQueued(uint16 typeID) const;
+    const SkillQueue& GetSkillQueue() const             { return m_skillQueue; }
+    /* the queue changed outside the client (/queue):  its end time saved, and the client told to fetch it again
+     *  (OnSkillQueueForciblyUpdated)
+     */
+    void            SkillQueueChanged();
     void            ClearSkillFlags();
     /* takes one level's worth of skill points off a skill, which drops a level (T3 ship loss, clone penalty).
      *  spAmount > 0 takes that many skill points instead (the level follows the points).

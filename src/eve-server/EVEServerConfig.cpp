@@ -266,6 +266,9 @@ EVEServerConfig::EVEServerConfig()
     character.startCorporation = 0;
     character.terminationDelay = 180 /*s*/;
     character.statMultiplier = 1;
+    character.skillTrainingSpeed = 10.0f;
+    character.injectAllSkills = true;
+    character.magic14AtFive = true;
     character.allow3edChar = false;
     character.requirePausedTraining = true;
     character.jumpCloneCost = 100000.0;
@@ -1216,6 +1219,9 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
     AddValueParser( "startCorporation", character.startCorporation );
     AddValueParser( "terminationDelay", character.terminationDelay );
     AddValueParser( "statMultiplier",   character.statMultiplier );
+    AddValueParser( "skillTrainingSpeed",           character.skillTrainingSpeed );
+    AddValueParser( "injectAllSkills",              character.injectAllSkills );
+    AddValueParser( "magic14AtFive",                character.magic14AtFive );
     AddValueParser( "allow3edChar",     character.allow3edChar );
     AddValueParser( "requirePausedTraining",        character.requirePausedTraining );
     AddValueParser( "jumpCloneCost",                character.jumpCloneCost );
@@ -1235,6 +1241,9 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
     RemoveParser( "startCorporation" );
     RemoveParser( "terminationDelay" );
     RemoveParser( "statMultiplier" );
+    RemoveParser( "skillTrainingSpeed" );
+    RemoveParser( "injectAllSkills" );
+    RemoveParser( "magic14AtFive" );
     RemoveParser( "allow3edChar" );
     RemoveParser( "requirePausedTraining" );
     RemoveParser( "jumpCloneCost" );

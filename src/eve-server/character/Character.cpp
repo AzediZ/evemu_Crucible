@@ -391,6 +391,10 @@ CharacterRef Character::Spawn( CharacterData& charData, CorpData& corpData) {
 void Character::LogOut()
 {
     SaveFullCharacter();
+    /* its skills are unloaded below, the one in training with them:  ~Character()'s save, when the client lets go of it,
+     *  would read that skill after it's gone (a crash for a player logging off while training).  its points are saved above
+     */
+    m_inTraining = nullptr;
     m_db.SetLogOffTime(m_itemID);
     if (!sConsole.IsShutdown())
         if (IsFleetID(m_fleetData.fleetID))
@@ -1293,7 +1297,8 @@ float Character::GetSPPerMin(Skill* skill)
 {
     float primary = GetAttribute(skill->GetAttribute(AttrPrimaryAttribute).get_uint32()).get_float();
     float secondary = GetAttribute(skill->GetAttribute(AttrSecondaryAttribute).get_uint32()).get_float();
-    return EvEMath::Skill::PointsPerMinute(primary, secondary);
+    // this server's training speed (eve-server.xml skillTrainingSpeed:  1 is TQ's)
+    return EvEMath::Skill::PointsPerMinute(primary, secondary) * std::max(0.01f, sConfig.character.skillTrainingSpeed);
 }
 
 SkillRef Character::GetCharSkillRef(uint16 skillTypeID) const
@@ -2124,6 +2129,15 @@ void Character::SkillQueueLoop(bool update/*true*/)
     PyDecRef(list);
 
     _log(SKILL__QUEUE, "SkillQueueLoop() completed in %.4fms", (GetTimeMSeconds() - begin));
+}
+
+void Character::SkillQueueChanged()
+{
+    UpdateSkillQueueEndTime();
+    if ((m_pClient == nullptr) or (sEntityList.FindClientByCharID(m_itemID) != m_pClient))
+        return;
+    PyTuple* tmp = new PyTuple(0);
+    m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
 }
 
 void Character::UpdateSkillQueueEndTime()

@@ -208,6 +208,8 @@ public:
    
     static bool        GetBaseSkills(std::map< uint32, uint8 >& into);
     static bool        GetSkillsByRace(uint32 raceID, std::map< uint32, uint8 >& into);
+    // every skill a player can have (published)
+    static bool        GetPublishedSkills(std::vector< uint16 >& into);
     static bool        GetSkillsByCareer(uint32 careerID, std::map< uint32, uint8 >& into);
 
     /**
