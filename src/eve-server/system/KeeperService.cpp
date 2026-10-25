@@ -191,6 +191,7 @@ PyResult KeeperBound::EditDungeon(PyCallArgs &call, PyInt* dungeonID)
         posList->AddItem(new PyFloat(roomPos.z));
 
     PyTuple* payload = new PyTuple(3);
+    PyIncRef(dungeonID);    // a call argument:  the call keeps its own reference
     payload->SetItem(0, dungeonID); //dungeonID
     payload->SetItem(1, new PyInt(call.byname["roomID"]->AsInt()->value())); //roomID
     payload->SetItem(2, posList); //roomPos

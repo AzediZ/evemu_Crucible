@@ -5,7 +5,10 @@ PyCallArgs::PyCallArgs(Client* c, PyTuple* tup, PyDict* dict) :
         client(c),
         tuple(tup)
 {
-    // PyIncRef( tup );
+    // the call stream keeps (and releases) tup as well
+    PySafeIncRef( tup );
+    if (dict == nullptr)
+        return;
     for (PyDict::const_iterator cur = dict->begin(); cur != dict->end(); cur++) {
         if (!cur->first->IsString()) {
             _log(SERVICE__ERROR, "Non-string key in call named arguments. Skipping.");
@@ -54,18 +57,20 @@ PyResult::~PyResult() { PySafeDecRef(ssResult); PySafeDecRef(ssNamedResult); }
 
 PyResult& PyResult::operator=(const PyResult& oth)
 {
-    PySafeDecRef(ssResult);
-    if (oth.ssResult != nullptr) {
-        ssResult = oth.ssResult;
+    // take the new references before releasing the old ones (safe when both share an object, or on self-assignment)
+    PyRep* result(oth.ssResult);
+    if (result != nullptr) {
+        PyIncRef(result);
+    } else {
+        result = PyStatic.NewNone();    // already a new reference
     }
-    else {
-        ssResult = PyStatic.NewNone();
-    }
-    PySafeIncRef(ssResult);
+    PyDict* named(oth.ssNamedResult);
+    PySafeIncRef(named);
 
+    PySafeDecRef(ssResult);
+    ssResult = result;
     PySafeDecRef(ssNamedResult);
-    ssNamedResult = oth.ssNamedResult;
-    PySafeIncRef(ssNamedResult);
+    ssNamedResult = named;
 
     return *this;
 }

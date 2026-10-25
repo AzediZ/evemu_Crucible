@@ -131,7 +131,8 @@ public:
      * These parameters are defined in the string itself in the form of %(name)s
      *
      * @param[in] name The parameter
-     * @param[in] value The value
+     * @param[in] value The value.  The exception takes over the caller's reference (as every Add* does with the
+     *      PyRep*s it is given), so pass a new object, or PyIncRef() one that something else keeps
      *
      * @return self
      */

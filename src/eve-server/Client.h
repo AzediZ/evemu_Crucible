@@ -333,6 +333,7 @@ public:
     void UpdateSessionInt( const char *sessionType, int value );
 
     PyRep *GetAggressors() const;
+    // these take over the caller's reference to *update / *multiEvent (*ptr is left as it is):  PyIncRef once per client
     void QueueDestinyUpdate(PyTuple** update, bool DoPackage=false, bool IsSetState=false);
     void QueueDestinyEvent(PyTuple** multiEvent);
     void FlushQueue();
@@ -496,6 +497,7 @@ protected:
 public:
     void SendSessionChange();
     void SendNotification(const PyAddress &dest, EVENotificationStream &noti, bool seq=true);
+    // these take over the caller's reference to payload (*payload is left as it is):  PyIncRef once per client
     void SendNotification(const char *notifyType, const char *idType, PyTuple *payload, bool seq=true);
     void SendNotification(const char *notifyType, const char *idType, PyTuple **payload, bool seq=true);
     // keyed client message (gameui.OnRemoteMessage(msgID, dict)) that does not throw.  args are consumed

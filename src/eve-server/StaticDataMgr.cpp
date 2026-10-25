@@ -1810,31 +1810,41 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
         rsp->SetItem(new PyInt(8), new PyObject("util.KeyVal", Invention));
     }
 
-    /**
-     * For some reason, Ref decrement causes internal parts of data to change. In this particular instance, CRowSets with data
-     * turns to Tuples, and client freaks out because it can no longer find named attributes.
-     * Commenting it out until we figure out how to resolve it.
+    /* cleanup:  each list put in a dict above belongs to that dict now, so only release the ones that weren't.
+     *  (releasing all of them is what used to break the CRowSets, back when a container didn't hold its items)
      */
-    /*
-    // cleanup
-    PyDecRef(matlListManuf);
-    PyDecRef(skillListManuf);
-    PyDecRef(extraListManuf);
-    PyDecRef(matlListTE);
-    PyDecRef(skillListTE);
-    PyDecRef(matlListME);
-    PyDecRef(skillListME);
-    PyDecRef(matlListCopy);
-    PyDecRef(skillListCopy);
-    PyDecRef(matlListDup);
-    PyDecRef(skillListDup);
-    PyDecRef(extraListDup);
-    PyDecRef(matlListRE);
-    PyDecRef(skillListRE);
-    PyDecRef(matlListInvent);
-    PyDecRef(skillListInvent);
-    PyDecRef(mtCRowSet);
-    */
+    PyDecRef(extraListManuf);   // only copied from
+    PyDecRef(extraListDup);     // only copied from
+    if (!manuf) {
+        PyDecRef(matlListManuf);
+        PyDecRef(skillListManuf);
+    }
+    if (!te) {
+        PyDecRef(matlListTE);
+        PyDecRef(skillListTE);
+    }
+    if (!me) {
+        PyDecRef(matlListME);
+        PyDecRef(skillListME);
+    }
+    if (!copy) {
+        PyDecRef(matlListCopy);
+        PyDecRef(skillListCopy);
+    }
+    if (!dup) {
+        PyDecRef(matlListDup);
+        PyDecRef(skillListDup);
+    }
+    if (!re) {
+        PyDecRef(matlListRE);
+        PyDecRef(skillListRE);
+    }
+    if (!invent) {
+        PyDecRef(matlListInvent);
+        PyDecRef(skillListInvent);
+    }
+    PyDecRef(mtCRowSet);    // each user above took its own reference
+    PyDecRef(header);       // as did each row and rowset
 
     return rsp;
 }

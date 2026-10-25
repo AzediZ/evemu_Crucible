@@ -491,7 +491,7 @@ public:
     //StargateSE& operator=(StargateSE&& oth) =delete;
 
     // d'tor
-    virtual ~StargateSE()                               { /* Do nothing here */ }
+    virtual ~StargateSE()                               { PySafeDecRef(m_jumps); }
 
     /* class type pointer querys. */
     virtual StargateSE*         GetGateSE()             { return this; }

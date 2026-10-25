@@ -333,7 +333,8 @@ void DestinyManager::PostEvolve() {
         CmdStop du;
             du.entityID = mySE->GetID();
         PyTuple* up = du.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
 
     if (m_warpActivated) {
@@ -758,7 +759,8 @@ void DestinyManager::SendMassive() const {
         bm.entityID = mySE->GetID();
         bm.is_massive = IsMassive();
     PyTuple* up = bm.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 // NPCs and missiles are solid.  ships only when bumping is enabled
@@ -793,12 +795,14 @@ void DestinyManager::GetCollisionState(Destiny::CollisionBall& ball) const {
 // keeps a warping entity in the bubble it is passing through, ending in the bubble at the exit point
 void DestinyManager::UpdateWarpBubble() {
     SystemBubble* pCurrent(mySE->SysBubble());
-    if ((pCurrent != nullptr) and pCurrent->InBubble(m_position, true))
-        return;
-
+    /* the exit point's bubble first, once we're in it:  a bubble made on the way in can overlap it, and staying in that
+     *  one we'd land in a bubble of our own, beside the entities we warped to without seeing them */
     SystemBubble* pNext(GetTargBubble());
-    if ((pNext == nullptr) or !pNext->InBubble(m_position, true))
+    if ((pNext == nullptr) or !pNext->InBubble(m_position, true)) {
+        if ((pCurrent != nullptr) and pCurrent->InBubble(m_position, true))
+            return;
         pNext = sBubbleMgr.GetBubble(mySE->SystemMgr(), m_position);
+    }
 
     if ((pNext == nullptr) or (pNext == pCurrent))
         return;
@@ -891,7 +895,8 @@ void DestinyManager::SetSpeedFraction(float fraction/*1.0*/) {
             du.entityID = mySE->GetID();
             du.fraction = fraction;
         PyTuple* up = du.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
 
 }
@@ -929,7 +934,8 @@ void DestinyManager::Stop() {
     CmdStop du;
         du.entityID = mySE->GetID();
     PyTuple *up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::Halt(bool notify/*true*/) {
@@ -1077,7 +1083,8 @@ void DestinyManager::Follow(SystemEntity* pSE, uint32 distance) {
         du.targetID = pSE->GetID();
         du.range = range;
     PyTuple *up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::AlignTo(SystemEntity* ent) {
@@ -1104,7 +1111,8 @@ void DestinyManager::GotoDirection(const GPoint& direction) {
         du.y = direction.y;
         du.z = direction.z;
     PyTuple* up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::GotoPoint(const GPoint& point) {
@@ -1117,7 +1125,8 @@ void DestinyManager::GotoPoint(const GPoint& point) {
         gtpoint.y = point.y;
         gtpoint.z = point.z;
     PyTuple* up = gtpoint.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/, bool gateWarp/*false*/, bool freeWarp/*false*/) {
@@ -1293,7 +1302,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
         bm.entityID = mySE->GetID();
         bm.is_massive = IsMassive();
     PyTuple *up = bm.Encode();
-    SendSingleDestinyUpdate(&up, true);   // consumed
+    SendSingleDestinyUpdate(&up, true);
+    PyDecRef(up);
 }
 
 /* login after a logoff in space:  the pilot is in warp back to where they logged off.  a ship that comes into space
@@ -1329,7 +1339,8 @@ void DestinyManager::AlignedWarpTo(const GPoint& where, int32 distance/*0*/) {
             bv.y = m_velocity.y;
             bv.z = m_velocity.z;
         PyTuple* up = bv.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
     WarpTo(where, distance, false, nullptr, 0, false, true);
 }
@@ -1355,7 +1366,8 @@ void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {
         du.orbitEntityID = pSE->GetID();
         du.distance = range;
     PyTuple *up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 bool DestinyManager::IsAligned(GPoint& targetPoint)
@@ -1398,7 +1410,8 @@ void DestinyManager::SetUndockSpeed() {
         bv.y = m_velocity.y;
         bv.z = m_velocity.z;
     PyTuple* up = bv.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
     GotoDirection(m_shipHeading);
 }
 
@@ -1481,7 +1494,8 @@ void DestinyManager::SetPosition(const GPoint &pt, bool update /*false*/) {
             du.y = m_position.y;
             du.z = m_position.z;
         PyTuple* up = du.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
 }
 
@@ -1497,7 +1511,8 @@ void DestinyManager::SetRadius(double radius, bool update /*false*/) {
         du.entityID = mySE->GetID();
         du.radius = m_radius;
         PyTuple* up = du.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
 }
 
@@ -1538,7 +1553,8 @@ void DestinyManager::ApplySpeed(bool update)
             sbms.entityID = mySE->GetID();
             sbms.speed = m_maxShipSpeed;
         PyTuple* up = sbms.Encode();
-        SendSingleDestinyUpdate(&up);   // consumed
+        SendSingleDestinyUpdate(&up);
+        PyDecRef(up);
     }
 }
 
@@ -1860,7 +1876,8 @@ void DestinyManager::UpdateOldShip(ShipSE* pShipSE)
     PyTuple* shipItem = new PyTuple(2);
         shipItem->SetItem(0, new PyString("OnSlimItemChange"));
         shipItem->SetItem(1, shipData);
-    SendSingleDestinyUpdate(&shipItem);   // consumed
+    SendSingleDestinyUpdate(&shipItem);
+    PyDecRef(shipItem);
 
     SendBallInteractive(pShipSE->GetShipItemRef(), false);
     m_hasSentShipUpdates = false;
@@ -1933,7 +1950,8 @@ void DestinyManager::SendCloakBall() const {
         cb.mode = m_cloakMode;
         cb.range = 2000.0;      // const.minCloakingDistance
     PyTuple* up = cb.Encode();
-    SendSingleDestinyUpdate(&up, true);   // consumed
+    SendSingleDestinyUpdate(&up, true);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendUncloakBall() const {
@@ -1942,7 +1960,8 @@ void DestinyManager::SendUncloakBall() const {
     UncloakBall ub;
         ub.entityID = mySE->GetID();
     PyTuple* up = ub.Encode();
-    SendSingleDestinyUpdate(&up, true);   // consumed
+    SendSingleDestinyUpdate(&up, true);
+    PyDecRef(up);
 }
 
 void DestinyManager::TractorBeamStart(SystemEntity* pShipSE, EvilNumber speed)
@@ -2039,7 +2058,8 @@ void DestinyManager::SendJettisonPacket() const {
         effect.start = 1;
         effect.active = 0;
     PyTuple* up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 /*
  *                  [PyTuple 2 items]
@@ -2073,7 +2093,8 @@ void DestinyManager::SendAnchorDrop() const {
         effect.active = 1;
         effect.startTime = GetFileTimeNow();
     PyTuple* up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendAnchorLift() const {
@@ -2086,7 +2107,8 @@ void DestinyManager::SendAnchorLift() const {
         effect.start = 1;
         effect.startTime = GetFileTimeNow();
     PyTuple* up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 /*
@@ -2155,7 +2177,8 @@ void DestinyManager::SendCloakFx(bool apply/*false*/, bool module/*false*/) cons
         effect.active = 0;
         up = effect.Encode();
     }
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 // def OnSpecialFX(shipID, moduleID, moduleTypeID, targetID, otherTypeID, area, guid, isOffensive, start, active, duration = -1, repeat = None, startTime = None, graphicInfo = None):
@@ -2171,7 +2194,8 @@ void DestinyManager::SendSpecialEffect10(uint32 entityID, uint32 targetID, std::
         effect.start = start;
         effect.active = isActive;
     PyTuple *up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 // def OnSpecialFX(shipID, moduleID, moduleTypeID, targetID, otherTypeID, area, guid, isOffensive, start, active, duration = -1, repeat = None, startTime = None, graphicInfo = None):
@@ -2203,7 +2227,8 @@ void DestinyManager::SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32 
         effect.startTime = GetFileTimeNow();
         effect.graphicInfo = (graphicInfo == nullptr ? PyStatic.NewNone() : graphicInfo);
     PyTuple *up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 /*
                   [PyTuple 2 items]
@@ -2236,7 +2261,8 @@ void DestinyManager::SendJumpOut(uint32 gateID) const {
         effect.start = 1;
         effect.active = 0;
     PyTuple *up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendJumpOutWormhole(uint32 wormholeID) const {
@@ -2248,7 +2274,8 @@ void DestinyManager::SendJumpOutWormhole(uint32 wormholeID) const {
         effect.start = 1;
         effect.active = 0;
     PyTuple *up = effect.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendGateActivity(uint32 gateID) const {
@@ -2259,7 +2286,8 @@ void DestinyManager::SendGateActivity(uint32 gateID) const {
         du.start = 1;
         du.active = 0;
     PyTuple* up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendWormholeActivity(uint32 wormholeID) const {
@@ -2270,7 +2298,8 @@ void DestinyManager::SendWormholeActivity(uint32 wormholeID) const {
         du.start = 1;
         du.active = 0;
     PyTuple* up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendBallInteractive(const ShipItemRef shipRef, bool set/*false*/) const {
@@ -2279,7 +2308,8 @@ void DestinyManager::SendBallInteractive(const ShipItemRef shipRef, bool set/*fa
         sbi.entityID = shipRef->itemID();
         sbi.interactive = set;
     PyTuple* up = sbi.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendJumpOutEffect(std::string JumpEffect, uint32 shipID) {
@@ -2352,7 +2382,8 @@ void DestinyManager::SendTerminalExplosion(uint32 shipID, uint32 bubbleID, bool 
         du.bubbleID = static_cast<int32>(bubbleID);
         du.ballIsGlobal = isGlobal;
     PyTuple* up = du.Encode();
-    SendSingleDestinyUpdate(&up);   // consumed
+    SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
 }
 
 void DestinyManager::SendSetState() const {
@@ -2484,14 +2515,22 @@ void DestinyManager::EncodeDestiny(Buffer& into) const {
     }
 }
 
+// the caller keeps its reference to *ev (and releases it after the call)
 void DestinyManager::SendSingleDestinyEvent(PyTuple** ev, bool self_only/*false*/) const
 {
+    if ((ev == nullptr) or (*ev == nullptr))
+        return;
     std::vector<PyTuple*> updates;
+    PyIncRef(*ev);  // the vector's reference, released by SendDestinyUpdate()
     std::vector<PyTuple*> events(1, *ev);   // create vector of size "1" and insert "*ev" into it
     SendDestinyUpdate(updates, events, self_only);
 }
 
+// the caller keeps its reference to *up (and releases it after the call)
 void DestinyManager::SendSingleDestinyUpdate(PyTuple **up, bool self_only/*false*/) const {
+    if ((up == nullptr) or (*up == nullptr))
+        return;
+    PyIncRef(*up);  // the vector's reference, released by SendDestinyUpdate()
     std::vector<PyTuple*> updates(1, *up);   // create vector of size "1" and insert "*up" into it
     std::vector<PyTuple*> events;
     SendDestinyUpdate(updates, events, self_only);
@@ -2502,9 +2541,22 @@ void DestinyManager::SendDestinyUpdate(std::vector<PyTuple*> &updates, bool self
     SendDestinyUpdate(updates, events, self_only);
 }
 
+// releases the vectors' references to the updates and events and clears them
+static void ReleaseDestinyUpdates(std::vector<PyTuple*>& updates, std::vector<PyTuple*>& events)
+{
+    for (auto cur : updates)
+        PySafeDecRef(cur);
+    for (auto cur : events)
+        PySafeDecRef(cur);
+    updates.clear();
+    events.clear();
+}
+
+// takes over the references in 'updates' and 'events' (each client queued to gets its own) and clears both vectors
 void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vector<PyTuple*>& events, bool self_only/*false*/) const {
     // this check shouldnt be needed...
     if (!mySE->SystemMgr()->IsLoaded()) {
+        ReleaseDestinyUpdates(updates, events);
         return;
     }
 
@@ -2527,6 +2579,7 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
                 mySE->SysBubble()->BubblecastDestiny(updates, events, "destiny" );
             }
 
+            ReleaseDestinyUpdates(updates, events);
             return;
         }
 
@@ -2573,10 +2626,6 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
                 pClient->QueueDestinyEvent(&ev);
             }
         }
-
-        // match BubblecastDestiny() semantics
-        updates.clear();
-        events.clear();
     } else if (mySE->SysBubble() != nullptr) {
         if (is_log_enabled(DESTINY__UPDATES)) {
             _log(
@@ -2610,4 +2659,7 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
         //sBubbleMgr.Add(mySE);
         //mySE->SysBubble()->BubblecastDestiny( updates, events, "destiny" );
     }
+
+    // the clients hold their own references (BubblecastDestiny() has already released and cleared its)
+    ReleaseDestinyUpdates(updates, events);
 }

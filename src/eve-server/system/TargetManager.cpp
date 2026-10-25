@@ -364,6 +364,16 @@ void TargetManager::ClearFromTargets() {
     if (m_targetedBy.empty())
         return;
 
+    /* the world being taken down, the ships that locked us may be gone already:  a ship freed then keeps its locks
+     *  (~DynamicSystemEntity), so there's nobody safe to tell.  (a site's container despawned after its hacker logged out at
+     *  shutdown.)  not while a halt waits for the main loop:  the world still runs, and a lock kept then crashed the next shot */
+    if (sEntityList.IsClosing()) {
+        for (auto cur : m_targetedBy)
+            SafeDelete(cur.second);
+        m_targetedBy.clear();
+        return;
+    }
+
     std::vector<SystemEntity *> ToNotify;
     for (auto cur : m_targetedBy) {
         SafeDelete(cur.second);

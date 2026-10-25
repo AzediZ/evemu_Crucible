@@ -64,6 +64,10 @@ public:
     void InitPod();
     void InitAttribs();
     void LogOut();
+    /* after LogOut, once nothing uses the ship:  its fitted modules hold the ship (GenericModule::m_shipRef), so it was
+     *  never freed while they were there.  the ship's left with an empty module manager
+     */
+    void ReleaseModules();
     // adds cargo mass to ship's mass
     void UpdateMass();  // will reset ship mass to default, then loop thru cargo
     // tells destiny about a mass change (cargo mass, server.CargoMassAdditive)

@@ -1065,9 +1065,12 @@ PyResult ShipBound::AssembleShip(PyCallArgs& args, PyInt* shipID) {
     // this one has subSystems as a byname argument, handled by the AssembleShip call with a PyList for now
     PyList* list = new PyList();
 
+    PyIncRef(shipID);   // shipID belongs to the call arguments
     list->AddItem(shipID);
 
-    return this->AssembleShip(args, list);
+    PyResult result(this->AssembleShip(args, list));
+    PyDecRef(list);
+    return result;
 }
 
 PyResult ShipBound::AssembleShip(PyCallArgs &call, PyList* itemIDs) {
@@ -1255,7 +1258,9 @@ PyResult ShipBound::GetShipConfiguration(PyCallArgs &call)
 
 PyResult ShipBound::ConfigureShip(PyCallArgs &call, PyDict* configuration)
 {
-    call.client->GetShipSE()->SetFleetSMBUsage(configuration->GetItemString("allowFleetSMBUsage")->AsBool());
+    PyRep* allow = configuration->GetItemString("allowFleetSMBUsage");
+    if ((allow != nullptr) and allow->IsBool())
+        call.client->GetShipSE()->SetFleetSMBUsage(allow->AsBool()->value());
 
     return nullptr;
 }

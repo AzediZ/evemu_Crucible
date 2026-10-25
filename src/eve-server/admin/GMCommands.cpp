@@ -278,8 +278,8 @@ PyResult Command_pop(Client* who, CommandDB* db, EVEServiceManager &services, co
     n.args[ key ] = new PyString(text);
 
     PyTuple* t = n.Encode();
+    // SendNotification takes over t
     who->SendNotification("OnRemoteMessage", "charid", &t);
-    PySafeDecRef(t);
 
     return new PyString("Message sent.");
 }

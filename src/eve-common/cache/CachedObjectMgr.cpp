@@ -159,7 +159,7 @@ bool CachedObjectMgr::HaveCached(const std::string &objectID) const
 
 bool CachedObjectMgr::HaveCached(const PyRep *objectID) const
 {
-    PyIncRef(objectID);
+    // only reads objectID
     const std::string str = OIDToString(objectID);
 
     return (m_cachedObjects.find(str) != m_cachedObjects.end());
@@ -167,7 +167,7 @@ bool CachedObjectMgr::HaveCached(const PyRep *objectID) const
 
 void CachedObjectMgr::InvalidateCache(const PyRep *objectID)
 {
-    PyIncRef(objectID);
+    // only reads objectID.  (it took a reference here that nothing gave back, so every invalidation leaked its id)
     const std::string str = OIDToString(objectID);
     CachedObjMapItr res = m_cachedObjects.find(str);
 
@@ -189,6 +189,8 @@ void CachedObjectMgr::UpdateCacheFromSS(const std::string &objectID, PySubStream
 
     PyString* str = new PyString( objectID );
     PyBuffer* buf = cache.cache->data();
+    // the record takes a reference; cache.cache keeps its own
+    PyIncRef(buf);
     _UpdateCache(str, &buf);
 
     PyDecRef( str );
@@ -213,6 +215,8 @@ void CachedObjectMgr::UpdateCache(const PyRep *objectID, PyRep **in_cached_data)
 
     Buffer* buf = new Buffer();
     bool res = MarshalDeflate( cached_data, *buf );
+    // consumed:  only the marshaled bytes are kept
+    PySafeDecRef( cached_data );
 
     if ( res ) {
         PyBuffer* pbuf = new PyBuffer( &buf );
@@ -756,6 +760,7 @@ bool PyCachedObjectDecoder::Decode(PySubStream **in_ss)
     } else if (args->items[4]->IsBuffer()) {
         //this is a data buffer, likely compressed.
         PyBuffer* buf = args->items[4]->AsBuffer();
+        PyIncRef(buf);
         cache = new PySubStream( buf );
     } else if (args->items[4]->IsString()) {
         //this is a data buffer, likely compressed, not sure why it comes through as a string...

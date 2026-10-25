@@ -425,7 +425,7 @@ PyDict *DBResultToPackedRowDict(DBQueryResult &result, uint32 key_index)
  */
 PyObjectEx *DBResultToCRowset(DBQueryResult &result)
 {
-    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
+    // the rowset takes over header (it goes in its keywords)
     DBRowDescriptor *header = new DBRowDescriptor(result);
     CRowSet *rowset = new CRowSet(&header);
 
@@ -458,7 +458,7 @@ PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, const char *key)
 }
 
 PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, uint32 key_index) {
-    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
+    // the rowset takes over header (it goes in its keywords)
     DBRowDescriptor *header = new DBRowDescriptor(result);
     CIndexedRowSet *rowset = new CIndexedRowSet(&header);
 

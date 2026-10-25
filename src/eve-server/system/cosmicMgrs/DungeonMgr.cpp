@@ -13,6 +13,7 @@
 #include "StaticDataMgr.h"
 #include "dungeon/DungeonDB.h"
 #include "Client.h"
+#include "ConsoleCommands.h"
 #include "EntityList.h"
 #include "npc/NPC.h"
 #include "npc/NPCAI.h"
@@ -1045,7 +1046,9 @@ void DungeonMgr::RemoveEntity(uint32 itemID, bool explode)
     m_entityIndex.erase(itemID);
     if (pSE->IsNPCSE()) {
         NPC* pNPC(pSE->GetNPCSE());
-        if (pNPC->TargetMgr() != nullptr)
+        /* shutting down, the ships and drones that locked it have gone already without telling it (their destructors skip
+         *  that then):  its lists point at freed entities */
+        if ((pNPC->TargetMgr() != nullptr) and !sEntityList.IsClosing())
             pNPC->TargetMgr()->ClearFromTargets();
         m_system->RemoveNPC(pNPC);
         delete pNPC;
@@ -2446,7 +2449,8 @@ void DungeonMgr::SendGateSlimUpdate(uint32 gateItemID)
     PyTuple* sItem = new PyTuple(2);
         sItem->SetItem(0, new PyString("OnSlimItemChange"));
         sItem->SetItem(1, shipData);
-    pSE->SysBubble()->BubblecastDestinyUpdate(&sItem, "dungeon");   // consumed
+    pSE->SysBubble()->BubblecastDestinyUpdate(&sItem, "dungeon");
+    PyDecRef(sItem);    // the bubblecast takes its own references
 }
 
 void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)

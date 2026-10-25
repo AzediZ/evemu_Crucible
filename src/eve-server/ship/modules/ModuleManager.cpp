@@ -1341,10 +1341,6 @@ int32 ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag, i
     if (pShipItem->HasPilot() and pShipItem->GetPilot()->IsInSpace()) {
         Rsp_CommonGetInfo_Entry entry2;
         if (chargeRef->Populate(entry2)) {
-            PyTuple* tuple = new PyTuple(3);
-                tuple->SetItem(0, new PyInt(chargeRef->locationID()));
-                tuple->SetItem(1, new PyInt(chargeRef->flag()));
-                tuple->SetItem(2, new PyInt(chargeRef->typeID()));
             PyTuple* result = new PyTuple(2);
                 result->SetItem(0, new PyInt(chargeRef->locationID()));
                 result->SetItem(1, new PyObject("util.KeyVal", entry2.Encode()));

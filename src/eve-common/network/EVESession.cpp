@@ -200,7 +200,8 @@ PyPacket* EVEClientSession::_HandleCommand(PyRep* rep) {
         }
     }
 
-    //PySafeDecRef(rep);
+    // Decode() consumed rep (and nulled it); this releases one that was never decoded
+    PySafeDecRef(rep);
     // recurse
     return PopPacket();
 }

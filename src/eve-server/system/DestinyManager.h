@@ -85,6 +85,8 @@ public:
     //  this is the flag the client currently has for us, so it is false during warp
     bool IsMassive() const;
 
+    // the Single versions leave the caller's reference with the caller (release it after the call);  the vector versions
+    //  take over the references in the vectors and clear them.  every client the update is queued to gets its own
     void SendSingleDestinyEvent(PyTuple** ev, bool self_only=false) const;
     void SendSingleDestinyUpdate(PyTuple** up, bool self_only=false) const;
     void SendDestinyUpdate(std::vector<PyTuple*> &updates, bool self_only=false) const;

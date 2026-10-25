@@ -581,6 +581,8 @@ PyRep *MarketDB::GetMarketGroups() {
         }
 
         PyPackedRow* pyrow = rowset->NewRow();
+        // pid is the rowset's key in the filter dict and is shared by every row of its group
+        PyIncRef(pid);
         pyrow->SetField((uint32)0, pid); //parentGroupID
         pyrow->SetField(1, new PyInt(row.GetUInt(1))); //marketGroupID
         pyrow->SetField(2, new PyString(row.GetText(2))); //marketGroupName

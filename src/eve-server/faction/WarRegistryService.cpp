@@ -48,7 +48,8 @@ WarRegistryService::WarRegistryService(EVEServiceManager& mgr) :
 BoundDispatcher* WarRegistryService::BindObject(Client* client, PyRep* bindParameters) {
     Call_TwoIntegerArgs args;
 
-    if (args.Decode(bindParameters->Clone()) == false) {
+    // (this Decode() doesn't consume its argument:  a Clone() here leaked)
+    if (args.Decode(bindParameters) == false) {
         codelog(SERVICE__ERROR, "%s: Failed to decode bind args.", GetName().c_str());
         return nullptr;
     }

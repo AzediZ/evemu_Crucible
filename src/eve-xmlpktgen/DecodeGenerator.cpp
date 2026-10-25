@@ -589,7 +589,7 @@ bool ClassDecodeGenerator::ProcessToken(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsToken()) {\n"
         "        %s = %s->AsToken();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a token: %%s\", %s->TypeString());\n"
         "        return false;\n"
@@ -672,7 +672,7 @@ bool ClassDecodeGenerator::ProcessObject(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsObject()) {\n"
         "        %s = %s->AsObject();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is the wrong type: %%s\", %s->TypeString());\n"
         "        return false;\n"
@@ -758,7 +758,7 @@ bool ClassDecodeGenerator::ProcessObjectEx(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsObjectEx()) {\n"
         "        %s = (%s*)%s->AsObjectEx();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is the wrong type: %%s\", %s->TypeString());\n"
         "        return false;\n"
@@ -805,7 +805,7 @@ bool ClassDecodeGenerator::ProcessTuple(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsTuple()) {\n"
         "        %s = %s->AsTuple();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a tuple: %%s\", %s->TypeString());\n"
         "        return false;\n"
@@ -902,7 +902,7 @@ bool ClassDecodeGenerator::ProcessList(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsList()) {\n"
         "        %s = %s->AsList();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a list: %%s\", %s->TypeString());\n"
         "        return false;\n"
@@ -1150,7 +1150,7 @@ bool ClassDecodeGenerator::ProcessDict(const TiXmlElement* field)
     fprintf(mOutputFile,
         "    if (%s->IsDict()) {\n"
         "        %s = %s->AsDict();\n"
-        "        //PyIncRef(%s);\n"
+        "        PyIncRef(%s);\n"
         "    } else {\n"
         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a dict: %%s\", %s->TypeString());\n"
         "        return false;\n"

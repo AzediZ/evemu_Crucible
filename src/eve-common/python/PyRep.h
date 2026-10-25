@@ -620,19 +620,23 @@ public:
     /**
      * @brief Stores Python object.
      *
+     * The tuple takes over the caller's reference (as PyList::AddItem and PyDict::SetItem do), so pass a new object or
+     *  PyIncRef() one that something else keeps.  The item it replaces is released.
+     *
      * @param[in] index  Index at which the object should be stored.
      * @param[in] object Object to be stored.
      */
     void SetItem( size_t index, PyRep* object )
     {
         PyRep** rep = &items.at( index );
+        if ((object != nullptr) and (object == *rep))
+            return;
         PySafeDecRef( *rep );
         if (object == nullptr) {
             *rep = new PyNone();
         } else {
             *rep = object;
         }
-        PyIncRef( *rep );
     }
 
     void SetItemInt( size_t index, int32 val )          { SetItem( index, new PyInt( val ) ); }
@@ -644,7 +648,8 @@ public:
     std::vector<PyRep*> items;
 
 protected:
-    virtual ~PyTuple()                                  { /* do nothing here */ }
+    // releases the items
+    virtual ~PyTuple()                                  { clear(); }
 };
 
 /**
@@ -692,19 +697,23 @@ public:
     /**
      * @brief Stores Python object.
      *
+     * The list takes over the caller's reference (as PyList::AddItem and PyDict::SetItem do), so pass a new object or
+     *  PyIncRef() one that something else keeps.  The item it replaces is released.
+     *
      * @param[in] index  Index at which the object should be stored.
      * @param[in] object Object to be stored.
      */
     void SetItem( size_t index, PyRep* object )
     {
         PyRep** rep = &items.at( index );
+        if ((object != nullptr) and (object == *rep))
+            return;
         PySafeDecRef( *rep );
         if (object == nullptr) {
             *rep = new PyNone();
         } else {
             *rep = object;
         }
-        PyIncRef( *rep );
     }
     /**
      * @brief Stores Python string.
@@ -714,6 +723,7 @@ public:
      */
     void SetItemString( size_t index, const char* str ) { SetItem( index, new PyString( str ) ); }
 
+    // the list takes over the caller's reference
     void AddItem( PyRep* i )                            { items.push_back( i ); }
     void AddItemInt( int32 intval )                     { AddItem( new PyInt( intval ) ); }
     void AddItemLong( int64 intval )                    { AddItem( new PyLong( intval ) ); }

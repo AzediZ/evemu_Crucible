@@ -71,6 +71,8 @@ public:
     void NewBubbleCenter(GVector shipVelocity, GPoint& newBubbleCenter);
     //call when an entity is removed from the system.
     void Remove(SystemEntity* ent);
+    // a client going away:  off every bubble's player list, in case one still has it (SystemBubble::DropPlayer())
+    void DropPlayer(Client* pClient);
     void clear();
     void ClearSystemBubbles(uint32 systemID);
     void RemoveBubble(uint32 systemID, SystemBubble* pSB);

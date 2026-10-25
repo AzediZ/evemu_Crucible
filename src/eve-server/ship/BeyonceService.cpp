@@ -961,6 +961,7 @@ PyResult BeyonceBound::CmdAbandonLoot(PyCallArgs &call, PyList* wreckIDs) {
             itemData->SetItem(0, new PyString("OnSlimItemChange"));
             itemData->SetItem(1, slimData);
         pSE->SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange" );
+        PyDecRef(itemData);     // the bubblecast takes its own references
     }
 
     return PyStatic.NewNone();

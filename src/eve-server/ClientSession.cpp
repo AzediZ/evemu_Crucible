@@ -160,8 +160,15 @@ void ClientSession::EncodeChanges(PyDict* into)
         valueTuple->SetItem (2, PyStatic.NewFalse());
 
         // add the value to the list if the client knows it
-        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
-            into->SetItem (cur.first, new_tuple (valueTuple->GetItem (0), valueTuple->GetItem(1)));
+        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ()) {
+            // the key and the values stay in mSession too
+            PyRep* last(valueTuple->GetItem (0));
+            PyRep* current(valueTuple->GetItem (1));
+            PyIncRef(cur.first);
+            PyIncRef(last);
+            PyIncRef(current);
+            into->SetItem (cur.first, new_tuple (last, current));
+        }
     }
 
     mDirty = false;
@@ -176,8 +183,13 @@ void ClientSession::EncodeInitialState (PyDict* into)
         valueTuple->SetItem(2, PyStatic.NewFalse());
 
         // add the value to the initial state only if the client knows it
-        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
-            into->SetItem (cur.first, cur.second->AsTuple ()->GetItem (1));
+        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ()) {
+            // the key and the value stay in mSession too
+            PyRep* current(valueTuple->GetItem (1));
+            PyIncRef(cur.first);
+            PyIncRef(current);
+            into->SetItem (cur.first, current);
+        }
     }
 
     // mark the session as not dirty
@@ -237,6 +249,8 @@ void ClientSession::_Set(const char* name, PyRep* value)
 
     PyRep* current(tuple->GetItem(1)); // copy c'tor
     if (value->hash() != current->hash()) {
+        // current moves to slot 0; SetItem(1) below releases slot 1's reference to it
+        PyIncRef(current);
         tuple->SetItem(0, current); /* didn't the session need to store the old value too? */
         tuple->SetItem(1, value);
         tuple->SetItem(2, PyStatic.NewTrue());

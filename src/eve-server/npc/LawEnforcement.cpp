@@ -881,6 +881,7 @@ void LawEnforcement::LeaveSpace(LoggedOff& l, const GPoint& savedAt)
     // what the client did when its pilot logged off: save it and unload it
     shipRef->SetPosition(savedAt);
     shipRef->LogOut();
+    shipRef->ReleaseModules();
 }
 
 bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)

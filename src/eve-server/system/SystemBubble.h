@@ -89,6 +89,11 @@ public:
     bool HasArrivals() const                            { return (m_arrivals > 0); }
     bool HasMarkers() const                             { return !m_markers.empty(); }
     bool HasPlayers() const                             { return !m_players.empty(); }
+    /* the client off the player list, wherever it is (Remove() only drops the pilot of a ship leaving with one:  a capsule
+     *  killed under a pilot leaves without one) */
+    void DropPlayer(Client* pClient);
+    // a player here to send to, other than the one in 'except'
+    bool HasConnectedPlayers(SystemEntity* except = nullptr) const;
     bool HasStatics() const                             { return !m_entities.empty(); }
     bool HasDynamics() const                            { return !m_dynamicEntities.empty(); }
     double x() const                                    { return m_center.x; }
@@ -123,6 +128,8 @@ public:
     void RemoveExclusive(SystemEntity* pSE);
     void AddBallExclusive(SystemEntity* about_who);
 
+    // each client gets its own reference.  the vector versions take over (release) the references in the vectors and
+    //  clear them;  the PyTuple** versions leave the caller's reference with the caller, to release after the call
     //send a set of destiny events and updates to every client in the bubble.
     void BubblecastDestiny(std::vector<PyTuple*> &updates, std::vector<PyTuple*> &events, const char* desc) const;
     //send a set of destiny updates to every client in the bubble.

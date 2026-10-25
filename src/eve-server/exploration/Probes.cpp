@@ -531,6 +531,7 @@ void ProbeSE::SendWarpStart(float travelTime/*0*/)
         from->SetItem(0, token);
         from->SetItem(1, posFrom.Encode());
     PyTuple* to = new PyTuple(2);
+        PyIncRef(token);    // in both tuples
         to->SetItem(0, token);
         to->SetItem(1, posTo.Encode());
     // OnProbeWarpStart(self, probeID, fromPos, toPos, startTime, duration)
@@ -626,6 +627,7 @@ void ProbeSE::SendSlimChange()
         updates->SetItem(0, new PyString("OnSlimItemChange"));
         updates->SetItem(1, probeData);
     m_destiny->SendSingleDestinyUpdate(&updates, true);
+    PyDecRef(updates);
 }
 
 /*

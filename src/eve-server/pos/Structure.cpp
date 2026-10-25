@@ -65,9 +65,10 @@ namespace {
  * Base Structure Item for all POS types
  */
 StructureItem::StructureItem(uint32 _structureID, const ItemType &_itemType, const ItemData &_data)
-    : InventoryItem(_structureID, _itemType, _data)
+    : InventoryItem(_structureID, _itemType, _data),
+    mySE(nullptr)
 {
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
     _log(ITEM__TRACE, "Created StructureItem for %s (%u).", name(), itemID());
     _log(POS__TRACE, "Created StructureItem for %s (%u).", name(), itemID());
 }
@@ -186,7 +187,10 @@ void StructureItem::AddItem(InventoryItemRef iRef)
 
     InventoryItem::AddItem(iRef);
 
-    if (mySE->IsCOSE())
+    /* a cargo container (a courier package, a can in a hangar) is a StructureItem with no entity of this class's:  this
+     *  was never set for one, and goods moved into a new courier package crashed the server
+     */
+    if ((mySE != nullptr) and mySE->IsCOSE())
         mySE->GetCOSE()->VerifyAddItem(iRef);
 }
 
@@ -200,6 +204,11 @@ void StructureItem::RemoveItem(InventoryItemRef iRef)
 
 void StructureItem::Rename(std::string name)
 {
+    // a cargo container (no structure in space) is named as any item is
+    if ((mySE == nullptr) or !mySE->IsPOSSE()) {
+        InventoryItem::Rename(name);
+        return;
+    }
     if (mySE->GetPOSSE()->GetState() > EVEPOS::StructureState::Unanchored)
     {
         InventoryItem::Rename(name);
@@ -1748,7 +1757,8 @@ void StructureSE::SendSlimUpdate()
     PyTuple *sItem = new PyTuple(2);
     sItem->SetItem(0, new PyString("OnSlimItemChange"));
     sItem->SetItem(1, shipData);
-    m_destiny->SendSingleDestinyUpdate(&sItem); // consumed
+    m_destiny->SendSingleDestinyUpdate(&sItem);
+    PyDecRef(sItem);
 }
 
 void StructureSE::SendBallFree(bool free)
@@ -1795,7 +1805,8 @@ void StructureSE::SendEffectUpdate(int16 effectID, bool active)
     events->AddItem(shipEff.Encode());
     PyTuple *event = new PyTuple(1);
     event->SetItem(0, events);
-    m_destiny->SendSingleDestinyEvent(&event); // consumed
+    m_destiny->SendSingleDestinyEvent(&event);
+    PyDecRef(event);
 }
 
 void StructureSE::EncodeDestiny(Buffer &into)

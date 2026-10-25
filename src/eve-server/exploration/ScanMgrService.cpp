@@ -104,7 +104,8 @@ PyResult ScanBound::ConeScan( PyCallArgs& call, PyRep* ignored1, PyRep* ignored2
 
     // TODO: for this one we're keeping the old mechanism for now as it requires changes on more than just this service
     Call_ConeScan args;
-    if (!args.Decode(&call.tuple)) {
+    // the call tuple belongs to the call (Decode(&call.tuple) would release it), so decode it without consuming it
+    if (!args.Decode(call.tuple)) {
         codelog(SERVICE__ERROR, "ScanBound: Failed to decode arguments.");
         throw CustomError("Invalid directional scan request.");
     }

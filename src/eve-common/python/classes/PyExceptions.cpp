@@ -36,9 +36,11 @@ PyException::~PyException() { PySafeDecRef( ssException ); }
 
 PyException& PyException::operator=( const PyException& oth )
 {
+    // take the new reference first (safe on self-assignment)
+    PyRep* except(oth.ssException);
+    PySafeIncRef( except );
     PySafeDecRef( ssException );
-    ssException = oth.ssException;
-    PySafeIncRef( ssException );
+    ssException = except;
 
     return *this;
 }

@@ -665,7 +665,8 @@ void CustomsSE::SendEffectUpdate(int16 effectID, bool active)
         events->AddItem(shipEff.Encode());
     PyTuple* event = new PyTuple(1);
         event->SetItem(0, events);
-    m_destiny->SendSingleDestinyEvent(&event);   // consumed
+    m_destiny->SendSingleDestinyEvent(&event);
+    PyDecRef(event);
 }
 
 void CustomsSE::ChangeOwner(uint32 corpID, int32 allianceID)
@@ -692,7 +693,8 @@ void CustomsSE::SendSlimUpdate()
     PyTuple* sItem = new PyTuple(2);
         sItem->SetItem(0,                               new PyString("OnSlimItemChange"));
         sItem->SetItem(1,                               shipData);
-    m_destiny->SendSingleDestinyUpdate(&sItem);   // consumed
+    m_destiny->SendSingleDestinyUpdate(&sItem);
+    PyDecRef(sItem);
 }
 
 

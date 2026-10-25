@@ -555,7 +555,7 @@ PyRep* UnmarshalStream::LoadPackedRow()
 
     if( !LoadRLE(unpacked) )
     {
-        PyDecRef( header_element );
+        PyDecRef( row );    // and the header with it
         return nullptr;
     }
 
@@ -682,6 +682,7 @@ PyRep* UnmarshalStream::LoadPackedRow()
 
             case DBTYPE_EMPTY:
             case DBTYPE_ERROR:
+                PyDecRef( row );
                 return nullptr;
         }
     }

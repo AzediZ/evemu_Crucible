@@ -50,7 +50,7 @@ CargoContainer::CargoContainer(uint32 _containerID, const ItemType &_containerTy
 mySE(nullptr),
 m_isAnchored(false)
 {
-    pInventory = new Inventory(InventoryItemRef(this));
+    // StructureItem made its inventory
     _log(ITEM__TRACE, "Created CargoContainer object for item %s (%u).", name(), m_itemID);
 }
 
@@ -267,6 +267,9 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
  m_armorDamage(0),
  m_hullDamage(0)
 {
+    // ObjectSystemEntity made a pair already.  replace them rather than leak them
+    SafeDelete(m_targMgr);
+    SafeDelete(m_destiny);
     m_targMgr = new TargetManager(this);
     m_destiny = new DestinyManager(this);
 
@@ -311,7 +314,7 @@ void ContainerSE::Init()
 ContainerSE::~ContainerSE()
 {
     if (m_targMgr != nullptr)
-        if (!sConsole.IsShutdown()) {
+        if (!sEntityList.IsClosing()) {
             m_targMgr->ClearModules();
             m_targMgr->ClearAllTargets(false);
             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
@@ -369,7 +372,7 @@ mySE(nullptr),
 m_delete(false),
 m_salvaged(false)
 {
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
 
     _log(ITEM__TRACE, "Created WreckContainer object for item %s (%u).", name(), itemID());
 }
@@ -486,8 +489,8 @@ void WreckContainer::MakeSlimItemChange()
     PyTuple* updates = new PyTuple(2);
         updates->SetItem(0, new PyString("OnSlimItemChange"));
         updates->SetItem(1, shipData);
-    //consumes updates
     mySE->SysBubble()->BubblecastDestinyUpdate(&updates, "destiny" );
+    PyDecRef(updates);  // the bubblecast takes its own references
 }
 
 WreckSE::WreckSE(WreckContainerRef self, EVEServiceManager &services, SystemManager* system, const FactionData &data)

@@ -159,7 +159,8 @@ MarketMgr::~MarketMgr()
 void MarketMgr::Close()
 {
     /** @todo put a save method here which will save anything changed before shutdown */
-    PyDecRef(m_marketGroups);
+    PySafeDecRef(m_marketGroups);
+    m_marketGroups = nullptr;
     for (auto& cur : m_asks)
         PySafeDecRef(cur.second.rep);
     m_asks.clear();

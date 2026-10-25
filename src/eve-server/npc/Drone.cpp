@@ -713,6 +713,7 @@ void DroneSE::Abandon() {
         up->SetItem(0, new PyString("OnSlimItemChange"));
         up->SetItem(1, data);
     m_bubble->BubblecastDestinyUpdate(&up, "destiny");
+    PyDecRef(up);   // the bubblecast takes its own references
 }
 
 void DroneSE::TargetLost(SystemEntity* who) {

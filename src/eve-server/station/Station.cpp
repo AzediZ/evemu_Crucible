@@ -65,7 +65,7 @@ m_stationType(type),
 m_stationID(stationID),
 m_loaded(false)
 {
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
 
     _log(ITEM__TRACE, "Created Station for item %s (%u).", name(), itemID());
 }

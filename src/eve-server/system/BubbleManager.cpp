@@ -220,6 +220,15 @@ void BubbleManager::NewBubbleCenter(GVector shipVelocity, GPoint &newCenter) {
     newCenter += (shipVelocity * (BUBBLE_RADIUS_METERS /2));
 }
 
+void BubbleManager::DropPlayer(Client* pClient)
+{
+    if (pClient == nullptr)
+        return;
+    for (auto pBubble : m_bubbles)
+        if ((pBubble != nullptr) and pBubble->HasPlayers())
+            pBubble->DropPlayer(pClient);
+}
+
 void BubbleManager::Remove(SystemEntity *ent) {
     // suns, planets and moons arent in bubbles
     // if (ent->IsStaticEntity())
@@ -275,13 +284,24 @@ SystemBubble* BubbleManager::FindBubble(uint32 systemID, const GPoint &pos) cons
     _log(DESTINY__BUBBLE_DEBUG, "BubbleManager::FindBubble() - Searching point %.1f, %.1f, %.1f in system %u.", \
                 pos.x, pos.y, pos.z, systemID);
 
+    /* bubbles can overlap (MakeBubble() moves a new one clear of only the first it overlaps), and the map's order is no
+     *  order at all:  of those the point is in, it's the one whose center is nearest.  else a ship landing where two
+     *  overlap could join the one without the entities around it */
+    SystemBubble* pFound(nullptr);
+    double nearest(0);
     auto range = m_sysBubbleMap.equal_range(systemID);
-    for ( auto itr = range.first; itr != range.second; ++itr )
-        if (itr->second->InBubble(pos))
-            return itr->second;
+    for ( auto itr = range.first; itr != range.second; ++itr ) {
+        if (!itr->second->InBubble(pos))
+            continue;
+        double distance(itr->second->GetCenter().distance(pos));
+        if ((pFound == nullptr) or (distance < nearest)) {
+            pFound = itr->second;
+            nearest = distance;
+        }
+    }
 
-    //not in any existing bubble.
-    return nullptr;
+    //nullptr:  not in any existing bubble.
+    return pFound;
 }
 
 SystemBubble* BubbleManager::GetBubble(SystemManager* sysMgr, const GPoint& pos)

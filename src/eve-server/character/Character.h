@@ -229,7 +229,12 @@ public:
     void            SetFleetData(CharFleetData& fleet);
     uint32          PickAlternateShip(uint32 locationID);
 
-    void            SetClient(Client* pClient)          { m_pClient = pClient; }
+    void            SetClient(Client* pClient)          { m_pClient = pClient; if (pClient != nullptr) m_hadClient = true; }
+    /* its row (wallet, location, ship, corp) from the database again.  a character loaded while its player was offline
+     *  (show info) keeps the row it had then, while the server changes an offline character in the database
+     *  (wallet transfers, docking, corp moves):  its client takes it as it is now
+     */
+    void            ReloadData();
     Client*         GetClient()                         { return m_pClient; }
 
     void            AddItem(InventoryItemRef item);
@@ -504,6 +509,8 @@ private:
     StandingDB s_db;
 
     Client* m_pClient;
+    // it had a client while loaded:  without one its row in memory is from when it loaded, and isn't saved (~Character)
+    bool m_hadClient;
 
     CorpData m_corpData;
     CharacterData m_charData;

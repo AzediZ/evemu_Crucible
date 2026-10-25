@@ -183,6 +183,7 @@ public:
     PyList*             GetTargets() const;
     PyList*             GetTargeters() const;
 
+    // the caller keeps (and releases) its own reference to *up
     void                QueueEvent(PyTuple **up) const;    //queue an event to all SEs targeting me.
     void                QueueUpdate(PyTuple **up) const;   //queue an update to all SEs targeting me.
 

@@ -43,7 +43,7 @@ m_warpLockUntil(0),
 m_jumpLockUntil(0)
 {
     m_onlineModuleVec.clear();
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
 
     _log(ITEM__TRACE, "Created ShipItem for %s(%u).", name(), itemID());
 }
@@ -124,6 +124,12 @@ void ShipItem::LogOut()
 
     if (pInv != nullptr)
         pInv->RemoveItem(ShipItemRef(this));
+}
+
+void ShipItem::ReleaseModules()
+{
+    SafeDelete(m_ModuleManager);
+    m_ModuleManager = new ModuleManager(this);
 }
 
 void ShipItem::SetPlayer(Client* pClient) {
@@ -3154,6 +3160,7 @@ void ShipSE::RefreshOwnerIDs()
         itemData->SetItem(0, new PyString("OnSlimItemChange"));
         itemData->SetItem(1, slimData);
     SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange");
+    PyDecRef(itemData);     // the bubblecast takes its own references
 }
 
 bool ShipSE::IsInvul()

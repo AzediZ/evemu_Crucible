@@ -95,7 +95,7 @@ OutpostSE::~OutpostSE()
     if (m_dirty)
         SaveSiege();
     if (m_targMgr != nullptr)
-        if (!sConsole.IsShutdown()) {
+        if (!sEntityList.IsClosing()) {
             m_targMgr->ClearModules();
             m_targMgr->ClearAllTargets(false);
         }

@@ -283,6 +283,7 @@ Character::Character(
   m_charData(_charData),
   m_corpData(_corpData),
   m_pClient(nullptr),
+  m_hadClient(false),
   m_inTraining(nullptr),
   m_loaded(false),
   m_fleetData(CharFleetData()),
@@ -295,7 +296,7 @@ Character::Character(
 
     if (!IsAgent(m_itemID)) {
         m_loginTime = sEntityList.GetStamp();
-        pInventory = new Inventory(InventoryItemRef(this));
+        pInventory = new Inventory(this);
         m_freePoints = CharacterDB::GetFreeSkillPoints(m_itemID);
     }
 }
@@ -303,7 +304,11 @@ Character::Character(
 Character::~Character()
 {
     SaveBookMarks();
-    SaveFullCharacter();
+    /* one that never had its client while loaded (show info) has the wallet,
+     *  location and corp it had when it loaded:  saving them would put back what the server has changed since
+     */
+    if (m_hadClient)
+        SaveFullCharacter();
     SaveCertificates();
     SafeDelete(pInventory);
 }
@@ -2103,6 +2108,8 @@ void Character::SkillQueueLoop(bool update/*true*/)
         if (!list->empty()) {
             if (list->size() > 1) {
                 OnMultipleSkillsTrained omst;
+                    // omst releases its own reference
+                    PyIncRef(list);
                     omst.skillList = list;
                 tmp = omst.Encode();
             }
@@ -2114,6 +2121,7 @@ void Character::SkillQueueLoop(bool update/*true*/)
 
         m_pClient->QueueDestinyEvent(&tmp);
     }
+    PyDecRef(list);
 
     _log(SKILL__QUEUE, "SkillQueueLoop() completed in %.4fms", (GetTimeMSeconds() - begin));
 }
@@ -2238,6 +2246,18 @@ void Character::PayBounty(CharacterRef cRef) {
     AccountService::TransferFunds(corpCONCORD, m_itemID, cRef->bounty(), reason, Journal::EntryType::Bounty, cRef->itemID());
     // add data to StatisticMgr
     sStatMgr.Add(Stat::pcBounties, cRef->bounty());
+}
+
+void Character::ReloadData()
+{
+    CharacterData charData = CharacterData();
+    if (CharacterDB::GetCharacterData(m_itemID, charData)) {
+        charData.loginTime = m_charData.loginTime;
+        m_charData = charData;
+    }
+    CorpData corpData = CorpData();
+    if (CharacterDB::GetCharCorpData(m_itemID, corpData))
+        m_corpData = corpData;
 }
 
 void Character::SetLoginTime() {

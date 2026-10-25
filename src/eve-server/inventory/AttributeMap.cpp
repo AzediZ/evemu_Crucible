@@ -438,8 +438,10 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
         return true;
     /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
      *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
-    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services))
+    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)) {
+        PyDecRef(attrChange);
         return true;
+    }
 
     /** @todo update this to use my new multicast replacement */
     if (IsPlayerCorp(mItem.ownerID())) {
@@ -454,8 +456,12 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
         }
     }
 
-    if (IsCorp(mItem.ownerID()))
+    if (IsCorp(mItem.ownerID())) {
+        // Multicast() took it for a player corp
+        if (!IsPlayerCorp(mItem.ownerID()))
+            PyDecRef(attrChange);
         return true;
+    }
 
     Client* pClient(nullptr);
     if (IsCharacterID(mItem.itemID())) {
@@ -466,12 +472,15 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
 
     if (pClient == nullptr) {
         _log(PLAYER__WARNING, "AttributeMap::SendChanges() - ownerID for %u not found", mItem.itemID() );
+        PyDecRef(attrChange);
         return false;
     }
 
     // avoid flooding the client on login
-    if (pClient->IsLogin())
+    if (pClient->IsLogin()) {
+        PyDecRef(attrChange);
         return true;
+    }
 
     if (is_log_enabled(ATTRIBUTE__CHANGE)) {
         _log(ATTRIBUTE__CHANGE, "Sending Attribute changes for %s(%u)", mItem.name(), mItem.itemID());

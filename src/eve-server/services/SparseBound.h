@@ -44,11 +44,12 @@ public:
     }
 
     ~SparseBound () {
-        PyDecRef (this->m_header);
+        PySafeDecRef (this->m_header);  // null when never primed
     }
 
     /**
      * Primes the index list and initializes the header
+     *  (takes over the caller's reference to headers)
      */
     void Prime (PyList* headers) {
         auto cur = headers->begin();
@@ -190,6 +191,7 @@ protected:
             if (indexIt == this->m_indexMap.end ()) {
                 // the index cannot be found, show an error and continue on to the next one
                 codelog(SERVICE__ERROR, "SparseRowset: Cannot find the key %lli in the index list", keyValue);
+                PyDecRef(value);
                 continue;
             }
 
@@ -224,6 +226,7 @@ protected:
             if (indexIt == this->m_indexMap.end ()) {
                 // the index cannot be found, show an error and continue on to the next one
                 codelog(SERVICE__ERROR, "SparseRowset: Cannot find the key %lli in the index list", keyValue);
+                PyDecRef(value);
                 continue;
             }
 

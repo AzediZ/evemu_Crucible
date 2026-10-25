@@ -242,7 +242,11 @@ PyResult AccountService::SetContactCost(PyCallArgs &call, std::optional<PyRep*> 
 }
 
 PyResult AccountService::GetCashBalance(PyCallArgs& call, std::optional<PyBool*> isCorpWallet, std::optional<PyInt*> walletKey) {
-    return GetCashBalance(call, new PyInt(isCorpWallet.has_value() ? isCorpWallet.value()->value() : 0), walletKey);
+    // the other overload only reads it
+    PyInt* isCorp(new PyInt(isCorpWallet.has_value() ? isCorpWallet.value()->value() : 0));
+    PyResult res(GetCashBalance(call, isCorp, walletKey));
+    PyDecRef(isCorp);
+    return res;
 }
 
 PyResult AccountService::GetCashBalance(PyCallArgs &call, std::optional<PyInt*> isCorpWallet, std::optional<PyInt*> walletKey) {

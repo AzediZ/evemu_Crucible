@@ -505,7 +505,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
                 + GetAttribute(AttrMassAddition).get_double()), false);
     if (ApplyActiveEffects())
         ApplyEffect(FX::State::Active, true);
-    if (IsValidTarget(targetID) and ApplyTargetEffects())
+    if (IsValidTarget(targetID) and (m_targetSE != nullptr) and ApplyTargetEffects())
         ApplyEffect(FX::State::Target, true);
 
     std::vector<GenericModule*> modules;
@@ -560,17 +560,25 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
         m_Stop = true;
 
     // check for one-hit kills and stop module after cycle completes
-    if (m_needsTarget)
-        if (m_targetSE->IsDead())
-            m_Stop = true;
+    if (m_needsTarget and ((m_targetSE == nullptr) or m_targetSE->IsDead()))
+        m_Stop = true;
 }
 
 void ActiveModule::Deactivate(std::string effect/*""*/)
 {
     if (m_ModuleState != Module::State::Activated) {
-        // a module finishing its last cycle on a target that is gone stops now.  it must not keep the target pointer
-        if ((m_ModuleState == Module::State::Deactivating) and (effect.compare("TargetDestroyed") == 0)) {
-            AbortCycle();
+        if (effect.compare("TargetDestroyed") == 0) {
+            // a module finishing its last cycle on a target that is gone stops now.  it must not keep the target pointer
+            if (m_ModuleState == Module::State::Deactivating) {
+                AbortCycle();
+                return;
+            }
+            /* the first cycle of an activation killed it (Activate() sets the module Activated after that cycle fires):  it
+             *  mustn't keep the pointer either, or it uses the freed target when the cycle ends.  it stops then (Process()) */
+            if (m_targetSE != nullptr) {
+                m_targetSE = nullptr;
+                m_Stop = true;
+            }
             return;
         }
         _log(MODULE__TRACE, "ActiveModule::Deactivate - %s called Deactivate but is not currently Activated (%s).", m_modRef->name(), GetModuleStateName(m_ModuleState));
@@ -1838,6 +1846,7 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
         m_shipRef->GetPilot()->QueueDestinyEvent(&tuple);
     } else {
         pBubble->BubblecastDestinyEvent(&tuple, "destiny");
+        PyDecRef(tuple);    // the bubblecast takes its own references
     }
 }
 /*

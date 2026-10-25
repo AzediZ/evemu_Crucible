@@ -312,6 +312,7 @@ PyResult CharMgrService::GetCharacterDescription(PyCallArgs &call, PyInt* charac
 {
     sItemFactory.SetUsingClient(call.client);
     CharacterRef c = sItemFactory.GetCharacterRef(characterID->value());
+    sItemFactory.UnsetUsingClient();
     if (!c ) {
         _log(CHARACTER__ERROR, "GetCharacterDescription failed to load character %u.", characterID->value());
         return nullptr;

@@ -28,7 +28,7 @@ StationOffice::StationOffice(uint32 _officeID, const ItemType& _containerType, c
 m_data(_odata)
 {
     m_loaded = false;
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
     _log(ITEM__TRACE, "Created StationOffice object for item %s (%u).", name(), itemID());
 }
 

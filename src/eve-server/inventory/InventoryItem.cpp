@@ -142,6 +142,9 @@ InventoryItem& InventoryItem::operator= ( InventoryItem&& oth ) noexcept
 InventoryItem::~InventoryItem() noexcept
 {
     SafeDelete(pAttributeMap);
+    // made in the c'tor.  ModifierContainerBase has no virtual d'tor, so delete it as what it is
+    delete static_cast<ModifierContainer*>(m_modifierContainer);
+    m_modifierContainer = nullptr;
 }
 
 InventoryItemRef InventoryItem::Load(uint32 itemID)
@@ -296,7 +299,12 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const 
             // test for office first
             if (type.id() == 27) {
                 return StationOffice::_LoadItem<StationOffice>(itemID, type, data);
-            } else if (type.groupID() != EVEDB::invGroups::Station) {
+            } else if (type.groupID() == EVEDB::invGroups::Station) {
+                /* a station loaded here, before its system boots (a sale or a buy order filled in a station whose
+                 *  system isn't loaded), must be a StationItem:  the system's boot takes it from the item factory as
+                 *  one (GetStationRef), and as a plain item it had no inventory.  that crashed the server docking there
+                 *  and unloading the system
+                 */
                 return StationItem::_LoadItem<StationItem>(itemID, type, data);
             }/* else if (type.groupID() != EVEDB::invGroups::Station_Services) {
                this isnt written yet...
@@ -657,12 +665,15 @@ void InventoryItem::Rename(std::string name)
     if (IsCharacterID(m_data.ownerID)) {
         // this will be the most-used case
         Client* pClient = sEntityList.FindClientByCharID(m_data.ownerID);
-        if (pClient == nullptr)
+        if (pClient == nullptr) {
+            PyDecRef(tuple);
             return;  //  make error here?
+        }
         if (pClient->IsDocked()) {
             pClient->SendNotification("OnCfgDataChanged", "charid", &tuple, false); //unsequenced.
         } else { // client in space.  sent update to all clients in bubble
             pClient->GetShipSE()->SysBubble()->BubblecastSendNotification("OnCfgDataChanged", "solarsystemid", &tuple, false);
+            PyDecRef(tuple);    // the bubblecast takes its own references
         }
     } else if (IsPlayerCorp(m_data.ownerID)) {
         // bcast to all online corp members
@@ -671,6 +682,8 @@ void InventoryItem::Rename(std::string name)
         } else {
             sEntityList.CorpNotify(m_data.ownerID, Notify::Types::ItemUpdateSystem, "OnCfgDataChanged", "solarsystemid", tuple);
         }
+    } else {
+        PyDecRef(tuple);
     }
 
     /** @todo  if renaming a POS or other space object, we'll need to BubblecastSendNotification instead of CorpNotify  */
@@ -1102,16 +1115,24 @@ void InventoryItem::ChangeOwner(uint32 new_owner, bool notify/*false*/) {
 
 //contents of changes are consumed and cleared
 void InventoryItem::SendItemChange(uint32 toID, std::map<int32, PyRep *> &changes) {
-    if (IsNPCCorp(toID) or (toID == 1) or IsFaction(toID))   //IsValidOwner()
+    Client* pClient(nullptr);
+    if (IsCharacterID(toID))
+        pClient = sEntityList.FindClientByCharID(toID);
+    // nobody to tell:  an NPC owner, a character that's offline or still being made, or the server is going down.  don't build the notification (its item row is the expensive part)
+    if (IsNPCCorp(toID) or (toID == 1) or IsFaction(toID)   //IsValidOwner()
+    or sConsole.IsShutdown() or changes.empty()
+    or (IsCharacterID(toID) and ((pClient == nullptr) or pClient->IsCharCreation()))
+    or (!IsCharacterID(toID) and !IsPlayerCorp(toID))) {
+        for (auto cur : changes)
+            PySafeDecRef(cur.second);
+        changes.clear();
         return;
-    if (sConsole.IsShutdown())
-        return;
-    if (changes.empty())
-        return;
+    }
 
     NotifyOnItemChange change;
         change.itemRow = GetItemRow();
-        change.changes = changes;
+        change.changes = changes;   // the struct releases these now
+    changes.clear();
     PyTuple *tmp = change.Encode();
 
     if (is_log_enabled(ITEM__CHANGE)) {
@@ -1121,11 +1142,6 @@ void InventoryItem::SendItemChange(uint32 toID, std::map<int32, PyRep *> &change
 
     //TODO: figure out the appropriate list of interested people...
     if (IsCharacterID(toID)) {
-        Client* pClient = sEntityList.FindClientByCharID(toID);
-        if (pClient == nullptr)
-            return;
-        if (pClient->IsCharCreation())
-            return;
         //if (IsShipItem()) //(pClient->IsBoard())
         //    pClient->SendNotification("OnItemsChanged", "charid", &tmp, false); //unsequenced.  <<--  this is called for multiple items
         //else

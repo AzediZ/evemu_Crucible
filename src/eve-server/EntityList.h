@@ -75,6 +75,10 @@ public:
     void Close();
     void Process();
     void Shutdown();
+    /* the world is being taken down (Shutdown() or Close()):  entities are freed in no particular order, so one going
+     *  doesn't clear its locks and modules from the others.  until then, halting or not, the world still runs and they do
+     */
+    bool IsClosing() const                              { return m_closing; }
     void Add(Client* pClient);
     void Remove(Client* pClient);
     // this must be called AFTER a character is selected, after Client and Character class construction is complete. (need complete data)
@@ -184,6 +188,7 @@ protected:
     //Mutex mMutex;
 
 private:
+    bool m_closing;
     Timer m_stampTimer;
     Timer m_minuteTimer;
     Timer m_targTimer;

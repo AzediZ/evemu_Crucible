@@ -657,9 +657,8 @@ void LSCChannel::SendOnLSC(const std::set<uint32>& charIDs, const char* method, 
     MulticastTarget mct;
     for (auto cur : charIDs)
         mct.characters.insert(cur);
+    // notify releases its arguments (Encode gave answer its own reference)
     PyTuple* answer = notify.Encode();
-    // NotifyOnLSC doesn't release its arguments
-    PyDecRef(notify.arguments);
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 

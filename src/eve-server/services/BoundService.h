@@ -134,7 +134,8 @@ public:
             // dispatch call
             CallMachoBindObject_call boundcall;
 
-            if (boundcall.Decode(&call.value()) == false) {
+            // the call tuple belongs to args (Decode(&x) would release it), so decode it without consuming it
+            if (boundcall.Decode(call.value()) == false) {
                 codelog(SERVICE__ERROR, "%s Service: Failed to decode boundcall arguments", this->GetName().c_str());
                 return nullptr;
             }
@@ -145,7 +146,8 @@ public:
 
             PyResult result = bound->Dispatch(boundcall.method_name, subArgs);
 
-            // set the tuple data
+            // set the tuple data (result releases its own reference)
+            PySafeIncRef(result.ssResult);
             rsp->SetItem(1, result.ssResult);
             // TODO: merge the dicts to return the full response data?
             // Py types are lacking lots of helper methods that could be useful
@@ -197,6 +199,11 @@ protected:
      * Default destructor, override to free resources if needed
      */
     virtual ~EVEBoundObject () {
+        PySafeDecRef(this->mOID);
+        // every bound object makes its own handlers (Add), so they go with it
+        for (auto& handler : this->mHandlers)
+            delete handler.second;
+        this->mHandlers.clear();
     }
 
     /**

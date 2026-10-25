@@ -382,8 +382,6 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
         outer->Dump(AGENT__RSP_DUMP, "    ");
     }
 
-    PySafeDecRef(agentSays);
-
     return outer;
 }
 

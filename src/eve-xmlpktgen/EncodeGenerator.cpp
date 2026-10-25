@@ -936,28 +936,22 @@ bool ClassEncodeGenerator::ProcessDictInline(const TiXmlElement* field)
             if (!ParseElementChildren(ele, 1))
                 return false;
 
-            //now store the result in the dict:
+            //now store the result in the dict, which takes over the value's reference:
             //taking the keyType into account
             if (keyTypeInt) {
                 fprintf(mOutputFile,
-                         "    %s->SetItem(new PyInt(%s), %s);\n"
-                         "    PyIncRef(%s);\n",
-                         iname, key, vname,
-                         vname
+                         "    %s->SetItem(new PyInt(%s), %s);\n",
+                         iname, key, vname
                );
             } else if (keyTypeLong) {
                     fprintf(mOutputFile,
-                             "    %s->SetItem(new PyLong(%s), %s);\n"
-                             "    PyIncRef(%s);\n",
-                             iname, key, vname,
-                             vname
+                             "    %s->SetItem(new PyLong(%s), %s);\n",
+                             iname, key, vname
                    );
             } else {
                 fprintf(mOutputFile,
-                         "    %s->SetItemString(\"%s\", %s);\n"
-                         "    PyIncRef(%s);\n",
-                         iname, key, vname,
-                         vname
+                         "    %s->SetItemString(\"%s\", %s);\n",
+                         iname, key, vname
                );
             }
         }

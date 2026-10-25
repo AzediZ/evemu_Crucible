@@ -568,6 +568,7 @@ void SystemManager::UnloadSystem() {
             m_staticEntities.erase(m_staticEntities.find(itr->first));
         } else if (pSE->IsShipSE()) {
             pSE->GetShipSE()->GetShipItemRef()->LogOut();
+            pSE->GetShipSE()->GetShipItemRef()->ReleaseModules();
         } else if (pSE->IsNPCSE()) {
             sEntityList.RemoveNPC();    // this is for loaded npc count.
             pSE->GetSelf()->Delete();
@@ -1469,8 +1470,9 @@ void SystemManager::OnNPCRemoved(SystemEntity* pSE)
     // an ambient npc:  its system forgets it (the system frees it below, like any other)
     if (pSE->IsNPCSE() and (pSE->GetNPCSE()->GetAmbientNPC() != nullptr))
         m_ambient->OnNPCRemoved(itemID, killed);
-    // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed
-    if (pSE->TargetMgr() != nullptr) {
+    // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed.  not while shutting down:  the
+    //  ships with those modules and locks have gone already (DungeonMgr::RemoveEntity)
+    if ((pSE->TargetMgr() != nullptr) and !sEntityList.IsClosing()) {
         pSE->TargetMgr()->ClearModules();
         pSE->TargetMgr()->ClearAllTargets(false);
     }

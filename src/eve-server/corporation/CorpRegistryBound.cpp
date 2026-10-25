@@ -585,7 +585,7 @@ PyResult CorpRegistryBound::UpdateDivisionNames(PyCallArgs &call,
 
     if (!m_db.UpdateDivisionNames(notif.key, args, notif.data)) {
         codelog(SERVICE__ERROR, "%s: Failed to update division names for corp %u", call.client->GetName(), notif.key);
-        PyDecRef( notif.data );
+        // notif releases its data
         return PyStatic.NewNone();
     }
 
@@ -769,10 +769,11 @@ PyResult CorpRegistryBound::AddCorporation(PyCallArgs &call,
         return nullptr;
     }
     PyTuple* a1 = cc.Encode();
+    // sent twice, and each send takes over a reference
+    PyIncRef(a1);
     // send single to client
     pClient->SendNotification("OnCorporationChanged", "clientID", &a1);
     // send multi to station guests
-    PyIncRef(a1);
     sEntityList.Multicast("OnCorporationChanged", "stationid", &a1, NOTIF_DEST__LOCATION, pClient->GetLocationID());
 
     return m_db.GetCorporations(corpID);
@@ -952,7 +953,7 @@ PyResult CorpRegistryBound::UpdateLogo(PyCallArgs &call,
     notif.data = new PyDict();
     if (!m_db.UpdateLogo(notif.key, args, notif.data))    {
         codelog( SERVICE__ERROR, "Corporation logo change failed..." );
-        PyDecRef( notif.data );
+        // notif releases its data
         return nullptr;
     }
 
@@ -1236,7 +1237,8 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
             continue;
         if (list->size() == 3) {
             Call_GetMemberIDsByQuery_List3 args3;
-            if (!args3.Decode(&list)) {
+            // list belongs to queryList, so decode without consuming it
+            if (!args3.Decode(list)) {
                 codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
                 return nullptr;
             }
@@ -1259,7 +1261,7 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
             if (!set)
                 return nullptr;
             Call_GetMemberIDsByQuery_List4 args4;
-            if (!args4.Decode(&list)) {
+            if (!args4.Decode(list)) {
                 codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
                 return nullptr;
             }
@@ -1303,12 +1305,8 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
     if (set)
         m_db.GetMembersForQuery(query, result);
 
-    // create/clear list as needed
-    if (list == nullptr) {
-        list = new PyList();
-    } else {
-        list->clear();
-    }
+    // a new list for the result (list points into queryList, which the call owns)
+    list = new PyList();
 
     // populate results
     for (auto cur : result)
@@ -1930,6 +1928,9 @@ PyResult CorpRegistryBound::GetOffices(PyCallArgs &call) {
 
     if (this->m_offices == nullptr) {
         this->m_offices = new OfficeSparseBound (this->GetServiceManager (), *this, m_db, m_corpID, headers);
+    } else {
+        // the bound object made its header already
+        PyDecRef(headers);
     }
 
     if (this->m_offices == nullptr) {

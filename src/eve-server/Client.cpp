@@ -149,6 +149,10 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
 }
 
 Client::~Client() {
+    // no one may load items as us once we're gone (Inventory::LoadContents reads the using client)
+    if (sItemFactory.GetUsingClient() == this)
+        sItemFactory.UnsetUsingClient();
+
     if (!m_loaded)
         return;
 
@@ -156,6 +160,8 @@ Client::~Client() {
 
     if (pShipSE != nullptr)
         WarpOut();      // need to make tests for this...it will segfault if m_char is invalid
+    // no bubble may keep us on its player list once we're gone
+    sBubbleMgr.DropPlayer(this);
 
     // LSC logout (also drops private conversations nobody is left in)
     m_lsc->CharacterLogout(this);
@@ -211,6 +217,9 @@ Client::~Client() {
 
     ReleaseScan();
     SafeDelete(pShipSE);
+    // done with the ship (one left in space keeps its modules until it's gone)
+    if (!m_shipLeftInSpace and (m_ship.get() != nullptr))
+        m_ship->ReleaseModules();
     SafeDelete(pSession);
     PyDecRef(m_destinyEventQueue);
     PyDecRef(m_destinyUpdateQueue);
@@ -288,6 +297,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
         return false;
     }
 
+    // it may have been loaded while offline (show info), with the wallet and location it had then
+    m_char->ReloadData();
     m_char->VerifySP();
     m_char->SetLoginTime();
     m_char->SetClient(this);
@@ -729,6 +740,9 @@ void Client::WarpOut() {
         pShipSE = nullptr;
         return;
     }
+    // its modules stop first:  one left running on a target would stay in that target's list after the ship is gone
+    if (m_ship->GetModuleManager() != nullptr)
+        m_ship->AbortCycle();
     DestroyShipSE();
     // saved where the pilot logged off (the destructor saves it)
     if (!keepLogoff.isZero())
@@ -1417,6 +1431,12 @@ void Client::ResetAfterPodded() {
 
     // clone penalty, implants and boosters lost, new Alpha clone, clone activation notification  (F15)
     m_char->PodKilled();
+
+    /* the dead capsule leaves space without a pilot (SetShip() below), so its bubble wouldn't drop us from its player list
+     *  and would go on sending to us, after we've logged off too (a crash)
+     */
+    if ((pShipSE != nullptr) and (pShipSE->SysBubble() != nullptr))
+        pShipSE->SysBubble()->DropPlayer(this);
 
     CreateNewPod();
     SetShip(m_pod);
@@ -2427,8 +2447,12 @@ void Client::QueueDestinyEvent(PyTuple** event) {
 void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool IsSetState /*false*/) {
     if ((update == nullptr) or ((*update) == nullptr))
         return;
-    if (sDataMgr.IsStation(m_locationID))
+    // the queue takes over the caller's reference to *update, so release it when it isn't queued
+    //  (callers sending one update to several clients PyIncRef it per client, and keep using the pointer)
+    if (sDataMgr.IsStation(m_locationID)) {
+        PyDecRef(*update);
         return;
+    }
     DoDestinyAction act;
         act.stamp = sEntityList.GetStamp();
     if (DoPackage/* or m_packaged*/) {
@@ -2461,8 +2485,7 @@ void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool
         PyTuple* t = dum.Encode();
         if (is_log_enabled(CLIENT__QUEUE_DUMP))
             t->Dump(CLIENT__QUEUE_DUMP, "");
-        SendNotification("DoDestinyUpdate", "clientID", &t, false);
-        PyDecRef(t);
+        SendNotification("DoDestinyUpdate", "clientID", &t, false);    // takes over t
     } else {
         act.update = *update;
         m_packaged = true;
@@ -2474,6 +2497,8 @@ void Client::_SendQueuedUpdates() {
     if (!m_destinyUpdateQueue->empty()) {
         if (m_destinyEventQueue->empty()) {
             DoDestinyUpdateMain_2 dum;
+                // the packet struct releases its lists; the queues are ours
+                PyIncRef(m_destinyUpdateQueue);
                 dum.updates = m_destinyUpdateQueue;
                 dum.waitForBubble = m_bubbleWait;
             PyTuple* t = dum.Encode();
@@ -2482,7 +2507,9 @@ void Client::_SendQueuedUpdates() {
             SendNotification("DoDestinyUpdate", "clientID", &t);
         } else {
             DoDestinyUpdateMain dum;
+                PyIncRef(m_destinyUpdateQueue);
                 dum.updates = m_destinyUpdateQueue;
+                PyIncRef(m_destinyEventQueue);
                 dum.events = m_destinyEventQueue;
                 dum.waitForBubble = m_bubbleWait;
             PyTuple* t = dum.Encode();
@@ -2492,6 +2519,7 @@ void Client::_SendQueuedUpdates() {
         }
     } else if (!m_destinyEventQueue->empty()) {
         Notify_OnMultiEvent nom;
+            PyIncRef(m_destinyEventQueue);
             nom.events = m_destinyEventQueue;
         PyTuple* t = nom.Encode();
         if (is_log_enabled(CLIENT__QUEUE_DUMP))
@@ -2976,8 +3004,11 @@ void Client::_SendCallReturn(const PyAddress& source, int64 callID, PyResult &rs
 
     packet->userid = GetUserID();
 
+    // the packet takes references to the results; rsp releases its own
+    PySafeIncRef(rsp.ssResult);
     packet->payload = new PyTuple(1);
     packet->payload->SetItem(0, new PySubStream(rsp.ssResult));
+    PySafeIncRef(rsp.ssNamedResult);
     packet->named_payload = rsp.ssNamedResult;
 
     if (is_log_enabled(COLLECT__PACKET_DUMP)) {
@@ -3008,7 +3039,7 @@ void Client::_SendException(const PyAddress& source, int64 callID, MACHONETMSG_T
         e.MsgType = msgType;
         e.ErrorCode = errCode;
         e.payload = *payload;
-    payload = nullptr;
+    *payload = nullptr;     // consumed:  e releases it
 
     packet->payload = e.Encode();
     QueuePacket(packet);

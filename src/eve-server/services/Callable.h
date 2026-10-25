@@ -63,6 +63,8 @@ template <class T> struct is_optional<std::optional<T>> : std::true_type {};
 
 struct CallHandlerBase {
 public:
+    // bound objects delete their handlers through this
+    virtual ~CallHandlerBase() = default;
     virtual PyResult operator() (void* service, PyCallArgs& args) const = 0;
     virtual const std::string& getSignature () = 0;
 };

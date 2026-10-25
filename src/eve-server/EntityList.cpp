@@ -65,6 +65,7 @@
 
 EntityList::EntityList()
 : m_services(nullptr),
+m_closing(false),
 m_targTimer(0, true),
 m_stampTimer(0, true),
 m_minuteTimer(0, true),
@@ -113,6 +114,7 @@ void EntityList::Shutdown() {
      * sConsole.IsShutdown() is true here, so clients take the shutdown logout path (no ship left in space).
      * server run loop will exit after control is returned from this function, which will clean up remaining items.
      */
+    m_closing = true;
     if (m_clients.empty())
         return;
 
@@ -130,6 +132,7 @@ void EntityList::Shutdown() {
 
 void EntityList::Close()
 {
+    m_closing = true;
     if (m_clients.size() > 0) {
         sLog.Yellow("       EntityList", "Cleaning up %lu clients, %lu systems, %lu agents, and %lu stations", \
                     m_clients.size(), m_systems.size(), m_agents.size(), m_stations.size());
@@ -550,8 +553,10 @@ void EntityList::GetUpTime( std::string& time )
 void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyType, const char* idType, PyTuple* payload) const
 {
     // make sure this is player corp (which it really should be, but just in case....)
-    if (IsNPCCorp(corpID))
+    if (IsNPCCorp(corpID)) {
+        PySafeDecRef(payload);
         return;
+    }
     std::map<uint32, Client*> cMap;
     std::map<uint32, corpRole>::const_iterator cItr = m_corpMembers.find(corpID);
     if (cItr == m_corpMembers.end()) {
@@ -732,7 +737,7 @@ void EntityList::Broadcast(const char* notifyType, const char* idType, PyTuple**
     EVENotificationStream notify;
         notify.remoteObject = 1;
         notify.args = *payload;
-    payload = nullptr;    //consumed
+    *payload = nullptr;    //consumed
 
     //now sent it to the client
     PyAddress dest;
@@ -760,7 +765,7 @@ void EntityList::Multicast(const character_set &cset, const PyAddress &dest, EVE
 void EntityList::Multicast( const char* notifyType, const char* idType, PyTuple** in_payload, NotificationDestination target, uint32 targID, bool seq )
 {
     PyTuple* payload = *in_payload;
-    in_payload = nullptr;
+    *in_payload = nullptr;    // consumed
 
     std::vector<Client*> cVec;
     cVec.clear();
@@ -803,7 +808,7 @@ void EntityList::Multicast(const char* notifyType, const char* idType, PyTuple**
 {
     // consume payload
     PyTuple* payload = *in_payload;
-    in_payload = nullptr;
+    *in_payload = nullptr;    // consumed
 
     if (!mcset.characters.empty())
         for (auto cur : mcset.characters) {
@@ -861,7 +866,7 @@ void EntityList::Multicast(const character_set &cset, const char* notifyType, co
 {
     // consume payload
     PyTuple* payload = *in_payload;
-    in_payload = nullptr;
+    *in_payload = nullptr;    // consumed
 
     std::map<uint32, Client*>::const_iterator itr = m_players.begin();
     for (auto cur : cset) {
@@ -875,9 +880,13 @@ void EntityList::Multicast(const character_set &cset, const char* notifyType, co
 }
 
 void EntityList::Unicast(uint32 charID, const char* notifyType, const char* idType, PyTuple** payload, bool seq) {
+    // takes over *payload, as SendNotification does
     Client* pClient = FindClientByCharID(charID);
-    if (pClient != nullptr)
+    if (pClient != nullptr) {
         pClient->SendNotification( notifyType, idType, payload, seq );
+    } else {
+        PySafeDecRef(*payload);
+    }
 }
 
 /** @todo @note NOTE: TODO: HACK: the Find* methods below can get very expensive for many players */

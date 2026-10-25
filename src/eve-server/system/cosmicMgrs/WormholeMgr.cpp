@@ -592,6 +592,7 @@ void WormholeMgr::SendSlim(const WormholePair& wh)
             itemData->SetItem(0, new PyString("OnSlimItemChange"));
             itemData->SetItem(1, slimData);
         pSE->SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange");
+        PyDecRef(itemData);     // the bubblecast takes its own references
     }
 }
 

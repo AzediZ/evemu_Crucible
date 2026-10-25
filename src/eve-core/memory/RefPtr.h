@@ -56,7 +56,7 @@ public:
      *
      * @param[in] initRefCount Initial reference count.
      */
-    RefObject(uint16 initRefCount)
+    RefObject(uint32 initRefCount)
     : mRefCount(initRefCount),
     mDeleted(false)
     {
@@ -78,7 +78,7 @@ public:
         mDeleted = true;
     }
 
-    uint16 GetCount()           { return mRefCount; }
+    uint32 GetCount()           { return mRefCount; }
     bool IsDeleted()            { return mDeleted; }
 
 protected:
@@ -124,8 +124,9 @@ protected:
     }
 
 private:
-    /// Reference count of instance.
-    mutable uint16 mRefCount;
+    /// Reference count of instance.  32 bits:  the shared PyStatic objects (None, True, empty tuple...) are referenced
+    ///  from everywhere, and a 16 bit count wrapped round
+    mutable uint32 mRefCount;
     mutable bool mDeleted;
 };
 

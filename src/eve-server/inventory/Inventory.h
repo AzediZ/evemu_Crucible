@@ -39,7 +39,8 @@ class Inventory
 {
     friend class InventoryItem;
 public:
-    Inventory(InventoryItemRef iRef);
+    // self is the item this is the inventory of, which owns it
+    explicit Inventory(InventoryItem* self);
     virtual ~Inventory() noexcept                       { /* do nothing here*/ }
 
     void Reset();
@@ -123,7 +124,10 @@ protected:
     void List(CRowSet* into, EVEItemFlags flag, uint32 ownerID=0) const;
 
     InventoryDB m_db;
-    InventoryItemRef m_self;
+    /* the item this is the inventory of.  not a reference:  the item owns its inventory, and a reference back meant no
+     *  item with an inventory (character, ship, container, station) was ever freed
+     */
+    InventoryItem* m_self;
 
 private:
     bool mContentsLoaded;

@@ -48,11 +48,11 @@
 /*
  * Inventory
  */
-Inventory::Inventory(InventoryItemRef iRef)
+Inventory::Inventory(InventoryItem* self)
 {
     mContentsLoaded = false;
-    m_self = iRef;
-    m_myID = iRef->itemID();
+    m_self = self;
+    m_myID = self->itemID();
 }
 
 void Inventory::Reset()
@@ -146,7 +146,7 @@ bool Inventory::LoadContents() {
         if (pClient->IsValidSession())
             od.corpID = pClient->GetCorporationID();
         if (sDataMgr.IsStation(m_myID)) {
-            if (!StationItemRef::StaticCast(m_self)->IsLoaded())
+            if (!static_cast<StationItem*>(m_self)->IsLoaded())
                 StationDB::LoadOffices(od, items);
             if (IsPlayerCorp(od.corpID)) {
                 /* this will load all non-NPC corp items in this station */
@@ -1020,8 +1020,7 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
         throw CustomError ("Only members of the gantry's corporation can put materials in its upgrade hold.");
     // customs offices take planetary commodities only, and their room is per character
     if ((m_self->groupID() == EVEDB::invGroups::Orbital_Infrastructure) and (flag == flagHangar)) {
-        StructureItemRef sRef = StructureItemRef::StaticCast(m_self);
-        SystemEntity* pSE(sRef->GetMySE());
+        SystemEntity* pSE(static_cast<StructureItem*>(m_self)->GetMySE());
         if ((pSE != nullptr) and pSE->IsCOSE()) {
             pSE->GetCOSE()->ValidateAddItem(iRef);
             return true;
@@ -1086,8 +1085,6 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
     // check capy for single unit
     if (capacity < volume) { // smallest volume is 0.0025
         if (pClient != nullptr) {
-            std::map<std::string, PyRep *> args;
-            args["volume"] = new PyFloat(volume);
             sItemFactory.UnsetUsingClient();
             if (IsCargoHoldFlag(flag))
                 throw UserError ("NotEnoughCargoSpace")

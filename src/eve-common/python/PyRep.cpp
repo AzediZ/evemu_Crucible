@@ -619,9 +619,11 @@ bool PyToken::visit( PyVisitor& v ) const
 /* PyRep Tuple Class                                                    */
 /************************************************************************/
 PyTuple::PyTuple( size_t item_count ) : PyRep( PyRep::PyTypeTuple ), items( item_count, nullptr ) {}
+// a shallow copy:  the items are shared, so each gets another reference
 PyTuple::PyTuple( const PyTuple& oth ) : PyRep( PyRep::PyTypeTuple ), items(oth.items)
 {
-    //sLog.Cyan("PyTuple()", "Copy C'tor.");
+    for (auto cur : items)
+        PySafeIncRef(cur);
 }
 
 PyRep* PyTuple::Clone() const
@@ -687,15 +689,16 @@ int32 PyTuple::hash() const
 /* PyRep List Class                                                     */
 /************************************************************************/
 PyList::PyList(size_t item_count) : PyRep(PyRep::PyTypeList), items(item_count, nullptr) { }
+// a shallow copy:  the items are shared, so each gets another reference
 PyList::PyList(const PyList& oth) : PyRep(PyRep::PyTypeList), items(oth.items)
 {
-    //sLog.Cyan("PyList()", "Copy C'tor.");
+    for (auto cur : items)
+        PySafeIncRef(cur);
 }
 
 PyList::~PyList()
 {
-    //for (auto cur : items)
-    //    PySafeDecRef(cur);
+    clear();
 }
 
 PyRep* PyList::Clone() const
@@ -741,19 +744,18 @@ PyList& PyList::operator=( const PyList& oth )
 /* PyRep Dict Class                                                     */
 /************************************************************************/
 PyDict::PyDict() : PyRep( PyRep::PyTypeDict ), items() { }
+// a shallow copy:  the keys and values are shared, so each gets another reference
 PyDict::PyDict( const PyDict& oth ) : PyRep( PyRep::PyTypeDict ), items(oth.items)
 {
-    //sLog.Cyan("PyDict()", "Copy C'tor.");
+    for (auto cur : items) {
+        PyIncRef(cur.first);
+        PySafeIncRef(cur.second);
+    }
 }
 
 PyDict::~PyDict()
 {
-    /*
-    for (auto cur : items) {
-        PyDecRef(cur.first);
-        PySafeDecRef(cur.second);
-    }
-    */
+    clear();
 }
 
 PyRep* PyDict::Clone() const
@@ -818,9 +820,11 @@ void PyDict::SetItem( PyRep* key, PyRep* value )
         items.insert( std::make_pair( key, value ) );
     } else {
         // We found 'key' in current dict, so use itr->first and decRef 'key'.
-        // is this right?
-        PyDecRef( key );
+        if (key != itr->first)
+            PyDecRef( key );
         // Replace itr->second with new value.
+        if ((value != nullptr) and (value == itr->second))
+            return;
         PySafeDecRef( itr->second );
         if (value == nullptr) {
             itr->second = PyStatic.NewNone();
@@ -857,7 +861,9 @@ PyObject::PyObject(const char* type, PyRep* args )
 PyObject::PyObject(const PyObject& oth)
 : PyRep(PyRep::PyTypeObject), mType(oth.mType), mArguments(oth.arguments())
 {
-    //sLog.Cyan("PyObject()", "Copy C'tor.");
+    // shared with oth, which releases them too
+    PyIncRef(mType);
+    PyIncRef(mArguments);
 }
 
 PyObject::~PyObject()
@@ -885,7 +891,9 @@ PyObjectEx::PyObjectEx(bool is_type_2, PyRep* header) : PyRep(PyRep::PyTypeObjec
 PyObjectEx::PyObjectEx( const PyObjectEx& oth ) : PyRep( PyRep::PyTypeObjectEx ),
 mHeader(oth.header()->Clone()), mIsType2(oth.isType2()), mList(oth.mList), mDict(oth.mDict)
 {
-    //sLog.Cyan("PyObjectEx()", "Copy C'tor.");
+    // shared with oth, which releases them too
+    PyIncRef(mList);
+    PyIncRef(mDict);
 }
 
 PyObjectEx::~PyObjectEx()
@@ -1097,12 +1105,7 @@ PyTuple* PyObjectEx_Type2::_CreateHeader( PyToken* args, PyDict* keywords, bool 
         body->SetItem( 0, args );
         body->SetItem( 1, keywords );
 
-    if (enclosed) {
-        PyTuple* head = new PyTuple( 1 );
-            head->SetItem( 0, body );
-    }
-
-    return body; // head;
+    return body;
 }
 
 /************************************************************************/
@@ -1113,7 +1116,9 @@ PyPackedRow::PyPackedRow(DBRowDescriptor* header)
 PyPackedRow::PyPackedRow(const PyPackedRow& oth )
 : PyRep(PyRep::PyTypePackedRow), mHeader(oth.header()), mFields(oth.mFields)
 {
-    //sLog.Cyan("PyPackedRow()", "Copy C'tor.");
+    // shared with oth, which releases them too
+    PyIncRef(mHeader);
+    PyIncRef(mFields);
 }
 
 PyPackedRow::~PyPackedRow()

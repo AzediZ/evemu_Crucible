@@ -55,7 +55,7 @@ SolarSystem::SolarSystem(
 : CelestialObject(_solarSystemID, _type, _data, _cData),
 m_data(_ssData)
 {
-    pInventory = new Inventory(InventoryItemRef(this));
+    pInventory = new Inventory(this);
 
     m_security = _ssData.security;
     m_radius = _ssData.radius;

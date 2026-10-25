@@ -29,6 +29,7 @@
 
 #include "ConsoleCommands.h"
 #include "Client.h"
+#include "EntityList.h"
 #include "Container.h"
 #include "EVEServerConfig.h"
 
@@ -630,7 +631,7 @@ ObjectSystemEntity::ObjectSystemEntity(const ObjectSystemEntity* oth)
 ObjectSystemEntity::~ObjectSystemEntity()
 {
     if (m_targMgr != nullptr)
-        if (!sConsole.IsShutdown()) {
+        if (!sEntityList.IsClosing()) {
             m_targMgr->ClearModules();
             m_targMgr->ClearAllTargets(false);
             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
@@ -774,7 +775,8 @@ void DeployableSE::Process()
                 sbf.entityID = m_self->itemID();
                 sbf.is_free = true;
             PyTuple* up = sbf.Encode();
-            m_destiny->SendSingleDestinyUpdate(&up);   // consumed
+            m_destiny->SendSingleDestinyUpdate(&up);
+            PyDecRef(up);
             // client: green, sphere hidden
             SendAnchorFx("effects.AnchorLift", false, 0);
             _log(SE__TRACE, "DeployableSE::Process() - %s(%u) unanchored.", GetName(), GetID());
@@ -812,7 +814,8 @@ void DeployableSE::Anchor(Client* pClient)
         sbf.entityID = m_self->itemID();
         sbf.is_free = false;
     PyTuple* up = sbf.Encode();
-    m_destiny->SendSingleDestinyUpdate(&up);   // consumed
+    m_destiny->SendSingleDestinyUpdate(&up);
+    PyDecRef(up);
     // client: yellow until the stop at the end of the delay
     SendAnchorFx("effects.AnchorDrop", true, delay);
     _log(SE__TRACE, "DeployableSE::Anchor() - %s(%u) anchoring for %ums.", GetName(), GetID(), delay);
@@ -886,7 +889,7 @@ DynamicSystemEntity::DynamicSystemEntity(const DynamicSystemEntity* oth)
 DynamicSystemEntity::~DynamicSystemEntity()
 {
     if (m_targMgr != nullptr)
-        if (!sConsole.IsShutdown()) {
+        if (!sEntityList.IsClosing()) {
             m_targMgr->ClearModules();
             m_targMgr->ClearAllTargets(false);
             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
