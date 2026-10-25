@@ -1,0 +1,1275 @@
+From 8f6c737bf7a5f7fb14861c9607e42f38538b8ce8 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 00:08:30 +0000
+Subject: [PATCH 100/110] Sovereignty and starbases
+
+Infrastructure hubs go into reinforcement by Dominion rules, as
+outposts do:  at 25% shield (out at 0%) and at 50% armor (out at 25%),
+each for the type's 24 hours give or take 3, and are destroyed with
+their upgrades at 0% structure.  Hits stop at the thresholds, a
+reinforced hub can't be shot, its shield regenerates, and a blockade
+broken between the timers ends the siege.  Siege state is kept in the
+new sovHubSiege table.
+
+The owners hear about attacks:  TCUs, SBUs and hubs send their damage
+alerts to the owner corp's starbase officers (at most once an hour),
+player customs offices send OrbitalAttacked and OrbitalReinforced,
+shooting an outpost's service structures sends StationAggression1 to
+its station managers, and handing a customs office or outpost to
+another corp sends OwnershipTransferred to both corps.
+
+Fixes rolled in:
+- SBUs anchor at their gate, and sov structures keep their damage
+  across system reloads without an error per hit
+- online TCUs and infrastructure hubs can be locked
+- stations can be hit, targeted and locked from near their walls, and
+  shooting an invulnerable one no longer crashes the server
+- starbase silos take fullerite and hybrid polymers, so polymer
+  reactions can run
+---
+ sql/migrations/20261024150000-ihub-sieges.sql |  17 ++
+ src/eve-server/admin/SystemCommands.cpp       |  58 ++++-
+ src/eve-server/admin/SystemCommands.h         |   2 +-
+ src/eve-server/corporation/CorpStationMgr.cpp |   4 +
+ src/eve-server/inventory/AttributeMap.cpp     |   7 +-
+ src/eve-server/mail/NotificationMgr.cpp       |  15 ++
+ src/eve-server/mail/NotificationMgr.h         |   3 +
+ src/eve-server/planet/CustomsOffice.cpp       |  41 +++-
+ src/eve-server/planet/CustomsOffice.h         |   8 +-
+ src/eve-server/pos/Structure.cpp              |  68 +++++-
+ src/eve-server/pos/Structure.h                |   7 +
+ src/eve-server/pos/Tower.cpp                  |   3 +
+ src/eve-server/pos/sovStructures/IHub.cpp     | 219 +++++++++++++++++-
+ src/eve-server/pos/sovStructures/IHub.h       |  36 ++-
+ src/eve-server/pos/sovStructures/SBU.cpp      |   7 +
+ src/eve-server/pos/sovStructures/SBU.h        |   2 +
+ src/eve-server/pos/sovStructures/TCU.cpp      |   7 +
+ src/eve-server/pos/sovStructures/TCU.h        |   2 +
+ src/eve-server/ship/BeyonceService.cpp        |   3 +
+ src/eve-server/ship/modules/ActiveModule.cpp  |  18 +-
+ .../ship/modules/TurretFormulas.cpp           |  16 +-
+ src/eve-server/station/Outpost.cpp            |  33 ++-
+ src/eve-server/station/Outpost.h              |   5 +-
+ src/eve-server/system/Damage.cpp              |   2 +-
+ src/eve-server/system/SystemManager.cpp       |   4 +
+ src/eve-server/system/TargetManager.cpp       |  15 +-
+ src/eve-server/system/sov/SovereigntyDB.cpp   |  37 +++
+ src/eve-server/system/sov/SovereigntyDB.h     |   6 +
+ 28 files changed, 609 insertions(+), 36 deletions(-)
+ create mode 100644 sql/migrations/20261024150000-ihub-sieges.sql
+
+diff --git a/sql/migrations/20261024150000-ihub-sieges.sql b/sql/migrations/20261024150000-ihub-sieges.sql
+new file mode 100644
+index 0000000..68729ca
+--- /dev/null
++++ b/sql/migrations/20261024150000-ihub-sieges.sql
+@@ -0,0 +1,17 @@
++-- Infrastructure hub sieges:  the damage and reinforcement of hubs that have been attacked (IHubSE).  phase is
++--  OutpostSiege::Phase (EVE_Outpost.h), timerEnd the FILETIME its reinforcement ends and updated the FILETIME of the save
++--  (shields regenerate while the system is unloaded).  a hub without a row is at full health
++-- +migrate Up
++CREATE TABLE IF NOT EXISTS `sovHubSiege` (
++  `hubID` int(10) unsigned NOT NULL,
++  `phase` tinyint(3) unsigned NOT NULL DEFAULT 0,
++  `shieldCharge` double NOT NULL DEFAULT 0,
++  `armorDamage` double NOT NULL DEFAULT 0,
++  `damage` double NOT NULL DEFAULT 0,
++  `timerEnd` bigint(20) NOT NULL DEFAULT 0,
++  `updated` bigint(20) NOT NULL DEFAULT 0,
++  PRIMARY KEY (`hubID`)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
++
++-- +migrate Down
++DROP TABLE IF EXISTS `sovHubSiege`;
+diff --git a/src/eve-server/admin/SystemCommands.cpp b/src/eve-server/admin/SystemCommands.cpp
+index e988bf8..ca4cd88 100644
+--- a/src/eve-server/admin/SystemCommands.cpp
++++ b/src/eve-server/admin/SystemCommands.cpp
+@@ -36,6 +36,7 @@
+ #include "pos/Tower.h"
+ #include "pos/Structure.h"
+ #include "station/Outpost.h"
++#include "pos/sovStructures/IHub.h"
+ #include "system/sov/SovereigntyDataMgr.h"
+ #include "tables/invGroups.h"
+ #include "tables/invCategories.h"
+@@ -1205,9 +1206,37 @@ namespace {
+         return "unknown";
+     }
+ 
+-    /* /sov siege [info|next|repair] [stationID]
+-     *  an outpost or conquerable station in your system (the first one if no stationID).  info shows its siege, next ends
+-     *  a reinforcement or puts it into its next one (the layer set to the threshold), repair takes it and its service structures back to full health
++    // the infrastructure hub's siege (/sov siege with a hub)
++    PyResult HubSiegeCommand(IHubSE* pHub, const std::string& what)
++    {
++        if (what == "next") {
++            if (!pHub->GMEndReinforcement())
++                throw CustomError ("%s can't go into reinforcement (no timers:  it isn't the hub of its alliance's claim).", pHub->GetName());
++        } else if (what == "repair") {
++            pHub->GMRepair();
++        }
++        InventoryItemRef iRef(pHub->GetSelf());
++        double shieldCap(iRef->GetAttribute(AttrShieldCapacity).get_double()), armorHP(iRef->GetAttribute(AttrArmorHP).get_double());
++        double hp(iRef->GetAttribute(AttrHP).get_double());
++        std::string reinforced;
++        if (OutpostSiege::IsReinforced(pHub->GetSiegePhase()))
++            reinforced = "  reinforced for " + std::to_string((pHub->GetReinforcementEnd() - GetFileTimeNow()) / EvE::Time::Minute) + " more minutes.";
++        char buf[1024];
++        snprintf(buf, sizeof(buf), "%s (%u), owner %u:  %s, %s%s.  shield %.1f%%, armor %.1f%%, structure %.1f%%.%s",
++                 pHub->GetName(), pHub->GetID(), pHub->GetCorporationID(),
++                 (OutpostSiege::IsReinforced(pHub->GetSiegePhase()) or (pHub->GetSiegePhase() != OutpostSiege::Phase::Structure)
++                    ? SiegePhaseName(pHub->GetSiegePhase()) : "structure (destroyed at 0%)"),
++                 (pHub->IsInvul() ? "invulnerable" : "vulnerable"), (pHub->HasTimers() ? "" : ", no timers"),
++                 (shieldCap > 0 ? 100.0 * iRef->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0),
++                 (armorHP > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrArmorDamage).get_double() / armorHP) : 0.0),
++                 (hp > 0 ? 100.0 * (1.0 - iRef->GetAttribute(AttrDamage).get_double() / hp) : 0.0), reinforced.c_str());
++        return new PyString(buf);
++    }
++
++    /* /sov siege [info|next|repair] [itemID]
++     *  an outpost, conquerable station or infrastructure hub in your system (the first outpost, else the claim's hub, if no
++     *  itemID).  info shows its siege, next ends a reinforcement or puts it into its next one (the layer set to the
++     *  threshold), repair takes it (and an outpost's service structures) back to full health
+      */
+     PyResult SiegeCommand(Client* pClient, const Seperator& args)
+     {
+@@ -1215,17 +1244,28 @@ namespace {
+             throw CustomError ("You must be in space.");
+         std::string what((args.argCount() > 2) ? args.arg(2) : "info");
+         if ((what != "info") and (what != "next") and (what != "repair"))
+-            throw CustomError ("Correct Usage: /sov siege [info|next|repair] [stationID]");
++            throw CustomError ("Correct Usage: /sov siege [info|next|repair] [itemID]");
+         OutpostSE* pOSE(nullptr);
++        IHubSE* pHub(nullptr);
+         if ((args.argCount() > 3) and args.isNumber(3)) {
+             SystemEntity* pSE(pClient->SystemMgr()->GetSE(atoi(args.arg(3).c_str())));
+-            if (pSE != nullptr)
++            if (pSE != nullptr) {
+                 pOSE = pSE->GetOutpostSE();
++                if (pSE->IsPOSSE())
++                    pHub = pSE->GetPOSSE()->GetIHubSE();
++            }
+         } else if (!pClient->SystemMgr()->GetOutposts().empty()) {
+             pOSE = pClient->SystemMgr()->GetOutposts().front();
++        } else {
++            uint32 hubID(svDataMgr.GetSovereigntyData(pClient->GetSystemID()).hubID);
++            SystemEntity* pSE(hubID > 0 ? pClient->SystemMgr()->GetSE(hubID) : nullptr);
++            if ((pSE != nullptr) and pSE->IsPOSSE())
++                pHub = pSE->GetPOSSE()->GetIHubSE();
+         }
++        if (pHub != nullptr)
++            return HubSiegeCommand(pHub, what);
+         if (pOSE == nullptr)
+-            throw CustomError ("No outpost or conquerable station found in this system.");
++            throw CustomError ("No outpost, conquerable station or claimed infrastructure hub found in this system.");
+ 
+         if (what == "next") {
+             if (!pOSE->GMEndReinforcement())
+@@ -1310,6 +1350,12 @@ namespace {
+             throw CustomError ("%u is not a structure in this system", itemID);
+ 
+         StructureSE* pStruct(pSE->GetPOSSE());
++        // a reinforced infrastructure hub:  complete ends the reinforcement now
++        if ((pStruct->GetIHubSE() != nullptr) and (action == StructureTiming::GMAction::Complete)
++        and OutpostSiege::IsReinforced(pStruct->GetIHubSE()->GetSiegePhase())) {
++            pStruct->GetIHubSE()->GMEndReinforcement();
++            return new PyString("Done:  " + name + " is out of reinforcement.");
++        }
+         if (!pStruct->GMChangeState(action))
+             return new PyString("Nothing to do:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");
+         return new PyString("Done:  " + name + " is " + PosStateName(pStruct->GetState()) + ".");
+diff --git a/src/eve-server/admin/SystemCommands.h b/src/eve-server/admin/SystemCommands.h
+index 03ee18a..c6f6a6e 100644
+--- a/src/eve-server/admin/SystemCommands.h
++++ b/src/eve-server/admin/SystemCommands.h
+@@ -37,7 +37,7 @@ COMMAND( killallnpcs, Acct::Role::ADMIN,
+ COMMAND( cloak, Acct::Role::VIP,
+          " - instantly and unconditionally toggles cloak state of your vessel")
+ COMMAND( sov, Acct::Role::CONTENT,
+-         "(anchor|online|offline|unanchor|complete) (itemID) | tenure (days) [solarSystemID] | siege [info|next|repair] [stationID] - anchors, onlines, offlines or unanchors a structure at once, without the delays (sovereignty structures, starbases, platforms, customs offices).  online anchors first, unanchor offlines first.  complete finishes the running anchoring/onlining/unanchoring now.  tenure backdates the claim to that many days held (the strategic/Sovereignty index follows: 7/21/35/65/100 days for levels 1-5).  siege [info|next|repair] [stationID] shows an outpost's siege, ends its reinforcement or puts it into the next one, or repairs it")
++         "(anchor|online|offline|unanchor|complete) (itemID) | tenure (days) [solarSystemID] | siege [info|next|repair] [itemID] - anchors, onlines, offlines or unanchors a structure at once, without the delays (sovereignty structures, starbases, platforms, customs offices).  online anchors first, unanchor offlines first.  complete finishes the running anchoring/onlining/unanchoring now.  tenure backdates the claim to that many days held (the strategic/Sovereignty index follows: 7/21/35/65/100 days for levels 1-5).  siege [info|next|repair] [itemID] shows the siege of an outpost or infrastructure hub, ends its reinforcement or puts it into the next one, or repairs it")
+ COMMAND( pos, Acct::Role::PROGRAMMER,
+          "(anchor|online|offline|unanchor|complete) (itemID) | fuel [towerID] [hours] - the same as /sov (any structure, at once), or fills a control tower's fuel and strontium bays")
+ COMMAND( hop, Acct::Role::CONTENT,
+diff --git a/src/eve-server/corporation/CorpStationMgr.cpp b/src/eve-server/corporation/CorpStationMgr.cpp
+index a34baea..e22b8dc 100644
+--- a/src/eve-server/corporation/CorpStationMgr.cpp
++++ b/src/eve-server/corporation/CorpStationMgr.cpp
+@@ -49,6 +49,7 @@
+ #include "chat/LSCService.h"
+ #include "corporation/CorpMgr.h"
+ #include "EVE_Mail.h"
++#include "mail/NotificationMgr.h"
+ #include "corporation/BillingMgr.h"
+ #include "corporation/ItemLockdown.h"
+ #include "alliance/AllianceDB.h"
+@@ -717,10 +718,13 @@ PyResult CorpStationMgrIMBound::UpdateStationOwner(PyCallArgs& call, PyInt* newO
+     if (corpID == pStationItem->GetOwnerID())
+         return nullptr;
+ 
++    uint32 oldCorpID(pStationItem->GetOwnerID());
+     StationDB::SetStationOwner(m_stationID, corpID);
+     stDataMgr.SetStationOwner(m_stationID, corpID);
+     pStationItem->UpdateSettings();
+     pStationItem->ChangeOwner(corpID, true);
++    NotificationMgr::SendOwnershipTransferred(call.client->GetCharacterID(), oldCorpID, corpID, pStationItem->locationID(), m_stationID,
++                                              pStationItem->typeID(), Corp::Role::StationManager);
+ 
+     _log(CORP__INFO, "CorpStationMgrIMBound::UpdateStationOwner() - station %u handed to corp %u by %u", m_stationID, corpID, call.client->GetCharacterID());
+     return nullptr;
+diff --git a/src/eve-server/inventory/AttributeMap.cpp b/src/eve-server/inventory/AttributeMap.cpp
+index 134047f..ca64eea 100644
+--- a/src/eve-server/inventory/AttributeMap.cpp
++++ b/src/eve-server/inventory/AttributeMap.cpp
+@@ -437,8 +437,11 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
+     if (attrChange == nullptr)
+         return true;
+     /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
+-     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
+-    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)) {
++     *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log).  the
++     *  sovereignty structures in space the same (a siege's hits) */
++    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)
++        or (mItem.groupID() == EVEDB::invGroups::Territorial_Claim_Units) or (mItem.groupID() == EVEDB::invGroups::Infrastructure_Hubs)
++        or (mItem.groupID() == EVEDB::invGroups::Sovereignty_Blockade_Units)) {
+         PyDecRef(attrChange);
+         return true;
+     }
+diff --git a/src/eve-server/mail/NotificationMgr.cpp b/src/eve-server/mail/NotificationMgr.cpp
+index e48ea81..44cf0cf 100644
+--- a/src/eve-server/mail/NotificationMgr.cpp
++++ b/src/eve-server/mail/NotificationMgr.cpp
+@@ -148,6 +148,21 @@ void NotificationMgr::SendToAlliance(uint32 allianceID, int64 roleMask, uint16 t
+     Send(toIDs, typeID, senderID, data);
+ }
+ 
++void NotificationMgr::SendOwnershipTransferred(uint32 charID, uint32 oldCorpID, uint32 newCorpID, uint32 solarSystemID,
++                                               uint32 structureID, uint16 structureTypeID, int64 roleMask)
++{
++    for (uint32 toCorp : {oldCorpID, newCorpID}) {
++        PyDict* data = new PyDict();
++            data->SetItemString("charID",           (charID == 0 ? PyStatic.NewNone() : new PyInt(charID)));
++            data->SetItemString("oldOwnerCorpID",   new PyInt(oldCorpID));
++            data->SetItemString("newOwnerCorpID",   new PyInt(newCorpID));
++            data->SetItemString("solarSystemID",    new PyInt(solarSystemID));
++            data->SetItemString("structureID",      new PyInt(structureID));
++            data->SetItemString("structureTypeID",  new PyInt(structureTypeID));
++        SendToCorp(toCorp, roleMask, Notify::Types::OwnershipTransferred, toCorp, data);
++    }
++}
++
+ std::string NotificationMgr::ToYaml(PyRep* rep)
+ {
+     std::string yaml;
+diff --git a/src/eve-server/mail/NotificationMgr.h b/src/eve-server/mail/NotificationMgr.h
+index 0611f7d..a747d82 100644
+--- a/src/eve-server/mail/NotificationMgr.h
++++ b/src/eve-server/mail/NotificationMgr.h
+@@ -50,6 +50,9 @@ public:
+     static void   SendToCorp(uint32 corpID, int64 roleMask, uint16 typeID, uint32 senderID, PyDict* data);
+     // all members of all corps in an alliance (roleMask as above).  consumes `data`
+     static void   SendToAlliance(uint32 allianceID, int64 roleMask, uint16 typeID, uint32 senderID, PyDict* data);
++    // 'Ownership transferred' (OwnershipTransferred) to the directors and roleMask holders of both corporations
++    static void   SendOwnershipTransferred(uint32 charID, uint32 oldCorpID, uint32 newCorpID, uint32 solarSystemID,
++                                           uint32 structureID, uint16 structureTypeID, int64 roleMask);
+ 
+     // group id (Notify::Groups) for a type, -1 when the type is not a client notification (eg. 125-129)
+     static int8   GetGroup(uint16 typeID);
+diff --git a/src/eve-server/planet/CustomsOffice.cpp b/src/eve-server/planet/CustomsOffice.cpp
+index c8fa2d5..71d6e4a 100644
+--- a/src/eve-server/planet/CustomsOffice.cpp
++++ b/src/eve-server/planet/CustomsOffice.cpp
+@@ -27,6 +27,9 @@
+ #include "manufacturing/Blueprint.h"
+ #include "map/MapDB.h"
+ #include "math/Trig.h"
++#include "mail/NotificationMgr.h"
++#include "../eve-common/EVE_Mail.h"
++#include "../eve-common/EVE_Roles.h"
+ #include "packets/Planet.h"
+ #include "planet/CustomsOffice.h"
+ #include "planet/Planet.h"
+@@ -44,7 +47,8 @@
+ CustomsSE::CustomsSE(StructureItemRef sRef, EVEServiceManager &services, SystemManager* system, const FactionData& data)
+ : ObjectSystemEntity(sRef, services, system),
+ m_system(system),
+-m_reinforceArmed(true)
++m_reinforceArmed(true),
++m_lastAttackAlert(0)
+ {
+     m_warID = data.factionID;
+     m_allyID = data.allianceID;
+@@ -418,8 +422,38 @@ bool CustomsSE::CanBeAttacked()
+     return !IsReinforced();
+ }
+ 
+-void CustomsSE::OnShieldDamaged()
++void CustomsSE::NotifyOwner(SystemEntity* pAttacker, uint16 notifyType, int64 reinforceExitTime/*0*/)
+ {
++    if (!IsPlayerCorp(m_corpID) or (m_system == nullptr))
++        return;
++    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
++    StructureSE::GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
++    PyDict* data = new PyDict();
++        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
++        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
++        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
++        data->SetItemString("planetID",             new PyInt(m_oData.planetID));
++        data->SetItemString("planetTypeID",         (m_planetSE == nullptr ? PyStatic.NewNone() : new PyInt(m_planetSE->GetTypeID())));
++        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
++        data->SetItemString("typeID",               new PyInt(GetTypeID()));
++    if (notifyType == Notify::Types::OrbitalReinforced) {
++        data->SetItemString("reinforceExitTime",    new PyLong(reinforceExitTime));
++    } else {
++        float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
++        data->SetItemString("shieldLevel",          new PyFloat(capacity > 0.0f ? m_self->GetAttribute(AttrShieldCharge).get_float() / capacity : 0.0f));
++    }
++    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::InfrastructureTacticalOfficer, notifyType, m_corpID, data);
++}
++
++void CustomsSE::OnShieldDamaged(SystemEntity* pAttacker)
++{
++    // at most once an hour
++    int64 now(GetFileTimeNow());
++    if ((now - m_lastAttackAlert) >= EvE::Time::Hour) {
++        m_lastAttackAlert = now;
++        NotifyOwner(pAttacker, Notify::Types::OrbitalAttacked);
++    }
++
+     /* dev blog "Player-owned Customs Office" (18 Oct 2011):  reinforced at 25% shields, out "somewhere within the time of
+      *  day specified by the owner, at least 24 hours after".  reinforcementDuration and reinforcementVariance of the type
+      *  (86400 s, 3600 s on the Customs Office; Interbus offices have none and don't reinforce).  the reinforcement hour is UTC.
+@@ -442,7 +476,7 @@ void CustomsSE::OnShieldDamaged()
+     int64 variance = (int64)m_self->GetAttribute(AttrreinforcementVariance).get_float();
+ 
+     // the first time on the selected hour at least the reinforcement duration from now, give or take the variance
+-    int64 now = GetFileTimeNow();
++    now = GetFileTimeNow();
+     int64 earliest = now + duration * EvE::Time::Second;
+     int64 dayStart = earliest - (earliest % EvE::Time::Day);
+     int64 exit = dayStart + m_cData.selectedHour * EvE::Time::Hour;
+@@ -456,6 +490,7 @@ void CustomsSE::OnShieldDamaged()
+     m_reinforceArmed = false;
+     SaveState();
+     SendSlimUpdate();
++    NotifyOwner(pAttacker, Notify::Types::OrbitalReinforced, exit);
+     _log(POS__MESSAGE, "CustomsSE::OnShieldDamaged() - %s(%u) reinforced until %lli", GetName(), GetID(), exit);
+ }
+ 
+diff --git a/src/eve-server/planet/CustomsOffice.h b/src/eve-server/planet/CustomsOffice.h
+index db840a2..298c5eb 100644
+--- a/src/eve-server/planet/CustomsOffice.h
++++ b/src/eve-server/planet/CustomsOffice.h
+@@ -82,8 +82,9 @@ public:
+     // the gantry becomes the customs office it builds.  deletes this entity
+     void                        Upgrade();
+     bool                        CanBeAttacked();
+-    // after damage:  25% shield or less puts a player office into reinforcement
+-    void                        OnShieldDamaged();
++    /* after damage:  25% shield or less puts a player office into reinforcement.  the owner's starbase officers hear about
++     *  the attack (OrbitalAttacked, at most once an hour) and the reinforcement (OrbitalReinforced) */
++    void                        OnShieldDamaged(SystemEntity* pAttacker);
+     // posMgr callers:  the gantry or office, owned by the client's corp, and the role to change it
+     void                        CheckCorpAccess(Client* pClient, int64 role);
+ 
+@@ -122,6 +123,8 @@ protected:
+     void                        SaveState();
+     // OnMajorPlanetStateUpdate to the planet's colonists online (their customs office changed)
+     void                        NotifyColonists();
++    // OrbitalAttacked / OrbitalReinforced to the owner corp.  reinforceExitTime only for OrbitalReinforced
++    void                        NotifyOwner(SystemEntity* pAttacker, uint16 notifyType, int64 reinforceExitTime = 0);
+ 
+ private:
+     PosMgrDB                    m_db;
+@@ -134,6 +137,7 @@ private:
+ 
+     // an office that came out of reinforcement goes again only once its shield was above 25%
+     bool                        m_reinforceArmed;
++    int64                       m_lastAttackAlert;
+ };
+ 
+ #endif  // EVEMU_POS_CUSTOMS_OFFICE_H_
+diff --git a/src/eve-server/pos/Structure.cpp b/src/eve-server/pos/Structure.cpp
+index 85b1f96..4e6f139 100644
+--- a/src/eve-server/pos/Structure.cpp
++++ b/src/eve-server/pos/Structure.cpp
+@@ -26,6 +26,8 @@
+ #include "manufacturing/Blueprint.h"
+ #include "map/MapDB.h"
+ #include "math/Trig.h"
++#include "mail/NotificationMgr.h"
++#include "../eve-common/EVE_Mail.h"
+ #include "planet/Moon.h"
+ #include "planet/Planet.h"
+ #include "planet/CustomsOffice.h"
+@@ -234,6 +236,7 @@ StructureSE::StructureSE(StructureItemRef structure, EVEServiceManager&services,
+     m_procTimer(10000), // arbitrary default
+     m_regenTimer(1000),
+     m_regenTicks(0),
++    m_lastAttackAlert(0),
+     m_controllerID(0),
+     m_tcu(false),
+     m_sbu(false),
+@@ -287,7 +290,7 @@ void StructureSE::InitData()
+         if (m_gateSE != nullptr)
+             m_data.anchorpointID = m_gateSE->GetID();
+     }
+-    if (m_platform and IsOutpostUpgradePlatform())
++    else if (m_platform and IsOutpostUpgradePlatform())
+     { //outpost upgrade and improvement platforms are anchored at the system's outpost (one per system)
+         uint32 outpostID(stDataMgr.GetOutpostInSystem(m_system->GetID()));
+         if (outpostID != 0)
+@@ -433,6 +436,17 @@ void StructureSE::Init()
+         {
+             m_gateSE = pSE->GetGateSE();
+         }
++        // saved with a moon for its anchor point (InitData gave SBUs one):  the stargate nearest it, as when it was put down
++        if (m_gateSE == nullptr)
++        {
++            SystemEntity* pGate(m_system->GetClosestGateSE(GetPosition()));
++            m_gateSE = (pGate == nullptr ? nullptr : pGate->GetGateSE());
++            if (m_gateSE != nullptr)
++            {
++                m_data.anchorpointID = m_gateSE->GetID();
++                m_db.UpdateBaseData(m_data);
++            }
++        }
+     }
+     if (m_ihub)
+     {
+@@ -1161,6 +1175,58 @@ void StructureSE::OnDamaged(SystemEntity* pAttacker)
+         pTower->OnStructureDamaged(this, pAttacker);
+ }
+ 
++void StructureSE::GetAggressor(SystemEntity* pAttacker, uint32& charID, uint32& corpID, uint32& allyID)
++{
++    charID = corpID = allyID = 0;
++    if (pAttacker == nullptr)
++        return;
++    // pilots (and their drones) by character, anything else by its owner
++    if (pAttacker->HasPilot()) {
++        Client* pPilot(pAttacker->GetPilot());
++        charID = pPilot->GetCharacterID();
++        corpID = pPilot->GetCorporationID();
++        allyID = pPilot->GetAllianceID();
++    } else if (pAttacker->IsDroneSE() and IsCharacterID(pAttacker->GetSelf()->ownerID())) {
++        charID = pAttacker->GetSelf()->ownerID();
++        corpID = pAttacker->GetCorporationID();
++        allyID = pAttacker->GetAllianceID();
++    } else {
++        charID = pAttacker->GetOwnerID();
++        corpID = pAttacker->GetCorporationID();
++        allyID = pAttacker->GetAllianceID();
++    }
++}
++
++void StructureSE::NotifyStructureAttack(SystemEntity* pAttacker, uint16 notifyType, bool force/*false*/)
++{
++    int64 now(GetFileTimeNow());
++    if (!force and ((now - m_lastAttackAlert) < EvE::Time::Hour))
++        return;
++    m_lastAttackAlert = now;
++    if (!IsPlayerCorp(m_corpID) or (m_system == nullptr))
++        return;
++
++    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
++    GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
++    float armorHP(m_self->GetAttribute(AttrArmorHP).get_float()), hp(m_self->GetAttribute(AttrHP).get_float());
++    float shieldCap(m_self->GetAttribute(AttrShieldCapacity).get_float());
++
++    PyDict* data = new PyDict();
++        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
++        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
++        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
++        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
++        data->SetItemString("typeID",               new PyInt(GetTypeID()));
++        data->SetItemString("shieldValue",          new PyFloat(shieldCap > 0.0f ? m_self->GetAttribute(AttrShieldCharge).get_float() / shieldCap : 0.0f));
++        data->SetItemString("armorValue",           new PyFloat(armorHP > 0.0f ? 1.0f - m_self->GetAttribute(AttrArmorDamage).get_float() / armorHP : 0.0f));
++        data->SetItemString("hullValue",            new PyFloat(hp > 0.0f ? 1.0f - m_self->GetAttribute(AttrDamage).get_float() / hp : 0.0f));
++    // customs offices also say which planet
++    if (m_planetSE != nullptr)
++        data->SetItemString("planetID",             new PyInt(m_planetSE->GetID()));
++    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StarbaseConfig | Corp::Role::InfrastructureTacticalOfficer,
++                                notifyType, m_corpID, data);
++}
++
+ float StructureSE::GetShieldFraction()
+ {
+     float capacity(m_self->GetAttribute(AttrShieldCapacity).get_float());
+diff --git a/src/eve-server/pos/Structure.h b/src/eve-server/pos/Structure.h
+index cd54265..8c7654c 100644
+--- a/src/eve-server/pos/Structure.h
++++ b/src/eve-server/pos/Structure.h
+@@ -288,6 +288,12 @@ public:
+     void                        SendEffectUpdate(int16 effectID, bool active);
+     // a starbase weapon a pilot may man (posPlayerControlStructure)
+     bool                        IsControllable();
++    /* attack alerts in the TowerAlert format (aggressor, system, type, shield/armor/hull fractions left) to the owner
++     *  corp's starbase officers (Config Starbase Equipment, Infrastructure Tactical Officer, directors), at most once an
++     *  hour per structure.  force:  always.  sovereignty structures (SovereigntyTCU/SBU/IHDamage) and customs offices */
++    void                        NotifyStructureAttack(SystemEntity* pAttacker, uint16 notifyType, bool force = false);
++    // the pilot (or drone owner, or npc owner) behind an attack, with corp and alliance
++    static void                 GetAggressor(SystemEntity* pAttacker, uint32& charID, uint32& corpID, uint32& allyID);
+ 
+ protected:
+     // the Crucible anchoring rules.  modules return the control tower they anchor at
+@@ -339,6 +345,7 @@ private:
+     Timer m_regenTimer;             // shield regeneration, 1s
+     uint32 m_controllerID;          // manual control (runtime)
+     uint8 m_regenTicks;             // damage state sent every 5 regeneration tics
++    int64 m_lastAttackAlert;        // NotifyStructureAttack
+ 
+     bool m_tcu :1;              // Territorial Claim Unit
+     bool m_sbu :1;              // System Blockade Unit
+diff --git a/src/eve-server/pos/Tower.cpp b/src/eve-server/pos/Tower.cpp
+index e167ab5..907d4bb 100644
+--- a/src/eve-server/pos/Tower.cpp
++++ b/src/eve-server/pos/Tower.cpp
+@@ -1488,6 +1488,9 @@ void TowerSE::ChangeProvisionType(uint32 itemID, uint16 typeID)
+                     case EVEDB::invGroups::Composite:
+                     case EVEDB::invGroups::Gas_Isotopes:
+                     case EVEDB::invGroups::Mineral:
++                    // ...and a polymer reactor's fullerite and its polymer:  without them no polymer reaction could run
++                    case EVEDB::invGroups::Harvestable_Cloud:
++                    case EVEDB::invGroups::Hybrid_Polymers:
+                         break;
+                     default:
+                         throw UserError("MoonInvalidSiloType");
+diff --git a/src/eve-server/pos/sovStructures/IHub.cpp b/src/eve-server/pos/sovStructures/IHub.cpp
+index 52cbbeb..5cf0f9c 100644
+--- a/src/eve-server/pos/sovStructures/IHub.cpp
++++ b/src/eve-server/pos/sovStructures/IHub.cpp
+@@ -29,10 +29,40 @@
+ #include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
+ #include "system/sov/SovereigntyDataMgr.h"
++#include "system/sov/SovereigntyDB.h"
++#include "../eve-common/EVE_Mail.h"
+ 
+ IHubSE::IHubSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& fData)
+-: StructureSE(structure, services, system, fData)
++: StructureSE(structure, services, system, fData),
++m_phase(OutpostSiege::Phase::Shield),
++m_timerEnd(0),
++m_lastProcess(GetFileTimeNow()),
++m_lastSave(m_lastProcess),
++m_dirty(false)
+ {
++    // a siege that was running
++    uint8 phase(0);
++    double charge(0), armorDamage(0), damage(0);
++    int64 timerEnd(0), updated(0);
++    if (SovereigntyDB::LoadHubSiege(structure->itemID(), phase, charge, armorDamage, damage, timerEnd, updated)) {
++        if (phase <= (uint8)OutpostSiege::Phase::Structure)
++            m_phase = (OutpostSiege::Phase)phase;
++        structure->SetAttribute(AttrShieldCharge,   EvE::min(charge, structure->GetAttribute(AttrShieldCapacity).get_double()), false);
++        structure->SetAttribute(AttrArmorDamage,    armorDamage, false);
++        structure->SetAttribute(AttrDamage,         damage, false);
++        m_timerEnd = timerEnd;
++        // shields came back while the system was unloaded
++        if ((updated > 0) and (updated < m_lastProcess))
++            m_lastProcess = updated;
++        _log(POS__MESSAGE, "IHubSE() - %s(%u) is under siege:  phase %u, shield %.0f, armor damage %.0f, damage %.0f",
++             structure->name(), structure->itemID(), phase, charge, armorDamage, damage);
++    }
++}
++
++IHubSE::~IHubSE()
++{
++    if (m_dirty)
++        SaveSiege();
+ }
+ 
+ 
+@@ -57,6 +87,8 @@ void IHubSE::Process()
+     // upgrades installed since the last tic
+     if (svDataMgr.TakeUpgradesDirty(m_data.itemID))
+         svDataMgr.RefreshUpgrades(m_system->GetID(), m_data.itemID);
++
++    ProcessSiege();
+ }
+ 
+ void IHubSE::SetOnline()
+@@ -84,6 +116,10 @@ void IHubSE::OnRemovedFromSpace(bool killed)
+ {
+     StructureSE::OnRemovedFromSpace(killed);
+ 
++    // the siege goes with it
++    m_dirty = false;
++    SovereigntyDB::DeleteHubSiege(m_data.itemID);
++
+     uint32 allianceID(svDataMgr.GetSystemAllianceID(m_system->GetID()));
+     // upgrades are destroyed with the hub
+     svDataMgr.RemoveHub(m_system->GetID(), m_data.itemID);
+@@ -100,9 +136,190 @@ void IHubSE::OnRemovedFromSpace(bool killed)
+ 
+ bool IHubSE::IsInvul()
+ {
++    // reinforced, it can't be shot or repaired
++    if (OutpostSiege::IsReinforced(m_phase))
++        return true;
+     // the claim's hub can only be attacked while SBUs are online at more than half the stargates
+     SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
+     if ((sovData.claimID > 0) and (sovData.hubID == m_data.itemID))
+         return !svDataMgr.IsClaimVulnerable(m_system);
+     return StructureSE::IsInvul();
+ }
++
++bool IHubSE::HasTimers()
++{
++    if (m_system == nullptr)
++        return false;
++    SovereigntyData sovData = svDataMgr.GetSovereigntyData(m_system->GetID());
++    return ((sovData.claimID > 0) and (sovData.hubID == m_data.itemID)
++        and OutpostSiege::HasTimers((m_allyID > 0 ? (uint32)m_allyID : 0), sovData.allianceID));
++}
++
++void IHubSE::GetDamageLimits(DamageLimits& into)
++{
++    OutpostSiege::HitLimits limits(OutpostSiege::Limits(m_phase, HasTimers()));
++    into.shieldFloor = limits.shieldFloor;
++    into.armorFloor = limits.armorFloor;
++}
++
++PyDict* IHubSE::MakeSlimItem()
++{
++    PyDict* slim(StructureSE::MakeSlimItem());
++    // the client shows 'shield reinforced' / 'armor reinforced' (pos.STRUCTURE_SHIELD/ARMOR_REINFORCE) until posTimestamp
++    if (OutpostSiege::IsReinforced(m_phase)) {
++        slim->SetItemString("posState", new PyInt(OutpostSiege::ClientState(m_phase)));
++        slim->SetItemString("posTimestamp", new PyLong(m_timerEnd));
++    }
++    return slim;
++}
++
++void IHubSE::OnDamaged(SystemEntity* pAttacker)
++{
++    StructureSE::OnDamaged(pAttacker);
++    m_dirty = true;
++    NotifyAttack(pAttacker);
++
++    double shieldCap(m_self->GetAttribute(AttrShieldCapacity).get_double());
++    double armorHP(m_self->GetAttribute(AttrArmorHP).get_double());
++    double shieldLeft(shieldCap > 0 ? m_self->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0);
++    double armorLeft(armorHP > 0 ? 1.0 - (m_self->GetAttribute(AttrArmorDamage).get_double() / armorHP) : 0.0);
++
++    OutpostSiege::Phase next(OutpostSiege::AfterHit(m_phase, HasTimers(), shieldLeft, armorLeft));
++    if (next != m_phase)
++        EnterReinforcement(next);
++}
++
++void IHubSE::EnterReinforcement(OutpostSiege::Phase phase)
++{
++    // the type's 24 hours, give or take its 3 hours, from now
++    int64 duration((int64)m_self->GetAttribute(AttrreinforcementDuration).get_float());
++    int64 variance((int64)m_self->GetAttribute(AttrreinforcementVariance).get_float());
++    if (duration <= 0)
++        duration = 86400;
++    int64 offset(variance > 0 ? MakeRandomInt(-variance, variance) : 0);
++    int64 now(GetFileTimeNow());
++
++    m_phase = phase;
++    m_timerEnd = now + ((duration + offset) * EvE::Time::Second);
++    m_dirty = true;
++    SaveSiege();
++    SendSlimUpdate();
++    SendDamageStateChanged();
++    // the owner hears about it straight away
++    NotifyAttack(nullptr, true);
++    if (m_allyID > 0) {
++        // 'The Infrastructure Hub belonging to {owner} has been reinforced'
++        PyDict* params = new PyDict();
++            params->SetItemString("owner", new PyString(sDataMgr.GetOwnerName(m_allyID)));
++            params->SetItemString("alliance", new PyString(sDataMgr.GetOwnerName(m_allyID)));
++            params->SetItemString("system", new PyString(sDataMgr.GetSystemName(m_system->GetID())));
++            params->SetItemString("solarSystemID", new PyInt(m_system->GetID()));
++        svDataMgr.SendAudioEvent(m_allyID, Sov::AudioEvent::HubReinforced, params);
++    }
++    _log(POS__MESSAGE, "IHubSE::EnterReinforcement() - %s(%u) is %s reinforced for %.1f hours", GetName(), m_data.itemID,
++         (phase == OutpostSiege::Phase::ShieldReinforced ? "shield" : "armor"), (double)(duration + offset) / 3600.0);
++}
++
++void IHubSE::EndReinforcement()
++{
++    // out at 0% shield, or at 25% armor (and no shield)
++    m_self->SetAttribute(AttrShieldCharge, m_self->GetAttribute(AttrShieldCapacity).get_double() * OutpostSiege::ShieldExit);
++    if (m_phase == OutpostSiege::Phase::ArmorReinforced) {
++        double armorHP(m_self->GetAttribute(AttrArmorHP).get_double());
++        m_self->SetAttribute(AttrArmorDamage, armorHP * (1.0 - OutpostSiege::ArmorExit));
++    }
++    m_phase = OutpostSiege::AfterReinforcement(m_phase);
++    m_timerEnd = 0;
++    // the blockade broke while it was reinforced:  the siege is over
++    if (IsInvul())
++        m_phase = OutpostSiege::Phase::Shield;
++    m_lastProcess = GetFileTimeNow();
++    m_dirty = true;
++    SaveSiege();
++    SendSlimUpdate();
++    SendDamageStateChanged();
++    _log(POS__MESSAGE, "IHubSE::EndReinforcement() - %s(%u) is out of reinforcement (phase %u)%s", GetName(), m_data.itemID,
++         (uint8)m_phase, (IsInvul() ? ", and invulnerable" : ""));
++}
++
++void IHubSE::ProcessSiege()
++{
++    int64 now(GetFileTimeNow());
++    if (OutpostSiege::IsReinforced(m_phase)) {
++        if ((m_timerEnd > 0) and (now >= m_timerEnd))
++            EndReinforcement();
++        // a reinforced hub's shield is frozen
++        m_lastProcess = now;
++    } else if ((now - m_lastProcess) >= (10 * EvE::Time::Second)) {
++        // the blockade broke between the timers:  "the siege is considered over"
++        if ((m_phase != OutpostSiege::Phase::Shield) and (!HasTimers() or IsInvul())) {
++            _log(POS__MESSAGE, "IHubSE::ProcessSiege() - %s(%u):  the blockade is broken, the siege is over", GetName(), m_data.itemID);
++            m_phase = OutpostSiege::Phase::Shield;
++            m_dirty = true;
++            SendSlimUpdate();
++        }
++        // shields come back by themselves.  armor and structure need repairing
++        double capacity(m_self->GetAttribute(AttrShieldCapacity).get_double());
++        double charge(m_self->GetAttribute(AttrShieldCharge).get_double());
++        if (charge < capacity) {
++            double rechargeSec(m_self->GetAttribute(AttrShieldRechargeRate).get_double() / 1000.0);
++            double dt((double)(now - m_lastProcess) / EvE::Time::Second);
++            m_self->SetAttribute(AttrShieldCharge, OutpostSiege::RechargedShield(charge, capacity, rechargeSec, dt), false);
++            m_dirty = true;
++            SendDamageStateChanged();
++        }
++        m_lastProcess = now;
++    }
++
++    if (m_dirty and ((now - m_lastSave) >= EvE::Time::Minute))
++        SaveSiege();
++}
++
++void IHubSE::SaveSiege()
++{
++    m_lastSave = GetFileTimeNow();
++    m_dirty = false;
++    SovereigntyDB::SaveHubSiege(m_data.itemID, (uint8)m_phase, m_self->GetAttribute(AttrShieldCharge).get_double(),
++                                m_self->GetAttribute(AttrArmorDamage).get_double(), m_self->GetAttribute(AttrDamage).get_double(), m_timerEnd);
++}
++
++void IHubSE::NotifyAttack(SystemEntity* pAttacker, bool force/*false*/)
++{
++    NotifyStructureAttack(pAttacker, Notify::Types::SovereigntyIHDamage, force);
++}
++
++bool IHubSE::GMEndReinforcement()
++{
++    if (OutpostSiege::IsReinforced(m_phase)) {
++        EndReinforcement();
++        return true;
++    }
++    if (!HasTimers())
++        return false;
++    // into the next reinforcement, with the layer at its threshold
++    if (m_phase == OutpostSiege::Phase::Shield) {
++        m_self->SetAttribute(AttrShieldCharge, m_self->GetAttribute(AttrShieldCapacity).get_double() * OutpostSiege::ShieldReinforceAt);
++        EnterReinforcement(OutpostSiege::Phase::ShieldReinforced);
++        return true;
++    }
++    if (m_phase == OutpostSiege::Phase::Armor) {
++        m_self->SetAttribute(AttrShieldCharge, EvilZero);
++        m_self->SetAttribute(AttrArmorDamage, m_self->GetAttribute(AttrArmorHP).get_double() * (1.0 - OutpostSiege::ArmorReinforceAt));
++        EnterReinforcement(OutpostSiege::Phase::ArmorReinforced);
++        return true;
++    }
++    return false;
++}
++
++void IHubSE::GMRepair()
++{
++    m_self->SetAttribute(AttrShieldCharge, m_self->GetAttribute(AttrShieldCapacity));
++    m_self->SetAttribute(AttrArmorDamage, EvilZero);
++    m_self->SetAttribute(AttrDamage, EvilZero);
++    m_phase = OutpostSiege::Phase::Shield;
++    m_timerEnd = 0;
++    m_dirty = false;
++    SovereigntyDB::DeleteHubSiege(m_data.itemID);
++    SendSlimUpdate();
++    SendDamageStateChanged();
++}
+diff --git a/src/eve-server/pos/sovStructures/IHub.h b/src/eve-server/pos/sovStructures/IHub.h
+index bc38e78..df92e08 100644
+--- a/src/eve-server/pos/sovStructures/IHub.h
++++ b/src/eve-server/pos/sovStructures/IHub.h
+@@ -10,6 +10,7 @@
+ #ifndef EVEMU_POS_IHub_H_
+ #define EVEMU_POS_IHub_H_
+ 
++#include "EVE_Outpost.h"
+ #include "pos/Structure.h"
+ 
+ class IHubSE
+@@ -17,7 +18,7 @@ class IHubSE
+ {
+ public:
+     IHubSE(StructureItemRef structure, EVEServiceManager& services, SystemManager* system, const FactionData& fData);
+-    virtual ~IHubSE()                                  { /* do nothing here */ }
++    virtual ~IHubSE();
+ 
+     /* class type pointer querys. */
+     virtual IHubSE*             GetIHubSE()            { return this; }
+@@ -32,12 +33,43 @@ public:
+     virtual void                SetOnline();
+     virtual void                SetOffline();
+     virtual void                OnRemovedFromSpace(bool killed);
+-    // the claim's hub is only shootable while SBUs are online at more than half the stargates
++    // the claim's hub is only shootable while SBUs are online at more than half the stargates, and never while reinforced
+     virtual bool                IsInvul();
++    // the hit stops at the next reinforcement threshold (OutpostSiege)
++    virtual void                GetDamageLimits(DamageLimits& into);
++    virtual PyDict*             MakeSlimItem();
+ 
+     /* virtual functions default to base class and overridden as needed */
+     virtual void                Init();
++    // a hit we survived:  reinforcement and the owner's alerts
++    virtual void                OnDamaged(SystemEntity* pAttacker);
+ 
++    /* sieges (Dominion rules):  reinforced at 25% shield (out at 0%) and at 50% armor (out at 25%), each for the type's
++     *  24 hours give or take 3 (reinforcementDuration, reinforcementVariance).  destroyed at 0% structure, upgrades and all.
++     *  only the claim's hub gets timers.  if the blockade breaks between the timers "the siege is considered over" */
++    OutpostSiege::Phase         GetSiegePhase()         { return m_phase; }
++    int64                       GetReinforcementEnd()   { return m_timerEnd; }
++    // the claim's hub, its alliance holding the claim
++    bool                        HasTimers();
++    void                        SaveSiege();
++    /* GM:  ends a reinforcement now (true), or puts it into its next reinforcement.  false if it can't */
++    bool                        GMEndReinforcement();
++    // GM:  full health, no siege
++    void                        GMRepair();
++
++protected:
++    void                        ProcessSiege();
++    void                        EnterReinforcement(OutpostSiege::Phase phase);
++    void                        EndReinforcement();
++    // attack alerts to the owner (SovereigntyIHDamage), at most once an hour.  force:  always
++    void                        NotifyAttack(SystemEntity* pAttacker, bool force = false);
++
++private:
++    OutpostSiege::Phase m_phase;
++    int64 m_timerEnd;               // reinforcement end (filetime)
++    int64 m_lastProcess;            // shield regeneration, blockade check
++    int64 m_lastSave;
++    bool m_dirty;
+ };
+ 
+ #endif  // EVEMU_POS_IHub_H_
+diff --git a/src/eve-server/pos/sovStructures/SBU.cpp b/src/eve-server/pos/sovStructures/SBU.cpp
+index bb8dc81..64b3677 100644
+--- a/src/eve-server/pos/sovStructures/SBU.cpp
++++ b/src/eve-server/pos/sovStructures/SBU.cpp
+@@ -29,6 +29,7 @@
+ #include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
+ #include "system/sov/SovereigntyDataMgr.h"
++#include "../eve-common/EVE_Mail.h"
+ #include "StaticDataMgr.h"
+ 
+ #include <set>
+@@ -132,3 +133,9 @@ void SBUSE::SendAudioEvent(uint8 eventID)
+         svDataMgr.SendAudioEvent(cur, eventID, params);
+     }
+ }
++
++void SBUSE::OnDamaged(SystemEntity* pAttacker)
++{
++    StructureSE::OnDamaged(pAttacker);
++    NotifyStructureAttack(pAttacker, Notify::Types::SovereigntySBUDamage);
++}
+diff --git a/src/eve-server/pos/sovStructures/SBU.h b/src/eve-server/pos/sovStructures/SBU.h
+index ec1e4b2..a0c9d3d 100644
+--- a/src/eve-server/pos/sovStructures/SBU.h
++++ b/src/eve-server/pos/sovStructures/SBU.h
+@@ -39,6 +39,8 @@ public:
+ 
+     /* virtual functions default to base class and overridden as needed */
+     virtual void                Init();
++    // attack alerts to the owner (SovereigntySBUDamage), at most once an hour
++    virtual void                OnDamaged(SystemEntity* pAttacker);
+ 
+     // anchoring done:  it holds its stargate, and the holding alliance hears of it
+     void                        OnAnchored();
+diff --git a/src/eve-server/pos/sovStructures/TCU.cpp b/src/eve-server/pos/sovStructures/TCU.cpp
+index 9958545..1a5d31d 100644
+--- a/src/eve-server/pos/sovStructures/TCU.cpp
++++ b/src/eve-server/pos/sovStructures/TCU.cpp
+@@ -29,6 +29,7 @@
+ #include "system/SystemBubble.h"
+ #include "system/SystemManager.h"
+ #include "system/sov/SovereigntyDataMgr.h"
++#include "../eve-common/EVE_Mail.h"
+ #include "StaticDataMgr.h"
+ 
+ TCUSE::TCUSE(StructureItemRef structure, EVEServiceManager&services, SystemManager *system, const FactionData &fData)
+@@ -147,3 +148,9 @@ void TCUSE::Process()
+ {
+     StructureSE::Process();
+ }
++
++void TCUSE::OnDamaged(SystemEntity* pAttacker)
++{
++    StructureSE::OnDamaged(pAttacker);
++    NotifyStructureAttack(pAttacker, Notify::Types::SovereigntyTCUDamage);
++}
+diff --git a/src/eve-server/pos/sovStructures/TCU.h b/src/eve-server/pos/sovStructures/TCU.h
+index 4cc8980..9401b39 100644
+--- a/src/eve-server/pos/sovStructures/TCU.h
++++ b/src/eve-server/pos/sovStructures/TCU.h
+@@ -38,6 +38,8 @@ public:
+ 
+     /* virtual functions default to base class and overridden as needed */
+     virtual void                Init();
++    // attack alerts to the owner (SovereigntyTCUDamage), at most once an hour
++    virtual void                OnDamaged(SystemEntity* pAttacker);
+ 
+     // removes this TCU's claim on the system (offline or gone)
+     void                        DropClaim();
+diff --git a/src/eve-server/ship/BeyonceService.cpp b/src/eve-server/ship/BeyonceService.cpp
+index 93e60c5..26a00cf 100644
+--- a/src/eve-server/ship/BeyonceService.cpp
++++ b/src/eve-server/ship/BeyonceService.cpp
+@@ -57,6 +57,7 @@
+ #include "system/cosmicMgrs/DungeonMgr.h"
+ #include "system/cosmicMgrs/ManagerDB.h"
+ #include "system/cosmicMgrs/WormholeMgr.h"
++#include "mail/NotificationMgr.h"
+ 
+ BeyonceService::BeyonceService(EVEServiceManager& mgr)
+ : BindableService("beyonce", mgr, eAccessLevel_SolarSystem2)
+@@ -923,6 +924,8 @@ PyResult BeyonceBound::CmdChangeStructureOwner(PyCallArgs &call, PyInt* itemID,
+         throw CustomError ("The customs office can't change hands while it is reinforced.");
+ 
+     pCO->ChangeOwner(newOwner, PosMgrDB::GetCorpAllianceID(newOwner));
++    NotificationMgr::SendOwnershipTransferred(pClient->GetCharacterID(), ownerID, newOwner, pSystem->GetID(), pCO->GetID(), pCO->GetTypeID(),
++                                              Corp::Role::StarbaseConfig);
+     _log(POS__MESSAGE, "%s transferred customs office %u from %u to %u", pClient->GetName(), pCO->GetID(), ownerID, newOwner);
+     return PyStatic.NewNone();
+ }
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 64a6d9c..66b6d08 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -56,6 +56,18 @@ namespace {
+         }
+         return -1.0;
+     }
++
++    /* a conquerable station (an outpost) to shoot.  IsValidTarget() leaves the npc stations' ids out, and the conquerable
++     *  stations of the static data have theirs among them, so a gun or launcher activated on one had no target and stopped.
++     *  only weapons:  webs, ewar and the rest want something that moves
++     */
++    bool OutpostTarget(ShipItemRef shipRef, uint32 targetID)
++    {
++        if (!IsStationID(targetID) or !shipRef->HasPilot() or (shipRef->GetPilot()->SystemMgr() == nullptr))
++            return false;
++        SystemEntity* pSE(shipRef->GetPilot()->SystemMgr()->GetSE(targetID));
++        return ((pSE != nullptr) and pSE->IsOutpostSE());
++    }
+ }
+ 
+ ActiveModule::ActiveModule(ModuleItemRef mRef, ShipItemRef sRef)
+@@ -412,7 +424,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+         targetID = 0;
+     if (groupID() == EVEDB::invGroups::Missile_Launcher_Bomb)
+         targetID = 0;
+-    if (IsValidTarget(targetID)) {
++    if (IsValidTarget(targetID) or ((m_turret or m_launcher) and OutpostTarget(m_shipRef, targetID))) {
+         // this is just a guess.  may have to use groupID test to verify if this doesnt work right.
+         // also need to make check for modules acting on OUR ship....in which case this will be wrong.
+         m_needsTarget = true;
+@@ -448,10 +460,12 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+                 if (m_targetSE->IsOutpostSE()) {
+                     uint32 sovAllianceID(svDataMgr.GetSystemAllianceID(m_targetSE->SystemMgr()->GetID()));
+                     if ((sovAllianceID > 0) and (PosMgrDB::GetCorpAllianceID(m_targetSE->GetSelf()->ownerID()) == sovAllianceID)) {
++                        // its name before Clear() lets go of the target (this crashed)
++                        std::string name(m_targetSE->GetName());
+                         Clear();
+                         throw UserError ("DeniedStationInvulnerableSovereign")
+                                 .AddFormatValue("module", new PyInt(typeID()))
+-                                .AddFormatValue("targetname", new PyString(m_targetSE->GetName()));
++                                .AddFormatValue("targetname", new PyString(name));
+                     }
+                 }
+                 Clear();
+diff --git a/src/eve-server/ship/modules/TurretFormulas.cpp b/src/eve-server/ship/modules/TurretFormulas.cpp
+index 0fec1b4..6d5c3af 100644
+--- a/src/eve-server/ship/modules/TurretFormulas.cpp
++++ b/src/eve-server/ship/modules/TurretFormulas.cpp
+@@ -27,6 +27,12 @@
+ #include "system/EwarState.h"
+ 
+ namespace {
++    // something to roll against:  in space with a destiny manager, or an outpost (stations have none, and stand still)
++    bool Rollable(SystemEntity* pTarget)
++    {
++        return ((pTarget != nullptr) and ((pTarget->DestinyMgr() != nullptr) or pTarget->IsOutpostSE()));
++    }
++
+     NpcMath::Vec3 PositionOf(SystemEntity* pSE)
+     {
+         const GPoint& p(pSE->DestinyMgr() != nullptr ? pSE->DestinyMgr()->GetPosition() : pSE->GetPosition());
+@@ -90,7 +96,7 @@ float TurretFormulas::Roll(SystemEntity* pShooter, SystemEntity* pTarget, double
+ 
+ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEntity* pTarget)
+ {
+-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr) or (shipRef->GetPilot() == nullptr))
++    if (!Rollable(pTarget) or (shipRef->GetPilot() == nullptr))
+         return 0;
+     SystemEntity* pShooter(shipRef->GetPilot()->GetShipSE());
+     if (pShooter == nullptr)
+@@ -111,7 +117,7 @@ float TurretFormulas::GetToHit(ShipItemRef shipRef, TurretModule* pMod, SystemEn
+ 
+ float TurretFormulas::GetNPCToHit(NPC* pNPC, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
+ {
+-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
++    if (!Rollable(pTarget))
+         return 0;
+     const NpcProfile& p(pNPC->GetAIMgr()->GetProfile());
+     double optimal(p.optimal), tracking(p.tracking);
+@@ -129,7 +135,7 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, floa
+ {
+     if (quality != nullptr)
+         *quality = 0.0f;
+-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
++    if (!Rollable(pTarget))
+         return 0;
+     const DroneStats& stats(pDrone->Stats());
+     /* fighter bombers (after AzediZ, Incursion rules):  their "fake missile" always hits a target within entityAttackRange
+@@ -163,7 +169,7 @@ float TurretFormulas::GetDroneToHit(DroneSE* pDrone, SystemEntity* pTarget, floa
+ 
+ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, float falloff, float tracking, float sigRes, SystemEntity* pTarget)
+ {
+-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
++    if (!Rollable(pTarget))
+         return 0;
+     // tracking disruptors on the battery
+     EwarState* pEwar(pSource->GetEwar());
+@@ -177,7 +183,7 @@ float TurretFormulas::GetStructureToHit(SystemEntity* pSource, float optimal, fl
+ 
+ float TurretFormulas::GetSentryToHit(Sentry* pSentry, SystemEntity* pTarget, NpcShotRecord* record/*nullptr*/)
+ {
+-    if ((pTarget == nullptr) or (pTarget->DestinyMgr() == nullptr))
++    if (!Rollable(pTarget))
+         return 0;
+     // maxRange is the optimal (it used to be entityAttackRange, with the target's whole speed as transversal)
+     const NpcProfile& p(pSentry->GetAIMgr()->GetProfile());
+diff --git a/src/eve-server/station/Outpost.cpp b/src/eve-server/station/Outpost.cpp
+index ba94d20..7f1e84a 100644
+--- a/src/eve-server/station/Outpost.cpp
++++ b/src/eve-server/station/Outpost.cpp
+@@ -38,6 +38,7 @@ m_lastProcess(GetFileTimeNow()),
+ m_lastSave(m_lastProcess),
+ m_lastOwnerCheck(0),
+ m_lastAttackNotify(0),
++m_lastServiceNotify(0),
+ m_lastDamageSend(0)
+ {
+     /* the type's hit points (100m shield, 150m armor, 100m structure).  the conquerable stations have a signature radius,
+@@ -393,6 +394,36 @@ void OutpostSE::NotifyAttack(SystemEntity* pAttacker, bool force/*false*/)
+     NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationAggression2, m_corpID, data);
+ }
+ 
++void OutpostSE::OnServiceAttacked(StationServiceSE* pService, SystemEntity* pAttacker)
++{
++    int64 now(GetFileTimeNow());
++    if ((pService == nullptr) or ((now - m_lastServiceNotify) < EvE::Time::Hour))
++        return;
++    m_lastServiceNotify = now;
++    if (!IsPlayerCorp(m_corpID))
++        return;
++
++    uint32 aggressorID(0), aggressorCorpID(0), aggressorAllyID(0);
++    StructureSE::GetAggressor(pAttacker, aggressorID, aggressorCorpID, aggressorAllyID);
++    InventoryItemRef sRef(pService->GetSelf());
++    double shieldCap(sRef->GetAttribute(AttrShieldCapacity).get_double());
++    double armorHP(sRef->GetAttribute(AttrArmorHP).get_double());
++    double hp(sRef->GetAttribute(AttrHP).get_double());
++
++    PyDict* data = new PyDict();
++        data->SetItemString("aggressorID",          (aggressorID == 0 ? PyStatic.NewNone() : new PyInt(aggressorID)));
++        data->SetItemString("aggressorCorpID",      (aggressorCorpID == 0 ? PyStatic.NewNone() : new PyInt(aggressorCorpID)));
++        data->SetItemString("aggressorAllianceID",  (IsAlliance(aggressorAllyID) ? new PyInt(aggressorAllyID) : PyStatic.NewNone()));
++        data->SetItemString("stationID",            new PyInt(m_self->itemID()));
++        data->SetItemString("solarSystemID",        new PyInt(m_system->GetID()));
++        // the service's structure type
++        data->SetItemString("typeID",               new PyInt(sRef->typeID()));
++        data->SetItemString("shieldValue",          new PyFloat(shieldCap > 0 ? sRef->GetAttribute(AttrShieldCharge).get_double() / shieldCap : 0.0));
++        data->SetItemString("armorValue",           new PyFloat(armorHP > 0 ? 1.0 - sRef->GetAttribute(AttrArmorDamage).get_double() / armorHP : 0.0));
++        data->SetItemString("hullValue",            new PyFloat(hp > 0 ? 1.0 - sRef->GetAttribute(AttrDamage).get_double() / hp : 0.0));
++    NotificationMgr::SendToCorp(m_corpID, Corp::Role::StationManager, Notify::Types::StationAggression1, m_corpID, data);
++}
++
+ void OutpostSE::ProcessSiege()
+ {
+     int64 now(GetFileTimeNow());
+@@ -661,7 +692,7 @@ void StationServiceSE::OnDamaged(SystemEntity* pAttacker)
+     m_dirty = true;
+     OutpostSE* pOSE(GetStation());
+     if (pOSE != nullptr)
+-        pOSE->OnServiceAttacked(pAttacker);
++        pOSE->OnServiceAttacked(this, pAttacker);
+     if (m_online and OutpostServices::Incapacitated(m_self->GetAttribute(AttrDamage).get_double(), m_self->GetAttribute(AttrHP).get_double(),
+                      (m_self->HasAttribute(AttrIncapacitationRatio) ? m_self->GetAttribute(AttrIncapacitationRatio).get_double() : OutpostServices::IncapacitationRatio)))
+         SetOnline(false);
+diff --git a/src/eve-server/station/Outpost.h b/src/eve-server/station/Outpost.h
+index 32c7400..0905b37 100644
+--- a/src/eve-server/station/Outpost.h
++++ b/src/eve-server/station/Outpost.h
+@@ -68,8 +68,8 @@ public:
+     StationServiceSE* GetService(uint16 typeID);
+     // the services can be shot whenever the station can
+     bool ServicesVulnerable();
+-    // a service's attack alerts are the station's
+-    void OnServiceAttacked(SystemEntity* pAttacker)     { NotifyAttack(pAttacker); }
++    // 'Station service under attack' (StationAggression1) to the owner's station managers, at most once an hour per station
++    void OnServiceAttacked(StationServiceSE* pService, SystemEntity* pAttacker);
+     /* any of serviceIDs (Station:: bits) shot down at this station.  only loaded systems are asked:  a pilot docked there
+      *  keeps its system loaded */
+     static bool IsServiceOffline(uint32 stationID, uint32 serviceIDs);
+@@ -121,6 +121,7 @@ private:
+     int64 m_lastSave;
+     int64 m_lastOwnerCheck;
+     int64 m_lastAttackNotify;
++    int64 m_lastServiceNotify;
+     int64 m_lastDamageSend;
+     std::vector<uint32> m_serviceIDs;    // the service structures here (looked up by ID:  they unload on their own)
+ };
+diff --git a/src/eve-server/system/Damage.cpp b/src/eve-server/system/Damage.cpp
+index 4ffbfc1..69022e6 100644
+--- a/src/eve-server/system/Damage.cpp
++++ b/src/eve-server/system/Damage.cpp
+@@ -637,7 +637,7 @@ bool SystemEntity::ApplyDamage(Damage &d) {
+             GetPOSSE()->OnDamaged(d.srcSE);
+         // player customs offices go reinforced at 25% shield
+         if (IsCOSE())
+-            GetCOSE()->OnShieldDamaged();
++            GetCOSE()->OnShieldDamaged(d.srcSE);
+         // outposts:  reinforcement, the owner's alerts, and changing hands at 0 structure
+         if (IsOutpostSE())
+             GetOutpostSE()->OnSiegeDamage(d.srcSE);
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 287681e..78a9a30 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -560,6 +560,10 @@ void SystemManager::UnloadSystem() {
+         if (pSE->TargetMgr() != nullptr)
+             pSE->TargetMgr()->Unload();
+ 
++        // a structure's hit points (shots at it while the system was up) are in its attributes:  saved, or the next boot forgets them
++        if (pSE->IsPOSSE() and (pSE->GetSelf().get() != nullptr))
++            pSE->GetSelf()->SaveAttributes();
++
+         if (pSE->IsStaticEntity() or pSE->isGlobal()) {
+             if (pSE->IsStationSE()) {
+                 pSE->GetStationSE()->UnloadStation();
+diff --git a/src/eve-server/system/TargetManager.cpp b/src/eve-server/system/TargetManager.cpp
+index 4aa81c5..a2928e7 100644
+--- a/src/eve-server/system/TargetManager.cpp
++++ b/src/eve-server/system/TargetManager.cpp
+@@ -137,9 +137,11 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+         return false;
+     }
+ 
+-    // Check if target is an invulnerable structure
++    /* Check if target is an invulnerable structure.  a claim's TCU and hub only while its claim isn't open to attack (SBUs
++     *  online at more than half the stargates), and a hub in reinforcement
++     */
+     if (tSE->IsTCUSE()) {
+-        if (tSE->GetTCUSE()->GetState() == EVEPOS::StructureState::Online) {
++        if (tSE->GetTCUSE()->IsInvul()) {
+             mySE->GetPilot()->SendNotifyMsg("You cannot target an invulnerable structure.");
+             return false;
+         }
+@@ -149,7 +151,7 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+             return false;
+         }
+     } else if (tSE->IsIHubSE()) {
+-        if (tSE->GetIHubSE()->GetState() == EVEPOS::StructureState::Online) {
++        if (tSE->GetIHubSE()->IsInvul()) {
+             mySE->GetPilot()->SendNotifyMsg("You cannot target an invulnerable structure.");
+             return false;
+         }
+@@ -158,10 +160,9 @@ bool TargetManager::StartTargeting(SystemEntity *tSE, ShipItemRef sRef)
+     // Check against max target range
+     double maxTargetRange(GetMaxTargetRange(sRef));
+     GVector rangeToTarget( mySE->GetPosition(), tSE->GetPosition() );
+-    // adjust for target radius, in case of ice or other large objects..
+-    double targetDistance = rangeToTarget.length();
+-    if (tSE->IsAsteroidSE())
+-        targetDistance -= tSE->GetRadius();
++    // to the target's surface, as the client shows it and module ranges go:  a station's center is tens of km in, so no
++    //  ship in reach of its walls could lock it.  (this was for ice and other large objects only)
++    double targetDistance = rangeToTarget.length() - tSE->GetRadius();
+     if (targetDistance > maxTargetRange) {
+         mySE->GetPilot()->SendNotifyMsg("Your ship and skills combination can only target to %.0f meters.  %s is %.0f meters away.", \
+         maxTargetRange, tSE->GetName(), targetDistance);
+diff --git a/src/eve-server/system/sov/SovereigntyDB.cpp b/src/eve-server/system/sov/SovereigntyDB.cpp
+index 2a53c56..3b4d58a 100644
+--- a/src/eve-server/system/sov/SovereigntyDB.cpp
++++ b/src/eve-server/system/sov/SovereigntyDB.cpp
+@@ -181,3 +181,40 @@ void SovereigntyDB::GetActiveUpgrades(DBQueryResult& res, const std::string& hub
+         codelog(SOV__ERROR, "Error in GetActiveUpgrades query: %s", res.error.c_str());
+     }
+ }
++
++bool SovereigntyDB::LoadHubSiege(uint32 hubID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated)
++{
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res, "SELECT phase, shieldCharge, armorDamage, damage, timerEnd, updated FROM sovHubSiege WHERE hubID = %u", hubID)) {
++        codelog(SOV__ERROR, "Error loading the siege of hub %u: %s", hubID, res.error.c_str());
++        return false;
++    }
++    DBResultRow row;
++    if (!res.GetRow(row))
++        return false;
++    phase = row.GetUInt(0);
++    shieldCharge = row.GetDouble(1);
++    armorDamage = row.GetDouble(2);
++    damage = row.GetDouble(3);
++    timerEnd = row.GetInt64(4);
++    updated = row.GetInt64(5);
++    return true;
++}
++
++void SovereigntyDB::SaveHubSiege(uint32 hubID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd)
++{
++    DBerror err;
++    if (!sDatabase.RunQuery(err,
++        "INSERT INTO sovHubSiege (hubID, phase, shieldCharge, armorDamage, damage, timerEnd, updated) VALUES (%u, %u, %f, %f, %f, %lli, %lli)"
++        " ON DUPLICATE KEY UPDATE phase = VALUES(phase), shieldCharge = VALUES(shieldCharge), armorDamage = VALUES(armorDamage),"
++        " damage = VALUES(damage), timerEnd = VALUES(timerEnd), updated = VALUES(updated)",
++        hubID, phase, shieldCharge, armorDamage, damage, timerEnd, (int64)GetFileTimeNow()))
++        codelog(SOV__ERROR, "Error saving the siege of hub %u: %s", hubID, err.c_str());
++}
++
++void SovereigntyDB::DeleteHubSiege(uint32 hubID)
++{
++    DBerror err;
++    if (!sDatabase.RunQuery(err, "DELETE FROM sovHubSiege WHERE hubID = %u", hubID))
++        codelog(SOV__ERROR, "Error deleting the siege of hub %u: %s", hubID, err.c_str());
++}
+diff --git a/src/eve-server/system/sov/SovereigntyDB.h b/src/eve-server/system/sov/SovereigntyDB.h
+index 7e21a86..7d28546 100644
+--- a/src/eve-server/system/sov/SovereigntyDB.h
++++ b/src/eve-server/system/sov/SovereigntyDB.h
+@@ -59,6 +59,12 @@ public:
+     static void LogSovChange(uint32 systemID, uint32 stationID, uint32 ownerID, uint32 oldOwnerID);
+     // solarSystemID, stationID, ownerID, oldOwnerID  of changes at or after 'since' (filetime)
+     static void GetRecentSovChanges(DBQueryResult& res, int64 since);
++
++    /* infrastructure hub sieges (sovHubSiege):  phase is OutpostSiege::Phase, timerEnd the filetime its reinforcement ends,
++     *  updated the filetime of the save.  false when the hub has none */
++    static bool LoadHubSiege(uint32 hubID, uint8& phase, double& shieldCharge, double& armorDamage, double& damage, int64& timerEnd, int64& updated);
++    static void SaveHubSiege(uint32 hubID, uint8 phase, double shieldCharge, double armorDamage, double damage, int64 timerEnd);
++    static void DeleteHubSiege(uint32 hubID);
+ };
+ 
+ #endif
+-- 
+2.43.0
+

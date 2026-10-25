@@ -1,0 +1,636 @@
+From 7737f1bff4adb031b01dd9108b5a8f0746821748 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 14:31:11 +0000
+Subject: [PATCH 106/110] Skills:  training speed, all skills for new
+ characters, /queue
+
+New settings in eve-server.xml <character>:
+- skillTrainingSpeed:  a multiplier on skill points per minute (1.0 is
+  Tranquility's speed, 10.0 the default here)
+- injectAllSkills:  new characters get every published skill injected
+  at level 0, so there are no skillbooks to buy
+- magic14AtFive:  new characters start with the 'magic 14' core skills
+  at V
+A new character gets the cheapest clone that covers the skill points it
+starts with.
+
+/queue lifts the client's 24 hour skill queue limit (the server never
+had one):  /queue shows your queue with its real end times, /queue add
+<skill> [level] adds a skill (and what it needs first), /queue add
+<ship or module> adds everything that needs, and /queue remove <skill>
+and /queue clear take them out.  The client is told to fetch the queue
+again.
+
+Fixes rolled in:
+- untrained skills' levels and skill points load as whole numbers (the
+  skill queue window failed on a float)
+- logging off while a skill trains no longer crashes the server later
+---
+ src/eve-server/CMakeLists.txt                 |   2 +
+ src/eve-server/EVEServerConfig.cpp            |   9 +
+ src/eve-server/EVEServerConfig.h              |   6 +
+ src/eve-server/admin/AllCommandsList.h        |   1 +
+ src/eve-server/admin/SkillQueueCommands.cpp   | 275 ++++++++++++++++++
+ src/eve-server/admin/SkillQueueCommands.h     |   5 +
+ .../character/CharUnboundMgrService.cpp       |  36 ++-
+ src/eve-server/character/Character.cpp        |  16 +-
+ src/eve-server/character/Character.h          |   5 +
+ src/eve-server/character/CharacterDB.cpp      |  18 ++
+ src/eve-server/character/CharacterDB.h        |   2 +
+ src/eve-server/character/Skill.cpp            |   7 +-
+ src/eve-server/inventory/AttributeMap.h       |   4 +
+ utils/config/eve-server.xml                   |   3 +
+ 14 files changed, 384 insertions(+), 5 deletions(-)
+ create mode 100644 src/eve-server/admin/SkillQueueCommands.cpp
+ create mode 100644 src/eve-server/admin/SkillQueueCommands.h
+
+diff --git a/src/eve-server/CMakeLists.txt b/src/eve-server/CMakeLists.txt
+index 847b0ae..ac9ffde 100644
+--- a/src/eve-server/CMakeLists.txt
++++ b/src/eve-server/CMakeLists.txt
+@@ -86,6 +86,7 @@ SET( admin_INCLUDE
+      "${TARGET_INCLUDE_DIR}/admin/GMCommands.h"
+      "${TARGET_INCLUDE_DIR}/admin/GMToolCommands.h"
+      "${TARGET_INCLUDE_DIR}/admin/MarketSimCommands.h"
++     "${TARGET_INCLUDE_DIR}/admin/SkillQueueCommands.h"
+      "${TARGET_INCLUDE_DIR}/admin/SimFacilityCommands.h"
+      "${TARGET_INCLUDE_DIR}/admin/PetitionDB.h"
+      "${TARGET_INCLUDE_DIR}/admin/PetitionerService.h"
+@@ -108,6 +109,7 @@ SET( admin_SOURCE
+      "${TARGET_SOURCE_DIR}/admin/GMCommands.cpp"
+      "${TARGET_SOURCE_DIR}/admin/GMToolCommands.cpp"
+      "${TARGET_SOURCE_DIR}/admin/MarketSimCommands.cpp"
++     "${TARGET_SOURCE_DIR}/admin/SkillQueueCommands.cpp"
+      "${TARGET_SOURCE_DIR}/admin/SimFacilityCommands.cpp"
+      "${TARGET_SOURCE_DIR}/admin/PetitionDB.cpp"
+      "${TARGET_SOURCE_DIR}/admin/PetitionerService.cpp"
+diff --git a/src/eve-server/EVEServerConfig.cpp b/src/eve-server/EVEServerConfig.cpp
+index a770560..60b7ca1 100644
+--- a/src/eve-server/EVEServerConfig.cpp
++++ b/src/eve-server/EVEServerConfig.cpp
+@@ -266,6 +266,9 @@ EVEServerConfig::EVEServerConfig()
+     character.startCorporation = 0;
+     character.terminationDelay = 180 /*s*/;
+     character.statMultiplier = 1;
++    character.skillTrainingSpeed = 10.0f;
++    character.injectAllSkills = true;
++    character.magic14AtFive = true;
+     character.allow3edChar = false;
+     character.requirePausedTraining = true;
+     character.jumpCloneCost = 100000.0;
+@@ -1216,6 +1219,9 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
+     AddValueParser( "startCorporation", character.startCorporation );
+     AddValueParser( "terminationDelay", character.terminationDelay );
+     AddValueParser( "statMultiplier",   character.statMultiplier );
++    AddValueParser( "skillTrainingSpeed",           character.skillTrainingSpeed );
++    AddValueParser( "injectAllSkills",              character.injectAllSkills );
++    AddValueParser( "magic14AtFive",                character.magic14AtFive );
+     AddValueParser( "allow3edChar",     character.allow3edChar );
+     AddValueParser( "requirePausedTraining",        character.requirePausedTraining );
+     AddValueParser( "jumpCloneCost",                character.jumpCloneCost );
+@@ -1235,6 +1241,9 @@ bool EVEServerConfig::ProcessCharacter( const TiXmlElement* ele )
+     RemoveParser( "startCorporation" );
+     RemoveParser( "terminationDelay" );
+     RemoveParser( "statMultiplier" );
++    RemoveParser( "skillTrainingSpeed" );
++    RemoveParser( "injectAllSkills" );
++    RemoveParser( "magic14AtFive" );
+     RemoveParser( "allow3edChar" );
+     RemoveParser( "requirePausedTraining" );
+     RemoveParser( "jumpCloneCost" );
+diff --git a/src/eve-server/EVEServerConfig.h b/src/eve-server/EVEServerConfig.h
+index adffe9a..5efe205 100644
+--- a/src/eve-server/EVEServerConfig.h
++++ b/src/eve-server/EVEServerConfig.h
+@@ -290,6 +290,12 @@ public:
+     struct {
+         bool allow3edChar;
+         uint8 statMultiplier;
++        /// skill training runs this many times as fast as on TQ (1.0)
++        float skillTrainingSpeed;
++        /// a player's new character starts with every skill injected (untrained), so it never needs a skillbook
++        bool injectAllSkills;
++        /// new characters start with the 'magic 14' core skills at level V
++        bool magic14AtFive;
+         /// Starting corp ID for new characters
+         uint32 startCorporation;
+         /// Delay for terminating a character in seconds
+diff --git a/src/eve-server/admin/AllCommandsList.h b/src/eve-server/admin/AllCommandsList.h
+index 8e264f0..178b30c 100644
+--- a/src/eve-server/admin/AllCommandsList.h
++++ b/src/eve-server/admin/AllCommandsList.h
+@@ -14,6 +14,7 @@
+ #include "admin/AmbientCommands.h"
+ #include "admin/MarketSimCommands.h"
+ #include "admin/SimFacilityCommands.h"
++#include "admin/SkillQueueCommands.h"
+ 
+ //clean up macros
+ #undef COMMAND
+diff --git a/src/eve-server/admin/SkillQueueCommands.cpp b/src/eve-server/admin/SkillQueueCommands.cpp
+new file mode 100644
+index 0000000..5e6413f
+--- /dev/null
++++ b/src/eve-server/admin/SkillQueueCommands.cpp
+@@ -0,0 +1,275 @@
++/**
++ * @name SkillQueueCommands.cpp
++ *   /queue:  the skill queue past the client's 24 hours
++ *
++ * @date:          21 October 2026
++ *
++ *   the Crucible client won't add a skill to a queue that runs past 24 hours (its own check, from its own estimate of the
++ *   training times at Tranquility's speed).  the server has no such limit, so /queue adds there:  a skill to a level, with
++ *   the skills it needs first, or everything a ship or module needs.  the skill queue window then shows the whole queue.
++ */
++
++#include "eve-server.h"
++
++#include <cctype>
++#include <ctime>
++#include <set>
++
++#include "Client.h"
++#include "admin/AllCommands.h"
++#include "character/Character.h"
++#include "inventory/ItemFactory.h"
++#include "inventory/ItemType.h"
++
++namespace {
++    const char* const Usage = "Usage:  /queue  |  /queue add (skill, ship or module) [level]  |  /queue remove (skill)  |  /queue clear";
++    // a queue shown this long at most
++    const size_t ShowMost = 60;
++
++    const char* const Roman[] = { "", "I", "II", "III", "IV", "V" };
++
++    std::string Lower(const std::string& text)
++    {
++        std::string out(text);
++        for (char& c : out)
++            c = (char)std::tolower((unsigned char)c);
++        return out;
++    }
++
++    // "3d 4h", "2h 10m", "5m"
++    std::string Duration(int64 fileTime)
++    {
++        int64 minutes(std::max<int64>(0, fileTime / EvE::Time::Minute));
++        char buf[32];
++        if (minutes >= 1440)
++            snprintf(buf, sizeof(buf), "%lid %lih", (long)(minutes / 1440), (long)((minutes % 1440) / 60));
++        else if (minutes >= 60)
++            snprintf(buf, sizeof(buf), "%lih %lim", (long)(minutes / 60), (long)(minutes % 60));
++        else
++            snprintf(buf, sizeof(buf), "%lim", (long)minutes);
++        return buf;
++    }
++
++    // "21 Oct 18:30"  (EVE time)
++    std::string When(int64 fileTime)
++    {
++        time_t t((time_t)((fileTime - 116444736000000000LL) / EvE::Time::Second));
++        struct tm utc;
++        gmtime_r(&t, &utc);
++        char buf[32];
++        strftime(buf, sizeof(buf), "%d %b %H:%M", &utc);
++        return buf;
++    }
++
++    std::string SkillName(uint16 typeID)
++    {
++        const ItemType* pType(sItemFactory.GetType(typeID));
++        return ((pType == nullptr) ? std::to_string(typeID) : pType->name());
++    }
++
++    /* a published type by name:  a skill named exactly (skillOnly), else the best match of any type (exact, then starting with
++     *  it, then containing it;  skills first, the shortest name first).  0:  none
++     */
++    uint16 FindType(const std::string& name, bool skillOnly, bool& isSkill)
++    {
++        std::string esc, like;
++        sDatabase.DoEscapeString(esc, name);
++        for (char c : esc) {
++            if ((c == '%') or (c == '_'))
++                like += '\\';
++            like += c;
++        }
++        DBQueryResult res;
++        DBResultRow row;
++        if (skillOnly) {
++            if (!sDatabase.RunQuery(res, "SELECT t.typeID, g.categoryID FROM invTypes AS t JOIN invGroups AS g ON g.groupID = t.groupID"
++                                    " WHERE t.published = 1 AND g.categoryID = %u AND t.typeName = '%s' LIMIT 1", (uint32)EVEDB::invCategories::Skill, esc.c_str()))
++                return 0;
++        } else if (!sDatabase.RunQuery(res, "SELECT t.typeID, g.categoryID FROM invTypes AS t JOIN invGroups AS g ON g.groupID = t.groupID"
++                                       " WHERE t.published = 1 AND t.typeName LIKE '%%%s%%'"
++                                       " ORDER BY (t.typeName = '%s') DESC, (t.typeName LIKE '%s%%') DESC, (g.categoryID = %u) DESC, LENGTH(t.typeName) LIMIT 1",
++                                       like.c_str(), esc.c_str(), like.c_str(), (uint32)EVEDB::invCategories::Skill)) {
++            return 0;
++        }
++        if (!res.GetRow(row))
++            return 0;
++        isSkill = (row.GetUInt(1) == (uint32)EVEDB::invCategories::Skill);
++        return (uint16)row.GetUInt(0);
++    }
++
++    /* the levels to queue for typeID to level:  what it needs first, then each level it doesn't have or have queued (planned:
++     *  the highest level trained or queued so far, by skill).  missing:  skills it needs that the character hasn't injected
++     */
++    void Plan(const CharacterRef& cRef, uint16 typeID, uint8 level, std::map<uint16, uint8>& planned, std::vector<std::pair<uint16, uint8>>& into,
++              std::set<uint16>& missing, int depth = 0)
++    {
++        if (depth > 10)
++            return;
++        std::map<uint16, uint8>::iterator itr = planned.find(typeID);
++        if (itr == planned.end()) {
++            int8 have(cRef->GetSkillLevel(typeID, false));
++            if (have < 0) {
++                missing.insert(typeID);
++                have = 0;
++            }
++            uint8 queued(0);
++            for (auto& cur : cRef->GetSkillQueue())
++                if ((cur.typeID == typeID) and (cur.level > queued))
++                    queued = cur.level;
++            itr = planned.emplace(typeID, std::max<uint8>((uint8)have, queued)).first;
++        }
++        if (itr->second >= level)
++            return;
++        const ItemType* pType(sItemFactory.GetType(typeID));
++        if (pType != nullptr)
++            for (auto& cur : pType->GetRequiredSkills())
++                Plan(cRef, cur.first, cur.second, planned, into, missing, depth + 1);
++        itr = planned.find(typeID);
++        for (uint8 l = itr->second + 1; l <= level; ++l)
++            into.emplace_back(typeID, l);
++        itr->second = level;
++    }
++
++    std::string Show(const CharacterRef& cRef)
++    {
++        const SkillQueue& queue(cRef->GetSkillQueue());
++        if (queue.empty())
++            return "Your skill queue is empty.  " + std::string(Usage);
++        int64 now((int64)GetFileTimeNow());
++        std::string out("Your skill queue (" + std::to_string(queue.size()) + " levels, done " + When(queue.back().endTime) + " EVE time, in "
++                        + Duration(queue.back().endTime - now) + "):");
++        for (size_t i = 0; (i < queue.size()) and (i < ShowMost); ++i)
++            out += "<br>" + std::to_string(i + 1) + ".  " + SkillName(queue[i].typeID) + " " + Roman[std::min<uint8>(queue[i].level, 5)]
++                 + ":  done " + When(queue[i].endTime) + " (in " + Duration(queue[i].endTime - now) + ")";
++        if (queue.size() > ShowMost)
++            out += "<br>... and " + std::to_string(queue.size() - ShowMost) + " more";
++        return out;
++    }
++
++    // the queue put back without what fails keep (the skill in training stops and the first left starts, as the client's own save does)
++    template <class Keep>
++    uint32 Rebuild(const CharacterRef& cRef, Keep keep)
++    {
++        SkillQueue old(cRef->GetSkillQueue());
++        cRef->ClearSkillQueue(true);
++        std::map<uint16, uint8> levels;
++        uint32 dropped(0);
++        for (auto& cur : old) {
++            // what it needs:  trained, or earlier in what's kept
++            bool needs(true);
++            const ItemType* pType(sItemFactory.GetType(cur.typeID));
++            if (pType != nullptr)
++                for (auto& req : pType->GetRequiredSkills()) {
++                    std::map<uint16, uint8>::const_iterator have = levels.find(req.first);
++                    if ((std::max<int8>(cRef->GetSkillLevel(req.first), 0) < req.second) and ((have == levels.end()) or (have->second < req.second)))
++                        needs = false;
++                }
++            if (!keep(cur) or !needs) {
++                ++dropped;
++                continue;
++            }
++            cRef->AddToSkillQueue(cur.typeID, cur.level);
++            levels[cur.typeID] = std::max(levels[cur.typeID], cur.level);
++        }
++        cRef->SkillQueueChanged();
++        return dropped;
++    }
++}
++
++PyResult Command_queue(Client* pClient, CommandDB* db, EVEServiceManager& services, const Seperator& args)
++{
++    CharacterRef cRef(pClient->GetChar());
++    if (cRef.get() == nullptr)
++        throw CustomError("No character.");
++    if (args.argCount() < 2)
++        return new PyString(Show(cRef));
++
++    std::string cmd(Lower(args.arg(1)));
++    if (cmd == "clear") {
++        cRef->ClearSkillQueue(true);
++        cRef->SkillQueueChanged();
++        return new PyString("Your skill queue is cleared.");
++    }
++    if ((cmd != "add") and (cmd != "remove"))
++        throw CustomError("%s", Usage);
++    if (args.argCount() < 3)
++        throw CustomError("%s", Usage);
++
++    // the name, and a level after it (a digit, or I to V after a skill's name)
++    std::vector<std::string> words;
++    for (size_t i = 2; i < args.argCount(); ++i)
++        words.push_back(args.arg(i));
++    uint8 level(0);
++    std::string last(words.back()), rest;
++    for (size_t i = 0; i + 1 < words.size(); ++i)
++        rest += (i ? " " : "") + words[i];
++    bool isSkill(false);
++    uint16 typeID(0);
++    if ((cmd == "add") and (words.size() > 1)) {
++        if ((last.size() == 1) and (last[0] >= '1') and (last[0] <= '5')) {
++            level = (uint8)(last[0] - '0');
++        } else {
++            for (uint8 l = 1; l <= 5; ++l)
++                if (Lower(last) == Lower(Roman[l]))
++                    level = l;
++            if ((level != 0) and ((typeID = FindType(rest, true, isSkill)) == 0))
++                level = 0;
++        }
++    }
++    std::string name;
++    for (size_t i = 0; i < words.size() - (level ? 1 : 0); ++i)
++        name += (i ? " " : "") + words[i];
++    if (typeID == 0)
++        typeID = FindType(name, (cmd == "remove"), isSkill);
++    if (typeID == 0)
++        throw CustomError("No %s called '%s'.", ((cmd == "remove") ? "skill" : "skill, ship or module"), name.c_str());
++    if (cmd == "remove")
++        isSkill = true;
++
++    if (cmd == "remove") {
++        uint32 dropped(Rebuild(cRef, [typeID](const QueuedSkill& q) { return (q.typeID != typeID); }));
++        return new PyString("Took " + std::to_string(dropped) + " levels out of your skill queue (" + SkillName(typeID)
++                            + " and what needed it).<br>" + Show(cRef));
++    }
++
++    // what to queue:  the skill to its level (the next by default), or what the ship or module needs
++    std::map<uint16, uint8> planned;
++    std::vector<std::pair<uint16, uint8>> plan;
++    std::set<uint16> missing;
++    if (isSkill) {
++        if (level == 0) {
++            int8 have(std::max<int8>(cRef->GetSkillLevel(typeID), 0));
++            uint8 queued(0);
++            for (auto& cur : cRef->GetSkillQueue())
++                if ((cur.typeID == typeID) and (cur.level > queued))
++                    queued = cur.level;
++            level = (uint8)std::min<int>(std::max<int>(have, queued) + 1, 5);
++        }
++        Plan(cRef, typeID, level, planned, plan, missing);
++    } else {
++        const ItemType* pType(sItemFactory.GetType(typeID));
++        if ((pType == nullptr) or pType->GetRequiredSkills().empty())
++            return new PyString(SkillName(typeID) + " needs no skills.");
++        for (auto& cur : pType->GetRequiredSkills())
++            Plan(cRef, cur.first, cur.second, planned, plan, missing);
++    }
++    if (!missing.empty()) {
++        std::string list;
++        for (uint16 cur : missing)
++            list += (list.empty() ? "" : ", ") + SkillName(cur);
++        throw CustomError("You haven't injected %s yet.", list.c_str());
++    }
++    if (plan.empty())
++        return new PyString("You already have" + std::string(isSkill ? "" : " every skill") + (isSkill ? " " + SkillName(typeID) + " " + Roman[level] : " " + SkillName(typeID) + " needs")
++                            + ", trained or queued.");
++    for (auto& cur : plan)
++        cRef->AddToSkillQueue(cur.first, cur.second);
++    cRef->SkillQueueChanged();
++
++    std::string added;
++    for (auto& cur : plan)
++        added += (added.empty() ? "" : ", ") + SkillName(cur.first) + " " + Roman[cur.second];
++    const SkillQueue& queue(cRef->GetSkillQueue());
++    return new PyString("Added " + added + ".  Your queue is done " + (queue.empty() ? std::string("now") : When(queue.back().endTime) + " EVE time, in "
++                        + Duration(queue.back().endTime - (int64)GetFileTimeNow())) + ".  /queue shows it.");
++}
+diff --git a/src/eve-server/admin/SkillQueueCommands.h b/src/eve-server/admin/SkillQueueCommands.h
+new file mode 100644
+index 0000000..015c248
+--- /dev/null
++++ b/src/eve-server/admin/SkillQueueCommands.h
+@@ -0,0 +1,5 @@
++//no macroguard on purpose
++/* /queue:  the skill queue past the client's 24 hours.  see SkillQueueCommands.cpp */
++COMMAND( queue, Acct::Role::PLAYER,
++         "[add (skill, ship or module) [level] | remove (skill) | clear] - your skill queue:  shows it with its real end times;  add puts a skill"
++         " (and what it needs) or everything a ship or module needs at the end, past the 24 hours the skill queue window allows" )
+diff --git a/src/eve-server/character/CharUnboundMgrService.cpp b/src/eve-server/character/CharUnboundMgrService.cpp
+index 7b98713..8dace34 100644
+--- a/src/eve-server/character/CharUnboundMgrService.cpp
++++ b/src/eve-server/character/CharUnboundMgrService.cpp
+@@ -326,6 +326,24 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
+              char_type->bloodlineID(), cdata.ancestryID);
+         // dont really care if this fails.  not enough to deny creation ...maybe make error?
+     }
++    //  the 'magic 14' core skills at V (eve-server.xml magic14AtFive)
++    if (sConfig.character.magic14AtFive) {
++        static const uint16 magic14[] = {
++            3426 /*Electronics (CPU Management)*/, 3413 /*Engineering (Power Grid Management)*/,
++            3418 /*Energy Management (Capacitor Management)*/, 3417 /*Energy Systems Operation (Capacitor Systems Operation)*/,
++            3392 /*Mechanics*/, 3394 /*Hull Upgrades*/, 3419 /*Shield Management*/, 3416 /*Shield Operation*/,
++            3428 /*Long Range Targeting*/, 3431 /*Signature Analysis*/, 3449 /*Navigation*/, 3453 /*Evasive Maneuvering*/,
++            3455 /*Warp Drive Operation*/, 3327 /*Spaceship Command*/ };
++        for (uint16 typeID : magic14)
++            startingSkills[typeID] = 5;
++    }
++    //  every other skill injected untrained (injectAllSkills):  no skillbooks to buy
++    if (sConfig.character.injectAllSkills) {
++        std::vector<uint16> all;
++        CharacterDB::GetPublishedSkills(all);
++        for (uint16 typeID : all)
++            startingSkills.emplace(typeID, 0);
++    }
+ 
+     //spawn all the skills
+     uint8 skillLevel = 0;
+@@ -346,6 +364,9 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
+         skill->SetAttribute(AttrSkillPoints, skillPoints, false);
+         skill->SaveItem();
+         cdata.skillPoints += skillPoints;
++        // an untrained skill (injectAllSkills) has no history
++        if (skillPoints == 0)
++            continue;
+         charRef->SaveSkillHistory(EvESkill::Event::SkillPointsApplied/*EvESkill::Event::CharCreation*/, // 'CharCreation' shows as "Unknown" in PD>Skill>History
+                                   GetFileTimeNow(),
+                                     charRef->itemID(),
+@@ -364,8 +385,19 @@ PyResult CharUnboundMgrService::CreateCharacterWithDoll(PyCallArgs &call, PyRep*
+     // need system loaded for proper ship creation/loading and subsquent character login
+     sEntityList.FindOrBootSystem(cdata.solarSystemID);
+ 
+-    // create alpha-level clone
+-    ItemData iData( itemCloneAlpha, charRef->itemID(), cdata.locationID, flagClone, 1 );
++    // create its clone:  the cheapest grade that saves the skill points it starts with (alpha, unless it starts with the magic 14)
++    uint16 cloneTypeID(itemCloneAlpha);
++    static const uint16 cloneGrades[] = { itemCloneAlpha, 165 /*Beta*/, 166 /*Gamma*/, 9917 /*Delta*/, 9919 /*Epsilon*/,
++                                          9921 /*Zeta*/, 9923 /*Eta*/, 9925 /*Theta*/, 9927 /*Iota*/, 9929 /*Kappa*/ };
++    for (uint16 typeID : cloneGrades) {
++        const ItemType* pType(sItemFactory.GetType(typeID));
++        if (pType == nullptr)
++            continue;
++        cloneTypeID = typeID;
++        if (pType->GetAttribute(AttrSkillPointsSaved).get_double() >= cdata.skillPoints)
++            break;
++    }
++    ItemData iData( cloneTypeID, charRef->itemID(), cdata.locationID, flagClone, 1 );
+         iData.customInfo="Active: ";
+         iData.customInfo += charRef->itemName();
+         iData.customInfo += "(";
+diff --git a/src/eve-server/character/Character.cpp b/src/eve-server/character/Character.cpp
+index 748dcef..d75fe47 100644
+--- a/src/eve-server/character/Character.cpp
++++ b/src/eve-server/character/Character.cpp
+@@ -391,6 +391,10 @@ CharacterRef Character::Spawn( CharacterData& charData, CorpData& corpData) {
+ void Character::LogOut()
+ {
+     SaveFullCharacter();
++    /* its skills are unloaded below, the one in training with them:  ~Character()'s save, when the client lets go of it,
++     *  would read that skill after it's gone (a crash for a player logging off while training).  its points are saved above
++     */
++    m_inTraining = nullptr;
+     m_db.SetLogOffTime(m_itemID);
+     if (!sConsole.IsShutdown())
+         if (IsFleetID(m_fleetData.fleetID))
+@@ -1293,7 +1297,8 @@ float Character::GetSPPerMin(Skill* skill)
+ {
+     float primary = GetAttribute(skill->GetAttribute(AttrPrimaryAttribute).get_uint32()).get_float();
+     float secondary = GetAttribute(skill->GetAttribute(AttrSecondaryAttribute).get_uint32()).get_float();
+-    return EvEMath::Skill::PointsPerMinute(primary, secondary);
++    // this server's training speed (eve-server.xml skillTrainingSpeed:  1 is TQ's)
++    return EvEMath::Skill::PointsPerMinute(primary, secondary) * std::max(0.01f, sConfig.character.skillTrainingSpeed);
+ }
+ 
+ SkillRef Character::GetCharSkillRef(uint16 skillTypeID) const
+@@ -2126,6 +2131,15 @@ void Character::SkillQueueLoop(bool update/*true*/)
+     _log(SKILL__QUEUE, "SkillQueueLoop() completed in %.4fms", (GetTimeMSeconds() - begin));
+ }
+ 
++void Character::SkillQueueChanged()
++{
++    UpdateSkillQueueEndTime();
++    if ((m_pClient == nullptr) or (sEntityList.FindClientByCharID(m_itemID) != m_pClient))
++        return;
++    PyTuple* tmp = new PyTuple(0);
++    m_pClient->SendNotification("OnSkillQueueForciblyUpdated", "charid", &tmp, false);
++}
++
+ void Character::UpdateSkillQueueEndTime()
+ {
+     if (m_skillQueue.empty()) {
+diff --git a/src/eve-server/character/Character.h b/src/eve-server/character/Character.h
+index 4962fd0..bcd2c02 100644
+--- a/src/eve-server/character/Character.h
++++ b/src/eve-server/character/Character.h
+@@ -263,6 +263,11 @@ public:
+     void            UpdateSkillQueueEndTime();
+     void            RemoveFromQueue(SkillRef sRef);
+     bool            IsSkillQueued(uint16 typeID) const;
++    const SkillQueue& GetSkillQueue() const             { return m_skillQueue; }
++    /* the queue changed outside the client (/queue):  its end time saved, and the client told to fetch it again
++     *  (OnSkillQueueForciblyUpdated)
++     */
++    void            SkillQueueChanged();
+     void            ClearSkillFlags();
+     /* takes one level's worth of skill points off a skill, which drops a level (T3 ship loss, clone penalty).
+      *  spAmount > 0 takes that many skill points instead (the level follows the points).
+diff --git a/src/eve-server/character/CharacterDB.cpp b/src/eve-server/character/CharacterDB.cpp
+index 5add4c2..f385bc0 100644
+--- a/src/eve-server/character/CharacterDB.cpp
++++ b/src/eve-server/character/CharacterDB.cpp
+@@ -1686,6 +1686,24 @@ bool CharacterDB::GetSkillsByRace(uint32 raceID, std::map<uint32, uint8> &into)
+     return true;
+ }
+ 
++bool CharacterDB::GetPublishedSkills(std::vector<uint16>& into) {
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res,
++        "SELECT t.typeID FROM invTypes AS t"
++        "  JOIN invGroups AS g ON g.groupID = t.groupID"
++        " WHERE g.categoryID = %u AND t.published = 1", (uint32)EVEDB::invCategories::Skill))
++    {
++        codelog(DATABASE__ERROR, "Error in query: %s", res.error.c_str());
++        return false;
++    }
++
++    DBResultRow row;
++    while (res.GetRow(row))
++        into.push_back((uint16)row.GetUInt(0));
++
++    return true;
++}
++
+ bool CharacterDB::GetSkillsByCareer(uint32 careerID, std::map<uint32, uint8> &into) {
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res,
+diff --git a/src/eve-server/character/CharacterDB.h b/src/eve-server/character/CharacterDB.h
+index 5477627..5c51e58 100644
+--- a/src/eve-server/character/CharacterDB.h
++++ b/src/eve-server/character/CharacterDB.h
+@@ -208,6 +208,8 @@ public:
+    
+     static bool        GetBaseSkills(std::map< uint32, uint8 >& into);
+     static bool        GetSkillsByRace(uint32 raceID, std::map< uint32, uint8 >& into);
++    // every skill a player can have (published)
++    static bool        GetPublishedSkills(std::vector< uint16 >& into);
+     static bool        GetSkillsByCareer(uint32 careerID, std::map< uint32, uint8 >& into);
+ 
+     /**
+diff --git a/src/eve-server/character/Skill.cpp b/src/eve-server/character/Skill.cpp
+index e0354d4..64ee50a 100644
+--- a/src/eve-server/character/Skill.cpp
++++ b/src/eve-server/character/Skill.cpp
+@@ -157,13 +157,16 @@ void Skill::VerifyAttribs()
+ {
+     if (!isSingleton())
+         ChangeSingleton(true);
++    /* a float 0.0 equals an int 0, so SetAttribute() kept the float:  an untrained skill (injected, or every skill a new character
++     *  gets) loads its type's float 0.0, and the client's skill queue window broke on it ("integer argument expected, got float")
++     */
+     if (GetAttribute(AttrSkillLevel).get_type() != evil_number_int) {
+         _log(SKILL__INFO, "Skill %s level type != int.  Fixing...", name());
+-        SetAttribute(AttrSkillLevel, GetAttribute(AttrSkillLevel).get_uint32(), false);
++        GetAttributeMap()->ReplaceAttribute(AttrSkillLevel, EvilNumber((int64)GetAttribute(AttrSkillLevel).get_uint32()));
+     }
+     if (GetAttribute(AttrSkillPoints).get_type() != evil_number_int) {
+         _log(SKILL__INFO, "Skill %s sp type != int.  Fixing...", name());
+-        SetAttribute(AttrSkillPoints, GetAttribute(AttrSkillPoints).get_uint32(), false);
++        GetAttributeMap()->ReplaceAttribute(AttrSkillPoints, EvilNumber((int64)GetAttribute(AttrSkillPoints).get_uint32()));
+     }
+ }
+ 
+diff --git a/src/eve-server/inventory/AttributeMap.h b/src/eve-server/inventory/AttributeMap.h
+index f29f523..0f4e7a9 100644
+--- a/src/eve-server/inventory/AttributeMap.h
++++ b/src/eve-server/inventory/AttributeMap.h
+@@ -45,6 +45,10 @@ public:
+     ~AttributeMap() noexcept;
+ 
+     void SetAttribute(uint16 attrID, EvilNumber& num, bool notify=true);
++    /* the value as it is, its type too, with no notice to the client:  SetAttribute() keeps a float 0.0 when given an int 0
++     *  (they're equal), and the client wants some as ints (a skill's level)
++     */
++    void ReplaceAttribute(uint16 attrID, EvilNumber num)            { mAttributes[attrID] = num; }
+     void MultiplyAttribute(uint16 attrID, EvilNumber& num, bool notify=false);
+ 
+     EvilNumber GetAttribute(const uint16 attrID) const;
+diff --git a/utils/config/eve-server.xml b/utils/config/eve-server.xml
+index a22377b..7bb15cc 100644
+--- a/utils/config/eve-server.xml
++++ b/utils/config/eve-server.xml
+@@ -290,6 +290,9 @@ boolean can use either 0/1 OR true/false.
+         <startCorporation>0</startCorporation><!-- corporationID for new characters '0' to use default based on school -->
+         <terminationDelay>1800</terminationDelay> <!-- seconds  30m default -->
+         <statMultiplier>1</statMultiplier><!-- stats are multiplied by this (after remap) -->
++        <skillTrainingSpeed>10.0</skillTrainingSpeed><!-- float  skills train this many times as fast as on TQ.  1.0 is TQ's speed.  the client's own estimates of a skill's training time (skill info, before it's queued) still show TQ's speed;  the queue shows the real end times -->
++        <injectAllSkills>true</injectAllSkills><!-- bool  a player's new character starts with every skill injected, untrained, so it never needs a skillbook -->
++        <magic14AtFive>true</magic14AtFive><!-- bool  new characters start with the 'magic 14' core skills at V:  CPU (Electronics), Power Grid (Engineering) and Capacitor Management (Energy Management), Capacitor Systems Operation (Energy Systems Operation), Mechanics, Hull Upgrades, Shield Management, Shield Operation, Long Range Targeting, Signature Analysis, Navigation, Evasive Maneuvering, Warp Drive Operation and Spaceship Command -->
+         <allow3edChar>false</allow3edChar><!-- (dis)allow creating a third character -->
+         <!-- clones, implants and boosters -->
+         <requirePausedTraining>true</requirePausedTraining><!-- bool  Crucible: plugging in implants, consuming boosters and clone jumping need a paused skill queue.  false recalculates the queue instead -->
+-- 
+2.43.0
+

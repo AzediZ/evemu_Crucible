@@ -1,0 +1,555 @@
+From 97ec637e75255e2d8ba370808a570a95fb87e27a Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 16:39:39 +0000
+Subject: [PATCH 110/110] Shutdown, server log and control panel
+
+Stopping the server saves everything in time on a busy universe:
+items are saved 2,000 rows to a statement (one statement went over
+MySQL's max_allowed_packet and nothing was saved), item attributes are
+saved in bulk too, the log says how long the item save and the whole
+shutdown took, and Docker's stop_grace_period is ten minutes (the stop
+still ends as soon as the server has exited).
+
+The server's log file, one per start, is mapped out of the container
+to ./logs (see logs/README.txt), and a release build flushes it at most
+a second behind the console and line by line once the server is
+stopping.
+
+Fixes rolled in:
+- clients leave their fleets, and their station's guest list, when the
+  server halts
+- the control panel starts the server again when Docker trips over
+  replacing its container, and its Stop says the save can take a few
+  minutes
+---
+ .gitignore                                |  2 +
+ EVEmuControlPanel.ps1                     | 18 ++++-
+ docker-compose.yml                        |  6 +-
+ logs/README.txt                           | 20 +++++
+ src/eve-core/log/LogNew.cpp               | 11 ++-
+ src/eve-core/log/LogNew.h                 |  7 ++
+ src/eve-server/Client.cpp                 | 13 +++-
+ src/eve-server/EntityList.cpp             |  3 +
+ src/eve-server/eve-server.cpp             |  7 +-
+ src/eve-server/inventory/AttributeMap.cpp | 35 ++++++---
+ src/eve-server/inventory/AttributeMap.h   |  4 +
+ src/eve-server/inventory/InventoryItem.h  |  1 +
+ src/eve-server/inventory/ItemDB.cpp       | 94 +++++++++++++++++------
+ src/eve-server/inventory/ItemDB.h         |  2 +
+ src/eve-server/inventory/ItemFactory.cpp  |  8 +-
+ 15 files changed, 187 insertions(+), 44 deletions(-)
+ create mode 100644 logs/README.txt
+
+diff --git a/.gitignore b/.gitignore
+index af7ead3..3592ead 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -98,6 +98,8 @@ out/
+ 
+ # evenmu runtime
+ config/
++logs/*
++!logs/README.txt
+ # universe backups made by the control panel
+ /backups/
+ 
+diff --git a/EVEmuControlPanel.ps1 b/EVEmuControlPanel.ps1
+index 9d67ea4..dcebd57 100644
+--- a/EVEmuControlPanel.ps1
++++ b/EVEmuControlPanel.ps1
+@@ -300,7 +300,7 @@ function Get-FailureHint([string]$log) {
+         return 'Docker ran out of disk space. Click "Free up space", make room on the drive shown under Disk space, then try again.'
+     }
+     if ($log -match 'is already in use by container') {
+-        return 'Your server was set up from a different folder. Open "EVEmu Control Panel.bat" from the folder you normally use, then try again.'
++        return 'Docker tried to replace the server twice at once. The server is usually running anyway: check the status line at the top. If it is not, click Start.'
+     }
+     if ($log -match 'error during connect|dockerDesktopLinuxEngine|Cannot connect to the Docker daemon|Internal Server Error') {
+         return 'Docker stopped responding. Restart Docker Desktop, then try again. If Windows says a drive is full, make room on it first.'
+@@ -359,6 +359,18 @@ function Test-Image([string]$name) {
+     & $docker image inspect $name 2>&1 | Out-Null
+     return ($LASTEXITCODE -eq 0)
+ }
++function Test-NameClash {
++    # Docker Compose now and then replaces a container twice at once and stops on the name clash, though the
++    # first replacement worked. Test-Folder has already ruled out a server set up from another folder.
++    $tail = Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue
++    return [bool]($tail -match 'is already in use by container')
++}
++function Up-AfterClash([int]$c) {
++    if (($c -eq 0) -or (-not (Test-NameClash))) { return $c }
++    Say 'Docker tripped over itself replacing the server (it does that now and then). Starting it again in 5 seconds...'
++    Start-Sleep -Seconds 5
++    return (Dock compose up -d)
++}
+ function Test-Folder {
+     # The containers are always named server and db, so only one folder can run them. If they
+     # were set up from another folder, Docker would try to make a second, empty universe and stop
+@@ -501,6 +513,7 @@ if (($c -ne 0) -and (-not $fresh)) {
+     Start-Sleep -Seconds 15
+     $c = Dock compose up -d
+ }
++$c = Up-AfterClash $c
+ if ($fresh) { Clean-Docker $false }
+ if ($c -ne 0) { exit $c }
+ Say ''
+@@ -509,7 +522,7 @@ exit 0
+ '@
+     Stop = @'
+ if (-not (Test-Folder)) { exit 1 }
+-Say 'Stopping the server...'
++Say 'Stopping the server. It saves everything first, which can take a few minutes on a busy universe...'
+ $c = Dock compose stop
+ exit $c
+ '@
+@@ -525,6 +538,7 @@ if (-not (Ensure-Engine)) { exit 1 }
+ if (-not (Test-Folder)) { exit 1 }
+ Say 'Rebuilding the server from the code in this folder. The first rebuild takes 15 to 30 minutes; later ones usually a few minutes...'
+ $c = Dock compose up -d --build
++$c = Up-AfterClash $c
+ Clean-Docker $false
+ if ($c -ne 0) { exit $c }
+ Say ''
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 86993f7..4124cae 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -8,6 +8,7 @@ services:
+     container_name: server
+     volumes:
+       - ./config:/app/etc
++      - ./logs:/app/logs # the server's own log file, one per start (see logs/README.txt)
+       # the caches belong to the universe in db_revised:  server_cache keeps static data read from that database
+       - server_cache_revised:/app/server_cache
+       - image_cache_revised:/app/image_cache
+@@ -24,8 +25,9 @@ services:
+     tty: true
+     # docker stop (and compose stop, restart and down) sends SIGTERM, which start.sh passes on to eve-server:  it logs
+     #  everyone out and saves before it exits.  Docker kills it after stop_grace_period (default 10 s), so allow
+-    #  time for the save;  the stop ends as soon as the server has exited
+-    stop_grace_period: 2m
++    #  time for the save;  the stop ends as soon as the server has exited.  a busy universe's save can take more than two
++    #  minutes, so allow ten
++    stop_grace_period: 10m
+     init: true # a small init process as PID 1 that passes signals on and reaps orphaned processes
+     # Docker keeps everything the server prints (docker logs server) in a file that otherwise grows for as long as
+     #  the container exists.  Keep the last 100 MB, in 5 files of 20 MB
+diff --git a/logs/README.txt b/logs/README.txt
+new file mode 100644
+index 0000000..4792add
+--- /dev/null
++++ b/logs/README.txt
+@@ -0,0 +1,20 @@
++Server logs
++===========
++
++The server writes everything it prints to a file in this folder, one file per start:
++
++    DD-MM-YYYY-HH-MM.log        (the date and time it started, the server's clock)
++
++That is the same output the control panel's Activity tab shows and that "docker logs server" gives, kept
++where it can be read, searched and kept after the container is recreated.  It holds the whole start
++(the database step, the static data, a time skip if one was asked for) and
++then everything the server says while it runs.
++
++The container start script keeps the newest 20 files here and removes the rest, so the folder doesn't grow
++without end.  Deleting any of them while the server runs is safe, apart from the one it is writing.
++
++A release build writes the file at most a second behind what the console shows, and line by line once
++the server is stopping.
++
++How it works: src/eve-core/log/LogNew.cpp (the file and its name), the logs line in docker-compose.yml
++(maps this folder into the container at /app/logs) and utils/container-scripts/start.sh (the pruning).
+diff --git a/src/eve-core/log/LogNew.cpp b/src/eve-core/log/LogNew.cpp
+index eb006ee..0cc7ffc 100644
+--- a/src/eve-core/log/LogNew.cpp
++++ b/src/eve-core/log/LogNew.cpp
+@@ -306,7 +306,16 @@ void NewLog::PrintVa( const char* fmt, va_list ap )
+ #ifndef NDEBUG
+         // flush immediately so logfile is accurate if we crash
+         fflush( mLogfile );
+-#endif /* !NDEBUG */
++#else /* NDEBUG */
++        // a release build writes the file in blocks:  at most a second behind what the console shows, and line by line once
++        //  the server is stopping, so a stop Docker cuts short keeps what the server said
++        time_t now( std::time( nullptr ) );
++        if( mFlushEach or ( now != mFlushedAt ) )
++        {
++            fflush( mLogfile );
++            mFlushedAt = now;
++        }
++#endif /* NDEBUG */
+ 
+         va_end( ap2 );
+     }
+diff --git a/src/eve-core/log/LogNew.h b/src/eve-core/log/LogNew.h
+index f5a3737..8f99d32 100644
+--- a/src/eve-core/log/LogNew.h
++++ b/src/eve-core/log/LogNew.h
+@@ -156,6 +156,10 @@ public:
+      * @param[in] time is the timestamp.
+      */
+     void SetTime( time_t time ) { mTime = time; }
++    /**
++     * @brief Writes each line to the logfile as it comes (the server is stopping:  a stop Docker cuts short keeps what was said).
++     */
++    void SetFlushEachLine() { mFlushEach = true; }
+ 
+ protected:
+     /// A convenience color enum.
+@@ -227,6 +231,9 @@ protected:
+     FILE* mLogfile;
+     /// Current timestamp.
+     time_t mTime; // crap there should be 1 generic easy to understand time manager.
++    /// The logfile was last flushed (a release build:  at most a second behind), and every line is flushed (stopping)
++    time_t mFlushedAt = 0;
++    bool mFlushEach = false;
+     /// Protection against concurrent log messages
+     Mutex mMutex;
+ 
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 4d8849f..2596296 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -185,10 +185,17 @@ Client::~Client() {
+                 // remove char from station
+                 sEntityList.GetStationByID(m_locationID)->RemoveItem(m_char);
+             }
++        } else if (IsDocked()) {
++            // halting, nobody is told.  but the station mustn't keep a client that's gone:  one logging in there before the
++            //  halt is done would notify it
++            StationItemRef sRef(sEntityList.GetStationByID(m_locationID));
++            if (sRef.get() != nullptr)
++                sRef->RemoveGuest(this);
+         }
+-        // drop fleet invites/join requests and leave the fleet before the character goes away
+-        if (!sConsole.IsShutdown())
+-            sFltSvc.ClientLogout(this);
++        /* drop fleet invites/join requests and leave the fleet before the character goes away.  when halting too:  the
++         *  fleet would keep a pointer to this client, and a fleetmate going after it (a lit cyno going out) would notify it
++         */
++        sFltSvc.ClientLogout(this);
+ 
+         // container passwords entered this session are forgotten
+         sContSec.ForgetCharacter(m_char->itemID());
+diff --git a/src/eve-server/EntityList.cpp b/src/eve-server/EntityList.cpp
+index 786b297..64dc1bc 100644
+--- a/src/eve-server/EntityList.cpp
++++ b/src/eve-server/EntityList.cpp
+@@ -116,6 +116,9 @@ void EntityList::Shutdown() {
+      * server run loop will exit after control is returned from this function, which will clean up remaining items.
+      */
+     m_closing = true;
++    // the log line by line from here (a console exit or a scheduled shutdown comes here without a signal)
++    sLog.SetFlushEachLine();
++
+     if (m_clients.empty())
+         return;
+ 
+diff --git a/src/eve-server/eve-server.cpp b/src/eve-server/eve-server.cpp
+index 1ebb06d..21084d5 100644
+--- a/src/eve-server/eve-server.cpp
++++ b/src/eve-server/eve-server.cpp
+@@ -1006,6 +1006,7 @@ static void SetupSignals()
+ 
+ static void CatchSignal( int sig_num )
+ {
++    sLog.SetFlushEachLine();
+     sLog.Error( "    Signal System", "Caught signal: %d", sig_num );
+     if (sConfig.debug.StackTrace)
+         EvE::traceStack();
+@@ -1059,6 +1060,8 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
+     /* every shutdown path ends here (console 'x', /shutdown, scheduled shutdown, signals)
+      * @note  these are order-dependent...
+      */
++    sLog.SetFlushEachLine();
++    double started(GetTimeMSeconds());
+     sLog.Warning("   ServerShutdown", "Main loop has stopped." );
+     sLog.Error("   ServerShutdown", "EVEmu Server is Offline." );
+     if (!sConsole.IsDbError()) {
+@@ -1095,8 +1098,10 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
+     /* Close the standings manager */
+     sStandingMgr.Close();
+     sLog.Warning("   ServerShutdown", "Saving Items." );
++    double saving(GetTimeMSeconds());
+     if (!sConsole.IsDbError())
+         sItemFactory.SaveItems();
++    sLog.Warning("   ServerShutdown", "Items saved in %.1f s.", (GetTimeMSeconds() - saving) / 1000.0);
+     /* Close the entity list */
+     sEntityList.Close();
+     /* Shut down the Item system */
+@@ -1113,7 +1118,7 @@ static void ServerShutdown(EVETCPServer& tcps, CommandDispatcher& command_dispat
+     sLog.Warning("   ServerShutdown", "Shutting down Thread Manager." );
+     /* join open threads */
+     sThread.EndThreads();
+-    sLog.Warning("   ServerShutdown", "EVEmu is Offline.");
++    sLog.Warning("   ServerShutdown", "EVEmu is Offline (the shutdown took %.1f s after the main loop stopped).", (GetTimeMSeconds() - started) / 1000.0);
+     /* close logfile */
+     log_close_logfile();
+ }
+diff --git a/src/eve-server/inventory/AttributeMap.cpp b/src/eve-server/inventory/AttributeMap.cpp
+index ca64eea..0b4cfb1 100644
+--- a/src/eve-server/inventory/AttributeMap.cpp
++++ b/src/eve-server/inventory/AttributeMap.cpp
+@@ -117,11 +117,16 @@ bool AttributeMap::Save() {
+     if (IsStaticItem(mItem.itemID()))
+         return true;
+ 
+-    bool save(false);
+     std::vector<Inv::AttrData> attribs;
+-    attribs.clear();
++    if (!IsCharacterID(mItem.itemID())) {
++        if (!Gather(attribs))
++            return (mItem.categoryID() == EVEDB::invCategories::Ship);
++        if (!attribs.empty())
++            ItemDB::SaveAttributes(false, attribs);
++        return true;
++    }
+     AttrMapItr itr = mAttributes.begin(), end = mAttributes.end();
+-    if (IsCharacterID(mItem.itemID())) {
++    {
+         for (; itr != end; ++itr) {
+             switch (itr->first) {
+                 case AttrCharisma:
+@@ -151,15 +156,26 @@ bool AttributeMap::Save() {
+                 }
+             }
+         }
+-    } else {
++    }
++
++    if (!attribs.empty())
++        ItemDB::SaveAttributes(true, attribs);
++    return true;
++}
++
++bool AttributeMap::Gather(std::vector<Inv::AttrData>& attribs)
++{
++    if (IsStaticItem(mItem.itemID()) or IsCharacterID(mItem.itemID()))
++        return false;
++    bool save(false);
++    AttrMapItr itr = mAttributes.begin(), end = mAttributes.end();
++    {
+         bool skill(false), damage(false), owner(false), module(false);
+         switch (mItem.categoryID()) {
+             case EVEDB::invCategories::Asteroid:    // asteroids and blueprints are NOT saved here
+-            case EVEDB::invCategories::Blueprint: {
+-                return false;
+-            } break;
++            case EVEDB::invCategories::Blueprint:
+             case EVEDB::invCategories::Ship: {      // ship attribs saved in shipItem, not here.
+-                return true;
++                return false;
+             } break;
+             case EVEDB::invCategories::Skill: {     // save SP, Level and times for skills
+                 skill = true;
+@@ -212,9 +228,6 @@ bool AttributeMap::Save() {
+             }
+         }
+     }
+-
+-    if (!attribs.empty())
+-        ItemDB::SaveAttributes(IsCharacterID(mItem.itemID()), attribs);
+     return true;
+ }
+ 
+diff --git a/src/eve-server/inventory/AttributeMap.h b/src/eve-server/inventory/AttributeMap.h
+index 0f4e7a9..c26d925 100644
+--- a/src/eve-server/inventory/AttributeMap.h
++++ b/src/eve-server/inventory/AttributeMap.h
+@@ -57,6 +57,10 @@ public:
+     bool HasAttribute(const uint16 attrID, EvilNumber& value) const;
+ 
+     bool Save();
++    /* ...what Save() would write for an item that isn't a character, added to into (a shutdown's save writes them all a
++     *  few thousand rows to a statement:  ItemDB::SaveAttributeRows()).  false:  it saves none of its attributes here
++     */
++    bool Gather(std::vector<Inv::AttrData>& into);
+ 
+     void Delete();
+     void DeleteAttribute(uint16 attrID);
+diff --git a/src/eve-server/inventory/InventoryItem.h b/src/eve-server/inventory/InventoryItem.h
+index 1b66f97..4bb0629 100644
+--- a/src/eve-server/inventory/InventoryItem.h
++++ b/src/eve-server/inventory/InventoryItem.h
+@@ -326,6 +326,7 @@ public:
+     bool HasAttribute(const uint16 attrID) const                       { return pAttributeMap->HasAttribute(attrID); }
+     bool HasAttribute(const uint16 attrID, EvilNumber &value) const    { return pAttributeMap->HasAttribute(attrID, value); }
+     bool SaveAttributes()                                              { return pAttributeMap->SaveAttributes(); }
++    bool GatherAttributes(std::vector<Inv::AttrData>& into)           { return pAttributeMap->Gather(into); }
+     void ResetAttribute(uint16 attrID, bool notify=false)              { pAttributeMap->ResetAttribute(attrID, notify); }
+     void DeleteAttribute(uint16 attrID)                                { pAttributeMap->DeleteAttribute(attrID); }
+ 
+diff --git a/src/eve-server/inventory/ItemDB.cpp b/src/eve-server/inventory/ItemDB.cpp
+index 406361d..c9de11a 100644
+--- a/src/eve-server/inventory/ItemDB.cpp
++++ b/src/eve-server/inventory/ItemDB.cpp
+@@ -264,11 +264,33 @@ bool ItemDB::SaveItem(uint32 itemID, const ItemData &data) {
+ 
+ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
+ {
++    /* a few thousand rows a statement:  the server's whole item cache in one (a quarter of a million items after a long
++     *  run) was over the database's max_allowed_packet, which drops the connection, so the save was lost and with it the
++     *  commit of everything saved before it in the transaction
++     */
++    const uint32 BatchRows = 2000;
+     std::ostringstream Inserts;
+-    // start the insert into command.
+-    Inserts << "INSERT INTO entity";
+-    Inserts << " (itemID, typeID, ownerID, locationID, flag, contraband, singleton, quantity, x, y, z, customInfo)";
+-    bool first = true;
++    uint32 rows(0);
++    auto flush = [&Inserts, &rows]() {
++        if (rows == 0)
++            return;
++        Inserts << " ON DUPLICATE KEY UPDATE ";
++        Inserts << "quantity=VALUES(quantity), ";
++        Inserts << "ownerID=VALUES(ownerID), ";
++        Inserts << "locationID=VALUES(locationID), ";
++        Inserts << "flag=VALUES(flag), ";
++        Inserts << "singleton=VALUES(singleton), ";
++        Inserts << "x=VALUES(x), ";
++        Inserts << "y=VALUES(y), ";
++        Inserts << "z=VALUES(z), ";
++        Inserts << "customInfo=VALUES(customInfo) ";
++        DBerror err;
++        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
++            _log(DATABASE__ERROR, "SaveItems - unable to save data - %s", err.c_str());
++        Inserts.str("");
++        Inserts.clear();
++        rows = 0;
++    };
+     for (auto cur : data) {
+         if (cur.position.isNaN() or cur.position.isInf()) {
+             _log(DATABASE__ERROR, "ItemDB::SaveItems() - %u has invalid position", cur.itemID);
+@@ -278,9 +300,10 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
+             _log(DATABASE__ERROR, "ItemDB::SaveItems() - %u has invalid location", cur.itemID);
+             continue;
+         }
+-        if (first) {
++        if (rows == 0) {
++            Inserts << "INSERT INTO entity";
++            Inserts << " (itemID, typeID, ownerID, locationID, flag, contraband, singleton, quantity, x, y, z, customInfo)";
+             Inserts << " VALUES ";
+-            first = false;
+         } else {
+             Inserts << ", ";
+         }
+@@ -292,24 +315,10 @@ void ItemDB::SaveItems(std::vector<Inv::SaveData>& data)
+         std::string info;
+         sDatabase.DoEscapeString(info, cur.customInfo);
+         Inserts << ", '" << info << "')";
++        if (++rows >= BatchRows)
++            flush();
+     }
+-
+-    if (!first) {
+-        Inserts << "ON DUPLICATE KEY UPDATE ";
+-        Inserts << "quantity=VALUES(quantity), ";
+-        Inserts << "ownerID=VALUES(ownerID), ";
+-        Inserts << "locationID=VALUES(locationID), ";
+-        Inserts << "flag=VALUES(flag), ";
+-        Inserts << "singleton=VALUES(singleton), ";
+-        Inserts << "quantity=VALUES(quantity), ";
+-        Inserts << "x=VALUES(x), ";
+-        Inserts << "y=VALUES(y), ";
+-        Inserts << "z=VALUES(z), ";
+-        Inserts << "customInfo=VALUES(customInfo) ";
+-        DBerror err;
+-        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
+-            _log(DATABASE__ERROR, "SaveItems - unable to save data - %s", err.c_str());
+-    }
++    flush();
+ }
+ 
+ void ItemDB::SaveAttributes(bool isChar, std::vector<Inv::AttrData>& data)
+@@ -352,6 +361,45 @@ void ItemDB::SaveAttributes(bool isChar, std::vector<Inv::AttrData>& data)
+     }
+ }
+ 
++void ItemDB::SaveAttributeRows(const std::vector<Inv::AttrData>& data)
++{
++    /* the shutdown's save:  a statement an item was most of it (every skill of every character loaded, 137,000 items on a
++     *  test server took 26 s).  a few thousand rows a statement, as SaveItems() writes the items, written as
++     *  SaveAttributes() writes them
++     */
++    const uint32 BatchRows = 2000;
++    std::ostringstream Inserts;
++    uint32 rows(0);
++    auto flush = [&Inserts, &rows]() {
++        if (rows == 0)
++            return;
++        Inserts << " ON DUPLICATE KEY UPDATE ";
++        Inserts << "valueInt=VALUES(valueInt), ";
++        Inserts << "valueFloat=VALUES(valueFloat)";
++        DBerror err;
++        if (!sDatabase.RunQuery(err, Inserts.str().c_str()))
++            _log(DATABASE__ERROR, "SaveAttributeRows - unable to save data - %s", err.c_str());
++        Inserts.str("");
++        Inserts.clear();
++        rows = 0;
++    };
++    for (auto& cur : data) {
++        if (rows == 0)
++            Inserts << "INSERT INTO entity_attributes (itemID, attributeID, valueInt, valueFloat) VALUES ";
++        else
++            Inserts << ", ";
++        Inserts << "(" << cur.itemID << ", " << cur.attrID << ", ";
++        if (cur.type) {
++            Inserts << "NULL, " << cur.valueFloat << ")";
++        } else {
++            Inserts << cur.valueInt << ", NULL)";
++        }
++        if (++rows >= BatchRows)
++            flush();
++    }
++    flush();
++}
++
+ bool ItemDB::DeleteItem(uint32 itemID) {
+     if (IsStaticMapItem(itemID)) {
+         _log(ITEM__ERROR, "Refusing to delete static map object %u.", itemID);
+diff --git a/src/eve-server/inventory/ItemDB.h b/src/eve-server/inventory/ItemDB.h
+index 310fc64..ec2d386 100644
+--- a/src/eve-server/inventory/ItemDB.h
++++ b/src/eve-server/inventory/ItemDB.h
+@@ -46,6 +46,8 @@ public:
+     static bool SaveItem(uint32 itemID, const ItemData &data);
+     static void SaveItems(std::vector< Inv::SaveData > &data);
+     static void SaveAttributes(bool isChar, std::vector< Inv::AttrData > &data);
++    // ...many items' attributes (not characters'), a few thousand rows to a statement
++    static void SaveAttributeRows(const std::vector< Inv::AttrData > &data);
+ 
+     // only used in ConsoleCommands to test/process fx data
+     static void GetItems(uint16 catID, std::map<uint16, std::string> &typeIDs);
+diff --git a/src/eve-server/inventory/ItemFactory.cpp b/src/eve-server/inventory/ItemFactory.cpp
+index 3b7e0e6..e7f8ed7 100644
+--- a/src/eve-server/inventory/ItemFactory.cpp
++++ b/src/eve-server/inventory/ItemFactory.cpp
+@@ -99,9 +99,14 @@ void ItemFactory::SaveItems() {
+     double startTime = GetTimeMSeconds();
+     std::vector<Inv::SaveData> items;
+     items.clear();
++    // the attributes of all but the characters a few thousand rows to a statement (ItemDB::SaveAttributeRows())
++    std::vector<Inv::AttrData> attribs;
+     for (auto cur : m_items) {
+         if (IsPlayerItem(cur.first)) { // this is a hack for now.  will eventually move to static/dynamic item maps
+-            cur.second->SaveAttributes();
++            if (IsCharacterID(cur.first))
++                cur.second->SaveAttributes();
++            else
++                cur.second->GatherAttributes(attribs);
+             Inv::SaveData data = Inv::SaveData();
+                 data.itemID = cur.first;
+                 data.contraband = cur.second->contraband();
+@@ -117,6 +122,7 @@ void ItemFactory::SaveItems() {
+             ++count;
+         }
+     }
++    ItemDB::SaveAttributeRows(attribs);
+     ItemDB::SaveItems(items);
+     sLog.Warning("        SaveItems", "Saved %u Dynamic Items in %.3fms.", count, (GetTimeMSeconds() -startTime));
+ }
+-- 
+2.43.0
+

@@ -4,6 +4,59 @@ Changes made on top of EVEmu Crucible for the single-player Crucible-era sandbox
 
 ---
 
+## Skill training speed and the skill queue
+
+**Training speed.** Skills train 10 times as fast as on Tranquility by default. To change it, edit `config/eve-server.xml` in the server folder (the container reads it as `/app/etc/eve-server.xml`) and restart the server:
+
+```xml
+<character>
+    <skillTrainingSpeed>10.0</skillTrainingSpeed>  <!-- 1.0 is Tranquility's speed, 2.0 twice as fast, and so on -->
+    <injectAllSkills>true</injectAllSkills>        <!-- new characters start with every skill injected, untrained -->
+    <magic14AtFive>true</magic14AtFive>            <!-- new characters start with the 'magic 14' core skills at V -->
+</character>
+```
+
+A `config/eve-server.xml` made before these settings existed doesn't have the lines; add them inside its `<character>` section, or the defaults above apply. The skill info window's training time estimate is the client's own and always shows Tranquility's speed; the skill queue shows the real end times. `injectAllSkills` and `magic14AtFive` only affect characters created after the change.
+
+**The skill queue past 24 hours.** The client won't queue more than 24 hours of training (its own check, at Tranquility's speed). The server has no limit, so type these in any chat channel:
+
+| Command | What it does |
+|---|---|
+| `/queue` | Shows your whole queue with each skill's real end time |
+| `/queue add Gallente Cruiser 4` | Adds a skill up to a level (a number or I to V), with the skills it needs first. Without a level it adds the next one |
+| `/queue add Vexor` | Adds everything a ship or module needs that you don't have yet |
+| `/queue remove Gallente Cruiser` | Takes every level of that skill out of the queue |
+| `/queue clear` | Empties the queue |
+
+The skill queue window updates when the command runs, and shows the whole queue.
+
+---
+
+## 2026-10-25: Faction warfare, killboard, sovereignty, skills and stability (branch `revised`)
+
+Patches `0099` to `0110` · Status: **compiles and boot-tested** (25 Oct 2026): the server was started natively against MariaDB with the new migrations and stopped cleanly. Each change has also been running on a live server as part of a larger build. Each patch is one feature, with the bug fixes found in that area rolled into it.
+
+- `0099` **Server stability and memory.** Long sessions no longer grow by a few MB an hour, and packets are no longer freed twice: the reference counting rules are now the same everywhere (later patches rely on them). Fixed crashes: a module whose first shot killed its target, ships leaving a fight with modules running, entities going while the server halts, a station loading before its system, goods put in a courier package or cargo container. A ship landing where two grids' bubbles overlap now sees the entities there instead of empty space. A character looked at while its player was offline (show info) no longer puts back an old wallet at shutdown or login. Faster character lookups.
+- `0100` **Sovereignty and starbases.** Infrastructure hubs go into reinforcement at 25% shield and 50% armor (24 hours, give or take 3, each) and die with their upgrades at 0% structure. TCU, SBU and hub damage alerts, customs office attack and reinforcement alerts, outpost service attack alerts and ownership transfer notices are sent. Online TCUs and hubs can be locked, SBUs anchor at their gate, structure damage survives a system reload, stations can be shot from near their walls, and starbase silos take fullerite and hybrid polymers so polymer reactions run.
+- `0101` **Fittings and undocking.** Fit Ship in the fitting window fits a saved fitting from your hangar: subsystems, rigs, modules, drones and charges, with the normal fitting checks, and lists what it couldn't fit. Fittings with charges save. Modules stay online when you undock (a stealth bomber's torpedo launchers went offline), and undocking right after logging in docked gives undock invulnerability again.
+- `0102` **CONCORD LP exchange.** The LP store turns CONCORD LP into an empire corporation's LP at 0.8, or a fringe faction's (Syndicate, ORE, Thukker, Sisters of EVE, Society, Mordu's Legion) at 0.4.
+- `0103` **Gas sites and signatures.** Booster gas sites spawn as Ladar signatures in their Crucible regions, the bigger ones guarded; `/gas list` and `/gas spawn` for GMs. DED complexes now spawn in known space, wormhole systems get their ore sites and the right number of other sites, and data and relic sites can be hacked and finish.
+- `0104` **Mining.** Three mining laser crashes fixed: a cycle filling the hold, two lasers emptying the same rock, and a laser emptying its rock. Ambient miners are Civilian Hulk NPCs by default (`<ambient><MinerModel>`; `hull` brings the pilotless barges back).
+- `0105` **Killboard and battle reports.** Kill reports, a zKillboard-style board and battle reports at `http://<server>:26001/kb/`, in the in-game browser or any browser. Everyone on a kill gets a CONCORD mail linking its report, and `/killboard` (or `/kb`) gives links. The star map's kill counts no longer overflow, and its jumps in the last hour reset every hour. The pages' icons and ship renders come from `utils/killboard/fetch-images.ps1`, which downloads them from CCP's public image server into the server's image folder; no images are in the repository.
+- `0106` **Skills.** The training speed, `injectAllSkills` and `magic14AtFive` settings and `/queue`, described at the top of this changelog. New characters get the cheapest clone that covers their starting skill points. Untrained skills no longer break the skill queue window, and logging off while training no longer crashes the server.
+- `0107` **Corporations and chat.** Corp and alliance chat MOTDs survive a restart. Recruitment adverts save, search and list properly. New applications and new members show without restarting the client, and Member Tracking shows who is really online. Accents, curly quotes and dashes in chat no longer show as `â€™`.
+- `0108` **Market and trade hubs.** Every blueprint an NPC corporation sells is also offered at every trade hub. The market sim no longer sells capitals that can't enter high security, the tournament prize ships, the gift ships or the Imperial Issue battleships. Buy order escrow at a player corp's station works.
+- `0109` **Faction warfare.** Militias by Crucible's rules: enlisting yourself or your corporation, militias at war anywhere without CONCORD. Minor, medium and major complexes in the war zones give victory points; at 200 a system's control bunker can be shot, and destroying it hands the system over at the next downtime. Militia missions, ranks by standing, and LP for killing enemy militia ships. GMs have `/fw`. Also fixes a crash in GM commands with an optional number left out.
+- `0110` **Shutdown, server log and control panel.** Stopping the server saves everything in time on a busy universe (the item save was one statement too big for MySQL and saved nothing). The server's log file for each start is in the new `logs` folder. Clients leave their fleets when the server halts, and the control panel starts the server again when Docker trips over replacing its container.
+
+**Before the first start**
+- Rebuild from the control panel. The next start applies the new migrations: `20261024150000-ihub-sieges`, `20261024160000-kspace-gas-sites`, `20261028100000-character-indexes`, `20261105100000-character-name-index`, `20261105110000-server-connections-int`, `20261121100000-chat-channel-motds`, `20261127100000-recruitment-adverts` and the five `facwar` ones.
+- The new `logs` folder is mapped into the container the next time it's created (a rebuild does this).
+
+**How to test.** Make a new character: it has every skill injected and the magic 14 at V. Type `/queue add Vexor` and open the skill queue. Get in a fight and open `http://<server>:26001/kb/` in the in-game browser. Enlist at a militia office in a war zone station and warp to a complex from the scanner.
+
+---
+
 ## 2026-10-15: DED complexes and fixes from the first in-game test (branch `revised`)
 
 Patches `0092` to `0098` · Status: **compiles and boot-tested** (15 Oct 2026). Azedi confirmed the pod fix in game. All 48 complexes were spawned on a test server with every pocket populated, and the server ran on with them and shut down cleanly. The rest isn't tested in game yet.

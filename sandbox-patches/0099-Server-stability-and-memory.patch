@@ -1,0 +1,3510 @@
+From 02b91a765230df94320db12c83bcb6e8d5c89df1 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 14:23:40 +0000
+Subject: [PATCH 099/110] Server stability and memory
+
+Long sessions grew by a few MB an hour, some paths freed packets twice,
+and several crashes showed up once the universe got busy.  The refcount
+rules are now the same across the server:  containers take over the
+reference passed to SetItem/AddItem, generated packet structs own their
+pointer fields, SendNotification, QueueDestinyUpdate/Event, Multicast
+and CorpNotify consume their payload (early returns included), and the
+single destiny sends and PyTuple** bubblecasts don't.  Later patches
+rely on these rules.
+
+Fixes rolled in:
+- packets nobody would receive aren't built, and object cache ids are
+  freed
+- a module whose first cycle killed its target kept a pointer to it and
+  used the freed target at the end of the cycle;  a shutdown with ships
+  or drones locked on dungeon NPCs crashed
+- ships that leave a fight stop their modules first, and entities going
+  while the server halts clear their locks until the world is actually
+  being taken down (both read freed modules or targets before)
+- a ship landing where two bubbles overlap joins the bubble with the
+  entities in it instead of an empty one beside it
+- a station loading before its system has booted no longer crashes
+- a character loaded while its player was offline (show info) no
+  longer writes its old wallet, location and corp back at shutdown or
+  login
+- goods put into a courier package or any cargo container no longer
+  crash the server (the container's structure entity was never set)
+- a podded pilot leaves its old bubble's player list
+- indexes for reading a character's rows and for character names, and
+  the server's login counter is an INT (it overflowed a SMALLINT)
+---
+ .../20261028100000-character-indexes.sql      |  13 ++
+ .../20261105100000-character-name-index.sql   |   7 +
+ .../20261105110000-server-connections-int.sql |   7 +
+ src/eve-common/cache/CachedObjectMgr.cpp      |   9 +-
+ src/eve-common/database/EVEDBUtils.cpp        |   4 +-
+ src/eve-common/marshal/EVEUnmarshal.cpp       |   3 +-
+ src/eve-common/network/EVESession.cpp         |   3 +-
+ src/eve-common/python/PyPacket.cpp            | 138 ++++--------------
+ src/eve-common/python/PyRep.cpp               |  49 ++++---
+ src/eve-common/python/PyRep.h                 |  16 +-
+ src/eve-common/python/classes/PyDatabase.cpp  |  10 +-
+ .../python/classes/PyExceptions.cpp           |   6 +-
+ src/eve-common/python/classes/PyExceptions.h  |   3 +-
+ src/eve-core/memory/RefPtr.h                  |   9 +-
+ src/eve-server/Client.cpp                     |  39 ++++-
+ src/eve-server/Client.h                       |   2 +
+ src/eve-server/ClientSession.cpp              |  22 ++-
+ src/eve-server/EntityList.cpp                 |  21 ++-
+ src/eve-server/EntityList.h                   |   5 +
+ src/eve-server/LiveUpdateDB.cpp               |   3 +
+ src/eve-server/StaticDataMgr.cpp              |  58 +++++---
+ src/eve-server/account/AccountService.cpp     |   6 +-
+ src/eve-server/admin/GMCommands.cpp           |   2 +-
+ src/eve-server/agents/AgentBound.cpp          |   2 -
+ src/eve-server/character/CharMgrService.cpp   |   1 +
+ src/eve-server/character/Character.cpp        |  24 ++-
+ src/eve-server/character/Character.h          |   9 +-
+ src/eve-server/chat/LSCChannel.cpp            |   3 +-
+ .../corporation/CorpRegistryBound.cpp         |  23 +--
+ src/eve-server/exploration/Probes.cpp         |   2 +
+ src/eve-server/exploration/ScanMgrService.cpp |   3 +-
+ src/eve-server/faction/WarRegistryService.cpp |   3 +-
+ src/eve-server/inventory/AttributeMap.cpp     |  15 +-
+ src/eve-server/inventory/Inventory.cpp        |  13 +-
+ src/eve-server/inventory/Inventory.h          |   8 +-
+ src/eve-server/inventory/InventoryItem.cpp    |  42 ++++--
+ src/eve-server/market/MarketDB.cpp            |   2 +
+ src/eve-server/market/MarketMgr.cpp           |   3 +-
+ src/eve-server/npc/Drone.cpp                  |   1 +
+ src/eve-server/npc/LawEnforcement.cpp         |   1 +
+ src/eve-server/planet/CustomsOffice.cpp       |   6 +-
+ src/eve-server/pos/Structure.cpp              |  21 ++-
+ src/eve-server/services/BoundService.h        |  11 +-
+ src/eve-server/services/Callable.cpp          |  25 ++--
+ src/eve-server/services/Callable.h            |   2 +
+ src/eve-server/services/SparseBound.h         |   5 +-
+ src/eve-server/ship/BeyonceService.cpp        |   1 +
+ src/eve-server/ship/Ship.cpp                  |   9 +-
+ src/eve-server/ship/Ship.h                    |   4 +
+ src/eve-server/ship/ShipService.cpp           |   9 +-
+ src/eve-server/ship/modules/ActiveModule.cpp  |  23 ++-
+ src/eve-server/ship/modules/ModuleManager.cpp |   4 -
+ src/eve-server/station/Outpost.cpp            |   2 +-
+ src/eve-server/station/Station.cpp            |   2 +-
+ src/eve-server/station/StationOffice.cpp      |   2 +-
+ src/eve-server/system/BubbleManager.cpp       |  30 +++-
+ src/eve-server/system/BubbleManager.h         |   2 +
+ src/eve-server/system/Container.cpp           |  11 +-
+ src/eve-server/system/DestinyManager.cpp      | 126 +++++++++++-----
+ src/eve-server/system/DestinyManager.h        |   2 +
+ src/eve-server/system/KeeperService.cpp       |   1 +
+ src/eve-server/system/SolarSystem.cpp         |   2 +-
+ src/eve-server/system/SystemBubble.cpp        |  47 +++++-
+ src/eve-server/system/SystemBubble.h          |   7 +
+ src/eve-server/system/SystemEntity.cpp        |  11 +-
+ src/eve-server/system/SystemEntity.h          |   2 +-
+ src/eve-server/system/SystemManager.cpp       |   6 +-
+ src/eve-server/system/TargetManager.cpp       |  10 ++
+ src/eve-server/system/TargetManager.h         |   1 +
+ .../system/cosmicMgrs/DungeonMgr.cpp          |   8 +-
+ .../system/cosmicMgrs/WormholeMgr.cpp         |   1 +
+ src/eve-xmlpktgen/DecodeGenerator.cpp         |  12 +-
+ src/eve-xmlpktgen/DestructGenerator.cpp       |  14 +-
+ src/eve-xmlpktgen/EncodeGenerator.cpp         |  20 +--
+ 74 files changed, 672 insertions(+), 357 deletions(-)
+ create mode 100644 sql/migrations/20261028100000-character-indexes.sql
+ create mode 100644 sql/migrations/20261105100000-character-name-index.sql
+ create mode 100644 sql/migrations/20261105110000-server-connections-int.sql
+
+diff --git a/sql/migrations/20261028100000-character-indexes.sql b/sql/migrations/20261028100000-character-indexes.sql
+new file mode 100644
+index 0000000..7fd4f84
+--- /dev/null
++++ b/sql/migrations/20261028100000-character-indexes.sql
+@@ -0,0 +1,13 @@
++-- Indexes for reading one character's rows, which every login, character creation and skill change does.  Without them
++--  each of these read the whole table, and got slower with every character made
++-- +migrate Up
++ALTER TABLE `chrSkillHistory` ADD INDEX IF NOT EXISTS `characterID` (`characterID`);
++ALTER TABLE `chrCharacterAttributes` ADD INDEX IF NOT EXISTS `charID` (`charID`);
++ALTER TABLE `chrSkillQueue` ADD INDEX IF NOT EXISTS `characterID` (`characterID`);
++ALTER TABLE `chrPausedSkillQueue` ADD INDEX IF NOT EXISTS `characterID` (`characterID`);
++
++-- +migrate Down
++ALTER TABLE `chrPausedSkillQueue` DROP INDEX IF EXISTS `characterID`;
++ALTER TABLE `chrSkillQueue` DROP INDEX IF EXISTS `characterID`;
++ALTER TABLE `chrCharacterAttributes` DROP INDEX IF EXISTS `charID`;
++ALTER TABLE `chrSkillHistory` DROP INDEX IF EXISTS `characterID`;
+diff --git a/sql/migrations/20261105100000-character-name-index.sql b/sql/migrations/20261105100000-character-name-index.sql
+new file mode 100644
+index 0000000..25159cc
+--- /dev/null
++++ b/sql/migrations/20261105100000-character-name-index.sql
+@@ -0,0 +1,7 @@
++-- An index on character names.  Character creation checks a new name isn't taken by looking it up, and without the
++--  index each check read the whole table, and got slower with every character made
++-- +migrate Up
++ALTER TABLE `chrCharacters` ADD INDEX IF NOT EXISTS `characterName` (`characterName`);
++
++-- +migrate Down
++ALTER TABLE `chrCharacters` DROP INDEX IF EXISTS `characterName`;
+diff --git a/sql/migrations/20261105110000-server-connections-int.sql b/sql/migrations/20261105110000-server-connections-int.sql
+new file mode 100644
+index 0000000..4c337c6
+--- /dev/null
++++ b/sql/migrations/20261105110000-server-connections-int.sql
+@@ -0,0 +1,7 @@
++-- The count of logins since the server started.  A smallint stopped at 32,767:  every login after that failed the
++--  update and logged a database error
++-- +migrate Up
++ALTER TABLE `srvStatus` MODIFY `Connections` INT UNSIGNED NOT NULL DEFAULT 0;
++
++-- +migrate Down
++ALTER TABLE `srvStatus` MODIFY `Connections` SMALLINT(6) NOT NULL;
+diff --git a/src/eve-common/cache/CachedObjectMgr.cpp b/src/eve-common/cache/CachedObjectMgr.cpp
+index 78d22ae..5fb7a93 100644
+--- a/src/eve-common/cache/CachedObjectMgr.cpp
++++ b/src/eve-common/cache/CachedObjectMgr.cpp
+@@ -159,7 +159,7 @@ bool CachedObjectMgr::HaveCached(const std::string &objectID) const
+ 
+ bool CachedObjectMgr::HaveCached(const PyRep *objectID) const
+ {
+-    PyIncRef(objectID);
++    // only reads objectID
+     const std::string str = OIDToString(objectID);
+ 
+     return (m_cachedObjects.find(str) != m_cachedObjects.end());
+@@ -167,7 +167,7 @@ bool CachedObjectMgr::HaveCached(const PyRep *objectID) const
+ 
+ void CachedObjectMgr::InvalidateCache(const PyRep *objectID)
+ {
+-    PyIncRef(objectID);
++    // only reads objectID.  (it took a reference here that nothing gave back, so every invalidation leaked its id)
+     const std::string str = OIDToString(objectID);
+     CachedObjMapItr res = m_cachedObjects.find(str);
+ 
+@@ -189,6 +189,8 @@ void CachedObjectMgr::UpdateCacheFromSS(const std::string &objectID, PySubStream
+ 
+     PyString* str = new PyString( objectID );
+     PyBuffer* buf = cache.cache->data();
++    // the record takes a reference; cache.cache keeps its own
++    PyIncRef(buf);
+     _UpdateCache(str, &buf);
+ 
+     PyDecRef( str );
+@@ -213,6 +215,8 @@ void CachedObjectMgr::UpdateCache(const PyRep *objectID, PyRep **in_cached_data)
+ 
+     Buffer* buf = new Buffer();
+     bool res = MarshalDeflate( cached_data, *buf );
++    // consumed:  only the marshaled bytes are kept
++    PySafeDecRef( cached_data );
+ 
+     if ( res ) {
+         PyBuffer* pbuf = new PyBuffer( &buf );
+@@ -756,6 +760,7 @@ bool PyCachedObjectDecoder::Decode(PySubStream **in_ss)
+     } else if (args->items[4]->IsBuffer()) {
+         //this is a data buffer, likely compressed.
+         PyBuffer* buf = args->items[4]->AsBuffer();
++        PyIncRef(buf);
+         cache = new PySubStream( buf );
+     } else if (args->items[4]->IsString()) {
+         //this is a data buffer, likely compressed, not sure why it comes through as a string...
+diff --git a/src/eve-common/database/EVEDBUtils.cpp b/src/eve-common/database/EVEDBUtils.cpp
+index be3422b..8234f28 100644
+--- a/src/eve-common/database/EVEDBUtils.cpp
++++ b/src/eve-common/database/EVEDBUtils.cpp
+@@ -425,7 +425,7 @@ PyDict *DBResultToPackedRowDict(DBQueryResult &result, uint32 key_index)
+  */
+ PyObjectEx *DBResultToCRowset(DBQueryResult &result)
+ {
+-    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
++    // the rowset takes over header (it goes in its keywords)
+     DBRowDescriptor *header = new DBRowDescriptor(result);
+     CRowSet *rowset = new CRowSet(&header);
+ 
+@@ -458,7 +458,7 @@ PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, const char *key)
+ }
+ 
+ PyObjectEx *DBResultToCIndexedRowset(DBQueryResult &result, uint32 key_index) {
+-    // header is owned by the rowset keywords; container children are not released by design (see PyRep.h)
++    // the rowset takes over header (it goes in its keywords)
+     DBRowDescriptor *header = new DBRowDescriptor(result);
+     CIndexedRowSet *rowset = new CIndexedRowSet(&header);
+ 
+diff --git a/src/eve-common/marshal/EVEUnmarshal.cpp b/src/eve-common/marshal/EVEUnmarshal.cpp
+index 16bae85..e26765b 100644
+--- a/src/eve-common/marshal/EVEUnmarshal.cpp
++++ b/src/eve-common/marshal/EVEUnmarshal.cpp
+@@ -555,7 +555,7 @@ PyRep* UnmarshalStream::LoadPackedRow()
+ 
+     if( !LoadRLE(unpacked) )
+     {
+-        PyDecRef( header_element );
++        PyDecRef( row );    // and the header with it
+         return nullptr;
+     }
+ 
+@@ -682,6 +682,7 @@ PyRep* UnmarshalStream::LoadPackedRow()
+ 
+             case DBTYPE_EMPTY:
+             case DBTYPE_ERROR:
++                PyDecRef( row );
+                 return nullptr;
+         }
+     }
+diff --git a/src/eve-common/network/EVESession.cpp b/src/eve-common/network/EVESession.cpp
+index c910fdb..daa52f9 100644
+--- a/src/eve-common/network/EVESession.cpp
++++ b/src/eve-common/network/EVESession.cpp
+@@ -200,7 +200,8 @@ PyPacket* EVEClientSession::_HandleCommand(PyRep* rep) {
+         }
+     }
+ 
+-    //PySafeDecRef(rep);
++    // Decode() consumed rep (and nulled it); this releases one that was never decoded
++    PySafeDecRef(rep);
+     // recurse
+     return PopPacket();
+ }
+diff --git a/src/eve-common/python/PyPacket.cpp b/src/eve-common/python/PyPacket.cpp
+index 48b8f95..c46c75e 100644
+--- a/src/eve-common/python/PyPacket.cpp
++++ b/src/eve-common/python/PyPacket.cpp
+@@ -115,6 +115,9 @@ bool PyPacket::Decode(PyRep **in_packet)
+ {
+     PyRep *packet = *in_packet; //assign
+     *in_packet = nullptr;       //consume
++    /* the packet is ours to release.  packet moves down to the object inside its wrappers, so release from the top
++     *  (root), and give what we keep its own reference first */
++    PyRep* root(packet);
+ 
+     PySafeDecRef(payload);
+     PySafeDecRef(named_payload);
+@@ -136,7 +139,7 @@ bool PyPacket::Decode(PyRep **in_packet)
+         ss->DecodeData();
+         if (ss->decoded() == nullptr) {
+             codelog(NET__PACKET_ERROR, "PyPacket::Decode() - unable to decode initial packet substream.");
+-            PyDecRef(packet);
++            PyDecRef(root);
+             return false;
+         }
+ 
+@@ -145,31 +148,33 @@ bool PyPacket::Decode(PyRep **in_packet)
+ 
+     if (!packet->IsObject()) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - packet body is not PyObject: %s", packet->TypeString());
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+ 
+     type_string = packet->AsObject()->type()->content();
+     if (!packet->AsObject()->arguments()->IsTuple()) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - packet body does not contain a tuple");
++        PyDecRef(root);
+         return false;
+     }
+ 
+     PyTuple *tuple = packet->AsObject()->arguments()->AsTuple();
+     if (tuple == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - tuple is null.");
++        PyDecRef(root);
+         return false;
+     }
+ 
+     if (tuple->items.size() != 7) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - packet body does not contain a tuple of length 7 (is %u)", tuple->items.size());
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+ 
+     if (!tuple->items[0]->IsInt()) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - First main tuple element is not an integer");
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+ 
+@@ -193,7 +198,7 @@ bool PyPacket::Decode(PyRep **in_packet)
+         } break;
+         default: {
+             codelog(NET__PACKET_ERROR, "PyPacket::Decode() - Unknown message type %i", PyRep::IntegerValue(tuple->items[0]));
+-            PyDecRef(packet);
++            PyDecRef(root);
+             return false;
+         } break;
+     }
+@@ -201,13 +206,13 @@ bool PyPacket::Decode(PyRep **in_packet)
+     //source address
+     if (!source.Decode(tuple->items[1]))  {
+         //error printed in decoder
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+     //dest address
+     if (!dest.Decode(tuple->items[2])) {
+         //error printed in decoder
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+ 
+@@ -216,26 +221,30 @@ bool PyPacket::Decode(PyRep **in_packet)
+     //payload
+     if (!tuple->items[4]->IsTuple()) {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - Fifth main tuple element is not a tuple");
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+     payload = tuple->items[4]->AsTuple();
++    PyIncRef(payload);
+ 
+     //options dict
+     if (tuple->items[5]->IsNone()) {
+         named_payload = nullptr;
+     } else if (tuple->items[5]->IsDict()) {
+         named_payload = tuple->items[5]->AsDict();
++        PyIncRef(named_payload);
+     } else {
+         codelog(NET__PACKET_ERROR, "PyPacket::Decode() - Sixth main tuple element is neither dict or none.");
+-        PyDecRef(packet);
++        PyDecRef(root);
+         return false;
+     }
+ 
+-    PyDecRef(packet);
++    PyDecRef(root);
+     return true;
+ }
+ 
++/* the result takes over payload, named_payload and contextKey:  the caller must clear them before deleting the packet
++ *  (EVEClientSession::QueuePacket does) */
+ PyRep *PyPacket::Encode() {
+     PyTuple *arg_tuple = new PyTuple(7);
+     //command
+@@ -328,8 +337,8 @@ void PyAddress::operator=(const PyAddress &right) {
+ }
+ 
+ bool PyAddress::Decode(PyRep *&in_object) {
++    // reads in_object, which stays with its packet
+     PyRep *base = in_object;
+-    in_object = nullptr;
+ 
+     if (base == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyAddress::Decode() - base is null.");
+@@ -338,22 +347,18 @@ bool PyAddress::Decode(PyRep *&in_object) {
+ 
+     if (!base->IsObject()) {
+         codelog(NET__PACKET_ERROR, "Invalid element type, expected object but got %s", base->TypeString());
+-        PyDecRef(base);
+         return false;
+     }
+ 
+     PyTuple *tuple = base->AsObject()->arguments()->AsTuple();
+     if (tuple == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyAddress::Decode() - tuple is null.");
+-        PyDecRef(base);
+         return false;
+     }
+ 
+     if (tuple->items.size() < 3) {
+         codelog(NET__PACKET_ERROR, "Not enough elements in address tuple: %u", tuple->items.size());
+         tuple->Dump(NET__PACKET_ERROR, "  ");
+-        PyDecRef(base);
+-        PyDecRef(tuple);
+         return false;
+     }
+ 
+@@ -361,8 +366,6 @@ bool PyAddress::Decode(PyRep *&in_object) {
+     if (!tuple->items[0]->IsInt()) {
+         codelog(NET__PACKET_ERROR, "Wrong type on address element (0)");
+         tuple->items[0]->Dump(NET__PACKET_ERROR, "  ");
+-        PyDecRef(base);
+-        PySafeDecRef(tuple);
+         return false;
+     }
+ 
+@@ -370,24 +373,18 @@ bool PyAddress::Decode(PyRep *&in_object) {
+         case Any: {
+             if (tuple->items.size() != 3) {
+                 codelog(NET__PACKET_ERROR, "Invalid number of elements in Any address tuple: %llu", tuple->items.size());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+             type = Any;
+ 
+             if (!_DecodeService(tuple->items[1])
+             or !_DecodeCallID(tuple->items[2])) {
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+         }  break;
+         case Node: {
+             if (tuple->items.size() != 4) {
+                 codelog(NET__PACKET_ERROR, "Invalid number of elements in Node address tuple: %llu", tuple->items.size());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+             type = Node;
+@@ -395,16 +392,12 @@ bool PyAddress::Decode(PyRep *&in_object) {
+             if (!_DecodeObjectID(tuple->items[1])
+             or !_DecodeService(tuple->items[2])
+             or !_DecodeCallID(tuple->items[3])) {
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+         }  break;
+         case Client: {
+             if (tuple->items.size() != 4) {
+                 codelog(NET__PACKET_ERROR, "Invalid number of elements in Client address tuple: %llu", tuple->items.size());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+             type = Client;
+@@ -412,30 +405,22 @@ bool PyAddress::Decode(PyRep *&in_object) {
+             if (!_DecodeObjectID(tuple->items[1])
+             or !_DecodeCallID(tuple->items[2])
+             or !_DecodeService(tuple->items[3])) {
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+         }  break;
+         case Broadcast: {
+             if (tuple->items.size() != 4) {
+                 codelog(NET__PACKET_ERROR, "Invalid number of elements in Broadcast address tuple: %llu", tuple->items.size());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+             type = Broadcast;
+ 
+             if (!tuple->items[1]->IsString()) {
+                 codelog(NET__PACKET_ERROR, "Invalid type %s for brodcastID", tuple->items[1]->TypeString());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+             if (!tuple->items[3]->IsString()) {
+                 codelog(NET__PACKET_ERROR, "Invalid type %s for idtype", tuple->items[3]->TypeString());
+-                PyDecRef(base);
+-                PySafeDecRef(tuple);
+                 return false;
+             }
+ 
+@@ -452,14 +437,10 @@ bool PyAddress::Decode(PyRep *&in_object) {
+         }   break;
+         default: {
+             codelog(NET__PACKET_ERROR, "Unknown address type: %i", PyRep::IntegerValue(tuple->items[0]));
+-            PyDecRef(base);
+-            PySafeDecRef(tuple);
+             return false;
+         }
+     }
+ 
+-    //PyDecRef(base);
+-    //PySafeDecRef(tuple);
+     return true;
+ }
+ 
+@@ -559,7 +540,7 @@ PyCallStream::PyCallStream()
+ 
+ PyCallStream::~PyCallStream() {
+     PySafeDecRef(arg_tuple);
+-    //PySafeDecRef(arg_dict);
++    PySafeDecRef(arg_dict);
+ }
+ 
+ PyCallStream *PyCallStream::Clone() const {
+@@ -597,6 +578,7 @@ void PyCallStream::Dump(LogType type, PyVisitor& dumper)
+ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+     PyTuple *payload = in_payload;   //copy
+     in_payload = nullptr;            //consume
++    // the payload is ours to release.  everything below lives inside it, so what we keep gets its own reference
+ 
+     PySafeDecRef(arg_tuple);
+     PySafeDecRef(arg_dict);
+@@ -629,14 +611,12 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+     if (payload2 == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - payload2 is null.");
+         PyDecRef(payload);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+     if (payload2->items.size() != 2) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - invalid tuple2 length %llu", payload2->items.size());
+         PyDecRef(payload);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -645,7 +625,6 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+     if (!payload2->items[1]->IsSubStream()) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - non-substream type");
+         PyDecRef(payload);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -653,7 +632,6 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+     if (ss == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - ss is null.");
+         PyDecRef(payload);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -661,30 +639,24 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+     if (ss->decoded() == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - Unable to decode call stream");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+     if (!ss->decoded()->IsTuple()) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - packet body does not contain a tuple");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+     PyTuple *maint = ss->decoded()->AsTuple();
+     if (maint == nullptr) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - maint is null.");
++        PyDecRef(payload);
+         return false;
+     }
+     if (maint->items.size() != 4) {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - packet body has %llu elements, expected %d", maint->items.size(), 4);
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(maint);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -700,9 +672,6 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+         codelog(NET__PACKET_ERROR, " in:");
+         payload->Dump(NET__PACKET_ERROR, "    ");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(maint);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -715,9 +684,6 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+         codelog(NET__PACKET_ERROR, " in:");
+         payload->Dump(NET__PACKET_ERROR, "    ");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(maint);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+@@ -728,37 +694,31 @@ bool PyCallStream::Decode(const std::string &type, PyTuple *&in_payload) {
+         codelog(NET__PACKET_ERROR, "in:");
+         payload->Dump(NET__PACKET_ERROR, "    ");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(maint);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+     arg_tuple = maint->items[2]->AsTuple();
++    PyIncRef(arg_tuple);
+ 
+     //options dict
+     if (maint->items[3]->IsNone()) {
+         arg_dict = nullptr;
+     } else if (maint->items[3]->IsDict()) {
+         arg_dict = maint->items[3]->AsDict();
++        PyIncRef(arg_dict);
+     } else {
+         codelog(NET__PACKET_ERROR, "PyCallStream::Decode() - tuple[3] has non-dict type");
+         maint->items[3]->Dump(NET__PACKET_ERROR, " --> ");
+         codelog(NET__PACKET_ERROR, "in:");
+         payload->Dump(NET__PACKET_ERROR, "    ");
+         PyDecRef(payload);
+-        PySafeDecRef(ss);
+-        PySafeDecRef(maint);
+-        PySafeDecRef(payload2);
+         return false;
+     }
+ 
+-    //PyDecRef(payload);
+-    //PySafeDecRef(ss);
+-    //PySafeDecRef(maint);
+-    //PySafeDecRef(payload2);
++    PyDecRef(payload);
+     return true;
+ }
+ 
++/* the result takes over arg_tuple and arg_dict:  clear them before the stream is destroyed (Client::SendServiceCall) */
+ PyTuple *PyCallStream::Encode() {
+     PyTuple *res_tuple = new PyTuple(4);
+ 
+@@ -822,6 +782,7 @@ void EVENotificationStream::Dump(LogType type, PyVisitor& dumper)
+ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::string &notify_type, PyTuple *&in_payload) {
+     PyTuple *payload = in_payload;      //copy
+     in_payload = nullptr;               //consume
++    // the payload is ours to release.  everything below lives inside it, so args gets its own reference
+ 
+     PySafeDecRef(args);
+     args = nullptr;
+@@ -858,7 +819,6 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+     if (payload2->items.size() != 2) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - invalid tuple2 length %llu", payload2->items.size());
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+ 
+@@ -867,7 +827,6 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+     if (!payload2->items[1]->IsSubStream()) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - non-substream type");
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+ 
+@@ -875,40 +834,30 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+     if (ss == nullptr) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - ss is null.");
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+     ss->DecodeData();
+     if (ss->decoded() == nullptr) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - Unable to decode call stream");
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+ 
+     if (!ss->decoded()->IsTuple()) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - packet body does not contain a tuple");
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+ 
+     PyTuple *robjt = ss->decoded()->AsTuple();
+     if (robjt == nullptr) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - robjt is null.");
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+         return false;
+     }
+     if (robjt->items.size() != 2) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - packet body has %llu elements, expected %d", robjt->items.size(), 2);
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+@@ -923,10 +872,7 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - main tuple[0] has invalid type %s", robjt->items[0]->TypeString());
+         _log(NET__PACKET_ERROR, " in:");
+         payload->Dump( NET__PACKET_ERROR, "" );
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+@@ -934,29 +880,19 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - main tuple[1] has non-tuple type %s", robjt->items[0]->TypeString());
+         _log(NET__PACKET_ERROR, " it is:");
+         payload->Dump( NET__PACKET_ERROR, "" );
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+     PyTuple *subt(robjt->items[1]->AsTuple());
+     if (subt == nullptr) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - subt is null.");
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+     if (subt->items.size() != 2) {
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - packet body has %llu elements, expected %d", subt->items.size(), 2);
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(subt);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+@@ -968,11 +904,7 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - sub tuple[0] has invalid type %s", subt->items[0]->TypeString());
+         _log(NET__PACKET_ERROR, " in:");
+         payload->Dump( NET__PACKET_ERROR, "" );
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(subt);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+@@ -980,29 +912,23 @@ bool EVENotificationStream::Decode(const std::string &pkt_type, const std::strin
+         codelog(NET__PACKET_ERROR, "EVENotificationStream::Decode() - subt tuple[1] has non-tuple type %s", robjt->items[0]->TypeString());
+         _log(NET__PACKET_ERROR, " it is:");
+         payload->Dump( NET__PACKET_ERROR, "" );
+-        PyDecRef(ss);
+         PyDecRef(payload);
+-        PyDecRef(payload2);
+-        PySafeDecRef(subt);
+-        PySafeDecRef(robjt);
+         return false;
+     }
+ 
+     args = subt->items[1]->AsTuple();
++    PyIncRef(args);
+     notifyType = notify_type;
+-
+-    PyDecRef(ss);
+     PyDecRef(payload);
+-    PyDecRef(payload2);
+-    PySafeDecRef(subt);
+-    PySafeDecRef(robjt);
+     return true;
+ }
+ 
+ PyTuple *EVENotificationStream::Encode() {
++    // args stays the stream's (its destructor releases it), so the packet gets its own reference
++    PyIncRef(args);
+     PyTuple *t4 = new PyTuple(2);
+         t4->SetItem(0, PyStatic.NewOne());
+-        t4->SetItem(1, args);       // no need to clone here.  set actual rep in item, and it will be cleaned up by d'tor later
++        t4->SetItem(1, args);
+     PyTuple *t3 = new PyTuple(2);
+         t3->SetItem(0, new PyInt(0));
+         t3->SetItem(1, t4);
+diff --git a/src/eve-common/python/PyRep.cpp b/src/eve-common/python/PyRep.cpp
+index eec8021..b8e2026 100644
+--- a/src/eve-common/python/PyRep.cpp
++++ b/src/eve-common/python/PyRep.cpp
+@@ -619,9 +619,11 @@ bool PyToken::visit( PyVisitor& v ) const
+ /* PyRep Tuple Class                                                    */
+ /************************************************************************/
+ PyTuple::PyTuple( size_t item_count ) : PyRep( PyRep::PyTypeTuple ), items( item_count, nullptr ) {}
++// a shallow copy:  the items are shared, so each gets another reference
+ PyTuple::PyTuple( const PyTuple& oth ) : PyRep( PyRep::PyTypeTuple ), items(oth.items)
+ {
+-    //sLog.Cyan("PyTuple()", "Copy C'tor.");
++    for (auto cur : items)
++        PySafeIncRef(cur);
+ }
+ 
+ PyRep* PyTuple::Clone() const
+@@ -687,15 +689,16 @@ int32 PyTuple::hash() const
+ /* PyRep List Class                                                     */
+ /************************************************************************/
+ PyList::PyList(size_t item_count) : PyRep(PyRep::PyTypeList), items(item_count, nullptr) { }
++// a shallow copy:  the items are shared, so each gets another reference
+ PyList::PyList(const PyList& oth) : PyRep(PyRep::PyTypeList), items(oth.items)
+ {
+-    //sLog.Cyan("PyList()", "Copy C'tor.");
++    for (auto cur : items)
++        PySafeIncRef(cur);
+ }
+ 
+ PyList::~PyList()
+ {
+-    //for (auto cur : items)
+-    //    PySafeDecRef(cur);
++    clear();
+ }
+ 
+ PyRep* PyList::Clone() const
+@@ -741,19 +744,18 @@ PyList& PyList::operator=( const PyList& oth )
+ /* PyRep Dict Class                                                     */
+ /************************************************************************/
+ PyDict::PyDict() : PyRep( PyRep::PyTypeDict ), items() { }
++// a shallow copy:  the keys and values are shared, so each gets another reference
+ PyDict::PyDict( const PyDict& oth ) : PyRep( PyRep::PyTypeDict ), items(oth.items)
+ {
+-    //sLog.Cyan("PyDict()", "Copy C'tor.");
++    for (auto cur : items) {
++        PyIncRef(cur.first);
++        PySafeIncRef(cur.second);
++    }
+ }
+ 
+ PyDict::~PyDict()
+ {
+-    /*
+-    for (auto cur : items) {
+-        PyDecRef(cur.first);
+-        PySafeDecRef(cur.second);
+-    }
+-    */
++    clear();
+ }
+ 
+ PyRep* PyDict::Clone() const
+@@ -818,9 +820,11 @@ void PyDict::SetItem( PyRep* key, PyRep* value )
+         items.insert( std::make_pair( key, value ) );
+     } else {
+         // We found 'key' in current dict, so use itr->first and decRef 'key'.
+-        // is this right?
+-        PyDecRef( key );
++        if (key != itr->first)
++            PyDecRef( key );
+         // Replace itr->second with new value.
++        if ((value != nullptr) and (value == itr->second))
++            return;
+         PySafeDecRef( itr->second );
+         if (value == nullptr) {
+             itr->second = PyStatic.NewNone();
+@@ -857,7 +861,9 @@ PyObject::PyObject(const char* type, PyRep* args )
+ PyObject::PyObject(const PyObject& oth)
+ : PyRep(PyRep::PyTypeObject), mType(oth.mType), mArguments(oth.arguments())
+ {
+-    //sLog.Cyan("PyObject()", "Copy C'tor.");
++    // shared with oth, which releases them too
++    PyIncRef(mType);
++    PyIncRef(mArguments);
+ }
+ 
+ PyObject::~PyObject()
+@@ -885,7 +891,9 @@ PyObjectEx::PyObjectEx(bool is_type_2, PyRep* header) : PyRep(PyRep::PyTypeObjec
+ PyObjectEx::PyObjectEx( const PyObjectEx& oth ) : PyRep( PyRep::PyTypeObjectEx ),
+ mHeader(oth.header()->Clone()), mIsType2(oth.isType2()), mList(oth.mList), mDict(oth.mDict)
+ {
+-    //sLog.Cyan("PyObjectEx()", "Copy C'tor.");
++    // shared with oth, which releases them too
++    PyIncRef(mList);
++    PyIncRef(mDict);
+ }
+ 
+ PyObjectEx::~PyObjectEx()
+@@ -1097,12 +1105,7 @@ PyTuple* PyObjectEx_Type2::_CreateHeader( PyToken* args, PyDict* keywords, bool
+         body->SetItem( 0, args );
+         body->SetItem( 1, keywords );
+ 
+-    if (enclosed) {
+-        PyTuple* head = new PyTuple( 1 );
+-            head->SetItem( 0, body );
+-    }
+-
+-    return body; // head;
++    return body;
+ }
+ 
+ /************************************************************************/
+@@ -1113,7 +1116,9 @@ PyPackedRow::PyPackedRow(DBRowDescriptor* header)
+ PyPackedRow::PyPackedRow(const PyPackedRow& oth )
+ : PyRep(PyRep::PyTypePackedRow), mHeader(oth.header()), mFields(oth.mFields)
+ {
+-    //sLog.Cyan("PyPackedRow()", "Copy C'tor.");
++    // shared with oth, which releases them too
++    PyIncRef(mHeader);
++    PyIncRef(mFields);
+ }
+ 
+ PyPackedRow::~PyPackedRow()
+diff --git a/src/eve-common/python/PyRep.h b/src/eve-common/python/PyRep.h
+index 6510dd7..2ad49ba 100644
+--- a/src/eve-common/python/PyRep.h
++++ b/src/eve-common/python/PyRep.h
+@@ -620,19 +620,23 @@ public:
+     /**
+      * @brief Stores Python object.
+      *
++     * The tuple takes over the caller's reference (as PyList::AddItem and PyDict::SetItem do), so pass a new object or
++     *  PyIncRef() one that something else keeps.  The item it replaces is released.
++     *
+      * @param[in] index  Index at which the object should be stored.
+      * @param[in] object Object to be stored.
+      */
+     void SetItem( size_t index, PyRep* object )
+     {
+         PyRep** rep = &items.at( index );
++        if ((object != nullptr) and (object == *rep))
++            return;
+         PySafeDecRef( *rep );
+         if (object == nullptr) {
+             *rep = new PyNone();
+         } else {
+             *rep = object;
+         }
+-        PyIncRef( *rep );
+     }
+ 
+     void SetItemInt( size_t index, int32 val )          { SetItem( index, new PyInt( val ) ); }
+@@ -644,7 +648,8 @@ public:
+     std::vector<PyRep*> items;
+ 
+ protected:
+-    virtual ~PyTuple()                                  { /* do nothing here */ }
++    // releases the items
++    virtual ~PyTuple()                                  { clear(); }
+ };
+ 
+ /**
+@@ -692,19 +697,23 @@ public:
+     /**
+      * @brief Stores Python object.
+      *
++     * The list takes over the caller's reference (as PyList::AddItem and PyDict::SetItem do), so pass a new object or
++     *  PyIncRef() one that something else keeps.  The item it replaces is released.
++     *
+      * @param[in] index  Index at which the object should be stored.
+      * @param[in] object Object to be stored.
+      */
+     void SetItem( size_t index, PyRep* object )
+     {
+         PyRep** rep = &items.at( index );
++        if ((object != nullptr) and (object == *rep))
++            return;
+         PySafeDecRef( *rep );
+         if (object == nullptr) {
+             *rep = new PyNone();
+         } else {
+             *rep = object;
+         }
+-        PyIncRef( *rep );
+     }
+     /**
+      * @brief Stores Python string.
+@@ -714,6 +723,7 @@ public:
+      */
+     void SetItemString( size_t index, const char* str ) { SetItem( index, new PyString( str ) ); }
+ 
++    // the list takes over the caller's reference
+     void AddItem( PyRep* i )                            { items.push_back( i ); }
+     void AddItemInt( int32 intval )                     { AddItem( new PyInt( intval ) ); }
+     void AddItemLong( int64 intval )                    { AddItem( new PyLong( intval ) ); }
+diff --git a/src/eve-common/python/classes/PyDatabase.cpp b/src/eve-common/python/classes/PyDatabase.cpp
+index bbec356..c1c91cd 100644
+--- a/src/eve-common/python/classes/PyDatabase.cpp
++++ b/src/eve-common/python/classes/PyDatabase.cpp
+@@ -211,7 +211,10 @@ PyDict* CIndexedRowSet::_CreateKeywords(DBRowDescriptor* rowDesc)
+ 
+     PyDict* keywords = new PyDict();
+     keywords->SetItemString( "header", rowDesc );
+-    keywords->SetItemString( "columnName", rowDesc->GetColumnName(0) );
++    // the name stays in the descriptor too
++    PyString* columnName = rowDesc->GetColumnName(0);
++    PyIncRef(columnName);
++    keywords->SetItemString( "columnName", columnName );
+ 
+     return keywords;
+ }
+@@ -256,7 +259,10 @@ PyDict* CFilterRowSet::_CreateKeywords(DBRowDescriptor* rowDesc)
+ 
+     PyDict* keywords = new PyDict();
+     keywords->SetItemString( "header", rowDesc );
+-    keywords->SetItemString( "columnName", rowDesc->GetColumnName(0) );
++    // the name stays in the descriptor too
++    PyString* columnName = rowDesc->GetColumnName(0);
++    PyIncRef(columnName);
++    keywords->SetItemString( "columnName", columnName );
+ 
+     return keywords;
+ }
+diff --git a/src/eve-common/python/classes/PyExceptions.cpp b/src/eve-common/python/classes/PyExceptions.cpp
+index ceea9de..a851e7b 100644
+--- a/src/eve-common/python/classes/PyExceptions.cpp
++++ b/src/eve-common/python/classes/PyExceptions.cpp
+@@ -36,9 +36,11 @@ PyException::~PyException() { PySafeDecRef( ssException ); }
+ 
+ PyException& PyException::operator=( const PyException& oth )
+ {
++    // take the new reference first (safe on self-assignment)
++    PyRep* except(oth.ssException);
++    PySafeIncRef( except );
+     PySafeDecRef( ssException );
+-    ssException = oth.ssException;
+-    PySafeIncRef( ssException );
++    ssException = except;
+ 
+     return *this;
+ }
+diff --git a/src/eve-common/python/classes/PyExceptions.h b/src/eve-common/python/classes/PyExceptions.h
+index 76b37c0..01c5607 100644
+--- a/src/eve-common/python/classes/PyExceptions.h
++++ b/src/eve-common/python/classes/PyExceptions.h
+@@ -131,7 +131,8 @@ public:
+      * These parameters are defined in the string itself in the form of %(name)s
+      *
+      * @param[in] name The parameter
+-     * @param[in] value The value
++     * @param[in] value The value.  The exception takes over the caller's reference (as every Add* does with the
++     *      PyRep*s it is given), so pass a new object, or PyIncRef() one that something else keeps
+      *
+      * @return self
+      */
+diff --git a/src/eve-core/memory/RefPtr.h b/src/eve-core/memory/RefPtr.h
+index 89d18c3..15d4605 100644
+--- a/src/eve-core/memory/RefPtr.h
++++ b/src/eve-core/memory/RefPtr.h
+@@ -56,7 +56,7 @@ public:
+      *
+      * @param[in] initRefCount Initial reference count.
+      */
+-    RefObject(uint16 initRefCount)
++    RefObject(uint32 initRefCount)
+     : mRefCount(initRefCount),
+     mDeleted(false)
+     {
+@@ -78,7 +78,7 @@ public:
+         mDeleted = true;
+     }
+ 
+-    uint16 GetCount()           { return mRefCount; }
++    uint32 GetCount()           { return mRefCount; }
+     bool IsDeleted()            { return mDeleted; }
+ 
+ protected:
+@@ -124,8 +124,9 @@ protected:
+     }
+ 
+ private:
+-    /// Reference count of instance.
+-    mutable uint16 mRefCount;
++    /// Reference count of instance.  32 bits:  the shared PyStatic objects (None, True, empty tuple...) are referenced
++    ///  from everywhere, and a 16 bit count wrapped round
++    mutable uint32 mRefCount;
+     mutable bool mDeleted;
+ };
+ 
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index f378ae8..16422e3 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -149,6 +149,10 @@ Client::Client(EVEServiceManager& services, EVETCPConnection** con)
+ }
+ 
+ Client::~Client() {
++    // no one may load items as us once we're gone (Inventory::LoadContents reads the using client)
++    if (sItemFactory.GetUsingClient() == this)
++        sItemFactory.UnsetUsingClient();
++
+     if (!m_loaded)
+         return;
+ 
+@@ -156,6 +160,8 @@ Client::~Client() {
+ 
+     if (pShipSE != nullptr)
+         WarpOut();      // need to make tests for this...it will segfault if m_char is invalid
++    // no bubble may keep us on its player list once we're gone
++    sBubbleMgr.DropPlayer(this);
+ 
+     // LSC logout (also drops private conversations nobody is left in)
+     m_lsc->CharacterLogout(this);
+@@ -211,6 +217,9 @@ Client::~Client() {
+ 
+     ReleaseScan();
+     SafeDelete(pShipSE);
++    // done with the ship (one left in space keeps its modules until it's gone)
++    if (!m_shipLeftInSpace and (m_ship.get() != nullptr))
++        m_ship->ReleaseModules();
+     SafeDelete(pSession);
+     PyDecRef(m_destinyEventQueue);
+     PyDecRef(m_destinyUpdateQueue);
+@@ -288,6 +297,8 @@ bool Client::SelectCharacter(int32 charID/*0*/)
+         return false;
+     }
+ 
++    // it may have been loaded while offline (show info), with the wallet and location it had then
++    m_char->ReloadData();
+     m_char->VerifySP();
+     m_char->SetLoginTime();
+     m_char->SetClient(this);
+@@ -729,6 +740,9 @@ void Client::WarpOut() {
+         pShipSE = nullptr;
+         return;
+     }
++    // its modules stop first:  one left running on a target would stay in that target's list after the ship is gone
++    if (m_ship->GetModuleManager() != nullptr)
++        m_ship->AbortCycle();
+     DestroyShipSE();
+     // saved where the pilot logged off (the destructor saves it)
+     if (!keepLogoff.isZero())
+@@ -1418,6 +1432,12 @@ void Client::ResetAfterPodded() {
+     // clone penalty, implants and boosters lost, new Alpha clone, clone activation notification  (F15)
+     m_char->PodKilled();
+ 
++    /* the dead capsule leaves space without a pilot (SetShip() below), so its bubble wouldn't drop us from its player list
++     *  and would go on sending to us, after we've logged off too (a crash)
++     */
++    if ((pShipSE != nullptr) and (pShipSE->SysBubble() != nullptr))
++        pShipSE->SysBubble()->DropPlayer(this);
++
+     CreateNewPod();
+     SetShip(m_pod);
+ 
+@@ -2427,8 +2447,12 @@ void Client::QueueDestinyEvent(PyTuple** event) {
+ void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool IsSetState /*false*/) {
+     if ((update == nullptr) or ((*update) == nullptr))
+         return;
+-    if (sDataMgr.IsStation(m_locationID))
++    // the queue takes over the caller's reference to *update, so release it when it isn't queued
++    //  (callers sending one update to several clients PyIncRef it per client, and keep using the pointer)
++    if (sDataMgr.IsStation(m_locationID)) {
++        PyDecRef(*update);
+         return;
++    }
+     DoDestinyAction act;
+         act.stamp = sEntityList.GetStamp();
+     if (DoPackage/* or m_packaged*/) {
+@@ -2461,8 +2485,7 @@ void Client::QueueDestinyUpdate(PyTuple **update, bool DoPackage /*false*/, bool
+         PyTuple* t = dum.Encode();
+         if (is_log_enabled(CLIENT__QUEUE_DUMP))
+             t->Dump(CLIENT__QUEUE_DUMP, "");
+-        SendNotification("DoDestinyUpdate", "clientID", &t, false);
+-        PyDecRef(t);
++        SendNotification("DoDestinyUpdate", "clientID", &t, false);    // takes over t
+     } else {
+         act.update = *update;
+         m_packaged = true;
+@@ -2474,6 +2497,8 @@ void Client::_SendQueuedUpdates() {
+     if (!m_destinyUpdateQueue->empty()) {
+         if (m_destinyEventQueue->empty()) {
+             DoDestinyUpdateMain_2 dum;
++                // the packet struct releases its lists; the queues are ours
++                PyIncRef(m_destinyUpdateQueue);
+                 dum.updates = m_destinyUpdateQueue;
+                 dum.waitForBubble = m_bubbleWait;
+             PyTuple* t = dum.Encode();
+@@ -2482,7 +2507,9 @@ void Client::_SendQueuedUpdates() {
+             SendNotification("DoDestinyUpdate", "clientID", &t);
+         } else {
+             DoDestinyUpdateMain dum;
++                PyIncRef(m_destinyUpdateQueue);
+                 dum.updates = m_destinyUpdateQueue;
++                PyIncRef(m_destinyEventQueue);
+                 dum.events = m_destinyEventQueue;
+                 dum.waitForBubble = m_bubbleWait;
+             PyTuple* t = dum.Encode();
+@@ -2492,6 +2519,7 @@ void Client::_SendQueuedUpdates() {
+         }
+     } else if (!m_destinyEventQueue->empty()) {
+         Notify_OnMultiEvent nom;
++            PyIncRef(m_destinyEventQueue);
+             nom.events = m_destinyEventQueue;
+         PyTuple* t = nom.Encode();
+         if (is_log_enabled(CLIENT__QUEUE_DUMP))
+@@ -2976,8 +3004,11 @@ void Client::_SendCallReturn(const PyAddress& source, int64 callID, PyResult &rs
+ 
+     packet->userid = GetUserID();
+ 
++    // the packet takes references to the results; rsp releases its own
++    PySafeIncRef(rsp.ssResult);
+     packet->payload = new PyTuple(1);
+     packet->payload->SetItem(0, new PySubStream(rsp.ssResult));
++    PySafeIncRef(rsp.ssNamedResult);
+     packet->named_payload = rsp.ssNamedResult;
+ 
+     if (is_log_enabled(COLLECT__PACKET_DUMP)) {
+@@ -3008,7 +3039,7 @@ void Client::_SendException(const PyAddress& source, int64 callID, MACHONETMSG_T
+         e.MsgType = msgType;
+         e.ErrorCode = errCode;
+         e.payload = *payload;
+-    payload = nullptr;
++    *payload = nullptr;     // consumed:  e releases it
+ 
+     packet->payload = e.Encode();
+     QueuePacket(packet);
+diff --git a/src/eve-server/Client.h b/src/eve-server/Client.h
+index a79d6cd..aa67be9 100644
+--- a/src/eve-server/Client.h
++++ b/src/eve-server/Client.h
+@@ -333,6 +333,7 @@ public:
+     void UpdateSessionInt( const char *sessionType, int value );
+ 
+     PyRep *GetAggressors() const;
++    // these take over the caller's reference to *update / *multiEvent (*ptr is left as it is):  PyIncRef once per client
+     void QueueDestinyUpdate(PyTuple** update, bool DoPackage=false, bool IsSetState=false);
+     void QueueDestinyEvent(PyTuple** multiEvent);
+     void FlushQueue();
+@@ -496,6 +497,7 @@ protected:
+ public:
+     void SendSessionChange();
+     void SendNotification(const PyAddress &dest, EVENotificationStream &noti, bool seq=true);
++    // these take over the caller's reference to payload (*payload is left as it is):  PyIncRef once per client
+     void SendNotification(const char *notifyType, const char *idType, PyTuple *payload, bool seq=true);
+     void SendNotification(const char *notifyType, const char *idType, PyTuple **payload, bool seq=true);
+     // keyed client message (gameui.OnRemoteMessage(msgID, dict)) that does not throw.  args are consumed
+diff --git a/src/eve-server/ClientSession.cpp b/src/eve-server/ClientSession.cpp
+index 0254132..a5cd0bf 100644
+--- a/src/eve-server/ClientSession.cpp
++++ b/src/eve-server/ClientSession.cpp
+@@ -160,8 +160,15 @@ void ClientSession::EncodeChanges(PyDict* into)
+         valueTuple->SetItem (2, PyStatic.NewFalse());
+ 
+         // add the value to the list if the client knows it
+-        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
+-            into->SetItem (cur.first, new_tuple (valueTuple->GetItem (0), valueTuple->GetItem(1)));
++        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ()) {
++            // the key and the values stay in mSession too
++            PyRep* last(valueTuple->GetItem (0));
++            PyRep* current(valueTuple->GetItem (1));
++            PyIncRef(cur.first);
++            PyIncRef(last);
++            PyIncRef(current);
++            into->SetItem (cur.first, new_tuple (last, current));
++        }
+     }
+ 
+     mDirty = false;
+@@ -176,8 +183,13 @@ void ClientSession::EncodeInitialState (PyDict* into)
+         valueTuple->SetItem(2, PyStatic.NewFalse());
+ 
+         // add the value to the initial state only if the client knows it
+-        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ())
+-            into->SetItem (cur.first, cur.second->AsTuple ()->GetItem (1));
++        if (CLIENTVARS.find (cur.first->AsString ()->content ()) != CLIENTVARS.end ()) {
++            // the key and the value stay in mSession too
++            PyRep* current(valueTuple->GetItem (1));
++            PyIncRef(cur.first);
++            PyIncRef(current);
++            into->SetItem (cur.first, current);
++        }
+     }
+ 
+     // mark the session as not dirty
+@@ -237,6 +249,8 @@ void ClientSession::_Set(const char* name, PyRep* value)
+ 
+     PyRep* current(tuple->GetItem(1)); // copy c'tor
+     if (value->hash() != current->hash()) {
++        // current moves to slot 0; SetItem(1) below releases slot 1's reference to it
++        PyIncRef(current);
+         tuple->SetItem(0, current); /* didn't the session need to store the old value too? */
+         tuple->SetItem(1, value);
+         tuple->SetItem(2, PyStatic.NewTrue());
+diff --git a/src/eve-server/EntityList.cpp b/src/eve-server/EntityList.cpp
+index 1f79335..992e832 100644
+--- a/src/eve-server/EntityList.cpp
++++ b/src/eve-server/EntityList.cpp
+@@ -65,6 +65,7 @@
+ 
+ EntityList::EntityList()
+ : m_services(nullptr),
++m_closing(false),
+ m_targTimer(0, true),
+ m_stampTimer(0, true),
+ m_minuteTimer(0, true),
+@@ -113,6 +114,7 @@ void EntityList::Shutdown() {
+      * sConsole.IsShutdown() is true here, so clients take the shutdown logout path (no ship left in space).
+      * server run loop will exit after control is returned from this function, which will clean up remaining items.
+      */
++    m_closing = true;
+     if (m_clients.empty())
+         return;
+ 
+@@ -130,6 +132,7 @@ void EntityList::Shutdown() {
+ 
+ void EntityList::Close()
+ {
++    m_closing = true;
+     if (m_clients.size() > 0) {
+         sLog.Yellow("       EntityList", "Cleaning up %lu clients, %lu systems, %lu agents, and %lu stations", \
+                     m_clients.size(), m_systems.size(), m_agents.size(), m_stations.size());
+@@ -550,8 +553,10 @@ void EntityList::GetUpTime( std::string& time )
+ void EntityList::CorpNotify(uint32 corpID, uint8 bCastType, const char* notifyType, const char* idType, PyTuple* payload) const
+ {
+     // make sure this is player corp (which it really should be, but just in case....)
+-    if (IsNPCCorp(corpID))
++    if (IsNPCCorp(corpID)) {
++        PySafeDecRef(payload);
+         return;
++    }
+     std::map<uint32, Client*> cMap;
+     std::map<uint32, corpRole>::const_iterator cItr = m_corpMembers.find(corpID);
+     if (cItr == m_corpMembers.end()) {
+@@ -732,7 +737,7 @@ void EntityList::Broadcast(const char* notifyType, const char* idType, PyTuple**
+     EVENotificationStream notify;
+         notify.remoteObject = 1;
+         notify.args = *payload;
+-    payload = nullptr;    //consumed
++    *payload = nullptr;    //consumed
+ 
+     //now sent it to the client
+     PyAddress dest;
+@@ -760,7 +765,7 @@ void EntityList::Multicast(const character_set &cset, const PyAddress &dest, EVE
+ void EntityList::Multicast( const char* notifyType, const char* idType, PyTuple** in_payload, NotificationDestination target, uint32 targID, bool seq )
+ {
+     PyTuple* payload = *in_payload;
+-    in_payload = nullptr;
++    *in_payload = nullptr;    // consumed
+ 
+     std::vector<Client*> cVec;
+     cVec.clear();
+@@ -803,7 +808,7 @@ void EntityList::Multicast(const char* notifyType, const char* idType, PyTuple**
+ {
+     // consume payload
+     PyTuple* payload = *in_payload;
+-    in_payload = nullptr;
++    *in_payload = nullptr;    // consumed
+ 
+     if (!mcset.characters.empty())
+         for (auto cur : mcset.characters) {
+@@ -861,7 +866,7 @@ void EntityList::Multicast(const character_set &cset, const char* notifyType, co
+ {
+     // consume payload
+     PyTuple* payload = *in_payload;
+-    in_payload = nullptr;
++    *in_payload = nullptr;    // consumed
+ 
+     std::map<uint32, Client*>::const_iterator itr = m_players.begin();
+     for (auto cur : cset) {
+@@ -875,9 +880,13 @@ void EntityList::Multicast(const character_set &cset, const char* notifyType, co
+ }
+ 
+ void EntityList::Unicast(uint32 charID, const char* notifyType, const char* idType, PyTuple** payload, bool seq) {
++    // takes over *payload, as SendNotification does
+     Client* pClient = FindClientByCharID(charID);
+-    if (pClient != nullptr)
++    if (pClient != nullptr) {
+         pClient->SendNotification( notifyType, idType, payload, seq );
++    } else {
++        PySafeDecRef(*payload);
++    }
+ }
+ 
+ /** @todo @note NOTE: TODO: HACK: the Find* methods below can get very expensive for many players */
+diff --git a/src/eve-server/EntityList.h b/src/eve-server/EntityList.h
+index b2b4a55..e640eeb 100644
+--- a/src/eve-server/EntityList.h
++++ b/src/eve-server/EntityList.h
+@@ -75,6 +75,10 @@ public:
+     void Close();
+     void Process();
+     void Shutdown();
++    /* the world is being taken down (Shutdown() or Close()):  entities are freed in no particular order, so one going
++     *  doesn't clear its locks and modules from the others.  until then, halting or not, the world still runs and they do
++     */
++    bool IsClosing() const                              { return m_closing; }
+     void Add(Client* pClient);
+     void Remove(Client* pClient);
+     // this must be called AFTER a character is selected, after Client and Character class construction is complete. (need complete data)
+@@ -184,6 +188,7 @@ protected:
+     //Mutex mMutex;
+ 
+ private:
++    bool m_closing;
+     Timer m_stampTimer;
+     Timer m_minuteTimer;
+     Timer m_targTimer;
+diff --git a/src/eve-server/LiveUpdateDB.cpp b/src/eve-server/LiveUpdateDB.cpp
+index cd974c6..bbc7f82 100644
+--- a/src/eve-server/LiveUpdateDB.cpp
++++ b/src/eve-server/LiveUpdateDB.cpp
+@@ -67,6 +67,8 @@ PyList* LiveUpdateDB::GenerateUpdates()
+     DBResultRow row;
+     while (res.GetRow(row))
+     {
++        // each row releases the header it was given
++        PyIncRef(header);
+         PyPackedRow* packedRow = new PyPackedRow(header);
+         for (int i = 0; i < 7; i++)
+             packedRow->SetField(i, DBColumnToPyRep(row, i));
+@@ -81,6 +83,7 @@ PyList* LiveUpdateDB::GenerateUpdates()
+ 
+         list->SetItem(listIndex++, packedRow);
+     }
++    PyDecRef(header);
+     list->Dump(NET__PRES_DEBUG, "    ");
+ 
+     return list;
+diff --git a/src/eve-server/StaticDataMgr.cpp b/src/eve-server/StaticDataMgr.cpp
+index f38bb6a..84b65f8 100644
+--- a/src/eve-server/StaticDataMgr.cpp
++++ b/src/eve-server/StaticDataMgr.cpp
+@@ -1810,31 +1810,41 @@ PyDict* StaticDataMgr::SetBPMatlType(int8 catID, uint16 typeID, uint16 prodID)
+         rsp->SetItem(new PyInt(8), new PyObject("util.KeyVal", Invention));
+     }
+ 
+-    /**
+-     * For some reason, Ref decrement causes internal parts of data to change. In this particular instance, CRowSets with data
+-     * turns to Tuples, and client freaks out because it can no longer find named attributes.
+-     * Commenting it out until we figure out how to resolve it.
++    /* cleanup:  each list put in a dict above belongs to that dict now, so only release the ones that weren't.
++     *  (releasing all of them is what used to break the CRowSets, back when a container didn't hold its items)
+      */
+-    /*
+-    // cleanup
+-    PyDecRef(matlListManuf);
+-    PyDecRef(skillListManuf);
+-    PyDecRef(extraListManuf);
+-    PyDecRef(matlListTE);
+-    PyDecRef(skillListTE);
+-    PyDecRef(matlListME);
+-    PyDecRef(skillListME);
+-    PyDecRef(matlListCopy);
+-    PyDecRef(skillListCopy);
+-    PyDecRef(matlListDup);
+-    PyDecRef(skillListDup);
+-    PyDecRef(extraListDup);
+-    PyDecRef(matlListRE);
+-    PyDecRef(skillListRE);
+-    PyDecRef(matlListInvent);
+-    PyDecRef(skillListInvent);
+-    PyDecRef(mtCRowSet);
+-    */
++    PyDecRef(extraListManuf);   // only copied from
++    PyDecRef(extraListDup);     // only copied from
++    if (!manuf) {
++        PyDecRef(matlListManuf);
++        PyDecRef(skillListManuf);
++    }
++    if (!te) {
++        PyDecRef(matlListTE);
++        PyDecRef(skillListTE);
++    }
++    if (!me) {
++        PyDecRef(matlListME);
++        PyDecRef(skillListME);
++    }
++    if (!copy) {
++        PyDecRef(matlListCopy);
++        PyDecRef(skillListCopy);
++    }
++    if (!dup) {
++        PyDecRef(matlListDup);
++        PyDecRef(skillListDup);
++    }
++    if (!re) {
++        PyDecRef(matlListRE);
++        PyDecRef(skillListRE);
++    }
++    if (!invent) {
++        PyDecRef(matlListInvent);
++        PyDecRef(skillListInvent);
++    }
++    PyDecRef(mtCRowSet);    // each user above took its own reference
++    PyDecRef(header);       // as did each row and rowset
+ 
+     return rsp;
+ }
+diff --git a/src/eve-server/account/AccountService.cpp b/src/eve-server/account/AccountService.cpp
+index d967885..2f3a939 100644
+--- a/src/eve-server/account/AccountService.cpp
++++ b/src/eve-server/account/AccountService.cpp
+@@ -242,7 +242,11 @@ PyResult AccountService::SetContactCost(PyCallArgs &call, std::optional<PyRep*>
+ }
+ 
+ PyResult AccountService::GetCashBalance(PyCallArgs& call, std::optional<PyBool*> isCorpWallet, std::optional<PyInt*> walletKey) {
+-    return GetCashBalance(call, new PyInt(isCorpWallet.has_value() ? isCorpWallet.value()->value() : 0), walletKey);
++    // the other overload only reads it
++    PyInt* isCorp(new PyInt(isCorpWallet.has_value() ? isCorpWallet.value()->value() : 0));
++    PyResult res(GetCashBalance(call, isCorp, walletKey));
++    PyDecRef(isCorp);
++    return res;
+ }
+ 
+ PyResult AccountService::GetCashBalance(PyCallArgs &call, std::optional<PyInt*> isCorpWallet, std::optional<PyInt*> walletKey) {
+diff --git a/src/eve-server/admin/GMCommands.cpp b/src/eve-server/admin/GMCommands.cpp
+index 6914519..06718b4 100644
+--- a/src/eve-server/admin/GMCommands.cpp
++++ b/src/eve-server/admin/GMCommands.cpp
+@@ -278,8 +278,8 @@ PyResult Command_pop(Client* who, CommandDB* db, EVEServiceManager &services, co
+     n.args[ key ] = new PyString(text);
+ 
+     PyTuple* t = n.Encode();
++    // SendNotification takes over t
+     who->SendNotification("OnRemoteMessage", "charid", &t);
+-    PySafeDecRef(t);
+ 
+     return new PyString("Message sent.");
+ }
+diff --git a/src/eve-server/agents/AgentBound.cpp b/src/eve-server/agents/AgentBound.cpp
+index 2bd2e59..d5cea51 100644
+--- a/src/eve-server/agents/AgentBound.cpp
++++ b/src/eve-server/agents/AgentBound.cpp
+@@ -382,8 +382,6 @@ PyResult AgentBound::DoAction(PyCallArgs &call, std::optional <PyInt*> actionID)
+         outer->Dump(AGENT__RSP_DUMP, "    ");
+     }
+ 
+-    PySafeDecRef(agentSays);
+-
+     return outer;
+ }
+ 
+diff --git a/src/eve-server/character/CharMgrService.cpp b/src/eve-server/character/CharMgrService.cpp
+index 6883cfd..97c5b03 100644
+--- a/src/eve-server/character/CharMgrService.cpp
++++ b/src/eve-server/character/CharMgrService.cpp
+@@ -312,6 +312,7 @@ PyResult CharMgrService::GetCharacterDescription(PyCallArgs &call, PyInt* charac
+ {
+     sItemFactory.SetUsingClient(call.client);
+     CharacterRef c = sItemFactory.GetCharacterRef(characterID->value());
++    sItemFactory.UnsetUsingClient();
+     if (!c ) {
+         _log(CHARACTER__ERROR, "GetCharacterDescription failed to load character %u.", characterID->value());
+         return nullptr;
+diff --git a/src/eve-server/character/Character.cpp b/src/eve-server/character/Character.cpp
+index 2682ad0..748dcef 100644
+--- a/src/eve-server/character/Character.cpp
++++ b/src/eve-server/character/Character.cpp
+@@ -283,6 +283,7 @@ Character::Character(
+   m_charData(_charData),
+   m_corpData(_corpData),
+   m_pClient(nullptr),
++  m_hadClient(false),
+   m_inTraining(nullptr),
+   m_loaded(false),
+   m_fleetData(CharFleetData()),
+@@ -295,7 +296,7 @@ Character::Character(
+ 
+     if (!IsAgent(m_itemID)) {
+         m_loginTime = sEntityList.GetStamp();
+-        pInventory = new Inventory(InventoryItemRef(this));
++        pInventory = new Inventory(this);
+         m_freePoints = CharacterDB::GetFreeSkillPoints(m_itemID);
+     }
+ }
+@@ -303,7 +304,11 @@ Character::Character(
+ Character::~Character()
+ {
+     SaveBookMarks();
+-    SaveFullCharacter();
++    /* one that never had its client while loaded (show info) has the wallet,
++     *  location and corp it had when it loaded:  saving them would put back what the server has changed since
++     */
++    if (m_hadClient)
++        SaveFullCharacter();
+     SaveCertificates();
+     SafeDelete(pInventory);
+ }
+@@ -2103,6 +2108,8 @@ void Character::SkillQueueLoop(bool update/*true*/)
+         if (!list->empty()) {
+             if (list->size() > 1) {
+                 OnMultipleSkillsTrained omst;
++                    // omst releases its own reference
++                    PyIncRef(list);
+                     omst.skillList = list;
+                 tmp = omst.Encode();
+             }
+@@ -2114,6 +2121,7 @@ void Character::SkillQueueLoop(bool update/*true*/)
+ 
+         m_pClient->QueueDestinyEvent(&tmp);
+     }
++    PyDecRef(list);
+ 
+     _log(SKILL__QUEUE, "SkillQueueLoop() completed in %.4fms", (GetTimeMSeconds() - begin));
+ }
+@@ -2240,6 +2248,18 @@ void Character::PayBounty(CharacterRef cRef) {
+     sStatMgr.Add(Stat::pcBounties, cRef->bounty());
+ }
+ 
++void Character::ReloadData()
++{
++    CharacterData charData = CharacterData();
++    if (CharacterDB::GetCharacterData(m_itemID, charData)) {
++        charData.loginTime = m_charData.loginTime;
++        m_charData = charData;
++    }
++    CorpData corpData = CorpData();
++    if (CharacterDB::GetCharCorpData(m_itemID, corpData))
++        m_corpData = corpData;
++}
++
+ void Character::SetLoginTime() {
+     m_loginTime = sEntityList.GetStamp();
+     m_db.SetLogInTime(m_itemID);
+diff --git a/src/eve-server/character/Character.h b/src/eve-server/character/Character.h
+index d3c15eb..4962fd0 100644
+--- a/src/eve-server/character/Character.h
++++ b/src/eve-server/character/Character.h
+@@ -229,7 +229,12 @@ public:
+     void            SetFleetData(CharFleetData& fleet);
+     uint32          PickAlternateShip(uint32 locationID);
+ 
+-    void            SetClient(Client* pClient)          { m_pClient = pClient; }
++    void            SetClient(Client* pClient)          { m_pClient = pClient; if (pClient != nullptr) m_hadClient = true; }
++    /* its row (wallet, location, ship, corp) from the database again.  a character loaded while its player was offline
++     *  (show info) keeps the row it had then, while the server changes an offline character in the database
++     *  (wallet transfers, docking, corp moves):  its client takes it as it is now
++     */
++    void            ReloadData();
+     Client*         GetClient()                         { return m_pClient; }
+ 
+     void            AddItem(InventoryItemRef item);
+@@ -504,6 +509,8 @@ private:
+     StandingDB s_db;
+ 
+     Client* m_pClient;
++    // it had a client while loaded:  without one its row in memory is from when it loaded, and isn't saved (~Character)
++    bool m_hadClient;
+ 
+     CorpData m_corpData;
+     CharacterData m_charData;
+diff --git a/src/eve-server/chat/LSCChannel.cpp b/src/eve-server/chat/LSCChannel.cpp
+index e0c7a92..8b33033 100644
+--- a/src/eve-server/chat/LSCChannel.cpp
++++ b/src/eve-server/chat/LSCChannel.cpp
+@@ -657,9 +657,8 @@ void LSCChannel::SendOnLSC(const std::set<uint32>& charIDs, const char* method,
+     MulticastTarget mct;
+     for (auto cur : charIDs)
+         mct.characters.insert(cur);
++    // notify releases its arguments (Encode gave answer its own reference)
+     PyTuple* answer = notify.Encode();
+-    // NotifyOnLSC doesn't release its arguments
+-    PyDecRef(notify.arguments);
+     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
+ }
+ 
+diff --git a/src/eve-server/corporation/CorpRegistryBound.cpp b/src/eve-server/corporation/CorpRegistryBound.cpp
+index 309a554..52eee88 100644
+--- a/src/eve-server/corporation/CorpRegistryBound.cpp
++++ b/src/eve-server/corporation/CorpRegistryBound.cpp
+@@ -585,7 +585,7 @@ PyResult CorpRegistryBound::UpdateDivisionNames(PyCallArgs &call,
+ 
+     if (!m_db.UpdateDivisionNames(notif.key, args, notif.data)) {
+         codelog(SERVICE__ERROR, "%s: Failed to update division names for corp %u", call.client->GetName(), notif.key);
+-        PyDecRef( notif.data );
++        // notif releases its data
+         return PyStatic.NewNone();
+     }
+ 
+@@ -769,10 +769,11 @@ PyResult CorpRegistryBound::AddCorporation(PyCallArgs &call,
+         return nullptr;
+     }
+     PyTuple* a1 = cc.Encode();
++    // sent twice, and each send takes over a reference
++    PyIncRef(a1);
+     // send single to client
+     pClient->SendNotification("OnCorporationChanged", "clientID", &a1);
+     // send multi to station guests
+-    PyIncRef(a1);
+     sEntityList.Multicast("OnCorporationChanged", "stationid", &a1, NOTIF_DEST__LOCATION, pClient->GetLocationID());
+ 
+     return m_db.GetCorporations(corpID);
+@@ -952,7 +953,7 @@ PyResult CorpRegistryBound::UpdateLogo(PyCallArgs &call,
+     notif.data = new PyDict();
+     if (!m_db.UpdateLogo(notif.key, args, notif.data))    {
+         codelog( SERVICE__ERROR, "Corporation logo change failed..." );
+-        PyDecRef( notif.data );
++        // notif releases its data
+         return nullptr;
+     }
+ 
+@@ -1236,7 +1237,8 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
+             continue;
+         if (list->size() == 3) {
+             Call_GetMemberIDsByQuery_List3 args3;
+-            if (!args3.Decode(&list)) {
++            // list belongs to queryList, so decode without consuming it
++            if (!args3.Decode(list)) {
+                 codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
+                 return nullptr;
+             }
+@@ -1259,7 +1261,7 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
+             if (!set)
+                 return nullptr;
+             Call_GetMemberIDsByQuery_List4 args4;
+-            if (!args4.Decode(&list)) {
++            if (!args4.Decode(list)) {
+                 codelog(SERVICE__ERROR, "CorpRegistryBound: Failed to decode arguments.");
+                 return nullptr;
+             }
+@@ -1303,12 +1305,8 @@ PyResult CorpRegistryBound::GetMemberIDsByQuery(PyCallArgs &call, PyList* queryL
+     if (set)
+         m_db.GetMembersForQuery(query, result);
+ 
+-    // create/clear list as needed
+-    if (list == nullptr) {
+-        list = new PyList();
+-    } else {
+-        list->clear();
+-    }
++    // a new list for the result (list points into queryList, which the call owns)
++    list = new PyList();
+ 
+     // populate results
+     for (auto cur : result)
+@@ -1930,6 +1928,9 @@ PyResult CorpRegistryBound::GetOffices(PyCallArgs &call) {
+ 
+     if (this->m_offices == nullptr) {
+         this->m_offices = new OfficeSparseBound (this->GetServiceManager (), *this, m_db, m_corpID, headers);
++    } else {
++        // the bound object made its header already
++        PyDecRef(headers);
+     }
+ 
+     if (this->m_offices == nullptr) {
+diff --git a/src/eve-server/exploration/Probes.cpp b/src/eve-server/exploration/Probes.cpp
+index 9fd7817..3202e66 100644
+--- a/src/eve-server/exploration/Probes.cpp
++++ b/src/eve-server/exploration/Probes.cpp
+@@ -531,6 +531,7 @@ void ProbeSE::SendWarpStart(float travelTime/*0*/)
+         from->SetItem(0, token);
+         from->SetItem(1, posFrom.Encode());
+     PyTuple* to = new PyTuple(2);
++        PyIncRef(token);    // in both tuples
+         to->SetItem(0, token);
+         to->SetItem(1, posTo.Encode());
+     // OnProbeWarpStart(self, probeID, fromPos, toPos, startTime, duration)
+@@ -626,6 +627,7 @@ void ProbeSE::SendSlimChange()
+         updates->SetItem(0, new PyString("OnSlimItemChange"));
+         updates->SetItem(1, probeData);
+     m_destiny->SendSingleDestinyUpdate(&updates, true);
++    PyDecRef(updates);
+ }
+ 
+ /*
+diff --git a/src/eve-server/exploration/ScanMgrService.cpp b/src/eve-server/exploration/ScanMgrService.cpp
+index 8be0f9d..a0f4c6b 100644
+--- a/src/eve-server/exploration/ScanMgrService.cpp
++++ b/src/eve-server/exploration/ScanMgrService.cpp
+@@ -104,7 +104,8 @@ PyResult ScanBound::ConeScan( PyCallArgs& call, PyRep* ignored1, PyRep* ignored2
+ 
+     // TODO: for this one we're keeping the old mechanism for now as it requires changes on more than just this service
+     Call_ConeScan args;
+-    if (!args.Decode(&call.tuple)) {
++    // the call tuple belongs to the call (Decode(&call.tuple) would release it), so decode it without consuming it
++    if (!args.Decode(call.tuple)) {
+         codelog(SERVICE__ERROR, "ScanBound: Failed to decode arguments.");
+         throw CustomError("Invalid directional scan request.");
+     }
+diff --git a/src/eve-server/faction/WarRegistryService.cpp b/src/eve-server/faction/WarRegistryService.cpp
+index 35f42ab..efe30c6 100644
+--- a/src/eve-server/faction/WarRegistryService.cpp
++++ b/src/eve-server/faction/WarRegistryService.cpp
+@@ -48,7 +48,8 @@ WarRegistryService::WarRegistryService(EVEServiceManager& mgr) :
+ BoundDispatcher* WarRegistryService::BindObject(Client* client, PyRep* bindParameters) {
+     Call_TwoIntegerArgs args;
+ 
+-    if (args.Decode(bindParameters->Clone()) == false) {
++    // (this Decode() doesn't consume its argument:  a Clone() here leaked)
++    if (args.Decode(bindParameters) == false) {
+         codelog(SERVICE__ERROR, "%s: Failed to decode bind args.", GetName().c_str());
+         return nullptr;
+     }
+diff --git a/src/eve-server/inventory/AttributeMap.cpp b/src/eve-server/inventory/AttributeMap.cpp
+index 8d68da5..134047f 100644
+--- a/src/eve-server/inventory/AttributeMap.cpp
++++ b/src/eve-server/inventory/AttributeMap.cpp
+@@ -438,8 +438,10 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
+         return true;
+     /* stations (outposts under siege) and their service structures tell nobody:  clients get their hit points from the damage
+      *  state.  a corp-owned one would multicast every hit to its corp (with an error and a stack trace in the log) */
+-    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services))
++    if (IsStationID(mItem.itemID()) or (mItem.groupID() == EVEDB::invGroups::Destructable_Station_Services)) {
++        PyDecRef(attrChange);
+         return true;
++    }
+ 
+     /** @todo update this to use my new multicast replacement */
+     if (IsPlayerCorp(mItem.ownerID())) {
+@@ -454,8 +456,12 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
+         }
+     }
+ 
+-    if (IsCorp(mItem.ownerID()))
++    if (IsCorp(mItem.ownerID())) {
++        // Multicast() took it for a player corp
++        if (!IsPlayerCorp(mItem.ownerID()))
++            PyDecRef(attrChange);
+         return true;
++    }
+ 
+     Client* pClient(nullptr);
+     if (IsCharacterID(mItem.itemID())) {
+@@ -466,12 +472,15 @@ bool AttributeMap::SendChanges(PyTuple* attrChange) {
+ 
+     if (pClient == nullptr) {
+         _log(PLAYER__WARNING, "AttributeMap::SendChanges() - ownerID for %u not found", mItem.itemID() );
++        PyDecRef(attrChange);
+         return false;
+     }
+ 
+     // avoid flooding the client on login
+-    if (pClient->IsLogin())
++    if (pClient->IsLogin()) {
++        PyDecRef(attrChange);
+         return true;
++    }
+ 
+     if (is_log_enabled(ATTRIBUTE__CHANGE)) {
+         _log(ATTRIBUTE__CHANGE, "Sending Attribute changes for %s(%u)", mItem.name(), mItem.itemID());
+diff --git a/src/eve-server/inventory/Inventory.cpp b/src/eve-server/inventory/Inventory.cpp
+index 3ffb861..afa0b0c 100644
+--- a/src/eve-server/inventory/Inventory.cpp
++++ b/src/eve-server/inventory/Inventory.cpp
+@@ -48,11 +48,11 @@
+ /*
+  * Inventory
+  */
+-Inventory::Inventory(InventoryItemRef iRef)
++Inventory::Inventory(InventoryItem* self)
+ {
+     mContentsLoaded = false;
+-    m_self = iRef;
+-    m_myID = iRef->itemID();
++    m_self = self;
++    m_myID = self->itemID();
+ }
+ 
+ void Inventory::Reset()
+@@ -146,7 +146,7 @@ bool Inventory::LoadContents() {
+         if (pClient->IsValidSession())
+             od.corpID = pClient->GetCorporationID();
+         if (sDataMgr.IsStation(m_myID)) {
+-            if (!StationItemRef::StaticCast(m_self)->IsLoaded())
++            if (!static_cast<StationItem*>(m_self)->IsLoaded())
+                 StationDB::LoadOffices(od, items);
+             if (IsPlayerCorp(od.corpID)) {
+                 /* this will load all non-NPC corp items in this station */
+@@ -1020,8 +1020,7 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
+         throw CustomError ("Only members of the gantry's corporation can put materials in its upgrade hold.");
+     // customs offices take planetary commodities only, and their room is per character
+     if ((m_self->groupID() == EVEDB::invGroups::Orbital_Infrastructure) and (flag == flagHangar)) {
+-        StructureItemRef sRef = StructureItemRef::StaticCast(m_self);
+-        SystemEntity* pSE(sRef->GetMySE());
++        SystemEntity* pSE(static_cast<StructureItem*>(m_self)->GetMySE());
+         if ((pSE != nullptr) and pSE->IsCOSE()) {
+             pSE->GetCOSE()->ValidateAddItem(iRef);
+             return true;
+@@ -1086,8 +1085,6 @@ bool Inventory::ValidateAddItem(EVEItemFlags flag, InventoryItemRef iRef) const
+     // check capy for single unit
+     if (capacity < volume) { // smallest volume is 0.0025
+         if (pClient != nullptr) {
+-            std::map<std::string, PyRep *> args;
+-            args["volume"] = new PyFloat(volume);
+             sItemFactory.UnsetUsingClient();
+             if (IsCargoHoldFlag(flag))
+                 throw UserError ("NotEnoughCargoSpace")
+diff --git a/src/eve-server/inventory/Inventory.h b/src/eve-server/inventory/Inventory.h
+index 0f60fad..962fc74 100644
+--- a/src/eve-server/inventory/Inventory.h
++++ b/src/eve-server/inventory/Inventory.h
+@@ -39,7 +39,8 @@ class Inventory
+ {
+     friend class InventoryItem;
+ public:
+-    Inventory(InventoryItemRef iRef);
++    // self is the item this is the inventory of, which owns it
++    explicit Inventory(InventoryItem* self);
+     virtual ~Inventory() noexcept                       { /* do nothing here*/ }
+ 
+     void Reset();
+@@ -123,7 +124,10 @@ protected:
+     void List(CRowSet* into, EVEItemFlags flag, uint32 ownerID=0) const;
+ 
+     InventoryDB m_db;
+-    InventoryItemRef m_self;
++    /* the item this is the inventory of.  not a reference:  the item owns its inventory, and a reference back meant no
++     *  item with an inventory (character, ship, container, station) was ever freed
++     */
++    InventoryItem* m_self;
+ 
+ private:
+     bool mContentsLoaded;
+diff --git a/src/eve-server/inventory/InventoryItem.cpp b/src/eve-server/inventory/InventoryItem.cpp
+index 8787434..f08f204 100644
+--- a/src/eve-server/inventory/InventoryItem.cpp
++++ b/src/eve-server/inventory/InventoryItem.cpp
+@@ -142,6 +142,9 @@ InventoryItem& InventoryItem::operator= ( InventoryItem&& oth ) noexcept
+ InventoryItem::~InventoryItem() noexcept
+ {
+     SafeDelete(pAttributeMap);
++    // made in the c'tor.  ModifierContainerBase has no virtual d'tor, so delete it as what it is
++    delete static_cast<ModifierContainer*>(m_modifierContainer);
++    m_modifierContainer = nullptr;
+ }
+ 
+ InventoryItemRef InventoryItem::Load(uint32 itemID)
+@@ -296,7 +299,12 @@ RefPtr<_Ty> InventoryItem::_LoadItem(uint32 itemID, const ItemType &type, const
+             // test for office first
+             if (type.id() == 27) {
+                 return StationOffice::_LoadItem<StationOffice>(itemID, type, data);
+-            } else if (type.groupID() != EVEDB::invGroups::Station) {
++            } else if (type.groupID() == EVEDB::invGroups::Station) {
++                /* a station loaded here, before its system boots (a sale or a buy order filled in a station whose
++                 *  system isn't loaded), must be a StationItem:  the system's boot takes it from the item factory as
++                 *  one (GetStationRef), and as a plain item it had no inventory.  that crashed the server docking there
++                 *  and unloading the system
++                 */
+                 return StationItem::_LoadItem<StationItem>(itemID, type, data);
+             }/* else if (type.groupID() != EVEDB::invGroups::Station_Services) {
+                this isnt written yet...
+@@ -657,12 +665,15 @@ void InventoryItem::Rename(std::string name)
+     if (IsCharacterID(m_data.ownerID)) {
+         // this will be the most-used case
+         Client* pClient = sEntityList.FindClientByCharID(m_data.ownerID);
+-        if (pClient == nullptr)
++        if (pClient == nullptr) {
++            PyDecRef(tuple);
+             return;  //  make error here?
++        }
+         if (pClient->IsDocked()) {
+             pClient->SendNotification("OnCfgDataChanged", "charid", &tuple, false); //unsequenced.
+         } else { // client in space.  sent update to all clients in bubble
+             pClient->GetShipSE()->SysBubble()->BubblecastSendNotification("OnCfgDataChanged", "solarsystemid", &tuple, false);
++            PyDecRef(tuple);    // the bubblecast takes its own references
+         }
+     } else if (IsPlayerCorp(m_data.ownerID)) {
+         // bcast to all online corp members
+@@ -671,6 +682,8 @@ void InventoryItem::Rename(std::string name)
+         } else {
+             sEntityList.CorpNotify(m_data.ownerID, Notify::Types::ItemUpdateSystem, "OnCfgDataChanged", "solarsystemid", tuple);
+         }
++    } else {
++        PyDecRef(tuple);
+     }
+ 
+     /** @todo  if renaming a POS or other space object, we'll need to BubblecastSendNotification instead of CorpNotify  */
+@@ -1102,16 +1115,24 @@ void InventoryItem::ChangeOwner(uint32 new_owner, bool notify/*false*/) {
+ 
+ //contents of changes are consumed and cleared
+ void InventoryItem::SendItemChange(uint32 toID, std::map<int32, PyRep *> &changes) {
+-    if (IsNPCCorp(toID) or (toID == 1) or IsFaction(toID))   //IsValidOwner()
+-        return;
+-    if (sConsole.IsShutdown())
+-        return;
+-    if (changes.empty())
++    Client* pClient(nullptr);
++    if (IsCharacterID(toID))
++        pClient = sEntityList.FindClientByCharID(toID);
++    // nobody to tell:  an NPC owner, a character that's offline or still being made, or the server is going down.  don't build the notification (its item row is the expensive part)
++    if (IsNPCCorp(toID) or (toID == 1) or IsFaction(toID)   //IsValidOwner()
++    or sConsole.IsShutdown() or changes.empty()
++    or (IsCharacterID(toID) and ((pClient == nullptr) or pClient->IsCharCreation()))
++    or (!IsCharacterID(toID) and !IsPlayerCorp(toID))) {
++        for (auto cur : changes)
++            PySafeDecRef(cur.second);
++        changes.clear();
+         return;
++    }
+ 
+     NotifyOnItemChange change;
+         change.itemRow = GetItemRow();
+-        change.changes = changes;
++        change.changes = changes;   // the struct releases these now
++    changes.clear();
+     PyTuple *tmp = change.Encode();
+ 
+     if (is_log_enabled(ITEM__CHANGE)) {
+@@ -1121,11 +1142,6 @@ void InventoryItem::SendItemChange(uint32 toID, std::map<int32, PyRep *> &change
+ 
+     //TODO: figure out the appropriate list of interested people...
+     if (IsCharacterID(toID)) {
+-        Client* pClient = sEntityList.FindClientByCharID(toID);
+-        if (pClient == nullptr)
+-            return;
+-        if (pClient->IsCharCreation())
+-            return;
+         //if (IsShipItem()) //(pClient->IsBoard())
+         //    pClient->SendNotification("OnItemsChanged", "charid", &tmp, false); //unsequenced.  <<--  this is called for multiple items
+         //else
+diff --git a/src/eve-server/market/MarketDB.cpp b/src/eve-server/market/MarketDB.cpp
+index 5ce43f3..f3fb95c 100644
+--- a/src/eve-server/market/MarketDB.cpp
++++ b/src/eve-server/market/MarketDB.cpp
+@@ -581,6 +581,8 @@ PyRep *MarketDB::GetMarketGroups() {
+         }
+ 
+         PyPackedRow* pyrow = rowset->NewRow();
++        // pid is the rowset's key in the filter dict and is shared by every row of its group
++        PyIncRef(pid);
+         pyrow->SetField((uint32)0, pid); //parentGroupID
+         pyrow->SetField(1, new PyInt(row.GetUInt(1))); //marketGroupID
+         pyrow->SetField(2, new PyString(row.GetText(2))); //marketGroupName
+diff --git a/src/eve-server/market/MarketMgr.cpp b/src/eve-server/market/MarketMgr.cpp
+index cd7377d..1ebbbaf 100644
+--- a/src/eve-server/market/MarketMgr.cpp
++++ b/src/eve-server/market/MarketMgr.cpp
+@@ -159,7 +159,8 @@ MarketMgr::~MarketMgr()
+ void MarketMgr::Close()
+ {
+     /** @todo put a save method here which will save anything changed before shutdown */
+-    PyDecRef(m_marketGroups);
++    PySafeDecRef(m_marketGroups);
++    m_marketGroups = nullptr;
+     for (auto& cur : m_asks)
+         PySafeDecRef(cur.second.rep);
+     m_asks.clear();
+diff --git a/src/eve-server/npc/Drone.cpp b/src/eve-server/npc/Drone.cpp
+index 40dabd0..47cd56c 100644
+--- a/src/eve-server/npc/Drone.cpp
++++ b/src/eve-server/npc/Drone.cpp
+@@ -713,6 +713,7 @@ void DroneSE::Abandon() {
+         up->SetItem(0, new PyString("OnSlimItemChange"));
+         up->SetItem(1, data);
+     m_bubble->BubblecastDestinyUpdate(&up, "destiny");
++    PyDecRef(up);   // the bubblecast takes its own references
+ }
+ 
+ void DroneSE::TargetLost(SystemEntity* who) {
+diff --git a/src/eve-server/npc/LawEnforcement.cpp b/src/eve-server/npc/LawEnforcement.cpp
+index 57efe7e..1539342 100644
+--- a/src/eve-server/npc/LawEnforcement.cpp
++++ b/src/eve-server/npc/LawEnforcement.cpp
+@@ -881,6 +881,7 @@ void LawEnforcement::LeaveSpace(LoggedOff& l, const GPoint& savedAt)
+     // what the client did when its pilot logged off: save it and unload it
+     shipRef->SetPosition(savedAt);
+     shipRef->LogOut();
++    shipRef->ReleaseModules();
+ }
+ 
+ bool LawEnforcement::ReclaimLoggedOffShip(uint32 shipID, GPoint& position)
+diff --git a/src/eve-server/planet/CustomsOffice.cpp b/src/eve-server/planet/CustomsOffice.cpp
+index 519d4d9..c8fa2d5 100644
+--- a/src/eve-server/planet/CustomsOffice.cpp
++++ b/src/eve-server/planet/CustomsOffice.cpp
+@@ -665,7 +665,8 @@ void CustomsSE::SendEffectUpdate(int16 effectID, bool active)
+         events->AddItem(shipEff.Encode());
+     PyTuple* event = new PyTuple(1);
+         event->SetItem(0, events);
+-    m_destiny->SendSingleDestinyEvent(&event);   // consumed
++    m_destiny->SendSingleDestinyEvent(&event);
++    PyDecRef(event);
+ }
+ 
+ void CustomsSE::ChangeOwner(uint32 corpID, int32 allianceID)
+@@ -692,7 +693,8 @@ void CustomsSE::SendSlimUpdate()
+     PyTuple* sItem = new PyTuple(2);
+         sItem->SetItem(0,                               new PyString("OnSlimItemChange"));
+         sItem->SetItem(1,                               shipData);
+-    m_destiny->SendSingleDestinyUpdate(&sItem);   // consumed
++    m_destiny->SendSingleDestinyUpdate(&sItem);
++    PyDecRef(sItem);
+ }
+ 
+ 
+diff --git a/src/eve-server/pos/Structure.cpp b/src/eve-server/pos/Structure.cpp
+index bd98665..85b1f96 100644
+--- a/src/eve-server/pos/Structure.cpp
++++ b/src/eve-server/pos/Structure.cpp
+@@ -65,9 +65,10 @@ namespace {
+  * Base Structure Item for all POS types
+  */
+ StructureItem::StructureItem(uint32 _structureID, const ItemType &_itemType, const ItemData &_data)
+-    : InventoryItem(_structureID, _itemType, _data)
++    : InventoryItem(_structureID, _itemType, _data),
++    mySE(nullptr)
+ {
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+     _log(ITEM__TRACE, "Created StructureItem for %s (%u).", name(), itemID());
+     _log(POS__TRACE, "Created StructureItem for %s (%u).", name(), itemID());
+ }
+@@ -186,7 +187,10 @@ void StructureItem::AddItem(InventoryItemRef iRef)
+ 
+     InventoryItem::AddItem(iRef);
+ 
+-    if (mySE->IsCOSE())
++    /* a cargo container (a courier package, a can in a hangar) is a StructureItem with no entity of this class's:  this
++     *  was never set for one, and goods moved into a new courier package crashed the server
++     */
++    if ((mySE != nullptr) and mySE->IsCOSE())
+         mySE->GetCOSE()->VerifyAddItem(iRef);
+ }
+ 
+@@ -200,6 +204,11 @@ void StructureItem::RemoveItem(InventoryItemRef iRef)
+ 
+ void StructureItem::Rename(std::string name)
+ {
++    // a cargo container (no structure in space) is named as any item is
++    if ((mySE == nullptr) or !mySE->IsPOSSE()) {
++        InventoryItem::Rename(name);
++        return;
++    }
+     if (mySE->GetPOSSE()->GetState() > EVEPOS::StructureState::Unanchored)
+     {
+         InventoryItem::Rename(name);
+@@ -1748,7 +1757,8 @@ void StructureSE::SendSlimUpdate()
+     PyTuple *sItem = new PyTuple(2);
+     sItem->SetItem(0, new PyString("OnSlimItemChange"));
+     sItem->SetItem(1, shipData);
+-    m_destiny->SendSingleDestinyUpdate(&sItem); // consumed
++    m_destiny->SendSingleDestinyUpdate(&sItem);
++    PyDecRef(sItem);
+ }
+ 
+ void StructureSE::SendBallFree(bool free)
+@@ -1795,7 +1805,8 @@ void StructureSE::SendEffectUpdate(int16 effectID, bool active)
+     events->AddItem(shipEff.Encode());
+     PyTuple *event = new PyTuple(1);
+     event->SetItem(0, events);
+-    m_destiny->SendSingleDestinyEvent(&event); // consumed
++    m_destiny->SendSingleDestinyEvent(&event);
++    PyDecRef(event);
+ }
+ 
+ void StructureSE::EncodeDestiny(Buffer &into)
+diff --git a/src/eve-server/services/BoundService.h b/src/eve-server/services/BoundService.h
+index 41d3d3b..06c50ba 100644
+--- a/src/eve-server/services/BoundService.h
++++ b/src/eve-server/services/BoundService.h
+@@ -134,7 +134,8 @@ public:
+             // dispatch call
+             CallMachoBindObject_call boundcall;
+ 
+-            if (boundcall.Decode(&call.value()) == false) {
++            // the call tuple belongs to args (Decode(&x) would release it), so decode it without consuming it
++            if (boundcall.Decode(call.value()) == false) {
+                 codelog(SERVICE__ERROR, "%s Service: Failed to decode boundcall arguments", this->GetName().c_str());
+                 return nullptr;
+             }
+@@ -145,7 +146,8 @@ public:
+ 
+             PyResult result = bound->Dispatch(boundcall.method_name, subArgs);
+ 
+-            // set the tuple data
++            // set the tuple data (result releases its own reference)
++            PySafeIncRef(result.ssResult);
+             rsp->SetItem(1, result.ssResult);
+             // TODO: merge the dicts to return the full response data?
+             // Py types are lacking lots of helper methods that could be useful
+@@ -197,6 +199,11 @@ protected:
+      * Default destructor, override to free resources if needed
+      */
+     virtual ~EVEBoundObject () {
++        PySafeDecRef(this->mOID);
++        // every bound object makes its own handlers (Add), so they go with it
++        for (auto& handler : this->mHandlers)
++            delete handler.second;
++        this->mHandlers.clear();
+     }
+ 
+     /**
+diff --git a/src/eve-server/services/Callable.cpp b/src/eve-server/services/Callable.cpp
+index aa44927..236548e 100644
+--- a/src/eve-server/services/Callable.cpp
++++ b/src/eve-server/services/Callable.cpp
+@@ -5,7 +5,10 @@ PyCallArgs::PyCallArgs(Client* c, PyTuple* tup, PyDict* dict) :
+         client(c),
+         tuple(tup)
+ {
+-    // PyIncRef( tup );
++    // the call stream keeps (and releases) tup as well
++    PySafeIncRef( tup );
++    if (dict == nullptr)
++        return;
+     for (PyDict::const_iterator cur = dict->begin(); cur != dict->end(); cur++) {
+         if (!cur->first->IsString()) {
+             _log(SERVICE__ERROR, "Non-string key in call named arguments. Skipping.");
+@@ -54,18 +57,20 @@ PyResult::~PyResult() { PySafeDecRef(ssResult); PySafeDecRef(ssNamedResult); }
+ 
+ PyResult& PyResult::operator=(const PyResult& oth)
+ {
+-    PySafeDecRef(ssResult);
+-    if (oth.ssResult != nullptr) {
+-        ssResult = oth.ssResult;
++    // take the new references before releasing the old ones (safe when both share an object, or on self-assignment)
++    PyRep* result(oth.ssResult);
++    if (result != nullptr) {
++        PyIncRef(result);
++    } else {
++        result = PyStatic.NewNone();    // already a new reference
+     }
+-    else {
+-        ssResult = PyStatic.NewNone();
+-    }
+-    PySafeIncRef(ssResult);
++    PyDict* named(oth.ssNamedResult);
++    PySafeIncRef(named);
+ 
++    PySafeDecRef(ssResult);
++    ssResult = result;
+     PySafeDecRef(ssNamedResult);
+-    ssNamedResult = oth.ssNamedResult;
+-    PySafeIncRef(ssNamedResult);
++    ssNamedResult = named;
+ 
+     return *this;
+ }
+diff --git a/src/eve-server/services/Callable.h b/src/eve-server/services/Callable.h
+index 84a5f30..14786ac 100644
+--- a/src/eve-server/services/Callable.h
++++ b/src/eve-server/services/Callable.h
+@@ -63,6 +63,8 @@ template <class T> struct is_optional<std::optional<T>> : std::true_type {};
+ 
+ struct CallHandlerBase {
+ public:
++    // bound objects delete their handlers through this
++    virtual ~CallHandlerBase() = default;
+     virtual PyResult operator() (void* service, PyCallArgs& args) const = 0;
+     virtual const std::string& getSignature () = 0;
+ };
+diff --git a/src/eve-server/services/SparseBound.h b/src/eve-server/services/SparseBound.h
+index d82c23e..b7091cd 100644
+--- a/src/eve-server/services/SparseBound.h
++++ b/src/eve-server/services/SparseBound.h
+@@ -44,11 +44,12 @@ public:
+     }
+ 
+     ~SparseBound () {
+-        PyDecRef (this->m_header);
++        PySafeDecRef (this->m_header);  // null when never primed
+     }
+ 
+     /**
+      * Primes the index list and initializes the header
++     *  (takes over the caller's reference to headers)
+      */
+     void Prime (PyList* headers) {
+         auto cur = headers->begin();
+@@ -190,6 +191,7 @@ protected:
+             if (indexIt == this->m_indexMap.end ()) {
+                 // the index cannot be found, show an error and continue on to the next one
+                 codelog(SERVICE__ERROR, "SparseRowset: Cannot find the key %lli in the index list", keyValue);
++                PyDecRef(value);
+                 continue;
+             }
+ 
+@@ -224,6 +226,7 @@ protected:
+             if (indexIt == this->m_indexMap.end ()) {
+                 // the index cannot be found, show an error and continue on to the next one
+                 codelog(SERVICE__ERROR, "SparseRowset: Cannot find the key %lli in the index list", keyValue);
++                PyDecRef(value);
+                 continue;
+             }
+ 
+diff --git a/src/eve-server/ship/BeyonceService.cpp b/src/eve-server/ship/BeyonceService.cpp
+index 09c4453..93e60c5 100644
+--- a/src/eve-server/ship/BeyonceService.cpp
++++ b/src/eve-server/ship/BeyonceService.cpp
+@@ -961,6 +961,7 @@ PyResult BeyonceBound::CmdAbandonLoot(PyCallArgs &call, PyList* wreckIDs) {
+             itemData->SetItem(0, new PyString("OnSlimItemChange"));
+             itemData->SetItem(1, slimData);
+         pSE->SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange" );
++        PyDecRef(itemData);     // the bubblecast takes its own references
+     }
+ 
+     return PyStatic.NewNone();
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index f380e44..da3a813 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -43,7 +43,7 @@ m_warpLockUntil(0),
+ m_jumpLockUntil(0)
+ {
+     m_onlineModuleVec.clear();
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+ 
+     _log(ITEM__TRACE, "Created ShipItem for %s(%u).", name(), itemID());
+ }
+@@ -126,6 +126,12 @@ void ShipItem::LogOut()
+         pInv->RemoveItem(ShipItemRef(this));
+ }
+ 
++void ShipItem::ReleaseModules()
++{
++    SafeDelete(m_ModuleManager);
++    m_ModuleManager = new ModuleManager(this);
++}
++
+ void ShipItem::SetPlayer(Client* pClient) {
+     if (m_pilot == pClient)
+         return;
+@@ -3154,6 +3160,7 @@ void ShipSE::RefreshOwnerIDs()
+         itemData->SetItem(0, new PyString("OnSlimItemChange"));
+         itemData->SetItem(1, slimData);
+     SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange");
++    PyDecRef(itemData);     // the bubblecast takes its own references
+ }
+ 
+ bool ShipSE::IsInvul()
+diff --git a/src/eve-server/ship/Ship.h b/src/eve-server/ship/Ship.h
+index 4a5da27..aa0e8c2 100644
+--- a/src/eve-server/ship/Ship.h
++++ b/src/eve-server/ship/Ship.h
+@@ -64,6 +64,10 @@ public:
+     void InitPod();
+     void InitAttribs();
+     void LogOut();
++    /* after LogOut, once nothing uses the ship:  its fitted modules hold the ship (GenericModule::m_shipRef), so it was
++     *  never freed while they were there.  the ship's left with an empty module manager
++     */
++    void ReleaseModules();
+     // adds cargo mass to ship's mass
+     void UpdateMass();  // will reset ship mass to default, then loop thru cargo
+     // tells destiny about a mass change (cargo mass, server.CargoMassAdditive)
+diff --git a/src/eve-server/ship/ShipService.cpp b/src/eve-server/ship/ShipService.cpp
+index 2c83909..cf250c6 100644
+--- a/src/eve-server/ship/ShipService.cpp
++++ b/src/eve-server/ship/ShipService.cpp
+@@ -1065,9 +1065,12 @@ PyResult ShipBound::AssembleShip(PyCallArgs& args, PyInt* shipID) {
+     // this one has subSystems as a byname argument, handled by the AssembleShip call with a PyList for now
+     PyList* list = new PyList();
+ 
++    PyIncRef(shipID);   // shipID belongs to the call arguments
+     list->AddItem(shipID);
+ 
+-    return this->AssembleShip(args, list);
++    PyResult result(this->AssembleShip(args, list));
++    PyDecRef(list);
++    return result;
+ }
+ 
+ PyResult ShipBound::AssembleShip(PyCallArgs &call, PyList* itemIDs) {
+@@ -1255,7 +1258,9 @@ PyResult ShipBound::GetShipConfiguration(PyCallArgs &call)
+ 
+ PyResult ShipBound::ConfigureShip(PyCallArgs &call, PyDict* configuration)
+ {
+-    call.client->GetShipSE()->SetFleetSMBUsage(configuration->GetItemString("allowFleetSMBUsage")->AsBool());
++    PyRep* allow = configuration->GetItemString("allowFleetSMBUsage");
++    if ((allow != nullptr) and allow->IsBool())
++        call.client->GetShipSE()->SetFleetSMBUsage(allow->AsBool()->value());
+ 
+     return nullptr;
+ }
+diff --git a/src/eve-server/ship/modules/ActiveModule.cpp b/src/eve-server/ship/modules/ActiveModule.cpp
+index 242dbea..64a6d9c 100644
+--- a/src/eve-server/ship/modules/ActiveModule.cpp
++++ b/src/eve-server/ship/modules/ActiveModule.cpp
+@@ -505,7 +505,7 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+                 + GetAttribute(AttrMassAddition).get_double()), false);
+     if (ApplyActiveEffects())
+         ApplyEffect(FX::State::Active, true);
+-    if (IsValidTarget(targetID) and ApplyTargetEffects())
++    if (IsValidTarget(targetID) and (m_targetSE != nullptr) and ApplyTargetEffects())
+         ApplyEffect(FX::State::Target, true);
+ 
+     std::vector<GenericModule*> modules;
+@@ -560,17 +560,25 @@ void ActiveModule::Activate(uint16 effectID, uint32 targetID/*0*/, int16 repeat/
+         m_Stop = true;
+ 
+     // check for one-hit kills and stop module after cycle completes
+-    if (m_needsTarget)
+-        if (m_targetSE->IsDead())
+-            m_Stop = true;
++    if (m_needsTarget and ((m_targetSE == nullptr) or m_targetSE->IsDead()))
++        m_Stop = true;
+ }
+ 
+ void ActiveModule::Deactivate(std::string effect/*""*/)
+ {
+     if (m_ModuleState != Module::State::Activated) {
+-        // a module finishing its last cycle on a target that is gone stops now.  it must not keep the target pointer
+-        if ((m_ModuleState == Module::State::Deactivating) and (effect.compare("TargetDestroyed") == 0)) {
+-            AbortCycle();
++        if (effect.compare("TargetDestroyed") == 0) {
++            // a module finishing its last cycle on a target that is gone stops now.  it must not keep the target pointer
++            if (m_ModuleState == Module::State::Deactivating) {
++                AbortCycle();
++                return;
++            }
++            /* the first cycle of an activation killed it (Activate() sets the module Activated after that cycle fires):  it
++             *  mustn't keep the pointer either, or it uses the freed target when the cycle ends.  it stops then (Process()) */
++            if (m_targetSE != nullptr) {
++                m_targetSE = nullptr;
++                m_Stop = true;
++            }
+             return;
+         }
+         _log(MODULE__TRACE, "ActiveModule::Deactivate - %s called Deactivate but is not currently Activated (%s).", m_modRef->name(), GetModuleStateName(m_ModuleState));
+@@ -1838,6 +1846,7 @@ void ActiveModule::ShowEffect(bool active/*false*/, bool abort/*false*/)
+         m_shipRef->GetPilot()->QueueDestinyEvent(&tuple);
+     } else {
+         pBubble->BubblecastDestinyEvent(&tuple, "destiny");
++        PyDecRef(tuple);    // the bubblecast takes its own references
+     }
+ }
+ /*
+diff --git a/src/eve-server/ship/modules/ModuleManager.cpp b/src/eve-server/ship/modules/ModuleManager.cpp
+index ca0bbfc..81cb11d 100644
+--- a/src/eve-server/ship/modules/ModuleManager.cpp
++++ b/src/eve-server/ship/modules/ModuleManager.cpp
+@@ -1341,10 +1341,6 @@ int32 ModuleManager::LoadCharge(InventoryItemRef chargeRef, EVEItemFlags flag, i
+     if (pShipItem->HasPilot() and pShipItem->GetPilot()->IsInSpace()) {
+         Rsp_CommonGetInfo_Entry entry2;
+         if (chargeRef->Populate(entry2)) {
+-            PyTuple* tuple = new PyTuple(3);
+-                tuple->SetItem(0, new PyInt(chargeRef->locationID()));
+-                tuple->SetItem(1, new PyInt(chargeRef->flag()));
+-                tuple->SetItem(2, new PyInt(chargeRef->typeID()));
+             PyTuple* result = new PyTuple(2);
+                 result->SetItem(0, new PyInt(chargeRef->locationID()));
+                 result->SetItem(1, new PyObject("util.KeyVal", entry2.Encode()));
+diff --git a/src/eve-server/station/Outpost.cpp b/src/eve-server/station/Outpost.cpp
+index 232e71c..ba94d20 100644
+--- a/src/eve-server/station/Outpost.cpp
++++ b/src/eve-server/station/Outpost.cpp
+@@ -95,7 +95,7 @@ OutpostSE::~OutpostSE()
+     if (m_dirty)
+         SaveSiege();
+     if (m_targMgr != nullptr)
+-        if (!sConsole.IsShutdown()) {
++        if (!sEntityList.IsClosing()) {
+             m_targMgr->ClearModules();
+             m_targMgr->ClearAllTargets(false);
+         }
+diff --git a/src/eve-server/station/Station.cpp b/src/eve-server/station/Station.cpp
+index 5c65fcc..73a4795 100644
+--- a/src/eve-server/station/Station.cpp
++++ b/src/eve-server/station/Station.cpp
+@@ -65,7 +65,7 @@ m_stationType(type),
+ m_stationID(stationID),
+ m_loaded(false)
+ {
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+ 
+     _log(ITEM__TRACE, "Created Station for item %s (%u).", name(), itemID());
+ }
+diff --git a/src/eve-server/station/StationOffice.cpp b/src/eve-server/station/StationOffice.cpp
+index cdc2a0e..b138802 100644
+--- a/src/eve-server/station/StationOffice.cpp
++++ b/src/eve-server/station/StationOffice.cpp
+@@ -28,7 +28,7 @@ StationOffice::StationOffice(uint32 _officeID, const ItemType& _containerType, c
+ m_data(_odata)
+ {
+     m_loaded = false;
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+     _log(ITEM__TRACE, "Created StationOffice object for item %s (%u).", name(), itemID());
+ }
+ 
+diff --git a/src/eve-server/system/BubbleManager.cpp b/src/eve-server/system/BubbleManager.cpp
+index 331cd65..ea51dd5 100644
+--- a/src/eve-server/system/BubbleManager.cpp
++++ b/src/eve-server/system/BubbleManager.cpp
+@@ -220,6 +220,15 @@ void BubbleManager::NewBubbleCenter(GVector shipVelocity, GPoint &newCenter) {
+     newCenter += (shipVelocity * (BUBBLE_RADIUS_METERS /2));
+ }
+ 
++void BubbleManager::DropPlayer(Client* pClient)
++{
++    if (pClient == nullptr)
++        return;
++    for (auto pBubble : m_bubbles)
++        if ((pBubble != nullptr) and pBubble->HasPlayers())
++            pBubble->DropPlayer(pClient);
++}
++
+ void BubbleManager::Remove(SystemEntity *ent) {
+     // suns, planets and moons arent in bubbles
+     // if (ent->IsStaticEntity())
+@@ -275,13 +284,24 @@ SystemBubble* BubbleManager::FindBubble(uint32 systemID, const GPoint &pos) cons
+     _log(DESTINY__BUBBLE_DEBUG, "BubbleManager::FindBubble() - Searching point %.1f, %.1f, %.1f in system %u.", \
+                 pos.x, pos.y, pos.z, systemID);
+ 
++    /* bubbles can overlap (MakeBubble() moves a new one clear of only the first it overlaps), and the map's order is no
++     *  order at all:  of those the point is in, it's the one whose center is nearest.  else a ship landing where two
++     *  overlap could join the one without the entities around it */
++    SystemBubble* pFound(nullptr);
++    double nearest(0);
+     auto range = m_sysBubbleMap.equal_range(systemID);
+-    for ( auto itr = range.first; itr != range.second; ++itr )
+-        if (itr->second->InBubble(pos))
+-            return itr->second;
++    for ( auto itr = range.first; itr != range.second; ++itr ) {
++        if (!itr->second->InBubble(pos))
++            continue;
++        double distance(itr->second->GetCenter().distance(pos));
++        if ((pFound == nullptr) or (distance < nearest)) {
++            pFound = itr->second;
++            nearest = distance;
++        }
++    }
+ 
+-    //not in any existing bubble.
+-    return nullptr;
++    //nullptr:  not in any existing bubble.
++    return pFound;
+ }
+ 
+ SystemBubble* BubbleManager::GetBubble(SystemManager* sysMgr, const GPoint& pos)
+diff --git a/src/eve-server/system/BubbleManager.h b/src/eve-server/system/BubbleManager.h
+index d8b4fba..f79017d 100644
+--- a/src/eve-server/system/BubbleManager.h
++++ b/src/eve-server/system/BubbleManager.h
+@@ -71,6 +71,8 @@ public:
+     void NewBubbleCenter(GVector shipVelocity, GPoint& newBubbleCenter);
+     //call when an entity is removed from the system.
+     void Remove(SystemEntity* ent);
++    // a client going away:  off every bubble's player list, in case one still has it (SystemBubble::DropPlayer())
++    void DropPlayer(Client* pClient);
+     void clear();
+     void ClearSystemBubbles(uint32 systemID);
+     void RemoveBubble(uint32 systemID, SystemBubble* pSB);
+diff --git a/src/eve-server/system/Container.cpp b/src/eve-server/system/Container.cpp
+index f0f4a08..8be3fbb 100644
+--- a/src/eve-server/system/Container.cpp
++++ b/src/eve-server/system/Container.cpp
+@@ -50,7 +50,7 @@ CargoContainer::CargoContainer(uint32 _containerID, const ItemType &_containerTy
+ mySE(nullptr),
+ m_isAnchored(false)
+ {
+-    pInventory = new Inventory(InventoryItemRef(this));
++    // StructureItem made its inventory
+     _log(ITEM__TRACE, "Created CargoContainer object for item %s (%u).", name(), m_itemID);
+ }
+ 
+@@ -267,6 +267,9 @@ ContainerSE::ContainerSE(CargoContainerRef self, EVEServiceManager& services, Sy
+  m_armorDamage(0),
+  m_hullDamage(0)
+ {
++    // ObjectSystemEntity made a pair already.  replace them rather than leak them
++    SafeDelete(m_targMgr);
++    SafeDelete(m_destiny);
+     m_targMgr = new TargetManager(this);
+     m_destiny = new DestinyManager(this);
+ 
+@@ -311,7 +314,7 @@ void ContainerSE::Init()
+ ContainerSE::~ContainerSE()
+ {
+     if (m_targMgr != nullptr)
+-        if (!sConsole.IsShutdown()) {
++        if (!sEntityList.IsClosing()) {
+             m_targMgr->ClearModules();
+             m_targMgr->ClearAllTargets(false);
+             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
+@@ -369,7 +372,7 @@ mySE(nullptr),
+ m_delete(false),
+ m_salvaged(false)
+ {
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+ 
+     _log(ITEM__TRACE, "Created WreckContainer object for item %s (%u).", name(), itemID());
+ }
+@@ -486,8 +489,8 @@ void WreckContainer::MakeSlimItemChange()
+     PyTuple* updates = new PyTuple(2);
+         updates->SetItem(0, new PyString("OnSlimItemChange"));
+         updates->SetItem(1, shipData);
+-    //consumes updates
+     mySE->SysBubble()->BubblecastDestinyUpdate(&updates, "destiny" );
++    PyDecRef(updates);  // the bubblecast takes its own references
+ }
+ 
+ WreckSE::WreckSE(WreckContainerRef self, EVEServiceManager &services, SystemManager* system, const FactionData &data)
+diff --git a/src/eve-server/system/DestinyManager.cpp b/src/eve-server/system/DestinyManager.cpp
+index 649b0d1..1d7062b 100644
+--- a/src/eve-server/system/DestinyManager.cpp
++++ b/src/eve-server/system/DestinyManager.cpp
+@@ -333,7 +333,8 @@ void DestinyManager::PostEvolve() {
+         CmdStop du;
+             du.entityID = mySE->GetID();
+         PyTuple* up = du.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+ 
+     if (m_warpActivated) {
+@@ -758,7 +759,8 @@ void DestinyManager::SendMassive() const {
+         bm.entityID = mySE->GetID();
+         bm.is_massive = IsMassive();
+     PyTuple* up = bm.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ // NPCs and missiles are solid.  ships only when bumping is enabled
+@@ -793,12 +795,14 @@ void DestinyManager::GetCollisionState(Destiny::CollisionBall& ball) const {
+ // keeps a warping entity in the bubble it is passing through, ending in the bubble at the exit point
+ void DestinyManager::UpdateWarpBubble() {
+     SystemBubble* pCurrent(mySE->SysBubble());
+-    if ((pCurrent != nullptr) and pCurrent->InBubble(m_position, true))
+-        return;
+-
++    /* the exit point's bubble first, once we're in it:  a bubble made on the way in can overlap it, and staying in that
++     *  one we'd land in a bubble of our own, beside the entities we warped to without seeing them */
+     SystemBubble* pNext(GetTargBubble());
+-    if ((pNext == nullptr) or !pNext->InBubble(m_position, true))
++    if ((pNext == nullptr) or !pNext->InBubble(m_position, true)) {
++        if ((pCurrent != nullptr) and pCurrent->InBubble(m_position, true))
++            return;
+         pNext = sBubbleMgr.GetBubble(mySE->SystemMgr(), m_position);
++    }
+ 
+     if ((pNext == nullptr) or (pNext == pCurrent))
+         return;
+@@ -891,7 +895,8 @@ void DestinyManager::SetSpeedFraction(float fraction/*1.0*/) {
+             du.entityID = mySE->GetID();
+             du.fraction = fraction;
+         PyTuple* up = du.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+ 
+ }
+@@ -929,7 +934,8 @@ void DestinyManager::Stop() {
+     CmdStop du;
+         du.entityID = mySE->GetID();
+     PyTuple *up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::Halt(bool notify/*true*/) {
+@@ -1077,7 +1083,8 @@ void DestinyManager::Follow(SystemEntity* pSE, uint32 distance) {
+         du.targetID = pSE->GetID();
+         du.range = range;
+     PyTuple *up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::AlignTo(SystemEntity* ent) {
+@@ -1104,7 +1111,8 @@ void DestinyManager::GotoDirection(const GPoint& direction) {
+         du.y = direction.y;
+         du.z = direction.z;
+     PyTuple* up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::GotoPoint(const GPoint& point) {
+@@ -1117,7 +1125,8 @@ void DestinyManager::GotoPoint(const GPoint& point) {
+         gtpoint.y = point.y;
+         gtpoint.z = point.z;
+     PyTuple* up = gtpoint.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoPilot/*false*/, SystemEntity* pSE/*nullptr*/, int32 warpSpeed/*0*/, bool gateWarp/*false*/, bool freeWarp/*false*/) {
+@@ -1293,7 +1302,8 @@ void DestinyManager::WarpTo(const GPoint& where, int32 distance/*0*/, bool autoP
+         bm.entityID = mySE->GetID();
+         bm.is_massive = IsMassive();
+     PyTuple *up = bm.Encode();
+-    SendSingleDestinyUpdate(&up, true);   // consumed
++    SendSingleDestinyUpdate(&up, true);
++    PyDecRef(up);
+ }
+ 
+ /* login after a logoff in space:  the pilot is in warp back to where they logged off.  a ship that comes into space
+@@ -1329,7 +1339,8 @@ void DestinyManager::AlignedWarpTo(const GPoint& where, int32 distance/*0*/) {
+             bv.y = m_velocity.y;
+             bv.z = m_velocity.z;
+         PyTuple* up = bv.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+     WarpTo(where, distance, false, nullptr, 0, false, true);
+ }
+@@ -1355,7 +1366,8 @@ void DestinyManager::Orbit(SystemEntity *pSE, uint32 distance/*0*/) {
+         du.orbitEntityID = pSE->GetID();
+         du.distance = range;
+     PyTuple *up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ bool DestinyManager::IsAligned(GPoint& targetPoint)
+@@ -1398,7 +1410,8 @@ void DestinyManager::SetUndockSpeed() {
+         bv.y = m_velocity.y;
+         bv.z = m_velocity.z;
+     PyTuple* up = bv.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+     GotoDirection(m_shipHeading);
+ }
+ 
+@@ -1481,7 +1494,8 @@ void DestinyManager::SetPosition(const GPoint &pt, bool update /*false*/) {
+             du.y = m_position.y;
+             du.z = m_position.z;
+         PyTuple* up = du.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+ }
+ 
+@@ -1497,7 +1511,8 @@ void DestinyManager::SetRadius(double radius, bool update /*false*/) {
+         du.entityID = mySE->GetID();
+         du.radius = m_radius;
+         PyTuple* up = du.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+ }
+ 
+@@ -1538,7 +1553,8 @@ void DestinyManager::ApplySpeed(bool update)
+             sbms.entityID = mySE->GetID();
+             sbms.speed = m_maxShipSpeed;
+         PyTuple* up = sbms.Encode();
+-        SendSingleDestinyUpdate(&up);   // consumed
++        SendSingleDestinyUpdate(&up);
++        PyDecRef(up);
+     }
+ }
+ 
+@@ -1860,7 +1876,8 @@ void DestinyManager::UpdateOldShip(ShipSE* pShipSE)
+     PyTuple* shipItem = new PyTuple(2);
+         shipItem->SetItem(0, new PyString("OnSlimItemChange"));
+         shipItem->SetItem(1, shipData);
+-    SendSingleDestinyUpdate(&shipItem);   // consumed
++    SendSingleDestinyUpdate(&shipItem);
++    PyDecRef(shipItem);
+ 
+     SendBallInteractive(pShipSE->GetShipItemRef(), false);
+     m_hasSentShipUpdates = false;
+@@ -1933,7 +1950,8 @@ void DestinyManager::SendCloakBall() const {
+         cb.mode = m_cloakMode;
+         cb.range = 2000.0;      // const.minCloakingDistance
+     PyTuple* up = cb.Encode();
+-    SendSingleDestinyUpdate(&up, true);   // consumed
++    SendSingleDestinyUpdate(&up, true);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendUncloakBall() const {
+@@ -1942,7 +1960,8 @@ void DestinyManager::SendUncloakBall() const {
+     UncloakBall ub;
+         ub.entityID = mySE->GetID();
+     PyTuple* up = ub.Encode();
+-    SendSingleDestinyUpdate(&up, true);   // consumed
++    SendSingleDestinyUpdate(&up, true);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::TractorBeamStart(SystemEntity* pShipSE, EvilNumber speed)
+@@ -2039,7 +2058,8 @@ void DestinyManager::SendJettisonPacket() const {
+         effect.start = 1;
+         effect.active = 0;
+     PyTuple* up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ /*
+  *                  [PyTuple 2 items]
+@@ -2073,7 +2093,8 @@ void DestinyManager::SendAnchorDrop() const {
+         effect.active = 1;
+         effect.startTime = GetFileTimeNow();
+     PyTuple* up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendAnchorLift() const {
+@@ -2086,7 +2107,8 @@ void DestinyManager::SendAnchorLift() const {
+         effect.start = 1;
+         effect.startTime = GetFileTimeNow();
+     PyTuple* up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ /*
+@@ -2155,7 +2177,8 @@ void DestinyManager::SendCloakFx(bool apply/*false*/, bool module/*false*/) cons
+         effect.active = 0;
+         up = effect.Encode();
+     }
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ // def OnSpecialFX(shipID, moduleID, moduleTypeID, targetID, otherTypeID, area, guid, isOffensive, start, active, duration = -1, repeat = None, startTime = None, graphicInfo = None):
+@@ -2171,7 +2194,8 @@ void DestinyManager::SendSpecialEffect10(uint32 entityID, uint32 targetID, std::
+         effect.start = start;
+         effect.active = isActive;
+     PyTuple *up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ // def OnSpecialFX(shipID, moduleID, moduleTypeID, targetID, otherTypeID, area, guid, isOffensive, start, active, duration = -1, repeat = None, startTime = None, graphicInfo = None):
+@@ -2203,7 +2227,8 @@ void DestinyManager::SendSpecialEffect(uint32 entityID, uint32 moduleID, uint32
+         effect.startTime = GetFileTimeNow();
+         effect.graphicInfo = (graphicInfo == nullptr ? PyStatic.NewNone() : graphicInfo);
+     PyTuple *up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ /*
+                   [PyTuple 2 items]
+@@ -2236,7 +2261,8 @@ void DestinyManager::SendJumpOut(uint32 gateID) const {
+         effect.start = 1;
+         effect.active = 0;
+     PyTuple *up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendJumpOutWormhole(uint32 wormholeID) const {
+@@ -2248,7 +2274,8 @@ void DestinyManager::SendJumpOutWormhole(uint32 wormholeID) const {
+         effect.start = 1;
+         effect.active = 0;
+     PyTuple *up = effect.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendGateActivity(uint32 gateID) const {
+@@ -2259,7 +2286,8 @@ void DestinyManager::SendGateActivity(uint32 gateID) const {
+         du.start = 1;
+         du.active = 0;
+     PyTuple* up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendWormholeActivity(uint32 wormholeID) const {
+@@ -2270,7 +2298,8 @@ void DestinyManager::SendWormholeActivity(uint32 wormholeID) const {
+         du.start = 1;
+         du.active = 0;
+     PyTuple* up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendBallInteractive(const ShipItemRef shipRef, bool set/*false*/) const {
+@@ -2279,7 +2308,8 @@ void DestinyManager::SendBallInteractive(const ShipItemRef shipRef, bool set/*fa
+         sbi.entityID = shipRef->itemID();
+         sbi.interactive = set;
+     PyTuple* up = sbi.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendJumpOutEffect(std::string JumpEffect, uint32 shipID) {
+@@ -2352,7 +2382,8 @@ void DestinyManager::SendTerminalExplosion(uint32 shipID, uint32 bubbleID, bool
+         du.bubbleID = static_cast<int32>(bubbleID);
+         du.ballIsGlobal = isGlobal;
+     PyTuple* up = du.Encode();
+-    SendSingleDestinyUpdate(&up);   // consumed
++    SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+ }
+ 
+ void DestinyManager::SendSetState() const {
+@@ -2484,14 +2515,22 @@ void DestinyManager::EncodeDestiny(Buffer& into) const {
+     }
+ }
+ 
++// the caller keeps its reference to *ev (and releases it after the call)
+ void DestinyManager::SendSingleDestinyEvent(PyTuple** ev, bool self_only/*false*/) const
+ {
++    if ((ev == nullptr) or (*ev == nullptr))
++        return;
+     std::vector<PyTuple*> updates;
++    PyIncRef(*ev);  // the vector's reference, released by SendDestinyUpdate()
+     std::vector<PyTuple*> events(1, *ev);   // create vector of size "1" and insert "*ev" into it
+     SendDestinyUpdate(updates, events, self_only);
+ }
+ 
++// the caller keeps its reference to *up (and releases it after the call)
+ void DestinyManager::SendSingleDestinyUpdate(PyTuple **up, bool self_only/*false*/) const {
++    if ((up == nullptr) or (*up == nullptr))
++        return;
++    PyIncRef(*up);  // the vector's reference, released by SendDestinyUpdate()
+     std::vector<PyTuple*> updates(1, *up);   // create vector of size "1" and insert "*up" into it
+     std::vector<PyTuple*> events;
+     SendDestinyUpdate(updates, events, self_only);
+@@ -2502,9 +2541,22 @@ void DestinyManager::SendDestinyUpdate(std::vector<PyTuple*> &updates, bool self
+     SendDestinyUpdate(updates, events, self_only);
+ }
+ 
++// releases the vectors' references to the updates and events and clears them
++static void ReleaseDestinyUpdates(std::vector<PyTuple*>& updates, std::vector<PyTuple*>& events)
++{
++    for (auto cur : updates)
++        PySafeDecRef(cur);
++    for (auto cur : events)
++        PySafeDecRef(cur);
++    updates.clear();
++    events.clear();
++}
++
++// takes over the references in 'updates' and 'events' (each client queued to gets its own) and clears both vectors
+ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vector<PyTuple*>& events, bool self_only/*false*/) const {
+     // this check shouldnt be needed...
+     if (!mySE->SystemMgr()->IsLoaded()) {
++        ReleaseDestinyUpdates(updates, events);
+         return;
+     }
+ 
+@@ -2527,6 +2579,7 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
+                 mySE->SysBubble()->BubblecastDestiny(updates, events, "destiny" );
+             }
+ 
++            ReleaseDestinyUpdates(updates, events);
+             return;
+         }
+ 
+@@ -2573,10 +2626,6 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
+                 pClient->QueueDestinyEvent(&ev);
+             }
+         }
+-
+-        // match BubblecastDestiny() semantics
+-        updates.clear();
+-        events.clear();
+     } else if (mySE->SysBubble() != nullptr) {
+         if (is_log_enabled(DESTINY__UPDATES)) {
+             _log(
+@@ -2610,4 +2659,7 @@ void DestinyManager::SendDestinyUpdate( std::vector<PyTuple*>& updates, std::vec
+         //sBubbleMgr.Add(mySE);
+         //mySE->SysBubble()->BubblecastDestiny( updates, events, "destiny" );
+     }
++
++    // the clients hold their own references (BubblecastDestiny() has already released and cleared its)
++    ReleaseDestinyUpdates(updates, events);
+ }
+diff --git a/src/eve-server/system/DestinyManager.h b/src/eve-server/system/DestinyManager.h
+index 3ac2941..adf08fc 100644
+--- a/src/eve-server/system/DestinyManager.h
++++ b/src/eve-server/system/DestinyManager.h
+@@ -85,6 +85,8 @@ public:
+     //  this is the flag the client currently has for us, so it is false during warp
+     bool IsMassive() const;
+ 
++    // the Single versions leave the caller's reference with the caller (release it after the call);  the vector versions
++    //  take over the references in the vectors and clear them.  every client the update is queued to gets its own
+     void SendSingleDestinyEvent(PyTuple** ev, bool self_only=false) const;
+     void SendSingleDestinyUpdate(PyTuple** up, bool self_only=false) const;
+     void SendDestinyUpdate(std::vector<PyTuple*> &updates, bool self_only=false) const;
+diff --git a/src/eve-server/system/KeeperService.cpp b/src/eve-server/system/KeeperService.cpp
+index 3abe63b..3f28ba8 100644
+--- a/src/eve-server/system/KeeperService.cpp
++++ b/src/eve-server/system/KeeperService.cpp
+@@ -191,6 +191,7 @@ PyResult KeeperBound::EditDungeon(PyCallArgs &call, PyInt* dungeonID)
+         posList->AddItem(new PyFloat(roomPos.z));
+ 
+     PyTuple* payload = new PyTuple(3);
++    PyIncRef(dungeonID);    // a call argument:  the call keeps its own reference
+     payload->SetItem(0, dungeonID); //dungeonID
+     payload->SetItem(1, new PyInt(call.byname["roomID"]->AsInt()->value())); //roomID
+     payload->SetItem(2, posList); //roomPos
+diff --git a/src/eve-server/system/SolarSystem.cpp b/src/eve-server/system/SolarSystem.cpp
+index 21d0462..5abe154 100644
+--- a/src/eve-server/system/SolarSystem.cpp
++++ b/src/eve-server/system/SolarSystem.cpp
+@@ -55,7 +55,7 @@ SolarSystem::SolarSystem(
+ : CelestialObject(_solarSystemID, _type, _data, _cData),
+ m_data(_ssData)
+ {
+-    pInventory = new Inventory(InventoryItemRef(this));
++    pInventory = new Inventory(this);
+ 
+     m_security = _ssData.security;
+     m_radius = _ssData.radius;
+diff --git a/src/eve-server/system/SystemBubble.cpp b/src/eve-server/system/SystemBubble.cpp
+index 377c840..17b438d 100644
+--- a/src/eve-server/system/SystemBubble.cpp
++++ b/src/eve-server/system/SystemBubble.cpp
+@@ -710,6 +710,13 @@ void SystemBubble::PrintEntityList() {
+     }
+ }
+ 
++bool SystemBubble::HasConnectedPlayers(SystemEntity* except/*nullptr*/) const {
++    for (auto cur : m_players)
++        if ((cur.second != nullptr) and ((except == nullptr) or (cur.second->GetShipSE() != except)))
++            return true;
++    return false;
++}
++
+ void SystemBubble::SendAddBalls(SystemEntity* to_who) {
+     if (!m_system->IsLoaded())
+         return;
+@@ -826,6 +833,9 @@ void SystemBubble::AddBallExclusive( SystemEntity* pSE ) {
+     if (pSE->DestinyMgr() != nullptr)
+         if (pSE->DestinyMgr()->IsCloaked())
+             return;
++    // nobody here would get it (no players)
++    if (!HasConnectedPlayers(pSE))
++        return;
+ 
+     Buffer* destinyBuffer = new Buffer();
+ 
+@@ -880,6 +890,8 @@ void SystemBubble::RemoveBall(SystemEntity *about_who) {
+     // seems not to trigger explosion on RemoveBall
+     if (!m_system->IsLoaded())
+         return;
++    if (!HasConnectedPlayers())
++        return;
+     RemoveBallsFromBP removeball;
+     removeball.balls.push_back(about_who->GetID());
+ 
+@@ -894,6 +906,8 @@ void SystemBubble::RemoveBall(SystemEntity *about_who) {
+ 
+ // this *should* only be called from DestinyMgr::Cloak() and DestinyMgr::Jump()
+ void SystemBubble::RemoveBallExclusive(SystemEntity *about_who) {
++    if (!HasConnectedPlayers(about_who))
++        return;
+     RemoveBallFromBP removeball;
+         removeball.entityID = about_who->GetID();
+     // RemoveBalls removeball;
+@@ -959,6 +973,7 @@ void SystemBubble::SyncPos() {
+             PyTuple* up = du.Encode();
+ 
+             player.second->GetShipSE()->DestinyMgr()->SendSingleDestinyUpdate(&up);
++            PyDecRef(up);
+         }
+ }
+ 
+@@ -1108,30 +1123,46 @@ void SystemBubble::MarkBubble(const GPoint& position, std::string& name, std::st
+ }
+ 
+ 
+-void SystemBubble::BubblecastDestiny(std::vector<PyTuple *> &updates, std::vector<PyTuple *> &events, const char *desc) const {
+-    if (m_players.empty())
+-        return;
++void SystemBubble::DropPlayer(Client* pClient)
++{
++    for (std::map<uint32, Client*>::iterator itr = m_players.begin(); itr != m_players.end(); ) {
++        if (itr->second == pClient)
++            itr = m_players.erase(itr);
++        else
++            ++itr;
++    }
++}
+ 
++void SystemBubble::BubblecastDestiny(std::vector<PyTuple *> &updates, std::vector<PyTuple *> &events, const char *desc) const {
++    // (no early return for an empty bubble:  the calls below release the caller's references either way)
+     BubblecastDestinyUpdate(updates, desc);
+     BubblecastDestinyEvent(events, desc);
+ }
+ 
+ void SystemBubble::BubblecastDestinyUpdate(std::vector<PyTuple *> &updates, const char *desc) const {
+-    for (std::vector<PyTuple *>::iterator itr = updates.begin(); itr != updates.end(); ++itr)
++    for (std::vector<PyTuple *>::iterator itr = updates.begin(); itr != updates.end(); ++itr) {
+         BubblecastDestinyUpdate(&(*itr), desc);
++        // the vector's reference (the clients hold their own)
++        PySafeDecRef(*itr);
++    }
+ 
+     updates.clear();
+ }
+ 
+ void SystemBubble::BubblecastDestinyEvent(std::vector<PyTuple *> &events, const char *desc) const {
+-    for (std::vector<PyTuple *>::iterator itr = events.begin(); itr != events.end(); ++itr)
++    for (std::vector<PyTuple *>::iterator itr = events.begin(); itr != events.end(); ++itr) {
+         BubblecastDestinyEvent(&(*itr), desc);
++        // the vector's reference (the clients hold their own)
++        PySafeDecRef(*itr);
++    }
+ 
+     events.clear();
+ }
+ 
+ void SystemBubble::BubblecastDestinyUpdate( PyTuple** payload, const char* desc ) const
+ {
++    if ((payload == nullptr) or (*payload == nullptr))
++        return;
+     if (is_log_enabled(DESTINY__BUBBLECAST_DUMP))
+         (*payload)->Dump(DESTINY__BUBBLECAST_DUMP, "    ");
+     for (auto cur : m_players) {
+@@ -1143,6 +1174,8 @@ void SystemBubble::BubblecastDestinyUpdate( PyTuple** payload, const char* desc
+ 
+ void SystemBubble::BubblecastDestinyUpdateExclusive( PyTuple** payload, const char* desc, SystemEntity* pSE ) const
+ {
++    if ((payload == nullptr) or (*payload == nullptr))
++        return;
+     for (auto cur : m_players) {
+         // Only queue a Destiny update for this bubble if the current SystemEntity is not 'pSE':
+         // (this is an update to all client objects in the bubble EXCLUDING 'pSE')
+@@ -1156,6 +1189,8 @@ void SystemBubble::BubblecastDestinyUpdateExclusive( PyTuple** payload, const ch
+ 
+ void SystemBubble::BubblecastDestinyEvent( PyTuple** payload, const char* desc ) const
+ {
++    if ((payload == nullptr) or (*payload == nullptr))
++        return;
+     if (is_log_enabled(DESTINY__BUBBLECAST_DUMP))
+         (*payload)->Dump(DESTINY__BUBBLECAST_DUMP, "    ");
+     for (auto cur : m_players) {
+@@ -1167,6 +1202,8 @@ void SystemBubble::BubblecastDestinyEvent( PyTuple** payload, const char* desc )
+ 
+ void SystemBubble::BubblecastSendNotification(const char* notifyType, const char* idType, PyTuple** payload, bool seq)
+ {
++    if ((payload == nullptr) or (*payload == nullptr))
++        return;
+     for (auto cur : m_players) {
+         _log( DESTINY__BUBBLECAST, "BubblecastNotify %s to %s(%u)", notifyType, cur.second->GetName(), cur.first );
+         PyIncRef(*payload);
+diff --git a/src/eve-server/system/SystemBubble.h b/src/eve-server/system/SystemBubble.h
+index 8d362bd..54c0a3c 100644
+--- a/src/eve-server/system/SystemBubble.h
++++ b/src/eve-server/system/SystemBubble.h
+@@ -89,6 +89,11 @@ public:
+     bool HasArrivals() const                            { return (m_arrivals > 0); }
+     bool HasMarkers() const                             { return !m_markers.empty(); }
+     bool HasPlayers() const                             { return !m_players.empty(); }
++    /* the client off the player list, wherever it is (Remove() only drops the pilot of a ship leaving with one:  a capsule
++     *  killed under a pilot leaves without one) */
++    void DropPlayer(Client* pClient);
++    // a player here to send to, other than the one in 'except'
++    bool HasConnectedPlayers(SystemEntity* except = nullptr) const;
+     bool HasStatics() const                             { return !m_entities.empty(); }
+     bool HasDynamics() const                            { return !m_dynamicEntities.empty(); }
+     double x() const                                    { return m_center.x; }
+@@ -123,6 +128,8 @@ public:
+     void RemoveExclusive(SystemEntity* pSE);
+     void AddBallExclusive(SystemEntity* about_who);
+ 
++    // each client gets its own reference.  the vector versions take over (release) the references in the vectors and
++    //  clear them;  the PyTuple** versions leave the caller's reference with the caller, to release after the call
+     //send a set of destiny events and updates to every client in the bubble.
+     void BubblecastDestiny(std::vector<PyTuple*> &updates, std::vector<PyTuple*> &events, const char* desc) const;
+     //send a set of destiny updates to every client in the bubble.
+diff --git a/src/eve-server/system/SystemEntity.cpp b/src/eve-server/system/SystemEntity.cpp
+index b3c8367..736c739 100644
+--- a/src/eve-server/system/SystemEntity.cpp
++++ b/src/eve-server/system/SystemEntity.cpp
+@@ -29,6 +29,7 @@
+ 
+ #include "ConsoleCommands.h"
+ #include "Client.h"
++#include "EntityList.h"
+ #include "Container.h"
+ #include "EVEServerConfig.h"
+ 
+@@ -630,7 +631,7 @@ ObjectSystemEntity::ObjectSystemEntity(const ObjectSystemEntity* oth)
+ ObjectSystemEntity::~ObjectSystemEntity()
+ {
+     if (m_targMgr != nullptr)
+-        if (!sConsole.IsShutdown()) {
++        if (!sEntityList.IsClosing()) {
+             m_targMgr->ClearModules();
+             m_targMgr->ClearAllTargets(false);
+             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
+@@ -774,7 +775,8 @@ void DeployableSE::Process()
+                 sbf.entityID = m_self->itemID();
+                 sbf.is_free = true;
+             PyTuple* up = sbf.Encode();
+-            m_destiny->SendSingleDestinyUpdate(&up);   // consumed
++            m_destiny->SendSingleDestinyUpdate(&up);
++            PyDecRef(up);
+             // client: green, sphere hidden
+             SendAnchorFx("effects.AnchorLift", false, 0);
+             _log(SE__TRACE, "DeployableSE::Process() - %s(%u) unanchored.", GetName(), GetID());
+@@ -812,7 +814,8 @@ void DeployableSE::Anchor(Client* pClient)
+         sbf.entityID = m_self->itemID();
+         sbf.is_free = false;
+     PyTuple* up = sbf.Encode();
+-    m_destiny->SendSingleDestinyUpdate(&up);   // consumed
++    m_destiny->SendSingleDestinyUpdate(&up);
++    PyDecRef(up);
+     // client: yellow until the stop at the end of the delay
+     SendAnchorFx("effects.AnchorDrop", true, delay);
+     _log(SE__TRACE, "DeployableSE::Anchor() - %s(%u) anchoring for %ums.", GetName(), GetID(), delay);
+@@ -886,7 +889,7 @@ DynamicSystemEntity::DynamicSystemEntity(const DynamicSystemEntity* oth)
+ DynamicSystemEntity::~DynamicSystemEntity()
+ {
+     if (m_targMgr != nullptr)
+-        if (!sConsole.IsShutdown()) {
++        if (!sEntityList.IsClosing()) {
+             m_targMgr->ClearModules();
+             m_targMgr->ClearAllTargets(false);
+             //m_targMgr->OnTarget(nullptr, TargMgr::Mode::Clear, TargMgr::Msg::Destroyed);
+diff --git a/src/eve-server/system/SystemEntity.h b/src/eve-server/system/SystemEntity.h
+index 915e19b..ae6d59a 100644
+--- a/src/eve-server/system/SystemEntity.h
++++ b/src/eve-server/system/SystemEntity.h
+@@ -491,7 +491,7 @@ public:
+     //StargateSE& operator=(StargateSE&& oth) =delete;
+ 
+     // d'tor
+-    virtual ~StargateSE()                               { /* Do nothing here */ }
++    virtual ~StargateSE()                               { PySafeDecRef(m_jumps); }
+ 
+     /* class type pointer querys. */
+     virtual StargateSE*         GetGateSE()             { return this; }
+diff --git a/src/eve-server/system/SystemManager.cpp b/src/eve-server/system/SystemManager.cpp
+index 3d229cc..287681e 100644
+--- a/src/eve-server/system/SystemManager.cpp
++++ b/src/eve-server/system/SystemManager.cpp
+@@ -568,6 +568,7 @@ void SystemManager::UnloadSystem() {
+             m_staticEntities.erase(m_staticEntities.find(itr->first));
+         } else if (pSE->IsShipSE()) {
+             pSE->GetShipSE()->GetShipItemRef()->LogOut();
++            pSE->GetShipSE()->GetShipItemRef()->ReleaseModules();
+         } else if (pSE->IsNPCSE()) {
+             sEntityList.RemoveNPC();    // this is for loaded npc count.
+             pSE->GetSelf()->Delete();
+@@ -1469,8 +1470,9 @@ void SystemManager::OnNPCRemoved(SystemEntity* pSE)
+     // an ambient npc:  its system forgets it (the system frees it below, like any other)
+     if (pSE->IsNPCSE() and (pSE->GetNPCSE()->GetAmbientNPC() != nullptr))
+         m_ambient->OnNPCRemoved(itemID, killed);
+-    // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed
+-    if (pSE->TargetMgr() != nullptr) {
++    // the modules on it stop, its locks go (both ways):  nothing points at it when it is freed.  not while shutting down:  the
++    //  ships with those modules and locks have gone already (DungeonMgr::RemoveEntity)
++    if ((pSE->TargetMgr() != nullptr) and !sEntityList.IsClosing()) {
+         pSE->TargetMgr()->ClearModules();
+         pSE->TargetMgr()->ClearAllTargets(false);
+     }
+diff --git a/src/eve-server/system/TargetManager.cpp b/src/eve-server/system/TargetManager.cpp
+index 2833a64..4aa81c5 100644
+--- a/src/eve-server/system/TargetManager.cpp
++++ b/src/eve-server/system/TargetManager.cpp
+@@ -364,6 +364,16 @@ void TargetManager::ClearFromTargets() {
+     if (m_targetedBy.empty())
+         return;
+ 
++    /* the world being taken down, the ships that locked us may be gone already:  a ship freed then keeps its locks
++     *  (~DynamicSystemEntity), so there's nobody safe to tell.  (a site's container despawned after its hacker logged out at
++     *  shutdown.)  not while a halt waits for the main loop:  the world still runs, and a lock kept then crashed the next shot */
++    if (sEntityList.IsClosing()) {
++        for (auto cur : m_targetedBy)
++            SafeDelete(cur.second);
++        m_targetedBy.clear();
++        return;
++    }
++
+     std::vector<SystemEntity *> ToNotify;
+     for (auto cur : m_targetedBy) {
+         SafeDelete(cur.second);
+diff --git a/src/eve-server/system/TargetManager.h b/src/eve-server/system/TargetManager.h
+index adee1a8..2b0c911 100644
+--- a/src/eve-server/system/TargetManager.h
++++ b/src/eve-server/system/TargetManager.h
+@@ -183,6 +183,7 @@ public:
+     PyList*             GetTargets() const;
+     PyList*             GetTargeters() const;
+ 
++    // the caller keeps (and releases) its own reference to *up
+     void                QueueEvent(PyTuple **up) const;    //queue an event to all SEs targeting me.
+     void                QueueUpdate(PyTuple **up) const;   //queue an update to all SEs targeting me.
+ 
+diff --git a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+index 8292467..0f4b4b1 100644
+--- a/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/DungeonMgr.cpp
+@@ -13,6 +13,7 @@
+ #include "StaticDataMgr.h"
+ #include "dungeon/DungeonDB.h"
+ #include "Client.h"
++#include "ConsoleCommands.h"
+ #include "EntityList.h"
+ #include "npc/NPC.h"
+ #include "npc/NPCAI.h"
+@@ -1045,7 +1046,9 @@ void DungeonMgr::RemoveEntity(uint32 itemID, bool explode)
+     m_entityIndex.erase(itemID);
+     if (pSE->IsNPCSE()) {
+         NPC* pNPC(pSE->GetNPCSE());
+-        if (pNPC->TargetMgr() != nullptr)
++        /* shutting down, the ships and drones that locked it have gone already without telling it (their destructors skip
++         *  that then):  its lists point at freed entities */
++        if ((pNPC->TargetMgr() != nullptr) and !sEntityList.IsClosing())
+             pNPC->TargetMgr()->ClearFromTargets();
+         m_system->RemoveNPC(pNPC);
+         delete pNPC;
+@@ -2446,7 +2449,8 @@ void DungeonMgr::SendGateSlimUpdate(uint32 gateItemID)
+     PyTuple* sItem = new PyTuple(2);
+         sItem->SetItem(0, new PyString("OnSlimItemChange"));
+         sItem->SetItem(1, shipData);
+-    pSE->SysBubble()->BubblecastDestinyUpdate(&sItem, "dungeon");   // consumed
++    pSE->SysBubble()->BubblecastDestinyUpdate(&sItem, "dungeon");
++    PyDecRef(sItem);    // the bubblecast takes its own references
+ }
+ 
+ void DungeonMgr::ActivateGate(Client* pClient, uint32 gateItemID)
+diff --git a/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp b/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
+index 3e88e6c..1a27e9c 100644
+--- a/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
++++ b/src/eve-server/system/cosmicMgrs/WormholeMgr.cpp
+@@ -592,6 +592,7 @@ void WormholeMgr::SendSlim(const WormholePair& wh)
+             itemData->SetItem(0, new PyString("OnSlimItemChange"));
+             itemData->SetItem(1, slimData);
+         pSE->SysBubble()->BubblecastDestinyUpdate(&itemData, "OnSlimItemChange");
++        PyDecRef(itemData);     // the bubblecast takes its own references
+     }
+ }
+ 
+diff --git a/src/eve-xmlpktgen/DecodeGenerator.cpp b/src/eve-xmlpktgen/DecodeGenerator.cpp
+index 80aba98..2473e88 100644
+--- a/src/eve-xmlpktgen/DecodeGenerator.cpp
++++ b/src/eve-xmlpktgen/DecodeGenerator.cpp
+@@ -589,7 +589,7 @@ bool ClassDecodeGenerator::ProcessToken(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsToken()) {\n"
+         "        %s = %s->AsToken();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a token: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+@@ -672,7 +672,7 @@ bool ClassDecodeGenerator::ProcessObject(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsObject()) {\n"
+         "        %s = %s->AsObject();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is the wrong type: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+@@ -758,7 +758,7 @@ bool ClassDecodeGenerator::ProcessObjectEx(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsObjectEx()) {\n"
+         "        %s = (%s*)%s->AsObjectEx();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is the wrong type: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+@@ -805,7 +805,7 @@ bool ClassDecodeGenerator::ProcessTuple(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsTuple()) {\n"
+         "        %s = %s->AsTuple();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a tuple: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+@@ -902,7 +902,7 @@ bool ClassDecodeGenerator::ProcessList(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsList()) {\n"
+         "        %s = %s->AsList();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a list: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+@@ -1150,7 +1150,7 @@ bool ClassDecodeGenerator::ProcessDict(const TiXmlElement* field)
+     fprintf(mOutputFile,
+         "    if (%s->IsDict()) {\n"
+         "        %s = %s->AsDict();\n"
+-        "        //PyIncRef(%s);\n"
++        "        PyIncRef(%s);\n"
+         "    } else {\n"
+         "        _log(XMLP__DECODE_ERROR, \"Decode %s failed: %s is not a dict: %%s\", %s->TypeString());\n"
+         "        return false;\n"
+diff --git a/src/eve-xmlpktgen/DestructGenerator.cpp b/src/eve-xmlpktgen/DestructGenerator.cpp
+index a9ae827..a02b39e 100644
+--- a/src/eve-xmlpktgen/DestructGenerator.cpp
++++ b/src/eve-xmlpktgen/DestructGenerator.cpp
+@@ -136,7 +136,7 @@ bool ClassDestructGenerator::ProcessBuffer( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-             "    //SafeDelete(%s);\n",
++             "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+@@ -172,7 +172,7 @@ bool ClassDestructGenerator::ProcessToken( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n",
++        "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+@@ -193,7 +193,7 @@ bool ClassDestructGenerator::ProcessObject( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n"
++        "    PySafeDecRef( %s );\n"
+         "\n",
+         name
+     );
+@@ -215,7 +215,7 @@ bool ClassDestructGenerator::ProcessObjectEx( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n",
++        "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+@@ -231,7 +231,7 @@ bool ClassDestructGenerator::ProcessTuple( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n",
++        "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+@@ -252,7 +252,7 @@ bool ClassDestructGenerator::ProcessList( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n",
++        "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+@@ -287,7 +287,7 @@ bool ClassDestructGenerator::ProcessDict( const TiXmlElement* field )
+     }
+ 
+     fprintf( mOutputFile,
+-        "    //PySafeDecRef( %s );\n",
++        "    PySafeDecRef( %s );\n",
+         name
+     );
+ 
+diff --git a/src/eve-xmlpktgen/EncodeGenerator.cpp b/src/eve-xmlpktgen/EncodeGenerator.cpp
+index c648dd2..89d95ba 100644
+--- a/src/eve-xmlpktgen/EncodeGenerator.cpp
++++ b/src/eve-xmlpktgen/EncodeGenerator.cpp
+@@ -936,28 +936,22 @@ bool ClassEncodeGenerator::ProcessDictInline(const TiXmlElement* field)
+             if (!ParseElementChildren(ele, 1))
+                 return false;
+ 
+-            //now store the result in the dict:
++            //now store the result in the dict, which takes over the value's reference:
+             //taking the keyType into account
+             if (keyTypeInt) {
+                 fprintf(mOutputFile,
+-                         "    %s->SetItem(new PyInt(%s), %s);\n"
+-                         "    PyIncRef(%s);\n",
+-                         iname, key, vname,
+-                         vname
++                         "    %s->SetItem(new PyInt(%s), %s);\n",
++                         iname, key, vname
+                );
+             } else if (keyTypeLong) {
+                     fprintf(mOutputFile,
+-                             "    %s->SetItem(new PyLong(%s), %s);\n"
+-                             "    PyIncRef(%s);\n",
+-                             iname, key, vname,
+-                             vname
++                             "    %s->SetItem(new PyLong(%s), %s);\n",
++                             iname, key, vname
+                    );
+             } else {
+                 fprintf(mOutputFile,
+-                         "    %s->SetItemString(\"%s\", %s);\n"
+-                         "    PyIncRef(%s);\n",
+-                         iname, key, vname,
+-                         vname
++                         "    %s->SetItemString(\"%s\", %s);\n",
++                         iname, key, vname
+                );
+             }
+         }
+-- 
+2.43.0
+

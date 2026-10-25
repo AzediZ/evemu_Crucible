@@ -1,0 +1,378 @@
+From 2503da2ead154e054147eafd31c4b89622d1dd15 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 01:13:47 +0000
+Subject: [PATCH 101/110] Fittings and undocking
+
+The fitting window's Fit Ship (shipInv.FitFitting) fits a saved fitting
+onto the active ship from the pilot's hangar at the station:
+subsystems first, then rigs and modules into their slots, drones into
+the drone bay and charges into the cargo hold, through the normal
+fitting checks (CPU, powergrid, slots, hardpoints, rig size, bay
+space).  Slots already holding the right module are left alone.  What
+can't be fitted or loaded is listed in a message.
+
+Fixes rolled in:
+- saving a fitting with charges in it no longer fails with
+  InvalidFittingDataInvalidFlag (the client puts charges in the cargo
+  hold flag)
+- undocking applies the hull's bonuses to fitted modules before it
+  onlines them, so a stealth bomber's torpedo launchers stay online
+- undocking right after a login while docked gives undock
+  invulnerability again
+---
+ src/eve-server/Client.cpp                     |   4 +-
+ src/eve-server/character/FittingDB.cpp        |   4 +-
+ src/eve-server/effects/EffectsData.h          |   3 +-
+ src/eve-server/effects/EffectsProcessor.cpp   |  31 +++-
+ src/eve-server/effects/EffectsProcessor.h     |   4 +-
+ src/eve-server/inventory/InventoryBound.cpp   | 144 ++++++++++++++++++
+ src/eve-server/inventory/InventoryBound.h     |   6 +
+ src/eve-server/ship/Ship.cpp                  |   6 +-
+ src/eve-server/ship/modules/ModuleManager.cpp |   4 +-
+ 9 files changed, 196 insertions(+), 10 deletions(-)
+
+diff --git a/src/eve-server/Client.cpp b/src/eve-server/Client.cpp
+index 16422e3..4d8849f 100644
+--- a/src/eve-server/Client.cpp
++++ b/src/eve-server/Client.cpp
+@@ -1899,7 +1899,9 @@ void Client::SetInvulTimer(uint32 time/*Player::Timer::Default*/)
+         return;
+     }
+ 
+-    if (m_invulTimer.Enabled()) {
++    /* a login's warp-in timer runs out unchecked while docked (ProcessClient() checks it in space only), so the first undock
++     *  after logging in found it still on and got no undock invulnerability */
++    if (m_invulTimer.Enabled() and (m_invulTimer.GetRemainingTime() > 0)) {
+         _log(CLIENT__ERROR, "%s: Invul Timer called but timer already enabled with %ums remaining.", m_char->name(), m_invulTimer.GetRemainingTime());
+         EvE::traceStack();
+         return;
+diff --git a/src/eve-server/character/FittingDB.cpp b/src/eve-server/character/FittingDB.cpp
+index 384f479..c1a1c9c 100644
+--- a/src/eve-server/character/FittingDB.cpp
++++ b/src/eve-server/character/FittingDB.cpp
+@@ -174,11 +174,11 @@ void FittingDB::CheckNameAndDescription(std::string& name, std::string& descript
+ 
+ static bool IsFittingFlag(int64 flag)
+ {
+-    // eveCfg.IsShipFittingFlag() or the drone bay
++    // eveCfg.IsShipFittingFlag(), the drone bay or the cargo hold (charges and ice products:  fittingSvc.VerifyFitting)
+     return ((flag >= flagLowSlot0) and (flag <= flagHiSlot7))
+         or ((flag >= flagRigSlot0) and (flag <= flagRigSlot7))
+         or ((flag >= flagSubSystem0) and (flag <= flagSubSystem7))
+-        or (flag == flagDroneBay);
++        or (flag == flagDroneBay) or (flag == flagCargoHold);
+ }
+ 
+ void FittingDB::Decode(PyRep* rep, FittingData& into)
+diff --git a/src/eve-server/effects/EffectsData.h b/src/eve-server/effects/EffectsData.h
+index 5208e6c..296d400 100644
+--- a/src/eve-server/effects/EffectsData.h
++++ b/src/eve-server/effects/EffectsData.h
+@@ -145,7 +145,8 @@ namespace FX {
+         enum {
+             All             = 0,
+             CharItems       = 1,
+-            Rest            = 2
++            Rest            = 2,
++            Fitted          = 3     // the ship's modifiers on its fitted modules and charges, before the modules go online (IsFittedModifier)
+         };
+     }
+ 
+diff --git a/src/eve-server/effects/EffectsProcessor.cpp b/src/eve-server/effects/EffectsProcessor.cpp
+index 059a4d7..feb9ba0 100644
+--- a/src/eve-server/effects/EffectsProcessor.cpp
++++ b/src/eve-server/effects/EffectsProcessor.cpp
+@@ -340,6 +340,18 @@ bool FxProc::IsCharItemModifier(const fxData& data)
+     return false;
+ }
+ 
++bool FxProc::IsFittedModifier(const fxData& data)
++{
++    using namespace FX;
++    switch (data.fxSrc) {
++        case Source::Group:     return (data.targLoc != Target::Char);
++        case Source::Owner:
++        case Source::Ship:      return true;
++        case Source::Skill:     return (((data.targLoc == Target::Ship) and (data.typeID != 0)) or (data.targLoc == Target::Charge));
++    }
++    return false;
++}
++
+ bool FxProc::WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip)
+ {
+     using namespace FX;
+@@ -372,9 +384,13 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+     mods.reserve(pItem->GetModifiers().size());
+     nodes.reserve(pItem->GetModifiers().size());
+     for (auto& cur : pItem->GetModifiers()) {
+-        if (pass != Pass::All)
++        if (pass == Pass::Fitted) {
++            if (!IsFittedModifier(cur.second))
++                continue;
++        } else if (pass != Pass::All) {
+             if (IsCharItemModifier(cur.second) != (pass == Pass::CharItems))
+                 continue;
++        }
+         mods.push_back(cur);
+         DogmaOrder::Modifier node = DogmaOrder::Modifier();
+         if (cur.second.srcRef.get() != nullptr) {
+@@ -726,9 +742,18 @@ void FxProc::ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShi
+         sFxAct.DoAction(action, pShip->GetPilot()->GetShipSE());   // this MUST be called AFTER all active effects are applied, as it uses those modified values
+      */
+ 
+-    // the CharItems pass leaves the map for the Rest pass
+-    if (pass != Pass::CharItems)
++    // the CharItems pass leaves the map for the Rest pass, and the Fitted pass leaves the modifiers it didn't apply
++    if (pass == Pass::Fitted) {
++        std::multimap<int8, fxData>& modifiers(pItem->GetModifiers());
++        for (auto itr = modifiers.begin(); itr != modifiers.end(); )
++            if (IsFittedModifier(itr->second)) {
++                itr = modifiers.erase(itr);
++            } else {
++                ++itr;
++            }
++    } else if (pass != Pass::CharItems) {
+         pItem->ClearModifiers();
++    }
+ 
+     if (sConfig.debug.UseProfiling)
+         sProfiler.AddTime(Profile::applyFX, GetTimeUSeconds() - profileStartTime);
+diff --git a/src/eve-server/effects/EffectsProcessor.h b/src/eve-server/effects/EffectsProcessor.h
+index d71cb3e..c935a16 100644
+--- a/src/eve-server/effects/EffectsProcessor.h
++++ b/src/eve-server/effects/EffectsProcessor.h
+@@ -27,10 +27,12 @@ public:
+     FxProc()        { /* do nothing here */ }
+     ~FxProc()       { /* do nothing here */ }
+ 
+-    // pItem is modifier container.  pass = FX::Pass  (CharItems/Rest split the character's modifiers, see IsCharItemModifier)
++    // pItem is modifier container.  pass = FX::Pass  (CharItems/Rest split the character's modifiers, see IsCharItemModifier.  Fitted, see IsFittedModifier)
+     void            ApplyEffects(InventoryItem* pItem, Character* pChar, ShipItem* pShip, bool update=false, int8 pass=0);
+     // modifiers whose targets are the character's own items (skills, implants, boosters)
+     static bool     IsCharItemModifier(const fxData& data);
++    // the modifier changes the ship's fitted modules or loaded charges (a hull bonus to launcher powergrid need, ...)
++    static bool     IsFittedModifier(const fxData& data);
+     /* the modifier changes an attribute of the item it comes from (its source item).  ApplyEffects applies these before the
+      *  modifiers of that item reading the attribute (EVE_DogmaOrder.h) */
+     static bool     WritesOwnItem(const fxData& data, Character* pChar, ShipItem* pShip);
+diff --git a/src/eve-server/inventory/InventoryBound.cpp b/src/eve-server/inventory/InventoryBound.cpp
+index 7fcf3be..d984332 100644
+--- a/src/eve-server/inventory/InventoryBound.cpp
++++ b/src/eve-server/inventory/InventoryBound.cpp
+@@ -72,6 +72,7 @@ InventoryBound::InventoryBound(EVEServiceManager &mgr, BoundServiceParent<Invent
+     EVEBoundObject::Add("MultiMerge", &InventoryBound::MultiMerge);
+     EVEBoundObject::Add("StackAll", &InventoryBound::StackAll);
+     EVEBoundObject::Add("StripFitting", &InventoryBound::StripFitting);
++    EVEBoundObject::Add("FitFitting", &InventoryBound::FitFitting);
+     EVEBoundObject::Add("DestroyFitting", &InventoryBound::DestroyFitting);
+     EVEBoundObject::Add("ImportExportWithPlanet", &InventoryBound::ImportExportWithPlanet);
+     EVEBoundObject::Add("CreateBookmarkVouchers", &InventoryBound::CreateBookmarkVouchers);
+@@ -119,6 +120,149 @@ PyResult InventoryBound::StripFitting(PyCallArgs &call)
+     return nullptr;
+ }
+ 
++PyResult InventoryBound::FitFitting(PyCallArgs& call, std::optional<PyRep*> a0, std::optional<PyRep*> a1, std::optional<PyRep*> a2,
++                                   std::optional<PyRep*> a3, std::optional<PyRep*> a4, std::optional<PyRep*> a5,
++                                   std::optional<PyRep*> a6, std::optional<PyRep*> a7)
++{
++    _log(INV__MESSAGE, "Calling InventoryBound::FitFitting() for %s(%u)", m_self->name(), m_itemID);
++    if (is_log_enabled(INV__DUMP))
++        call.Dump(INV__DUMP);
++
++    Client* pClient(call.client);
++    ShipItem* pShip(GetFittableShip(pClient, m_self));
++    if (!pClient->IsDocked())
++        throw UserError("CannotLoadFittingInSpace");
++    // the active ship only (the client fits util.GetActiveShip())
++    if (pShip->itemID() != pClient->GetShipID())
++        throw CustomError("You can only fit the ship you are in.");
++
++    /* what to fit:  modules by slot flag, then drones and cargo (charges) by type and quantity.  itemsToFit (the
++     *  hangar items the client picked, a defaultdict of sets) isn't needed:  the hangar is searched here */
++    std::map<uint16, uint16> modules;           // flag -> typeID
++    std::map<uint16, uint32> drones, cargo;     // typeID -> qty
++    for (auto arg : {a1, a2, a3, a4, a5, a6, a7}) {
++        if (!arg.has_value() or (arg.value() == nullptr) or !arg.value()->IsDict())
++            continue;
++        PyDict* dict(arg.value()->AsDict());
++        bool slots(true), counts(true);
++        for (auto cur : *dict) {
++            if (!cur.first->IsInt() or !cur.second->IsInt()) {
++                slots = counts = false;
++                break;
++            }
++            int32 key(cur.first->AsInt()->value());
++            if (!IsModuleSlot(key))
++                slots = false;
++        }
++        if (!counts or dict->empty())
++            continue;
++        for (auto cur : *dict) {
++            uint32 key(cur.first->AsInt()->value()), value(cur.second->AsInt()->value());
++            if (slots) {
++                modules[key] = value;
++            } else if (value > 0) {
++                // drones to the drone bay, anything else (charges) to the cargo hold
++                const ItemType* type(sItemFactory.GetType(key));
++                if (type == nullptr)
++                    continue;
++                if (type->categoryID() == EVEDB::invCategories::Drone)
++                    drones[key] += value;
++                else
++                    cargo[key] += value;
++            }
++        }
++    }
++
++    // my hangar here, by type (singletons and stacks)
++    StationItemRef sRef(sItemFactory.GetStationRef(pClient->GetStationID()));
++    if (sRef.get() == nullptr)
++        throw CustomError("Your station's hangar could not be found.");
++    std::vector<InventoryItemRef> owned;
++    sRef->GetMyInventory()->GetInvForOwner(pClient->GetCharacterID(), owned);
++    std::multimap<uint16, InventoryItemRef> hangar;
++    for (auto cur : owned)
++        if ((cur->flag() == flagHangar) and (cur->quantity() > 0))
++            hangar.emplace(cur->typeID(), cur);
++
++    std::map<uint16, uint32> failed;
++    std::vector<std::string> reasons;
++    // moves qty of typeID from the hangar to toFlag.  returns what was moved
++    auto moveFromHangar = [&](uint16 typeID, uint32 qty, EVEItemFlags toFlag) -> uint32 {
++        uint32 moved(0);
++        auto range(hangar.equal_range(typeID));
++        for (auto itr = range.first; (itr != range.second) and (moved < qty); ++itr) {
++            InventoryItemRef iRef(itr->second);
++            if ((iRef->locationID() != sRef->itemID()) or (iRef->flag() != flagHangar) or (iRef->quantity() < 1))
++                continue;
++            uint32 want(qty - moved);
++            uint32 take(std::min(want, (uint32)iRef->quantity()));
++            std::vector<int32> items;
++            items.push_back(iRef->itemID());
++            try {
++                PyRep* res(MoveItems(pClient, items, toFlag, take, (take >= (uint32)iRef->quantity()), 0.0f));
++                PySafeDecRef(res);
++                moved += take;
++            } catch (...) {
++                // CPU, powergrid, slot limits, bay space...
++                sItemFactory.UnsetUsingClient();
++                break;
++            }
++        }
++        return moved;
++    };
++
++    // subsystems first (they give the slots), then rigs, then low, mid and high slots
++    std::vector<std::pair<uint16, uint16>> order;
++    for (auto cur : modules)
++        if (IsSubSystem(cur.first))
++            order.push_back(cur);
++    for (auto cur : modules)
++        if (IsRigSlot(cur.first))
++            order.push_back(cur);
++    for (auto cur : modules)
++        if (!IsSubSystem(cur.first) and !IsRigSlot(cur.first))
++            order.push_back(cur);
++    for (auto cur : order) {
++        EVEItemFlags flag((EVEItemFlags)cur.first);
++        // already fitted
++        InventoryItemRef fitted(pShip->GetModuleRef(flag));
++        if ((fitted.get() != nullptr) and (fitted->typeID() == cur.second))
++            continue;
++        if ((fitted.get() != nullptr) and !IsSubSystem(flag)) {
++            failed[cur.second] += 1;
++            continue;
++        }
++        if (moveFromHangar(cur.second, 1, flag) < 1)
++            failed[cur.second] += 1;
++    }
++    for (auto cur : drones) {
++        uint32 moved(moveFromHangar(cur.first, cur.second, flagDroneBay));
++        if (moved < cur.second)
++            failed[cur.first] += cur.second - moved;
++    }
++    for (auto cur : cargo) {
++        uint32 moved(moveFromHangar(cur.first, cur.second, flagCargoHold));
++        if (moved < cur.second)
++            failed[cur.first] += cur.second - moved;
++    }
++
++    PyList* list = new PyList();
++    std::string text;
++    for (auto cur : failed) {
++        PyTuple* tuple = new PyTuple(2);
++            tuple->SetItem(0, new PyInt(cur.first));
++            tuple->SetItem(1, new PyInt(cur.second));
++        list->AddItem(tuple);
++        const ItemType* type(sItemFactory.GetType(cur.first));
++        text += (text.empty() ? "" : ", ") + std::to_string(cur.second) + "x " + (type == nullptr ? std::to_string(cur.first) : type->name());
++    }
++    if (!text.empty())
++        pClient->SendNotifyMsg("Not everything in the fitting could be fitted or loaded (missing from your hangar here, or the ship can't take it):  %s", text.c_str());
++    _log(INV__MESSAGE, "FitFitting() - %s fitted %s(%u):  %lu modules, %lu drone types, %lu cargo types, %lu failed",
++         pClient->GetName(), pShip->name(), pShip->itemID(), modules.size(), drones.size(), cargo.size(), failed.size());
++    return list;
++}
++
+ PyResult InventoryBound::DestroyFitting(PyCallArgs &call, PyInt* itemID) {
+     _log(INV__MESSAGE, "Calling InventoryBound::DestroyFitting() for %s(%u)", m_self->name(), m_itemID);
+     ShipItem* pShip(GetFittableShip(call.client, m_self));
+diff --git a/src/eve-server/inventory/InventoryBound.h b/src/eve-server/inventory/InventoryBound.h
+index 5bd4884..4de45a1 100644
+--- a/src/eve-server/inventory/InventoryBound.h
++++ b/src/eve-server/inventory/InventoryBound.h
+@@ -41,6 +41,12 @@ public:
+ protected:
+     PyResult GetItem(PyCallArgs& call);
+     PyResult StripFitting(PyCallArgs& call);
++    /* 'Fit Ship' from a saved fitting (fittingSvc.LoadFitting):  shipInv.FitFitting(shipID, itemsToFit, stationID,
++     *  modulesByFlag, dronesByType, chargesByType).  the arguments are told apart by what they hold, so their order
++     *  doesn't matter.  returns [(typeID, qty)] of what could not be fitted or loaded */
++    PyResult FitFitting(PyCallArgs& call, std::optional<PyRep*> a0, std::optional<PyRep*> a1, std::optional<PyRep*> a2,
++                        std::optional<PyRep*> a3, std::optional<PyRep*> a4, std::optional<PyRep*> a5,
++                        std::optional<PyRep*> a6, std::optional<PyRep*> a7);
+     PyResult DestroyFitting(PyCallArgs& call, PyInt* itemID);
+     PyResult StackAll(PyCallArgs& call, std::optional <PyInt*> flag);
+     PyResult ImportExportWithPlanet(PyCallArgs& call, PyInt* spaceportPinID, PyDict* importData, PyDict* exportData, PyFloat* taxRate);
+diff --git a/src/eve-server/ship/Ship.cpp b/src/eve-server/ship/Ship.cpp
+index da3a813..6847c7a 100644
+--- a/src/eve-server/ship/Ship.cpp
++++ b/src/eve-server/ship/Ship.cpp
+@@ -2302,6 +2302,10 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
+         }
+     }
+ 
++    /* the hull's bonuses to its modules and charges go on before the modules come online:  the cpu and powergrid checks in
++     *  GenericModule::Online() read them (a stealth bomber's torpedo launchers need 1750 powergrid without its role bonus) */
++    sFxProc.ApplyEffects(this, m_pilot->GetChar().get(), this, update, FX::Pass::Fitted);
++
+     if (m_isUndocking) {
+         // online modules sent from client (these are onlined in fit window while docked)
+         m_ModuleManager->UpdateModules(m_onlineModuleVec);
+@@ -2312,7 +2316,7 @@ void ShipItem::ProcessShipEffects(bool update/*false*/)
+         m_ModuleManager->LoadOnline();
+     }
+ 
+-    // apply processed effects
++    // apply the rest of the processed effects
+     sFxProc.ApplyEffects(this, m_pilot->GetChar().get(), this, update);
+     //ClearModifiers();
+ }
+diff --git a/src/eve-server/ship/modules/ModuleManager.cpp b/src/eve-server/ship/modules/ModuleManager.cpp
+index 81cb11d..0aa5f2e 100644
+--- a/src/eve-server/ship/modules/ModuleManager.cpp
++++ b/src/eve-server/ship/modules/ModuleManager.cpp
+@@ -1562,7 +1562,9 @@ void ModuleManager::UpdateModules(std::vector<uint32> modVec)
+     GetShipSubSystems(modVec);
+     std::vector< GenericModule* > modList;
+     SortModulesBySlotDec(modVec, modList);
+-    /** @todo check this.  may have to rework */
++    /* that's subsystems, rigs, then high, mid and low slots.  the low slots go first, as in LoadOnline():  co-processors and
++     *  power upgrades must be on before the cpu and powergrid checks of the modules they make room for */
++    std::reverse(std::stable_partition(modList.begin(), modList.end(), [](GenericModule* pMod) { return pMod->isRig() or pMod->isSubSystem(); }), modList.end());
+     for (auto cur : modList) {
+         cur->Update();
+         cur->Online();
+-- 
+2.43.0
+

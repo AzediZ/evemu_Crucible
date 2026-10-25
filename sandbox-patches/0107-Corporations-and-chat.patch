@@ -1,0 +1,919 @@
+From 810c2a8149f6fb1fe2856b4060754d29ce7adb84 Mon Sep 17 00:00:00 2001
+From: AzediZ <145237384+AzediZ@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 14:28:50 +0000
+Subject: [PATCH 107/110] Corporations and chat
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Corp and alliance chat MOTDs are kept in the database and come back
+after a restart.  Recruitment adverts work:  they failed to save
+(unescaped text, titles over 30 characters, ad IDs too small for the
+recruiters table), searches ignored their filters, and a corp's list
+showed every corp's adverts.  Creating, updating, deleting and
+searching now work;  updates keep the expiry and add days after it.
+
+Fixes rolled in:
+- new applications show in the corp's applications list without a
+  client restart (applicationDateTime was missing from the update)
+- a new member shows in the member list (the join was announced with
+  two columns), and Member Tracking no longer calls every member Online
+- chat lines with accents, curly quotes or dashes go to the client as
+  unicode instead of showing as "â€™"
+---
+ .../20261121100000-chat-channel-motds.sql     |  13 +
+ .../20261127100000-recruitment-adverts.sql    |   6 +
+ src/eve-common/packets/CorporationPkts.xmlp   |  17 +-
+ src/eve-server/chat/LSCChannel.cpp            |  23 +-
+ src/eve-server/chat/LSCDB.cpp                 |  25 ++
+ src/eve-server/chat/LSCDB.h                   |   5 +
+ src/eve-server/chat/LSCService.cpp            |  24 +-
+ src/eve-server/chat/LSCService.h              |   2 +
+ src/eve-server/corporation/CorpMgr.cpp        |  37 ++-
+ .../corporation/CorpRegistryBound.cpp         |  76 +++---
+ src/eve-server/corporation/CorporationDB.cpp  | 235 ++++++++++++------
+ src/eve-server/corporation/CorporationDB.h    |  34 ++-
+ .../corporation/CorporationService.cpp        |   5 +-
+ 13 files changed, 353 insertions(+), 149 deletions(-)
+ create mode 100644 sql/migrations/20261121100000-chat-channel-motds.sql
+ create mode 100644 sql/migrations/20261127100000-recruitment-adverts.sql
+
+diff --git a/sql/migrations/20261121100000-chat-channel-motds.sql b/sql/migrations/20261121100000-chat-channel-motds.sql
+new file mode 100644
+index 0000000..b45d701
+--- /dev/null
++++ b/sql/migrations/20261121100000-chat-channel-motds.sql
+@@ -0,0 +1,13 @@
++-- the MOTDs players set in their corp's and alliance's chat channels, kept across restarts (they used to go back to the
++--  corp's or alliance's name).  setBy:  the character who set it, setAt:  when (FILETIME)
++-- +migrate Up
++CREATE TABLE IF NOT EXISTS chatChannelMotds (
++    channelID       INT(10) NOT NULL,
++    motd            MEDIUMTEXT,
++    setBy           INT(10) UNSIGNED NOT NULL DEFAULT 0,
++    setAt           BIGINT(20) NOT NULL DEFAULT 0,
++    PRIMARY KEY (channelID)
++) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
++
++-- +migrate Down
++DROP TABLE IF EXISTS chatChannelMotds;
+diff --git a/sql/migrations/20261127100000-recruitment-adverts.sql b/sql/migrations/20261127100000-recruitment-adverts.sql
+new file mode 100644
+index 0000000..a444871
+--- /dev/null
++++ b/sql/migrations/20261127100000-recruitment-adverts.sql
+@@ -0,0 +1,6 @@
++-- Recruitment adverts' recruiters keyed the advert by a smallint, too small for the advert IDs
++-- +migrate Up
++ALTER TABLE `crpRecruiters` MODIFY `adID` int(10) NOT NULL;
++
++-- +migrate Down
++ALTER TABLE `crpRecruiters` MODIFY `adID` smallint(5) NOT NULL;
+diff --git a/src/eve-common/packets/CorporationPkts.xmlp b/src/eve-common/packets/CorporationPkts.xmlp
+index 2a9a2a9..f122df2 100644
+--- a/src/eve-common/packets/CorporationPkts.xmlp
++++ b/src/eve-common/packets/CorporationPkts.xmlp
+@@ -605,7 +605,16 @@
+             <raw name="lastCorpUpdaterIDNew" />
+           </tupleInline>
+         </dictInlineEntry>
+-        <!--
++        <!-- the client builds a row of its applications header out of this dict, so every column of that
++             header has to be in here:  without applicationDateTime it threw a KeyError in
++             bco_applications.OnCorporationApplicationChanged and the application never reached the list -->
++        <dictInlineEntry key="applicationDateTime">
++          <tupleInline>
++            <raw name="applicationDateTimeOld" />
++            <raw name="applicationDateTimeNew" />
++          </tupleInline>
++        </dictInlineEntry>
++        <!-- not columns of that header:
+         <dictInlineEntry key="roles">
+           <tupleInline>
+             <raw name="rolesOld" />
+@@ -618,12 +627,6 @@
+             <raw name="grantableRolesNew" />
+           </tupleInline>
+         </dictInlineEntry>
+-        <dictInlineEntry key="applicationDateTime">
+-          <tupleInline>
+-            <raw name="applicationDateTimeOld" />
+-            <raw name="applicationDateTimeNew" />
+-          </tupleInline>
+-        </dictInlineEntry>
+         <dictInlineEntry key="deleted">
+           <tupleInline>
+             <raw name="deletedOld" />
+diff --git a/src/eve-server/chat/LSCChannel.cpp b/src/eve-server/chat/LSCChannel.cpp
+index 8b33033..03e63f5 100644
+--- a/src/eve-server/chat/LSCChannel.cpp
++++ b/src/eve-server/chat/LSCChannel.cpp
+@@ -200,6 +200,20 @@ void LSCChannel::Evacuate(Client * c) {
+     m_chars.clear();
+ }
+ 
++namespace {
++    /* the client takes a plain string as bytes:  a line past ascii (curly quotes and dashes, a player's accents, a motd.txt
++     *  in utf-8) must go as unicode or it reads as "â€™"
++     */
++    void AsUnicode(PyTuple* answer, const std::string& message)
++    {
++        if (Motd::IsAscii(message))
++            return;
++        PyRep* args(answer->GetItem(4));
++        if ((args != nullptr) and args->IsTuple() and (args->AsTuple()->size() > 0))
++            args->AsTuple()->SetItem(0, new PyWString(message));
++    }
++}
++
+ void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*/) {
+ // to send system msgs, senderID should be 1 (system owner)
+ 
+@@ -219,6 +233,7 @@ void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*
+     sm.member_count = m_chars.size();
+ 
+     PyTuple *answer = sm.Encode();
++    AsUnicode(answer, message);
+     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
+ }
+ 
+@@ -236,6 +251,7 @@ void LSCChannel::SendSystemMessage(const char * message) {
+     sm.member_count = m_chars.size();
+ 
+     PyTuple *answer = sm.Encode();
++    AsUnicode(answer, message);
+     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
+ }
+ 
+@@ -250,12 +266,7 @@ void LSCChannel::SendSystemMessageTo(Client* pClient, const std::string& message
+     sm.member_count = m_chars.size();
+ 
+     PyTuple *answer = sm.Encode();
+-    // the client takes a plain string as bytes:  anything past ascii (a motd.txt in utf-8) must be unicode
+-    if (!Motd::IsAscii(message)) {
+-        PyRep* args(answer->GetItem(4));
+-        if ((args != nullptr) and args->IsTuple() and (args->AsTuple()->size() > 0))
+-            args->AsTuple()->SetItem(0, new PyWString(message));
+-    }
++    AsUnicode(answer, message);
+     pClient->SendNotification("OnLSC", GetTypeString(), &answer);
+ }
+ 
+diff --git a/src/eve-server/chat/LSCDB.cpp b/src/eve-server/chat/LSCDB.cpp
+index 7a7ded7..6067e09 100644
+--- a/src/eve-server/chat/LSCDB.cpp
++++ b/src/eve-server/chat/LSCDB.cpp
+@@ -372,6 +372,31 @@ bool LSCDB::GetChannelInfo(int32 channelID, std::string &name, std::string &motd
+ }
+ 
+ 
++bool LSCDB::GetKeptMotd(int32 channelID, std::string& motd)
++{
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res, "SELECT motd FROM chatChannelMotds WHERE channelID = %i", channelID)) {
++        _log(DATABASE__ERROR, "Error in GetKeptMotd query: %s", res.error.c_str());
++        return false;
++    }
++    DBResultRow row;
++    if (!res.GetRow(row) or row.IsNull(0))
++        return false;
++    motd = row.GetText(0);
++    return true;
++}
++
++void LSCDB::KeepMotd(int32 channelID, const std::string& motd, uint32 byID)
++{
++    std::string esc;
++    sDatabase.DoEscapeString(esc, motd);
++    DBerror err;
++    if (!sDatabase.RunQuery(err, "INSERT INTO chatChannelMotds (channelID, motd, setBy, setAt) VALUES (%i, '%s', %u, %lli)"
++                            " ON DUPLICATE KEY UPDATE motd = VALUES(motd), setBy = VALUES(setBy), setAt = VALUES(setAt)",
++                            channelID, esc.c_str(), byID, (int64)GetFileTimeNow()))
++        _log(DATABASE__ERROR, "Error in KeepMotd query: %s", err.c_str());
++}
++
+ int32 LSCDB::GetChannelIDFromComparisonKey(std::string compkey)
+ {
+     DBQueryResult res;
+diff --git a/src/eve-server/chat/LSCDB.h b/src/eve-server/chat/LSCDB.h
+index 4d8e104..41ef54f 100644
+--- a/src/eve-server/chat/LSCDB.h
++++ b/src/eve-server/chat/LSCDB.h
+@@ -83,6 +83,11 @@ public:
+         std::vector<int> & cspas, int & channelCount);
+ 
+     bool GetChannelInfo(int32 channelID, std::string& name, std::string& motd);
++    /* a player corp's or alliance's channel MOTD, kept across restarts (chatChannelMotds):  false when none was set.  byID:
++     *  whoever set it
++     */
++    bool GetKeptMotd(int32 channelID, std::string& motd);
++    void KeepMotd(int32 channelID, const std::string& motd, uint32 byID);
+ 
+     int32 GetChannelIDFromComparisonKey(std::string compkey);
+ 
+diff --git a/src/eve-server/chat/LSCService.cpp b/src/eve-server/chat/LSCService.cpp
+index fc01e1b..82f9599 100644
+--- a/src/eve-server/chat/LSCService.cpp
++++ b/src/eve-server/chat/LSCService.cpp
+@@ -744,6 +744,7 @@ PyResult LSCService::SetChannelMOTD(PyCallArgs& call, PyRep* channelInfo, PyRep*
+         throw UserError("LSCCannotSetMOTD").AddFormatValue("msg", new PyString("You are not allowed to change the MOTD of this channel."));
+ 
+     channel->ChangeMOTD(PyRep::StringContent(motd), call.client);
++    MotdChanged(channel, call.client);
+     if (channel->IsUserChannel() and !channel->GetTemporary())
+         m_db.UpdateChannelInfo(channel);
+     return PyStatic.NewNone();
+@@ -827,8 +828,10 @@ PyResult LSCService::Configure(PyCallArgs& call, PyRep* channelInfo)
+ 
+     if (GetNamedArg(call, "motd", value) and !value->IsNone()) {
+         std::string motd = PyRep::StringContent(value);
+-        if (motd != channel->GetMOTD())
++        if (motd != channel->GetMOTD()) {
+             channel->ChangeMOTD(motd, call.client);
++            MotdChanged(channel, call.client);
++        }
+     }
+ 
+     if (GetNamedArg(call, "newPassword", value)) {
+@@ -1471,13 +1474,16 @@ void LSCService::CreateSystemChannel(int32 channelID)
+     } else if (IsPlayerCorp(channelID)) {
+         type = LSC::Type::corp;
+         name = "Corp";
+-        motd = m_db.GetCorporationName(channelID);
++        // the MOTD its members last set, else its name
++        if (!m_db.GetKeptMotd(channelID, motd))
++            motd = m_db.GetCorporationName(channelID);
+         grpMsgID = 263235;
+         messageID = 0;
+     } else if (IsAlliance(channelID)) {
+         type = LSC::Type::alliance;
+         name = "Alliance";
+-        motd = m_db.GetAllianceName(channelID);
++        if (!m_db.GetKeptMotd(channelID, motd))
++            motd = m_db.GetAllianceName(channelID);
+         grpMsgID = 5;
+         messageID = 0;
+     } else if (IsFleetID(channelID)) {
+@@ -1525,6 +1531,18 @@ void LSCService::CreateSystemChannel(int32 channelID)
+     }
+ }
+ 
++void LSCService::MotdChanged(LSCChannel* pChan, Client* pWho)
++{
++    // a player corp's or alliance's channel:  its MOTD is kept across restarts
++    if ((pChan == nullptr) or ((pChan->GetType() != LSC::Type::corp) and (pChan->GetType() != LSC::Type::alliance)))
++        return;
++    int32 channelID(pChan->GetChannelID());
++    if (!IsPlayerCorp(channelID) and !IsAlliance(channelID))
++        return;
++    uint32 byID((pWho == nullptr) ? 0 : pWho->GetCharacterID());
++    m_db.KeepMotd(channelID, pChan->GetMOTD(), byID);
++}
++
+ void LSCService::SetSystemChannelMOTD(int32 channelID, const std::string& motd)
+ {
+     LSCChannel* pChan(GetChannelByID(channelID));
+diff --git a/src/eve-server/chat/LSCService.h b/src/eve-server/chat/LSCService.h
+index 723479d..9c379ce 100644
+--- a/src/eve-server/chat/LSCService.h
++++ b/src/eve-server/chat/LSCService.h
+@@ -101,6 +101,8 @@ public:
+     void DeleteSystemChannel(int32 channelID);
+     // sets the stored motd of a server-created channel (fleet), if it exists
+     void SetSystemChannelMOTD(int32 channelID, const std::string& motd);
++    // a member changed a channel's MOTD:  a player corp's or alliance's is kept (chatChannelMotds) for the next start
++    void MotdChanged(LSCChannel* pChan, Client* pWho);
+     void SystemUnload(uint32 systemID, uint32 constID, uint32 regionID);
+ 
+     void SendMail(uint32 sender, uint32 recipient, const std::string &subject, const std::string &content) {
+diff --git a/src/eve-server/corporation/CorpMgr.cpp b/src/eve-server/corporation/CorpMgr.cpp
+index 9476caf..b7ccdc9 100644
+--- a/src/eve-server/corporation/CorpMgr.cpp
++++ b/src/eve-server/corporation/CorpMgr.cpp
+@@ -573,15 +573,38 @@ void CorpMgr::MoveMemberToCorp(uint32 charID, uint32 newCorpID)
+     if (IsPlayerCorp(newCorpID))
+         cdb.AddItemEvent(newCorpID, charID, Corp::EventType::JoinedCorporation);
+ 
+-    // both corps' member lists:  OnCorporationMemberChanged(charID, {corporationID: (old, new), startDateTime: (old, new)})
+-    PyDict* change = new PyDict();
+-        AddChange(change, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
+-        AddChange(change, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
++    /*  both corps' member lists:  OnCorporationMemberChanged(charID, {column: (old, new)}).
++     *   the corp it left only has to drop the row, so the two columns that say it went elsewhere are enough.
++     *   the corp it joined has no row for it yet and makes one out of this dict, so that one carries every
++     *   column of the list's own header (CorporationDB::GetMemberRow):  with only the two, the row the client
++     *   made had nothing on it and the member window threw on characterID, which is why a new member was
++     *   missing from the list until the client was restarted. */
+     if (IsPlayerCorp(oldCorpID)) {
+-        PyIncRef(change);
+-        SendMemberChanged(oldCorpID, charID, change);
++        PyDict* left = new PyDict();
++            AddChange(left, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
++            AddChange(left, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
++        SendMemberChanged(oldCorpID, charID, left);
++    }
++    if (IsPlayerCorp(newCorpID)) {
++        PyDict* joined = new PyDict();
++        // the row is only worth reading when somebody of that corp is online to be told
++        std::vector<Client*> online;
++        sEntityList.GetCorpClients(online, newCorpID);
++        PyDict* row = (online.empty() ? nullptr : CorporationDB::GetMemberRow(newCorpID, charID));
++        if (row != nullptr) {
++            for (auto itr : *row) {
++                std::string key(PyRep::StringContent(itr.first));
++                // the corp it came from, so a client that has the member already moves it instead of adding it
++                PyRep* was = (key.compare("corporationID") == 0 ? (PyRep*)new PyInt(oldCorpID) : PyStatic.NewNone());
++                AddChange(joined, key.c_str(), was, itr.second->Clone());
++            }
++            PyDecRef(row);
++        } else {
++            AddChange(joined, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
++            AddChange(joined, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
++        }
++        SendMemberChanged(newCorpID, charID, joined);
+     }
+-    SendMemberChanged(newCorpID, charID, change);
+ 
+     _log(CORP__INFO, "CorpMgr::MoveMemberToCorp() - %u moved from corp %u to %u", charID, oldCorpID, newCorpID);
+ }
+diff --git a/src/eve-server/corporation/CorpRegistryBound.cpp b/src/eve-server/corporation/CorpRegistryBound.cpp
+index 52eee88..1515f5f 100644
+--- a/src/eve-server/corporation/CorpRegistryBound.cpp
++++ b/src/eve-server/corporation/CorpRegistryBound.cpp
+@@ -297,7 +297,8 @@ PyResult CorpRegistryBound::GetApplications(PyCallArgs &call)
+ 
+ PyResult CorpRegistryBound::GetRecruitmentAdsForCorporation(PyCallArgs &call)
+ {   // recruitments = self.GetCorpRegistry().GetRecruitmentAdsForCorporation()
+-    return m_db.GetAdRegistryData();
++    // this corp's own (it listed every corp's out of an alliance)
++    return CorporationDB::GetAdRegistryData(0, false, 0, 0, m_corpID);
+ }
+ 
+ PyResult CorpRegistryBound::GetMyApplications(PyCallArgs &call)
+@@ -374,7 +375,7 @@ PyResult CorpRegistryBound::GetMemberIDsWithMoreThanAvgShares(PyCallArgs &call)
+ 
+ PyResult CorpRegistryBound::GetRecruiters(PyCallArgs &call, PyInt* corpID, PyInt* adID)
+ {   // working
+-    return m_db.GetRecruiters(corpID->value(), adID->value());
++    return CorporationDB::GetRecruiters(corpID->value(), adID->value());
+ }
+ 
+ PyResult CorpRegistryBound::DeleteTitle(PyCallArgs &call, PyInt* titleID)
+@@ -402,7 +403,8 @@ PyResult CorpRegistryBound::DeleteTitle(PyCallArgs &call, PyInt* titleID)
+ 
+ PyResult CorpRegistryBound::DeleteRecruitmentAd(PyCallArgs &call, PyInt* adID)
+ {   // working
+-    m_db.DeleteAdvert(adID->value());
++    // this corp's only, and its recruiters with it
++    CorporationDB::DeleteAdvert(adID->value(), m_corpID);
+     return nullptr;
+ }
+ 
+@@ -1054,16 +1056,17 @@ PyResult CorpRegistryBound::CreateRecruitmentAd(PyCallArgs &call, PyInt* days, P
+      * 00:41:50 [CorpCallDump]       [ 6]    WString: 'test'
+      */
+ 
+-    uint32 amount = 1250000;
+-    switch (days->value()) {
+-        case 7:    amount = 2250000;  break;
+-        case 14:   amount = 4000000;  break;
+-        case 28:   amount = 7500000;  break;
+-    }
+-
+-    AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), amount, "Initial Advert Time for Corp Recruit Advert", Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
++    uint8 adDays((uint8)std::min<int32>(std::max<int32>(days->value(), 1), 28));
++    AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), CorporationDB::AdvertFee(adDays, false), "Initial Advert Time for Corp Recruit Advert",
++                                  Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
+ 
+-    int32 adID = m_db.CreateAdvert(call.client, m_corpID, typeMask->value(), days->value(), m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(), title->content());
++    // put up where the one putting it up is docked, else at the corp's headquarters
++    uint32 stationID(call.client->GetStationID() != 0 ? call.client->GetStationID() : (uint32)call.client->GetCorpHQ());
++    uint32 adID(CorporationDB::CreateAdvert(m_corpID, call.client->GetAllianceID(), stationID, sDataMgr.GetStationRegion(stationID),
++                                            typeMask->value(), adDays, m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(),
++                                            title->content()));
++    if (adID == 0)
++        throw CustomError("The advert couldn't be put up.");
+ 
+     std::vector<int32> recruiters;
+     recruiters.clear();
+@@ -1075,7 +1078,7 @@ PyResult CorpRegistryBound::CreateRecruitmentAd(PyCallArgs &call, PyInt* days, P
+     if (recruiters.empty())
+         recruiters.push_back(call.client->GetCharacterID());
+ 
+-    m_db.AddRecruiters(adID, (int32)m_corpID, recruiters);
++    CorporationDB::AddRecruiters(adID, (int32)m_corpID, recruiters);
+ 
+     return nullptr;
+ }
+@@ -1101,28 +1104,19 @@ PyResult CorpRegistryBound::UpdateRecruitmentAd(PyCallArgs &call, PyInt* adID, P
+      * 04:47:40 [CorpCallDump]       [ 6]    Integer: 0
+      */
+ 
+-    uint8 days = 1;
+-    // check that corp can afford added time, if requested
+-    if (addedDays->value()) {
+-        // 3d = .75misk, 7d = 1.75misk, 14d = 3.5misk
+-        uint32 amount = 750000;
+-        switch (addedDays->value()) {
+-            case 7:    amount = 1750000;  break;
+-            case 14:   amount = 3500000;  break;
+-        }
+-
+-        AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), amount, "Added Advert Time to Corp Recruit Advert", Journal::EntryType::CorporationAdvertisementFee);
+-
+-        // do some funky shit to determine days left for advert then add additional time if requested
+-        int64 time = m_db.GetAdvertTime(adID->value(), m_corpID);
+-        if (time > 0) {
+-            time -= GetFileTimeNow();
+-            days = time / EvE::Time::Day;
+-            days += addedDays->value();
+-        }
++    // the time it has left stands (it was cut to a day when no days were added), and days added go on after it
++    int64 expiry(CorporationDB::GetAdvertTime(adID->value(), m_corpID));
++    if (expiry == 0)
++        throw CustomError("That advert isn't your corporation's.");
++    if (addedDays->value() > 0) {
++        uint8 added((uint8)std::min<int32>(addedDays->value(), 28));
++        AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), CorporationDB::AdvertFee(added, true), "Added Advert Time to Corp Recruit Advert",
++                                      Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
++        expiry = std::max(expiry, (int64)GetFileTimeNow()) + EvE::Time::Day * added;
+     }
+ 
+-    m_db.UpdateAdvert(adID->value(), m_corpID, typeMask->value(), days, m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(), title->content());
++    CorporationDB::UpdateAdvert(adID->value(), m_corpID, typeMask->value(), expiry, m_db.GetCorpMemberCount(m_corpID), description->content(),
++                                channelID->value(), title->content());
+ 
+     std::vector<int32> recruiters;
+     recruiters.clear();
+@@ -1133,9 +1127,9 @@ PyResult CorpRegistryBound::UpdateRecruitmentAd(PyCallArgs &call, PyInt* adID, P
+     if (recruiters.empty())
+         recruiters.push_back(call.client->GetCharacterID());
+ 
+-    m_db.AddRecruiters(adID->value(), (int32)m_corpID, recruiters);
++    CorporationDB::AddRecruiters(adID->value(), (int32)m_corpID, recruiters);
+ 
+-    return m_db.GetAdvert(adID->value());
++    return CorporationDB::GetAdvert(adID->value());
+ }
+ 
+ PyResult CorpRegistryBound::MoveCompanyShares(PyCallArgs &call, PyInt* corporationID, PyInt* toShareholderID, PyInt* numberOfShares) {
+@@ -1788,12 +1782,16 @@ void CorpRegistryBound::CheckCanAccept(uint32 charID)
+     }
+ }
+ 
++/*  the client makes a row of its applications header out of this dict (bco_applications.OnCorporationApplicationChanged),
++ *   so every column of that header has to be in here:  applicationID, characterID, corporationID, applicationText,
++ *   status, applicationDateTime, lastCorpUpdaterID.  one missing threw a KeyError there and the application never
++ *   reached the list the window reads, so it showed nothing until the client was restarted. */
+ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged& OCAC, const Corp::ApplicationInfo& Old, const Corp::ApplicationInfo& New)
+ {
+     //  ? (PyRep*)new PyInt(x) : PyStatic.NewNone();
+     if (Old.valid) {
+         OCAC.applicationIDOld = new PyInt(Old.appID);
+-        //OCAC.applicationDateTimeOld = new PyLong(Old.appTime);
++        OCAC.applicationDateTimeOld = new PyLong(Old.appTime);
+         OCAC.applicationTextOld = new PyString(Old.appText);
+         OCAC.characterIDOld = new PyInt(Old.charID);
+         OCAC.corporationIDOld = new PyInt(Old.corpID);
+@@ -1808,7 +1806,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
+         OCAC.statusOld = new PyInt(Old.status);
+     } else {
+         OCAC.applicationIDOld = PyStatic.NewNone();
+-        //OCAC.applicationDateTimeOld = PyStatic.NewNone();
++        OCAC.applicationDateTimeOld = PyStatic.NewNone();
+         OCAC.applicationTextOld = PyStatic.NewNone();
+         OCAC.characterIDOld = PyStatic.NewNone();
+         OCAC.corporationIDOld = PyStatic.NewNone();
+@@ -1821,7 +1819,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
+ 
+     if (New.valid) {
+         OCAC.applicationIDNew = new PyInt(New.appID);
+-        //OCAC.applicationDateTimeNew = new PyLong(New.appTime);
++        OCAC.applicationDateTimeNew = new PyLong(New.appTime);
+         OCAC.applicationTextNew = new PyString(New.appText);
+         OCAC.characterIDNew = new PyInt(New.charID);
+         OCAC.corporationIDNew = new PyInt(New.corpID);
+@@ -1836,7 +1834,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
+         OCAC.statusNew = new PyInt(New.status);
+     } else {
+         OCAC.applicationIDNew = PyStatic.NewNone();
+-        //OCAC.applicationDateTimeNew = PyStatic.NewNone();
++        OCAC.applicationDateTimeNew = PyStatic.NewNone();
+         OCAC.applicationTextNew = PyStatic.NewNone();
+         OCAC.characterIDNew = PyStatic.NewNone();
+         OCAC.corporationIDNew = PyStatic.NewNone();
+diff --git a/src/eve-server/corporation/CorporationDB.cpp b/src/eve-server/corporation/CorporationDB.cpp
+index 11d426f..374bf63 100644
+--- a/src/eve-server/corporation/CorporationDB.cpp
++++ b/src/eve-server/corporation/CorporationDB.cpp
+@@ -840,14 +840,65 @@ bool CorporationDB::CreateCorporationCreatePacket(OnCorporationChanged & cc, uin
+     return true;
+ }
+ 
++namespace {
++    // the columns of the client's member row, in the order MemberRowDict() reads them
++    const char* MemberRowColumns =
++        "SELECT characterID, corporationID, title, corpRole | rolesAtAll, grantableRoles, startDateTime, baseID,"
++        " rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther,"
++        " titleMask, corpAccountKey, blockRoles + 0"
++        " FROM chrCharacters";
++
++    /*  one member as the client's member list has it.  the client makes its row out of these keys, and the member
++     *   window reads the row by them, so a dict that leaves one out is a row the window can't use. */
++    PyDict* MemberRowDict(DBResultRow& row)
++    {
++        PyDict* dict = new PyDict();
++            dict->SetItemString("characterID",           new PyInt(row.GetUInt(0)));
++            dict->SetItemString("corporationID",         new PyInt(row.GetUInt(1)));
++            dict->SetItemString("divisionID",            new PyInt(0));
++            dict->SetItemString("squadronID",            new PyInt(0));
++            dict->SetItemString("title",                 new PyWString(std::string(row.GetText(2))));
++            dict->SetItemString("roles",                 new PyLong(row.GetInt64(3)));
++            dict->SetItemString("grantableRoles",        new PyLong(row.GetInt64(4)));
++            dict->SetItemString("startDateTime",         new PyLong(row.GetInt64(5)));
++            dict->SetItemString("baseID",                (row.GetInt(6) > 0 ? (PyRep*)new PyInt(row.GetInt(6)) : PyStatic.NewNone()));
++            dict->SetItemString("rolesAtHQ",             new PyLong(row.GetInt64(7)));
++            dict->SetItemString("grantableRolesAtHQ",    new PyLong(row.GetInt64(8)));
++            dict->SetItemString("rolesAtBase",           new PyLong(row.GetInt64(9)));
++            dict->SetItemString("grantableRolesAtBase",  new PyLong(row.GetInt64(10)));
++            dict->SetItemString("rolesAtOther",          new PyLong(row.GetInt64(11)));
++            dict->SetItemString("grantableRolesAtOther", new PyLong(row.GetInt64(12)));
++            dict->SetItemString("titleMask",             new PyLong(row.GetInt64(13)));
++            dict->SetItemString("accountKey",            new PyInt(row.GetInt(14)));
++            dict->SetItemString("rowDate",               new PyLong(row.GetInt64(5)));
++            dict->SetItemString("blockRoles",            new PyInt(row.GetInt(15)));
++        return dict;
++    }
++}
++
++PyDict* CorporationDB::GetMemberRow(uint32 corpID, uint32 charID)
++{
++    std::ostringstream query;
++    query << MemberRowColumns << " WHERE corporationID = " << corpID << " AND characterID = " << charID;
++
++    DBQueryResult res;
++    if (!sDatabase.RunQuery(res, query.str().c_str())) {
++        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
++        return nullptr;
++    }
++
++    DBResultRow row;
++    if (!res.GetRow(row))
++        return nullptr;
++
++    return MemberRowDict(row);
++}
++
+ PyList* CorporationDB::GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit)
+ {
+     // the client's member row (corp.members:  util.KeyVal per member, edited in place by OnCorporationMemberChanged)
+     std::ostringstream query;
+-    query << "SELECT characterID, corporationID, title, corpRole | rolesAtAll, grantableRoles, startDateTime, baseID,"
+-             " rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther,"
+-             " titleMask, corpAccountKey, blockRoles + 0"
+-             " FROM chrCharacters WHERE corporationID = " << corpID;
++    query << MemberRowColumns << " WHERE corporationID = " << corpID;
+     if (ids != nullptr) {
+         if (ids->empty())
+             return new PyList();
+@@ -873,29 +924,8 @@ PyList* CorporationDB::GetMemberRows(uint32 corpID, const std::vector<uint32>* i
+ 
+     PyList* list = new PyList();
+     DBResultRow row;
+-    while (res.GetRow(row)) {
+-        PyDict* dict = new PyDict();
+-            dict->SetItemString("characterID",           new PyInt(row.GetUInt(0)));
+-            dict->SetItemString("corporationID",         new PyInt(row.GetUInt(1)));
+-            dict->SetItemString("divisionID",            new PyInt(0));
+-            dict->SetItemString("squadronID",            new PyInt(0));
+-            dict->SetItemString("title",                 new PyWString(std::string(row.GetText(2))));
+-            dict->SetItemString("roles",                 new PyLong(row.GetInt64(3)));
+-            dict->SetItemString("grantableRoles",        new PyLong(row.GetInt64(4)));
+-            dict->SetItemString("startDateTime",         new PyLong(row.GetInt64(5)));
+-            dict->SetItemString("baseID",                (row.GetInt(6) > 0 ? (PyRep*)new PyInt(row.GetInt(6)) : PyStatic.NewNone()));
+-            dict->SetItemString("rolesAtHQ",             new PyLong(row.GetInt64(7)));
+-            dict->SetItemString("grantableRolesAtHQ",    new PyLong(row.GetInt64(8)));
+-            dict->SetItemString("rolesAtBase",           new PyLong(row.GetInt64(9)));
+-            dict->SetItemString("grantableRolesAtBase",  new PyLong(row.GetInt64(10)));
+-            dict->SetItemString("rolesAtOther",          new PyLong(row.GetInt64(11)));
+-            dict->SetItemString("grantableRolesAtOther", new PyLong(row.GetInt64(12)));
+-            dict->SetItemString("titleMask",             new PyLong(row.GetInt64(13)));
+-            dict->SetItemString("accountKey",            new PyInt(row.GetInt(14)));
+-            dict->SetItemString("rowDate",               new PyLong(row.GetInt64(5)));
+-            dict->SetItemString("blockRoles",            new PyInt(row.GetInt(15)));
+-        list->AddItem(new PyObject("util.KeyVal", dict));
+-    }
++    while (res.GetRow(row))
++        list->AddItem(new PyObject("util.KeyVal", MemberRowDict(row)));
+ 
+     return list;
+ }
+@@ -1354,7 +1384,7 @@ PyRep* CorporationDB::GetBulletins(uint32 corpID)
+     return DBResultToCRowset(res);
+ }
+ 
+-void CorporationDB::AddRecruiters(uint16 adID, int32 corpID, std::vector< int32 >& charVec)
++void CorporationDB::AddRecruiters(uint32 adID, int32 corpID, std::vector< int32 >& charVec)
+ {
+     std::ostringstream str;
+     str << "INSERT INTO crpRecruiters (adID, corpID, charID) VALUES ";
+@@ -1378,7 +1408,7 @@ void CorporationDB::AddRecruiters(uint16 adID, int32 corpID, std::vector< int32
+     }
+ }
+ 
+-PyRep* CorporationDB::GetRecruiters(int32 corpID, uint16 adID)
++PyRep* CorporationDB::GetRecruiters(int32 corpID, uint32 adID)
+ {
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res, "SELECT charID FROM crpRecruiters WHERE corpID = %u AND adID = %u", corpID, adID)) {
+@@ -1387,7 +1417,7 @@ PyRep* CorporationDB::GetRecruiters(int32 corpID, uint16 adID)
+     }
+ 
+     PyTuple* tuple = new PyTuple(res.GetRowCount());
+-    int8 i = 0;
++    uint32 i = 0;
+     DBResultRow row;
+     while (res.GetRow(row))
+         tuple->SetItem(i++, new PyInt(row.GetInt(0)));
+@@ -1415,22 +1445,61 @@ PyRep* CorporationDB::GetAdGroupData()
+     return DBResultToCRowset(res);
+ }
+ 
+-PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*false*/, int16 minMembers/*0*/, uint16 maxMembers/*12602*/)
++namespace {
++    // the columns the Recruitment tab reads.  the corp's alliance and member count as they are now, not as they were when it was put up
++    const char* const AdvertSelect =
++        "SELECT"
++        "  a.adID, a.corporationID, IFNULL(c.allianceID, 0) AS allianceID, a.stationID, a.regionID, a.raceMask, a.typeMask,"
++        "  a.createDateTime, a.expiryDateTime, a.title, a.description, IFNULL(c.memberCount, a.memberCount) AS memberCount, a.channelID"
++        " FROM crpAdRegistry AS a LEFT JOIN crpCorporation AS c ON c.corporationID = a.corporationID";
++
++    // a title is varchar(30) in characters:  cut to that many, never in the middle of a character
++    std::string AdvertTitle(const std::string& title)
++    {
++        size_t chars(0), at(0);
++        while ((at < title.size()) and (chars < 30)) {
++            unsigned char c(title[at]);
++            at += ((c < 0x80) ? 1 : ((c >> 5) == 0x6) ? 2 : ((c >> 4) == 0xe) ? 3 : 4);
++            ++chars;
++        }
++        return title.substr(0, std::min(at, title.size()));
++    }
++}
++
++PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*false*/, int16 minMembers/*0*/, uint16 maxMembers/*0*/, uint32 corpID/*0*/)
+ {
+-    // make sure this isnt 0
+-    if (maxMembers < 1)
+-        maxMembers = 12602;
++    /* the adverts running:  a corp's own, or those a search finds.  the types come in groups (what the corp does, where, its
++     *  timezone, language and play style):  an advert matches when it has one of the types ticked in each group a search ticks.
++     *  in an alliance ticked:  corps in one only.  before, the search showed only corps out of alliances, ignored the types and
++     *  showed adverts long run out, and a corp's own list was every corp's
++     */
++    static std::map<uint32, int64> groups;
++    if (groups.empty()) {
++        DBQueryResult res;
++        DBResultRow row;
++        if (sDatabase.RunQuery(res, "SELECT groupID, typeMask FROM crpAdTypeData"))
++            while (res.GetRow(row))
++                groups[row.GetUInt(0)] |= row.GetInt64(1);
++    }
++    std::ostringstream where;
++    where << " WHERE a.expiryDateTime > " << (int64)GetFileTimeNow();
++    if (corpID != 0) {
++        where << " AND a.corporationID = " << corpID;
++    } else {
++        for (auto& cur : groups)
++            if ((typeMask & cur.second) != 0)
++                where << " AND (a.typeMask & " << (typeMask & cur.second) << ") <> 0";
++        if (inAlliance)
++            where << " AND IFNULL(c.allianceID, 0) > 0";
++        if (minMembers > 0)
++            where << " AND IFNULL(c.memberCount, a.memberCount) >= " << minMembers;
++        if (maxMembers > 0)
++            where << " AND IFNULL(c.memberCount, a.memberCount) <= " << maxMembers;
++        where << " AND IFNULL(c.deleted, 0) = 0";
++    }
+ 
+     DBQueryResult res;
+-    if (!sDatabase.RunQuery(res,
+-        "SELECT"
+-        "  adID, corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
+-        "  createDateTime, expiryDateTime, title, description, memberCount, channelID"
+-        " FROM crpAdRegistry"
+-        "  WHERE allianceID %s 0"
+-        "   AND (memberCount >= %u AND memberCount < %u)",
+-        (inAlliance ? ">" : "="), minMembers, maxMembers))
+-    {
++    if (!sDatabase.RunQuery(res, "%s%s ORDER BY a.createDateTime DESC LIMIT 500", AdvertSelect, where.str().c_str())) {
+         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+         return nullptr;
+     }
+@@ -1438,16 +1507,10 @@ PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*fa
+     return DBResultToCRowset(res);
+ }
+ 
+-PyRep* CorporationDB::GetAdvert(uint16 adID)
++PyRep* CorporationDB::GetAdvert(uint32 adID)
+ {
+     DBQueryResult res;
+-    if (!sDatabase.RunQuery(res,
+-        "SELECT"
+-        "  adID, corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
+-        "  createDateTime, expiryDateTime, title, description, memberCount, channelID"
+-        " FROM crpAdRegistry"
+-        "  WHERE adID = %u", adID))
+-    {
++    if (!sDatabase.RunQuery(res, "%s WHERE a.adID = %u", AdvertSelect, adID)) {
+         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+         return nullptr;
+     }
+@@ -1455,37 +1518,64 @@ PyRep* CorporationDB::GetAdvert(uint16 adID)
+     return DBResultToCRowset(res);
+ }
+ 
+-void CorporationDB::DeleteAdvert(uint16 adID)
++void CorporationDB::DeleteAdvert(uint32 adID, uint32 corpID)
+ {
+     DBerror err;
+-    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE adID=%u ", adID);
++    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE adID = %u AND corporationID = %u", adID, corpID);
++    sDatabase.RunQuery(err, "DELETE FROM crpRecruiters WHERE adID = %u AND corpID = %u", adID, corpID);
+ }
+ 
+-uint32 CorporationDB::CreateAdvert(Client* pClient, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description, uint32 channelID, std::string title)
++uint32 CorporationDB::AdvertFee(uint8 days, bool added)
++{
++    // putting one up:  3 days 1.25m, 7 days 2.25m, 14 days 4m, 28 days 7.5m.  more days on one:  3 days 0.75m, 7 days 1.75m, 14 days 3.5m
++    if (added)
++        return ((days >= 14) ? 3500000 : (days >= 7) ? 1750000 : 750000);
++    return ((days >= 28) ? 7500000 : (days >= 14) ? 4000000 : (days >= 7) ? 2250000 : 1250000);
++}
++
++uint32 CorporationDB::CreateAdvert(uint32 corpID, uint32 allianceID, uint32 stationID, uint32 regionID, int64 typeMask, uint8 days,
++                                   uint16 members, const std::string& description, uint32 channelID, const std::string& title)
+ {
+-    uint32 adID(0);
+     DBerror err;
+-    sDatabase.RunQueryLID(err, adID, "INSERT INTO crpAdRegistry"
+-    " (corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
+-    "  createDateTime, expiryDateTime, description, title, memberCount, channelID)"
+-    " VALUES (%u,%u,%u,%u,%u,%lli,%f,%f,'%s','%s',%u,%u)",
+-        corpID, pClient->GetAllianceID(), pClient->GetStationID(), pClient->GetRegionID(), 15, typeMask, // raceMask isnt implemented yet
+-        GetFileTimeNow(), GetFileTimeNow() + (EvE::Time::Day * days), description.c_str(), title.c_str(), members, channelID);
++    // adverts run out of days a week ago go, with their recruiters
++    int64 now(GetFileTimeNow());
++    sDatabase.RunQuery(err, "DELETE r FROM crpRecruiters AS r JOIN crpAdRegistry AS a ON a.adID = r.adID WHERE a.expiryDateTime < %" PRIi64,
++                       now - EvE::Time::Week);
++    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE expiryDateTime < %" PRIi64, now - EvE::Time::Week);
++
++    // the text went in unescaped (an apostrophe broke the query) and a title over 30 characters failed it
++    std::string eDesc, eTitle;
++    sDatabase.DoEscapeString(eDesc, description);
++    sDatabase.DoEscapeString(eTitle, AdvertTitle(title));
++    uint32 adID(0);
++    if (!sDatabase.RunQueryLID(err, adID, "INSERT INTO crpAdRegistry"
++        " (corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
++        "  createDateTime, expiryDateTime, description, title, memberCount, channelID)"
++        " VALUES (%u, %u, %u, %u, 15, %" PRIi64 ", %" PRIi64 ", %" PRIi64 ", '%s', '%s', %u, %u)",       // raceMask isnt implemented yet
++        corpID, allianceID, stationID, regionID, typeMask, now, now + (EvE::Time::Day * days), eDesc.c_str(), eTitle.c_str(), members, channelID))
++    {
++        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
++        return 0;
++    }
+ 
+     return adID;
+ }
+ 
+-void CorporationDB::UpdateAdvert(uint16 adID, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description, uint32 channelID, std::string title)
++void CorporationDB::UpdateAdvert(uint32 adID, uint32 corpID, int64 typeMask, int64 expiry, uint16 members, const std::string& description,
++                                 uint32 channelID, const std::string& title)
+ {
+-    int64 time = GetFileTimeNow() + (EvE::Time::Day * days);
++    std::string eDesc, eTitle;
++    sDatabase.DoEscapeString(eDesc, description);
++    sDatabase.DoEscapeString(eTitle, AdvertTitle(title));
+     DBerror err;
+-    sDatabase.RunQuery(err, "UPDATE crpAdRegistry"
+-        " SET typeMask=%lli, expiryDateTime=%lli, description='%s', title='%s', memberCount=%u, channelID=%u"
+-        " WHERE adID=%u ",
+-        typeMask, time, description.c_str(), title.c_str(), members, channelID, adID);
++    if (!sDatabase.RunQuery(err, "UPDATE crpAdRegistry"
++        " SET typeMask = %" PRIi64 ", expiryDateTime = %" PRIi64 ", description = '%s', title = '%s', memberCount = %u, channelID = %u"
++        " WHERE adID = %u AND corporationID = %u",
++        typeMask, expiry, eDesc.c_str(), eTitle.c_str(), members, channelID, adID, corpID))
++        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+ }
+ 
+-int64 CorporationDB::GetAdvertTime(uint16 adID, uint32 corpID)
++int64 CorporationDB::GetAdvertTime(uint32 adID, uint32 corpID)
+ {
+     DBQueryResult res;
+     sDatabase.RunQuery(res, "SELECT expiryDateTime FROM crpAdRegistry WHERE adID=%u AND corporationID=%u", adID, corpID);
+@@ -1979,15 +2069,16 @@ bool CorporationDB::UpdateLogo(uint32 corpID, const Call_UpdateLogo & upd, PyDic
+ 
+ PyRep* CorporationDB::GetMemberTrackingInfo(uint32 corpID)
+ {
+-    //  lastOnline(hours) needs update based on char logoffDateTime using GetElapsedHours();
+-    // no idea how to do that short of pulling/updating column every (x time) interval....and uh, no.
++    /*  lastOnline:  -1 for a member online now, else the hours since it logged off.  it was -1 for everybody, so the window called
++     *   every member Online and its Online Only box hid nobody */
+     DBQueryResult res;
+     if (!sDatabase.RunQuery(res,
+         "SELECT c.characterID, c.corporationID, c.title, c.startDateTime, c.corpRole AS roles, c.baseID, c.grantableRoles, c.blockRoles,"
+-        " c.logonDateTime, c.logoffDateTime, c.locationID, IFNULL(e.typeID, 0) AS shipTypeID, -1 AS lastOnline"
++        " c.logonDateTime, c.logoffDateTime, c.locationID, IFNULL(e.typeID, 0) AS shipTypeID,"
++        " CAST(IF(c.online = 1, -1, GREATEST(0, FLOOR((%" PRIi64 " - c.logoffDateTime) / %" PRIi64 "))) AS SIGNED) AS lastOnline"
+         " FROM chrCharacters AS c"
+         "  LEFT JOIN entity AS e ON e.itemID = c.shipID"
+-        " WHERE c.corporationID = %u", corpID))
++        " WHERE c.corporationID = %u", (int64)GetFileTimeNow(), (int64)EvE::Time::Hour, corpID))
+     {
+         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+         return nullptr;
+diff --git a/src/eve-server/corporation/CorporationDB.h b/src/eve-server/corporation/CorporationDB.h
+index 61dde22..be61694 100644
+--- a/src/eve-server/corporation/CorporationDB.h
++++ b/src/eve-server/corporation/CorporationDB.h
+@@ -38,6 +38,7 @@ struct OfficeData;
+ class Client;
+ class PyRep;
+ class PyObject;
++class PyDict;
+ 
+ class CorporationDB
+ : public ServiceDB
+@@ -51,6 +52,8 @@ public:
+     void CreateTitleData(uint32 corpID);
+     // the client's member rows (util.KeyVal) of the corp, all or only ids, ordered by characterID.  limit 0 = all
+     static PyList* GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit);
++    // one member's row as a plain dict (the columns of the client's member list), nullptr if it isn't in that corp
++    static PyDict* GetMemberRow(uint32 corpID, uint32 charID);
+     static std::string GetMemberTitle(uint32 charID);
+     // titleID -> roles of the corp's titles
+     static void GetTitleRoles(uint32 corpID, std::map<int64, Corp::TitleRoles>& into);
+@@ -170,19 +173,24 @@ public:
+ 
+     PyRep* GetAdTypeData();
+     PyRep* GetAdGroupData();
+-    PyRep* GetAdRegistryData(int64 typeMask=0, bool inAlliance=false, int16 minMembers=0, uint16 maxMembers=12602);
+-    PyRep* GetAdvert(uint16 adID);
+-    void DeleteAdvert(uint16 adID);
+-
+-    uint32 CreateAdvert(Client* pClient, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description,
+-                      uint32 channelID, std::string title);
+-
+-    void UpdateAdvert(uint16 adID, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description,
+-                        uint32 channelID, std::string title);
+-
+-    int64 GetAdvertTime(uint16 adID, uint32 corpID);
+-    void AddRecruiters(uint16 adID, int32 corpID, std::vector< int32 >& charVec);
+-    PyRep* GetRecruiters(int32 corpID, uint16 adID);
++    /* recruitment adverts (the Recruitment tab):  those running that a search finds (members 0:  any), or a corp's own (corpID).
++     *  static, so code outside a corp's bound object can read and put them up too
++     */
++    static PyRep* GetAdRegistryData(int64 typeMask=0, bool inAlliance=false, int16 minMembers=0, uint16 maxMembers=0, uint32 corpID=0);
++    static PyRep* GetAdvert(uint32 adID);
++    static void DeleteAdvert(uint32 adID, uint32 corpID);
++    // the fee for an advert of days, or for adding days to one
++    static uint32 AdvertFee(uint8 days, bool added);
++    // its adID, 0 when it failed
++    static uint32 CreateAdvert(uint32 corpID, uint32 allianceID, uint32 stationID, uint32 regionID, int64 typeMask, uint8 days, uint16 members,
++                               const std::string& description, uint32 channelID, const std::string& title);
++    // expiry:  FILETIME it runs out
++    static void UpdateAdvert(uint32 adID, uint32 corpID, int64 typeMask, int64 expiry, uint16 members, const std::string& description,
++                             uint32 channelID, const std::string& title);
++
++    static int64 GetAdvertTime(uint32 adID, uint32 corpID);
++    static void AddRecruiters(uint32 adID, int32 corpID, std::vector< int32 >& charVec);
++    static PyRep* GetRecruiters(int32 corpID, uint32 adID);
+ 
+     bool InsertApplication(Corp::ApplicationInfo& aInfo);
+     bool UpdateApplication(const Corp::ApplicationInfo& aInfo);
+diff --git a/src/eve-server/corporation/CorporationService.cpp b/src/eve-server/corporation/CorporationService.cpp
+index 31fed89..a2a882f 100644
+--- a/src/eve-server/corporation/CorporationService.cpp
++++ b/src/eve-server/corporation/CorporationService.cpp
+@@ -121,7 +121,7 @@ PyResult CorporationService::GetRecruitmentAdsByCriteria(PyCallArgs& call, PyInt
+     _log(CORP__CALL, "CorporationService::Handle_GetRecruitmentAdsByCriteria()");
+     call.Dump(CORP__CALL_DUMP);
+ 
+-    return m_db.GetAdRegistryData(
++    return CorporationDB::GetAdRegistryData(
+         typeMask->value(), inAlliance->value(),
+         minMembers.has_value () ? minMembers.value ()->value() : 0,
+         maxMembers.has_value () ? maxMembers.value ()->value() : 0);
+@@ -133,7 +133,8 @@ PyResult CorporationService::GetRecruitmentAdsForCorporation(PyCallArgs& call)
+     _log(CORP__CALL, "CorporationService::Handle_GetRecruitmentAdsForCorporation()");
+     call.Dump(CORP__CALL_DUMP);
+ 
+-    return m_db.GetAdRegistryData();
++    // the caller's corp's own
++    return CorporationDB::GetAdRegistryData(0, false, 0, 0, call.client->GetCorporationID());
+ }
+ 
+ 
+-- 
+2.43.0
+
