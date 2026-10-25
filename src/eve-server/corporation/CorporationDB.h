@@ -38,6 +38,7 @@ struct OfficeData;
 class Client;
 class PyRep;
 class PyObject;
+class PyDict;
 
 class CorporationDB
 : public ServiceDB
@@ -51,6 +52,8 @@ public:
     void CreateTitleData(uint32 corpID);
     // the client's member rows (util.KeyVal) of the corp, all or only ids, ordered by characterID.  limit 0 = all
     static PyList* GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit);
+    // one member's row as a plain dict (the columns of the client's member list), nullptr if it isn't in that corp
+    static PyDict* GetMemberRow(uint32 corpID, uint32 charID);
     static std::string GetMemberTitle(uint32 charID);
     // titleID -> roles of the corp's titles
     static void GetTitleRoles(uint32 corpID, std::map<int64, Corp::TitleRoles>& into);
@@ -170,19 +173,24 @@ public:
 
     PyRep* GetAdTypeData();
     PyRep* GetAdGroupData();
-    PyRep* GetAdRegistryData(int64 typeMask=0, bool inAlliance=false, int16 minMembers=0, uint16 maxMembers=12602);
-    PyRep* GetAdvert(uint16 adID);
-    void DeleteAdvert(uint16 adID);
+    /* recruitment adverts (the Recruitment tab):  those running that a search finds (members 0:  any), or a corp's own (corpID).
+     *  static, so code outside a corp's bound object can read and put them up too
+     */
+    static PyRep* GetAdRegistryData(int64 typeMask=0, bool inAlliance=false, int16 minMembers=0, uint16 maxMembers=0, uint32 corpID=0);
+    static PyRep* GetAdvert(uint32 adID);
+    static void DeleteAdvert(uint32 adID, uint32 corpID);
+    // the fee for an advert of days, or for adding days to one
+    static uint32 AdvertFee(uint8 days, bool added);
+    // its adID, 0 when it failed
+    static uint32 CreateAdvert(uint32 corpID, uint32 allianceID, uint32 stationID, uint32 regionID, int64 typeMask, uint8 days, uint16 members,
+                               const std::string& description, uint32 channelID, const std::string& title);
+    // expiry:  FILETIME it runs out
+    static void UpdateAdvert(uint32 adID, uint32 corpID, int64 typeMask, int64 expiry, uint16 members, const std::string& description,
+                             uint32 channelID, const std::string& title);
 
-    uint32 CreateAdvert(Client* pClient, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description,
-                      uint32 channelID, std::string title);
-
-    void UpdateAdvert(uint16 adID, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description,
-                        uint32 channelID, std::string title);
-
-    int64 GetAdvertTime(uint16 adID, uint32 corpID);
-    void AddRecruiters(uint16 adID, int32 corpID, std::vector< int32 >& charVec);
-    PyRep* GetRecruiters(int32 corpID, uint16 adID);
+    static int64 GetAdvertTime(uint32 adID, uint32 corpID);
+    static void AddRecruiters(uint32 adID, int32 corpID, std::vector< int32 >& charVec);
+    static PyRep* GetRecruiters(int32 corpID, uint32 adID);
 
     bool InsertApplication(Corp::ApplicationInfo& aInfo);
     bool UpdateApplication(const Corp::ApplicationInfo& aInfo);

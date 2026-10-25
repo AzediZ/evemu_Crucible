@@ -83,6 +83,11 @@ public:
         std::vector<int> & cspas, int & channelCount);
 
     bool GetChannelInfo(int32 channelID, std::string& name, std::string& motd);
+    /* a player corp's or alliance's channel MOTD, kept across restarts (chatChannelMotds):  false when none was set.  byID:
+     *  whoever set it
+     */
+    bool GetKeptMotd(int32 channelID, std::string& motd);
+    void KeepMotd(int32 channelID, const std::string& motd, uint32 byID);
 
     int32 GetChannelIDFromComparisonKey(std::string compkey);
 

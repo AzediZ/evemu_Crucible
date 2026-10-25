@@ -840,14 +840,65 @@ bool CorporationDB::CreateCorporationCreatePacket(OnCorporationChanged & cc, uin
     return true;
 }
 
+namespace {
+    // the columns of the client's member row, in the order MemberRowDict() reads them
+    const char* MemberRowColumns =
+        "SELECT characterID, corporationID, title, corpRole | rolesAtAll, grantableRoles, startDateTime, baseID,"
+        " rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther,"
+        " titleMask, corpAccountKey, blockRoles + 0"
+        " FROM chrCharacters";
+
+    /*  one member as the client's member list has it.  the client makes its row out of these keys, and the member
+     *   window reads the row by them, so a dict that leaves one out is a row the window can't use. */
+    PyDict* MemberRowDict(DBResultRow& row)
+    {
+        PyDict* dict = new PyDict();
+            dict->SetItemString("characterID",           new PyInt(row.GetUInt(0)));
+            dict->SetItemString("corporationID",         new PyInt(row.GetUInt(1)));
+            dict->SetItemString("divisionID",            new PyInt(0));
+            dict->SetItemString("squadronID",            new PyInt(0));
+            dict->SetItemString("title",                 new PyWString(std::string(row.GetText(2))));
+            dict->SetItemString("roles",                 new PyLong(row.GetInt64(3)));
+            dict->SetItemString("grantableRoles",        new PyLong(row.GetInt64(4)));
+            dict->SetItemString("startDateTime",         new PyLong(row.GetInt64(5)));
+            dict->SetItemString("baseID",                (row.GetInt(6) > 0 ? (PyRep*)new PyInt(row.GetInt(6)) : PyStatic.NewNone()));
+            dict->SetItemString("rolesAtHQ",             new PyLong(row.GetInt64(7)));
+            dict->SetItemString("grantableRolesAtHQ",    new PyLong(row.GetInt64(8)));
+            dict->SetItemString("rolesAtBase",           new PyLong(row.GetInt64(9)));
+            dict->SetItemString("grantableRolesAtBase",  new PyLong(row.GetInt64(10)));
+            dict->SetItemString("rolesAtOther",          new PyLong(row.GetInt64(11)));
+            dict->SetItemString("grantableRolesAtOther", new PyLong(row.GetInt64(12)));
+            dict->SetItemString("titleMask",             new PyLong(row.GetInt64(13)));
+            dict->SetItemString("accountKey",            new PyInt(row.GetInt(14)));
+            dict->SetItemString("rowDate",               new PyLong(row.GetInt64(5)));
+            dict->SetItemString("blockRoles",            new PyInt(row.GetInt(15)));
+        return dict;
+    }
+}
+
+PyDict* CorporationDB::GetMemberRow(uint32 corpID, uint32 charID)
+{
+    std::ostringstream query;
+    query << MemberRowColumns << " WHERE corporationID = " << corpID << " AND characterID = " << charID;
+
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, query.str().c_str())) {
+        codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
+        return nullptr;
+    }
+
+    DBResultRow row;
+    if (!res.GetRow(row))
+        return nullptr;
+
+    return MemberRowDict(row);
+}
+
 PyList* CorporationDB::GetMemberRows(uint32 corpID, const std::vector<uint32>* ids, uint32 offset, uint32 limit)
 {
     // the client's member row (corp.members:  util.KeyVal per member, edited in place by OnCorporationMemberChanged)
     std::ostringstream query;
-    query << "SELECT characterID, corporationID, title, corpRole | rolesAtAll, grantableRoles, startDateTime, baseID,"
-             " rolesAtHQ, grantableRolesAtHQ, rolesAtBase, grantableRolesAtBase, rolesAtOther, grantableRolesAtOther,"
-             " titleMask, corpAccountKey, blockRoles + 0"
-             " FROM chrCharacters WHERE corporationID = " << corpID;
+    query << MemberRowColumns << " WHERE corporationID = " << corpID;
     if (ids != nullptr) {
         if (ids->empty())
             return new PyList();
@@ -873,29 +924,8 @@ PyList* CorporationDB::GetMemberRows(uint32 corpID, const std::vector<uint32>* i
 
     PyList* list = new PyList();
     DBResultRow row;
-    while (res.GetRow(row)) {
-        PyDict* dict = new PyDict();
-            dict->SetItemString("characterID",           new PyInt(row.GetUInt(0)));
-            dict->SetItemString("corporationID",         new PyInt(row.GetUInt(1)));
-            dict->SetItemString("divisionID",            new PyInt(0));
-            dict->SetItemString("squadronID",            new PyInt(0));
-            dict->SetItemString("title",                 new PyWString(std::string(row.GetText(2))));
-            dict->SetItemString("roles",                 new PyLong(row.GetInt64(3)));
-            dict->SetItemString("grantableRoles",        new PyLong(row.GetInt64(4)));
-            dict->SetItemString("startDateTime",         new PyLong(row.GetInt64(5)));
-            dict->SetItemString("baseID",                (row.GetInt(6) > 0 ? (PyRep*)new PyInt(row.GetInt(6)) : PyStatic.NewNone()));
-            dict->SetItemString("rolesAtHQ",             new PyLong(row.GetInt64(7)));
-            dict->SetItemString("grantableRolesAtHQ",    new PyLong(row.GetInt64(8)));
-            dict->SetItemString("rolesAtBase",           new PyLong(row.GetInt64(9)));
-            dict->SetItemString("grantableRolesAtBase",  new PyLong(row.GetInt64(10)));
-            dict->SetItemString("rolesAtOther",          new PyLong(row.GetInt64(11)));
-            dict->SetItemString("grantableRolesAtOther", new PyLong(row.GetInt64(12)));
-            dict->SetItemString("titleMask",             new PyLong(row.GetInt64(13)));
-            dict->SetItemString("accountKey",            new PyInt(row.GetInt(14)));
-            dict->SetItemString("rowDate",               new PyLong(row.GetInt64(5)));
-            dict->SetItemString("blockRoles",            new PyInt(row.GetInt(15)));
-        list->AddItem(new PyObject("util.KeyVal", dict));
-    }
+    while (res.GetRow(row))
+        list->AddItem(new PyObject("util.KeyVal", MemberRowDict(row)));
 
     return list;
 }
@@ -1354,7 +1384,7 @@ PyRep* CorporationDB::GetBulletins(uint32 corpID)
     return DBResultToCRowset(res);
 }
 
-void CorporationDB::AddRecruiters(uint16 adID, int32 corpID, std::vector< int32 >& charVec)
+void CorporationDB::AddRecruiters(uint32 adID, int32 corpID, std::vector< int32 >& charVec)
 {
     std::ostringstream str;
     str << "INSERT INTO crpRecruiters (adID, corpID, charID) VALUES ";
@@ -1378,7 +1408,7 @@ void CorporationDB::AddRecruiters(uint16 adID, int32 corpID, std::vector< int32 
     }
 }
 
-PyRep* CorporationDB::GetRecruiters(int32 corpID, uint16 adID)
+PyRep* CorporationDB::GetRecruiters(int32 corpID, uint32 adID)
 {
     DBQueryResult res;
     if (!sDatabase.RunQuery(res, "SELECT charID FROM crpRecruiters WHERE corpID = %u AND adID = %u", corpID, adID)) {
@@ -1387,7 +1417,7 @@ PyRep* CorporationDB::GetRecruiters(int32 corpID, uint16 adID)
     }
 
     PyTuple* tuple = new PyTuple(res.GetRowCount());
-    int8 i = 0;
+    uint32 i = 0;
     DBResultRow row;
     while (res.GetRow(row))
         tuple->SetItem(i++, new PyInt(row.GetInt(0)));
@@ -1415,22 +1445,61 @@ PyRep* CorporationDB::GetAdGroupData()
     return DBResultToCRowset(res);
 }
 
-PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*false*/, int16 minMembers/*0*/, uint16 maxMembers/*12602*/)
+namespace {
+    // the columns the Recruitment tab reads.  the corp's alliance and member count as they are now, not as they were when it was put up
+    const char* const AdvertSelect =
+        "SELECT"
+        "  a.adID, a.corporationID, IFNULL(c.allianceID, 0) AS allianceID, a.stationID, a.regionID, a.raceMask, a.typeMask,"
+        "  a.createDateTime, a.expiryDateTime, a.title, a.description, IFNULL(c.memberCount, a.memberCount) AS memberCount, a.channelID"
+        " FROM crpAdRegistry AS a LEFT JOIN crpCorporation AS c ON c.corporationID = a.corporationID";
+
+    // a title is varchar(30) in characters:  cut to that many, never in the middle of a character
+    std::string AdvertTitle(const std::string& title)
+    {
+        size_t chars(0), at(0);
+        while ((at < title.size()) and (chars < 30)) {
+            unsigned char c(title[at]);
+            at += ((c < 0x80) ? 1 : ((c >> 5) == 0x6) ? 2 : ((c >> 4) == 0xe) ? 3 : 4);
+            ++chars;
+        }
+        return title.substr(0, std::min(at, title.size()));
+    }
+}
+
+PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*false*/, int16 minMembers/*0*/, uint16 maxMembers/*0*/, uint32 corpID/*0*/)
 {
-    // make sure this isnt 0
-    if (maxMembers < 1)
-        maxMembers = 12602;
+    /* the adverts running:  a corp's own, or those a search finds.  the types come in groups (what the corp does, where, its
+     *  timezone, language and play style):  an advert matches when it has one of the types ticked in each group a search ticks.
+     *  in an alliance ticked:  corps in one only.  before, the search showed only corps out of alliances, ignored the types and
+     *  showed adverts long run out, and a corp's own list was every corp's
+     */
+    static std::map<uint32, int64> groups;
+    if (groups.empty()) {
+        DBQueryResult res;
+        DBResultRow row;
+        if (sDatabase.RunQuery(res, "SELECT groupID, typeMask FROM crpAdTypeData"))
+            while (res.GetRow(row))
+                groups[row.GetUInt(0)] |= row.GetInt64(1);
+    }
+    std::ostringstream where;
+    where << " WHERE a.expiryDateTime > " << (int64)GetFileTimeNow();
+    if (corpID != 0) {
+        where << " AND a.corporationID = " << corpID;
+    } else {
+        for (auto& cur : groups)
+            if ((typeMask & cur.second) != 0)
+                where << " AND (a.typeMask & " << (typeMask & cur.second) << ") <> 0";
+        if (inAlliance)
+            where << " AND IFNULL(c.allianceID, 0) > 0";
+        if (minMembers > 0)
+            where << " AND IFNULL(c.memberCount, a.memberCount) >= " << minMembers;
+        if (maxMembers > 0)
+            where << " AND IFNULL(c.memberCount, a.memberCount) <= " << maxMembers;
+        where << " AND IFNULL(c.deleted, 0) = 0";
+    }
 
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        "  adID, corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
-        "  createDateTime, expiryDateTime, title, description, memberCount, channelID"
-        " FROM crpAdRegistry"
-        "  WHERE allianceID %s 0"
-        "   AND (memberCount >= %u AND memberCount < %u)",
-        (inAlliance ? ">" : "="), minMembers, maxMembers))
-    {
+    if (!sDatabase.RunQuery(res, "%s%s ORDER BY a.createDateTime DESC LIMIT 500", AdvertSelect, where.str().c_str())) {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
@@ -1438,16 +1507,10 @@ PyRep* CorporationDB::GetAdRegistryData(int64 typeMask/*0*/, bool inAlliance/*fa
     return DBResultToCRowset(res);
 }
 
-PyRep* CorporationDB::GetAdvert(uint16 adID)
+PyRep* CorporationDB::GetAdvert(uint32 adID)
 {
     DBQueryResult res;
-    if (!sDatabase.RunQuery(res,
-        "SELECT"
-        "  adID, corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
-        "  createDateTime, expiryDateTime, title, description, memberCount, channelID"
-        " FROM crpAdRegistry"
-        "  WHERE adID = %u", adID))
-    {
+    if (!sDatabase.RunQuery(res, "%s WHERE a.adID = %u", AdvertSelect, adID)) {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;
     }
@@ -1455,37 +1518,64 @@ PyRep* CorporationDB::GetAdvert(uint16 adID)
     return DBResultToCRowset(res);
 }
 
-void CorporationDB::DeleteAdvert(uint16 adID)
+void CorporationDB::DeleteAdvert(uint32 adID, uint32 corpID)
 {
     DBerror err;
-    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE adID=%u ", adID);
+    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE adID = %u AND corporationID = %u", adID, corpID);
+    sDatabase.RunQuery(err, "DELETE FROM crpRecruiters WHERE adID = %u AND corpID = %u", adID, corpID);
 }
 
-uint32 CorporationDB::CreateAdvert(Client* pClient, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description, uint32 channelID, std::string title)
+uint32 CorporationDB::AdvertFee(uint8 days, bool added)
 {
+    // putting one up:  3 days 1.25m, 7 days 2.25m, 14 days 4m, 28 days 7.5m.  more days on one:  3 days 0.75m, 7 days 1.75m, 14 days 3.5m
+    if (added)
+        return ((days >= 14) ? 3500000 : (days >= 7) ? 1750000 : 750000);
+    return ((days >= 28) ? 7500000 : (days >= 14) ? 4000000 : (days >= 7) ? 2250000 : 1250000);
+}
+
+uint32 CorporationDB::CreateAdvert(uint32 corpID, uint32 allianceID, uint32 stationID, uint32 regionID, int64 typeMask, uint8 days,
+                                   uint16 members, const std::string& description, uint32 channelID, const std::string& title)
+{
+    DBerror err;
+    // adverts run out of days a week ago go, with their recruiters
+    int64 now(GetFileTimeNow());
+    sDatabase.RunQuery(err, "DELETE r FROM crpRecruiters AS r JOIN crpAdRegistry AS a ON a.adID = r.adID WHERE a.expiryDateTime < %" PRIi64,
+                       now - EvE::Time::Week);
+    sDatabase.RunQuery(err, "DELETE FROM crpAdRegistry WHERE expiryDateTime < %" PRIi64, now - EvE::Time::Week);
+
+    // the text went in unescaped (an apostrophe broke the query) and a title over 30 characters failed it
+    std::string eDesc, eTitle;
+    sDatabase.DoEscapeString(eDesc, description);
+    sDatabase.DoEscapeString(eTitle, AdvertTitle(title));
     uint32 adID(0);
-    DBerror err;
-    sDatabase.RunQueryLID(err, adID, "INSERT INTO crpAdRegistry"
-    " (corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
-    "  createDateTime, expiryDateTime, description, title, memberCount, channelID)"
-    " VALUES (%u,%u,%u,%u,%u,%lli,%f,%f,'%s','%s',%u,%u)",
-        corpID, pClient->GetAllianceID(), pClient->GetStationID(), pClient->GetRegionID(), 15, typeMask, // raceMask isnt implemented yet
-        GetFileTimeNow(), GetFileTimeNow() + (EvE::Time::Day * days), description.c_str(), title.c_str(), members, channelID);
+    if (!sDatabase.RunQueryLID(err, adID, "INSERT INTO crpAdRegistry"
+        " (corporationID, allianceID, stationID, regionID, raceMask, typeMask,"
+        "  createDateTime, expiryDateTime, description, title, memberCount, channelID)"
+        " VALUES (%u, %u, %u, %u, 15, %" PRIi64 ", %" PRIi64 ", %" PRIi64 ", '%s', '%s', %u, %u)",       // raceMask isnt implemented yet
+        corpID, allianceID, stationID, regionID, typeMask, now, now + (EvE::Time::Day * days), eDesc.c_str(), eTitle.c_str(), members, channelID))
+    {
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
+        return 0;
+    }
 
     return adID;
 }
 
-void CorporationDB::UpdateAdvert(uint16 adID, uint32 corpID, int64 typeMask, int8 days, uint16 members, std::string description, uint32 channelID, std::string title)
+void CorporationDB::UpdateAdvert(uint32 adID, uint32 corpID, int64 typeMask, int64 expiry, uint16 members, const std::string& description,
+                                 uint32 channelID, const std::string& title)
 {
-    int64 time = GetFileTimeNow() + (EvE::Time::Day * days);
+    std::string eDesc, eTitle;
+    sDatabase.DoEscapeString(eDesc, description);
+    sDatabase.DoEscapeString(eTitle, AdvertTitle(title));
     DBerror err;
-    sDatabase.RunQuery(err, "UPDATE crpAdRegistry"
-        " SET typeMask=%lli, expiryDateTime=%lli, description='%s', title='%s', memberCount=%u, channelID=%u"
-        " WHERE adID=%u ",
-        typeMask, time, description.c_str(), title.c_str(), members, channelID, adID);
+    if (!sDatabase.RunQuery(err, "UPDATE crpAdRegistry"
+        " SET typeMask = %" PRIi64 ", expiryDateTime = %" PRIi64 ", description = '%s', title = '%s', memberCount = %u, channelID = %u"
+        " WHERE adID = %u AND corporationID = %u",
+        typeMask, expiry, eDesc.c_str(), eTitle.c_str(), members, channelID, adID, corpID))
+        codelog(CORP__DB_ERROR, "Error in query: %s", err.c_str());
 }
 
-int64 CorporationDB::GetAdvertTime(uint16 adID, uint32 corpID)
+int64 CorporationDB::GetAdvertTime(uint32 adID, uint32 corpID)
 {
     DBQueryResult res;
     sDatabase.RunQuery(res, "SELECT expiryDateTime FROM crpAdRegistry WHERE adID=%u AND corporationID=%u", adID, corpID);
@@ -1979,15 +2069,16 @@ bool CorporationDB::UpdateLogo(uint32 corpID, const Call_UpdateLogo & upd, PyDic
 
 PyRep* CorporationDB::GetMemberTrackingInfo(uint32 corpID)
 {
-    //  lastOnline(hours) needs update based on char logoffDateTime using GetElapsedHours();
-    // no idea how to do that short of pulling/updating column every (x time) interval....and uh, no.
+    /*  lastOnline:  -1 for a member online now, else the hours since it logged off.  it was -1 for everybody, so the window called
+     *   every member Online and its Online Only box hid nobody */
     DBQueryResult res;
     if (!sDatabase.RunQuery(res,
         "SELECT c.characterID, c.corporationID, c.title, c.startDateTime, c.corpRole AS roles, c.baseID, c.grantableRoles, c.blockRoles,"
-        " c.logonDateTime, c.logoffDateTime, c.locationID, IFNULL(e.typeID, 0) AS shipTypeID, -1 AS lastOnline"
+        " c.logonDateTime, c.logoffDateTime, c.locationID, IFNULL(e.typeID, 0) AS shipTypeID,"
+        " CAST(IF(c.online = 1, -1, GREATEST(0, FLOOR((%" PRIi64 " - c.logoffDateTime) / %" PRIi64 "))) AS SIGNED) AS lastOnline"
         " FROM chrCharacters AS c"
         "  LEFT JOIN entity AS e ON e.itemID = c.shipID"
-        " WHERE c.corporationID = %u", corpID))
+        " WHERE c.corporationID = %u", (int64)GetFileTimeNow(), (int64)EvE::Time::Hour, corpID))
     {
         codelog(CORP__DB_ERROR, "Error in query: %s", res.error.c_str());
         return nullptr;

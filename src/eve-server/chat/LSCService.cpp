@@ -744,6 +744,7 @@ PyResult LSCService::SetChannelMOTD(PyCallArgs& call, PyRep* channelInfo, PyRep*
         throw UserError("LSCCannotSetMOTD").AddFormatValue("msg", new PyString("You are not allowed to change the MOTD of this channel."));
 
     channel->ChangeMOTD(PyRep::StringContent(motd), call.client);
+    MotdChanged(channel, call.client);
     if (channel->IsUserChannel() and !channel->GetTemporary())
         m_db.UpdateChannelInfo(channel);
     return PyStatic.NewNone();
@@ -827,8 +828,10 @@ PyResult LSCService::Configure(PyCallArgs& call, PyRep* channelInfo)
 
     if (GetNamedArg(call, "motd", value) and !value->IsNone()) {
         std::string motd = PyRep::StringContent(value);
-        if (motd != channel->GetMOTD())
+        if (motd != channel->GetMOTD()) {
             channel->ChangeMOTD(motd, call.client);
+            MotdChanged(channel, call.client);
+        }
     }
 
     if (GetNamedArg(call, "newPassword", value)) {
@@ -1471,13 +1474,16 @@ void LSCService::CreateSystemChannel(int32 channelID)
     } else if (IsPlayerCorp(channelID)) {
         type = LSC::Type::corp;
         name = "Corp";
-        motd = m_db.GetCorporationName(channelID);
+        // the MOTD its members last set, else its name
+        if (!m_db.GetKeptMotd(channelID, motd))
+            motd = m_db.GetCorporationName(channelID);
         grpMsgID = 263235;
         messageID = 0;
     } else if (IsAlliance(channelID)) {
         type = LSC::Type::alliance;
         name = "Alliance";
-        motd = m_db.GetAllianceName(channelID);
+        if (!m_db.GetKeptMotd(channelID, motd))
+            motd = m_db.GetAllianceName(channelID);
         grpMsgID = 5;
         messageID = 0;
     } else if (IsFleetID(channelID)) {
@@ -1523,6 +1529,18 @@ void LSCService::CreateSystemChannel(int32 channelID)
         if (!pChan->HasDefaultMod())
             pChan->LoadMod(LSCChannelMod(0, LSC::Mode::chConversationalist));
     }
+}
+
+void LSCService::MotdChanged(LSCChannel* pChan, Client* pWho)
+{
+    // a player corp's or alliance's channel:  its MOTD is kept across restarts
+    if ((pChan == nullptr) or ((pChan->GetType() != LSC::Type::corp) and (pChan->GetType() != LSC::Type::alliance)))
+        return;
+    int32 channelID(pChan->GetChannelID());
+    if (!IsPlayerCorp(channelID) and !IsAlliance(channelID))
+        return;
+    uint32 byID((pWho == nullptr) ? 0 : pWho->GetCharacterID());
+    m_db.KeepMotd(channelID, pChan->GetMOTD(), byID);
 }
 
 void LSCService::SetSystemChannelMOTD(int32 channelID, const std::string& motd)

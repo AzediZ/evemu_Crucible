@@ -297,7 +297,8 @@ PyResult CorpRegistryBound::GetApplications(PyCallArgs &call)
 
 PyResult CorpRegistryBound::GetRecruitmentAdsForCorporation(PyCallArgs &call)
 {   // recruitments = self.GetCorpRegistry().GetRecruitmentAdsForCorporation()
-    return m_db.GetAdRegistryData();
+    // this corp's own (it listed every corp's out of an alliance)
+    return CorporationDB::GetAdRegistryData(0, false, 0, 0, m_corpID);
 }
 
 PyResult CorpRegistryBound::GetMyApplications(PyCallArgs &call)
@@ -374,7 +375,7 @@ PyResult CorpRegistryBound::GetMemberIDsWithMoreThanAvgShares(PyCallArgs &call)
 
 PyResult CorpRegistryBound::GetRecruiters(PyCallArgs &call, PyInt* corpID, PyInt* adID)
 {   // working
-    return m_db.GetRecruiters(corpID->value(), adID->value());
+    return CorporationDB::GetRecruiters(corpID->value(), adID->value());
 }
 
 PyResult CorpRegistryBound::DeleteTitle(PyCallArgs &call, PyInt* titleID)
@@ -402,7 +403,8 @@ PyResult CorpRegistryBound::DeleteTitle(PyCallArgs &call, PyInt* titleID)
 
 PyResult CorpRegistryBound::DeleteRecruitmentAd(PyCallArgs &call, PyInt* adID)
 {   // working
-    m_db.DeleteAdvert(adID->value());
+    // this corp's only, and its recruiters with it
+    CorporationDB::DeleteAdvert(adID->value(), m_corpID);
     return nullptr;
 }
 
@@ -1054,16 +1056,17 @@ PyResult CorpRegistryBound::CreateRecruitmentAd(PyCallArgs &call, PyInt* days, P
      * 00:41:50 [CorpCallDump]       [ 6]    WString: 'test'
      */
 
-    uint32 amount = 1250000;
-    switch (days->value()) {
-        case 7:    amount = 2250000;  break;
-        case 14:   amount = 4000000;  break;
-        case 28:   amount = 7500000;  break;
-    }
+    uint8 adDays((uint8)std::min<int32>(std::max<int32>(days->value(), 1), 28));
+    AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), CorporationDB::AdvertFee(adDays, false), "Initial Advert Time for Corp Recruit Advert",
+                                  Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
 
-    AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), amount, "Initial Advert Time for Corp Recruit Advert", Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
-
-    int32 adID = m_db.CreateAdvert(call.client, m_corpID, typeMask->value(), days->value(), m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(), title->content());
+    // put up where the one putting it up is docked, else at the corp's headquarters
+    uint32 stationID(call.client->GetStationID() != 0 ? call.client->GetStationID() : (uint32)call.client->GetCorpHQ());
+    uint32 adID(CorporationDB::CreateAdvert(m_corpID, call.client->GetAllianceID(), stationID, sDataMgr.GetStationRegion(stationID),
+                                            typeMask->value(), adDays, m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(),
+                                            title->content()));
+    if (adID == 0)
+        throw CustomError("The advert couldn't be put up.");
 
     std::vector<int32> recruiters;
     recruiters.clear();
@@ -1075,7 +1078,7 @@ PyResult CorpRegistryBound::CreateRecruitmentAd(PyCallArgs &call, PyInt* days, P
     if (recruiters.empty())
         recruiters.push_back(call.client->GetCharacterID());
 
-    m_db.AddRecruiters(adID, (int32)m_corpID, recruiters);
+    CorporationDB::AddRecruiters(adID, (int32)m_corpID, recruiters);
 
     return nullptr;
 }
@@ -1101,28 +1104,19 @@ PyResult CorpRegistryBound::UpdateRecruitmentAd(PyCallArgs &call, PyInt* adID, P
      * 04:47:40 [CorpCallDump]       [ 6]    Integer: 0
      */
 
-    uint8 days = 1;
-    // check that corp can afford added time, if requested
-    if (addedDays->value()) {
-        // 3d = .75misk, 7d = 1.75misk, 14d = 3.5misk
-        uint32 amount = 750000;
-        switch (addedDays->value()) {
-            case 7:    amount = 1750000;  break;
-            case 14:   amount = 3500000;  break;
-        }
-
-        AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), amount, "Added Advert Time to Corp Recruit Advert", Journal::EntryType::CorporationAdvertisementFee);
-
-        // do some funky shit to determine days left for advert then add additional time if requested
-        int64 time = m_db.GetAdvertTime(adID->value(), m_corpID);
-        if (time > 0) {
-            time -= GetFileTimeNow();
-            days = time / EvE::Time::Day;
-            days += addedDays->value();
-        }
+    // the time it has left stands (it was cut to a day when no days were added), and days added go on after it
+    int64 expiry(CorporationDB::GetAdvertTime(adID->value(), m_corpID));
+    if (expiry == 0)
+        throw CustomError("That advert isn't your corporation's.");
+    if (addedDays->value() > 0) {
+        uint8 added((uint8)std::min<int32>(addedDays->value(), 28));
+        AccountService::TransferFunds(m_corpID, call.client->GetCorpHQ(), CorporationDB::AdvertFee(added, true), "Added Advert Time to Corp Recruit Advert",
+                                      Journal::EntryType::CorporationAdvertisementFee, call.client->GetCharacterID());
+        expiry = std::max(expiry, (int64)GetFileTimeNow()) + EvE::Time::Day * added;
     }
 
-    m_db.UpdateAdvert(adID->value(), m_corpID, typeMask->value(), days, m_db.GetCorpMemberCount(m_corpID), description->content(), channelID->value(), title->content());
+    CorporationDB::UpdateAdvert(adID->value(), m_corpID, typeMask->value(), expiry, m_db.GetCorpMemberCount(m_corpID), description->content(),
+                                channelID->value(), title->content());
 
     std::vector<int32> recruiters;
     recruiters.clear();
@@ -1133,9 +1127,9 @@ PyResult CorpRegistryBound::UpdateRecruitmentAd(PyCallArgs &call, PyInt* adID, P
     if (recruiters.empty())
         recruiters.push_back(call.client->GetCharacterID());
 
-    m_db.AddRecruiters(adID->value(), (int32)m_corpID, recruiters);
+    CorporationDB::AddRecruiters(adID->value(), (int32)m_corpID, recruiters);
 
-    return m_db.GetAdvert(adID->value());
+    return CorporationDB::GetAdvert(adID->value());
 }
 
 PyResult CorpRegistryBound::MoveCompanyShares(PyCallArgs &call, PyInt* corporationID, PyInt* toShareholderID, PyInt* numberOfShares) {
@@ -1788,12 +1782,16 @@ void CorpRegistryBound::CheckCanAccept(uint32 charID)
     }
 }
 
+/*  the client makes a row of its applications header out of this dict (bco_applications.OnCorporationApplicationChanged),
+ *   so every column of that header has to be in here:  applicationID, characterID, corporationID, applicationText,
+ *   status, applicationDateTime, lastCorpUpdaterID.  one missing threw a KeyError there and the application never
+ *   reached the list the window reads, so it showed nothing until the client was restarted. */
 void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged& OCAC, const Corp::ApplicationInfo& Old, const Corp::ApplicationInfo& New)
 {
     //  ? (PyRep*)new PyInt(x) : PyStatic.NewNone();
     if (Old.valid) {
         OCAC.applicationIDOld = new PyInt(Old.appID);
-        //OCAC.applicationDateTimeOld = new PyLong(Old.appTime);
+        OCAC.applicationDateTimeOld = new PyLong(Old.appTime);
         OCAC.applicationTextOld = new PyString(Old.appText);
         OCAC.characterIDOld = new PyInt(Old.charID);
         OCAC.corporationIDOld = new PyInt(Old.corpID);
@@ -1808,7 +1806,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
         OCAC.statusOld = new PyInt(Old.status);
     } else {
         OCAC.applicationIDOld = PyStatic.NewNone();
-        //OCAC.applicationDateTimeOld = PyStatic.NewNone();
+        OCAC.applicationDateTimeOld = PyStatic.NewNone();
         OCAC.applicationTextOld = PyStatic.NewNone();
         OCAC.characterIDOld = PyStatic.NewNone();
         OCAC.corporationIDOld = PyStatic.NewNone();
@@ -1821,7 +1819,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
 
     if (New.valid) {
         OCAC.applicationIDNew = new PyInt(New.appID);
-        //OCAC.applicationDateTimeNew = new PyLong(New.appTime);
+        OCAC.applicationDateTimeNew = new PyLong(New.appTime);
         OCAC.applicationTextNew = new PyString(New.appText);
         OCAC.characterIDNew = new PyInt(New.charID);
         OCAC.corporationIDNew = new PyInt(New.corpID);
@@ -1836,7 +1834,7 @@ void CorpRegistryBound::FillOCApplicationChange(OnCorporationApplicationChanged&
         OCAC.statusNew = new PyInt(New.status);
     } else {
         OCAC.applicationIDNew = PyStatic.NewNone();
-        //OCAC.applicationDateTimeNew = PyStatic.NewNone();
+        OCAC.applicationDateTimeNew = PyStatic.NewNone();
         OCAC.applicationTextNew = PyStatic.NewNone();
         OCAC.characterIDNew = PyStatic.NewNone();
         OCAC.corporationIDNew = PyStatic.NewNone();

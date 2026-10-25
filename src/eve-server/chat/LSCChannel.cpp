@@ -200,6 +200,20 @@ void LSCChannel::Evacuate(Client * c) {
     m_chars.clear();
 }
 
+namespace {
+    /* the client takes a plain string as bytes:  a line past ascii (curly quotes and dashes, a player's accents, a motd.txt
+     *  in utf-8) must go as unicode or it reads as "â€™"
+     */
+    void AsUnicode(PyTuple* answer, const std::string& message)
+    {
+        if (Motd::IsAscii(message))
+            return;
+        PyRep* args(answer->GetItem(4));
+        if ((args != nullptr) and args->IsTuple() and (args->AsTuple()->size() > 0))
+            args->AsTuple()->SetItem(0, new PyWString(message));
+    }
+}
+
 void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*/) {
 // to send system msgs, senderID should be 1 (system owner)
 
@@ -219,6 +233,7 @@ void LSCChannel::SendMessage(Client * c, const char * message, bool self/*false*
     sm.member_count = m_chars.size();
 
     PyTuple *answer = sm.Encode();
+    AsUnicode(answer, message);
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 
@@ -236,6 +251,7 @@ void LSCChannel::SendSystemMessage(const char * message) {
     sm.member_count = m_chars.size();
 
     PyTuple *answer = sm.Encode();
+    AsUnicode(answer, message);
     sEntityList.Multicast("OnLSC", GetTypeString(), &answer, mct);
 }
 
@@ -250,12 +266,7 @@ void LSCChannel::SendSystemMessageTo(Client* pClient, const std::string& message
     sm.member_count = m_chars.size();
 
     PyTuple *answer = sm.Encode();
-    // the client takes a plain string as bytes:  anything past ascii (a motd.txt in utf-8) must be unicode
-    if (!Motd::IsAscii(message)) {
-        PyRep* args(answer->GetItem(4));
-        if ((args != nullptr) and args->IsTuple() and (args->AsTuple()->size() > 0))
-            args->AsTuple()->SetItem(0, new PyWString(message));
-    }
+    AsUnicode(answer, message);
     pClient->SendNotification("OnLSC", GetTypeString(), &answer);
 }
 

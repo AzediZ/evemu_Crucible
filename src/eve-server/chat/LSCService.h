@@ -101,6 +101,8 @@ public:
     void DeleteSystemChannel(int32 channelID);
     // sets the stored motd of a server-created channel (fleet), if it exists
     void SetSystemChannelMOTD(int32 channelID, const std::string& motd);
+    // a member changed a channel's MOTD:  a player corp's or alliance's is kept (chatChannelMotds) for the next start
+    void MotdChanged(LSCChannel* pChan, Client* pWho);
     void SystemUnload(uint32 systemID, uint32 constID, uint32 regionID);
 
     void SendMail(uint32 sender, uint32 recipient, const std::string &subject, const std::string &content) {

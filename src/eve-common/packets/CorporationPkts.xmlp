@@ -605,7 +605,16 @@
             <raw name="lastCorpUpdaterIDNew" />
           </tupleInline>
         </dictInlineEntry>
-        <!--
+        <!-- the client builds a row of its applications header out of this dict, so every column of that
+             header has to be in here:  without applicationDateTime it threw a KeyError in
+             bco_applications.OnCorporationApplicationChanged and the application never reached the list -->
+        <dictInlineEntry key="applicationDateTime">
+          <tupleInline>
+            <raw name="applicationDateTimeOld" />
+            <raw name="applicationDateTimeNew" />
+          </tupleInline>
+        </dictInlineEntry>
+        <!-- not columns of that header:
         <dictInlineEntry key="roles">
           <tupleInline>
             <raw name="rolesOld" />
@@ -616,12 +625,6 @@
           <tupleInline>
             <raw name="grantableRolesOld" />
             <raw name="grantableRolesNew" />
-          </tupleInline>
-        </dictInlineEntry>
-        <dictInlineEntry key="applicationDateTime">
-          <tupleInline>
-            <raw name="applicationDateTimeOld" />
-            <raw name="applicationDateTimeNew" />
           </tupleInline>
         </dictInlineEntry>
         <dictInlineEntry key="deleted">

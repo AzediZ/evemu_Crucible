@@ -573,15 +573,38 @@ void CorpMgr::MoveMemberToCorp(uint32 charID, uint32 newCorpID)
     if (IsPlayerCorp(newCorpID))
         cdb.AddItemEvent(newCorpID, charID, Corp::EventType::JoinedCorporation);
 
-    // both corps' member lists:  OnCorporationMemberChanged(charID, {corporationID: (old, new), startDateTime: (old, new)})
-    PyDict* change = new PyDict();
-        AddChange(change, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
-        AddChange(change, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
+    /*  both corps' member lists:  OnCorporationMemberChanged(charID, {column: (old, new)}).
+     *   the corp it left only has to drop the row, so the two columns that say it went elsewhere are enough.
+     *   the corp it joined has no row for it yet and makes one out of this dict, so that one carries every
+     *   column of the list's own header (CorporationDB::GetMemberRow):  with only the two, the row the client
+     *   made had nothing on it and the member window threw on characterID, which is why a new member was
+     *   missing from the list until the client was restarted. */
     if (IsPlayerCorp(oldCorpID)) {
-        PyIncRef(change);
-        SendMemberChanged(oldCorpID, charID, change);
+        PyDict* left = new PyDict();
+            AddChange(left, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
+            AddChange(left, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
+        SendMemberChanged(oldCorpID, charID, left);
     }
-    SendMemberChanged(newCorpID, charID, change);
+    if (IsPlayerCorp(newCorpID)) {
+        PyDict* joined = new PyDict();
+        // the row is only worth reading when somebody of that corp is online to be told
+        std::vector<Client*> online;
+        sEntityList.GetCorpClients(online, newCorpID);
+        PyDict* row = (online.empty() ? nullptr : CorporationDB::GetMemberRow(newCorpID, charID));
+        if (row != nullptr) {
+            for (auto itr : *row) {
+                std::string key(PyRep::StringContent(itr.first));
+                // the corp it came from, so a client that has the member already moves it instead of adding it
+                PyRep* was = (key.compare("corporationID") == 0 ? (PyRep*)new PyInt(oldCorpID) : PyStatic.NewNone());
+                AddChange(joined, key.c_str(), was, itr.second->Clone());
+            }
+            PyDecRef(row);
+        } else {
+            AddChange(joined, "corporationID", new PyInt(oldCorpID), new PyInt(newCorpID));
+            AddChange(joined, "startDateTime", new PyLong(old.startDateTime), new PyLong(data.startDateTime));
+        }
+        SendMemberChanged(newCorpID, charID, joined);
+    }
 
     _log(CORP__INFO, "CorpMgr::MoveMemberToCorp() - %u moved from corp %u to %u", charID, oldCorpID, newCorpID);
 }

@@ -372,6 +372,31 @@ bool LSCDB::GetChannelInfo(int32 channelID, std::string &name, std::string &motd
 }
 
 
+bool LSCDB::GetKeptMotd(int32 channelID, std::string& motd)
+{
+    DBQueryResult res;
+    if (!sDatabase.RunQuery(res, "SELECT motd FROM chatChannelMotds WHERE channelID = %i", channelID)) {
+        _log(DATABASE__ERROR, "Error in GetKeptMotd query: %s", res.error.c_str());
+        return false;
+    }
+    DBResultRow row;
+    if (!res.GetRow(row) or row.IsNull(0))
+        return false;
+    motd = row.GetText(0);
+    return true;
+}
+
+void LSCDB::KeepMotd(int32 channelID, const std::string& motd, uint32 byID)
+{
+    std::string esc;
+    sDatabase.DoEscapeString(esc, motd);
+    DBerror err;
+    if (!sDatabase.RunQuery(err, "INSERT INTO chatChannelMotds (channelID, motd, setBy, setAt) VALUES (%i, '%s', %u, %lli)"
+                            " ON DUPLICATE KEY UPDATE motd = VALUES(motd), setBy = VALUES(setBy), setAt = VALUES(setAt)",
+                            channelID, esc.c_str(), byID, (int64)GetFileTimeNow()))
+        _log(DATABASE__ERROR, "Error in KeepMotd query: %s", err.c_str());
+}
+
 int32 LSCDB::GetChannelIDFromComparisonKey(std::string compkey)
 {
     DBQueryResult res;

@@ -121,7 +121,7 @@ PyResult CorporationService::GetRecruitmentAdsByCriteria(PyCallArgs& call, PyInt
     _log(CORP__CALL, "CorporationService::Handle_GetRecruitmentAdsByCriteria()");
     call.Dump(CORP__CALL_DUMP);
 
-    return m_db.GetAdRegistryData(
+    return CorporationDB::GetAdRegistryData(
         typeMask->value(), inAlliance->value(),
         minMembers.has_value () ? minMembers.value ()->value() : 0,
         maxMembers.has_value () ? maxMembers.value ()->value() : 0);
@@ -133,7 +133,8 @@ PyResult CorporationService::GetRecruitmentAdsForCorporation(PyCallArgs& call)
     _log(CORP__CALL, "CorporationService::Handle_GetRecruitmentAdsForCorporation()");
     call.Dump(CORP__CALL_DUMP);
 
-    return m_db.GetAdRegistryData();
+    // the caller's corp's own
+    return CorporationDB::GetAdRegistryData(0, false, 0, 0, call.client->GetCorporationID());
 }
 
 
